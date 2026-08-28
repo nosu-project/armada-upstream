@@ -69,10 +69,13 @@ export function InvitePage() {
   }, [naddr, fragment]);
 
   const handleAccept = async () => {
-    if (!invite) return;
+    if (!invite || !resolved) return;
     try {
-      const { communityId, name } = await join({ invite });
-      toast({ title: "Encrypted community joined", description: name });
+      // Optimistic: the preview's bundle is passed along, so this resolves
+      // immediately and the durable join chain runs in the background (its
+      // failure surfaces as a toast from useCommunityActions).
+      const { communityId, name } = await join({ invite, bundle: resolved.bundle });
+      toast({ title: "Joined", description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
       setBanned(e instanceof BannedFromCommunityError);

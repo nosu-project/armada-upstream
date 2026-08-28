@@ -33,6 +33,8 @@ import {
   type ParsedInviteLink,
 } from "@/concord/lib/invite";
 import { KIND_INVITE_BUNDLE, VSK_INVITE_REVOKED } from "@/concord/lib/kinds";
+import { addPendingJoin, removePendingJoin } from "@/concord/lib/pendingJoins";
+import { toast } from "@/hooks/useToast";
 import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin } from "@/concord/lib/voice";
 import {
@@ -617,8 +619,11 @@ export function useCommunityActions() {
     },
   });
 
-  const join = useMutation<{ communityId: string; name: string }, Error, { invite: ParsedInviteLink }>({
-    mutationFn: async ({ invite }) => {
+  // The durable join chain — same ORDER as the old blocking join: a fresh
+  // resolve (catches a revocation the preview's copy predates), the platform
+  // reachability check, the ban check BEFORE anything is recorded or
+  // published, then the vault write and the best-effort Guestbook Join.
+  const completeJoin = async (invite: ParsedInviteLink): Promise<{ communityId: string; name: string }> => {
       if (!user) throw new Error("Sign in to join an encrypted community.");
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
@@ -647,6 +652,40 @@ export function useCommunityActions() {
       }
 
       return { communityId: bundle.community_id, name: bundle.name };
+  };
+
+  const join = useMutation<
+    { communityId: string; name: string },
+    Error,
+    { invite: ParsedInviteLink; bundle?: InviteBundle }
+  >({
+    mutationFn: async ({ invite, bundle: resolved }) => {
+      if (!user) throw new Error("Sign in to join an encrypted community.");
+      // Callers with no resolved preview in hand keep the blocking chain.
+      if (!resolved) return completeJoin(invite);
+
+      // Optimistic path: the preview already resolved and verified this
+      // bundle, so the community's identity, name and keys are in hand at
+      // click time. Record a UI-only pending entry and answer NOW; the
+      // durable chain runs behind it, the real vault entry replaces the
+      // pending one when it lands, and the ban check still precedes every
+      // publish and every durable record. Nothing exists to revert on
+      // failure — the pending entry is dropped and a toast says why.
+      const unusable = unusableRelaysReason(resolved.relays);
+      if (unusable) throw new Error(unusable);
+      addPendingJoin(bundleToEntry(resolved, { inviteRef: inviteRefOf(invite) }));
+      const { community_id: communityId, name } = resolved;
+      void completeJoin(invite)
+        .then(() => removePendingJoin(communityId))
+        .catch((e) => {
+          removePendingJoin(communityId);
+          toast({
+            title: e instanceof BannedFromCommunityError ? "You're banned" : `Couldn't join ${name}`,
+            description: e instanceof Error ? e.message : "The invite didn't work.",
+            variant: "destructive",
+          });
+        });
+      return { communityId, name };
     },
   });
 

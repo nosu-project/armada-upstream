@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -37,6 +37,7 @@ import {
   type FragList,
 } from "@/concord/lib/listFrag";
 import { STOCK_RELAYS } from "@/concord/lib/invite";
+import { pendingJoinEntries, subscribePendingJoins } from "@/concord/lib/pendingJoins";
 import { KIND_COMMUNITY_LIST_FRAG, KIND_COMMUNITY_LIST_RETIRED } from "@/concord/lib/kinds";
 import type { Community } from "@/concord/lib/types";
 import { logSync } from "@/lib/syncLog";
@@ -1280,10 +1281,24 @@ export function useUpdateCommunityList() {
   });
 }
 
+/**
+ * The optimistic pending-join entries (see pendingJoins.ts), reactive. UI-only
+ * overlays for joins whose durable list write is still in flight.
+ */
+function usePendingJoins(): CommunityListEntry[] {
+  return useSyncExternalStore(subscribePendingJoins, pendingJoinEntries, pendingJoinEntries);
+}
+
 /** The LIVE Concord membership entries (tombstoned ones stay in the doc but not here). */
 export function useLiveCommunities(): CommunityListEntry[] {
   const { data } = useCommunityList();
-  return useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  const pending = usePendingJoins();
+  return useMemo(() => {
+    const live = data ? liveEntries(data.list) : [];
+    if (pending.length === 0) return live;
+    const held = new Set(live.map((e) => e.community_id));
+    return [...live, ...pending.filter((e) => !held.has(e.community_id))];
+  }, [data, pending]);
 }
 
 /**
@@ -1308,11 +1323,19 @@ export function useCommunity(idHex: string | undefined): Community | undefined {
  */
 export function useCommunityEntry(idHex: string | undefined): CommunityListEntry | undefined {
   const { data } = useCommunityList();
+  const pending = usePendingJoins();
   return useMemo(() => {
-    if (!idHex || !data) return undefined;
-    if (!isLive(data.list, idHex)) return undefined;
-    return data.list.entries.find((e) => e.community_id === idHex);
-  }, [data, idHex]);
+    if (!idHex) return undefined;
+    if (data && isLive(data.list, idHex)) {
+      return data.list.entries.find((e) => e.community_id === idHex);
+    }
+    // An optimistic pending join resolves like a live entry so the community
+    // page can open immediately after the click. Deliberately AFTER the live
+    // check — the durable entry wins the moment the vault write lands — and
+    // safe against the tombstone hazard above: a pending entry exists only
+    // between an explicit Join click and its background chain settling.
+    return pending.find((e) => e.community_id === idHex);
+  }, [data, pending, idHex]);
 }
 
 /**
