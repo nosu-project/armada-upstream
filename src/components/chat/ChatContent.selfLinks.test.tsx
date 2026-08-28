@@ -32,6 +32,40 @@ vi.mock("@/components/chat/ProfilePreviewCard", () => ({
   ProfilePreviewCard: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+const MEMBER_COMMUNITY = "abc123";
+const STRANGER_COMMUNITY = "def456";
+const CACHED_MSG = "1".repeat(64);
+
+// The reader's Concord vault, standing in for the real one: a member of
+// `abc123` and of nothing else. These hooks reach the pool and the signer, and
+// `ChatContent` is deliberately mountable bare — what's under test is which of
+// the two cards the community link produces, not how the vault is read.
+vi.mock("@/concord/hooks/useCommunityList", () => ({
+  useCommunity: (id?: string) =>
+    id === MEMBER_COMMUNITY ? { idHex: MEMBER_COMMUNITY, name: "Bundle Name" } : undefined,
+  useCommunityList: () => ({ data: { list: { entries: [] }, decryptFailed: false }, isLoading: false }),
+}));
+vi.mock("@/concord/hooks/useControlPlane", () => ({
+  useControlFold: () => ({ data: { metadata: { name: "Fixture Community" } } }),
+  useChannels: () => [{ idHex: "general", name: "general" }],
+}));
+vi.mock("@/concord/hooks/useDecryptedImage", () => ({ useDecryptedImage: () => null }));
+vi.mock("@/concord/lib/rumorStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/concord/lib/rumorStore")>()),
+  queryRumorsByIds: async (_community: string, ids: string[]) =>
+    ids.includes(CACHED_MSG)
+      ? [{
+        rumorId: CACHED_MSG,
+        author: "b".repeat(64),
+        kind: 9,
+        content: "hello from the community",
+        tags: [],
+        ms: 1700000000000,
+        createdAt: 1700000000,
+      }]
+      : [],
+}));
+
 import { ChatContent } from "@/components/chat/ChatContent";
 
 afterEach(cleanup);
@@ -94,9 +128,33 @@ describe("ChatContent own-origin links", () => {
     expect(container.textContent).toContain("Direct message");
   });
 
-  it("labels a community channel card by what the path names", () => {
-    const { container } = renderContent("https://armada.buzz/c/abc123/general");
+  it("names the community and channel a member can already see", () => {
+    const { container } = renderContent(
+      `https://armada.buzz/c/${MEMBER_COMMUNITY}/general`,
+    );
     expect(container.textContent).toContain("Community channel");
+    // The folded metadata name, not the bundle's join-time preview.
+    expect(container.textContent).toContain("Fixture Community");
+    expect(container.textContent).toContain("#general");
+  });
+
+  it("shows a member the linked message out of the community's own store", async () => {
+    const { container, findByText } = renderContent(
+      `https://armada.buzz/c/${MEMBER_COMMUNITY}/general/m/${CACHED_MSG}`,
+    );
+    expect(container.textContent).toContain("Community message");
+    expect(await findByText("hello from the community")).toBeInTheDocument();
+  });
+
+  it("tells a non-member they aren't one, and names nothing else", () => {
+    const { container } = renderContent(
+      `https://armada.buzz/c/${STRANGER_COMMUNITY}/general/m/${CACHED_MSG}`,
+    );
+    expect(container.textContent).toContain("not a member of this community");
+    // Nothing about the community itself — not a name, not a channel, not a body.
+    expect(container.textContent).not.toContain("Fixture Community");
+    expect(container.textContent).not.toContain("#general");
+    expect(container.textContent).not.toContain("hello from the community");
   });
 
   it("reads a bare profile link as a mention rather than a link", () => {
