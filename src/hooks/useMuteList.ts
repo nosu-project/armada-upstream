@@ -450,13 +450,13 @@ async function editMuteList(
     // this is the check that decides whether we are allowed to publish at all.
     const cached = parseMuteSeed(await readFolded<unknown>(muteFoldKey(user.pubkey)));
     if (cached.pubkeys.length > 0) {
-      throw new Error("Couldn't load your existing mute list — not saving to avoid losing it.");
+      throw new Error("Couldn't load your existing block list. Not saving, to avoid losing it.");
     }
   }
 
   const { publicTags, privateTags, privateReadable } = await readMuteTags(prev, user.signer);
   if (!privateReadable) {
-    throw new Error("Couldn't read your existing mute list — not saving to avoid losing it.");
+    throw new Error("Couldn't read your existing block list. Not saving, to avoid losing it.");
   }
 
   const next = edit({ publicTags, privateTags });
@@ -468,7 +468,7 @@ async function editMuteList(
   let content = "";
   if (next.privateTags.length > 0 || prev?.content) {
     if (!user.signer.nip44) {
-      throw new Error("Your signer can't encrypt the mute list (NIP-44 required).");
+      throw new Error("Your signer can't encrypt the block list (NIP-44 required).");
     }
     content = await user.signer.nip44.encrypt(
       user.pubkey,
@@ -529,9 +529,9 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
       return { previous };
     },
     mutationFn: (pubkey: string) => serializeMuteListWrite(async () => {
-      if (!user) throw new Error("You must be logged in to mute someone.");
+      if (!user) throw new Error("You must be logged in to block someone.");
       if (!user.signer.nip44) {
-        throw new Error("Your signer can't encrypt the mute list (NIP-44 required).");
+        throw new Error("Your signer can't encrypt the block list (NIP-44 required).");
       }
 
       const next = await editMuteList(
@@ -604,7 +604,7 @@ export function useUnmuteUser(): UseMutationResult<void, Error, string> {
       return { previous };
     },
     mutationFn: (pubkey: string) => serializeMuteListWrite(async () => {
-      if (!user) throw new Error("You must be logged in to unmute someone.");
+      if (!user) throw new Error("You must be logged in to unblock someone.");
 
       const isTarget = ([name, value]: string[]) => name === "p" && value === pubkey;
       const next = await editMuteList(
@@ -648,7 +648,7 @@ export interface MuteToggle {
   canMute: boolean;
   /** A write is in flight; the menu item should be disabled. */
   pending: boolean;
-  /** "Mute" or "Unmute", for the menu label. */
+  /** "Block" or "Unblock", for the menu label. */
   label: string;
   /** Toggle the mute, reporting the outcome with a toast. Never throws. */
   toggle: () => Promise<void>;
@@ -675,19 +675,19 @@ export function useMuteToggle(pubkey: string | undefined): MuteToggle {
     try {
       if (muted) {
         await unmuteUser.mutateAsync(pubkey);
-        toast({ title: "Unmuted", description: "You'll see this person again." });
+        toast({ title: "Unblocked", description: "You'll see this person again." });
       } else {
         await muteUser.mutateAsync(pubkey);
-        toast({ title: "Muted", description: "You won't see this person anymore." });
+        toast({ title: "Blocked", description: "You won't see this person anymore." });
       }
     } catch (e) {
       toast({
-        title: muted ? "Couldn't unmute" : "Couldn't mute",
-        description: e instanceof Error ? e.message : "Failed to update your mute list.",
+        title: muted ? "Couldn't unblock" : "Couldn't block",
+        description: e instanceof Error ? e.message : "Failed to update your block list.",
         variant: "destructive",
       });
     }
   }, [pubkey, canMute, muted, muteUser, unmuteUser]);
 
-  return { muted, canMute, pending, label: muted ? "Unmute" : "Mute", toggle };
+  return { muted, canMute, pending, label: muted ? "Unblock" : "Block", toggle };
 }

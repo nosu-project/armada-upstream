@@ -163,7 +163,13 @@ export function useSignupKey(): SignupKey {
   };
 }
 
-/** Step 1 body: mint the key. Wrap in the consumer's wizard shell. */
+/**
+ * Step 1 body: mint the key. Wrap in the consumer's wizard shell.
+ *
+ * The Terms of Service notice is a plain anchor, not a router Link: both
+ * signup surfaces render outside any spot a mid-wizard route change would be
+ * safe, and /terms is a real page on every platform.
+ */
 export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
   return (
     <div className="flex flex-col items-center gap-8 text-center">
@@ -177,13 +183,22 @@ export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
           No email, no phone number, no password to forget.
         </p>
       </div>
-      <Button
-        size="lg"
-        className="h-12 w-full clip-corner-lg text-base font-medium"
-        onClick={onGenerate}
-      >
-        Generate my key
-      </Button>
+      <div className="w-full space-y-3">
+        <Button
+          size="lg"
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+          onClick={onGenerate}
+        >
+          Generate my key
+        </Button>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          By creating an account, you agree to the{" "}
+          <a href="/terms" className="text-primary hover:underline">
+            Terms of Service
+          </a>
+          .
+        </p>
+      </div>
     </div>
   );
 }

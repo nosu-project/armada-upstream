@@ -1,4 +1,4 @@
-import { AlertCircle, Ban, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
+import { AlertCircle, Ban, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -40,6 +40,7 @@ import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
@@ -609,6 +610,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // Nostr pubkey the mute list can name.
   const mute = useMuteToggle(identityOverride ? undefined : event.pubkey);
 
+  // Hiding is viewer-local removal — instant, unpublished, undoable from its
+  // toast — so like blocking it needs no destination and is offered in every
+  // room.
+  const hiddenMessages = useHiddenMessages();
+
   // Zap dialog. The button shows on others' messages when the surface supports
   // zaps; it disables (with a hint) once the author's profile has loaded
   // without a lightning address. While the profile is still loading the button
@@ -755,19 +761,31 @@ const ChatMessageInner = memo(function ChatMessageInner({
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
-  // Mute, report and delete share the trailing destructive group, so only the
-  // first of them opens it — two adjacent separators would read as three groups.
+  // Hide, block, report and delete share the trailing moderation group, so only
+  // the first of them opens it — two adjacent separators would read as three
+  // groups. Hide leads: it is the mildest tool (this one message, this device,
+  // undoable from its toast), and the escalation reads top-down from there.
+  const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
   const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
+  if (showHide) {
+    menuActions.push({
+      id: "hide",
+      label: "Hide message",
+      icon: EyeOff,
+      groupStart: true,
+      onSelect: () => hiddenMessages.hide(event.id),
+    });
+  }
   if (showMute) {
     menuActions.push({
       id: "mute",
-      label: mute.muted ? "Unmute person" : "Mute person",
+      label: mute.muted ? "Unblock person" : "Block person",
       icon: mute.muted ? UserCheck : UserX,
-      // Unmuting restores someone rather than removing them; styling it
+      // Unblocking restores someone rather than removing them; styling it
       // destructive would read as the dangerous direction of the same switch.
       destructive: !mute.muted,
-      groupStart: true,
+      groupStart: !showHide,
       onSelect: () => void mute.toggle(),
     });
   }
@@ -777,7 +795,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: !showMute,
+      groupStart: !showHide && !showMute,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -787,7 +805,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showMute && !showReport,
+      groupStart: !showHide && !showMute && !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }

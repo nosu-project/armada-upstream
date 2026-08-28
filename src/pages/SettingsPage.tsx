@@ -386,9 +386,9 @@ export function SettingsPage() {
       userItems.push(
         { id: "profile", title: "Profile", icon: UserCircle },
         { id: "notifications", title: "Notifications", icon: Bell },
-        // The only route back from a mute: a muted person appears in no list
-        // anywhere else, so there is nowhere else an unmute could live.
-        { id: "muted", title: "Muted people", icon: UserX },
+        // The only route back from a block: a blocked person appears in no
+        // list anywhere else, so there is nowhere else an unblock could live.
+        { id: "muted", title: "Blocked people", icon: UserX },
       );
     }
     const appItems: NavItem[] = [
