@@ -1,4 +1,4 @@
-import { Braces, ChevronDown, Copy, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -45,6 +45,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
+import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useMutedPubkeys, useMuteToggle } from "@/hooks/useMuteList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -177,8 +178,10 @@ function ThreadMessage({
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
-  // Mute needs no destination, so it is offered wherever a reply is rendered.
+  // Blocking needs no destination, so it is offered wherever a reply is
+  // rendered; hiding is viewer-local and rides beside it.
   const mute = useMuteToggle(event.pubkey);
+  const hiddenMessages = useHiddenMessages();
   const reportTarget: ReportTarget =
     isRumor && reportTo?.kind === "network"
       ? { pubkey: event.pubkey }
@@ -229,17 +232,27 @@ function ThreadMessage({
     });
   }
   menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
-  // Mute, report and delete share the trailing destructive group; only the
-  // first of them opens it.
+  // Hide, block, report and delete share the trailing moderation group; only
+  // the first of them opens it. Same order as ChatMessage: mildest tool first.
+  const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
   const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
+  if (showHide) {
+    menuActions.push({
+      id: "hide",
+      label: "Hide message",
+      icon: EyeOff,
+      groupStart: true,
+      onSelect: () => hiddenMessages.hide(event.id),
+    });
+  }
   if (showMute) {
     menuActions.push({
       id: "mute",
-      label: mute.muted ? "Unmute person" : "Mute person",
+      label: mute.muted ? "Unblock person" : "Block person",
       icon: mute.muted ? UserCheck : UserX,
       destructive: !mute.muted,
-      groupStart: true,
+      groupStart: !showHide,
       onSelect: () => void mute.toggle(),
     });
   }
@@ -249,7 +262,7 @@ function ThreadMessage({
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: !showMute,
+      groupStart: !showHide && !showMute,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -259,7 +272,7 @@ function ThreadMessage({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showMute && !showReport,
+      groupStart: !showHide && !showMute && !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }
@@ -520,11 +533,15 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   // below is derived from the filtered list on purpose: a count that includes
   // replies the reader can't see is a permanent "1 reply" on an empty thread.
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
+  const { hiddenIds } = useHiddenMessages();
   const replies = useMemo(() => {
     const all = threadRepliesFor?.(root.id) ?? [];
-    if (!mutesReady || mutedPubkeys.size === 0) return all;
-    return all.filter((reply) => !mutedPubkeys.has(reply.pubkey));
-  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady]);
+    const dropMuted = mutesReady && mutedPubkeys.size > 0;
+    if (!dropMuted && hiddenIds.size === 0) return all;
+    return all.filter(
+      (reply) => !hiddenIds.has(reply.id) && (!dropMuted || !mutedPubkeys.has(reply.pubkey)),
+    );
+  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds]);
   // A muted root is reachable only by permalink now that the timeline filters,
   // but "reachable only by permalink" isn't "never" — treat it like a root that
   // couldn't be loaded rather than rendering the person the reader muted.
@@ -697,7 +714,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           <MessagesSquare className="size-4 shrink-0" />
           <span className="italic">
             {rootMuted
-              ? "You muted the person who started this thread."
+              ? "You blocked the person who started this thread."
               : "Original message not loaded — it may be older than the channel window."}
           </span>
         </div>

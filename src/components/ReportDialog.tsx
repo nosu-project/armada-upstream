@@ -115,8 +115,8 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
         await muteUser.mutateAsync(target.pubkey);
       } catch (e) {
         toast({
-          title: "Reported, but couldn't mute",
-          description: e instanceof Error ? e.message : "Failed to update your mute list.",
+          title: "Reported, but couldn't block",
+          description: e instanceof Error ? e.message : "Failed to update your block list.",
           variant: "destructive",
         });
         setBusy(false);
@@ -169,7 +169,7 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
                 checked={alsoMute}
                 onCheckedChange={(v) => setAlsoMute(v === true)}
               />
-              Also mute <DisplayName pubkey={target.pubkey} name={name} />
+              Also block <DisplayName pubkey={target.pubkey} name={name} />
             </Label>
           )}
         </div>

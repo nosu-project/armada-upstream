@@ -166,7 +166,7 @@ function useVoiceMenuItems(
               onSelect={() => void mute.toggle()}
             >
               {mute.muted ? <UserCheck className="size-4" /> : <UserX className="size-4" />}
-              {mute.muted ? "Unmute person" : "Mute person"}
+              {mute.muted ? "Unblock person" : "Block person"}
             </Item>
           </>
         )}

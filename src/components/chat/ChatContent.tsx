@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { Download, Expand, Share2 } from "lucide-react";
+import { Copy, Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -15,6 +15,7 @@ import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
 import { MediaFallback } from "@/components/chat/MediaFallback";
 import { CodeBlock, InlineCode } from "@/components/chat/Markdown";
+import { ChatRouteEmbed } from "@/components/chat/ChatRouteEmbed";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { renderInlineMarkdown } from "@/components/chat/markdownRender";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
@@ -28,7 +29,7 @@ import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { CASHU_TOKEN_PATTERN, parseCashuToken } from "@/lib/cashu";
 import { buildEmojiMap } from "@/lib/customEmoji";
-import { writeClipboardText } from "@/lib/clipboard";
+import { canCopyImages, writeClipboardImage, writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
@@ -40,6 +41,7 @@ import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
+import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
 import { cn } from "@/lib/utils";
@@ -53,6 +55,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
 
 import type { AddrCoords } from "@/hooks/useEvent";
+import type { ChatRoute } from "@/lib/routes";
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
@@ -154,6 +157,10 @@ type ContentToken =
   | { type: "link-embed"; url: string }
   | { type: "invite-embed"; url: string }
   | { type: "inline-link"; url: string }
+  /** An own-origin chat link alone on its line — the in-app preview card. */
+  | { type: "self-chat-embed"; url: string; route: ChatRoute; path: string }
+  /** An own-origin chat link mid-sentence — an internal router link. */
+  | { type: "self-link"; url: string; path: string }
   | { type: "mention"; pubkey: string }
   | { type: "text-mention"; pubkey: string; raw: string }
   | { type: "everyone-mention"; raw: string }
@@ -663,12 +670,25 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           const isEndOfLine = lineSuffix.trim() === "";
 
           const isInvite = isInviteUrl(url);
+          // A link back into this app (a copied message link, a channel/server
+          // share, a profile link) routes internally instead of opening a new
+          // tab. Checked before the njump unfold below, which would otherwise
+          // claim a `/dm/npub1…/m/<id>` path by the npub inside it. Invites
+          // are excluded — they already have their own card, matched by path.
+          const selfTarget = isInvite ? null : parseSelfLink(url);
           // A URL whose path IS a nostr id (njump.me/nevent1…, habla.news/…
           // /naddr1…) unfolds to the rich card for that entity, keeping the
           // original url as a "source" back-link. Skipped for invite links,
           // whose naddr points at encrypted content (handled above).
-          const nostrFromUrl = isInvite ? null : extractNostrFromUrl(url);
-          if (isEndOfLine && isInvite) {
+          const nostrFromUrl = isInvite || selfTarget ? null : extractNostrFromUrl(url);
+          if (selfTarget?.kind === "profile") {
+            // A bare `/<npub>` link is exactly a mention, wherever it sits.
+            out.push({ type: "mention", pubkey: selfTarget.pubkey });
+          } else if (selfTarget?.kind === "chat" && isEndOfLine) {
+            out.push({ type: "self-chat-embed", url, route: selfTarget.route, path: selfTarget.path });
+          } else if (selfTarget?.kind === "chat") {
+            out.push({ type: "self-link", url, path: selfTarget.path });
+          } else if (isEndOfLine && isInvite) {
             out.push({ type: "invite-embed", url });
           } else if (isInvite) {
             // A mid-sentence invite link stays a plain link — never a generic
@@ -1049,6 +1069,24 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   };
 
   /**
+   * A link back into this app: a react-router `<Link>`, so it navigates the SPA
+   * instead of reloading the app in a new tab. Labeled with the shortened path
+   * rather than the raw URL — the origin is this app and the ids in it are
+   * opaque, so spelling them out adds nothing a reader can use.
+   */
+  const selfLink = (key: React.Key, url: string, path: string) => (
+    <Link
+      key={key}
+      to={path}
+      title={url}
+      className="text-primary hover:underline break-all"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {selfLinkLabel(path)}
+    </Link>
+  );
+
+  /**
    * Render one token. `topIndex` is the token's index in `groupedTokens`
    * (drives lightbox image indexing; null inside quotes). Inside quotes,
    * block-level media/embed tokens demote to inline links.
@@ -1163,6 +1201,22 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       case "invite-embed":
         if (inQuote) return inlineLink(key, token.url);
         return <InviteEmbed key={key} url={token.url} className="my-1.5" />;
+      case "self-chat-embed":
+        // Demoted to the internal link inside quotes (cards are visually
+        // wrong there) and inside embedded cards, where mounting the preview
+        // — which itself renders a ChatContent — would recurse.
+        if (disableNoteEmbeds || inQuote) return selfLink(key, token.url, token.path);
+        return (
+          <ChatRouteEmbed
+            key={key}
+            url={token.url}
+            route={token.route}
+            path={token.path}
+            className="my-1.5"
+          />
+        );
+      case "self-link":
+        return selfLink(key, token.url, token.path);
       case "inline-link":
         return inlineLink(key, token.url);
       case "media-embed": {
@@ -1451,6 +1505,21 @@ function mdLinkSpoofHost(text: string, href: string): string | undefined {
   }
 }
 
+/**
+ * The label for an in-app link: the router path with its opaque segments
+ * shortened (a pubkey, a relay param, an event id — none of which a reader
+ * gets anything from in full), so the link reads as a place rather than as a
+ * wall of hex. The full URL stays on the `title`.
+ */
+function selfLinkLabel(path: string): string {
+  const [pathname] = path.split(/[?#]/);
+  const shortened = pathname
+    .split("/")
+    .map((seg) => (seg.length > 16 ? `${seg.slice(0, 10)}…` : seg))
+    .join("/");
+  return shortened || path;
+}
+
 /** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
 function extOfUrl(url: string): string | undefined {
   try {
@@ -1519,6 +1588,20 @@ async function shareImage(src: string, image: ImageRef): Promise<void> {
   }
 }
 
+/** Copy a message image to the clipboard as an image, from its resolved src. */
+async function copyImage(src: string): Promise<void> {
+  try {
+    await writeClipboardImage(src);
+    toast({ title: "Copied", description: "The image is on your clipboard." });
+  } catch {
+    toast({
+      title: "Couldn't copy this image",
+      description: "Try saving or sharing it instead.",
+      variant: "destructive",
+    });
+  }
+}
+
 /**
  * Wire an image's tap / long-press / right-click, returning the handlers to
  * spread on its `<button>`.
@@ -1549,6 +1632,14 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
           label: "Share image",
           icon: Share2,
           onSelect: () => void shareImage(resolvedSrc, image),
+        });
+      }
+      if (canCopyImages()) {
+        list.push({
+          id: "img-copy",
+          label: "Copy image",
+          icon: Copy,
+          onSelect: () => void copyImage(resolvedSrc),
         });
       }
     }
