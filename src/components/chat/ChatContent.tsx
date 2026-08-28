@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { Download, Expand, Share2 } from "lucide-react";
+import { Copy, Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -28,7 +28,7 @@ import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { CASHU_TOKEN_PATTERN, parseCashuToken } from "@/lib/cashu";
 import { buildEmojiMap } from "@/lib/customEmoji";
-import { writeClipboardText } from "@/lib/clipboard";
+import { canCopyImages, writeClipboardImage, writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
@@ -1519,6 +1519,20 @@ async function shareImage(src: string, image: ImageRef): Promise<void> {
   }
 }
 
+/** Copy a message image to the clipboard as an image, from its resolved src. */
+async function copyImage(src: string): Promise<void> {
+  try {
+    await writeClipboardImage(src);
+    toast({ title: "Copied", description: "The image is on your clipboard." });
+  } catch {
+    toast({
+      title: "Couldn't copy this image",
+      description: "Try saving or sharing it instead.",
+      variant: "destructive",
+    });
+  }
+}
+
 /**
  * Wire an image's tap / long-press / right-click, returning the handlers to
  * spread on its `<button>`.
@@ -1549,6 +1563,14 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
           label: "Share image",
           icon: Share2,
           onSelect: () => void shareImage(resolvedSrc, image),
+        });
+      }
+      if (canCopyImages()) {
+        list.push({
+          id: "img-copy",
+          label: "Copy image",
+          icon: Copy,
+          onSelect: () => void copyImage(resolvedSrc),
         });
       }
     }

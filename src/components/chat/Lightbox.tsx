@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { ChevronLeft, ChevronRight, Download, Loader2, Share2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Download, Loader2, Share2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -10,6 +10,7 @@ import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
+import { canCopyImages, writeClipboardImage } from "@/lib/clipboard";
 import { downloadUrl } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { cn } from "@/lib/utils";
@@ -317,6 +318,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
             <span />
           )}
           <div className="flex items-center gap-1">
+            <LightboxCopyButton item={media[currentIndex]} />
             <LightboxShareButton item={media[currentIndex]} />
             <LightboxDownloadButton item={media[currentIndex]} />
             <button
@@ -477,6 +479,55 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
       onClick={handleDownload}
     >
       {downloading ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
+    </button>
+  );
+}
+
+/**
+ * Top-bar button that copies the current image to the clipboard.
+ *
+ * Images only — a video has no clipboard representation the way a bitmap does,
+ * so the button doesn't render for one. Hidden too where the platform can't
+ * copy an image (Android's plugin would paste the data URL as text, older
+ * Firefox has no `ClipboardItem`); the download and share buttons cover those.
+ */
+function LightboxCopyButton({ item }: { item: LightboxItem }) {
+  const resolved = useResolvedMediaSrc(item);
+  const [copying, setCopying] = useState(false);
+
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (copying || resolved.status !== "ready") return;
+      setCopying(true);
+      try {
+        await writeClipboardImage(resolved.src);
+        toast({ title: "Copied", description: "The image is on your clipboard." });
+      } catch {
+        toast({
+          title: "Couldn't copy this image",
+          description: "Try downloading or sharing it instead.",
+          variant: "destructive",
+        });
+      } finally {
+        setCopying(false);
+      }
+    },
+    [copying, resolved],
+  );
+
+  if (isVideoItem(item) || resolved.status !== "ready" || !canCopyImages()) return null;
+  return (
+    <button
+      type="button"
+      aria-label="Copy image"
+      title="Copy"
+      disabled={copying}
+      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      onClick={handleCopy}
+    >
+      {copying ? <Loader2 className="size-5 animate-spin" /> : <Copy className="size-5" />}
     </button>
   );
 }
