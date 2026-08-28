@@ -3976,6 +3976,17 @@ export function ConcordPage() {
                           recentAuthors={recentAuthors}
                           conversationRelays={community?.relays}
                           placeholder={communityPaused ? "This community is paused" : user ? `Message #${channel.name}` : "Sign in to send"}
+                          // Android Direct Share: named community-first, since
+                          // a bare "#general" is ambiguous across communities,
+                          // and a suggestion has one short line to identify a
+                          // destination by. No icon, deliberately: a community
+                          // image is an encrypted ImagePointer that only this
+                          // client can decrypt, and the shortcut avatar is
+                          // fetched natively by plain HTTP — handing it the
+                          // ciphertext URL would spend a request to decode
+                          // nothing. The suggestion ships icon-less and the OS
+                          // draws the app icon.
+                          shareLabel={community?.name ? `${community.name} #${channel.name}` : `#${channel.name}`}
                           sendOverride={handleSend}
                           canSend={composerCanSend}
                           onPollSubmit={transport.sendPoll}

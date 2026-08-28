@@ -8,6 +8,7 @@ import {
   PUSH_INSTALLATION_KEY,
   stagePushCleanupForPurge,
 } from "@/lib/pushRegistry";
+import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
 
@@ -126,6 +127,12 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   // their own copy in memory. Deleting the database underneath them would
   // leave the next account reading the previous one's data straight out of it.
   resetKvCaches();
+  // The Android share sheet keeps what was published to it until it is told
+  // otherwise, so the suggestions would go on naming the previous account's
+  // conversations, wearing their avatars, and deep-linking into rooms the next
+  // account may not be in. Not awaited with the rest: it is a system call that
+  // can be rate-limited, and no other teardown step depends on it.
+  void clearShareShortcuts();
   purgeLocalStorage(preservePushCleanup);
   // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
   // not applied, so its databases have to be closed before the sweep runs.

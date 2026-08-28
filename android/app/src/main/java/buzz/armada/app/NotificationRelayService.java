@@ -5804,17 +5804,39 @@ public class NotificationRelayService extends Service {
      * sender's avatar for a DM, or the community image for a channel (like a
      * Signal group chat's group avatar). Best-effort: a failed push (rate
      * limit, OEM quirks) just means the notification renders the ordinary way.
+     *
+     * <p>These are NOT share targets. The category that would make them one is
+     * deliberately absent (see ShareTargetPlugin.CATEGORY_SHARE_TARGET): this
+     * fires on an incoming message, so using it to nominate share suggestions
+     * ranked rooms by who messages the user rather than by who the user
+     * messages. They also carry a rank floor, so that when the shortcut list
+     * fills, the eviction takes one of these rather than a suggestion.
      */
     private void pushConversationShortcut(RoomNotif room, Person sender, Bitmap avatar) {
         try {
             String label = conversationTitle(room);
-            // The shortcut id is the conversation's stable in-app ROUTE, not
-            // the roomKey: it doubles as the Direct Share target id
-            // (EXTRA_SHORTCUT_ID on an incoming share), and a route is the one
-            // spelling the web layer can navigate without service state.
-            // Must match ShareTargetPlugin.publishShortcuts, the other writer
-            // of these shortcuts.
+            // ShortcutManager rate-limits a BACKGROUNDED app to a handful of
+            // pushes per day (reset when it next comes to the foreground), and
+            // this ran once per notification — so a busy day spent the quota on
+            // repeat pushes of rooms that already had a shortcut, and later
+            // ones were dropped. Skip a push that would change nothing, and
+            // skip every push once the quota is gone, so what does get through
+            // is the set that changed rather than an arbitrary prefix of it.
             String id = shortcutIdFor(room);
+            String signature = label + "\u0000" + (avatar != null);
+            if (signature.equals(pushedShortcuts.get(id))) return;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N_MR1) {
+                android.content.pm.ShortcutManager sm =
+                        getSystemService(android.content.pm.ShortcutManager.class);
+                if (sm != null && sm.isRateLimitingActive()) return;
+            }
+            // `id` above is the conversation's stable in-app ROUTE, not the
+            // roomKey: it doubles as the Direct Share target id
+            // (EXTRA_SHORTCUT_ID on an incoming share), and a route is the one
+            // spelling the web layer can navigate without service state. Must
+            // match ShareTargetPlugin.publishShortcuts, which pushes the same
+            // ids — so a room the user also shares to has ONE shortcut that
+            // both writers update in place, rather than two that evict.
             ShortcutInfoCompat.Builder sb = new ShortcutInfoCompat.Builder(this, id)
                     .setShortLabel(label)
                     .setPerson(sender)
@@ -5823,18 +5845,29 @@ public class NotificationRelayService extends Service {
                     // open the room, not scroll to whatever message last
                     // notified.
                     .setIntent(deepLinkIntent(conversationRoute(room.url)))
-                    .setCategories(new java.util.HashSet<>(java.util.Arrays.asList(
-                            ShareTargetPlugin.CATEGORY_CONVERSATION,
-                            ShareTargetPlugin.CATEGORY_SHARE_TARGET)));
+                    .setRank(ShareTargetPlugin.SERVICE_RANK_FLOOR)
+                    .setCategories(new java.util.HashSet<>(java.util.Collections.singletonList(
+                            ShareTargetPlugin.CATEGORY_CONVERSATION)));
             // The shortcut icon is what the conversation layout paints on the
             // left; without it (avatar not fetched yet) the app icon shows until
             // the silent avatar re-post refreshes the shortcut.
             if (avatar != null) sb.setIcon(IconCompat.createWithBitmap(avatar));
             ShortcutManagerCompat.pushDynamicShortcut(this, sb.build());
+            pushedShortcuts.put(id, signature);
         } catch (Exception e) {
             if (BuildConfig.DEBUG) Log.w(TAG, "pushConversationShortcut failed", e);
         }
     }
+
+    /**
+     * Shortcut id → the label/icon state last pushed for it, so an unchanged
+     * push can be skipped. In-memory only: a restarted service re-pushes once
+     * per room, which is the correct behaviour anyway (the system may have
+     * evicted them meanwhile) and cannot go stale the way a persisted copy of
+     * someone else's state could.
+     */
+    private final java.util.Map<String, String> pushedShortcuts =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * The conversation shortcut id for a room: its stable in-app route when

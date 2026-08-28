@@ -53,10 +53,20 @@ export interface ShareShortcutItem {
   iconUrl?: string;
 }
 
+/** One row of {@link dumpShareShortcuts}. */
+export interface ShareShortcutDump {
+  id: string;
+  label: string;
+  rank: number;
+  shareTarget: boolean;
+}
+
 interface ShareTargetNativePlugin {
   peekShare(): Promise<PeekShareResult>;
   checkShare(): Promise<CheckShareResult>;
   publishShortcuts(opts: { shortcuts: ShareShortcutItem[] }): Promise<{ published: number }>;
+  getMaxShortcuts(): Promise<{ max: number }>;
+  dumpShortcuts(): Promise<{ shortcuts: ShareShortcutDump[]; max: number }>;
   clearShortcuts(): Promise<void>;
   addListener(
     eventName: "shareReceived",
@@ -69,6 +79,56 @@ export const ShareTarget = registerPlugin<ShareTargetNativePlugin>("ShareTarget"
 /** True where ShareTargetPlugin.java exists (Android only, like the service). */
 export function hasShareTarget(): boolean {
   return Capacitor.getPlatform() === "android";
+}
+
+/**
+ * How many Direct Share suggestions to publish on this device.
+ *
+ * A device property, not a constant: the per-activity shortcut cap is commonly
+ * 15 but 5 on plenty of builds, and publishing past it silently evicts. The
+ * fallback matches what the publisher assumed before the plugin could answer.
+ */
+export async function maxShareShortcuts(): Promise<number> {
+  try {
+    const { max } = await ShareTarget.getMaxShortcuts();
+    return Number.isFinite(max) && max > 0 ? max : 8;
+  } catch {
+    return 8;
+  }
+}
+
+/**
+ * Drop every published Direct Share suggestion.
+ *
+ * Called on logout: they name the previous account's conversations, carry
+ * their avatars, and deep-link into rooms the next account may not be in.
+ */
+export async function clearShareShortcuts(): Promise<void> {
+  if (!hasShareTarget()) return;
+  try {
+    await ShareTarget.clearShortcuts();
+  } catch {
+    // Best-effort, like every other teardown step in the purge.
+  }
+}
+
+/**
+ * The live dynamic shortcut set, for diagnosing what the OS actually holds.
+ *
+ * Whether the share sheet DISPLAYS a published suggestion, and in what order,
+ * is the system's decision and is not observable from here — so this answers
+ * the one question that is: did what we published survive.
+ */
+export async function dumpShareShortcuts(): Promise<{
+  shortcuts: ShareShortcutDump[];
+  max: number;
+}> {
+  if (!hasShareTarget()) return { shortcuts: [], max: 0 };
+  try {
+    return await ShareTarget.dumpShortcuts();
+  } catch {
+    return { shortcuts: [], max: 0 };
+  }
 }
 
 // ── The share stash ──────────────────────────────────────────────────────────
