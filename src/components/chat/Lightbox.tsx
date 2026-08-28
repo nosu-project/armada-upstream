@@ -6,6 +6,12 @@ import { createPortal } from "react-dom";
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { MediaFallback } from "@/components/chat/MediaFallback";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
@@ -318,7 +324,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
             <span />
           )}
           <div className="flex items-center gap-1">
-            <LightboxCopyButton item={media[currentIndex]} />
             <LightboxShareButton item={media[currentIndex]} />
             <LightboxDownloadButton item={media[currentIndex]} />
             <button
@@ -484,55 +489,6 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
 }
 
 /**
- * Top-bar button that copies the current image to the clipboard.
- *
- * Images only — a video has no clipboard representation the way a bitmap does,
- * so the button doesn't render for one. Hidden too where the platform can't
- * copy an image (Android's plugin would paste the data URL as text, older
- * Firefox has no `ClipboardItem`); the download and share buttons cover those.
- */
-function LightboxCopyButton({ item }: { item: LightboxItem }) {
-  const resolved = useResolvedMediaSrc(item);
-  const [copying, setCopying] = useState(false);
-
-  const handleCopy = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      e.preventDefault();
-      if (copying || resolved.status !== "ready") return;
-      setCopying(true);
-      try {
-        await writeClipboardImage(resolved.src);
-        toast({ title: "Copied", description: "The image is on your clipboard." });
-      } catch {
-        toast({
-          title: "Couldn't copy this image",
-          description: "Try downloading or sharing it instead.",
-          variant: "destructive",
-        });
-      } finally {
-        setCopying(false);
-      }
-    },
-    [copying, resolved],
-  );
-
-  if (isVideoItem(item) || resolved.status !== "ready" || !canCopyImages()) return null;
-  return (
-    <button
-      type="button"
-      aria-label="Copy image"
-      title="Copy"
-      disabled={copying}
-      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
-      onClick={handleCopy}
-    >
-      {copying ? <Loader2 className="size-5 animate-spin" /> : <Copy className="size-5" />}
-    </button>
-  );
-}
-
-/**
  * Top-bar button that hands the current item to the system share sheet.
  *
  * Shares the FILE, never the URL: an encrypted attachment's `url` points at
@@ -626,6 +582,65 @@ function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boo
       />
     </div>
   );
+}
+
+/**
+ * The image's own actions — the same ones the chat image menu offers, minus
+ * "Open" (the lightbox IS open). Save and Share also live in the top bar; the
+ * menu carries them too so a right-click / long-press on the image is the same
+ * menu as in the message list rather than a different, shorter one.
+ *
+ * Each is gated the same way its chat counterpart is: Save works everywhere,
+ * Share needs a file-capable share sheet, Copy needs a real image clipboard.
+ */
+async function saveLightboxImage(src: string, image: EncryptedRef): Promise<void> {
+  try {
+    const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
+    toast(
+      result === "downloaded"
+        ? Capacitor.isNativePlatform()
+          ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
+          : { title: "Saved", description: "Check your downloads folder." }
+        : {
+            title: "Opened in a new tab",
+            description: "This image couldn't be saved directly, so it opened instead.",
+          },
+    );
+  } catch {
+    toast({
+      title: "Download failed",
+      description: "Could not save this image. Please try again.",
+      variant: "destructive",
+    });
+  }
+}
+
+async function shareLightboxImage(src: string, image: EncryptedRef): Promise<void> {
+  const shared = await shareFile(src, {
+    nameHint: image.url,
+    mime: image.mime,
+    dialogTitle: "Share image",
+  });
+  if (!shared) {
+    toast({
+      title: "Couldn't share this image",
+      description: "Try downloading it instead.",
+      variant: "destructive",
+    });
+  }
+}
+
+async function copyLightboxImage(src: string): Promise<void> {
+  try {
+    await writeClipboardImage(src);
+    toast({ title: "Copied", description: "The image is on your clipboard." });
+  } catch {
+    toast({
+      title: "Couldn't copy this image",
+      description: "Try downloading or sharing it instead.",
+      variant: "destructive",
+    });
+  }
 }
 
 const MIN_SCALE = 1;
@@ -848,7 +863,37 @@ function LightboxImage({
     };
   }, [handleTouchMove, handleWheel]);
 
-  return (
+  // The image's own menu — the same actions the chat image menu offers, minus
+  // "Open" (the lightbox already is open). Built only once the source has
+  // resolved, and each entry gated exactly as its chat counterpart is.
+  const resolvedSrc = resolved.status === "ready" ? resolved.src : null;
+  const actions: { id: string; label: string; icon: typeof Copy; onSelect: () => void }[] = [];
+  if (resolvedSrc) {
+    actions.push({
+      id: "img-save",
+      label: "Save image",
+      icon: Download,
+      onSelect: () => void saveLightboxImage(resolvedSrc, image),
+    });
+    if (canShareFiles()) {
+      actions.push({
+        id: "img-share",
+        label: "Share image",
+        icon: Share2,
+        onSelect: () => void shareLightboxImage(resolvedSrc, image),
+      });
+    }
+    if (canCopyImages()) {
+      actions.push({
+        id: "img-copy",
+        label: "Copy image",
+        icon: Copy,
+        onSelect: () => void copyLightboxImage(resolvedSrc),
+      });
+    }
+  }
+
+  const inner = (
     <div
       ref={containerRef}
       className="w-full h-full flex items-center justify-center overflow-hidden"
@@ -911,5 +956,23 @@ function LightboxImage({
         )}
       </div>
     </div>
+  );
+
+  // No resolved bytes yet (or nothing the platform can do with them) → no menu.
+  if (actions.length === 0) return inner;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{inner}</ContextMenuTrigger>
+      {/* Above the lightbox's own z-[200] backdrop, or it opens behind it. */}
+      <ContextMenuContent className="w-48" style={{ zIndex: 210 }}>
+        {actions.map((action) => (
+          <ContextMenuItem key={action.id} onSelect={action.onSelect}>
+            <action.icon className="mr-2 size-4" />
+            {action.label}
+          </ContextMenuItem>
+        ))}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
