@@ -20,7 +20,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   build: {
@@ -35,7 +35,7 @@ export default defineConfig({
     // out of the main process is the only diagnostic a packaged app gives.
     minify: false,
     lib: {
-      entry: path.resolve(__dirname, "src/lib/desktopUpdate.ts"),
+      entry: path.resolve(import.meta.dirname, "src/lib/desktopUpdate.ts"),
       formats: ["cjs"],
       fileName: () => "updateFeed.cjs",
     },
