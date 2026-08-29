@@ -140,10 +140,26 @@ describe("verifyEventsOnce", () => {
     const results = await verifyEventsOnce([ev, { ...ev }, ev], ecVerify);
 
     expect(results).toEqual([true, true, true]);
-    // One EC verify for three copies: the residue is deduped by id, so the
-    // same seal arriving from two relays in one batch costs one point-mul.
+    // One EC verify for three identical copies: the residue is deduped by the
+    // whole triple, so the same seal arriving from two relays in one batch
+    // costs one point-mul.
     const handed = ecVerify.mock.calls.flatMap((c) => c[0]);
     expect(handed).toHaveLength(1);
+  });
+
+  it("does not let a mangled-sig copy veto the honest copy's verdict in one batch", async () => {
+    // Same id (identical content — the hash still binds), different sigs. A
+    // keyholder can craft exactly this: take a victim's real seal, mangle its
+    // sig, re-wrap it. If the dedupe keyed by id alone, the mangled copy
+    // arriving FIRST would carry its verdict onto the honest copy — and
+    // openChatBatch memoizes a false verdict per wrap for the session, so
+    // that would be message suppression, not a hiccup.
+    const ev = signed();
+    const mangled = { ...ev, sig: "00".repeat(64) };
+
+    const results = await verifyEventsOnce([mangled, ev], inlineEcVerify);
+
+    expect(results).toEqual([false, true]);
   });
 
   it("handles an empty batch without consulting the verifier", async () => {

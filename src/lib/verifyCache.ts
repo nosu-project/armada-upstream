@@ -138,10 +138,15 @@ export type EcVerifyBatch = (triples: VerifyTriple[]) => Promise<boolean[]>;
  * wholesale (a dead worker) reads as "unverified" for the residue, never as an
  * exception: the caller drops those events, exactly as a bad sig would.
  *
- * The residue is deduped by id: the same seal arriving from two relays in one
- * batch is one EC verify, with every copy taking that one verdict. Sound for
- * the same reason the memo is — both copies were hash-bound to the id here, so
- * an identical id means identical content.
+ * The residue is deduped by the WHOLE triple (id + sig + pubkey), not by id:
+ * the same seal arriving from two relays in one batch is one EC verify, with
+ * every identical copy taking that one verdict — sound for the same reason the
+ * memo is, since both copies were hash-bound to the id here. The sig must be
+ * part of the key: keyed by id alone, a same-id copy carrying a MANGLED sig —
+ * which a keyholder can mint from anyone's real seal — would carry its false
+ * verdict onto the honest copy in the same batch, and `openChatBatch` memoizes
+ * a false verdict per wrap for the session. Copies with different sigs verify
+ * independently, exactly as the sync path would.
  */
 export async function verifyEventsOnce(
   events: NostrEvent[],
@@ -150,10 +155,10 @@ export async function verifyEventsOnce(
   const start = performance.now();
   const result = new Array<boolean>(events.length);
   const residue: VerifyTriple[] = [];
-  // Which result slots each residue triple answers — a duplicate id adds a
-  // slot to an existing triple's list rather than a second triple.
+  // Which result slots each residue triple answers — an identical duplicate
+  // adds a slot to an existing triple's list rather than a second triple.
   const residueSlots: number[][] = [];
-  const residueById = new Map<string, number>();
+  const residueByTriple = new Map<string, number>();
 
   for (let i = 0; i < events.length; i++) {
     const gate = hashGate(events[i]);
@@ -161,12 +166,13 @@ export async function verifyEventsOnce(
       result[i] = gate.result;
       continue;
     }
-    const at = residueById.get(events[i].id);
+    const key = `${events[i].id}|${events[i].sig}|${events[i].pubkey}`;
+    const at = residueByTriple.get(key);
     if (at !== undefined) {
       residueSlots[at].push(i);
       continue;
     }
-    residueById.set(events[i].id, residue.length);
+    residueByTriple.set(key, residue.length);
     residue.push({ sig: events[i].sig, id: events[i].id, pubkey: events[i].pubkey });
     residueSlots.push([i]);
   }
