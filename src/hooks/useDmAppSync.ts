@@ -1,39 +1,57 @@
 /**
- * In-chat app coordination plane for NIP-17 DMs, scoped to one app session
- * (`uuid`). This is the DM twin of `useConcordAppSync`:
+ * In-chat app coordination plane for a NIP-17 DM, scoped to one app session
+ * (`uuid`). The DM twin of `useConcordAppSync`, and the same two planes:
  *
- *  - **state** (`sendUpdate`) rides kind 3310 (CORD-02 Appendix B) with an `i`
- *    tag (the webxdc uuid). Durable state is read from the DM thread's
- *    kind-3310 rumors filtered by the session id.
- *  - **realtime** (`joinRealtimeChannel`) does NOT ride Nostr at all. Frames
- *    go peer to peer over iroh gossip, the transport Vector uses, so the two
- *    clients share one game rather than two that cannot see each other. The
- *    DM plane carries only the peer signals that let the two parties find
- *    each other.
+ *  - **state** (`sendUpdate`) is a DURABLE kind-3310 rumor carrying an `i` tag
+ *    = the session id, gift-wrapped like every other DM rumor. Read back by
+ *    {@link queryDm17Webxdc} — its OWN query, not a slice of the thread's page,
+ *    because a thread read is one filter with one `limit` and a chatty game
+ *    would otherwise evict the conversation from its own window.
+ *  - **realtime** (`joinRealtimeChannel`) does NOT ride Nostr at all. Frames go
+ *    peer to peer over iroh gossip, the transport Vector uses, so the two
+ *    clients share one game rather than two that cannot see each other. The DM
+ *    plane carries only the peer signals that let the parties find each other.
+ *    Without the transport there is no realtime: a relay fallback would put
+ *    half the room on a plane the other half never reads.
  *
- * Peer signals are kind 30078 rumors (Vector's `vector-webxdc-peer` d tag)
- * gift-wrapped to the DM peer, exactly as Vector sends them. The receiving
- * side is in `useDm17.ts` (openAndStore → dispatchDmPeerSignal).
+ * Peer signals are Vector's DM spelling — a kind-30078 rumor whose CONTENT is
+ * the operation and whose tags carry the topic and node address — sealed and
+ * wrapped to every participant. They are never stored; the receiving side is
+ * `openAndStore` → `dispatchDmPeerSignal` in `useDm17.ts`.
+ *
+ * Addressed by CONVERSATION, not by a peer: a NIP-17 room is its participant
+ * set (`dmConvKey`), and a wrap has to be minted per recipient. Handing a
+ * conversation key to a function expecting a pubkey is exactly how the group
+ * path used to fail — NIP-44 rejects it, so realtime silently never came up.
  */
 
 import { useNostr } from "@nostrify/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { effectiveDmRelays } from "@/contexts/AppContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useDm17Thread, getDmPeerSignals, dmWebxdcPeerScope } from "@/hooks/useDm17";
-import { useWireScopes } from "@/wire/useWireScopes";
+import { useDmRelaysForAll } from "@/hooks/useDmRelayList";
+import {
+  DM_WEBXDC_PEER_SCOPE,
+  dmWebxdcPeerScope,
+  getDmPeerSignals,
+  useDm17Thread,
+} from "@/hooks/useDm17";
+import { queryDm17Webxdc } from "@/lib/nip17/dm17Store";
+import { logSync } from "@/lib/syncLog";
 import {
   buildDmRumor,
-  dmWebxdcTags,
+  dmConvPeers,
   KIND_DM_PEER_SIGNAL,
-  KIND_DM_WEBXDC,
   sealDmRumor,
   wrapDmSeal,
   type Dm17Signer,
+  type OpenedDm,
 } from "@/lib/nip17/protocol";
-import { effectiveDmRelays } from "@/contexts/AppContext";
-import { useAppContext } from "@/hooks/useAppContext";
-import { useDmRelaysForAll } from "@/hooks/useDmRelayList";
+import { dmThreadScope } from "@/wire/bus";
+import { useWireScopes } from "@/wire/useWireScopes";
 
 import {
   realtimeTransport,
@@ -42,13 +60,14 @@ import {
 import {
   base32Decode,
   decodeNodeAddr,
+  dmPeerSignalContent,
+  dmPeerSignalTags,
   encodeNodeAddr,
   foldPeerSignals,
   frame,
   isTopicId,
   unframe,
-  dmPeerSignalTags,
-  dmPeerSignalContent,
+  type PeerSignalEvent,
 } from "@/lib/webxdcRealtime";
 
 import type {
@@ -65,84 +84,79 @@ function tagValue(tags: string[][], name: string): string | undefined {
 }
 
 /**
- * In-chat app coordination plane for a NIP-17 DM, scoped to one app session
- * (`uuid`). Both planes ride the DM's gift-wrap envelope:
- *
- *  - **state** (`sendUpdate`) is a DURABLE kind 3310 (CORD-02 Appendix B) with
- *    an `i` tag = the session uuid. Read back from the DM thread, refreshed live
- *    off the wire bus plus a slow poll.
- *  - **realtime** (`joinRealtimeChannel`) does NOT ride Nostr at all. Frames
- *    go peer to peer over iroh gossip, the transport Vector uses, so the two
- *    clients share one game rather than two that cannot see each other. The
- *    DM plane carries only the peer signals that let the two parties find
- *    each other. Without the transport there is no realtime: a relay fallback
- *    would put half the room on a plane the other half never reads.
+ * In-chat app coordination plane for one NIP-17 conversation and one app
+ * session. `conversation` is a conversation KEY (see `dmConvKey`).
  *
  * Requires a signed-in user with NIP-44 capability (the DM plane is sealed).
  */
 export function useDmAppSync(
-  peer: string | undefined,
+  conversation: string | undefined,
   uuid: string,
 ): AppSync {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
+  const queryClient = useQueryClient();
 
   const self = user?.pubkey;
-  const enabled = Boolean(peer && uuid && user);
+  const peers = useMemo(
+    () => (conversation ? dmConvPeers(conversation) : []),
+    [conversation],
+  );
+  // Who a wrap actually has to be minted for: everyone but us. Empty for Note
+  // to Self, which has no second party to coordinate with.
+  const recipients = useMemo(
+    () => peers.filter((peer) => peer !== self),
+    [peers, self],
+  );
+  const enabled = Boolean(conversation && uuid && self);
 
-  // The DM conversation key for this peer
-  const conversation = peer;
+  // Publishing rides the thread's own send path, so the seal/wrap/expiry rules
+  // are written once. Its query key is the one the page already mounted, so
+  // react-query serves this from cache rather than issuing a second read.
+  const { sendWebxdc } = useDm17Thread(conversation);
 
-  // Get the DM thread for durable state
-  const dmThread = useDm17Thread(conversation);
-
-  // Get the peer's inbox relays (must be called at top level, not in callbacks)
-  const inboxRelays = useDmRelaysForAll(peer ? [peer] : []);
+  const inboxRelays = useDmRelaysForAll(recipients);
 
   // ── Durable state plane ────────────────────────────────────────────────────
 
-  // State updates are kind 3310 (CORD-02 Appendix B) messages with an `i` tag
-  // matching our uuid. We read from the raw query data because webxdc updates
-  // (kind 3310) are filtered out of dmThread.messages.
+  const stateKey = useMemo(
+    () => ["dm17", "app-state", self, conversation, uuid] as const,
+    [self, conversation, uuid],
+  );
+  const { data: opened } = useQuery<OpenedDm[]>({
+    queryKey: stateKey,
+    enabled,
+    // State arrives live off the wire bus (below); this is the slow healing
+    // backstop for a missed ring.
+    refetchInterval: 60_000,
+    queryFn: ({ signal }) => queryDm17Webxdc(self!, peers, uuid, { signal }),
+  });
+
   const stateUpdates = useMemo((): AppStateUpdate[] => {
-    const rawMessages = dmThread.query.data ?? [];
-    if (!rawMessages.length) return [];
-    const updates: AppStateUpdate[] = [];
-    for (const msg of rawMessages) {
-      // Accept kind 3310 (webxdc updates)
-      if (msg.kind !== KIND_DM_WEBXDC) continue;
-      // Filter by session uuid (`i` tag)
-      const sessionTag = tagValue(msg.tags, "i");
-      if (sessionTag !== uuid) continue;
-      // The content is the JSON payload
+    return (opened ?? []).map((rumor) => {
       let payload: unknown;
       try {
-        payload = JSON.parse(msg.content);
+        payload = JSON.parse(rumor.content);
       } catch {
-        payload = msg.content;
+        payload = rumor.content;
       }
-      updates.push({
+      return {
         payload,
-        info: tagValue(msg.tags, "info"),
-        document: tagValue(msg.tags, "document"),
-        summary: tagValue(msg.tags, "summary"),
-      });
-    }
-    return updates;
-  }, [dmThread.query.data, uuid]);
-
-  // ── Publish (state plane) ──────────────────────────────────────────────────
+        info: tagValue(rumor.tags, "info"),
+        document: tagValue(rumor.tags, "document"),
+        summary: tagValue(rumor.tags, "summary"),
+      };
+    });
+  }, [opened]);
 
   const sendState = useCallback(
     (payload: unknown, opts?: AppStateMeta) => {
-      if (!peer || !self || !user?.signer.nip44) return;
-      // Send as a kind 3310 (CORD-02 Appendix B) with the session uuid in the `i` tag.
-      // The content is the JSON payload.
-      const tags = dmWebxdcTags([peer], uuid, opts);
-      void dmThread.sendWebxdc(JSON.stringify(payload), tags).catch(() => {});
+      void sendWebxdc(uuid, JSON.stringify(payload), opts)
+        .then(() => queryClient.invalidateQueries({ queryKey: stateKey }))
+        .catch(() => undefined);
     },
-    [peer, self, user, uuid, dmThread],
+    [sendWebxdc, uuid, queryClient, stateKey],
   );
 
   // ── Gossip session (realtime plane) ────────────────────────────────────────
@@ -171,65 +185,80 @@ export function useDmAppSync(
   }, []);
 
   const listenersRef = useRef(new Set<(data: Uint8Array) => void>());
-  const selfPubkey = user?.pubkey;
 
-  // Peer signals from the DM plane (received via useDm17's openAndStore)
-  const [peerSignals, setPeerSignals] = useState<Array<{ author: string; content: string; ms: number }>>([]);
+  // The signals this CONVERSATION has carried for this topic. Scoped to the
+  // room, not just the topic: who is playing is a question about a room, and a
+  // signal that arrived in one DM must not put its author into a session
+  // opened from another.
+  const [peerSignals, setPeerSignals] = useState<PeerSignalEvent[]>([]);
+  const readPeerSignals = useCallback(() => {
+    if (!conversation || !isTopicId(uuid)) return;
+    setPeerSignals(getDmPeerSignals(conversation, uuid));
+  }, [conversation, uuid]);
 
-  // Subscribe to peer signal updates via wire bus
+  // Whatever arrived while this session was closed is already in hand.
+  useEffect(readPeerSignals, [readPeerSignals]);
+
   useWireScopes((scopes) => {
-    if (!uuid || !isTopicId(uuid)) return;
-    if (scopes.has(dmWebxdcPeerScope(uuid)) || scopes.has("dm:webxdc-peer")) {
-      const signals = getDmPeerSignals(uuid);
-      setPeerSignals(signals.map((s) => ({
-        author: s.author,
-        content: s.op === "ad"
-          ? JSON.stringify({ op: "ad", topic: s.topic, addr: s.addr })
-          : JSON.stringify({ op: "left", topic: s.topic }),
-        ms: s.ms,
-      })));
+    if (!conversation || !isTopicId(uuid)) return;
+    if (
+      scopes.has(dmWebxdcPeerScope(conversation, uuid)) ||
+      scopes.has(DM_WEBXDC_PEER_SCOPE)
+    ) {
+      readPeerSignals();
+    }
+    // Durable state arrives on the thread's own ring.
+    if (scopes.has(dmThreadScope(conversation))) {
+      void queryClient.invalidateQueries({ queryKey: stateKey });
     }
   });
 
   /**
-   * Send a peer signal to the DM peer via gift-wrapped kind 30078.
-   * This matches Vector's `send_webxdc_peer_advertisement` format.
+   * Advertise (or retract) our iroh node address to every participant, in
+   * Vector's DM shape: a kind-30078 rumor whose content is the operation,
+   * sealed and wrapped per recipient like any other DM rumor.
    */
   const sendPeerSignal = useCallback(
     async (topic: string, nodeAddr?: string) => {
-      if (!peer || !self || !user?.signer.nip44) return;
+      if (!self || !user?.signer.nip44 || recipients.length === 0) return;
       const signer = user.signer as unknown as Dm17Signer;
-
-      // Build the peer signal rumor (kind 30078)
-      const content = dmPeerSignalContent(nodeAddr);
-      const tags = dmPeerSignalTags(topic, nodeAddr);
-      // Add the receiver's pubkey as a p tag (Vector's format)
-      tags.push(["p", peer]);
 
       const rumor = buildDmRumor({
         kind: KIND_DM_PEER_SIGNAL,
-        content,
-        tags,
+        content: dmPeerSignalContent(nodeAddr),
+        // The `p` set is what makes this rumor name its conversation on the
+        // other side (`dmPeersOf`), exactly as a message does.
+        tags: [
+          ...dmPeerSignalTags(topic, nodeAddr),
+          ...peers.map((peer) => ["p", peer]),
+        ],
         pubkey: self,
       });
 
-      // Seal and wrap to the peer
-      const seal = await sealDmRumor(rumor, peer, signer);
-      const wrap = wrapDmSeal(seal, peer);
-
-      // Publish to our DM relays and the peer's inbox relays
       const myRelays = effectiveDmRelays(config);
-      const peerInboxRelays = inboxRelays.get(peer) ?? [];
-      const targets = [...new Set([...myRelays, ...peerInboxRelays])];
-
       await Promise.allSettled(
-        targets.map((url) =>
-          nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) }),
-        ),
+        recipients.map(async (recipient) => {
+          const seal = await sealDmRumor(rumor, recipient, signer);
+          const wrap = wrapDmSeal(seal, recipient);
+          const targets = [
+            ...new Set([...(inboxRelays.get(recipient) ?? []), ...myRelays]),
+          ];
+          return Promise.allSettled(
+            targets.map((url) =>
+              nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) }),
+            ),
+          );
+        }),
       );
     },
-    [peer, self, user, config, nostr, inboxRelays],
+    [self, user, peers, recipients, config, nostr, inboxRelays],
   );
+
+  // Held in a ref so the join effect can keep its narrow dependency list: it is
+  // keyed on the session, and must not tear the mesh down because a relay list
+  // resolved.
+  const signalRef = useRef(sendPeerSignal);
+  signalRef.current = sendPeerSignal;
 
   /**
    * Bring up the mesh for this app, if the attachment named a topic and the
@@ -240,7 +269,7 @@ export function useDmAppSync(
    * a topic gossip has not registered, and the frames it carries are dropped.
    */
   useEffect(() => {
-    if (!enabled || !isTopicId(uuid) || !peer || !selfPubkey) return;
+    if (!enabled || !isTopicId(uuid) || !conversation) return;
     const topic = base32Decode(uuid);
     if (!topic || topic.length !== 32) return;
 
@@ -270,16 +299,15 @@ export function useDmAppSync(
         },
         // A mesh that never formed and one where nobody spoke are the same
         // silence, and only these tell them apart.
-        (msg) => console.debug("[webxdc] gossip:", msg),
+        (msg) => logSync("dm", `webxdc gossip: ${msg}`),
       );
       if (cancelled) {
         if (sessionClaim.current === claim) node.leave(topic);
         return;
       }
       gossip.current = { node, topic, key };
-      // Advertise our node address to the peer
-      void sendPeerSignal(uuid, encodeNodeAddr(node.nodeAddrJson()));
-      // Announce readiness so the dial pass runs
+      void signalRef.current(uuid, encodeNodeAddr(node.nodeAddrJson()));
+      // Announce readiness so the dial pass runs.
       setMeshReady((n) => n + 1);
     })();
 
@@ -288,37 +316,35 @@ export function useDmAppSync(
       const g = gossip.current;
       gossip.current = undefined;
       if (!g) return;
-      // Tell the peer before dropping the mesh
-      void sendPeerSignal(uuid);
+      // Tell the room before dropping the mesh.
+      void signalRef.current(uuid);
       g.node.leave(g.topic);
       dialled.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, uuid, peer, selfPubkey]);
+  }, [enabled, uuid, conversation]);
 
   /**
-   * Dial the peers the DM plane has advertised, whenever the signals change or
-   * the mesh finishes coming up.
+   * Dial the peers this conversation has advertised, whenever the signals
+   * change or the mesh finishes coming up.
    */
   useEffect(() => {
     const g = gossip.current;
     if (!g || !isTopicId(uuid)) return;
-    const peers = foldPeerSignals(peerSignals, uuid, selfPubkey);
-    for (const peerSignal of peers) {
+    for (const peer of foldPeerSignals(peerSignals, uuid, self)) {
       if (inFlightDials.current >= MAX_DIAL_PEERS) break;
-      if (dialledRef.current.has(peerSignal.addr)) continue;
-      dialledRef.current.add(peerSignal.addr);
-      const json = decodeNodeAddr(peerSignal.addr);
+      if (dialledRef.current.has(peer.addr)) continue;
+      dialledRef.current.add(peer.addr);
+      const json = decodeNodeAddr(peer.addr);
       if (!json) continue;
       inFlightDials.current += 1;
       void g.node
         .addPeer(g.topic, json)
-        .catch(() => dialledRef.current.delete(peerSignal.addr))
+        .catch(() => dialledRef.current.delete(peer.addr))
         .finally(() => {
           inFlightDials.current -= 1;
         });
     }
-  }, [peerSignals, uuid, selfPubkey, meshReady]);
+  }, [peerSignals, uuid, self, meshReady]);
 
   const onRealtime = useCallback((cb: (data: Uint8Array) => void) => {
     listenersRef.current.add(cb);

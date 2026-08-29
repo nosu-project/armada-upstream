@@ -36,7 +36,12 @@ class Dm17Test {
 
     @Test
     fun `keeps every DM-plane kind`() {
-        for (kind in listOf(5, 7, 14, 15, 1740)) {
+        // The port of `DM_RUMOR_KINDS`, and it must be the WHOLE of it: the
+        // service is a second writer into the tenant the WebView reads, so a
+        // kind only one of them accepts is a rumor that reaches the store on
+        // one path and not the other. Mini App state (3310) arriving while the
+        // app is dead would simply be dropped.
+        for (kind in listOf(5, 7, 14, 15, 1740, 3310)) {
             assertTrue(Dm17.storable(self, rumor(kind = kind, pubkey = alice), now))
         }
     }
@@ -47,6 +52,24 @@ class Dm17Test {
         // Concord invite arrives in a DM wrap but belongs to another plane.
         assertFalse(Dm17.storable(self, rumor(kind = 23311, pubkey = alice), now))
         assertFalse(Dm17.storable(self, rumor(kind = 1059, pubkey = alice), now))
+    }
+
+    @Test
+    fun `refuses a Mini App peer signal`() {
+        // A kind-30078 peer signal names an iroh node address that is
+        // meaningless once the session ends, so it is live routing rather than
+        // history and the JS side stores none either. A service that filed one
+        // would put a stale address into a dial set months later.
+        val signal = rumor(
+            kind = 30078,
+            pubkey = alice,
+            tags = listOf(
+                listOf("p", self),
+                listOf("d", "vector-webxdc-peer"),
+                listOf("webxdc-topic", "A".repeat(52)),
+            ),
+        )
+        assertFalse(Dm17.storable(self, signal, now))
     }
 
     @Test

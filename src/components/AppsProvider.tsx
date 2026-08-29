@@ -71,7 +71,7 @@ function DmRunningApp({
   active: ActiveApp & { scope: Extract<AppScope, { kind: "dm" }> };
   children: (sync: AppSync) => React.ReactNode;
 }) {
-  const sync = useDmAppSync(active.scope.peer, active.sessionId);
+  const sync = useDmAppSync(active.scope.conversation, active.sessionId);
   return <>{children(sync)}</>;
 }
 

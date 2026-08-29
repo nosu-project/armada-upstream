@@ -53,12 +53,11 @@ import { markOwnWebPushEvent } from "@/lib/webPushState";
 import {
   buildDmEditRumors,
   buildDmRumor,
-  DM_PEER_SIGNAL_D,
   DM_RUMOR_KINDS,
   dmChatTags,
+  dmConvKey,
   dmConvPeers,
   dmDeleteTags,
-  dmFileTags,
   dmReactionTags,
   dmTimerTags,
   dmWebxdcTags,
@@ -71,11 +70,13 @@ import {
   KIND_DM_REACTION,
   KIND_DM_TIMER,
   KIND_DM_WEBXDC,
+  KIND_DM_WRAP,
   MAX_WRAP_BACKDATE_SECS,
   openDmWrap,
   sealDmRumor,
   wrapDmSeal,
   type Dm17Signer,
+  type DmWebxdcMeta,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -98,6 +99,11 @@ import {
   type Dm17Cursor,
 } from "@/lib/nip17/dm17Store";
 import { persistDm17ThreadSnapshot, prewarmDm17ThreadSnapshot } from "@/lib/nip17/threadSnapshot";
+import {
+  parseDmPeerSignal,
+  peerSignalContent,
+  type PeerSignalEvent,
+} from "@/lib/webxdcRealtime";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
@@ -278,85 +284,69 @@ function persistSeenWraps(self: string): void {
   }).catch(() => undefined);
 }
 
-/** Wire scope for DM WebXDC peer signals (gossip channel coordination). */
-export function dmWebxdcPeerScope(topic: string): string {
-  return `dm:webxdc-peer:${topic}`;
+// ── Mini App peer signals (Vector's DM realtime discovery) ──────────────────
+//
+// A peer signal is a kind-30078 rumor inside an ordinary gift wrap, naming an
+// iroh node address for one Mini App topic. It is LIVE data — the address it
+// carries is meaningless once that session ends — so it is never stored, and
+// no relay query asks for the bare kind: a kind-30078 addressed to us that
+// arrived outside a wrap proves only that someone can spell our pubkey, and
+// admitting it would let any author put a node into our dial set.
+
+/** Wire scope for one conversation's Mini App peer signals. */
+export function dmWebxdcPeerScope(conversation: string, topic: string): string {
+  return `dm:webxdc-peer:${conversation}:${topic}`;
 }
 
-/** A parsed DM WebXDC peer signal. */
-export interface DmPeerSignal {
-  topic: string;
-  op: "ad" | "left";
-  addr?: string;
-  author: string;
-  ms: number;
-}
+/** Every DM peer signal, whatever the conversation or topic. */
+export const DM_WEBXDC_PEER_SCOPE = "dm:webxdc-peer";
 
-/**
- * Parse a WebXDC peer signal from an opened DM rumor.
- * Vector sends these as kind 30078 rumors with content "peer-advertisement"
- * or "peer-left", gift-wrapped inside kind 1059.
- * Returns the signal data or undefined if not a valid peer signal.
- */
-function parsePeerSignalFromRumor(rumor: { kind: number; content: string; tags: string[][]; author: string; createdAt: number }): DmPeerSignal | undefined {
-  if (rumor.kind !== KIND_DM_PEER_SIGNAL) return undefined;
-  
-  // Find the webxdc-topic tag
-  const topicTag = rumor.tags.find(([name]) => name === "webxdc-topic");
-  if (!topicTag || topicTag.length < 2) return undefined;
-  const topic = topicTag[1];
-  
-  // Validate topic format (52 uppercase base32 chars)
-  if (topic.length !== 52 || !/^[A-Z2-7]+$/.test(topic)) return undefined;
-  
-  // Determine operation from content
-  if (rumor.content === "peer-left") {
-    return { topic, op: "left", author: rumor.author, ms: rumor.createdAt * 1000 };
-  } else if (rumor.content === "peer-advertisement") {
-    // Find the webxdc-node-addr tag
-    const addrTag = rumor.tags.find(([name]) => name === "webxdc-node-addr");
-    if (!addrTag || addrTag.length < 2) return undefined;
-    return { topic, op: "ad", addr: addrTag[1], author: rumor.author, ms: rumor.createdAt * 1000 };
-  }
-  
-  return undefined;
-}
-
-/**
- * Parse a WebXDC peer signal event (for direct kind 30078 events, not gift-wrapped).
- * Returns the signal data or undefined if not a valid peer signal.
- */
-function parsePeerSignal(event: NostrEvent): DmPeerSignal | undefined {
-  return parsePeerSignalFromRumor({
-    kind: event.kind,
-    content: event.content,
-    tags: event.tags,
-    author: event.pubkey,
-    createdAt: event.created_at,
-  });
-}
-
-/** In-memory store of recent DM peer signals for WebXDC realtime channels. */
-const dmPeerSignalStore = new Map<string, DmPeerSignal[]>();
+/** Recent peer signals, keyed by conversation and topic. */
+const dmPeerSignalStore = new Map<string, PeerSignalEvent[]>();
 const DM_PEER_SIGNAL_MAX = 100;
 
-/** Get recent peer signals for a topic. */
-export function getDmPeerSignals(topic: string): DmPeerSignal[] {
-  return dmPeerSignalStore.get(topic) ?? [];
+function peerSignalKey(conversation: string, topic: string): string {
+  return `${conversation}\u0000${topic}`;
 }
 
-/** Store and dispatch a DM peer signal. */
-function dispatchDmPeerSignal(signal: DmPeerSignal): void {
-  const existing = dmPeerSignalStore.get(signal.topic) ?? [];
-  existing.push(signal);
-  // Keep bounded
+/**
+ * The signals one conversation has carried for one topic, in the shape
+ * {@link foldPeerSignals} reads.
+ *
+ * Keyed by the CONVERSATION as well as the topic. A topic is minted per send
+ * so two conversations do not collide by accident, but "who is playing" is a
+ * question about a room: a signal that arrived in one DM must not put its
+ * author into a session opened from another.
+ */
+export function getDmPeerSignals(conversation: string, topic: string): PeerSignalEvent[] {
+  return dmPeerSignalStore.get(peerSignalKey(conversation, topic)) ?? [];
+}
+
+/**
+ * Read a peer signal out of an opened rumor and hand it to whichever session
+ * is listening. Vector's DM spelling (the operation is the CONTENT, the topic
+ * and address are tags) is converted to the one canonical fold input here, so
+ * the DM and Concord planes are folded by the same code.
+ */
+function dispatchDmPeerSignal(dm: OpenedDm): void {
+  const signal = parseDmPeerSignal(dm.content, dm.tags);
+  if (!signal) return;
+  const conversation = dmConvKey(dm.peers);
+  if (!conversation) return;
+
+  const key = peerSignalKey(conversation, signal.topic);
+  const existing = dmPeerSignalStore.get(key) ?? [];
+  existing.push({
+    author: dm.author,
+    content: peerSignalContent(signal.topic, signal.op === "ad" ? signal.addr : undefined),
+    ms: dm.createdAt * 1000,
+  });
   if (existing.length > DM_PEER_SIGNAL_MAX) {
     existing.splice(0, existing.length - DM_PEER_SIGNAL_MAX);
   }
-  dmPeerSignalStore.set(signal.topic, existing);
-  
-  // Notify listeners via wire bus
-  emitWireScopes([dmWebxdcPeerScope(signal.topic), "dm:webxdc-peer"]);
+  dmPeerSignalStore.set(key, existing);
+
+  emitWireScopes([dmWebxdcPeerScope(conversation, signal.topic), DM_WEBXDC_PEER_SCOPE]);
 }
 
 /**
@@ -385,8 +375,8 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
 
   const seen = seenSetFor(ctx.self);
   const opened: OpenedDm[] = [];
-  const peerSignals: DmPeerSignal[] = [];
-  
+  const peerSignals: OpenedDm[] = [];
+
   // Bounded waves, never one unthrottled Promise.all: each wrap costs two
   // NIP-44 opens (synchronous noble crypto for local signers), so a full
   // cold-scan page as one microtask-chained batch blocks the main thread for
@@ -395,30 +385,15 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
   for (let i = 0; i < wraps.length; i += DECRYPT_WAVE) {
     await Promise.all(
       wraps.slice(i, i + DECRYPT_WAVE).map(async (wrap) => {
-        seen.add(wrap.id);
-        
-        // Handle direct peer signals (Kind 30078) - sent without gift wrap
-        // (for forward compatibility; Vector normally gift-wraps these)
-        if (wrap.kind === KIND_DM_PEER_SIGNAL) {
-          const signal = parsePeerSignal(wrap);
-          if (signal) {
-            peerSignals.push(signal);
-          }
-          return;
-        }
-        
-        // Handle gift-wrapped DMs (Kind 1059)
         const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self);
+        seen.add(wrap.id);
         if (!dm) return;
-        
-        // Check if this is a gift-wrapped peer signal (Vector's format:
-        // kind 30078 rumor inside kind 1059 wrap)
-        const peerSignal = parsePeerSignalFromRumor(dm);
-        if (peerSignal) {
-          peerSignals.push(peerSignal);
+        // A Mini App peer signal is live routing, not history: collected here
+        // and dispatched below rather than stored.
+        if (dm.kind === KIND_DM_PEER_SIGNAL) {
+          peerSignals.push(dm);
           return;
         }
-        
         // Foreign rumor kinds (e.g. Concord direct invites, kind 3313) are not
         // ours to store — their own scan paths handle them.
         if (DM_RUMOR_KINDS.includes(dm.kind)) opened.push(dm);
@@ -426,16 +401,12 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
     );
     if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
   }
-  
+
   await writeDm17Rumors(ctx.self, opened);
   feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
   persistSeenWraps(ctx.self);
-  
-  // Dispatch peer signals to the WebXDC runtime via wire bus
-  for (const signal of peerSignals) {
-    dispatchDmPeerSignal(signal);
-  }
-  
+  for (const signal of peerSignals) dispatchDmPeerSignal(signal);
+
   return true;
 }
 
@@ -590,18 +561,17 @@ export interface Dm17RelayQueryResult {
 export async function queryWrapsPerRelay(
   nostr: NostrPool,
   relays: string[],
-  filter: NostrFilter | NostrFilter[] | ((url: string) => NostrFilter | NostrFilter[]),
+  filter: NostrFilter | ((url: string) => NostrFilter),
   signal: AbortSignal,
 ): Promise<Dm17RelayQueryResult> {
   const settled = await Promise.allSettled(
-    relays.map(async (url): Promise<Dm17RelayPage> => {
-      const resolved = typeof filter === "function" ? filter(url) : filter;
-      const filters = Array.isArray(resolved) ? resolved : [resolved];
-      return {
-        url,
-        events: await nostr.relay(url).query(filters, { signal }),
-      };
-    }),
+    relays.map(async (url): Promise<Dm17RelayPage> => ({
+      url,
+      events: await nostr.relay(url).query(
+        [typeof filter === "function" ? filter(url) : filter],
+        { signal },
+      ),
+    })),
   );
   const pages: Dm17RelayPage[] = [];
   const failed: string[] = [];
@@ -629,53 +599,48 @@ function mergeRelayPages(pages: Dm17RelayPage[]): NostrEvent[] {
  * returned. An empty page therefore still bounds the next poll's window to
  * the backdate horizon, without ever advancing past a backdated wrap still
  * en route — which is what writing wall clock here would do.
+ *
+ * Only GIFT WRAPS raise it, and the kind check is the whole guarantee rather
+ * than a formality: the floor is sound only because every event counted here
+ * is backdated by at most the horizon. An event published at wall clock —
+ * anything that is not a 1059 — would drag the watermark a full two days past
+ * where a backdated wrap still in flight will land, and the next narrow poll
+ * would simply not select it. That is a silently lost DM, so a page that
+ * somehow carries another kind is watermarked as if it were empty.
  */
 export function relayScanWatermarks(pages: Dm17RelayPage[], nowSecs: number): Record<string, number> {
   const floor = nowSecs - MAX_WRAP_BACKDATE_SECS;
   const out: Record<string, number> = {};
   for (const page of pages) {
-    out[page.url] = Math.max(floor, ...page.events.map((event) => event.created_at));
+    const backdated = page.events.filter((event) => event.kind === KIND_DM_WRAP);
+    out[page.url] = Math.max(floor, ...backdated.map((event) => event.created_at));
   }
   return out;
 }
 
-/** Build one relay's top-up filters from that relay's own successful progress.
- * Returns an ARRAY of filters: one for DM gift wraps (kind 1059), one for
- * WebXDC peer signals (kind 30078). They must be separate because Nostr ANDs
- * all conditions within a single filter — a `#d` condition would exclude
- * kind-1059 wraps (which have no `d` tag) entirely.
+/**
+ * Build one relay's top-up filter from that relay's own successful progress.
+ *
+ * Gift wraps and nothing else. A Mini App peer signal rides INSIDE one of
+ * these like every other DM rumor, so there is no second filter to ask for:
+ * a bare kind-30078 addressed to us is an event any author can publish, and
+ * asking for it would both admit unauthenticated node addresses into the dial
+ * set and put a non-backdated event into the page {@link relayScanWatermarks}
+ * reads.
  */
 export function dm17InboxFilter(
   self: string,
   cursor: Dm17Cursor | undefined,
   relay: string,
   full: boolean,
-): NostrFilter[] {
+): NostrFilter {
   const newest = cursor?.relayNewest?.[relay];
-  const since = newest !== undefined
-    ? Math.max(0, newest - (full ? RESYNC_SLACK_SECS : NARROW_RESYNC_SLACK_SECS))
-    : undefined;
-
-  // DM gift wraps (kind 1059) — no `d` tag filter
-  const wrapFilter: NostrFilter = {
-    kinds: [1059],
-    "#p": [self],
-    limit: INBOX_PAGE,
-  };
-  if (since !== undefined) wrapFilter.since = since;
-
-  // WebXDC peer signals (kind 30078) — with `d` tag filter
-  // Note: Vector gift-wraps these, so they normally arrive as kind 1059.
-  // This filter catches any sent directly (for forward compatibility).
-  const peerSignalFilter: NostrFilter = {
-    kinds: [KIND_DM_PEER_SIGNAL],
-    "#p": [self],
-    "#d": [DM_PEER_SIGNAL_D],
-    limit: INBOX_PAGE,
-  };
-  if (since !== undefined) peerSignalFilter.since = since;
-
-  return [wrapFilter, peerSignalFilter];
+  const filter: NostrFilter = { kinds: [KIND_DM_WRAP], "#p": [self], limit: INBOX_PAGE };
+  if (newest !== undefined) {
+    const slack = full ? RESYNC_SLACK_SECS : NARROW_RESYNC_SLACK_SECS;
+    filter.since = Math.max(0, newest - slack);
+  }
+  return filter;
 }
 
 /**
@@ -779,16 +744,10 @@ async function pageOlderDmWraps(
   until: number,
   interactive: boolean,
 ): Promise<{ oldest?: number; exhausted: boolean; scanned: number }> {
-  // Separate filters: kind 1059 (gift wraps) and kind 30078 (peer signals).
-  // They must be separate because Nostr ANDs all conditions within a single
-  // filter — a `#d` condition would exclude kind-1059 wraps entirely.
   const result = await queryWrapsPerRelay(
     ctx.nostr,
     ctx.relays,
-    [
-      { kinds: [1059], "#p": [ctx.self], until, limit: INBOX_PAGE },
-      { kinds: [KIND_DM_PEER_SIGNAL], "#p": [ctx.self], "#d": [DM_PEER_SIGNAL_D], until, limit: INBOX_PAGE },
-    ],
+    { kinds: [KIND_DM_WRAP], "#p": [ctx.self], until, limit: INBOX_PAGE },
     AbortSignal.timeout(8000),
   );
   // No successful relay is not an empty page. Throw so callers leave their
@@ -912,8 +871,6 @@ interface PendingPublish {
 export interface Dm17Thread {
   /** Chat/file rumors, deletes applied, ascending (oldest first). */
   messages: OpenedDm[];
-  /** Raw query data including webxdc updates (for useDmAppSync). */
-  query: { data: OpenedDm[] | undefined };
   /** Reaction rumors grouped by their `e` target id (deletes applied). */
   reactionsByTarget: Map<string, OpenedDm[]>;
   /**
@@ -954,24 +911,15 @@ export interface Dm17Thread {
   /** Send a chat message (kind 14). Resolves once optimistically rendered. */
   send: (content: string, extraTags?: string[][]) => Promise<void>;
   /**
-   * Send a kind-3310 WebXDC update (CORD-02 Appendix B). Used for in-chat app
-   * state coordination. The content is JSON, and tags include the session uuid.
+   * Publish one Mini App state update (kind 3310) into this conversation,
+   * scoped to `uuid` — the session the attachment named.
+   *
+   * The metadata is webxdc's own `sendUpdate` payload and is passed as FIELDS
+   * rather than as pre-built tags: a caller that hands over tags has to be
+   * trusted to have built them the way this rumor's kind requires, and the one
+   * that did was silently losing all three.
    */
-  sendWebxdc: (content: string, tags: string[][]) => Promise<void>;
-  /**
-   * Send a file message (kind 15). For `.xdc` Mini Apps, automatically mints
-   * a webxdc-topic for realtime gossip session identification.
-   */
-  sendFile: (opts: {
-    fileUrl: string;
-    fileHash: string;
-    fileName: string;
-    mimeType: string;
-    fileSize: number;
-    thumbnail?: string;
-    dim?: string;
-    blurhash?: string;
-  }) => Promise<void>;
+  sendWebxdc: (uuid: string, payload: string, meta?: DmWebxdcMeta) => Promise<void>;
   /** Send a kind-7 reaction targeting a message in this conversation. */
   react: (targetId: string, targetKind: number, content: string, emojiUrl?: string) => void;
   /** Retract an own reaction (kind-5 delete of the reaction rumor). */
@@ -1683,75 +1631,24 @@ export function useDm17Thread(
   const discard = dropPending;
 
   /**
-   * Send a Kind 15 file message with optional webxdc-topic for Mini Apps.
+   * Publish one Mini App state update (kind 3310) into this conversation.
    *
-   * For `.xdc` files, automatically mints a webxdc-topic using the file hash
-   * and sender pubkey, matching Vector's approach for cross-client compatibility.
-   */
-  const sendFile = useCallback(
-    async (opts: {
-      fileUrl: string;
-      fileHash: string;
-      fileName: string;
-      mimeType: string;
-      fileSize: number;
-      thumbnail?: string;
-      dim?: string;
-      blurhash?: string;
-    }) => {
-      if (!canSend || !self || peers.length === 0) {
-        throw new Error("This conversation isn't reachable over private DMs yet.");
-      }
-
-      const expiresAt = await resolveExpiry();
-      
-      // Check if this is a .xdc Mini App file
-      const isXdc = opts.fileName.toLowerCase().endsWith('.xdc');
-      let webxdcTopic: string | undefined;
-      
-      if (isXdc) {
-        // Import mintTopicId dynamically to avoid circular dependencies
-        const { mintTopicId } = await import("@/lib/webxdcRealtime");
-        webxdcTopic = mintTopicId(opts.fileHash, self);
-      }
-
-      // Build NIP-94 file metadata tags
-      const fileTags: string[][] = [
-        ["file-type", opts.mimeType],
-        ["size", String(opts.fileSize)],
-        ["name", opts.fileName],
-      ];
-      
-      if (opts.thumbnail) fileTags.push(["thumb", opts.thumbnail]);
-      if (opts.dim) fileTags.push(["dim", opts.dim]);
-      if (opts.blurhash) fileTags.push(["blurhash", opts.blurhash]);
-
-      const rumor = buildDmRumor({
-        kind: KIND_DM_FILE,
-        content: opts.fileUrl,
-        tags: dmFileTags(peers, fileTags, { webxdcTopic, expiresAt }),
-        pubkey: self,
-      });
-
-      dispatchRumor(rumor, openedOf(rumor), { firstContact: messages.length === 0 });
-    },
-    [canSend, self, peers, resolveExpiry, dispatchRumor, openedOf, messages.length],
-  );
-
-  /**
-   * Send a kind-3310 WebXDC update (CORD-02 Appendix B). Used for in-chat app
-   * state coordination. The content is JSON, and tags include the session uuid.
+   * The session id and the webxdc metadata are the arguments, and the tags are
+   * built HERE: a caller passing pre-built tags has to be trusted to have
+   * spelled this kind's requirements correctly, and the one that did dropped
+   * `info`/`document`/`summary` on the floor — the three fields webxdc's own
+   * `sendUpdate` carries.
    */
   const sendWebxdc = useCallback(
-    async (content: string, tags: string[][]) => {
+    async (uuid: string, payload: string, meta?: DmWebxdcMeta) => {
       if (!canSend || !self || peers.length === 0) {
         throw new Error("This conversation isn't reachable over private DMs yet.");
       }
       const expiresAt = await resolveExpiry();
       const rumor = buildDmRumor({
         kind: KIND_DM_WEBXDC,
-        content,
-        tags: dmWebxdcTags(peers, tags.find(([n]) => n === "i")?.[1] ?? "", { expiresAt }),
+        content: payload,
+        tags: dmWebxdcTags(peers, uuid, { ...meta, expiresAt }),
         pubkey: self,
       });
       dispatchRumor(rumor, openedOf(rumor), { firstContact: messages.length === 0 });
@@ -1817,7 +1714,6 @@ export function useDm17Thread(
 
   return {
     messages,
-    query: { data: query.data },
     reactionsByTarget,
     timerChanges,
     timer,
@@ -1829,7 +1725,6 @@ export function useDm17Thread(
     firstPaintReady,
     canSend,
     send,
-    sendFile,
     sendWebxdc,
     react,
     removeReaction,

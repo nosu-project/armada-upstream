@@ -976,8 +976,11 @@ function Conversation({
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
     <div className="flex flex-col flex-1 min-h-0">
-      {/* Top-of-chat app stage (webxdc apps) for this DM. */}
-      <AppStageSlot scope={{ kind: "dm", peer }} />
+      {/* Top-of-chat app stage (Mini Apps) for this DM. Keyed by the
+          CONVERSATION, which is what the launch card's `ChatScopeContext`
+          carries — a group's first participant would name a scope the card
+          never spells, and the stage would host nothing. */}
+      <AppStageSlot scope={{ kind: "dm", conversation }} />
       <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         {/* Mobile back → returns to the rail + conversation list (the shared
             DM-list view), the same panes that are persistently rendered. */}
@@ -2982,7 +2985,7 @@ export function DMsPage() {
           recipient picker takes this column in place of the empty state. */}
       <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
         {renderedPeer ? (
-          <ChatScopeContext.Provider value={{ kind: "dm", peer: renderedPeer }}>
+          <ChatScopeContext.Provider value={{ kind: "dm", conversation: renderedPeer }}>
             <Conversation
               key={renderedPeer}
               conversation={renderedPeer}

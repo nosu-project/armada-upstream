@@ -11,7 +11,14 @@ import type { ImetaEncryption } from "@/lib/imeta";
 export type AppScope =
   | { kind: "nip29"; relayUrl: string; groupId: string }
   | { kind: "concord"; community: Community; channel: Channel }
-  | { kind: "dm"; peer: string };
+  /**
+   * A NIP-17 conversation, named by its participant SET (`dmConvKey`) and never
+   * by one peer. The two spellings coincide for a 1:1 and diverge for a group,
+   * and a scope that carried a peer named a room that only sometimes existed:
+   * the launch card and the stage slot then keyed differently, so the app
+   * portalled into a slot nothing had registered.
+   */
+  | { kind: "dm"; conversation: string };
 
 /**
  * A stable string identifying a chat scope. MUST be deterministic and identical
@@ -30,8 +37,9 @@ export function appScopeKey(scope: AppScope): string {
       // coordination session from every other client in the same channel.
       return `concord2|${scope.channel.idHex}`;
     case "dm":
-      // DM scope is identified by the peer's pubkey
-      return `dm|${scope.peer}`;
+      // The participant set, which for a 1:1 is byte-identical to the single
+      // pubkey this used to be — so no existing session is renamed.
+      return `dm|${scope.conversation}`;
   }
 }
 

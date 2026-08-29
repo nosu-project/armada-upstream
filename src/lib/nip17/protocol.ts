@@ -121,22 +121,21 @@ export const KIND_DM_WRAP_EPHEMERAL = 21059;
 export const TYPING_WINDOW_SECS = 8;
 
 /**
- * WebXDC update (CORD-02 Appendix B). Used for in-chat app state coordination
- * in DMs, matching Concord's kind 3310. Not stored in the DM rumor store —
- * read by useDmAppSync for webxdc state synchronization.
+ * In-chat app state (the same kind Concord's chat plane carries, CORD-02
+ * Appendix B). Durable, stored like any other DM rumor, and read back by
+ * {@link queryDm17Webxdc} — never by a thread read, which is what
+ * {@link DM_THREAD_KINDS} is for.
  */
 export const KIND_DM_WEBXDC = 3310;
+
 /**
- * WebXDC peer signal kind (Vector's custom kind for Mini App realtime).
- * Not stored in the DM rumor store — processed live for gossip channel coordination.
+ * Vector's DM peer-signal kind. These arrive gift-wrapped like any other DM
+ * rumor and are processed LIVE — they name a transport address that is
+ * meaningless once the session ends, so nothing stores one and no relay query
+ * asks for one directly (a bare kind-30078 addressed to us proves only that
+ * someone spelled our pubkey).
  */
 export const KIND_DM_PEER_SIGNAL = 30078;
-
-/** The `d` tag Vector scopes its DM peer signals under. */
-export const DM_PEER_SIGNAL_D = "vector-webxdc-peer";
-
-/** Peer signal kinds that should be processed live (not stored). */
-export const DM_PEER_SIGNAL_KINDS = [KIND_DM_PEER_SIGNAL];
 
 /** Every rumor kind the DM plane stores and folds. */
 export const DM_RUMOR_KINDS = [
@@ -147,6 +146,18 @@ export const DM_RUMOR_KINDS = [
   KIND_DM_TIMER,
   KIND_DM_WEBXDC,
 ];
+
+/**
+ * The kinds a THREAD read asks for — everything stored except app state.
+ *
+ * A conversation read is one filter with one `limit` (see
+ * `conversationFilters`), so every kind in it competes for the same rows. App
+ * state is unbounded in a way messages are not: one game can emit an update
+ * per move, which would evict the conversation from its own page and, read the
+ * other way, truncate the game's own history to whatever the messages left
+ * over. So 3310 is stored, and read back by its own per-session query.
+ */
+export const DM_THREAD_KINDS = DM_RUMOR_KINDS.filter((kind) => kind !== KIND_DM_WEBXDC);
 
 /** NIP-59: outer (seal + wrap) timestamps are tweaked into the past, ≤ 2 days. */
 export const MAX_WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
@@ -276,39 +287,25 @@ export function dmDeleteTags(
 }
 
 /**
- * Tags for a kind-15 file message rumor. The `p` set leads (conversation
- * attribution — NIP-17 receivers), followed by NIP-94 file metadata tags
- * (file-type, size, dim, blurhash, thumb, encryption params, etc.).
- *
- * For `.xdc` Mini App files, optionally includes a `webxdc-topic` tag that
- * identifies the realtime gossip session. The topic is minted by the sender
- * (see `mintTopicId` in `webxdcRealtime.ts`) and must be 52 uppercase base32
- * characters to match Vector's validation.
+ * The optional fields a webxdc `sendUpdate` carries beside its payload. Spelled
+ * once, because they are a contract with the Mini App API rather than with this
+ * rumor: the same three ride Concord's 3310 (`useConcordAppSync`).
  */
-export function dmFileTags(
-  peers: readonly string[],
-  fileTags: string[][],
-  opts?: { webxdcTopic?: string; expiresAt?: number },
-): string[][] {
-  const tags: string[][] = [...peers.map((peer) => ["p", peer])];
-  // Add webxdc-topic for Mini Apps (Vector's interop field)
-  if (opts?.webxdcTopic) {
-    tags.push(["webxdc-topic", opts.webxdcTopic]);
-  }
-  // Add NIP-94 file metadata tags (file-type, size, dim, etc.)
-  for (const t of fileTags) tags.push(t);
-  return withExpiration(tags, opts?.expiresAt);
+export interface DmWebxdcMeta {
+  info?: string;
+  document?: string;
+  summary?: string;
 }
 
 /**
- * Tags for a kind-3310 WebXDC update rumor (CORD-02 Appendix B). The `p` set
- * leads (conversation attribution — NIP-17 receivers), followed by the `i` tag
- * (webxdc session uuid), and optional metadata tags (info, document, summary).
+ * Tags for a kind-3310 Mini App state rumor. The `p` set leads (conversation
+ * attribution — NIP-17 receivers), followed by the `i` tag naming the session
+ * and whatever {@link DmWebxdcMeta} the update carried.
  */
 export function dmWebxdcTags(
   peers: readonly string[],
   uuid: string,
-  opts?: { info?: string; document?: string; summary?: string; expiresAt?: number },
+  opts?: DmWebxdcMeta & { expiresAt?: number },
 ): string[][] {
   const tags: string[][] = [...peers.map((peer) => ["p", peer]), ["i", uuid]];
   if (opts?.info) tags.push(["info", opts.info]);
@@ -361,58 +358,6 @@ export function buildDmEditRumors(
   });
 
   return { replacement, deletion };
-}
-
-/**
- * Build a Kind 15 file message rumor for NIP-17 DMs.
- *
- * For `.xdc` Mini App files, mints a webxdc-topic and adds it to the tags.
- * The topic is derived from the file hash and sender pubkey, matching Vector's
- * approach for cross-client compatibility.
- */
-export function buildDmFileRumor(opts: {
-  fileUrl: string;
-  fileHash: string;
-  fileName: string;
-  mimeType: string;
-  fileSize: number;
-  peers: readonly string[];
-  pubkey: string;
-  createdAt?: number;
-  /** Optional thumbnail URL */
-  thumbnail?: string;
-  /** Optional image dimensions (e.g., "1280x720") */
-  dim?: string;
-  /** Optional blurhash placeholder */
-  blurhash?: string;
-}): NostrRumor {
-  const { fileUrl, fileHash: _fileHash, fileName, mimeType, fileSize, peers, pubkey, createdAt } = opts;
-  
-  // Build NIP-94 file metadata tags
-  const fileTags: string[][] = [
-    ["file-type", mimeType],
-    ["size", String(fileSize)],
-    ["name", fileName],
-  ];
-  
-  // Add optional metadata
-  if (opts.thumbnail) fileTags.push(["thumb", opts.thumbnail]);
-  if (opts.dim) fileTags.push(["dim", opts.dim]);
-  if (opts.blurhash) fileTags.push(["blurhash", opts.blurhash]);
-  
-  // The content is the file URL (NIP-17 file messages use content as the blob URL)
-  const rumor = buildDmRumor({
-    kind: KIND_DM_FILE,
-    content: fileUrl,
-    tags: dmFileTags(peers, fileTags, {
-      // webxdc-topic will be added by the caller if this is a .xdc file
-      // (they have access to mintTopicId from webxdcRealtime.ts)
-    }),
-    pubkey,
-    createdAt,
-  });
-  
-  return rumor;
 }
 
 /** Tags for a kind-1740 timer-change rumor. `seconds` of 0 turns it off. */
