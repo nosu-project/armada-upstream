@@ -18,6 +18,8 @@ struct ConcordStream {
     /// message is still stored — the timeline folds it away on read — but the
     /// extension must not present it, so `prepareConcord` drops it after decrypt.
     let banned: Set<String>
+    /// Authors currently authorized to issue a literal @everyone in this channel.
+    let mentionEveryoneAuthors: Set<String>
     /// "mentions only": the gateway is content-blind and wakes iOS for every
     /// message on this channel, but the extension decrypts, so `prepareConcord`
     /// drops a message that doesn't `#p`-tag the viewer. Mirrors the Android
@@ -31,6 +33,7 @@ struct ConcordStream {
         communityId: String,
         channelId: String,
         banned: Set<String>,
+        mentionEveryoneAuthors: Set<String> = [],
         mentionOnly: Bool = false
     ) {
         self.pubkey = pubkey
@@ -39,6 +42,7 @@ struct ConcordStream {
         self.communityId = communityId
         self.channelId = channelId
         self.banned = banned
+        self.mentionEveryoneAuthors = mentionEveryoneAuthors
         self.mentionOnly = mentionOnly
     }
 }
@@ -204,6 +208,7 @@ struct PushConfig {
                 communityId: communityId,
                 channelId: channelId,
                 banned: Set((entry["banned"] as? [String]) ?? []),
+                mentionEveryoneAuthors: Set((entry["mentionEveryoneAuthors"] as? [String]) ?? []),
                 mentionOnly: (entry["mentionOnly"] as? Bool) ?? false
             ))
         }

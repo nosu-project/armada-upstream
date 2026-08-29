@@ -963,11 +963,11 @@ function Conversation({
     onBack();
     try {
       await pendingMute;
-      toast({ title: "Muted", description: `You won't see messages from ${name}.` });
+      toast({ title: "Blocked", description: `You won't see messages from ${name}.` });
     } catch (e) {
       toast({
-        title: "Couldn't mute",
-        description: e instanceof Error ? e.message : "Failed to update your mute list.",
+        title: "Couldn't block",
+        description: e instanceof Error ? e.message : "Failed to update your block list.",
         variant: "destructive",
       });
     }
@@ -1193,8 +1193,8 @@ function Conversation({
             {!noteToSelf && !group && (
               <>
                 <DropdownMenuSeparator />
-                {/* Muting closes the thread, so it confirms first. Unmuting is
-                    reversible and costs nothing to undo — it just goes. */}
+                {/* Blocking closes the thread, so it confirms first. Unblocking
+                    is reversible and costs nothing to undo — it just goes. */}
                 {mute.muted ? (
                   <DropdownMenuItem
                     className="px-3 py-2"
@@ -1202,7 +1202,7 @@ function Conversation({
                     onClick={() => void mute.toggle()}
                   >
                     <UserCheck className="size-4" />
-                    Unmute person
+                    Unblock person
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem
@@ -1210,7 +1210,7 @@ function Conversation({
                     onClick={() => setMuteConfirmOpen(true)}
                   >
                     <UserX className="size-4" />
-                    Mute person
+                    Block person
                   </DropdownMenuItem>
                 )}
                 {/* A DM has no moderator: there is no room, no operator, and
@@ -1492,15 +1492,13 @@ function Conversation({
       <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            {/* Blocking a request and muting a contact are the same NIP-51
-                action; only the word the user clicked differs. */}
             <AlertDialogTitle>
-              {isRequest ? "Block" : "Mute"} <DisplayName pubkey={peer} name={name} />?
+              Block <DisplayName pubkey={peer} name={name} />?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This conversation will be hidden and you won't see new messages from{" "}
               <DisplayName pubkey={peer} name={name} />.
-              You can unmute them later from your mute list.
+              You can unblock them later from Settings.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1512,13 +1510,7 @@ function Conversation({
               }}
               disabled={muteUser.isPending}
             >
-              {muteUser.isPending
-                ? isRequest
-                  ? "Blocking…"
-                  : "Muting…"
-                : isRequest
-                  ? "Block"
-                  : "Mute"}
+              {muteUser.isPending ? "Blocking…" : "Block"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

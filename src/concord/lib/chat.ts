@@ -325,6 +325,8 @@ export interface ChatModeration {
    * path supplies it from the control fold.
    */
   isStaff?: (author: string) => boolean;
+  /** Whether an author holds MENTION_EVERYONE in a target channel. */
+  canMentionEveryone?: (author: string, channelIdHex: string) => boolean;
 }
 
 /** A tallied reaction: reactors (pubkey→rumorId) plus the NIP-30 custom-emoji URL (if any). */

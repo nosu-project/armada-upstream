@@ -128,7 +128,7 @@ function ConcordNotificationSource({
   const community = useCommunity(entry.community_id);
   const { data: folded } = useControlFold(community, false);
   const channels = useChannels(community, false);
-  const { mentions } = useConcordMentions(channels, community?.idHex);
+  const { mentions } = useConcordMentions(community, channels);
   const { getLastRead } = useReadState();
   const nameById = useMemo(
     () => new Map(channels.map((channel) => [channel.idHex, channel.name])),

@@ -655,6 +655,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             messages={messages}
             replyTo={replyTo}
             placeholder={channelName ? `Message ${channelName}` : undefined}
+            // Android Direct Share: the group's own name/picture, captured on
+            // send. The publisher can't resolve NIP-29 metadata itself.
+            shareLabel={channelName}
+            shareIconUrl={groupDetails?.group?.picture}
             onCancelReply={() => setReplyTo(undefined)}
             onSent={pinToPresent}
             onOptimisticInsert={insertOptimistic}

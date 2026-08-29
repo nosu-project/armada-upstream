@@ -532,8 +532,8 @@ export async function queryRumorsByChannel(
 }
 
 /**
- * Read cached messages across a community's channels that p-tag `pubkey` — the
- * "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
+ * Read cached messages across a community's channels that may mention
+ * `pubkey` — the "@ Mentions" view, purely local (no relay, no decrypt). Both `p` and
  * `channel` are in {@link QUERYABLE_TAGS}, so the filter is index-backed. Each
  * message's own `channel` binding tag recovers its channel id for the row.
  * Covers kind-9 messages and kind-1111 thread replies (a reply p-tags the
@@ -542,24 +542,44 @@ export async function queryRumorsByChannel(
  * Deliberately NOT derived from {@link queryRumorsByChannel}: that scan reads
  * only the newest window of each channel, so a mention older than a busy
  * channel's window would silently vanish from the tab. This single indexed
- * filter reaches the newest `limit` mentions across the WHOLE store, however
- * deep, in one cheap transaction.
+ * filter reaches the newest `limit` direct mentions across the WHOLE store,
+ * however deep, in one cheap transaction. Authorized mass-mention authors can
+ * also be supplied; their newest messages are returned as candidates for the
+ * caller to content-match and re-authorize per channel.
  */
 export async function queryMentionRumors(
   communityIdHex: string,
   channelIdsHex: string[],
   pubkey: string,
-  opts: { limit: number; signal?: AbortSignal },
+  opts: { limit: number; signal?: AbortSignal; everyoneAuthors?: string[] },
 ): Promise<OpenedChat[]> {
   if (channelIdsHex.length === 0 || !pubkey) return [];
-  const filter = {
+  const filters: Array<{
+    kinds: number[];
+    "#channel": string[];
+    limit: number;
+    "#p"?: string[];
+    authors?: string[];
+  }> = [{
     kinds: [9, 1111],
     "#p": [pubkey],
     "#channel": channelIdsHex,
     limit: opts.limit,
-  };
-  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
-  return notExpired(events).map((ev) =>
+  }];
+  if (opts.everyoneAuthors && opts.everyoneAuthors.length > 0) {
+    filters.push({
+      kinds: [9, 1111],
+      authors: opts.everyoneAuthors,
+      "#channel": channelIdsHex,
+      // This path has no content index. Authorized role holders are normally a
+      // small set, but cap the local scan so a prolific owner cannot stall the
+      // Notification Center while direct `#p` mentions remain depth-exact.
+      limit: Math.max(opts.limit * 5, 1_000),
+    });
+  }
+  const events = await rumorStore(communityIdHex).query(filters, { signal: opts.signal });
+  const unique = new Map(notExpired(events).map((event) => [event.id, event]));
+  return [...unique.values()].map((ev) =>
     storedToOpenedChat(ev, ev.tags.find((t) => t[0] === "channel")?.[1] ?? ""),
   );
 }

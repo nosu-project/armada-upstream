@@ -16,6 +16,7 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
+import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 
 /** Per-channel unread summary (mirrors NIP-29's `GroupUnread`). */
 export interface ConcordUnread {
@@ -69,7 +70,7 @@ export function useConcordUnread(
   // Banlist drop is unaffected. The default is false so that a NEW ambient
   // caller cannot reintroduce the fan-out by forgetting to pass the flag; the
   // page opts in explicitly instead.
-  const { banned } = useChatModeration(community, active);
+  const { banned, canMentionEveryone } = useChatModeration(community, active);
   const {
     readState,
     getLastRead: sharedGetLastRead,
@@ -169,7 +170,9 @@ export function useConcordUnread(
         if (quarantined.has(r.rumorId)) continue;
         if (remembered?.has(r.rumorId)) continue;
         if (r.createdAt > latest) latest = r.createdAt;
-        if (r.createdAt > latestMention && r.tags.some(([n, v]) => n === "p" && v === pubkey)) {
+        const mentionsViewer = r.tags.some(([n, v]) => n === "p" && v === pubkey)
+          || (hasEveryoneMention(r.content) && Boolean(canMentionEveryone?.(r.author, idHex)));
+        if (r.createdAt > latestMention && mentionsViewer) {
           latestMention = r.createdAt;
         }
       }
@@ -187,7 +190,7 @@ export function useConcordUnread(
       if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
     }
     return next;
-  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys, banned, communityIdHex, memoryRev]);
+  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {

@@ -1,4 +1,4 @@
-import { Loader2, ShieldCheck, Users } from "lucide-react";
+import { ShieldCheck, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -89,7 +89,6 @@ function InviteResolvedCard({
   // idHex on the community list is the hex community_id; the bundle carries the
   // same hex, so a direct lookup tells us if we're already a member.
   const alreadyJoined = !!useCommunity(preview.communityId);
-  const [joining, setJoining] = useState(false);
 
   const expired =
     typeof preview.bundle.expires_at === "number" && Date.now() > preview.bundle.expires_at;
@@ -101,10 +100,12 @@ function InviteResolvedCard({
       toast({ title: "Sign in to join", description: "Create an account or sign in to accept this invite." });
       return;
     }
-    setJoining(true);
     try {
-      const { communityId, name } = await join({ invite });
-      toast({ title: "Encrypted community joined", description: name });
+      // Optimistic: the resolved bundle rides along, so this answers
+      // immediately and the durable join chain runs in the background (its
+      // failure surfaces as a toast from useCommunityActions).
+      const { communityId, name } = await join({ invite, bundle: preview.bundle });
+      toast({ title: "Joined", description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`);
     } catch (e) {
       toast({
@@ -112,12 +113,8 @@ function InviteResolvedCard({
         description: e instanceof Error ? e.message : "The invite didn't work.",
         variant: "destructive",
       });
-    } finally {
-      setJoining(false);
     }
   };
-
-  const busy = joining || isJoining;
 
   return (
     <div
@@ -166,15 +163,8 @@ function InviteResolvedCard({
             Invite expired
           </Button>
         ) : (
-          <Button className="w-full clip-corner-lg" onClick={doJoin} disabled={busy}>
-            {busy ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Joining…
-              </>
-            ) : (
-              "Join"
-            )}
+          <Button className="w-full clip-corner-lg" onClick={doJoin} disabled={isJoining}>
+            Join
           </Button>
         )}
       </div>

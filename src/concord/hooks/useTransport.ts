@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import {
   useChannelTimeline,
+  useChatModeration,
   useMessageActions,
   useSendMessage,
   useSendStatus,
@@ -15,6 +16,7 @@ import { KIND_CALENDAR_RSVP, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_
 import { markReactionDeleted, type OpenedChat } from "@/concord/lib/chat";
 import { timerNoticeSeconds } from "@/concord/lib/disappearing";
 import { sendRefusal } from "@/concord/lib/sendRateLimit";
+import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { channelKey } from "@/concord/hooks/useChannel";
 import type { DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
 import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
@@ -99,6 +101,7 @@ export function useTransport(
     focus,
   );
   const { mutateAsync: send } = useSendMessage(community, channel);
+  const moderation = useChatModeration(community);
   const { retry, discard, deleteMessage } = useMessageActions(community, channel);
   const sendStatus = useSendStatus(channel);
 
@@ -567,6 +570,17 @@ export function useTransport(
   );
   const retryEvent = useCallback((event: ChatMsg) => retry(event.id), [retry]);
   const deleteEvent = useCallback((event: ChatMsg) => deleteMessage(event.id), [deleteMessage]);
+  const mentionsEveryone = useCallback(
+    (event: ChatMsg) => Boolean(
+      channel
+      && hasEveryoneMention(event.content)
+      && moderation.canMentionEveryone?.(event.pubkey, channel.idHex)
+    ),
+    [channel, moderation],
+  );
+  const canMentionEveryone = Boolean(
+    user && channel && moderation.canMentionEveryone?.(user.pubkey, channel.idHex)
+  );
 
   const transport = useMemo<ChatTransport>(
     () => ({
@@ -574,6 +588,8 @@ export function useTransport(
       isLoading,
       canWrite,
       canModerate,
+      canMentionEveryone,
+      mentionsEveryone,
       isRumor: true,
       rotationDividerIds,
       quarantinedIds,
@@ -598,7 +614,7 @@ export function useTransport(
       sendThreadReply,
       canSend,
     }),
-    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, quarantinedIds, pausedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
+    [timeline, isLoading, canWrite, canModerate, canMentionEveryone, mentionsEveryone, rotationDividerIds, quarantinedIds, pausedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
   // Built from the RAW rows, not the folded ones: pinning needs the original

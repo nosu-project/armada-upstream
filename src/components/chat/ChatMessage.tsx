@@ -1,4 +1,4 @@
-import { AlertCircle, Ban, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
+import { AlertCircle, Ban, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -40,6 +40,7 @@ import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
@@ -412,6 +413,8 @@ export interface ChatMessageProps {
    * received message would light up as a "mention".
    */
   mentionHighlight?: boolean;
+  /** This Concord message contains an authorized channel-wide @everyone. */
+  everyoneMention?: boolean;
   /**
    * A small badge rendered next to the author's name (after the bot pill) —
    * e.g. the DM page's "NIP-04" legacy-encryption marker.
@@ -502,6 +505,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onToggleActive,
   continuation = false,
   mentionHighlight = true,
+  everyoneMention = false,
   nameBadge,
   permalink,
   rumor,
@@ -526,12 +530,15 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;
-  // Highlight messages that mention you or reply to you: both add a `p` tag for
-  // the current user (NIP-27 mention / NIP-10 reply). Not your own messages.
+  // Highlight messages that mention you, reply to you, or carry an authorized
+  // Concord @everyone. Not your own messages.
   // Suppressed where a `p` tag is addressing, not mentioning (DMs).
   const mentionsMe = Boolean(
     mentionHighlight &&
-      user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
+      user && !isOwn && (
+        everyoneMention
+        || event.tags.some(([name, value]) => name === "p" && value === user.pubkey)
+      ),
   );
   // Only plain group/NIP-17 chat messages are editable (polls, files and other
   // structured rows carry semantics an inline text field cannot preserve).
@@ -602,6 +609,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // with nobody to report to. Same identity caveat: a mesh/proxied row isn't a
   // Nostr pubkey the mute list can name.
   const mute = useMuteToggle(identityOverride ? undefined : event.pubkey);
+
+  // Hiding is viewer-local removal — instant, unpublished, undoable from its
+  // toast — so like blocking it needs no destination and is offered in every
+  // room.
+  const hiddenMessages = useHiddenMessages();
 
   // Zap dialog. The button shows on others' messages when the surface supports
   // zaps; it disables (with a hint) once the author's profile has loaded
@@ -749,19 +761,31 @@ const ChatMessageInner = memo(function ChatMessageInner({
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
-  // Mute, report and delete share the trailing destructive group, so only the
-  // first of them opens it — two adjacent separators would read as three groups.
+  // Hide, block, report and delete share the trailing moderation group, so only
+  // the first of them opens it — two adjacent separators would read as three
+  // groups. Hide leads: it is the mildest tool (this one message, this device,
+  // undoable from its toast), and the escalation reads top-down from there.
+  const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
   const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
+  if (showHide) {
+    menuActions.push({
+      id: "hide",
+      label: "Hide message",
+      icon: EyeOff,
+      groupStart: true,
+      onSelect: () => hiddenMessages.hide(event.id),
+    });
+  }
   if (showMute) {
     menuActions.push({
       id: "mute",
-      label: mute.muted ? "Unmute person" : "Mute person",
+      label: mute.muted ? "Unblock person" : "Block person",
       icon: mute.muted ? UserCheck : UserX,
-      // Unmuting restores someone rather than removing them; styling it
+      // Unblocking restores someone rather than removing them; styling it
       // destructive would read as the dangerous direction of the same switch.
       destructive: !mute.muted,
-      groupStart: true,
+      groupStart: !showHide,
       onSelect: () => void mute.toggle(),
     });
   }
@@ -771,7 +795,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: !showMute,
+      groupStart: !showHide && !showMute,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -781,7 +805,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showMute && !showReport,
+      groupStart: !showHide && !showMute && !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }
@@ -894,7 +918,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </div>
       ) : event.kind === KIND_POLL ? (
         <>
-          <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+          <ChatContent event={event} className="text-[15px]" highlight={highlight} everyoneMention={everyoneMention} />
           {pollContext ? (
             <PollCard
               event={event}
@@ -954,10 +978,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
             className="inline italic"
             highlight={highlight}
             noMentionAtPrefix
+            everyoneMention={everyoneMention}
           />
         </div>
       ) : (
-        <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+        <ChatContent event={event} className="text-[15px]" highlight={highlight} everyoneMention={everyoneMention} />
       )}
     </>
   );

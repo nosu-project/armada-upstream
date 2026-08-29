@@ -70,7 +70,9 @@ import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/fo
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
+import { parseChatRoute, roomPath } from "@/lib/routes";
 import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
+import { recordSent } from "@/lib/shareTargets";
 import { stripTrackingParamsInText } from "@/lib/trackingParams";
 import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
@@ -275,6 +277,21 @@ interface ChatComposerProps {
   /** Called after a message is successfully sent. */
   onSent?: () => void;
   /**
+   * Display name + avatar for this room's Android Direct Share suggestion,
+   * captured whenever the user sends here (see `lib/shareTargets`).
+   *
+   * Only rooms whose name the publisher cannot resolve on its own need these:
+   * Concord channels and NIP-29 groups, whose metadata lives in state
+   * `useShareShortcuts` has no access to. DMs pass neither — those are
+   * resolved live from the kind-0 profiles already in the event store, so a
+   * contact who changes their name or picture updates without sending anything.
+   *
+   * Scalars rather than an object so the send callbacks' dependency lists don't
+   * churn on every render of an inline prop.
+   */
+  shareLabel?: string;
+  shareIconUrl?: string;
+  /**
    * When provided, the composer sends via this callback (with the final text,
    * including any appended attachment URLs) instead of publishing a NIP-29
    * kind-9 group message. Used by DMs, where the whole content is encrypted
@@ -318,6 +335,8 @@ interface ChatComposerProps {
    * these pubkeys. Omit it (plain DMs) to keep mentions disabled.
    */
   mentionPubkeys?: string[];
+  /** Whether the current user may insert Concord's channel-wide @everyone. */
+  canMentionEveryone?: boolean;
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
   /**
@@ -437,7 +456,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, canSend, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -1385,6 +1404,31 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups, replyExtraTags]);
 
   /**
+   * Note this room in the Direct Share "last sent" ledger.
+   *
+   * The room comes from the LOCATION rather than from props: `roomPath` strips
+   * the `/t/<root>` and `/m/<id>` focus, so a thread reply and a permalinked
+   * message both credit the room they were sent in, and one derivation covers
+   * DMs, Concord and NIP-29 without teaching this component their three
+   * different id shapes. (`relayUrl`/`groupId` cannot do this — Concord passes
+   * a bare `channel.idHex` with no community, so its route is not
+   * reconstructible from them.)
+   *
+   * Called where the send is DISPATCHED, which for the override and optimistic
+   * paths is before it is signed — those are deliberately fire-and-forget. So
+   * this means "the user sent here", not "the relay accepted it". That is the
+   * right granularity for a suggestion: a room you tried to message is a room
+   * you meant to message, and the alternative is three protocol-specific hooks
+   * with no shared point at all.
+   */
+  const noteSent = useCallback(() => {
+    if (!user) return;
+    const route = parseChatRoute(window.location.pathname);
+    if (!route) return;
+    recordSent(user.pubkey, roomPath(route), { label: shareLabel, iconUrl: shareIconUrl });
+  }, [user, shareLabel, shareIconUrl]);
+
+  /**
    * Publish a finalized message body via the active send path.
    *
    * `extraTags` are appended to the content-derived ones. They carry routing that
@@ -1425,6 +1469,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // result here.
         resetComposeState();
         onSent?.();
+        noteSent();
         void Promise.resolve(sendOverride(finalText, tags)).catch((err) => {
           // Post-sign delivery failures are surfaced inline by the override
           // (per-message failed/retry state). But a failure BEFORE the
@@ -1450,6 +1495,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // rapid Enter presses don't race on a NIP-07 extension.
         resetComposeState();
         onSent?.();
+        noteSent();
         void (async () => {
           let signedId: string | undefined;
           try {
@@ -1488,6 +1534,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         });
         resetComposeState();
         onSent?.();
+        noteSent();
       }
     } catch (err) {
       toast({
@@ -1496,7 +1543,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [user, isSending, sendOverride, canSend, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
+  }, [user, isSending, sendOverride, canSend, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, noteSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
 
   /** Execute a parsed slash command's result (run action / send rewritten text). */
   const executeSlash = useCallback(async (command: SlashCommand, arg: string) => {
@@ -1725,11 +1772,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       resetComposeState();
       onSent?.();
+      noteSent();
       toast({ title: "Poll published!" });
     } catch {
       toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
     }
-  }, [content, pollOptions, user, isSending, isUploading, canSend, canonicalizeLinks, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast, onPollSubmit]);
+  }, [content, pollOptions, user, isSending, isUploading, canSend, canonicalizeLinks, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, noteSent, toast, onPollSubmit]);
 
   /** Stop recording, upload, and send as a voice message (kind 9 + imeta). */
   const handleStopAndSendVoice = useCallback(async () => {
@@ -1811,12 +1859,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       onCancelReply?.();
       onSent?.();
+      noteSent();
     } catch {
       toast({ title: "Error", description: "Failed to send voice message.", variant: "destructive" });
     } finally {
       setIsPublishingVoice(false);
     }
-  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, onCancelReply, onSent, toast, messageKind]);
+  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, onCancelReply, onSent, noteSent, toast, messageKind]);
 
   const handleStartRecording = useCallback(async () => {
     try {
@@ -2250,6 +2299,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     content={content}
                     onInsertMention={insertAtCursor}
                     restrictToPubkeys={memberPubkeys}
+                    allowEveryone={canMentionEveryone}
                   />
                 )}
                 <SlashCommandAutocomplete

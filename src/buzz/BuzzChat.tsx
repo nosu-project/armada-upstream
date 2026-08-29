@@ -915,6 +915,10 @@ export function BuzzChat({
             messageKind={forum ? KIND_FORUM_POST : undefined}
             pollsEnabled={false}
             placeholder={channelName ? `Message ${channelName}` : undefined}
+            // Android Direct Share: the channel's own name/picture, captured on
+            // send. The publisher can't resolve NIP-29 metadata itself.
+            shareLabel={channelName}
+            shareIconUrl={groupDetails?.group?.picture}
             onCancelReply={() => setReplyTo(undefined)}
             onSent={handleSent}
             onOptimisticInsert={insertOptimistic}

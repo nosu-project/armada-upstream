@@ -478,6 +478,18 @@ export interface Dm17ConversationRow {
   latest: OpenedDm;
   /** The viewer has authored at least one message in this conversation. */
   mine: boolean;
+  /**
+   * When the viewer last sent here (unix seconds), or undefined for a
+   * conversation they have never written in.
+   *
+   * The `distinct:convmine` collapse below already reads exactly this rumor to
+   * compute {@link mine}; keeping its timestamp costs no extra query. It is
+   * what Android's Direct Share suggestions rank DMs by — "who do I message"
+   * rather than `latest.createdAt`'s "who messages me" (see
+   * `useShareShortcuts`), and unlike the local `shareTargets` ledger it is
+   * derived from the message history, so it survives a reinstall.
+   */
+  mineAt?: number;
 }
 
 /**
@@ -523,7 +535,8 @@ export async function queryDm17Conversations(
   );
 
   const byConversation = new Map<string, OpenedDm>();
-  const mine = new Set<string>();
+  /** Conversation → when the viewer last sent there. Keys are the `mine` set. */
+  const mine = new Map<string, number>();
   /** Conversations whose newest message is expired but not yet swept. */
   const stale = new Map<string, OpenedDm>();
 
@@ -542,7 +555,13 @@ export async function queryDm17Conversations(
     // for a year into the request tier, and tells the push gateways its sender
     // is a stranger (`useNostrPush`). It cannot mint a phantom row: the result
     // is built from `byConversation`, which an expired rumor never reaches.
-    if (opened.author === self) mine.add(key);
+    // The MAX, not the last seen: the two collapses can each hand back a rumor
+    // the viewer wrote (`convmsg`'s newest-overall is theirs whenever they sent
+    // last), and the expired-row retry below folds older ones still.
+    if (opened.author === self) {
+      const prev = mine.get(key);
+      if (prev === undefined || opened.createdAt > prev) mine.set(key, opened.createdAt);
+    }
     if (isExpired(ev.tags)) {
       const worst = stale.get(key);
       if (!worst || opened.createdAt > worst.createdAt) stale.set(key, opened);
@@ -575,7 +594,13 @@ export async function queryDm17Conversations(
   }
 
   return [...byConversation.entries()]
-    .map(([key, latest]) => ({ key, peers: latest.peers, latest, mine: mine.has(key) }))
+    .map(([key, latest]) => ({
+      key,
+      peers: latest.peers,
+      latest,
+      mine: mine.has(key),
+      mineAt: mine.get(key),
+    }))
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
 

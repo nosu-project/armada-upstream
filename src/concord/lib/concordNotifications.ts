@@ -6,6 +6,7 @@ import { channelGitRepositoryAttachments } from "@/concord/lib/types";
 import type { FoldedControl } from "@/concord/lib/control";
 import type { GroupKey } from "@/concord/lib/derive";
 import type { Community } from "@/concord/lib/types";
+import { everyoneMentionAuthors } from "@/concord/lib/everyoneMention";
 
 /**
  * One stream address of a Concord channel (one per held epoch): the wrap author to
@@ -52,6 +53,8 @@ export interface ConcordSub {
    * than failing to type-check.
    */
   banned?: string[];
+  /** Authors currently allowed to issue @everyone in this channel. */
+  mentionEveryoneAuthors?: string[];
   /**
    * The community's encrypted icon pointer (CORD-02 §6), for the native
    * per-community notification group summary. The service fetches the blob,
@@ -103,6 +106,9 @@ export function buildConcordSubs(
     // EVERY held epoch registers for NIP-42 stream auth (backfill still reads
     // retired epochs from auth-gating relays)…
     streamKeys.push(...channel.streams.map((s) => s.group));
+    const mentionEveryoneAuthors = folded
+      ? everyoneMentionAuthors(folded.roster, folded.ownerHex, [channel.idHex])
+      : community.owner ? [community.owner] : [];
     subs.push({
       relays: community.relays,
       communityId: community.idHex,
@@ -120,6 +126,7 @@ export function buildConcordSubs(
         },
       ],
       banned,
+      mentionEveryoneAuthors,
       communityImage,
       timerSecs,
       gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),

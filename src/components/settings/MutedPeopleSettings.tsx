@@ -25,11 +25,11 @@ function MutedRow({ pubkey }: { pubkey: string }) {
     setBusy(true);
     try {
       await unmute.mutateAsync(pubkey);
-      toast({ title: "Unmuted", description: `You'll see ${displayName} again.` });
+      toast({ title: "Unblocked", description: `You'll see ${displayName} again.` });
     } catch (e) {
       toast({
-        title: "Couldn't unmute",
-        description: e instanceof Error ? e.message : "Failed to update your mute list.",
+        title: "Couldn't unblock",
+        description: e instanceof Error ? e.message : "Failed to update your block list.",
         variant: "destructive",
       });
       setBusy(false);
@@ -57,7 +57,7 @@ function MutedRow({ pubkey }: { pubkey: string }) {
         onClick={onUnmute}
       >
         {busy ? <Loader2 className="size-3.5 animate-spin" /> : <UserCheck className="size-3.5" />}
-        Unmute
+        Unblock
       </Button>
     </SettingsRow>
   );
@@ -86,7 +86,7 @@ export function MutedPeopleSettings() {
       <SettingsRow>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
-          Loading your mute list…
+          Loading your block list…
         </div>
       </SettingsRow>
     );
@@ -96,8 +96,8 @@ export function MutedPeopleSettings() {
     return (
       <SettingsRow>
         <p className="text-sm text-muted-foreground">
-          You haven't muted anyone. Muting someone hides their messages,
-          reactions, notifications and profile everywhere in Armada — it is
+          You haven't blocked anyone. Blocking someone hides their messages,
+          reactions, notifications and profile everywhere in Armada. It is
           private to you, and they are never told.
         </p>
       </SettingsRow>

@@ -1070,31 +1070,46 @@ export function useDm17Thread(
     threadWindowRef.current = { self, conversation, limit: THREAD_WINDOW };
   }
 
-  // Whether NIP-17's first local paint has resolved, so the merged timeline can
-  // stop holding its skeleton (see shouldShowDmTimelineLoading). It flips when
-  // the snapshot prewarm SETTLES — one KV read, hit or miss — so the hold is
-  // never the store read's first-of-session legacy drain. A disabled query
-  // (no self/peer/support) is ready immediately: it never holds the gate.
-  const [firstPaintReady, setFirstPaintReady] = useState(false);
+  // Whether the NIP-17 store read is enabled — i.e. this plane can actually
+  // contribute rows. Single-sourced with the query below so the skeleton gate
+  // and the query can never disagree about whether NIP-17 is coming.
+  const queryEnabled = !!self && peers.length > 0 && support;
+  // Which query key's snapshot prewarm has SETTLED (one KV read, hit or miss).
+  // Recorded here, but readiness is DERIVED at render time (below) rather than
+  // stored — because a stored flag set from the effect lagged a render: it was
+  // still `true` from the pre-login phase (no user yet on a cold tab, so
+  // `support` reads false) on the very render `support` flipped true, and the
+  // kind-4 half — seeded SYNCHRONOUSLY from localStorage — painted alone for
+  // that one frame before the effect could re-arm the gate. That leak is the
+  // flicker that survived on a fresh tab.
+  const prewarmKey = useMemo(() => JSON.stringify(queryKey), [queryKey]);
+  const [prewarmSettledKey, setPrewarmSettledKey] = useState<string | null>(null);
 
   // Paint the last window from KV while the store read runs. The read is
   // enabled on this very render, but it awaits the legacy drain and merges two
   // 300-row filters; the snapshot is one KV row, so it lands first and the real
   // data replaces it (seeded stale — see threadSnapshot).
   useEffect(() => {
-    if (!self || !conversation || !support) {
-      setFirstPaintReady(true);
-      return;
-    }
-    setFirstPaintReady(false);
+    if (!queryEnabled) return;
     let cancelled = false;
-    void prewarmDm17ThreadSnapshot(queryClient, self, conversation, queryKey).finally(() => {
-      if (!cancelled) setFirstPaintReady(true);
+    void prewarmDm17ThreadSnapshot(queryClient, self!, conversation!, queryKey).finally(() => {
+      if (!cancelled) setPrewarmSettledKey(prewarmKey);
     });
     return () => {
       cancelled = true;
     };
-  }, [queryClient, self, conversation, support, queryKey]);
+  }, [queryClient, self, conversation, queryEnabled, queryKey, prewarmKey]);
+
+  // NIP-17's first local paint has "resolved" when the plane either cannot
+  // contribute rows at all (disabled — no self/peer/NIP-44) or its snapshot
+  // prewarm has settled for THIS query key. DERIVED at render time rather than
+  // stored so the disabled→enabled flip recomputes it to `false` on the very
+  // render `support` turns true — the render on which the kind-4 half's
+  // synchronous localStorage seed also first appears. A stored flag set from an
+  // effect could not: it kept the pre-login `true` for that one frame and let
+  // the kind-4 half paint alone, which is the flicker that survived on a fresh
+  // tab.
+  const firstPaintReady = !queryEnabled || prewarmSettledKey === prewarmKey;
 
   const query = useQuery<OpenedDm[]>({
     queryKey,
@@ -1102,7 +1117,7 @@ export function useDm17Thread(
     // ladder holding `isPending` — and therefore the timeline's skeleton — over
     // rumors that are already on disk. See storeQuery.
     ...STORE_READ,
-    enabled: !!self && peers.length > 0 && support,
+    enabled: queryEnabled,
     queryFn: async ({ signal }) => {
       // LOCAL-FIRST: the store paints immediately; the inbox scan tops up in
       // the background (throttled) and rings the `dm` scope on new rumors.

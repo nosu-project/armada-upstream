@@ -19,31 +19,40 @@ export function TermsPage() {
 
       <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
         <article className="max-w-2xl mx-auto px-4 sm:px-6 pb-16 pt-3 space-y-6 text-sm text-foreground/90 leading-relaxed">
-          <p className="text-xs text-muted-foreground">Last updated: July 11, 2026</p>
+          <p className="text-xs text-muted-foreground">Last updated: August 28, 2026</p>
 
           <section className="space-y-2">
-            <h2 className="text-base font-bold text-foreground">Overview</h2>
+            <h2 className="text-base font-bold text-foreground">What These Terms Are</h2>
             <p>
               {APP_NAME} is a client application for the <strong>Nostr protocol</strong>, an open, decentralized
-              communication network. By using {APP_NAME}, you agree to these terms. Nostr itself is a protocol
-              (like email or the web) — it does not have terms of service. Individual relays and apps may have
-              their own rules.
+              communication network with no central operator. Your identity is a cryptographic key that belongs
+              to you and works in any compatible app.
+            </p>
+            <p>
+              These terms cover this app: the content policy that applies to it, the moderation tools it provides,
+              and what its developers can and cannot do. They do not govern the Nostr network itself or your key.
+              By using {APP_NAME}, you agree to these terms.
             </p>
           </section>
 
           <section className="space-y-2">
             <h2 className="text-base font-bold text-foreground">Your Account</h2>
             <p>
-              You are responsible for safeguarding the private key associated with your account. {APP_NAME} never
-              accesses or stores your private key directly — it is managed by your chosen signer (browser
-              extension, hardware device, or other NIP-07-compatible signer). If you lose access to your private
-              key, you will permanently lose access to your account, and no one can recover it for you.
+              Your account is a cryptographic key pair. If you sign in with a secret key, {APP_NAME} stores it on
+              your device so you stay signed in; it is never sent to the developers or to any server. If you sign
+              in with an external signer (a browser extension, signer app, or remote signer), the key stays with
+              that signer and {APP_NAME} never sees it. You are responsible for safeguarding your key and any
+              backups of it. If you lose it, you permanently lose access to the account; no one can reset or
+              recover it for you.
             </p>
           </section>
 
           <section className="space-y-2">
             <h2 className="text-base font-bold text-foreground">Acceptable Use</h2>
-            <p>You agree not to use {APP_NAME} to:</p>
+            <p>
+              {APP_NAME} has no tolerance for objectionable content or abusive users. You agree not to use{" "}
+              {APP_NAME} to:
+            </p>
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li>Violate any applicable law or regulation</li>
               <li>Infringe on the rights of any person or entity</li>
@@ -53,17 +62,32 @@ export function TermsPage() {
               <li>Attempt to disrupt or compromise the service, relays, or infrastructure</li>
             </ul>
             <p>
-              Individual relays and communities may enforce their own rules and code of conduct. {APP_NAME} does not
-              moderate content and cannot remove content from relays it does not operate.
+              Individual relays and communities enforce their own rules and codes of conduct on top of this policy.
             </p>
           </section>
 
           <section className="space-y-2">
-            <h2 className="text-base font-bold text-foreground">Content and Publishing</h2>
+            <h2 className="text-base font-bold text-foreground">Content, Moderation, and Your Tools</h2>
             <p>
-              You are solely responsible for the content you publish through {APP_NAME}. Content published to Nostr
-              relays is public by default and may be visible to anyone. Once published, content may be difficult or
-              impossible to remove, as relays operate independently and may not honor deletion requests.
+              You are solely responsible for the content you publish through {APP_NAME}. Content published to
+              public relays may be visible to anyone, and because relays operate independently, it may not be
+              removable from every relay once published.
+            </p>
+            <p>The app puts moderation where it can actually be enforced:</p>
+            <ul className="list-disc list-inside space-y-1 ml-2">
+              <li>
+                <strong>You</strong> can delete your own messages, instantly hide any message from your view,
+                block any user (removing their messages, reactions, and profile everywhere in the app), and
+                report any message or user.
+              </li>
+              <li>
+                <strong>Community moderators and server operators</strong> receive those reports for the spaces
+                they run, and can remove content and eject members from them.
+              </li>
+            </ul>
+            <p>
+              {APP_NAME}'s developers do not operate the network and cannot delete content from relays they do
+              not run.
             </p>
           </section>
 
@@ -89,18 +113,9 @@ export function TermsPage() {
           <section className="space-y-2">
             <h2 className="text-base font-bold text-foreground">Third-Party Services</h2>
             <p>
-              {APP_NAME} interacts with third-party services — Nostr relays, Blossom file servers, and LiveKit
-              voice servers — that are operated independently. Each has its own terms and policies. We are not
+              {APP_NAME} interacts with third-party services (Nostr relays, Blossom file servers, and LiveKit
+              voice servers) that are operated independently. Each has its own terms and policies. We are not
               responsible for the practices or content of these third-party services.
-            </p>
-          </section>
-
-          <section className="space-y-2">
-            <h2 className="text-base font-bold text-foreground">Decentralized Nature</h2>
-            <p>
-              Because Nostr is decentralized, {APP_NAME} is a client — not a service provider. The app connects you
-              to relays and communities you choose. We cannot control the availability, moderation, or data
-              practices of those relays, nor can we guarantee that content you publish will be removable from them.
             </p>
           </section>
 
@@ -113,9 +128,11 @@ export function TermsPage() {
           </section>
 
           <section className="space-y-2">
-            <h2 className="text-base font-bold text-foreground">Contact</h2>
+            <h2 className="text-base font-bold text-foreground">Contact &amp; Reporting</h2>
             <p>
-              If you have questions about these terms, you can reach the team behind {APP_NAME} at{" "}
+              To flag inappropriate activity, use the <strong>Report</strong> action available on every message
+              and profile; it reaches the people who can act on it. To reach the team behind {APP_NAME} directly,
+              including to report inappropriate activity or ask about these terms, visit{" "}
               <a href="https://soapbox.pub" className="text-primary hover:underline" target="_blank" rel="noopener noreferrer">
                 soapbox.pub
               </a>.

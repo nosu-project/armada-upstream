@@ -329,9 +329,13 @@ struct PushProcessor {
         // be checked.
         if stream.banned.contains(opened.author) { return .dropped }
 
-        let mention = opened.tags.contains {
+        let directMention = opened.tags.contains {
             $0.count > 1 && $0[0] == "p" && $0[1] == config.selfPubkey
         }
+        let mention = directMention || (
+            stream.mentionEveryoneAuthors.contains(opened.author)
+            && Self.hasEveryoneMention(opened.content)
+        )
         let reaction = opened.kind == Concord.kindReaction
         // A reaction notifies only when it points at one of YOUR messages; the
         // `p` tag is on the encrypted rumor, so this is the first place it can
@@ -498,6 +502,15 @@ struct PushProcessor {
         value.addingPercentEncoding(
             withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.!~*'()"))
         ) ?? value
+    }
+
+    /// Match the interoperable lowercase token without treating an email or a
+    /// longer handle such as `@everyone_else` as a mass mention.
+    static func hasEveryoneMention(_ content: String) -> Bool {
+        content.range(
+            of: #"(^|[^\p{L}\p{N}_@])@everyone(?![\p{L}\p{N}_])"#,
+            options: .regularExpression
+        ) != nil
     }
 }
 

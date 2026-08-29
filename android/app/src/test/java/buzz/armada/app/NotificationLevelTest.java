@@ -79,6 +79,14 @@ public class NotificationLevelTest {
         assertTrue(NotificationRelayService.wantsResolvedGroupMessage(true, true));
     }
 
+    @Test public void everyoneMentionMatchesOnlyTheInteroperableToken() {
+        assertTrue(NotificationRelayService.hasEveryoneMention("Heads up @everyone!"));
+        assertFalse(NotificationRelayService.hasEveryoneMention("mail@everyone.example"));
+        assertFalse(NotificationRelayService.hasEveryoneMention("@everyone_else"));
+        assertFalse(NotificationRelayService.hasEveryoneMention("@everyone你"));
+        assertFalse(NotificationRelayService.hasEveryoneMention("@Everyone"));
+    }
+
     @Test public void opaqueConcordOnlyAllowsResolvedAll() {
         assertTrue(NotificationRelayService.wantsOpaqueResolvedGroupMessage(false));
         assertFalse(NotificationRelayService.wantsOpaqueResolvedGroupMessage(true));

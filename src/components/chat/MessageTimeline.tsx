@@ -19,6 +19,7 @@ import {
 } from "@/components/chat/scrollAnchor";
 import { Skeleton } from "@/components/ui/skeleton";
 import { markBootPainted } from "@/lib/bootGate";
+import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { cn } from "@/lib/utils";
@@ -485,24 +486,30 @@ export function MessageTimeline({
     [entries, messages],
   );
 
-  // Muted people are dropped here rather than in each transport, because this
-  // is the one place every timeline surface — Concord, NIP-29, Buzz, DMs, mesh
-  // — funnels through, and because the row model below compares by identity:
-  // filtering upstream per-caller would mean five chances to forget. Skipped
-  // entirely while the mute set is still cold (`!ready`), so the common warm
-  // case pays one Set lookup per row and the cold case can't hide a row it has
-  // no basis to hide yet.
+  // Blocked people and individually hidden messages are dropped here rather
+  // than in each transport, because this is the one place every timeline
+  // surface — Concord, NIP-29, Buzz, DMs, mesh — funnels through, and because
+  // the row model below compares by identity: filtering upstream per-caller
+  // would mean five chances to forget. The mute filter is skipped while the
+  // mute set is still cold (`!ready`), so the common warm case pays one Set
+  // lookup per row and the cold case can't hide a row it has no basis to hide
+  // yet; the hidden-message set is synchronous local storage, so it has no
+  // cold state to wait out.
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
+  const { hiddenIds } = useHiddenMessages();
   const timelineEntries = useMemo<readonly ChannelTimelineEntry[]>(() => {
-    if (!mutesReady || mutedPubkeys.size === 0) return allEntries;
+    const dropMuted = mutesReady && mutedPubkeys.size > 0;
+    if (!dropMuted && hiddenIds.size === 0) return allEntries;
     const kept = allEntries.filter((entry) => {
+      if (entry.type === "chat" && hiddenIds.has(entry.message.id)) return false;
+      if (!dropMuted) return true;
       const author = timelineEntryAuthor(entry);
       return !author || !mutedPubkeys.has(author);
     });
     // Preserve identity when nothing was removed: a fresh array on every mute
     // set change would read as a new conversation to the prepend anchor.
     return kept.length === allEntries.length ? allEntries : kept;
-  }, [allEntries, mutedPubkeys, mutesReady]);
+  }, [allEntries, mutedPubkeys, mutesReady, hiddenIds]);
 
   // Remember that we've shown a populated timeline. If `messages` then briefly
   // empties (a transient between a cache refresh and the merged result landing),

@@ -49,6 +49,7 @@ import {
   type ModerationPane,
 } from "@/concord/lib/moderationPanes";
 import { reportInboxSecret } from "@/concord/lib/report";
+import { isEveryoneMention } from "@/concord/lib/everyoneMention";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
 import { SuspiciousActivityView } from "@/concord/components/SuspiciousActivityView";
 import { useSelfRemove } from "@/concord/hooks/useSelfRemove";
@@ -250,6 +251,7 @@ interface ChatMessage2Props {
   continuation: boolean;
   canWrite: boolean;
   canModerate: boolean;
+  everyoneMention: boolean;
   sendStatus: SendStatus | undefined;
   active: boolean;
   onToggleActive: (id: string) => void;
@@ -298,6 +300,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   continuation,
   canWrite,
   canModerate,
+  everyoneMention,
   sendStatus,
   active,
   onToggleActive,
@@ -337,6 +340,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       rumor={rumor}
       canWrite={canWrite}
       canModerate={canModerate}
+      everyoneMention={everyoneMention}
       reactions={reactions}
       zapEnabled={Boolean(onSendZap)}
       zaps={zaps}
@@ -726,11 +730,13 @@ function MentionsView({
   mentions,
   isLoading,
   onJump,
+  mentionsEveryone,
 }: {
   channels: Channel[];
   mentions: ChatMsg[];
   isLoading: boolean;
   onJump: (channelIdHex: string, message: ChatMsg) => void;
+  mentionsEveryone: (message: ChatMsg) => boolean;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -763,6 +769,7 @@ function MentionsView({
             </div>
             <AggregateMessage
               event={msg}
+              everyoneMention={mentionsEveryone(msg)}
               onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
             />
           </div>
@@ -782,9 +789,11 @@ function MentionsView({
 const AggregateMessage = memo(function AggregateMessage({
   event,
   onJump,
+  everyoneMention = false,
 }: {
   event: ChatMsg;
   onJump?: () => void;
+  everyoneMention?: boolean;
 }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
@@ -813,7 +822,7 @@ const AggregateMessage = memo(function AggregateMessage({
       )}
       aria-label={onJump ? "Jump to this message" : undefined}
     >
-      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />
+      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} everyoneMention={everyoneMention} />
     </div>
   );
 });
@@ -842,6 +851,7 @@ function AllMessagesView({
   isLoadingOlder,
   onLoadOlder,
   onJump,
+  mentionsEveryone,
 }: {
   channels: Channel[];
   messages: ChatMsg[];
@@ -850,6 +860,7 @@ function AllMessagesView({
   isLoadingOlder: boolean;
   onLoadOlder: () => void;
   onJump: (channelIdHex: string, message: ChatMsg) => void;
+  mentionsEveryone: (message: ChatMsg) => boolean;
 }) {
   const channelById = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -901,6 +912,7 @@ function AllMessagesView({
             ) : null}
             <AggregateMessage
               event={msg}
+              everyoneMention={mentionsEveryone(msg)}
               onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
             />
           </div>
@@ -942,11 +954,13 @@ function ThreadsView({
   threads,
   isLoading,
   onOpen,
+  mentionsEveryone,
 }: {
   channels: Channel[];
   threads: ConcordThread[];
   isLoading: boolean;
   onOpen: (thread: ConcordThread) => void;
+  mentionsEveryone: (message: ChatMsg) => boolean;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -993,7 +1007,7 @@ function ThreadsView({
               )}
               aria-label="Open thread"
             >
-              <ThreadRootPreview event={t.root} />
+              <ThreadRootPreview event={t.root} everyoneMention={mentionsEveryone(t.root)} />
               <div className="flex items-center gap-2 pl-[3.875rem] pr-3 pb-1.5 -mt-1">
                 <ThreadReplyAvatars pubkeys={t.participants} />
                 <span
@@ -1015,12 +1029,12 @@ function ThreadsView({
 }
 
 /** The thread root message, read-only (its click is handled by the row wrapper). */
-const ThreadRootPreview = memo(function ThreadRootPreview({ event }: { event: ChatMsg }) {
+const ThreadRootPreview = memo(function ThreadRootPreview({ event, everyoneMention = false }: { event: ChatMsg; everyoneMention?: boolean }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
   return (
     <div className="pointer-events-none">
-      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />
+      <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} everyoneMention={everyoneMention} />
     </div>
   );
 });
@@ -1246,7 +1260,7 @@ export function ConcordPage() {
     hasNew: hasUnreadMention,
     markRead: markMentionsRead,
     markAllRead: markAllMentionsRead,
-  } = useConcordMentions(channels, community?.idHex);
+  } = useConcordMentions(community, channels);
 
   // The community-wide "All messages" feed. Reads the store only while its
   // pane is open — see `useCommunityFeed` on why it isn't ambient.
@@ -1540,6 +1554,23 @@ export function ConcordPage() {
   const { rekeyChannel, canRekeyChannel } = useChannelRekey(community);
   const { pause: communityPause, setPaused, clearPause } = useCommunityPause(community);
   const ownerHex = folded?.ownerHex ?? community?.owner;
+  const messageMentionsEveryone = useCallback(
+    (message: ChatMsg) => {
+      if (!folded) return false;
+      const channelIdHex = message.tags.find(([name, value]) => name === "channel" && value)?.[1];
+      return Boolean(
+        channelIdHex
+        && isEveryoneMention(
+          message.content,
+          folded.roster,
+          folded.ownerHex,
+          message.pubkey,
+          channelIdHex,
+        )
+      );
+    },
+    [folded],
+  );
   const iAmOwner = Boolean(user && ownerHex && user.pubkey === ownerHex);
   const roster = folded?.roster;
   const canManageRoles = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_ROLES));
@@ -3623,6 +3654,7 @@ export function ConcordPage() {
                     isLoadingOlder={feed.isLoadingOlder}
                     onLoadOlder={feed.loadOlder}
                     onJump={jumpToMention}
+                    mentionsEveryone={messageMentionsEveryone}
                   />
                 </div>
               ) : view === "mentions" ? (
@@ -3632,6 +3664,7 @@ export function ConcordPage() {
                     mentions={mentions}
                     isLoading={mentionsLoading}
                     onJump={jumpToMention}
+                    mentionsEveryone={messageMentionsEveryone}
                   />
                 </div>
               ) : isModerationPane(view) ? (
@@ -3685,6 +3718,7 @@ export function ConcordPage() {
                     threads={displayedThreads}
                     isLoading={threadsLoading}
                     onOpen={openThreadFromList}
+                    mentionsEveryone={messageMentionsEveryone}
                   />
                 </div>
               ) : view === "projects" ? (
@@ -3829,6 +3863,7 @@ export function ConcordPage() {
                         continuation={continuation}
                         canWrite={transport.canWrite}
                         canModerate={transport.canModerate}
+                        everyoneMention={Boolean(transport.mentionsEveryone?.(msg))}
                         isPinned={Boolean(transport.isPinned?.(msg.id))}
                         onTogglePin={transport.togglePin}
                         sendStatus={transport.sendStatusFor?.(msg.id)}
@@ -3936,10 +3971,22 @@ export function ConcordPage() {
                           groupId={channel.idHex}
                           messages={[]}
                           mentionPubkeys={memberPubkeys}
+                          canMentionEveryone={transport.canMentionEveryone}
                           botCommands
                           recentAuthors={recentAuthors}
                           conversationRelays={community?.relays}
                           placeholder={communityPaused ? "This community is paused" : user ? `Message #${channel.name}` : "Sign in to send"}
+                          // Android Direct Share: named community-first, since
+                          // a bare "#general" is ambiguous across communities,
+                          // and a suggestion has one short line to identify a
+                          // destination by. No icon, deliberately: a community
+                          // image is an encrypted ImagePointer that only this
+                          // client can decrypt, and the shortcut avatar is
+                          // fetched natively by plain HTTP — handing it the
+                          // ciphertext URL would spend a request to decode
+                          // nothing. The suggestion ships icon-less and the OS
+                          // draws the app icon.
+                          shareLabel={community?.name ? `${community.name} #${channel.name}` : `#${channel.name}`}
                           sendOverride={handleSend}
                           canSend={composerCanSend}
                           onPollSubmit={transport.sendPoll}

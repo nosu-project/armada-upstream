@@ -45,11 +45,11 @@ function message(content: string): NostrEvent {
   };
 }
 
-function renderContent(content: string, documentMarkdown = false) {
+function renderContent(content: string, documentMarkdown = false, everyoneMention = false) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
-        <ChatContent event={message(content)} documentMarkdown={documentMarkdown} />
+        <ChatContent event={message(content)} documentMarkdown={documentMarkdown} everyoneMention={everyoneMention} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -91,5 +91,18 @@ describe("ChatContent chat markdown", () => {
     expect(pre?.dataset.lang).toBe("json");
     await waitFor(() => expect(pre?.querySelector(".hljs-attr")).not.toBeNull());
     expect(pre?.textContent).toBe('{"name": "Eduardo"}');
+  });
+
+  it("chips an authorized @everyone but leaves code and unauthorized text literal", () => {
+    const authorized = renderContent("Heads up @everyone\n`@everyone`", false, true);
+    const chips = authorized.container.querySelectorAll(".bg-primary\\/15");
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent).toBe("@everyone");
+    expect(authorized.container.querySelector("code")?.textContent).toBe("@everyone");
+    cleanup();
+
+    const unauthorized = renderContent("Heads up @everyone");
+    expect(unauthorized.container.querySelector(".bg-primary\\/15")).toBeNull();
+    expect(unauthorized.container.textContent).toContain("@everyone");
   });
 });

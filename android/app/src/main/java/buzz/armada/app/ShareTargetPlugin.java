@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Android share-target bridge: stages ACTION_SEND / ACTION_SEND_MULTIPLE
@@ -57,14 +58,51 @@ public class ShareTargetPlugin extends Plugin {
 
     /**
      * The category tying dynamic conversation shortcuts to the static
-     * <share-target> in res/xml/shortcuts.xml. Both shortcut writers — this
-     * plugin and NotificationRelayService.pushConversationShortcut — must set
-     * it, or the shortcut never appears in share sheets.
+     * <share-target> in res/xml/shortcuts.xml. A shortcut without it never
+     * appears in a share sheet.
+     *
+     * <p>Set by THIS plugin only. The notification service publishes
+     * conversation shortcuts too (for the Android 11+ conversation-space
+     * notification look) but deliberately does not set this: its trigger is an
+     * INCOMING message, which is the wrong signal for "where do I share to" —
+     * it suggested whichever rooms happened to notify rather than the ones the
+     * user writes in. Ranking suggestions is `useShareShortcuts`'s job, and
+     * this plugin is the single writer of the share-target set.
      */
     static final String CATEGORY_SHARE_TARGET = "buzz.armada.app.category.SHARE_TARGET";
 
     /** Launcher conversation-space category (matches the service's pushes). */
     static final String CATEGORY_CONVERSATION = "android.shortcut.conversation";
+
+    /**
+     * Rank floor for the notification service's conversation shortcuts.
+     *
+     * <p>Rank ASCENDS — 0 is best — and {@code pushDynamicShortcut} evicts the
+     * lowest-ranked shortcut when the per-activity list is full. The service
+     * used to set no rank at all, so every notified room landed at the default
+     * rank 0 and evicted the ranked share targets below it: over a day of
+     * notifications the suggestion list was guaranteed to decay into whichever
+     * rooms had most recently pushed, which is exactly the "random communities
+     * instead of my pinned DMs" this band exists to prevent.
+     *
+     * <p>Share targets occupy 0..n-1; the service starts here, so an eviction
+     * always takes a notification shortcut before a suggestion. That is the
+     * intended trade: an evicted conversation shortcut costs a notification its
+     * avatar, an evicted share target costs the feature.
+     */
+    static final int SERVICE_RANK_FLOOR = 1000;
+
+    /**
+     * Slots left to the notification service when sizing the published set.
+     *
+     * <p>Android 11+ is documented to CACHE a long-lived shortcut referenced by
+     * a notification, which would make this unnecessary — but that has not been
+     * verified on the devices this ships to, and the failure mode if it is
+     * wrong (every notification silently losing its conversation-space avatar)
+     * is invisible in testing. Two slots is cheap insurance; a share sheet only
+     * ever displays four or five.
+     */
+    private static final int SERVICE_RESERVED_SLOTS = 2;
 
     /** Marks a launch intent whose share payload JS has already consumed, so an
      *  activity/bridge re-init (process restore) doesn't replay the share. */
@@ -159,14 +197,45 @@ public class ShareTargetPlugin extends Plugin {
     }
 
     /**
-     * Publish the ranked Direct Share conversation suggestions. Input:
-     * {shortcuts: [{id, label, iconUrl?}]} in rank order (best first). The id
-     * is the conversation's in-app route; iconUrl is the avatar to fetch —
-     * fetched HERE (native, like the notification service's avatar fetches)
-     * because a WebView fetch of an arbitrary avatar host dies on CORS.
-     * Pushed one at a time so they MERGE with the notification service's
-     * per-message pushes (same id updates in place) instead of clobbering
-     * them; pushDynamicShortcut evicts the lowest-ranked when full.
+     * How many share suggestions JS should send, given the device's real
+     * shortcut budget. Returns {@code {max}}.
+     *
+     * <p>The publisher used to assume 8. The actual per-activity cap is a
+     * device property — commonly 15, but 5 on plenty of OEM builds — and
+     * publishing past it silently evicts, which with the old rank collision
+     * meant the survivors were arbitrary. Reserving
+     * {@link #SERVICE_RESERVED_SLOTS} for the notification service, but never
+     * dropping below four, since four is roughly what a sheet displays anyway.
+     */
+    @PluginMethod
+    public void getMaxShortcuts(PluginCall call) {
+        int cap;
+        try {
+            cap = ShortcutManagerCompat.getMaxShortcutCountPerActivity(getContext());
+        } catch (Exception e) {
+            cap = 0;
+        }
+        if (cap <= 0) cap = 5;
+        JSObject ret = new JSObject();
+        ret.put("max", Math.max(4, cap - SERVICE_RESERVED_SLOTS));
+        call.resolve(ret);
+    }
+
+    /**
+     * Publish the ranked Direct Share conversation suggestions, replacing the
+     * previous set. Input: {shortcuts: [{id, label, iconUrl?}]} in rank order
+     * (best first). The id is the conversation's in-app route; iconUrl is the
+     * avatar to fetch — fetched HERE (native, like the notification service's
+     * avatar fetches) because a WebView fetch of an arbitrary avatar host dies
+     * on CORS.
+     *
+     * <p>Pushed one at a time, and stale ids removed individually, rather than
+     * with {@code setDynamicShortcuts}: that replaces the WHOLE dynamic list,
+     * which would take the notification service's conversation shortcuts with
+     * it and cost every active notification its avatar. Removal is scoped to
+     * shortcuts carrying {@link #CATEGORY_SHARE_TARGET}, which only this method
+     * sets — so a room that drops out of the suggestions stops being a share
+     * target, while anything the service owns is left alone.
      */
     @PluginMethod
     public void publishShortcuts(PluginCall call) {
@@ -175,6 +244,7 @@ public class ShareTargetPlugin extends Plugin {
             call.reject("shortcuts required");
             return;
         }
+        List<String> keep = new ArrayList<>();
         int published = 0;
         for (int i = 0; i < arr.length(); i++) {
             try {
@@ -196,13 +266,70 @@ public class ShareTargetPlugin extends Plugin {
                     if (icon != null) sb.setIcon(icon);
                 }
                 ShortcutManagerCompat.pushDynamicShortcut(getContext(), sb.build());
+                keep.add(id);
                 published++;
             } catch (Exception e) {
                 if (BuildConfig.DEBUG) Log.w(TAG, "publishShortcuts item failed", e);
             }
         }
+        // Only after at least one push landed. An empty or wholly failed
+        // publish is far more likely to be a transient (a rate limit, a cold
+        // store read) than a genuine "no conversations", and retiring the set
+        // on one would leave the user with no suggestions at all until the next
+        // successful publish.
+        if (published > 0) retireShareTargets(keep);
         JSObject ret = new JSObject();
         ret.put("published", published);
+        call.resolve(ret);
+    }
+
+    /** Drop every share target whose id isn't in {@code keep}. */
+    private void retireShareTargets(List<String> keep) {
+        try {
+            List<String> stale = new ArrayList<>();
+            for (ShortcutInfoCompat s : ShortcutManagerCompat.getDynamicShortcuts(getContext())) {
+                Set<String> categories = s.getCategories();
+                if (categories == null || !categories.contains(CATEGORY_SHARE_TARGET)) continue;
+                if (!keep.contains(s.getId())) stale.add(s.getId());
+            }
+            if (!stale.isEmpty()) ShortcutManagerCompat.removeDynamicShortcuts(getContext(), stale);
+        } catch (Exception e) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "retireShareTargets failed", e);
+        }
+    }
+
+    /**
+     * Dump the live dynamic shortcut set — id, rank, categories, whether it has
+     * an icon — as {@code {shortcuts: [...], max}}.
+     *
+     * <p>Diagnostic. Which shortcuts a share sheet actually DISPLAYS, and in
+     * what order, is the system's call: stock Android ranks them through an
+     * AppPredictionService backed by Play Services, which a de-Googled build
+     * does not have, leaving AOSP to fall back on this list. There is no way to
+     * observe that decision from inside the app, so the only thing that can be
+     * checked is that what we published is what is actually there.
+     */
+    @PluginMethod
+    public void dumpShortcuts(PluginCall call) {
+        JSArray out = new JSArray();
+        int cap = 0;
+        try {
+            cap = ShortcutManagerCompat.getMaxShortcutCountPerActivity(getContext());
+            for (ShortcutInfoCompat s : ShortcutManagerCompat.getDynamicShortcuts(getContext())) {
+                JSObject o = new JSObject();
+                o.put("id", s.getId());
+                o.put("label", String.valueOf(s.getShortLabel()));
+                o.put("rank", s.getRank());
+                Set<String> categories = s.getCategories();
+                o.put("shareTarget", categories != null && categories.contains(CATEGORY_SHARE_TARGET));
+                out.put(o);
+            }
+        } catch (Exception e) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "dumpShortcuts failed", e);
+        }
+        JSObject ret = new JSObject();
+        ret.put("shortcuts", out);
+        ret.put("max", cap);
         call.resolve(ret);
     }
 
