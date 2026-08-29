@@ -13,7 +13,10 @@
  */
 
 import { perfCount } from "@/lib/perf";
+import { verifyEventsOnce } from "@/lib/verifyCache";
+import { ecVerifyBatch } from "@/lib/verifyPool";
 
+import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { KIND_CALENDAR_DATE, KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_TIMER_NOTICE, KIND_ZAP } from "@/concord/lib/kinds";
@@ -24,7 +27,7 @@ import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { citationFromTags, type AuthorityCitation } from "@/concord/lib/edition";
 import { floodClusters } from "@/concord/lib/floodCluster";
-import { checkChannelBinding, FUTURE_HOLD_MS, openWrap, type OpenedEvent } from "@/concord/lib/stream";
+import { checkChannelBinding, FUTURE_HOLD_MS, openWrapToSeal, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib/stream";
 import type { Channel } from "@/concord/lib/types";
 
 /** An opened chat event with its verified channel/epoch coordinate. */
@@ -58,43 +61,87 @@ export function _resetChatMemoForTests(): void {
   skippedNoKey.clear();
 }
 
-function openOne(wrap: NostrRumor, channel: Channel): OpenedChat | null {
+/**
+ * A wrap decoded up to its seal (phase 1), carrying the seal to verify and
+ * everything {@link finishChat} needs to complete it once the seal's signature
+ * is proven — the epoch and its retirement cutoff, which the batch verify
+ * cannot see. The seal-signature verify is what {@link openChatBatch} lifts off
+ * the main thread, so it happens BETWEEN the two.
+ */
+interface PendingChat {
+  memoKey: string;
+  epoch: bigint;
+  retiredAt?: number;
+  seal: NostrEvent;
+  finish: () => OpenedWireEvent;
+}
+
+/**
+ * Phase 1: consult the memo, and (on a miss) decrypt the wrap up to its seal
+ * WITHOUT the seal-signature check. Returns `{ done }` for anything already
+ * resolved — a memo hit, a wrap for a stream key we don't hold, or a pre-verify
+ * failure (all memoized exactly as {@link openChatBatch} used to) — or
+ * `{ pending }` for a seal that still needs its signature verified.
+ *
+ * The chat seal-form check (CORD-02 §5: chat seals MUST be encrypted) runs
+ * here, BEFORE the verify: a plaintext seal is refused whether or not its
+ * signature is valid, so there is no point paying the EC verify to reject it.
+ */
+function openChatToSeal(
+  wrap: NostrRumor,
+  channel: Channel,
+): { done: OpenedChat | null } | { pending: PendingChat } {
   const memoKey = `${wrap.id}|${channel.idHex}`;
   const cached = decodeMemo.get(memoKey);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) return { done: cached };
 
   const stream = channel.streams.find((s) => s.group.pk === wrap.pubkey);
   if (!stream) {
     decodeMemo.set(memoKey, null);
     skippedNoKey.add(memoKey);
-    return null;
+    return { done: null };
   }
-  let opened: OpenedChat | null = null;
   try {
-    const ev = openWrap(wrap, stream.group);
+    const { seal, finish } = openWrapToSeal(wrap, stream.group);
     // Chat seals MUST be encrypted (CORD-02 §5) — a plaintext seal would make
     // the message a standalone signed artifact any relay could display.
-    if (ev.sealKind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
-    checkChannelBinding(ev, channel.idHex, stream.epoch);
+    if (seal.kind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
+    return { pending: { memoKey, epoch: stream.epoch, retiredAt: stream.retiredAt, seal, finish } };
+  } catch {
+    decodeMemo.set(memoKey, null);
+    return { done: null };
+  }
+}
+
+/**
+ * Phase 3: recover and bind the rumor of a seal whose signature has now been
+ * verified, and memoize the result. This is the tail of the old single-decode:
+ * the channel/epoch binding and the retired-epoch cutoff.
+ */
+function finishChat(pending: PendingChat, channel: Channel): OpenedChat | null {
+  let opened: OpenedChat | null = null;
+  try {
+    const ev = pending.finish();
+    checkChannelBinding(ev, channel.idHex, pending.epoch);
     // A retired epoch is sealed history, not a live channel: the superseding
     // rotation's publish time is a hard cutoff, and anything sealed under the
     // old key but dated after it is refused. Key possession alone must not
     // keep an ejected member writing into epochs the community rotated away
     // from — the roster/banlist can't drop what it can't attribute in time.
-    if (stream.retiredAt !== undefined && ev.createdAt > stream.retiredAt) {
+    if (pending.retiredAt !== undefined && ev.createdAt > pending.retiredAt) {
       throw new Error("sealed under a retired epoch after its rotation");
     }
-    opened = { ...ev, channelIdHex: channel.idHex, epoch: stream.epoch };
+    opened = { ...ev, channelIdHex: channel.idHex, epoch: pending.epoch };
   } catch {
     opened = null;
   }
-  decodeMemo.set(memoKey, opened);
+  decodeMemo.set(pending.memoKey, opened);
   return opened;
 }
 
 /**
  * Drop stored events that violate their epoch's retirement cutoff. The decode
- * path ({@link openOne}) refuses these at ingest, but rows written before the
+ * path ({@link finishChat}) refuses these at ingest, but rows written before the
  * rotation was adopted locally (or by a client that predates cutoffs) are
  * already in the store — the read side applies the same rule so a retired
  * epoch is history everywhere, not just for freshly-arriving wraps.
@@ -123,32 +170,47 @@ const DECODE_SLICE_MS = 5;
 
 /**
  * Open a batch of sealed wraps for one channel, memoized and time-sliced off
- * the main thread so a large first decode never freezes the UI. Each wrap costs
- * two synchronous NIP-44 decrypts + a Schnorr verify (nostr-tools `@noble`,
- * main-thread), so we yield whenever a slice has run longer than
- * {@link DECODE_SLICE_MS}. Skips (foreign epochs, malformed, spliced) are
- * silent, as in Vector's read path.
+ * the main thread so a large first decode never freezes the UI. Decoding is
+ * three phases, because the seal-signature verify — the dominant per-wrap cost
+ * (~1.8ms of secp256k1 point math on desktop, more on a phone) — is the one
+ * step worth running off the main thread:
+ *
+ *   1. decrypt each wrap up to its seal (synchronous NIP-44; memo hits, no-key
+ *      skips and malformed wraps all resolve here). Time-sliced.
+ *   2. verify every pending seal's signature in ONE batch, off the main thread
+ *      when the batch is large enough to be worth it (`verifyPool`). The
+ *      hash-bind + memo stay main-thread (`verifyCache`), so a worker only ever
+ *      sees a pre-hashed triple it cannot be tricked by.
+ *   3. recover + bind the rumors of the seals that verified (a second
+ *      synchronous NIP-44 decrypt). Time-sliced.
+ *
+ * `cryptoMs` counts the SYNCHRONOUS decrypt work only (phases 1 + 3); the
+ * verify's time is reported separately by `verifyCache`'s own
+ * `crypto.verifyEvents` counter, and when it runs off-thread it is no longer
+ * main-thread CPU at all — which is the whole point of the split. The yields
+ * between slices are deliberately NOT counted, so this stays "main thread spent
+ * decrypting" rather than wall clock. Skips (foreign epochs, malformed,
+ * spliced, bad signature) are silent, as in Vector's read path.
  */
 export async function openChatBatch(
   wraps: NostrRumor[],
   channel: Channel,
   opts?: { signal?: AbortSignal },
 ): Promise<OpenedChat[]> {
-  const out: OpenedChat[] = [];
-  let sliceStart = performance.now();
-  // Crypto time only — the yields between slices are deliberately NOT counted,
-  // so this reads as "main thread spent decrypting" rather than wall clock. Both
-  // numbers matter and they are very different: `setTimeout(0)` is clamped to
-  // ~4ms once nesting passes 5, so a thousand wraps at a 5ms slice adds seconds
-  // of wall clock the CPU total will not show. Compare against the wall-clock
-  // mark the caller records.
   let cryptoMs = 0;
+  let sliceStart = performance.now();
+
+  // ── Phase 1: decrypt each wrap to its seal. `resolved` keeps a slot per wrap
+  // so the output stays in input order across the async verify below.
+  const resolved: Array<OpenedChat | null> = new Array(wraps.length).fill(null);
+  const pending: Array<{ slot: number; chat: PendingChat }> = [];
   for (let i = 0; i < wraps.length; i++) {
     if (opts?.signal?.aborted) break;
     const openStart = performance.now();
-    const opened = openOne(wraps[i], channel);
+    const step = openChatToSeal(wraps[i], channel);
     cryptoMs += performance.now() - openStart;
-    if (opened) out.push(opened);
+    if ("done" in step) resolved[i] = step.done;
+    else pending.push({ slot: i, chat: step.pending });
     // Yield once this slice has run long enough (and more work remains), so the
     // main thread stays responsive during a large backfill decode.
     if (i + 1 < wraps.length && performance.now() - sliceStart >= DECODE_SLICE_MS) {
@@ -156,7 +218,35 @@ export async function openChatBatch(
       sliceStart = performance.now();
     }
   }
+
+  if (pending.length > 0) {
+    // ── Phase 2: batch-verify every pending seal (off-thread when it pays).
+    const oks = await verifyEventsOnce(pending.map((p) => p.chat.seal), ecVerifyBatch);
+
+    // ── Phase 3: finish the rumors of the seals that verified; memoize the
+    // rest as failures (a bad signature won't become good). The rumor recover
+    // is a synchronous NIP-44 decrypt, so slice it like phase 1.
+    sliceStart = performance.now();
+    for (let j = 0; j < pending.length; j++) {
+      if (opts?.signal?.aborted) break;
+      const { slot, chat } = pending[j];
+      const finishStart = performance.now();
+      if (oks[j]) {
+        resolved[slot] = finishChat(chat, channel);
+      } else {
+        decodeMemo.set(chat.memoKey, null);
+      }
+      cryptoMs += performance.now() - finishStart;
+      if (j + 1 < pending.length && performance.now() - sliceStart >= DECODE_SLICE_MS) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        sliceStart = performance.now();
+      }
+    }
+  }
+
   perfCount("crypto.openChatBatch", cryptoMs, wraps.length, "wraps");
+  const out: OpenedChat[] = [];
+  for (const r of resolved) if (r) out.push(r);
   return out;
 }
 

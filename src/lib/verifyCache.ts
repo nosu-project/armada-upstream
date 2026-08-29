@@ -39,10 +39,34 @@ import type { NostrEvent } from "@nostrify/nostrify";
 const MAX_IDS = 20_000;
 const verified = new Set<string>();
 
-/** Verify `event`, skipping the Schnorr check for an id already verified. */
-export function verifyEventOnce(event: NostrEvent): boolean {
-  const start = performance.now();
+/**
+ * Record that content hashing to `id` carried a valid signature. The bounded
+ * FIFO is the whole memo, so both the sync and the batched paths below insert
+ * through here — a second copy of the eviction would be a second contract.
+ */
+function rememberVerified(id: string): void {
+  if (verified.size >= MAX_IDS) {
+    // Oldest insertion first — `Set` iterates in insertion order.
+    const oldest = verified.keys().next();
+    if (!oldest.done) verified.delete(oldest.value);
+  }
+  verified.add(id);
+}
 
+/**
+ * The main-thread half of the memo's security argument, shared by both the
+ * sync {@link verifyEventOnce} and the batched {@link verifyEventsOnce}: an
+ * event is only a candidate for skipping (or deferring) the Schnorr verify once
+ * its claimed id is proven to be the hash of the copy in hand.
+ *
+ * Returns `"decided"` — the event needs no EC verify, `result` is final — or
+ * `"needs-ec"` — hash-bound but not yet in the memo, so the Schnorr verify must
+ * still run against `event.sig`. This is deliberately kept in this file (never
+ * shipped to a worker) because recomputing the hash IS the memo's security
+ * argument: a worker that both hashed and verified could be handed content that
+ * doesn't match its id and would have no honest copy to compare against.
+ */
+function hashGate(event: NostrEvent): { state: "decided"; result: boolean } | { state: "needs-ec" } {
   let hash: string;
   try {
     // `getEventHash` serializes, and serializing an event with missing or
@@ -53,18 +77,26 @@ export function verifyEventOnce(event: NostrEvent): boolean {
     // `verifyEvent` catches this internally; so must the memoized form.)
     hash = getEventHash(event);
   } catch {
-    perfCount("crypto.verifyEvent", performance.now() - start, 1, "events");
-    return false;
+    return { state: "decided", result: false };
   }
+  if (hash !== event.id) return { state: "decided", result: false };
+  if (verified.has(event.id)) return { state: "decided", result: true };
+  return { state: "needs-ec" };
+}
 
-  if (hash !== event.id) {
-    perfCount("crypto.verifyEvent", performance.now() - start, 1, "events");
-    return false;
-  }
+/** Verify `event`, skipping the Schnorr check for an id already verified. */
+export function verifyEventOnce(event: NostrEvent): boolean {
+  const start = performance.now();
 
-  if (verified.has(event.id)) {
-    perfCount("crypto.verifyEvent (memo hit)", performance.now() - start, 1, "events");
-    return true;
+  const gate = hashGate(event);
+  if (gate.state === "decided") {
+    perfCount(
+      gate.result && verified.has(event.id) ? "crypto.verifyEvent (memo hit)" : "crypto.verifyEvent",
+      performance.now() - start,
+      1,
+      "events",
+    );
+    return gate.result;
   }
 
   let ok = false;
@@ -74,16 +106,73 @@ export function verifyEventOnce(event: NostrEvent): boolean {
   } catch {
     ok = false;
   }
-  if (ok) {
-    if (verified.size >= MAX_IDS) {
-      // Oldest insertion first — `Set` iterates in insertion order.
-      const oldest = verified.keys().next();
-      if (!oldest.done) verified.delete(oldest.value);
-    }
-    verified.add(event.id);
-  }
+  if (ok) rememberVerified(event.id);
   perfCount("crypto.verifyEvent", performance.now() - start, 1, "events");
   return ok;
+}
+
+/** The three fields an out-of-process EC verifier needs, and nothing else. */
+export interface VerifyTriple {
+  sig: string;
+  id: string;
+  pubkey: string;
+}
+
+/**
+ * A pluggable Schnorr batch verifier: given `(sig, id, pubkey)` triples,
+ * resolve one boolean per triple in order. The default is main-thread `@noble`;
+ * `verifyPool.ts` supplies a worker-backed one so a large first decode's EC
+ * math runs off the main thread. The verifier does the EC ONLY — the hash bind
+ * and the memo stay here (see {@link hashGate}).
+ */
+export type EcVerifyBatch = (triples: VerifyTriple[]) => Promise<boolean[]>;
+
+/**
+ * Batched, memoized verification. Same security argument as {@link
+ * verifyEventOnce}, applied to a whole batch: every event is hash-bound and
+ * memo-checked on THIS thread; only the residue that actually needs a Schnorr
+ * verify is handed to `ecVerify` (which may run it off-thread). A valid result
+ * is remembered so a later copy — or the sync path — hits the memo.
+ *
+ * Returns one boolean per input event, in input order. `ecVerify` failing
+ * wholesale (a dead worker) reads as "unverified" for the residue, never as an
+ * exception: the caller drops those events, exactly as a bad sig would.
+ */
+export async function verifyEventsOnce(
+  events: NostrEvent[],
+  ecVerify: EcVerifyBatch,
+): Promise<boolean[]> {
+  const start = performance.now();
+  const result = new Array<boolean>(events.length);
+  const residue: VerifyTriple[] = [];
+  const residueIndex: number[] = [];
+
+  for (let i = 0; i < events.length; i++) {
+    const gate = hashGate(events[i]);
+    if (gate.state === "decided") {
+      result[i] = gate.result;
+      continue;
+    }
+    residue.push({ sig: events[i].sig, id: events[i].id, pubkey: events[i].pubkey });
+    residueIndex.push(i);
+  }
+
+  if (residue.length > 0) {
+    let oks: boolean[];
+    try {
+      oks = await ecVerify(residue);
+    } catch {
+      oks = residue.map(() => false);
+    }
+    for (let j = 0; j < residue.length; j++) {
+      const ok = oks[j] === true;
+      result[residueIndex[j]] = ok;
+      if (ok) rememberVerified(residue[j].id);
+    }
+  }
+
+  perfCount("crypto.verifyEvents", performance.now() - start, events.length, "events");
+  return result;
 }
 
 /** Test seam: forget every verified id. */

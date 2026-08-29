@@ -263,20 +263,49 @@ export function resolveMs(createdAtSecs: number, tags: string[][]): number {
 }
 
 /**
- * Open and fully verify one stream wrap under its plane's group key:
+ * A wrap decoded up to — but NOT through — its seal-signature check.
+ *
+ * {@link seal} is the layer whose Schnorr signature authenticates the rumor's
+ * real author; {@link finish} recovers and binds the rumor and builds the
+ * event, and is VALID TO CALL ONLY once `seal` has been verified. Splitting the
+ * one EC verify out of the decode is what lets a large first decode batch those
+ * verifies and run them off the main thread — see `chat.ts` `openChatBatch`,
+ * which drives `verifyEventsOnce` over the seals between the two halves.
+ */
+export interface WrapToSeal {
+  /**
+   * The seal (20013 encrypted / 20014 plaintext) whose Schnorr signature
+   * authenticates the rumor's real author. The caller MUST verify this
+   * (`verifyEventOnce` / `verifyEventsOnce`) before calling {@link finish}.
+   */
+  seal: NostrEvent;
+  /**
+   * Recover the rumor, check its author + id bindings, and build the event —
+   * the tail of {@link openWrap} after the seal verify. Assumes {@link seal} is
+   * already verified; throws {@link StreamError} on a binding failure exactly
+   * as `openWrap` does.
+   */
+  finish(): OpenedWireEvent;
+}
+
+/**
+ * Decode one stream wrap up to its seal, WITHOUT the seal-signature check:
  *
  *   1. the wrap's author must be the stream address (else it isn't ours);
  *      the wrap's OWN signature is never checked — it is made by a throwaway
  *      ephemeral key and proves nothing, which is why this takes a rumor and
- *      a parked wrap can be stored without one;
- *   2. decrypt the wrap → the seal; verify the seal's Schnorr signature
- *      (authorship proof) and that its kind declares a known seal form;
- *   3. recover the rumor (decrypting again for 20013); verify the rumor's id
+ *      a parked wrap can be stored without one — EXCEPT a write-restricted
+ *      stream, whose wrap signature IS the write gate and is verified here;
+ *   2. decrypt the wrap → the seal, and check its kind declares a known seal
+ *      form. The seal's Schnorr signature is NOT checked here: {@link openWrap}
+ *      does it inline, the batched path does it off-thread. Both then call
+ *      {@link WrapToSeal.finish}, which:
+ *   3. recovers the rumor (decrypting again for 20013); verifies the rumor's id
  *      is its NIP-01 hash (an id is the ordering tiebreak — never trust a
  *      claimed one) and that the rumor's pubkey equals the seal's signer (or a
  *      keyholder could re-seal another member's rumor under their own name).
  */
-export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEvent {
+export function openWrapToSeal(wrap: NostrRumor, stream: StreamKeyView): WrapToSeal {
   if (wrap.kind !== KIND_WRAP && wrap.kind !== KIND_WRAP_EPHEMERAL) {
     throw new StreamError("bad-wrap-kind", `not a stream wrap: kind ${wrap.kind}`);
   }
@@ -287,7 +316,9 @@ export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEve
   // the signer set is narrower than the readership, so unlike an ordinary
   // stream wrap (signed with a key every reader holds — never checked), it
   // proves a `control_root` holder published this, and a reader MUST check it
-  // rather than lean on the relays having done so.
+  // rather than lean on the relays having done so. This is a DIFFERENT verify
+  // from the seal's and stays synchronous here — the restricted (control)
+  // plane is low-volume, so it is not worth the batched path's complexity.
   if (stream.restricted) {
     const signed = wrap as NostrRumor & { sig?: string };
     if (typeof signed.sig !== "string" || !verifyEventOnce(signed as NostrEvent)) {
@@ -304,6 +335,61 @@ export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEve
   if (seal.kind !== KIND_SEAL_ENCRYPTED && seal.kind !== KIND_SEAL_PLAINTEXT) {
     throw new StreamError("bad-seal-kind", `unknown seal kind ${seal.kind}`);
   }
+
+  return {
+    seal,
+    finish: () => {
+      let rumor: NostrRumor;
+      try {
+        const json = seal.kind === KIND_SEAL_ENCRYPTED ? nip44Decrypt(seal.content, stream.convKey) : seal.content;
+        rumor = JSON.parse(json) as NostrRumor;
+      } catch (e) {
+        throw new StreamError(
+          seal.kind === KIND_SEAL_ENCRYPTED ? "decrypt" : "parse",
+          `rumor recover: ${e instanceof Error ? e.message : e}`,
+        );
+      }
+
+      if (rumor.pubkey !== seal.pubkey) {
+        throw new StreamError("author-mismatch", "rumor author does not match the seal's signer");
+      }
+      const expectedId = getEventHash({
+        kind: rumor.kind,
+        content: rumor.content,
+        tags: rumor.tags,
+        created_at: rumor.created_at,
+        pubkey: rumor.pubkey,
+      });
+      if (rumor.id !== expectedId) {
+        throw new StreamError("bad-rumor-id", "rumor id is not its event hash");
+      }
+
+      return {
+        rumorId: rumor.id,
+        author: seal.pubkey,
+        kind: rumor.kind,
+        content: rumor.content,
+        tags: rumor.tags,
+        ms: resolveMs(rumor.created_at, rumor.tags),
+        createdAt: rumor.created_at,
+        wrapId: wrap.id,
+        streamPk: wrap.pubkey,
+        sealKind: seal.kind,
+        seal,
+      };
+    },
+  };
+}
+
+/**
+ * Open and fully verify one stream wrap under its plane's group key:
+ * {@link openWrapToSeal} plus the seal's Schnorr signature check, in that
+ * order (so error codes are unchanged whichever check a malformed wrap trips
+ * first). The wrap's own signature is never checked for an ordinary stream —
+ * see {@link openWrapToSeal}.
+ */
+export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEvent {
+  const { seal, finish } = openWrapToSeal(wrap, stream);
   // Memoized by seal id (see verifyCache): the same wrap arrives from every
   // relay serving the community, and each delivery re-parses the seal into a
   // fresh object, so nostr-tools' per-object `verifiedSymbol` memo never hits.
@@ -312,45 +398,7 @@ export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEve
   if (!verifyEventOnce(seal)) {
     throw new StreamError("bad-seal-signature", "seal signature invalid");
   }
-
-  let rumor: NostrRumor;
-  try {
-    const json = seal.kind === KIND_SEAL_ENCRYPTED ? nip44Decrypt(seal.content, stream.convKey) : seal.content;
-    rumor = JSON.parse(json) as NostrRumor;
-  } catch (e) {
-    throw new StreamError(
-      seal.kind === KIND_SEAL_ENCRYPTED ? "decrypt" : "parse",
-      `rumor recover: ${e instanceof Error ? e.message : e}`,
-    );
-  }
-
-  if (rumor.pubkey !== seal.pubkey) {
-    throw new StreamError("author-mismatch", "rumor author does not match the seal's signer");
-  }
-  const expectedId = getEventHash({
-    kind: rumor.kind,
-    content: rumor.content,
-    tags: rumor.tags,
-    created_at: rumor.created_at,
-    pubkey: rumor.pubkey,
-  });
-  if (rumor.id !== expectedId) {
-    throw new StreamError("bad-rumor-id", "rumor id is not its event hash");
-  }
-
-  return {
-    rumorId: rumor.id,
-    author: seal.pubkey,
-    kind: rumor.kind,
-    content: rumor.content,
-    tags: rumor.tags,
-    ms: resolveMs(rumor.created_at, rumor.tags),
-    createdAt: rumor.created_at,
-    wrapId: wrap.id,
-    streamPk: wrap.pubkey,
-    sealKind: seal.kind,
-    seal,
-  };
+  return finish();
 }
 
 /**
