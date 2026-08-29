@@ -49,6 +49,7 @@ import {
 } from "@/lib/nip17/conversation";
 import {
   DM_RUMOR_KINDS,
+  DM_THREAD_KINDS,
   dmConvKey,
   dmConvKeyOf,
   dmPeersOf,
@@ -56,6 +57,7 @@ import {
   KIND_DM_CHAT,
   KIND_DM_FILE,
   KIND_DM_TIMER,
+  KIND_DM_WEBXDC,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
@@ -423,7 +425,10 @@ export function conversationFilters(
   // viewer into their own conversation still names the term the store filed.
   const others = peers.filter((peer) => peer !== self);
   const filter: NostrFilter = {
-    kinds: DM_RUMOR_KINDS,
+    // Not every stored kind: app state (3310) is read by its own session query.
+    // One filter is one `limit`, so a kind in here spends the conversation's
+    // page budget — see DM_THREAD_KINDS.
+    kinds: DM_THREAD_KINDS,
     search: dmConvTerm(others.length > 0 ? others : [self]),
   };
   if (opts.limit !== undefined) filter.limit = opts.limit;
@@ -466,6 +471,46 @@ export async function queryDm17Timer(
   if (raw === undefined) return undefined;
   const secs = Number(raw);
   return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
+}
+
+/** How many app-state rumors one session reads back. Concord's own bound. */
+const WEBXDC_PAGE = 1000;
+
+/**
+ * One app session's durable state, oldest first — the DM twin of Concord's
+ * `queryWebxdcRumors`.
+ *
+ * Its OWN query, and that is the point: a thread read is one filter with one
+ * `limit` shared by every kind in it (see {@link conversationFilters}), so
+ * reading app state off the thread window would make a chatty game evict the
+ * conversation from its own page and, in the same breath, truncate the game's
+ * history to whatever the messages left over. A session is bounded by its
+ * `i` tag instead, so the two never compete.
+ *
+ * Ascending, because a webxdc `sendUpdate` stream is a log the app replays in
+ * order and assigns serials to by position.
+ */
+export async function queryDm17Webxdc(
+  self: string,
+  peers: readonly string[],
+  uuid: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<OpenedDm[]> {
+  if (!uuid) return [];
+  await migrateLegacyDms(self).catch(() => undefined);
+  const key = dmConvKey(peers);
+  const events = await dm17Store(self).query(
+    conversationFilters(self, peers, { limit: WEBXDC_PAGE }).map((f) => ({
+      ...f,
+      kinds: [KIND_DM_WEBXDC],
+      "#i": [uuid],
+    })),
+    { signal: opts.signal },
+  );
+  return events
+    .filter((ev) => !isExpired(ev.tags) && dmConvKeyOf(ev, self) === key)
+    .map((ev) => storedToDm17(ev, self))
+    .sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
 }
 
 /** One row of the conversation list: a participant set and its newest message. */
@@ -543,6 +588,8 @@ export async function queryDm17Conversations(
     const opened = storedToDm17(ev, self);
     if (opened.peers.length === 0) return;
     if (!DM_MESSAGE_KINDS.includes(ev.kind)) return;
+    // Filter out WebXDC updates (kind-3310)
+    if (ev.kind === KIND_DM_WEBXDC) return;
     const key = dmConvKey(opened.peers);
     // BEFORE the expiry check, and that ordering is the whole point: expiry
     // decides what is DISPLAYED, not whether the viewer ever wrote here. The

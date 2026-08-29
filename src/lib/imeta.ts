@@ -138,6 +138,9 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
  * `blurhash`, `thumb`/`image`, and the `encryption-algorithm` /
  * `decryption-key` / `decryption-nonce` triple.
  *
+ * For WebXDC Mini Apps, also extracts the `webxdc-topic` tag which identifies
+ * the realtime gossip session (Vector's interop field).
+ *
  * Returns `undefined` when `url` isn't a usable http(s) URL. Encryption is
  * attached only when the params parse as valid AES-GCM (see
  * {@link parseImetaEncryption}); a file message with no/invalid encryption
@@ -161,6 +164,9 @@ export function parseFileMessageTags(url: string, tags: string[][]): ImetaEntry 
     blurhash: flat.blurhash,
     name: flat.name,
     size: flat.size,
+    // Extract webxdc-topic for Mini Apps (Vector's interop field)
+    // Prefer webxdc-topic over legacy webxdc field
+    webxdc: flat["webxdc-topic"] ?? flat.webxdc,
     fallbacks: fallbacks.length ? fallbacks : undefined,
     encryption: parseImetaEncryption(flat),
   };

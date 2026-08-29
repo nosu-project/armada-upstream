@@ -18,12 +18,15 @@ internal object Dm17 {
 
     /**
      * The rumor kinds the DM store holds: NIP-09 delete, NIP-25 reaction,
-     * chat, file, and Armada's disappearing-messages timer.
+     * chat, file, Armada's disappearing-messages timer, and Mini App state
+     * (3310). The port of `DM_RUMOR_KINDS`.
      *
      * Typing indicators (23311) are deliberately absent — the signal IS the
-     * event's existence, it lives for seconds, and it must never reach the store.
+     * event's existence, it lives for seconds, and it must never reach the
+     * store. Mini App PEER SIGNALS (30078) are absent for the same reason:
+     * they name a transport address that is meaningless once the session ends.
      */
-    val KINDS = setOf(5, 7, 14, 15, 1740)
+    val KINDS = setOf(5, 7, 14, 15, 1740, 3310)
 
     /**
      * The kinds worth LISTING — a chat message or a file — which [MSG_TERM] and

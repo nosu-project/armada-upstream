@@ -4,6 +4,7 @@ import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  conversationFilters,
   countUnreadDm17Messages,
   DM17_DRAIN_PAGE,
   dm17Store,
@@ -13,6 +14,7 @@ import {
   queryDm17Rumor,
   queryDm17Thread,
   queryDm17Timer,
+  queryDm17Webxdc,
   readDm17Cursor,
   searchDm17Rumors,
   storedToDm17,
@@ -23,17 +25,21 @@ import {
 import {
   buildDmEditRumors,
   buildDmRumor,
+  DM_RUMOR_KINDS,
+  DM_THREAD_KINDS,
   dmChatTags,
   dmConvKey,
   dmDeleteTags,
   dmPeersOf,
   dmReactionTags,
   dmTimerTags,
+  dmWebxdcTags,
   KIND_DM_CHAT,
   KIND_DM_DELETE,
   KIND_DM_FILE,
   KIND_DM_REACTION,
   KIND_DM_TIMER,
+  KIND_DM_WEBXDC,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
 import { dmThreadScope, onWireScopes, resetWireBus } from "@/wire/bus";
@@ -760,5 +766,72 @@ describe("the conversation list is a list, not a sample", () => {
     // policy that disagreed with the reader would file rows nothing lists.
     const { DM_MESSAGE_KINDS } = await import("@/lib/nip17/conversation");
     expect([...DM_MESSAGE_KINDS].sort()).toEqual([KIND_DM_CHAT, KIND_DM_FILE].sort());
+  });
+});
+
+describe("Mini App state", () => {
+  const viewer = getPublicKey(generateSecretKey());
+  const friend = getPublicKey(generateSecretKey());
+  const session = "A".repeat(52);
+  const other = "B".repeat(52);
+
+  it("keeps app state out of the conversation's page budget", () => {
+    // A thread read is ONE filter with ONE `limit` shared by every kind in it,
+    // so a kind listed here spends rows the conversation needs. App state is
+    // unbounded in a way messages are not — a game can emit an update per move
+    // — and read the other way its own history would be truncated to whatever
+    // the messages left over. It is stored, and read by its own session query.
+    const [filter] = conversationFilters(viewer, [friend], { limit: 50 });
+    expect(filter.kinds).not.toContain(KIND_DM_WEBXDC);
+    expect(filter.kinds).toEqual([...DM_THREAD_KINDS]);
+    expect([...DM_RUMOR_KINDS].sort()).toEqual([...DM_THREAD_KINDS, KIND_DM_WEBXDC].sort());
+  });
+
+  it("reads one session's state, oldest first, and nobody else's", async () => {
+    const mine = opened({
+      author: viewer,
+      peer: friend,
+      kind: KIND_DM_WEBXDC,
+      content: JSON.stringify({ move: 1 }),
+      tags: dmWebxdcTags([friend], session, { summary: "1-0" }),
+    });
+    const theirs = opened({
+      author: friend,
+      peer: friend,
+      kind: KIND_DM_WEBXDC,
+      content: JSON.stringify({ move: 2 }),
+      tags: dmWebxdcTags([viewer], session),
+    });
+    // A second game in the same conversation, and a chat message beside them.
+    const elsewhere = opened({
+      author: friend,
+      peer: friend,
+      kind: KIND_DM_WEBXDC,
+      content: JSON.stringify({ move: 99 }),
+      tags: dmWebxdcTags([viewer], other),
+    });
+    const chat = opened({
+      author: friend,
+      peer: friend,
+      content: "your turn",
+      tags: dmChatTags([viewer]),
+    });
+    await writeDm17Rumors(viewer, [mine, theirs, elsewhere, chat]);
+
+    const rows = await queryDm17Webxdc(viewer, [friend], session);
+    // Ascending: a webxdc update stream is a log the app replays in order and
+    // assigns serials to by position.
+    expect(rows.map((row) => row.rumorId)).toEqual([mine.rumorId, theirs.rumorId]);
+    // The metadata survives the round trip — it is webxdc's `sendUpdate`
+    // payload, not decoration.
+    expect(rows[0].tags).toContainEqual(["summary", "1-0"]);
+
+    // And the thread it shares a conversation with never sees any of it.
+    const thread = await queryDm17Thread(viewer, [friend], { limit: 50 });
+    expect(thread.map((row) => row.rumorId)).toEqual([chat.rumorId]);
+  });
+
+  it("names no session at all rather than reading every game", async () => {
+    expect(await queryDm17Webxdc(viewer, [friend], "")).toEqual([]);
   });
 });

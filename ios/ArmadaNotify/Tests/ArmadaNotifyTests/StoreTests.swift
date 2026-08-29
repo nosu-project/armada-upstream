@@ -97,6 +97,25 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try rumors(tenant: NotifyStore.dmTenant(self: self_)).count, 1)
     }
 
+    func testStoresMiniAppState() throws {
+        // Kind 3310 is a DM-plane rumor like any other (`DM_RUMOR_KINDS`), and
+        // the extension is a SECOND writer into the tenant the WebView reads —
+        // so a kind only one of them accepts is state that reaches the store on
+        // one path and not the other. The extension needs no rule of its own
+        // here: `writeDm` files what the opener handed it, and `PushProcessor`
+        // separately declines to make a non-message into a notification.
+        let update = OpenedDm(
+            rumorId: String(repeating: "5", count: 64), author: peer, kind: 3310,
+            content: #"{"move":1}"#,
+            tags: [["p", self_], ["i", String(repeating: "A", count: 52)]],
+            createdAt: now, peers: [peer]
+        )
+        try store.writeDm(update, self: self_, now: now)
+        let stored = try rumors(tenant: NotifyStore.dmTenant(self: self_))
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored[0]["kind"] as? Int, 3310)
+    }
+
     // MARK: - Concord writes
 
     func testWritesAChatRumorIntoTheCommunityTenant() throws {
@@ -331,7 +350,7 @@ final class StorelessTests: XCTestCase {
             policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
             nip46: nil, concord: [stream]
         )
-        let wrap = ["scope": "c2", "event": concord["wrap"] as! [String: Any]]
+        let wrap: [String: Any] = ["scope": "c2", "event": concord["wrap"] as! [String: Any]]
         // A clock well behind the vector's rumor: it reads as future and holds.
         XCTAssertEqual(
             PushProcessor(store: nil, config: config, now: 1_699_000_000)
