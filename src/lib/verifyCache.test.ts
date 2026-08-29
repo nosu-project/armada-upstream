@@ -10,11 +10,13 @@
  *    documented, deliberate acceptance).
  */
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { _resetVerifyCacheForTests, verifyEventOnce } from "./verifyCache";
+import { _resetVerifyCacheForTests, verifyEventOnce, verifyEventsOnce } from "./verifyCache";
+import { ecVerifyBatch as inlineEcVerify } from "./verifyPool";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { EcVerifyBatch } from "./verifyCache";
 
 function signed(content = "hello"): NostrEvent {
   return finalizeEvent(
@@ -55,5 +57,98 @@ describe("verifyEventOnce", () => {
     const ev = signed();
     expect(verifyEventOnce({ ...ev, sig: "00".repeat(64) })).toBe(false);
     expect(verifyEventOnce(ev)).toBe(true);
+  });
+});
+
+describe("verifyEventsOnce", () => {
+  it("returns one verdict per event, in input order, through the real inline verifier", async () => {
+    const good = [signed("a"), signed("b"), signed("c")];
+    const bad = { ...signed("d"), sig: "00".repeat(64) };
+    const tampered = { ...signed("e"), content: "tampered" };
+
+    const results = await verifyEventsOnce([good[0], bad, good[1], tampered, good[2]], inlineEcVerify);
+
+    expect(results).toEqual([true, false, true, false, true]);
+  });
+
+  it("applies the same security argument as the sync path — a verified id never blesses different content", async () => {
+    const ev = signed();
+    expect(await verifyEventsOnce([ev], inlineEcVerify)).toEqual([true]);
+    // Tampered content riding a known-good id must be hash-refused on the main
+    // thread, without the EC verifier ever being consulted.
+    const ecVerify = vi.fn<EcVerifyBatch>(async (triples) => triples.map(() => true));
+    expect(await verifyEventsOnce([{ ...ev, content: "tampered" }], ecVerify)).toEqual([false]);
+    expect(ecVerify).not.toHaveBeenCalled();
+  });
+
+  it("hands the EC verifier only the residue the memo can't answer", async () => {
+    const seen = signed("seen");
+    const fresh = signed("fresh");
+    expect(verifyEventOnce(seen)).toBe(true);
+
+    const ecVerify = vi.fn<EcVerifyBatch>(inlineEcVerify);
+    const results = await verifyEventsOnce([seen, fresh], ecVerify);
+
+    expect(results).toEqual([true, true]);
+    expect(ecVerify).toHaveBeenCalledTimes(1);
+    expect(ecVerify.mock.calls[0][0]).toEqual([{ sig: fresh.sig, id: fresh.id, pubkey: fresh.pubkey }]);
+  });
+
+  it("feeds the memo: a batched verify makes the sync path's later copy a memo hit", async () => {
+    const ev = signed();
+    expect(await verifyEventsOnce([ev], inlineEcVerify)).toEqual([true]);
+    // A mangled-sig copy passing is the proof the memo engaged (see above).
+    expect(verifyEventOnce({ ...ev, sig: "00".repeat(64) })).toBe(true);
+  });
+
+  it("does not memoize a failed batched verify — the honest copy still passes later", async () => {
+    const ev = signed();
+    expect(await verifyEventsOnce([{ ...ev, sig: "00".repeat(64) }], inlineEcVerify)).toEqual([false]);
+    expect(await verifyEventsOnce([ev], inlineEcVerify)).toEqual([true]);
+  });
+
+  it("reads a throwing verifier as unverified for the residue, never as an exception", async () => {
+    const memoized = signed("memoized");
+    expect(verifyEventOnce(memoized)).toBe(true);
+    const fresh = signed("fresh");
+
+    const broken: EcVerifyBatch = async () => {
+      throw new Error("worker exploded");
+    };
+    const results = await verifyEventsOnce([memoized, fresh], broken);
+
+    // The memo hit survives; only the residue reads as unverified — and is not
+    // memoized as failed, so the same event verifies once the verifier works.
+    expect(results).toEqual([true, false]);
+    expect(await verifyEventsOnce([fresh], inlineEcVerify)).toEqual([true]);
+  });
+
+  it("pads a short answer with false instead of leaving holes", async () => {
+    const events = [signed("a"), signed("b"), signed("c")];
+    const short: EcVerifyBatch = async (triples) => triples.slice(0, 1).map(() => true);
+
+    const results = await verifyEventsOnce(events, short);
+
+    expect(results).toEqual([true, false, false]);
+    for (const r of results) expect(typeof r).toBe("boolean");
+  });
+
+  it("verifies a duplicate id within one batch only once", async () => {
+    const ev = signed();
+    const ecVerify = vi.fn<EcVerifyBatch>(inlineEcVerify);
+
+    const results = await verifyEventsOnce([ev, { ...ev }, ev], ecVerify);
+
+    expect(results).toEqual([true, true, true]);
+    // One EC verify for three copies: the residue is deduped by id, so the
+    // same seal arriving from two relays in one batch costs one point-mul.
+    const handed = ecVerify.mock.calls.flatMap((c) => c[0]);
+    expect(handed).toHaveLength(1);
+  });
+
+  it("handles an empty batch without consulting the verifier", async () => {
+    const ecVerify = vi.fn<EcVerifyBatch>(inlineEcVerify);
+    expect(await verifyEventsOnce([], ecVerify)).toEqual([]);
+    expect(ecVerify).not.toHaveBeenCalled();
   });
 });

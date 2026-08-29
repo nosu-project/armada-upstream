@@ -137,6 +137,11 @@ export type EcVerifyBatch = (triples: VerifyTriple[]) => Promise<boolean[]>;
  * Returns one boolean per input event, in input order. `ecVerify` failing
  * wholesale (a dead worker) reads as "unverified" for the residue, never as an
  * exception: the caller drops those events, exactly as a bad sig would.
+ *
+ * The residue is deduped by id: the same seal arriving from two relays in one
+ * batch is one EC verify, with every copy taking that one verdict. Sound for
+ * the same reason the memo is — both copies were hash-bound to the id here, so
+ * an identical id means identical content.
  */
 export async function verifyEventsOnce(
   events: NostrEvent[],
@@ -145,7 +150,10 @@ export async function verifyEventsOnce(
   const start = performance.now();
   const result = new Array<boolean>(events.length);
   const residue: VerifyTriple[] = [];
-  const residueIndex: number[] = [];
+  // Which result slots each residue triple answers — a duplicate id adds a
+  // slot to an existing triple's list rather than a second triple.
+  const residueSlots: number[][] = [];
+  const residueById = new Map<string, number>();
 
   for (let i = 0; i < events.length; i++) {
     const gate = hashGate(events[i]);
@@ -153,9 +161,20 @@ export async function verifyEventsOnce(
       result[i] = gate.result;
       continue;
     }
+    const at = residueById.get(events[i].id);
+    if (at !== undefined) {
+      residueSlots[at].push(i);
+      continue;
+    }
+    residueById.set(events[i].id, residue.length);
     residue.push({ sig: events[i].sig, id: events[i].id, pubkey: events[i].pubkey });
-    residueIndex.push(i);
+    residueSlots.push([i]);
   }
+
+  // The gate + residue build is the main-thread cost this counter reports;
+  // the EC verify below may run off-thread, and awaiting it is wall clock,
+  // not CPU — `verifyPool` / the verifier's own counters account for that.
+  perfCount("crypto.verifyEvents", performance.now() - start, events.length, "events");
 
   if (residue.length > 0) {
     let oks: boolean[];
@@ -166,12 +185,11 @@ export async function verifyEventsOnce(
     }
     for (let j = 0; j < residue.length; j++) {
       const ok = oks[j] === true;
-      result[residueIndex[j]] = ok;
+      for (const slot of residueSlots[j]) result[slot] = ok;
       if (ok) rememberVerified(residue[j].id);
     }
   }
 
-  perfCount("crypto.verifyEvents", performance.now() - start, events.length, "events");
   return result;
 }
 

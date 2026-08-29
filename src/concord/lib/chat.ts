@@ -185,9 +185,9 @@ const DECODE_SLICE_MS = 5;
  *      synchronous NIP-44 decrypt). Time-sliced.
  *
  * `cryptoMs` counts the SYNCHRONOUS decrypt work only (phases 1 + 3); the
- * verify's time is reported separately by `verifyCache`'s own
- * `crypto.verifyEvents` counter, and when it runs off-thread it is no longer
- * main-thread CPU at all — which is the whole point of the split. The yields
+ * verify's own main-thread cost (hash-bind + memo) is `verifyCache`'s
+ * `crypto.verifyEvents` counter, and the EC math itself may run off-thread,
+ * where it is no longer main-thread CPU at all — the point of the split. The yields
  * between slices are deliberately NOT counted, so this stays "main thread spent
  * decrypting" rather than wall clock. Skips (foreign epochs, malformed,
  * spliced, bad signature) are silent, as in Vector's read path.
