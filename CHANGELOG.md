@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.1] - 2026-08-30
+
+Fixes a freeze on mobile when opening a link or notification that jumps to a
+specific message: the app kept rendering but stopped responding to touch until
+it was force-quit. Jumping to a message from a notification now also closes the
+channel list so the message you were sent to is actually on screen.
+
+### Fixed
+- Opening a link or notification that jumps to a specific message no longer leaves the app unresponsive on mobile
+- Tapping a notification for a channel in the community you already have open now closes the channel list and lands on the message
+
 ## [0.59.0] - 2026-08-29
 
 Mini Apps now work inside direct messages, each scoped to its own conversation
