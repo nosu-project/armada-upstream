@@ -346,6 +346,18 @@ interface ChatComposerProps {
    */
   draftScope?: string;
   /**
+   * The room path this composer serves — the address a share is routed to
+   * (Android share target, the `/share` picker, an in-app forward) for its
+   * text and files to land in this draft.
+   *
+   * Supplied by the surface rather than read from the location, because the
+   * location is ambient: several composers are mounted at once during a route
+   * transition, and each would see the destination's path as readily as the
+   * one it actually renders. Omit it wherever the composer is not a share
+   * destination — the thread panel, whose room already has one.
+   */
+  shareRoute?: string;
+  /**
    * Optimistic-send hooks (group mode). When provided, an outgoing message is
    * inserted into the timeline as `pending` the moment it's signed, then
    * confirmed (`onSent` of the publish) or marked failed for retry.
@@ -456,7 +468,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -1144,15 +1156,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // Consume a shared payload routed to THIS conversation (Android share
   // target / the /share destination picker): shared text is appended to the
   // draft, shared files go through the normal attachment pipeline. The consume
-  // is matched on the current pathname — the share stash routes a payload to
-  // exactly one conversation path, and a thread-panel composer at a deeper
-  // `/t/` path never matches. Subscribed (not just checked on mount) because a
-  // native share's file copies can land AFTER navigation mounted this
-  // composer, and a Direct Share into the room already on screen re-routes the
-  // stash without remounting anything.
+  // is matched on `shareRoute` — the room this composer serves, which the
+  // surface hands down — and NOT on the current pathname, which every mounted
+  // composer reads the same. During a route transition the page being left is
+  // still mounted while the destination's chunk loads, so an ambient match let
+  // it claim a payload addressed to the room being navigated to. Subscribed
+  // (not just checked on mount) because a native share's file copies can land
+  // AFTER navigation mounted this composer, and a Direct Share into the room
+  // already on screen re-routes the stash without remounting anything.
   useEffect(() => {
+    if (!shareRoute) return;
     const consume = () => {
-      const share = consumeShareFor(window.location.pathname);
+      const share = consumeShareFor(shareRoute);
       if (!share) return;
       // A forward's imeta/emoji tags (see forwardMessage.ts). Appended, not
       // replaced: several forwards can be staged into one draft before it's
@@ -1193,7 +1208,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
     consume();
     return onShareStashChanged(consume);
-  }, [handleFileUpload]);
+  }, [handleFileUpload, shareRoute]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;

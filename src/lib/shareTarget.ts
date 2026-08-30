@@ -188,12 +188,21 @@ export function pendingSharePreview(): SharePayload | null {
 }
 
 /**
- * Hand the payload to the composer at `pathname` — the consume is
- * path-matched so only the conversation the share was routed to takes it
- * (never e.g. a thread-panel composer at a deeper path).
+ * Hand the payload to the composer serving `route`, so only the conversation
+ * the share was routed to takes it.
+ *
+ * `route` is the composer's OWN room path, which the surface rendering it
+ * passes down — never the ambient `window.location`. More than one composer is
+ * mounted at a time (a route transition keeps the previous page alive while
+ * the destination's chunk loads, and a thread panel has one of its own beside
+ * the room's), and they would all read the same location: matching on it let
+ * whichever composer happened to be mounted claim a payload addressed to the
+ * conversation being navigated TO, pasting the share into the screen the user
+ * was leaving. A composer with no route of its own (the thread panel) is not a
+ * share destination and consumes nothing.
  */
-export function consumeShareFor(pathname: string): SharePayload | null {
-  if (!stash || stash.route === null || stash.route !== pathname) return null;
+export function consumeShareFor(route: string | undefined): SharePayload | null {
+  if (!route || !stash || stash.route === null || stash.route !== route) return null;
   const { payload } = stash;
   stash = null;
   emitStashChanged();

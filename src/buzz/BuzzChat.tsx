@@ -909,6 +909,9 @@ export function BuzzChat({
             relayUrl={relayUrl}
             groupId={channelId}
             messages={timeline}
+            // Where a share routed to this channel lands — the channel's own
+            // address, not the ambient location.
+            shareRoute={chatRoute({ kind: "nip29", relayUrl, groupId: channelId })}
             replyTo={replyTo}
             replyMarker="buzz"
             replyExtraTags={BROADCAST_TAGS}

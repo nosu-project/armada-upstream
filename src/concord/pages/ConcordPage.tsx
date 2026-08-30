@@ -3987,6 +3987,10 @@ export function ConcordPage() {
                           relayUrl="dm"
                           groupId={channel.idHex}
                           messages={[]}
+                          // Where a share routed to this channel lands — the
+                          // same address the switcher and Direct Share name it
+                          // by, not whatever the location happens to say.
+                          shareRoute={channelRoute && chatRoute(channelRoute)}
                           mentionPubkeys={memberPubkeys}
                           canMentionEveryone={transport.canMentionEveryone}
                           botCommands

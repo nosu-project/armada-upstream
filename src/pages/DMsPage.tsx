@@ -1459,6 +1459,10 @@ function Conversation({
           relayUrl="dm"
           groupId={conversation}
           messages={[]}
+          // Where a share/forward routed to this conversation lands. Built
+          // from the conversation key rather than read from the location, so
+          // the page being navigated away from can't claim it.
+          shareRoute={chatRoute({ kind: "dm", peer: dmRouteParam(conversation) })}
           // If this peer is a bot, offer its `/` commands. A DM's recipient IS
           // the bot, so the invocation sends untagged (no routing leak, and it
           // rides inside NIP-17's sealed rumor like any other DM content).

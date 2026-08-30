@@ -36,7 +36,7 @@ import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { withSignature } from "@/lib/publishOutbox";
-import { parseChatRoute } from "@/lib/routes";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -653,6 +653,11 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             relayUrl={relayUrl}
             groupId={groupId}
             messages={messages}
+            // Where a share routed to this group lands. Rebuilt from the
+            // group's own identity — the same derivation `recordSent` stamps
+            // into the Direct Share shortcut — rather than read from the
+            // ambient location.
+            shareRoute={chatRoute({ kind: "nip29", relayUrl, groupId })}
             replyTo={replyTo}
             placeholder={channelName ? `Message ${channelName}` : undefined}
             // Android Direct Share: the group's own name/picture, captured on

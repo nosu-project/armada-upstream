@@ -823,6 +823,9 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           canMentionEveryone={transport.canMentionEveryone}
           placeholder="Reply in thread…"
           draftScope={`thread:${root.id}`}
+          // No `shareRoute`: a share is addressed to a room, and this room's
+          // own composer is the one that serves it. The thread panel is a
+          // second composer in the same room, not a second destination.
           autoFocus={autoFocus}
           canSend={transport.canSend}
           sendOverride={async (text, tags) => {
