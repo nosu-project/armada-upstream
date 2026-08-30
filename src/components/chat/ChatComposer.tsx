@@ -1153,6 +1153,26 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   }, [uploadFile, toast, encryptAttachments, user?.pubkey]);
 
+  /**
+   * Strip tracking parameters from the links in a message body, when the user
+   * hasn't turned that off.
+   *
+   * Applied at BOTH ends of the draft. On the way in — a share or a forward —
+   * so the user reads and edits the canonical link rather than discovering the
+   * `?utm_source=…` one only after sending it; and again to the TYPED text on
+   * send, which is what actually governs what is published, since the draft is
+   * editable and a link can be pasted or restored by hand after it arrives.
+   * On send it runs before anything else reads the text, so slash-command
+   * parsing, bot invocations and `buildMessageTags` all see the canonical URL
+   * — but deliberately before attachment URLs are appended, since an upload's
+   * URL is matched against its `imeta` tag by exact string and must never be
+   * rewritten.
+   */
+  const canonicalizeLinks = useCallback(
+    (text: string) => (config.stripTrackingParams ? stripTrackingParamsInText(text) : text),
+    [config.stripTrackingParams],
+  );
+
   // Consume a shared payload routed to THIS conversation (Android share
   // target / the /share destination picker): shared text is appended to the
   // draft, shared files go through the normal attachment pipeline. The consume
@@ -1195,9 +1215,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           return next;
         });
       }
-      const text = forwarded.length
-        ? stripUrlsFromText(share.text, forwarded.map((a) => a.url))
-        : share.text;
+      // Canonicalized on arrival, not only on send, so what the user is shown
+      // is what they are about to publish — a share sheet hands over whatever
+      // link the source app built, and `?utm_source=…` pasted into the draft
+      // is something they can only notice after it has gone out. After the
+      // attachment URLs are removed rather than before: those are matched by
+      // exact string and must not be rewritten.
+      const text = canonicalizeLinks(
+        forwarded.length
+          ? stripUrlsFromText(share.text, forwarded.map((a) => a.url))
+          : share.text,
+      );
       if (text) {
         setContent((cur) => (cur ? `${cur}\n${text}` : text));
       }
@@ -1208,7 +1236,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
     consume();
     return onShareStashChanged(consume);
-  }, [handleFileUpload, shareRoute]);
+  }, [handleFileUpload, shareRoute, canonicalizeLinks]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
@@ -1676,20 +1704,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     void sendInvocation(entry.bot, entry.command.name, text);
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [botCommand, sendInvocation]);
-
-  /**
-   * Strip tracking parameters from the links in an outgoing body, when the
-   * user hasn't turned that off. Applied to the TYPED text before anything
-   * else reads it, so slash-command parsing, bot invocations and
-   * `buildMessageTags` all see the canonical URL and what is published is
-   * clean for every future reader — but deliberately before attachment URLs
-   * are appended, since an upload's URL is matched against its `imeta` tag by
-   * exact string and must never be rewritten.
-   */
-  const canonicalizeLinks = useCallback(
-    (text: string) => (config.stripTrackingParams ? stripTrackingParamsInText(text) : text),
-    [config.stripTrackingParams],
-  );
 
   const handleSend = useCallback(async () => {
     // An attachment is still uploading — its URL isn't in `attachments` yet, so
