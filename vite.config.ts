@@ -44,7 +44,7 @@ function getVersion(): string {
   const tag = getCommitTag();
   if (tag) return tag.replace(/^v/, "");
   try {
-    const changelog = fs.readFileSync(path.resolve(__dirname, "CHANGELOG.md"), "utf-8");
+    const changelog = fs.readFileSync(path.resolve(import.meta.dirname, "CHANGELOG.md"), "utf-8");
     const match = changelog.match(/^## \[([^\]]+)\]/m);
     if (match) return match[1];
   } catch {
@@ -59,7 +59,7 @@ function getVersion(): string {
  * fetch it without maintaining a duplicate copy in public/.
  */
 function serveChangelog(): Plugin {
-  const root = path.resolve(__dirname, "CHANGELOG.md");
+  const root = path.resolve(import.meta.dirname, "CHANGELOG.md");
   return {
     name: "armada-serve-changelog",
     configureServer(server) {
@@ -116,7 +116,7 @@ function buildStamp(): Plugin {
     closeBundle() {
       // sw.js is copied verbatim from public/ during the bundle write; stamp
       // it afterwards.
-      const swPath = path.resolve(__dirname, "dist/sw.js");
+      const swPath = path.resolve(import.meta.dirname, "dist/sw.js");
       if (fs.existsSync(swPath)) {
         fs.writeFileSync(swPath, fs.readFileSync(swPath, "utf8").replaceAll("__BUILD_STAMP__", stamp));
       }
@@ -272,7 +272,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
     dedupe: ["react", "react-dom", "react/jsx-runtime"],
   },

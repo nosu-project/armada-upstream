@@ -27,7 +27,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   build: {
@@ -40,7 +40,7 @@ export default defineConfig({
     copyPublicDir: false,
     minify: true,
     lib: {
-      entry: path.resolve(__dirname, "src/sw/pushRuntime.ts"),
+      entry: path.resolve(import.meta.dirname, "src/sw/pushRuntime.ts"),
       formats: ["iife"],
       // The bundle publishes itself onto the worker global as a side effect;
       // this name only receives the (empty) module exports.
