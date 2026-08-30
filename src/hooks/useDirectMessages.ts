@@ -788,13 +788,73 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
  * conversation (kind-4 or NIP-17) is from the peer and newer than the thread's
  * last-read stamp. Drives the unread dot on the DMs button in the server rail.
  *
- * NIP-17 conversations are additionally narrowed to KNOWN peers (see
- * `useKnownDmPeers`), matching the kind-4 plane's relay-level established-peer
- * scoping — an unsolicited stranger's gift wrap must not light a dot for a
- * conversation the main list would never show. This is what keeps the request
- * tier from being an attention channel: a request is discovered by opening
- * DMs, never by the rail demanding it.
+ * BOTH planes are narrowed to KNOWN peers (see `useKnownDmPeers`) — an
+ * unsolicited stranger's message must not light a dot for a conversation the
+ * main list would never show. This is what keeps the request tier from being
+ * an attention channel: a request is discovered by opening DMs, never by the
+ * rail demanding it.
+ *
+ * The kind-4 half is narrowed HERE and not merely at fetch time. Its relay
+ * queries are already scoped to established authors (`buildDmFilters`), but
+ * that is a request a relay may answer as it likes, and the fetched set is an
+ * append-only cache that outlives a peer's membership in the roster. Neither
+ * is a property this dot can rest on, and the check is the same predicate the
+ * list splits on, so a conversation the inbox holds can never fail it.
  */
+/** The least a kind-4 conversation row must expose to be judged unread. */
+export interface UnreadLegacyDmSource {
+  peer: string;
+  latest: { pubkey: string; created_at: number };
+  mine: boolean;
+}
+
+/** The same for NIP-17, whose conversation key is a participant SET. */
+export interface UnreadDm17Source {
+  key: string;
+  peers: string[];
+  latest: { author: string; createdAt: number };
+  mine: boolean;
+}
+
+/**
+ * Whether either plane holds an unread conversation the INBOX would show.
+ *
+ * Pure, so the request-tier rule can be tested without a signer or a store —
+ * the same reason `buildDmSwitcherEntries` is. Both planes apply `isKnown`
+ * identically; see {@link useHasUnreadDMs} for why the kind-4 half does not
+ * lean on its relay-side author scoping.
+ */
+export function hasUnreadDmConversations(
+  legacy: readonly UnreadLegacyDmSource[],
+  nip17: readonly UnreadDm17Source[],
+  opts: {
+    self: string;
+    isKnown: (peer: string, mine: boolean) => boolean;
+    getLastRead: (key: string) => number;
+  },
+): boolean {
+  const { self, isKnown, getLastRead } = opts;
+  if (
+    legacy.some(
+      (c) =>
+        isKnown(c.peer, c.mine) &&
+        c.latest.pubkey !== self &&
+        c.latest.created_at > getLastRead(dmReadKey(c.peer)),
+    )
+  ) {
+    return true;
+  }
+  return nip17.some(
+    (c) =>
+      // A group is in the inbox only when EVERY participant is: one stranger
+      // in the room is enough to make it a request, exactly as a message from
+      // that stranger alone would be.
+      c.peers.every((peer) => isKnown(peer, c.mine)) &&
+      c.latest.author !== self &&
+      c.latest.createdAt > getLastRead(dmReadKey(c.key)),
+  );
+}
+
 export function useHasUnreadDMs(): boolean {
   const { user } = useCurrentUser();
   const { conversations } = useDMConversations();
@@ -804,24 +864,11 @@ export function useHasUnreadDMs(): boolean {
 
   return useMemo(() => {
     if (!user) return false;
-    if (
-      conversations.some(
-        (c) =>
-          c.latest.pubkey !== user.pubkey &&
-          c.latest.created_at > getLastRead(dmReadKey(c.peer)),
-      )
-    ) {
-      return true;
-    }
-    return dm17Conversations.some(
-      (c) =>
-        // A group is in the inbox only when EVERY participant is: one stranger
-        // in the room is enough to make it a request, exactly as a message from
-        // that stranger alone would be.
-        c.peers.every((peer) => isKnown(peer, c.mine)) &&
-        c.latest.author !== user.pubkey &&
-        c.latest.createdAt > getLastRead(dmReadKey(c.key)),
-    );
+    return hasUnreadDmConversations(conversations, dm17Conversations, {
+      self: user.pubkey,
+      isKnown,
+      getLastRead,
+    });
   }, [user, conversations, dm17Conversations, isKnown, getLastRead]);
 }
 

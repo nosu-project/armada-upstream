@@ -8,6 +8,7 @@ import {
   DM_PAGE_SIZE,
   dmCounterparty,
   hasMoreCursor,
+  hasUnreadDmConversations,
   keepPreviousDmPreviews,
   mergeDmEvents,
   mergeDmThread,
@@ -18,6 +19,7 @@ import {
   type RelayCursors,
 } from "@/hooks/useDirectMessages";
 import { clearRenderedPlaintext, setRenderedPlaintext } from "@/hooks/dmRenderCache";
+import { dmReadKey } from "@/hooks/useReadState";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -57,6 +59,78 @@ describe("dmCounterparty", () => {
   });
   it("sent message: counterparty is the first p tag", () => {
     expect(dmCounterparty(dmEvent({ id: "1", from: SELF, to: PEER1 }), SELF)).toBe(PEER1);
+  });
+});
+
+// The DMs button's dot is the rail's only account-level DM signal, so it must
+// answer for exactly the conversations the INBOX shows. A request-tier row
+// lighting it would make the request tier an attention channel — discovered by
+// the rail rather than by opening DMs — which is the thing the tier exists to
+// prevent. Both planes are checked here rather than relying on the kind-4
+// plane's relay-side author scoping: that is a request a relay may answer as it
+// likes, and the fetched set is an append-only cache that outlives a peer's
+// membership in the known roster.
+describe("hasUnreadDmConversations (request tier never lights the dot)", () => {
+  const unread = { self: SELF, isKnown: () => true, getLastRead: () => 0 };
+  const legacy = (peer: string, mine = false) => ({
+    peer,
+    latest: { pubkey: peer, created_at: 500 },
+    mine,
+  });
+  const modern = (key: string, peers: string[], author: string, mine = false) => ({
+    key,
+    peers,
+    latest: { author, createdAt: 500 },
+    mine,
+  });
+
+  it("a known peer's incoming kind-4 is unread", () => {
+    expect(hasUnreadDmConversations([legacy(PEER1)], [], unread)).toBe(true);
+  });
+
+  it("a STRANGER's kind-4 is not, even though it reached the cache", () => {
+    expect(
+      hasUnreadDmConversations([legacy(PEER1)], [], { ...unread, isKnown: () => false }),
+    ).toBe(false);
+  });
+
+  it("a stranger the viewer has written to (`mine`) is unread again", () => {
+    expect(
+      hasUnreadDmConversations([legacy(PEER1, true)], [], {
+        ...unread,
+        isKnown: (_peer, mine) => mine,
+      }),
+    ).toBe(true);
+  });
+
+  it("the viewer's own kind-4 is never unread", () => {
+    expect(
+      hasUnreadDmConversations(
+        [{ peer: PEER1, latest: { pubkey: SELF, created_at: 500 }, mine: true }],
+        [],
+        unread,
+      ),
+    ).toBe(false);
+  });
+
+  it("a kind-4 older than its read stamp is not unread", () => {
+    expect(
+      hasUnreadDmConversations([legacy(PEER1)], [], {
+        ...unread,
+        getLastRead: (key) => (key === dmReadKey(PEER1) ? 900 : 0),
+      }),
+    ).toBe(false);
+  });
+
+  it("one stranger in a NIP-17 group keeps the whole room out", () => {
+    const room = modern(`${PEER1},${PEER2}`, [PEER1, PEER2], PEER1);
+    expect(hasUnreadDmConversations([], [room], unread)).toBe(true);
+    expect(
+      hasUnreadDmConversations([], [room], {
+        ...unread,
+        isKnown: (peer) => peer !== PEER2,
+      }),
+    ).toBe(false);
   });
 });
 
