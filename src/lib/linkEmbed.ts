@@ -123,3 +123,30 @@ export function extractSpotifyEmbed(url: string): SpotifyEmbedInfo | null {
     return null;
   }
 }
+
+/**
+ * Extract an Instagram post shortcode from an instagram.com URL, or null if it
+ * isn't an embeddable post link. Handles posts (`/p/…`), reels (`/reel/…` and
+ * `/reels/…`) and IGTV (`/tv/…`), including the `/<user>/p/…` and
+ * `/<user>/reel/…` profile-prefixed forms, plus the `ddinstagram`/`instagramez`
+ * front-ends people paste in Instagram's place — all of which resolve through
+ * Instagram's own `/p/<shortcode>/embed/` page. The shortcode is base64url
+ * (letters, digits, `-`, `_`).
+ */
+export function extractInstagramShortcode(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "").replace(/^m\./, "");
+    const isInstagramHost =
+      host === "instagram.com" ||
+      host === "instagr.am" ||
+      host === "ddinstagram.com" ||
+      host === "d.ddinstagram.com" ||
+      host === "instagramez.com";
+    if (!isInstagramHost) return null;
+    const match = u.pathname.match(/(?:^|\/)(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}

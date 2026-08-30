@@ -2,9 +2,15 @@ import { ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { InstagramEmbed } from "@/components/chat/InstagramEmbed";
 import { TweetEmbed } from "@/components/chat/TweetEmbed";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
-import { extractSpotifyEmbed, extractTweetId, extractYouTubeId } from "@/lib/linkEmbed";
+import {
+  extractInstagramShortcode,
+  extractSpotifyEmbed,
+  extractTweetId,
+  extractYouTubeId,
+} from "@/lib/linkEmbed";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import {
   hasNativeYouTubePlayer,
@@ -27,6 +33,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const youtubeId = extractYouTubeId(url);
   const spotify = extractSpotifyEmbed(url);
   const tweetId = extractTweetId(url);
+  const instagramShortcode = extractInstagramShortcode(url);
 
   if (youtubeId) {
     return (
@@ -39,6 +46,10 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
 
   if (tweetId) {
     return <TweetEmbed tweetId={tweetId} className={className} />;
+  }
+
+  if (instagramShortcode) {
+    return <InstagramEmbed shortcode={instagramShortcode} className={className} />;
   }
 
   if (spotify) {
