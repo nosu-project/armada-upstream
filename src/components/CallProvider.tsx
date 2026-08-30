@@ -4,6 +4,7 @@ import { FloatingCallStage } from "@/components/chat/FloatingCallStage";
 import { MobileCallPreview } from "@/components/chat/MobileCallPreview";
 import { useCallForegroundService } from "@/hooks/useCallForegroundService";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { usePinScrollOrigin } from "@/hooks/usePinScrollOrigin";
 import {
   CallContext,
   type ActiveCall,
@@ -109,6 +110,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // The app shell; the mobile call bar writes its measured height to
   // `--call-bar-h` here so the shell reserves exactly that as bottom padding.
   const shellRef = useRef<HTMLDivElement>(null);
+  // It is `overflow-hidden` to CLIP, never to scroll — and a shell holding a
+  // stray scroll offset is the frozen-touch state (see the hook).
+  usePinScrollOrigin(shellRef);
 
   const joinCall = useCallback((relayUrl: string, groupId: string) => {
     if (exitTimer.current) {

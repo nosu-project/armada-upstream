@@ -2108,6 +2108,23 @@ export function ConcordPage() {
     setNavKey(communityId);
     setChannelsOpen(!routeChannelId);
   }
+  // A permalink names one message, and messages are only visible in the chat
+  // pane — so honouring one means the list cannot stay revealed. Keying the
+  // reveal on the COMMUNITY alone (above) misses exactly this: a notification
+  // for a channel in the community already open leaves `channelsOpen` true, and
+  // the destination the reader was sent to sits parked off-screen behind the
+  // list. Keyed on the NAVIGATION rather than on the message id, for the same
+  // reason `useMessagePermalink` keys its own once-per-arrival guard that way:
+  // tapping one notification twice must land twice, and an id-keyed check sees
+  // no change on the second tap and leaves the list sitting over the
+  // destination. Firing once per arrival leaves the reader free to swipe the
+  // list back open afterwards, and the mount seeds rather than fires, because
+  // `channelsOpen` above already initializes from the arriving route.
+  const [focusNavKey, setFocusNavKey] = useState(location.key);
+  if (focusNavKey !== location.key) {
+    setFocusNavKey(location.key);
+    if (route?.messageId) setChannelsOpen(false);
+  }
   // The open channel as a route: what the thread panel pushes `/t/<root>`
   // onto, what "Copy message link" stamps a message id onto, and what the
   // legacy `?m=`/`?thread=` translation redirects into.

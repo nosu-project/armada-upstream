@@ -113,27 +113,26 @@ describe("MessageTimeline with generalized entries", () => {
   it("queues a message jump while the opening window is still mounting", async () => {
     const messages = Array.from({ length: 40 }, (_, i) => message(`m${i}`, 1000 + i));
     const handle = createRef<MessageTimelineHandle>();
-    const scrollIntoView = vi.fn();
-    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-    HTMLElement.prototype.scrollIntoView = scrollIntoView;
 
-    try {
-      render(
-        <MessageTimeline
-          transport={transportOf(messages)}
-          handleRef={handle}
-          renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
-        />,
-      );
+    render(
+      <MessageTimeline
+        transport={transportOf(messages)}
+        handleRef={handle}
+        renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
+      />,
+    );
 
-      act(() => {
-        expect(handle.current?.scrollToMessage("m5")).toBe(true);
-      });
+    act(() => {
+      expect(handle.current?.scrollToMessage("m5")).toBe(true);
+    });
 
-      expect(await screen.findByText("chat:m5")).toBeInTheDocument();
-      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(3));
-    } finally {
-      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
-    }
+    // The row is outside the opening window, so the jump is queued until the
+    // window extends and the row mounts. `flashRow`'s wash landing on it is the
+    // observable that the queued jump actually ran — it deliberately no longer
+    // calls `scrollIntoView`, which scrolled every ancestor (see rowFlash.ts).
+    const row = await screen.findByText("chat:m5");
+    await waitFor(() =>
+      expect(row.closest("[data-event-id]")?.classList.contains("bg-primary/10")).toBe(true),
+    );
   });
 });
