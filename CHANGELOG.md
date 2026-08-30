@@ -4,6 +4,34 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.0] - 2026-08-29
+
+Mini Apps now work inside direct messages, each scoped to its own conversation
+so a group DM and a one-to-one keep separate app state. Chat links that point
+back into Armada now open in the app as navigable cards instead of leaving for a
+browser, and you can mention everyone in a community when you're allowed to.
+Moderation gets clearer: hide individual messages just for yourself, block a
+person distinctly from muting a channel, and a rewritten Terms page. Joining a
+community from an invite is now instant.
+
+### Added
+- Mini Apps in direct messages, each scoped to its conversation so group and one-to-one chats keep separate app state
+- Mention everyone in a community with @everyone, where you're authorized to
+- Chat links to a message, channel, community or profile on Armada open in the app as a navigable card instead of a browser, showing the destination and, when it's on your device, the sender and message
+- Hide an individual message just for yourself, undoable from the toast
+- Copy a chat image straight from the message or the lightbox
+
+### Changed
+- Joining a community from an invite opens it immediately while the rest completes in the background
+- The person-level mute is now labelled Block/Unblock, distinct from muting a channel's notifications
+- The Terms page now spells out what the terms cover, the acceptable-use policy, and the moderation tools each side holds
+- The lightbox's copy, save and share moved to a right-click menu on the image
+- On Android, share suggestions are ranked by the conversations you most recently sent to
+
+### Fixed
+- Tweet embeds now load instead of being blocked
+- A cold tab no longer briefly flashes the wrong half of a direct message before it's ready
+
 ## [0.58.0] - 2026-08-26
 
 A new All messages pane gathers every channel in a community into one feed, so
