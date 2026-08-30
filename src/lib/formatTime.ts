@@ -8,13 +8,27 @@ export function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/** Format a unix-seconds timestamp into a short relative string ("now"/"5m"/"3h"/"2d"). */
+const MINUTE = 60;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+const WEEK = 7 * DAY;
+/** Average lengths. A one- or two-character label rounds away any calendar detail. */
+const MONTH = 30.44 * DAY;
+const YEAR = 365.25 * DAY;
+
+/**
+ * Format a unix-seconds timestamp into a short relative string
+ * ("now"/"5m"/"3h"/"2d"/"4w"/"11mo"/"2y"). Months are "mo" because "m" is minutes.
+ */
 export function shortTimeAgo(timestamp: number): string {
   const diff = Math.floor(Date.now() / 1000) - timestamp;
-  if (diff < 60) return "now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
+  if (diff < MINUTE) return "now";
+  if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m`;
+  if (diff < DAY) return `${Math.floor(diff / HOUR)}h`;
+  if (diff < WEEK) return `${Math.floor(diff / DAY)}d`;
+  if (diff < MONTH) return `${Math.floor(diff / WEEK)}w`;
+  if (diff < YEAR) return `${Math.floor(diff / MONTH)}mo`;
+  return `${Math.floor(diff / YEAR)}y`;
 }
 
 /** Format a unix-seconds timestamp as a long relative string ("2 days ago"). */
