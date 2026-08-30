@@ -93,6 +93,16 @@ describe("NIP-17 per-relay inbox filters", () => {
     expect(filter.since).toBeUndefined();
   });
 
+  it("asks for gift wraps and nothing else", () => {
+    // A Mini App peer signal rides INSIDE a wrap like every other DM rumor, so
+    // there is no second filter to ask for. A bare kind-30078 addressed to us
+    // is an event any author can publish — asking for it would admit an
+    // unauthenticated node address into the dial set, and put a non-backdated
+    // event into the page `relayScanWatermarks` reads.
+    const filter = dm17InboxFilter(self, undefined, "wss://a.example", false);
+    expect(filter.kinds).toEqual([1059]);
+  });
+
   it("uses each relay's own cursor for narrow and full recovery windows", () => {
     const cursor = {
       newest: 50_000,
@@ -111,6 +121,7 @@ describe("NIP-17 per-relay inbox filters", () => {
 });
 
 describe("relayScanWatermarks", () => {
+  const viewer = "2".repeat(64);
   const nowSecs = 100 * MAX_WRAP_BACKDATE_SECS;
   const floor = nowSecs - MAX_WRAP_BACKDATE_SECS;
 
@@ -127,6 +138,28 @@ describe("relayScanWatermarks", () => {
   it("never leaves the watermark below the floor on a page of old wraps", () => {
     const pages = [{ url: "wss://a.example", events: [event("a", floor - 5_000)] }];
     expect(relayScanWatermarks(pages, nowSecs)["wss://a.example"]).toBe(floor);
+  });
+
+  it("is not moved by an event that is not a gift wrap", () => {
+    // The floor is sound ONLY because every event counted is backdated by at
+    // most the horizon. An event published at wall clock — a bare kind-30078
+    // Mini App peer signal is the one that nearly shipped — would carry the
+    // watermark a full two days past where a wrap still in flight will land,
+    // and the next narrow poll would simply not select it. A silently lost DM.
+    const bare: NostrEvent = { ...event("c", nowSecs), kind: 30078 };
+    const pages = [{ url: "wss://a.example", events: [bare] }];
+    expect(relayScanWatermarks(pages, nowSecs)["wss://a.example"]).toBe(floor);
+
+    // And the consequence the floor exists for: a wrap published now, backdated
+    // the full two days, stays inside the next narrow poll's window.
+    const cursor = {
+      newest: floor,
+      oldest: 1,
+      exhausted: false,
+      relayNewest: { "wss://a.example": floor },
+    };
+    const since = dm17InboxFilter(viewer, cursor, "wss://a.example", false).since ?? 0;
+    expect(since).toBeLessThanOrEqual(nowSecs - MAX_WRAP_BACKDATE_SECS);
   });
 });
 

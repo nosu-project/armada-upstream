@@ -3,6 +3,7 @@ import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 
+import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -31,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -974,6 +976,11 @@ function Conversation({
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
     <div className="flex flex-col flex-1 min-h-0">
+      {/* Top-of-chat app stage (Mini Apps) for this DM. Keyed by the
+          CONVERSATION, which is what the launch card's `ChatScopeContext`
+          carries — a group's first participant would name a scope the card
+          never spells, and the stage would host nothing. */}
+      <AppStageSlot scope={{ kind: "dm", conversation }} />
       <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
         {/* Mobile back → returns to the rail + conversation list (the shared
             DM-list view), the same panes that are persistently rendered. */}
@@ -2978,14 +2985,16 @@ export function DMsPage() {
           recipient picker takes this column in place of the empty state. */}
       <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
         {renderedPeer ? (
-          <Conversation
-            key={renderedPeer}
-            conversation={renderedPeer}
-            peers={dmConvPeers(renderedPeer)}
-            isRequest={requestRows.some((c) => c.conversation === renderedPeer)}
-            onAccept={() => acceptConversation(renderedPeer)}
-            onBack={revealList}
-          />
+          <ChatScopeContext.Provider value={{ kind: "dm", conversation: renderedPeer }}>
+            <Conversation
+              key={renderedPeer}
+              conversation={renderedPeer}
+              peers={dmConvPeers(renderedPeer)}
+              isRequest={requestRows.some((c) => c.conversation === renderedPeer)}
+              onAccept={() => acceptConversation(renderedPeer)}
+              onBack={revealList}
+            />
+          </ChatScopeContext.Provider>
         ) : composing ? (
           <NewDMPane onSelectRecipients={openNewRecipients} onCancel={revealList} />
         ) : (

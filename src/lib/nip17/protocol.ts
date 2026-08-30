@@ -120,6 +120,23 @@ export const KIND_DM_WRAP_EPHEMERAL = 21059;
 /** How long a typing signal stays live before it ages out. */
 export const TYPING_WINDOW_SECS = 8;
 
+/**
+ * In-chat app state (the same kind Concord's chat plane carries, CORD-02
+ * Appendix B). Durable, stored like any other DM rumor, and read back by
+ * {@link queryDm17Webxdc} — never by a thread read, which is what
+ * {@link DM_THREAD_KINDS} is for.
+ */
+export const KIND_DM_WEBXDC = 3310;
+
+/**
+ * Vector's DM peer-signal kind. These arrive gift-wrapped like any other DM
+ * rumor and are processed LIVE — they name a transport address that is
+ * meaningless once the session ends, so nothing stores one and no relay query
+ * asks for one directly (a bare kind-30078 addressed to us proves only that
+ * someone spelled our pubkey).
+ */
+export const KIND_DM_PEER_SIGNAL = 30078;
+
 /** Every rumor kind the DM plane stores and folds. */
 export const DM_RUMOR_KINDS = [
   KIND_DM_DELETE,
@@ -127,7 +144,20 @@ export const DM_RUMOR_KINDS = [
   KIND_DM_CHAT,
   KIND_DM_FILE,
   KIND_DM_TIMER,
+  KIND_DM_WEBXDC,
 ];
+
+/**
+ * The kinds a THREAD read asks for — everything stored except app state.
+ *
+ * A conversation read is one filter with one `limit` (see
+ * `conversationFilters`), so every kind in it competes for the same rows. App
+ * state is unbounded in a way messages are not: one game can emit an update
+ * per move, which would evict the conversation from its own page and, read the
+ * other way, truncate the game's own history to whatever the messages left
+ * over. So 3310 is stored, and read back by its own per-session query.
+ */
+export const DM_THREAD_KINDS = DM_RUMOR_KINDS.filter((kind) => kind !== KIND_DM_WEBXDC);
 
 /** NIP-59: outer (seal + wrap) timestamps are tweaked into the past, ≤ 2 days. */
 export const MAX_WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
@@ -254,6 +284,34 @@ export function dmDeleteTags(
   targetKind: number,
 ): string[][] {
   return [...peers.map((peer) => ["p", peer]), ["e", targetId], ["k", String(targetKind)]];
+}
+
+/**
+ * The optional fields a webxdc `sendUpdate` carries beside its payload. Spelled
+ * once, because they are a contract with the Mini App API rather than with this
+ * rumor: the same three ride Concord's 3310 (`useConcordAppSync`).
+ */
+export interface DmWebxdcMeta {
+  info?: string;
+  document?: string;
+  summary?: string;
+}
+
+/**
+ * Tags for a kind-3310 Mini App state rumor. The `p` set leads (conversation
+ * attribution — NIP-17 receivers), followed by the `i` tag naming the session
+ * and whatever {@link DmWebxdcMeta} the update carried.
+ */
+export function dmWebxdcTags(
+  peers: readonly string[],
+  uuid: string,
+  opts?: DmWebxdcMeta & { expiresAt?: number },
+): string[][] {
+  const tags: string[][] = [...peers.map((peer) => ["p", peer]), ["i", uuid]];
+  if (opts?.info) tags.push(["info", opts.info]);
+  if (opts?.document) tags.push(["document", opts.document]);
+  if (opts?.summary) tags.push(["summary", opts.summary]);
+  return withExpiration(tags, opts?.expiresAt);
 }
 
 /** The two rumors that make one optional NIP-17 edit operation. */
