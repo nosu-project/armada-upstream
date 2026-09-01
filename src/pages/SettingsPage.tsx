@@ -417,7 +417,11 @@ export function SettingsPage() {
     if (user) {
       appItems.push({ id: "emojis", title: "Emoji packs", icon: Smile });
     }
-    if (user && config.zapsEnabled) {
+    if (user) {
+      // The Wallet page is reachable even when zaps are off, because its own
+      // enable toggle lives inside it — gating the nav entry on zapsEnabled
+      // would strand the user with no way to turn it back on. The page hides
+      // its own contents when disabled.
       appItems.push({ id: "wallet", title: "Wallet", icon: Zap });
     }
     if (canInstall || needsManualInstall) {
@@ -431,7 +435,7 @@ export function SettingsPage() {
       groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
     }
     return groups;
-  }, [user, logins, canInstall, needsManualInstall, config.zapsEnabled, config.accountStandingSeen, openStanding]);
+  }, [user, logins, canInstall, needsManualInstall, config.accountStandingSeen, openStanding]);
 
   /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {
