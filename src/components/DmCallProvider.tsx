@@ -107,9 +107,14 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   followsRef.current = followData?.pubkeys ?? [];
 
   // Where our copies publish and our other sessions read: the same union the
-  // DM inbox sync and typing indicators use.
+  // DM inbox sync and typing indicators use. `dmsDisabled` collapses this to
+  // empty, so the standing 21059 call-signal subscription is never held and no
+  // inbound call can ring — the whole-DM opt-out covers call signaling too.
   const myRelays = useMemo(
-    () => [...new Set([...effectiveDmRelays(config), ...publishedRelays])],
+    () =>
+      config.dmsDisabled
+        ? []
+        : [...new Set([...effectiveDmRelays(config), ...publishedRelays])],
     [config, publishedRelays],
   );
   const myRelaysRef = useRef(myRelays);

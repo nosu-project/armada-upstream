@@ -291,6 +291,17 @@ export function SettingsPage() {
   };
 
   /**
+   * Turn direct messages off (or back on) entirely — see `dmsDisabled`. When
+   * on, every standing DM subscription (wire, inbox top-up, typing, calls, and
+   * the push/native watch sets) collapses to an empty relay set, so the client
+   * stops receiving DMs at the network level. Local config only (synced across
+   * devices); publishes nothing and deletes no stored conversations.
+   */
+  const setDmsDisabled = (value: boolean) => {
+    updateConfig((current) => ({ ...current, dmsDisabled: value }));
+  };
+
+  /**
    * Toggle whether unknown-sender DMs are surfaced in the request tier. On by
    * default — see `showDmRequests`. Local config only (synced across devices);
    * publishes nothing and drops no messages.
@@ -702,6 +713,12 @@ export function SettingsPage() {
         const effective = effectiveDmRelays(config);
         return (
           <>
+            <SettingsRow
+              label="Turn off direct messages"
+              description="Stop this account from listening for direct messages at all. No standing inbox subscription is held, so unsolicited DMs never reach you and cost no bandwidth. Your stored conversations and DM relay list are left untouched; turn this back off to resume. Synced across your devices."
+            >
+              <Switch checked={config.dmsDisabled} onCheckedChange={setDmsDisabled} />
+            </SettingsRow>
             <SettingsRow
               label="Use app DM relays"
               description="Send and receive DMs on your general app relays and the additional synchronized app DM relays below."

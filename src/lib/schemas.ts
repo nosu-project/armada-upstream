@@ -113,6 +113,7 @@ export const AppConfigSchema = z.object({
   pushPrefs: PushPrefsSchema.catch(defaultConfig.pushPrefs),
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).catch({}),
   dmTypingIndicators: z.boolean().catch(defaultConfig.dmTypingIndicators),
+  dmsDisabled: z.boolean().catch(defaultConfig.dmsDisabled),
   pinnedDms: z.array(z.string()).catch([]),
   closedDms: z.record(z.string(), ClosedDmMarkerSchema).catch({}),
   acceptedDms: z.array(z.string()).catch([]),
@@ -178,6 +179,8 @@ export const MetadataDocSchema = z.looseObject({
   appBlossomServers: z.array(z.string()).optional(),
   /** Whether typing indicators are sent and shown in DMs (see AppConfig). */
   dmTypingIndicators: z.boolean().optional(),
+  /** Whether direct messages are turned off entirely (see AppConfig). */
+  dmsDisabled: z.boolean().optional(),
   /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
   showDmRequests: z.boolean().optional(),
   /** Whether the rail shows the automatic recent-unread DM strip (see AppConfig). */

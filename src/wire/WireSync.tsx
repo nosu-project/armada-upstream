@@ -781,8 +781,15 @@ function WireSyncInner() {
   // LIVE — only useDm17's 60s poll (which does union the 10050 relays) would
   // fetch it, which is exactly the "DMs only show up after ~30-60s / a refresh"
   // bug. Deduped.
+  // `dmsDisabled` collapses this to empty, which drops every DM filter from the
+  // spec (the DM block loops over `dmRelays`): the account holds no standing
+  // gift-wrap or legacy-DM subscription at all, so unsolicited inbound DMs
+  // never reach the wire and cost no bandwidth.
   const dmRelays = useMemo(
-    () => [...new Set([...effectiveDmRelays(config), ...publishedDmRelays])],
+    () =>
+      config.dmsDisabled
+        ? []
+        : [...new Set([...effectiveDmRelays(config), ...publishedDmRelays])],
     [config, publishedDmRelays],
   );
 

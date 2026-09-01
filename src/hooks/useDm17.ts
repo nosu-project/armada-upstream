@@ -787,13 +787,17 @@ function useDm17SyncCtx(): SyncCtx | undefined {
   // Normalized so one relay spelled two ways (trailing slash, uppercase host)
   // can't dial twice or fork the persisted per-relay watermark: config URLs
   // arrive raw, while the published 10050 half is already normalized.
+  // `dmsDisabled` collapses this to empty, so the inbox top-up scans nothing:
+  // the account holds no standing DM subscription and fetches no gift wraps.
   const relays = useMemo(
     () =>
-      [...new Set(
-        [...effectiveDmRelays(config), ...publishedRelays]
-          .map((url) => normalizeRelayUrl(url))
-          .filter((url): url is string => url !== undefined),
-      )],
+      config.dmsDisabled
+        ? []
+        : [...new Set(
+            [...effectiveDmRelays(config), ...publishedRelays]
+              .map((url) => normalizeRelayUrl(url))
+              .filter((url): url is string => url !== undefined),
+          )],
     [config, publishedRelays],
   );
   const relayKey = relays.join(",");

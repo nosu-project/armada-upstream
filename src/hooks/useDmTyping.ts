@@ -92,6 +92,9 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
   const on =
     enabled &&
     config.dmTypingIndicators &&
+    // The whole-DM opt-out: with DMs off we neither publish our own typing
+    // signal (`publishTyping` gates on `on`) nor hold the standing 21059 sub.
+    !config.dmsDisabled &&
     !!self &&
     peers.length > 0 &&
     // A note-to-self thread would just show us our own indicator.

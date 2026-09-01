@@ -226,7 +226,11 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
       a.relay.localeCompare(b.relay) || a.groupId.localeCompare(b.groupId));
   }, [groupList, channelLevel]);
 
+  // `dmsDisabled` collapses this to empty, which drops both DM push specs
+  // (each guards on `dmRelays.length > 0`): the content-blind gateway registers
+  // no gift-wrap/legacy-DM watch, so no unsolicited DM can wake this device.
   const dmRelays = useMemo(() => {
+    if (config.dmsDisabled) return [];
     const set = new Set<string>();
     for (const url of [...effectiveDmRelays(config), ...publishedDmRelays]) {
       const n = normalizeRelayUrl(url);

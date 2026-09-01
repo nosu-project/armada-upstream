@@ -306,6 +306,19 @@ export interface AppConfig {
    */
   dmTypingIndicators: boolean;
   /**
+   * Whether direct messages are turned off entirely. OFF by default (DMs on).
+   * When ON, this client stops holding every STANDING direct-message
+   * subscription — the wire's gift-wrap/legacy-DM filters (`buildWireSpec`),
+   * the NIP-17 inbox top-up (`useDm17`), typing indicators, DM call signaling,
+   * and the web-push / iOS / Android watch sets — by collapsing their DM relay
+   * set to empty. That is the point: it saves the bandwidth of a live inbox and
+   * opts the account out of unsolicited inbound DMs at the network level,
+   * rather than merely hiding them after they arrive. It doesn't delete stored
+   * conversations or unpublish the user's kind-10050 inbox. Synced across
+   * devices, so the opt-out follows the account.
+   */
+  dmsDisabled: boolean;
+  /**
    * Pinned direct-message conversations, as hex pubkeys. Pinned conversations
    * render in their own section above the rest of the DM list, still sorted
    * newest-message-first within that section — this is a SET, and its array
@@ -486,6 +499,7 @@ export const METADATA_CONFIG_KEYS = [
   "useAppBlossomServers",
   "appBlossomServers",
   "dmTypingIndicators",
+  "dmsDisabled",
   "showDmRequests",
   "showRecentRailDms",
   "discoverAllContent",
@@ -578,6 +592,7 @@ export const defaultConfig: AppConfig = {
   pushPrefs: { ...DEFAULT_PUSH_PREFS },
   dmProtocol: {},
   dmTypingIndicators: true,
+  dmsDisabled: false,
   pinnedDms: [],
   closedDms: {},
   acceptedDms: [],

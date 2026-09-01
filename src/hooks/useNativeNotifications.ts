@@ -370,7 +370,11 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     relays: publishedDmRelays,
     isReady: dmRelaysReady,
   } = useDmRelayList();
+  // `dmsDisabled` collapses this to empty, so the background service holds no
+  // kind-1059/kind-4 DM REQ: an account that has opted out of DMs at the
+  // network level is not woken by one while the app is dead either.
   const dmRelays = useMemo(() => {
+    if (config.dmsDisabled) return [];
     const set = new Set<string>();
     for (const url of [...effectiveDmRelays(config), ...publishedDmRelays]) {
       const n = normalizeRelayUrl(url);
