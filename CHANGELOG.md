@@ -4,6 +4,28 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.2] - 2026-09-01
+
+Instagram posts now unfurl into rich embeds in chat, and timestamps read
+naturally past a few days as weeks, months and years. Shared links drop their
+tracking parameters as they land in the composer, and a shared payload now goes
+to the room you're actually in. Notification sounds play reliably when a message
+arrives, the DMs unread dot no longer lights for strangers, and the desktop
+Flatpak build can update itself in place.
+
+### Added
+- Instagram posts shared in chat now show as rich embeds
+
+### Changed
+- Relative timestamps now extend past days to weeks, months and years
+- Shared links have their tracking parameters stripped as they enter the composer
+- The desktop Flatpak build can now update itself in place
+
+### Fixed
+- The in-app notification sound now plays when a message arrives
+- The DMs unread indicator no longer lights up for people you don't know
+- A shared or forwarded message now goes to the room you have open rather than the wrong one
+
 ## [0.59.1] - 2026-08-30
 
 Fixes a freeze on mobile when opening a link or notification that jumps to a
