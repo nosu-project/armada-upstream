@@ -63,15 +63,20 @@ const SCOPE_TABS: Array<{ value: Scope; label: string }> = [
   { value: "servers", label: "Servers" },
 ];
 
-/** The message corpus a scope searches, or null when it shows no messages. */
-function messageScopeFor(scope: Scope): MessageScope | null {
+/**
+ * The message corpus a scope searches, or null when it shows no messages. With
+ * DMs turned off (`config.dmsDisabled`) the DM corpus is excluded entirely: the
+ * `all` scope searches channels only, and the `dms` scope — whose tab is hidden
+ * anyway — searches nothing.
+ */
+function messageScopeFor(scope: Scope, dmsDisabled: boolean): MessageScope | null {
   switch (scope) {
     case "all":
-      return "all";
+      return dmsDisabled ? "channels" : "all";
     case "messages":
       return "channels";
     case "dms":
-      return "dms";
+      return dmsDisabled ? null : "dms";
     default:
       return null;
   }
@@ -187,7 +192,8 @@ export function QuickSwitcher() {
     Boolean(user) && (legacyDmsLoading || dm17DmsLoading || dmTrustLoading);
 
   const dmEntries = useMemo(() => {
-    if (!user || dmEntriesLoading) return [];
+    // With DMs off, the palette surfaces no conversation rows at all.
+    if (!user || config.dmsDisabled || dmEntriesLoading) return [];
     return buildDmSwitcherEntries(legacyDms, dm17Dms, {
       self: user.pubkey,
       pinned: config.pinnedDms,
@@ -198,6 +204,7 @@ export function QuickSwitcher() {
     user,
     legacyDms,
     dm17Dms,
+    config.dmsDisabled,
     config.pinnedDms,
     config.startedDms,
     dmEntriesLoading,
@@ -262,7 +269,7 @@ export function QuickSwitcher() {
   }, [open]);
   useEffect(() => {
     const needle = query.trim();
-    const searchScope = messageScopeFor(scope);
+    const searchScope = messageScopeFor(scope, config.dmsDisabled);
     if (!open || !needle || !searchScope) {
       setMessages([]);
       setSearching(false);
@@ -288,7 +295,16 @@ export function QuickSwitcher() {
       live = false;
       clearTimeout(handle);
     };
-  }, [open, query, scope, entries.channels, ctx, allowedDmKeys]);
+  }, [open, query, scope, entries.channels, ctx, allowedDmKeys, config.dmsDisabled]);
+
+  // The DM scope tab is hidden entirely when the account has opted out of DMs.
+  const scopeTabs = useMemo(
+    () => (config.dmsDisabled ? SCOPE_TABS.filter((t) => t.value !== "dms") : SCOPE_TABS),
+    [config.dmsDisabled],
+  );
+  // The DM section — its conversation rows, its loading spinner, and its slice
+  // of the empty-state suppression — only exists when DMs are on.
+  const dmSectionActive = !config.dmsDisabled && (scope === "all" || scope === "dms");
 
   const go = (to: string) => {
     setOpen(false);
@@ -333,7 +349,7 @@ export function QuickSwitcher() {
           onValueChange={(v) => setScope((v || "all") as Scope)}
           className="flex flex-wrap justify-start gap-1"
         >
-          {SCOPE_TABS.map((t) => (
+          {scopeTabs.map((t) => (
             <ToggleGroupItem
               key={t.value}
               value={t.value}
@@ -347,10 +363,10 @@ export function QuickSwitcher() {
       <CommandList>
         {/* While a message search is in flight, hold the empty state back (an
             in-flight search isn't "no results") and show a spinner instead. */}
-        {!searching && !(dmEntriesLoading && (scope === "all" || scope === "dms")) && (
+        {!searching && !(dmEntriesLoading && dmSectionActive) && (
           <CommandEmpty>No results found.</CommandEmpty>
         )}
-        {dmEntriesLoading && (scope === "all" || scope === "dms") && (
+        {dmEntriesLoading && dmSectionActive && (
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Loading direct messages…
@@ -362,7 +378,7 @@ export function QuickSwitcher() {
             Searching messages…
           </div>
         )}
-        {(scope === "all" || scope === "dms") && dmEntries.length > 0 && (
+        {dmSectionActive && dmEntries.length > 0 && (
           <CommandGroup heading="Direct messages">
             {dmEntries.map((conversation, index) => (
               <DeferredRow
