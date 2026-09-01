@@ -1523,12 +1523,15 @@ function ServerRailInner({
     [dmActivity],
   );
   const recentDms = useMemo(() => {
-    if (!config.showRecentRailDms) return [];
+    // The whole-DM opt-out removes the strip along with everything else: the
+    // account is no longer listening for DMs, so a "recent unread" strip would
+    // be stale by construction.
+    if (config.dmsDisabled || !config.showRecentRailDms) return [];
     const manuallyArranged = new Set(railDms);
     return dmActivity
       .filter((item) => item.unreadCount > 0 && !manuallyArranged.has(item.key))
       .slice(0, MAX_RAIL_RECENT_DMS);
-  }, [dmActivity, railDms, config.showRecentRailDms]);
+  }, [dmActivity, railDms, config.showRecentRailDms, config.dmsDisabled]);
 
   // Every live rail item (NIP-29 servers, Concord communities and pinned
   // DMs) in discovery order. The persisted layout arranges these into the
@@ -1537,9 +1540,13 @@ function ServerRailInner({
     const base: RailItem[] = [];
     base.push(...servers.map((url) => ({ kind: "server" as const, key: url, url })));
     if (user) {
-      base.push(
-        ...railDms.map((pubkey) => ({ kind: "dm" as const, key: dmRailKey(pubkey), pubkey })),
-      );
+      // With DMs off the account isn't listening for them, so even manually
+      // pinned DM rail items drop — the master opt-out hides the whole surface.
+      if (!config.dmsDisabled) {
+        base.push(
+          ...railDms.map((pubkey) => ({ kind: "dm" as const, key: dmRailKey(pubkey), pubkey })),
+        );
+      }
       for (const entry of concord) {
         base.push({
           kind: "concord",
@@ -1550,7 +1557,7 @@ function ServerRailInner({
       }
     }
     return base;
-  }, [servers, concord, railDms, user]);
+  }, [servers, concord, railDms, user, config.dmsDisabled]);
 
   const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
 
@@ -1977,8 +1984,9 @@ function ServerRailInner({
         )}
 
         {/* Direct messages — account-level, above the servers (Discord-style).
-            Only shown when signed in (DMs require an account). */}
-        {user && (
+            Only shown when signed in (DMs require an account); hidden entirely
+            when the account has opted out of DMs (config.dmsDisabled). */}
+        {user && !config.dmsDisabled && (
           <Tooltip>
             <TooltipTrigger asChild>
               <NavLink

@@ -38,6 +38,7 @@ import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useSharedCommunities, type SharedCommunity } from "@/concord/hooks/useSharedCommunities";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useClosedDms } from "@/hooks/useClosedDms";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -204,6 +205,7 @@ function useAfterPaint(): boolean {
 function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
   // kind-0 is whatever its author typed.
@@ -379,7 +381,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     </>
                   ) : (
                     <>
-                      {user && npub && (
+                      {user && npub && !config.dmsDisabled && (
                         <Button size="sm" className="clip-corner-lg h-9 touch:h-11" onClick={openDm}>
                           <MessageSquare className="size-4 mr-1.5" />
                           Message

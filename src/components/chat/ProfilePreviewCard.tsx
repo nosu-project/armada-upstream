@@ -24,6 +24,7 @@ import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { usePrefetchProfile } from "@/hooks/usePrefetchProfile";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { requestMention } from "@/hooks/useMentionBus";
 import { useProfileTheme, usePrefetchProfileTheme } from "@/hooks/useProfileTheme";
@@ -61,6 +62,7 @@ function ProfilePreviewBody({
   const openProfile = useOpenProfile();
   const prefetchProfile = usePrefetchProfile();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const metadata = author.data?.metadata;
   // kind-0 is whatever its author typed.
   const banner = sanitizeImageSrc(metadata?.banner);
@@ -299,10 +301,12 @@ function ProfilePreviewBody({
             Message / Mention pair. */}
         {!isSelf && (
           <div className="mt-3 flex items-center gap-2">
-            <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={message}>
-              <MessageSquare className="size-3.5 mr-1.5" />
-              Message
-            </Button>
+            {!config.dmsDisabled && (
+              <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={message}>
+                <MessageSquare className="size-3.5 mr-1.5" />
+                Message
+              </Button>
+            )}
             <Button
               size="sm"
               variant="secondary"

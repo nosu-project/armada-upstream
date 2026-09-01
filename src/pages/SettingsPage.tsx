@@ -719,71 +719,78 @@ export function SettingsPage() {
             >
               <Switch checked={config.dmsDisabled} onCheckedChange={setDmsDisabled} />
             </SettingsRow>
-            <SettingsRow
-              label="Use app DM relays"
-              description="Send and receive DMs on your general app relays and the additional synchronized app DM relays below."
-            >
-              <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
-            </SettingsRow>
-            <SettingsRow
-              stack
-              label="Additional app DM relays"
-              description="The client-provided DM relays used alongside your general app relays. This synchronized list replaces Armada's built-in DM address."
-            >
-              <RelayListEditor
-                relays={config.appDmRelays}
-                onChange={setAppDmRelays}
-                onReset={() => setAppDmRelays([...DM_RELAYS])}
-                emptyText="No additional app DM relays. Legacy DMs still use your general app relays."
-                placeholder="wss://dm-relay.example.com"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Use my own DM relays"
-              description="Also send and receive DMs on your own relays (listed below)."
-            >
-              <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
-            </SettingsRow>
-            <SettingsRow>
-              <RelayListEditor
-                relays={config.dmRelays}
-                onChange={setDmRelays}
-                emptyText="No personal DM relays yet. Add one, or rely on the app DM relays above."
-                placeholder="wss://dm-relay.example.com"
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Message requests"
-              description="Show DMs from people you don't follow and haven't written to in a separate Requests list. Turn off to hide them from your inbox entirely."
-            >
-              <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
-            </SettingsRow>
-            <SettingsRow
-              label="Recent DMs in the rail"
-              description="Show your newest unread conversations as a strip at the top of the far-left rail. Turn off to keep only the DMs you've pinned there. Doesn't affect your DM list."
-            >
-              <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
-            </SettingsRow>
-            <SettingsRow
-              label="Typing indicators"
-              description="Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
-            >
-              <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
-            </SettingsRow>
-            {effective.length > 0 ? (
-              <SettingsRow>
-                <div className="space-y-2">
-                  <div className="text-sm font-medium leading-tight">DMs currently use</div>
-                  <RelayListEditor readOnly relays={effective} />
-                </div>
-              </SettingsRow>
-            ) : (
-              <SettingsRow>
-                <p className="text-sm text-destructive">
-                  No DM relays selected. You can't send or receive direct
-                  messages. Turn on at least one option above.
-                </p>
-              </SettingsRow>
+            {/* Everything below configures a DM inbox the account is no longer
+                listening on, so the whole-DM opt-out hides it — leaving only
+                the master toggle to turn DMs back on. */}
+            {!config.dmsDisabled && (
+              <>
+                <SettingsRow
+                  label="Use app DM relays"
+                  description="Send and receive DMs on your general app relays and the additional synchronized app DM relays below."
+                >
+                  <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
+                </SettingsRow>
+                <SettingsRow
+                  stack
+                  label="Additional app DM relays"
+                  description="The client-provided DM relays used alongside your general app relays. This synchronized list replaces Armada's built-in DM address."
+                >
+                  <RelayListEditor
+                    relays={config.appDmRelays}
+                    onChange={setAppDmRelays}
+                    onReset={() => setAppDmRelays([...DM_RELAYS])}
+                    emptyText="No additional app DM relays. Legacy DMs still use your general app relays."
+                    placeholder="wss://dm-relay.example.com"
+                  />
+                </SettingsRow>
+                <SettingsRow
+                  label="Use my own DM relays"
+                  description="Also send and receive DMs on your own relays (listed below)."
+                >
+                  <Switch checked={config.useOwnDmRelays} onCheckedChange={setUseOwnDmRelays} />
+                </SettingsRow>
+                <SettingsRow>
+                  <RelayListEditor
+                    relays={config.dmRelays}
+                    onChange={setDmRelays}
+                    emptyText="No personal DM relays yet. Add one, or rely on the app DM relays above."
+                    placeholder="wss://dm-relay.example.com"
+                  />
+                </SettingsRow>
+                <SettingsRow
+                  label="Message requests"
+                  description="Show DMs from people you don't follow and haven't written to in a separate Requests list. Turn off to hide them from your inbox entirely."
+                >
+                  <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
+                </SettingsRow>
+                <SettingsRow
+                  label="Recent DMs in the rail"
+                  description="Show your newest unread conversations as a strip at the top of the far-left rail. Turn off to keep only the DMs you've pinned there. Doesn't affect your DM list."
+                >
+                  <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
+                </SettingsRow>
+                <SettingsRow
+                  label="Typing indicators"
+                  description="Show when the other person is typing, and let them see when you are. Sends a small encrypted signal every few seconds while you type, so your relays can tell the conversation is active right now."
+                >
+                  <Switch checked={config.dmTypingIndicators} onCheckedChange={setDmTypingIndicators} />
+                </SettingsRow>
+                {effective.length > 0 ? (
+                  <SettingsRow>
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium leading-tight">DMs currently use</div>
+                      <RelayListEditor readOnly relays={effective} />
+                    </div>
+                  </SettingsRow>
+                ) : (
+                  <SettingsRow>
+                    <p className="text-sm text-destructive">
+                      No DM relays selected. You can't send or receive direct
+                      messages. Turn on at least one option above.
+                    </p>
+                  </SettingsRow>
+                )}
+              </>
             )}
           </>
         );

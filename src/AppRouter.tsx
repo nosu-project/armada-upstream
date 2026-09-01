@@ -248,7 +248,10 @@ function HomeRedirect() {
     if (mesh.available) {
       return <Navigate to="/mesh" replace />;
     }
-    return <Navigate to="/dm" replace />;
+    // DMs are the usual fallback, but not when the account has opted out of
+    // them (config.dmsDisabled): `/dm` bounces back to `/` in that case, so land
+    // on Discover directly rather than looping through a hidden inbox.
+    return <Navigate to={config.dmsDisabled ? "/discover" : "/dm"} replace />;
   }
   return <Navigate to={firstRoute} replace />;
 }
@@ -265,6 +268,23 @@ function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/" replace />;
   }
   return <>{children}</>;
+}
+
+/**
+ * Gate the DM routes behind the whole-DM opt-out. When `config.dmsDisabled` is
+ * on the account holds no DM subscription at all (see AppConfig), so the inbox
+ * is a screen with nothing to show and every entry point into it is hidden —
+ * but a stale deep link, an old bookmark or a tray notification can still land
+ * here. Send those to `/` rather than the empty inbox; `HomeRedirect` picks the
+ * account's real home (a community, or `/discover` when there's none). Wraps
+ * `RequireAuth` so a signed-out hit still bounces to the landing first.
+ */
+function RequireDms({ children }: { children: ReactNode }) {
+  const { config } = useAppContext();
+  if (config.dmsDisabled) {
+    return <Navigate to="/" replace />;
+  }
+  return <RequireAuth>{children}</RequireAuth>;
 }
 
 /**
@@ -480,10 +500,10 @@ function AppRoutes() {
                 Distinct from a community's own `/c/:id/invites` link-admin pane. */}
             <Route path="/invites" element={<RequireAuth><InvitesPage /></RequireAuth>} />
             <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
-            <Route path="/dm" element={<RequireAuth><DMsPage /></RequireAuth>} />
-            <Route path="/dm/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            <Route path="/dm" element={<RequireDms><DMsPage /></RequireDms>} />
+            <Route path="/dm/:peer" element={<RequireDms><DMsPage /></RequireDms>} />
             {/* DMs have no thread panel, so no `/t/` shape here. */}
-            <Route path="/dm/:peer/m/:messageId" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            <Route path="/dm/:peer/m/:messageId" element={<RequireDms><DMsPage /></RequireDms>} />
             {/* Pre-rename links (stale push subscriptions, tray notifications,
                 bookmarks). Declared before `/:user`, which would otherwise
                 swallow a bare `/dms` and render its own 404. */}
