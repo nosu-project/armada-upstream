@@ -579,19 +579,16 @@ export function useForegroundNotifications(): void {
       const canShowOsNotification = isForegroundNotifyReady();
       const soundSettings = loadNotificationSoundSettings();
       let playedSound = false;
-      // One fresh ownership proof per ingest batch. This reacts immediately to
-      // enable/disable/rotation instead of pinning a mount-time subscription
-      // state, and every page cue shares the same no-subscription decision.
+      // One fresh ownership proof per ingest batch, shared by every OS
+      // notification in it. This reacts immediately to enable/disable/rotation
+      // instead of pinning a mount-time subscription state. The in-app sound is
+      // NOT gated on it: it is a page cue that plays at ingest regardless of who
+      // presents the visual, so a Web Push install still hears it (the OS
+      // notification itself, page- or worker-owned, stays `silent: true`).
       let pageOwnership: Promise<boolean> | undefined;
       const pageOwnsPresentation = () => (
         pageOwnership ??= pageMayShowOsNotification()
       );
-      const playPageSound = async (silent: boolean) => {
-        if (!soundSettings.enabled || playedSound || silent) return;
-        if (!(await pageOwnsPresentation()) || playedSound) return;
-        playNotificationSound({ settings: soundSettings });
-        playedSound = true;
-      };
 
       const c = ctx.current;
 
@@ -758,6 +755,19 @@ export function useForegroundNotifications(): void {
         // idempotent and only appears while the tab is hidden or unfocused.
         markTabAttention();
 
+        // The selected in-app sound is a page-owned cue like the tab marker: it
+        // needs no OS-notification permission and does not depend on who
+        // presents the visual. Whether the page or the service worker shows the
+        // banner, the OS notification is always constructed `silent`, so this is
+        // the one tone for the event — play it here at ingest, not behind the
+        // presentation handoff, which silenced it for anyone with a Web Push
+        // subscription (the page hands presentation to the worker, and the
+        // worker can't play audio). One sound per batch, never a stack.
+        if (soundSettings.enabled && !playedSound && !silent) {
+          playNotificationSound({ settings: soundSettings });
+          playedSound = true;
+        }
+
         const canCoordinateExactEvent = () => Boolean(
           cand.eventId
           && roomKey
@@ -765,10 +775,7 @@ export function useForegroundNotifications(): void {
           && document.hasFocus(),
         );
 
-        if (!canShowOsNotification) {
-          void playPageSound(silent);
-          continue;
-        }
+        if (!canShowOsNotification) continue;
 
         // Resolve the title (async — needs the author's profile) then fire the
         // OS notification. Errors are swallowed so one bad event never breaks
@@ -875,10 +882,6 @@ export function useForegroundNotifications(): void {
             if (n === null) {
               clearPresenting(cand.eventId, roomKey);
               return;
-            }
-            if (soundSettings.enabled && !playedSound && !silent) {
-              playNotificationSound({ settings: soundSettings });
-              playedSound = true;
             }
             recordPushState(cand.eventId, roomKey, "presented");
             if (n) {
