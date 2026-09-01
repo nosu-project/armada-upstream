@@ -555,7 +555,7 @@ function trayImage() {
 function trayMenuEntries() {
   return [
     { id: 1, label: "Show Armada", activate: showWindow },
-    autoUpdatesSupported()
+    autoUpdatesSupported() || flatpakUpdatesSupported()
       ? {
           id: 2,
           label: "Check for Updates…",
@@ -772,13 +772,20 @@ function hideWindowToTray() {
 //
 // electron-updater supports the installed NSIS build on Windows, signed macOS
 // builds, and AppImage on Linux. A portable .exe has nowhere stable to install
-// an update, while deb and Flatpak packages must remain owned by their package
-// manager, so those formats intentionally never contact the update feed.
+// an update, and a deb stays owned by apt, so those formats never contact the
+// update feed. A Flatpak reads the SAME feed to NOTICE an update, but applies
+// it through the Flatpak update portal instead — its `/app` is a read-only
+// OSTree mount electron-updater cannot rewrite, and the portal
+// (org.freedesktop.portal.Flatpak, reachable from every sandbox with no
+// finish-args grant) is the one actor that can deploy the newer commit from the
+// GPG-verified origin remote and then spawn a fresh instance on it
+// (`checkForFlatpakUpdate` / electron/flatpakUpdate.js).
 //
 // The feed is the kind-30622 release event — the same one /downloads reads —
-// resolved by ./nostrUpdateProvider.js. No latest*.yml is generated or deployed
-// any more. The `publish` block in electron-builder.yml still exists, but not as
-// a feed: it is the only thing that makes electron-builder package an
+// resolved by ./nostrUpdateProvider.js (electron-updater path) and directly by
+// ./updateFeed.cjs (Flatpak path). No latest*.yml is generated or deployed any
+// more. The `publish` block in electron-builder.yml still exists, but not as a
+// feed: it is the only thing that makes electron-builder package an
 // app-update.yml, which electron-updater reads on every DOWNLOAD for its cache
 // directory name. Its url is never fetched — setFeedURL below replaces the
 // provider outright. See electron/README.md.
@@ -815,6 +822,22 @@ function autoUpdatesSupported() {
   });
 }
 
+// Whether this is a packaged Flatpak, which updates through its OWN path rather
+// than electron-updater. `supportsSelfUpdate()` deliberately excludes Flatpak
+// (its `/app` is a read-only OSTree mount the process cannot rewrite, and
+// electron-updater has no installer for the format), so the two predicates are
+// mutually exclusive. The Flatpak path resolves the SAME kind-30622 event to
+// decide there is something to do, then has the update PORTAL deploy the newer
+// commit from the GPG-verified origin remote and spawn a fresh instance on it —
+// see electron/flatpakUpdate.js.
+function flatpakUpdatesSupported() {
+  return (
+    app.isPackaged &&
+    process.platform === "linux" &&
+    Boolean(process.env.FLATPAK_ID)
+  );
+}
+
 async function showUpdateMessage(options) {
   // Only parent to a VISIBLE window. Update checks run on a timer, so this can
   // fire while the app sits in the tray or was autostarted hidden, and a
@@ -827,6 +850,7 @@ async function showUpdateMessage(options) {
 }
 
 async function checkForDesktopUpdates(manual = false) {
+  if (flatpakUpdatesSupported()) return checkForFlatpakUpdate(manual);
   if (!autoUpdatesSupported()) return;
   if (updateCheckInFlight) {
     if (manual) manualUpdateCheck = true;
@@ -853,9 +877,147 @@ async function checkForDesktopUpdates(manual = false) {
   }
 }
 
-function installAutoUpdater() {
-  if (!autoUpdatesSupported()) return;
+// Resolve the release event, offer the update, install it through the Flatpak
+// update portal, and restart into the new deploy. The whole flow is synchronous
+// within this one call — unlike electron-updater, which drives the download and
+// install through events — so `manualUpdateCheck` is read directly rather than
+// handed to a later listener.
+//
+// The event decides WHETHER to offer (same feed, same comparator as every other
+// edition); the portal does the whole apply. `UpdateMonitor.Update()` pulls and
+// deploys this app's newer commit from the GPG-verified origin remote the
+// signed bundle embedded at install time — the portal cannot be handed
+// arbitrary bytes, which is why nothing is downloaded from Blossom here — and
+// `Spawn(LATEST_VERSION)` starts a fresh instance on the new deploy, which a
+// bare `app.relaunch()` cannot do: a child of this process inherits the OLD
+// sandbox, whose `/app` still mounts the commit it was launched from. See
+// electron/flatpakUpdate.js.
+async function checkForFlatpakUpdate(manual = false) {
+  if (updateCheckInFlight) {
+    if (manual) manualUpdateCheck = true;
+    return;
+  }
+  updateCheckInFlight = true;
+  manualUpdateCheck = manual;
+  // Whether the user pressed "Install and restart": a failure after that click
+  // is reported even on a background check — silence there would look like the
+  // update simply never happened.
+  let confirmedInstall = false;
+  let bus;
+  try {
+    const { resolveDesktopUpdate } = require("./updateFeed.cjs");
+    const {
+      plannedFlatpakUpdate,
+      installFlatpakUpdate,
+      restartIntoLatest,
+    } = require("./flatpakUpdate");
+    // The synthetic `flatpak` target selects the .flatpak bundle over the
+    // AppImage the `linux` target would resolve (see src/lib/desktopUpdate.ts).
+    const update = await resolveDesktopUpdate({
+      target: { platform: "flatpak", arch: process.arch },
+    });
+    const planned = plannedFlatpakUpdate(update, app.getVersion());
+    const wasManual = manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (!planned) {
+      if (wasManual) {
+        await showUpdateMessage({
+          type: "info",
+          title: "Armada is up to date",
+          message: `You are running Armada ${app.getVersion()}, the newest available version.`,
+        });
+      }
+      return;
+    }
+    const { response } = await showUpdateMessage({
+      type: "info",
+      title: "Armada update available",
+      message: `Armada ${planned.version} is available.`,
+      detail: "Install it now? Armada will restart to finish updating.",
+      buttons: ["Install and restart", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response !== 0) return;
+    confirmedInstall = true;
 
+    bus = require("@jellybrick/dbus-next").sessionBus();
+    const outcome = await installFlatpakUpdate({
+      bus,
+      onProgress: (progress) => {
+        if (progress.progress != null) {
+          console.log(`[updater] Flatpak update progress ${progress.progress}%`);
+        }
+      },
+    });
+    if (outcome.result === "nothing") {
+      // The release event and the OSTree repository are published by the same
+      // workflow but propagate independently, so the event can name a version
+      // the remote has not finished serving yet. The next timer tick retries.
+      await showUpdateMessage({
+        type: "info",
+        title: "Update not available yet",
+        message: `Armada ${planned.version} is not yet available from the update repository.`,
+        detail: "Armada will retry automatically. No restart is needed now.",
+      });
+      return;
+    }
+    // The new commit is deployed but this process still runs the old one, and
+    // its children would inherit the old sandbox. Release the single-instance
+    // lock so the spawned instance does not immediately quit as a "second"
+    // one, ask the portal for a fresh instance of the LATEST version, and get
+    // out of its way. isQuitting bypasses close-to-tray.
+    isQuitting = true;
+    app.releaseSingleInstanceLock();
+    await restartIntoLatest({ bus });
+    app.exit(0);
+  } catch (error) {
+    console.warn("[updater] Flatpak update failed", error);
+    const shouldReport = confirmedInstall || (manual && manualUpdateCheck);
+    manualUpdateCheck = false;
+    if (shouldReport) {
+      await showUpdateMessage({
+        type: "error",
+        title: confirmedInstall ? "Update failed" : "Update check failed",
+        message: confirmedInstall
+          ? "Armada could not install the update."
+          : "Armada could not check for updates.",
+        detail: confirmedInstall
+          ? `Running \`flatpak update ${process.env.FLATPAK_ID || "buzz.armada.app"}\` installs it manually.\n\n${String(error?.message || error)}`
+          : "Check your connection and try again.",
+      });
+    }
+  } finally {
+    try {
+      if (bus) bus.disconnect();
+    } catch {
+      // The check is over either way; a bus that will not disconnect is not
+      // worth more than this.
+    }
+    updateCheckInFlight = false;
+  }
+}
+
+function installAutoUpdater() {
+  const electronUpdater = autoUpdatesSupported();
+  // The electron-updater path owns AppImage/NSIS/mac; the Flatpak path owns a
+  // packaged Flatpak. Either drives the same timer below; only the former needs
+  // electron-updater wired up.
+  if (!electronUpdater && !flatpakUpdatesSupported()) return;
+
+  if (electronUpdater) installElectronUpdater();
+
+  // Let the UI and keyring finish booting before the first network request.
+  setTimeout(() => void checkForDesktopUpdates(false), 10_000).unref();
+  updateCheckTimer = setInterval(
+    () => void checkForDesktopUpdates(false),
+    4 * 60 * 60 * 1000,
+  );
+  updateCheckTimer.unref();
+}
+
+function installElectronUpdater() {
   // Reaching here means this package has a single writable update owner: an
   // installed Windows NSIS build, a Developer ID-signed macOS build, or an
   // AppImage. Windows signing improves publisher verification and reputation,
@@ -909,14 +1071,6 @@ function installAutoUpdater() {
       autoUpdater.quitAndInstall(false, true);
     }
   });
-
-  // Let the UI and keyring finish booting before the first network request.
-  setTimeout(() => void checkForDesktopUpdates(false), 10_000).unref();
-  updateCheckTimer = setInterval(
-    () => void checkForDesktopUpdates(false),
-    4 * 60 * 60 * 1000,
-  );
-  updateCheckTimer.unref();
 }
 
 // ── Unread badge ─────────────────────────────────────────────────────────────

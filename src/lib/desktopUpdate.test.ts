@@ -130,6 +130,21 @@ describe("pickDesktopArtifact", () => {
     expect(picked?.filename).toBe("Armada-v1.2.3.AppImage");
   });
 
+  it("takes the .flatpak bundle for a Flatpak install, never the AppImage", () => {
+    // The Flatpak self-update flow (electron/flatpakUpdate.js) runs outside
+    // electron-updater and downloads the signed bundle, so it resolves the
+    // .flatpak the `linux` row deliberately refuses. Same event, different
+    // artifact, keyed on the synthetic `flatpak` platform.
+    const picked = pickDesktopArtifact(release, { platform: "flatpak", arch: "x64" });
+    expect(picked?.filename).toBe("Armada-v1.2.3.flatpak");
+  });
+
+  it("refuses a .flatpak that names a different architecture", () => {
+    // The bundle is per-arch, so an x86_64 bundle must not be offered to an
+    // arm64 machine even though the extension matches.
+    expect(pickDesktopArtifact(release, { platform: "flatpak", arch: "arm64" })).toBeUndefined();
+  });
+
   it("takes the NSIS installer on Windows, never the portable build", () => {
     // Both carry f=windows-x86_64 and the same mime type, so the filename is
     // the only thing that tells them apart.

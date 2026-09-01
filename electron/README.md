@@ -24,9 +24,11 @@ It also adds desktop-native behavior the web build can't:
   or make the shared content genuinely full-screen.
 - **Global push to talk** — Windows, macOS and X11 use `uiohook-napi`; Wayland
   uses the trusted Global Shortcuts portal, including sandboxed Flatpak builds.
-- **Package-aware updates** — installed Windows and AppImage editions update
-  themselves. Portable, deb and Flatpak builds defer to their actual package
-  owner, and the tray explains when the in-app updater is unavailable.
+- **Package-aware updates** — installed Windows, AppImage and Flatpak editions
+  update themselves; portable and deb builds defer to their actual package
+  owner. The Flatpak notices a release from the same signed event as the
+  others, then installs and restarts through the Flatpak update portal — from
+  the GPG-verified origin remote, with no sandbox permission spent on it.
 - **Encrypted login store** — the web build keeps the login blob (which for an
   nsec login holds the raw secret key) in plaintext `localStorage`. Here it is
   encrypted at rest with `safeStorage`, i.e. the OS credential store
@@ -221,7 +223,7 @@ Every edition has exactly one update owner:
 | CI cross-built ad-hoc macOS zip | Replace manually; marked no-self-update |
 | Linux AppImage | Armada replaces the running AppImage from the release event |
 | Linux deb | Download and install the newer deb; in-app updater disabled |
-| Linux Flatpak | embedded Armada Flatpak remote; in-app updater disabled |
+| Linux Flatpak | Armada installs from the embedded GPG-verified remote via the update portal and restarts itself; `flatpak update` also works |
 
 ### The feed is the release event
 
@@ -336,6 +338,20 @@ Future releases use Flatpak's normal package-manager update path either way:
 ```sh
 flatpak update --user buzz.armada.app
 ```
+
+Armada also updates itself, like the other self-updating editions. It reads
+the same signed kind-30622 release event every other edition reads to notice a
+newer version, then asks the Flatpak update portal
+(`org.freedesktop.portal.Flatpak`, reachable from every sandbox with no
+finish-args grant) to deploy the newer commit from this GPG-verified origin
+remote and to spawn a fresh instance on the new deploy — the running process
+keeps its old `/app` mount until it exits, which is why a plain relaunch could
+never land on the update. The bytes installed this way come exclusively from
+the signed OSTree repository; the release event is detection only. Two
+consequences worth knowing: the portal refuses an update whose permissions
+grew, so a release that adds a finish-args entry updates through
+`flatpak update` instead, and the desktop may show a one-time "Update Armada?"
+consent dialog the first time. See `electron/flatpakUpdate.js`.
 
 Armada itself comes from that origin, not Flathub. Its Freedesktop and Electron
 runtimes still need a configured Flathub remote; most Flatpak installations

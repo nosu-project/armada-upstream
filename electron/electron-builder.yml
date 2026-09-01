@@ -53,6 +53,11 @@ files:
   # itself again, which is the harder failure to notice.
   - nostrUpdateProvider.js
   - updateFeed.cjs
+  # The Flatpak self-update path: main.js requires it lazily on a packaged
+  # Flatpak to download and stage the signed .flatpak bundle. Unlisted, the
+  # require throws inside the asar and every Flatpak update check fails
+  # silently — the same shipped-app-that-can-never-update failure as above.
+  - flatpakUpdate.js
   - linuxAudioSources.js
   - linuxVideoAcceleration.js
   - displayMediaPolicy.js

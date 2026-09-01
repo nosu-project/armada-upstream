@@ -172,13 +172,33 @@ const SHARED_TEST_CONFIG = {
  */
 const RUN_PERF = !!process.env.ARMADA_TEST_PERF;
 
+/**
+ * Build outputs a local flatpak build drops under `electron/`, which the
+ * `electron/**` test globs must never traverse. `.flatpak-builder` holds
+ * host-absolute symlinks (electron-builder.yml refuses to package it for the
+ * same reason) and `release/` is a multi-GB OSTree repo; letting file discovery
+ * descend either one hangs the whole run at startup rather than failing. Two
+ * entries cover everything `flatpak/build.sh` writes: its build and repo
+ * directories are both under `release/`. Applied in BOTH modes — the perf branch
+ * had no exclude at all, so a stale build tree would hang `npm run test:perf`
+ * too. CI never has these (each job is a fresh checkout); this only bites a
+ * machine that has run `npm run dist:flatpak`.
+ */
+const BUILD_ARTIFACT_EXCLUDES = [
+  "**/electron/.flatpak-builder/**",
+  "**/electron/release/**",
+];
+
 /** `include`/`exclude` for one project, given the extensions it owns. */
 function testFilesFor(extensions: string) {
   return RUN_PERF
-    ? { include: [`{src,electron}/**/*.perf.test.${extensions}`] }
+    ? {
+        include: [`{src,electron}/**/*.perf.test.${extensions}`],
+        exclude: [...configDefaults.exclude, ...BUILD_ARTIFACT_EXCLUDES],
+      }
     : {
         include: [`{src,electron}/**/*.test.${extensions}`],
-        exclude: [...configDefaults.exclude, "**/*.perf.test.*"],
+        exclude: [...configDefaults.exclude, "**/*.perf.test.*", ...BUILD_ARTIFACT_EXCLUDES],
       };
 }
 

@@ -35,6 +35,14 @@ import {
   type ReleaseArtifact,
 } from "./releases";
 
+// Re-exported so `electron/updateFeed.cjs` — this file's bundled build — carries
+// the version comparison the Flatpak update path needs. electron-updater does
+// its own semver comparison for the AppImage/NSIS/mac formats, but the Flatpak
+// path in `electron/flatpakUpdate.js` runs outside electron-updater and decides
+// "is this newer than what I'm running" itself, against the same parser the rest
+// of the release contract uses rather than a second one.
+export { compareVersions } from "./releases";
+
 /** How long a single relay gets to answer before it is written off. */
 const RELAY_TIMEOUT_MS = 12_000;
 
@@ -51,15 +59,28 @@ const RELEASE_QUERY_LIMIT = 50;
 /**
  * Which installer each platform self-updates from.
  *
- * These are exactly the editions `supportsSelfUpdate()` in
- * `electron/updateSupport.js` arms, and the pairing is not incidental: the
- * portable .exe, the .deb and the .flatpak are all present in the same release
- * event, and handing one to electron-updater would have it replace files that
- * belong to a package manager or to a directory the user unpacked by hand.
- * The exclusion of `-portable.exe` is the load-bearing half — CI publishes the
- * NSIS installer and the portable build under the same `windows-x86_64`
- * platform token and the same mime type, so the filename is the only thing that
- * distinguishes them.
+ * The `win32`/`darwin`/`linux` rows are exactly the editions
+ * `supportsSelfUpdate()` in `electron/updateSupport.js` arms, and the pairing is
+ * not incidental: the portable .exe, the .deb and the .flatpak are all present
+ * in the same release event, and handing one to electron-updater would have it
+ * replace files that belong to a package manager or to a directory the user
+ * unpacked by hand. The exclusion of `-portable.exe` is the load-bearing half —
+ * CI publishes the NSIS installer and the portable build under the same
+ * `windows-x86_64` platform token and the same mime type, so the filename is the
+ * only thing that distinguishes them.
+ *
+ * `flatpak` is a SYNTHETIC target the Electron side passes explicitly (in place
+ * of the real `process.platform`, which is `linux`) only when `FLATPAK_ID` is
+ * set. It resolves the signed `.flatpak` bundle rather than the AppImage —
+ * deliberately kept OUT of the `linux` row so electron-updater never receives
+ * it: a Flatpak's `/app` is a read-only OSTree mount the process cannot rewrite,
+ * and `quitAndInstall` has no installer for the format. The Flatpak update flow
+ * (`electron/flatpakUpdate.js`) runs entirely outside electron-updater, and it
+ * uses this resolution for DETECTION only: a release that carries a `.flatpak`
+ * artifact is one whose OSTree commit the same workflow published, so resolving
+ * it here is what decides "there is something to install". The install itself
+ * is the Flatpak update portal deploying that commit from the GPG-verified
+ * origin remote — nothing from this row's URL is ever downloaded on that path.
  */
 const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) => boolean }> = {
   linux: { os: "linux", accepts: (name) => /\.appimage$/i.test(name) },
@@ -68,6 +89,7 @@ const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) 
     accepts: (name) => /\.exe$/i.test(name) && !/-portable\.exe$/i.test(name),
   },
   darwin: { os: "macos", accepts: (name) => /\.zip$/i.test(name) },
+  flatpak: { os: "linux", accepts: (name) => /\.flatpak$/i.test(name) },
 };
 
 /**
