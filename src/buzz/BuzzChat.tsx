@@ -26,9 +26,8 @@ import { buzzMessagesKey, useBuzzMessages } from "@/buzz/useBuzzMessages";
 import { useBuzzEditMessage, useBuzzTyping, useSendBuzzThreadReply } from "@/buzz/useBuzzActions";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
-import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { ChatMessage } from "@/components/chat/ChatMessage";
 import { DisplayName } from "@/components/DisplayName";
-import { firstImageRef, getReplyToId } from "@/components/chat/messageHelpers";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
@@ -57,7 +56,6 @@ import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { useEvent } from "@/hooks/useEvent";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { chatRoute, parseChatRoute, type ChatRoute } from "@/lib/routes";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
@@ -72,26 +70,6 @@ import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Buzz reply context: fetch the replied-to event and render the shared chrome. */
-function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl: string; onJump: (id: string) => void }) {
-  const { data: event } = useEvent(eventId, [relayUrl]);
-  const author = useAuthor(event?.pubkey);
-  const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
-
-  if (!event) return null;
-
-  const image = firstImageRef(event);
-  return (
-    <ReplyContextLine
-      name={displayName}
-      pubkey={event.pubkey}
-      preview={<ReplyPreview content={event.content} tags={event.tags} hideMediaPlaceholder={!!image} />}
-      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(eventId)}
-    />
-  );
-}
-
 /** Chat-like kinds that render through the shared ChatMessage row. */
 function isChatRow(kind: number): boolean {
   return kind === 9 || kind === 40001 || kind === KIND_STREAM_MESSAGE_V2 || kind === KIND_FORUM_POST;
@@ -99,7 +77,6 @@ function isChatRow(kind: number): boolean {
 
 interface BuzzChatMessageProps {
   event: ChatMsg;
-  relayUrl: string;
   transport: ChatTransport;
   isEditing: boolean;
   highlight?: string;
@@ -109,7 +86,6 @@ interface BuzzChatMessageProps {
   onEdit: (event: ChatMsg) => void;
   onEditSubmit: (event: ChatMsg, content: string) => void;
   onEditCancel: () => void;
-  onJumpToReply: (id: string) => void;
   onReply: (event: ChatMsg) => void;
   /** Forum vote bar (forum channels only). */
   votes?: { up: number; down: number; mine?: "+" | "-" };
@@ -127,7 +103,6 @@ interface BuzzChatMessageProps {
  */
 function BuzzChatMessage({
   event,
-  relayUrl,
   transport,
   isEditing,
   highlight,
@@ -137,7 +112,6 @@ function BuzzChatMessage({
   onEdit,
   onEditSubmit,
   onEditCancel,
-  onJumpToReply,
   onReply,
   votes,
   onVote,
@@ -146,7 +120,6 @@ function BuzzChatMessage({
 }: BuzzChatMessageProps) {
   const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
-  const replyToId = getReplyToId(event);
   return (
     <div>
       <ChatMessage
@@ -163,11 +136,6 @@ function BuzzChatMessage({
         replyCount={transport.replyCountFor?.(event.id) ?? 0}
         threadParticipants={threadInfo.participants}
         lastReplyAt={threadInfo.lastReplyAt}
-        replyContext={
-          replyToId
-            ? <ReplyContext eventId={replyToId} relayUrl={relayUrl} onJump={onJumpToReply} />
-            : undefined
-        }
         nameBadge={
           isAgent ? (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-medium text-primary align-middle">
@@ -575,10 +543,6 @@ export function BuzzChat({
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
-  const jumpToReply = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
-
   // Message permalinks (`/m/<id>` — notification taps, copied links).
   const channelRoute = useMemo(
     () => ({ kind: "nip29", relayUrl, groupId: channelId }) as const,
@@ -818,7 +782,6 @@ export function BuzzChat({
         <BuzzChatMessage
           key={msg.id}
           event={msg}
-          relayUrl={relayUrl}
           transport={transport}
           isAgent={memberRoles?.[msg.pubkey] === "bot"}
           isEditing={editingId === msg.id}
@@ -829,7 +792,6 @@ export function BuzzChat({
           onEdit={(e) => setEditingId(e.id)}
           onEditSubmit={handleEditSubmit}
           onEditCancel={() => setEditingId(undefined)}
-          onJumpToReply={jumpToReply}
           onReply={setReplyTo}
           votes={votes ? { up: votes.up, down: votes.down, mine: votes.mine?.value } : undefined}
           onVote={forum ? handleVote : undefined}
@@ -848,7 +810,6 @@ export function BuzzChat({
       activeId,
       toggleActive,
       handleEditSubmit,
-      jumpToReply,
       handleVote,
       channelRoute,
     ],
