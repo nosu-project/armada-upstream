@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.3] - 2026-09-01
+
+Direct messages can now be turned off entirely — the DM inbox, its settings, and
+its command-palette entries all disappear while it's off. Invite links to
+relay-hosted servers now open as cards right in the chat, and short invite codes
+without a dot are accepted. The Wallet settings stay reachable even with zaps
+turned off, a channel you've left no longer resurfaces in the list, and
+relay-server timeline rows read a little cleaner.
+
+### Added
+- A setting to turn off direct messages entirely, hiding the DM inbox and all its controls
+
+### Changed
+- Invite links to relay-hosted servers now appear as cards directly in the chat, and short invite codes are accepted
+- Relay-server timeline rows are cleaner without the inline reply-context line
+
+### Fixed
+- The Wallet settings entry stays reachable when zaps are turned off
+- A channel you've left no longer reappears in the list from stale cached data
+
 ## [0.59.2] - 2026-09-01
 
 Instagram posts now unfurl into rich embeds in chat, and timestamps read
