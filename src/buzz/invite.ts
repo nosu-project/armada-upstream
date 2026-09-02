@@ -57,8 +57,11 @@ export function buildBuzzInviteUrl(base: string, relayUrl: string, code: string)
 /**
  * Parse a Buzz invite landing URL (`https://<host>/invite/<code>`). Returns
  * undefined for anything else — including Armada's own `/invite/<naddr>`
- * Concord links, whose path segment is bech32 (`naddr1…`); Buzz codes are
- * dot-separated base64url HMAC tokens, so the shapes never collide.
+ * Concord links, whose path segment is bech32 (`naddr1…`). The code is opaque:
+ * Buzz mints dot-separated base64url HMAC tokens, but other NIP-29 relays that
+ * serve the same HTTP claim API (e.g. newlay) mint plain hex, so the ONLY
+ * shape we reject is a bech32 naddr — that is what keeps a Concord invite from
+ * being read as a Buzz one.
  *
  * An Armada-hosted link (`https://armada.buzz/invite/<code>?r=<relay-host>`)
  * carries the true relay in `?r=` — its own host is only a deep-link façade.
@@ -75,16 +78,25 @@ export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   const match = url.pathname.match(/^\/invite\/([^/]+)$/);
   if (!match) return undefined;
   const code = decodeURIComponent(match[1]);
-  // A Concord invite path segment is an naddr; a Buzz code contains a `.`
-  // (HMAC token separator) and is never bech32.
+  // A Concord invite path segment is a bech32 naddr; a Buzz-style claim code
+  // never is. That is the whole discriminator — the code is otherwise opaque
+  // (Buzz's dotted HMAC token, a bare hex token, or anything else).
   if (/^naddr1[023456789acdefghjklmnpqrstuvwxyz]+$/i.test(code)) return undefined;
-  if (!code.includes(".")) return undefined;
   const relayParam = url.searchParams.get("r")?.trim();
   if (relayParam) return buzzInviteFromRelay(code, relayParam);
   const scheme = url.protocol === "https:" ? "wss" : "ws";
   const relayUrl = normalizeRelayUrl(`${scheme}://${url.host}`);
   if (!relayUrl) return undefined;
   return { host: url.host, code, relayUrl, origin: url.origin };
+}
+
+/**
+ * Cheap boolean sibling of `parseBuzzInviteUrl` for classifiers that only need
+ * to know whether a URL is a Buzz-style relay invite landing link (the chat
+ * tokenizer's card discriminator, mirroring Concord's `isInviteUrl`).
+ */
+export function isBuzzInviteUrl(input: string): boolean {
+  return parseBuzzInviteUrl(input) !== undefined;
 }
 
 export interface BuzzJoinPolicy {

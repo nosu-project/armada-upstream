@@ -245,11 +245,24 @@ describe("parseBuzzInviteUrl", () => {
     expect(invite?.code).toBe("eyJjIjoiNjU2YzcxNmIifQ.92Tdbmlf38m");
   });
 
+  it("parses a dotless code from a NIP-29 relay that serves the same claim API", () => {
+    // Some NIP-29 relays (e.g. newlay) mint plain hex codes with no HMAC dot;
+    // the landing host IS the relay, and it speaks the same
+    // POST /api/invites/claim endpoint.
+    const invite = parseBuzzInviteUrl(
+      "https://team.relay.example/invite/00112233445566778899aabbccddeeff",
+    );
+    expect(invite).toBeDefined();
+    expect(invite?.host).toBe("team.relay.example");
+    expect(invite?.relayUrl).toBe("wss://team.relay.example");
+    expect(invite?.origin).toBe("https://team.relay.example");
+    expect(invite?.code).toBe("00112233445566778899aabbccddeeff");
+  });
+
   it("rejects Concord naddr invites and non-invite URLs", () => {
     expect(
       parseBuzzInviteUrl("https://armada.buzz/invite/naddr1qqxnzdesxgmnwd3jxs6rswpnqgs2m"),
     ).toBeUndefined();
-    expect(parseBuzzInviteUrl("https://example.com/invite/plaincode")).toBeUndefined();
     expect(parseBuzzInviteUrl("wss://relay.example.com")).toBeUndefined();
     expect(parseBuzzInviteUrl("not a url")).toBeUndefined();
   });

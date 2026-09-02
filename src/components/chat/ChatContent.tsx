@@ -10,6 +10,7 @@ import { CashuToken } from "@/components/chat/CashuToken";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
+import { BuzzInviteEmbed } from "@/components/chat/BuzzInviteEmbed";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
@@ -33,6 +34,7 @@ import { canCopyImages, writeClipboardImage, writeClipboardText } from "@/lib/cl
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
+import { isBuzzInviteUrl } from "@/buzz/invite";
 import { isInviteUrl } from "@/concord/lib/invite";
 import { EVERYONE_MENTION_PATTERN } from "@/concord/lib/everyoneMention";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
@@ -156,6 +158,7 @@ type ContentToken =
   | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number }
   | { type: "link-embed"; url: string }
   | { type: "invite-embed"; url: string }
+  | { type: "buzz-invite-embed"; url: string }
   | { type: "inline-link"; url: string }
   /** An own-origin chat link alone on its line — the in-app preview card. */
   | { type: "self-chat-embed"; url: string; route: ChatRoute; path: string }
@@ -694,6 +697,14 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             // A mid-sentence invite link stays a plain link — never a generic
             // naddr card (the invite bundle's naddr points at encrypted content).
             out.push({ type: "inline-link", url });
+          } else if (isEndOfLine && isBuzzInviteUrl(url)) {
+            // A Buzz / NIP-29 relay invite landing URL (`/invite/<code>`, a
+            // non-naddr code) gets its own join card. Checked after the Concord
+            // `isInvite` branches — the two never collide (Concord's segment is
+            // a bech32 naddr, which `parseBuzzInviteUrl` rejects).
+            out.push({ type: "buzz-invite-embed", url });
+          } else if (isBuzzInviteUrl(url)) {
+            out.push({ type: "inline-link", url });
           } else if (nostrFromUrl?.kind === "addr") {
             out.push({ type: "naddr-embed", addr: nostrFromUrl.addr, url });
           } else if (nostrFromUrl?.kind === "event") {
@@ -888,7 +899,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         || token.type === "lightning-invoice"
         || token.type === "cashu-token"
         || token.type === "code-block" || token.type === "quote"
-        || token.type === "invite-embed";
+        || token.type === "invite-embed"
+        || token.type === "buzz-invite-embed";
 
       if (isBlock) {
         if (i > 0) {
@@ -1201,6 +1213,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       case "invite-embed":
         if (inQuote) return inlineLink(key, token.url);
         return <InviteEmbed key={key} url={token.url} className="my-1.5" />;
+      case "buzz-invite-embed":
+        if (inQuote) return inlineLink(key, token.url);
+        return <BuzzInviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "self-chat-embed":
         // Demoted to the internal link inside quotes (cards are visually
         // wrong there) and inside embedded cards, where mounting the preview

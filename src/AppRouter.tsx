@@ -94,12 +94,13 @@ const UserPage = lazy(lazyWithReload(() => import("@/pages/UserPage").then((m) =
 
 /**
  * Dispatch `/invite/<segment>` to the right landing page. A Concord invite's
- * segment is a bech32 `naddr`; a Buzz relay invite's is a dotted HMAC token
- * (contains `.`, never bech32), so the shapes never collide.
+ * segment is a bech32 `naddr`; a Buzz-style relay invite's is any other code
+ * (Buzz's dotted HMAC token, a bare hex token, …), so a segment that
+ * isn't an naddr is a relay invite.
  */
 function InviteRoute() {
   const { naddr } = useParams<{ naddr: string }>();
-  const isBuzz = !!naddr && !/^naddr1/i.test(naddr) && naddr.includes(".");
+  const isBuzz = !!naddr && !/^naddr1/i.test(naddr);
   return isBuzz ? <BuzzInvitePage /> : <InvitePage />;
 }
 
