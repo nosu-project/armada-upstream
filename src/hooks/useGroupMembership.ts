@@ -2,9 +2,11 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useJoinRelay } from "@/hooks/useRelayMembership";
 import {
+  KIND_GROUP_METADATA,
   KIND_JOIN_REQUEST,
   KIND_LEAVE_REQUEST,
   KIND_PUT_USER,
@@ -94,6 +96,7 @@ export function useJoinGroup(relayUrl: string, groupId: string) {
 export function useLeaveGroup(relayUrl: string, groupId: string) {
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
+  const eventStore = useEventStore();
 
   return useMutation({
     mutationFn: async ({ reason }: { reason?: string } = {}) => {
@@ -104,9 +107,29 @@ export function useLeaveGroup(relayUrl: string, groupId: string) {
         relay: relayUrl,
       });
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Drop this channel's cached kind-39000 metadata from the relay's tenant.
+      // The channel list (useRelayGroups) is rebuilt by UNIONING every 39000 the
+      // relay's key ever signed with the live directory read — so leaving alone
+      // wouldn't remove a left channel: the relay stops listing it for a
+      // non-member, but the stale cached copy would union it right back on every
+      // "Refresh channels", which is why only a reinstall (a storage wipe)
+      // cleared it. Buzz's own client never has this problem because its list is
+      // an authoritative server snapshot, never a cache union — pruning the row
+      // here is the local equivalent of the channel simply no longer being in
+      // that snapshot. Best-effort: a failed prune just leaves the next refetch
+      // to re-decide, and a refetchable row is refetchable from the relay.
+      try {
+        const store = await eventStore;
+        await store.remove([{ kinds: [KIND_GROUP_METADATA], "#d": [groupId] }], { relay: relayUrl });
+      } catch {
+        // Ignore — the invalidations below still run, and the row (if it
+        // survives) is only a stale cache entry the next read supersedes.
+      }
       queryClient.invalidateQueries({ queryKey: ["nip29", "membership", relayUrl, groupId] });
       queryClient.invalidateQueries({ queryKey: ["nip29", "group", relayUrl, groupId] });
+      // Rebuild the channel list without the pruned row.
+      queryClient.invalidateQueries({ queryKey: ["nip29", "groups", relayUrl] });
     },
   });
 }
