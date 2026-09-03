@@ -563,6 +563,16 @@ export function MessageTimeline({
   // Previous scroll offset, to tell a reader moving up from this component's
   // own downward scrolls (see `handleScroll`).
   const lastScrollTopRef = useRef(Number.POSITIVE_INFINITY);
+  // Re-check for another extension one frame after a slice-change commit that
+  // leaves the reader scrolled up. The scroll-driven trigger only fires while
+  // `scrollTop` is *decreasing*, so a reveal or backfill that lands the reader
+  // at the top (no downward delta left to emit) would otherwise dead-end a
+  // chain that isn't finished — the "scroll down a little and back up to
+  // unstick it" symptom. Holds the pending rAF id so a burst of commits
+  // schedules only one re-check. `maybeExtendRef` breaks the source-order cycle
+  // (this effect is declared above `maybeExtend`).
+  const continueRafRef = useRef<number | null>(null);
+  const maybeExtendRef = useRef<() => void>(() => {});
 
   // The scroller only exists once there's something to put in it; the skeleton
   // replaces it outright.
@@ -858,7 +868,22 @@ export function MessageTimeline({
       pinToBottomNow();
       return;
     }
-    if (distanceRef.current > AT_BOTTOM_PX && restoreReadingAnchor()) return;
+    if (distanceRef.current > AT_BOTTOM_PX && restoreReadingAnchor()) {
+      // The reader is scrolled up and this commit changed the rendered slice
+      // (a reveal step, a landed backfill page, or an unrelated edit). If they
+      // are still near the top, `maybeExtend` has more to do but no upward
+      // gesture is coming to ask for it, so re-check next frame. It is cheaply
+      // guarded — a no-op unless within the trigger band — and self-limiting:
+      // each step restores the viewport further from the top until the band is
+      // cleared, `hasMore` runs out, or the reader reaches the bottom.
+      if (continueRafRef.current == null) {
+        continueRafRef.current = requestAnimationFrame(() => {
+          continueRafRef.current = null;
+          maybeExtendRef.current();
+        });
+      }
+      return;
+    }
     stickToBottom();
     // `listVisible` is a dependency because the scroller is what this effect
     // moves: every commit before it mounts returns at the `!el` guard above, so
@@ -924,6 +949,15 @@ export function MessageTimeline({
       setBackfillPulse((pulse) => pulse + 1);
     });
   }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
+  // The layout effect's frame-later continuation calls through this ref, since
+  // it is declared above `maybeExtend`. Cancel any pending re-check on unmount.
+  maybeExtendRef.current = maybeExtend;
+  useEffect(
+    () => () => {
+      if (continueRafRef.current != null) cancelAnimationFrame(continueRafRef.current);
+    },
+    [],
+  );
 
   /**
    * Extend while the rendered slice does not even fill the scroller.

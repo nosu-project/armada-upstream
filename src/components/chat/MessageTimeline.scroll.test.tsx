@@ -257,4 +257,65 @@ describe("MessageTimeline reading anchor", () => {
     expect(offset).toBeGreaterThanOrEqual(0);
     expect(offset).toBeLessThan(scroller.clientHeight);
   });
+
+  it("continues from a reveal step into a backfill without a second gesture", async () => {
+    // A single scroll to the top can have more to do than one step: the window
+    // starts short of everything loaded, so the first `maybeExtend` REVEALS the
+    // already-loaded remainder (start → 0) and lands the reader inside the
+    // backfill band — but with no downward delta left, no further scroll event
+    // is coming to ask the transport for the older page. The reveal→backfill
+    // chain has to run itself out. (Test 3 above opens with start already 0, so
+    // its gesture reaches the transport directly and never crosses this seam.)
+    const loadOlder = vi.fn<() => Promise<number>>();
+
+    function DmHistory() {
+      // 40 loaded > INITIAL_WINDOW (30), so the opening window is m10..m39 and
+      // one WINDOW_STEP reveal reaches start 0 — the reveal precedes any
+      // transport call.
+      const [messages, setMessages] = useState(() =>
+        Array.from({ length: 40 }, (_, index) => message(index)),
+      );
+      const backfill = useCallback(async () => {
+        const priorDay = Array.from({ length: 40 }, (_, index) => ({
+          ...message(index - 40),
+          id: `old${index}`,
+          content: `old ${index}`,
+          created_at: 1_700_000_000 - 3 * 24 * 60 * 60 + index,
+        }));
+        setMessages((current) => [...priorDay, ...current]);
+        return priorDay.length;
+      }, []);
+      loadOlder.mockImplementation(backfill);
+      return (
+        <MessageTimeline
+          transport={{
+            ...transportOf(messages),
+            hasMore: true,
+            loadOlder,
+          }}
+          renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
+        />
+      );
+    }
+
+    const rendered = render(<DmHistory />);
+    await screen.findByText("chat:m10");
+    const scroller = rendered.container.querySelector<HTMLElement>(".scrollbar-stable")!;
+    const content = scroller.firstElementChild as HTMLElement;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: {
+        configurable: true,
+        get: () => content.querySelectorAll("[data-scroll-anchor]").length * 100,
+      },
+    });
+
+    // One gesture to the top: reveals m0..m9, then must reach the transport on
+    // its own. No second scroll is fired.
+    scroll(scroller, 2_500);
+    scroll(scroller, 0);
+
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("chat:old39")).toBeInTheDocument());
+  });
 });
