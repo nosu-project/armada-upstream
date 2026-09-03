@@ -116,7 +116,13 @@ export function useConcordMentions(community: Community | undefined, channels: C
         .map(openedToChatMsg);
     },
     enabled: !!communityIdHex && !!pubkey && channelIds.length > 0,
-    refetchInterval: 30_000,
+    // NO refetch interval: the `c2:` bus ring below invalidates this the moment
+    // the wire ingests a message for a watched channel, which is the only way a
+    // new mention arrives in-process. The rail mounts one of these per joined
+    // community, so the old 30s poll was N independent index scans on unaligned
+    // clocks whatever screen was open — the highest-frequency slice of the
+    // recurring O(N) foreground load behind the power-user hitches. `staleTime:
+    // 0` keeps a remount catch-up; the live path is the bus.
     staleTime: 0,
   });
 

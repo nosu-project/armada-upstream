@@ -10,6 +10,7 @@ import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEA
 import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { Channel } from "@/concord/lib/types";
+import { onWireScopes } from "@/wire/bus";
 import {
   ackPendingWraps,
   openedToStored,
@@ -772,5 +773,94 @@ describe("disappearing messages (CORD-08 §3)", () => {
     // hide a surviving row — the message is gone: deleted, not merely hidden.
     rows = await queryChannelRumors(CID, idHex, { limit: 10 });
     expect(rows.map((r) => r.content)).toEqual(["forever"]);
+  });
+});
+
+/**
+ * The wire bus is the live path for every in-process write, and the rail's
+ * per-community backstop poll is only redundant with it if that path is
+ * complete. So this pins the load-bearing guarantee: a committed chat write —
+ * and a sweep that deletes — rings `c2:<channel>` for every channel it touched.
+ *
+ * The ring is a SUPERSET, not an exact set: `writeStored` reports a completed
+ * write as committed whether or not any row was actually new, so a re-write of
+ * already-stored rumors rings too. That is the safe direction — over-ringing
+ * costs a redundant re-read, never a missed change. What would make the
+ * backstop non-redundant is the opposite: a writer that committed a change
+ * WITHOUT ringing, which a bus-driven consumer would silently miss. This suite
+ * is the tripwire for that under-ring.
+ */
+describe("concord rumor store — wire bus emission", () => {
+  /** Collect scope rings until `want` has been announced (bus coalesces on 50ms). */
+  async function ringsFor(want: string, run: () => unknown): Promise<Set<string>> {
+    const seen = new Set<string>();
+    const off = onWireScopes((scopes) => {
+      for (const s of scopes) seen.add(s);
+    });
+    try {
+      await run();
+      await eventually(async () => seen, (s) => s.has(want));
+    } finally {
+      off();
+    }
+    return seen;
+  }
+
+  it("rings c2:<channel> once a chat write commits", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const opened = await openChatBatch(
+      [await wrapChat(chatRumor(idHex, alice, KIND_MESSAGE, "hi", 1000), channel, alice)],
+      channel,
+    );
+
+    const seen = await ringsFor(`c2:${idHex}`, () => writeRumors(CID, opened));
+    expect(seen.has(`c2:${idHex}`)).toBe(true);
+  });
+
+  it("rings every channel a multi-channel batch commits", async () => {
+    const a = makeChannel();
+    const b = makeChannel();
+    const alice = signer();
+    const opened = [
+      ...await openChatBatch([await wrapChat(chatRumor(a.idHex, alice, KIND_MESSAGE, "in a", 1000), a.channel, alice)], a.channel),
+      ...await openChatBatch([await wrapChat(chatRumor(b.idHex, alice, KIND_MESSAGE, "in b", 1000), b.channel, alice)], b.channel),
+    ];
+
+    const seen = await ringsFor(`c2:${b.idHex}`, () => writeRumors(CID, opened));
+    expect(seen.has(`c2:${a.idHex}`)).toBe(true);
+    expect(seen.has(`c2:${b.idHex}`)).toBe(true);
+  });
+
+  it("rings c2:<channel> for a channel the expiry sweep deleted from", async () => {
+    // Its own community: the sweep is self-gated to one run per community per
+    // interval (module-level `lastSweepAt`), and the file's expiry test already
+    // spent that budget for `CID`.
+    const SWEEP_CID = "cd".repeat(32);
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const realNow = Date.now();
+    const nowSecs = Math.floor(realNow / 1000);
+
+    // A live-then-expired message plus a permanent one, so the sweep has exactly
+    // one row to remove from this channel.
+    const soon = chatRumor(idHex, alice, KIND_MESSAGE, "soon", realNow, [["expiration", String(nowSecs + 30)]]);
+    const forever = chatRumor(idHex, alice, KIND_MESSAGE, "forever", realNow + 1);
+    const opened = await openChatBatch(
+      [await wrapChat(soon, channel, alice), await wrapChat(forever, channel, alice)].map(plain),
+      channel,
+    );
+    await ringsFor(`c2:${idHex}`, () => writeRumors(SWEEP_CID, opened));
+    await eventually(() => queryChannelRumors(SWEEP_CID, idHex, { limit: 10 }), (r) => r.length === 2);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 60_000);
+    try {
+      const seen = await ringsFor(`c2:${idHex}`, async () => {
+        expect(await sweepExpiredCommunityRumors(SWEEP_CID)).toBe(1);
+      });
+      expect(seen.has(`c2:${idHex}`)).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

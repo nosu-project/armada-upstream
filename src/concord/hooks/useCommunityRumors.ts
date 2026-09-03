@@ -59,14 +59,23 @@ export function useCommunityRumors(
     queryFn: ({ signal }) =>
       queryRumorsByChannel(communityIdHex!, channelIds, { perChannel: PER_CHANNEL, signal }),
     enabled: !!communityIdHex && channelIds.length > 0,
-    // The wire bus below is the live path (per-channel delta reads); this
-    // interval is only a backstop for an announcement this tab never heard
-    // (e.g. a write from another tab). It re-runs the FULL N-channel scan,
-    // which contends with the active channel's own reads on the shared store
-    // connection — keep it slow.
-    refetchInterval: 2 * 60_000,
-    // The wire bus below is the live path and the interval the backstop; a
-    // finite staleTime only added focus/remount re-runs of the full scan.
+    // NO refetch interval: the wire bus below is the COMPLETE in-process live
+    // path. Every write of a community rumor rings `c2:<channel>` once it
+    // commits — `writeRumors` and `sweepExpiredCommunityRumors`, pinned in
+    // rumorStore.test.ts as a superset ring (over-rings, never under-rings) —
+    // and the delta handler below re-reads only the channels that changed.
+    //
+    // The old backstop re-ran the FULL N-channel scan for its community on a
+    // 2-minute clock, and the always-mounted rail mounts one of these PER
+    // joined community regardless of screen. So a power user paid N independent
+    // periodic full scans on unaligned phases, smearing across the window and
+    // contending on the one store connection — the recurring O(N) foreground
+    // load behind the "fine for new users, bad for power users" hitches. Its
+    // stated reason ("a write from another tab") is the ONE case the local
+    // in-memory bus can't hear, and the right shape for that cross-context gap
+    // is a single shared doorbell, not N forever-polls. On the single-context
+    // platforms (Android/iOS/desktop) — the ones with the lag — no such writer
+    // exists, so the interval was pure redundancy.
     staleTime: Infinity,
   });
 
