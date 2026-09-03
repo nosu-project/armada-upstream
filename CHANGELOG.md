@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.4] - 2026-09-02
+
+The community settings channel organizer gets a proper reordering experience:
+press and hold a channel to drag it, follow a drag grip on each row, and the
+list auto-scrolls when you drag near an edge. Each channel row's actions now
+tuck into an overflow menu for a cleaner layout. Scrolling to a linked message
+now keeps loading older history without needing a second scroll.
+
+### Added
+- Press and hold to drag and reorder channels in community settings, with a drag grip on each row and auto-scroll when dragging near the edges
+
+### Changed
+- A channel row's actions in community settings now collapse into an overflow menu
+
+### Fixed
+- Jumping to a linked message continues loading older messages without a second scroll gesture
+
 ## [0.59.3] - 2026-09-01
 
 Direct messages can now be turned off entirely — the DM inbox, its settings, and
