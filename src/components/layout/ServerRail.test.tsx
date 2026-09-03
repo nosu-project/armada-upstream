@@ -220,7 +220,7 @@ async function mouseDrag(fromAnchor: string, toY: number) {
   firePointer(el!, "pointerdown", { x: 36, y: startY });
   // Hold through the long-press threshold (~300ms) to pick up…
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 350));
+    await vi.advanceTimersByTimeAsync(350);
   });
   // …drag to the target…
   firePointer(window, "pointermove", { x: 36, y: toY });
@@ -257,7 +257,13 @@ describe("ServerRail drag wiring", () => {
     extraServers = [];
     config = { ...defaultConfig, railLayout: [], railOpenFolders: [] };
     restoreGeometry = installGeometry();
-    return () => restoreGeometry();
+    // Fake timers so the ~300ms long-press pickup is crossed on the virtual
+    // clock rather than by really sleeping 350ms in each of these tests.
+    vi.useFakeTimers();
+    return () => {
+      vi.useRealTimers();
+      restoreGeometry();
+    };
   });
 
   it("drops one server onto another to create a folder", async () => {
@@ -324,7 +330,7 @@ describe("ServerRail drag wiring", () => {
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
     // No movement — the long-press threshold (~300ms) alone fires the pickup…
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 350));
+      await vi.advanceTimersByTimeAsync(350);
     });
     // …and the entry reads as held: the global grabbing cursor plus the
     // full-viewport cursor overlay (what actually flips the cursor in
@@ -349,7 +355,7 @@ describe("ServerRail drag wiring", () => {
     firePointer(window, "pointermove", { x: 36, y: slotCenter(2) });
     expect(document.body.style.cursor).toBe(""); // …no pickup from movement…
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 350));
+      await vi.advanceTimersByTimeAsync(350);
     });
     // …but the hold still completes, picking up at the cursor's position
     // (over C, not at the press point over A).
@@ -376,7 +382,7 @@ describe("ServerRail drag wiring", () => {
     const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 350));
+      await vi.advanceTimersByTimeAsync(350);
     });
     firePointer(window, "pointerup", { x: 36, y: slotCenter(0) });
     expect(document.body.style.cursor).toBe("");
@@ -392,7 +398,7 @@ describe("ServerRail drag wiring", () => {
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0), pointerType: "touch" });
     // Long-press threshold (~300ms) fires the pickup.
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 350));
+      await vi.advanceTimersByTimeAsync(350);
     });
     // With the drag live, raw touchmove must be canceled — otherwise the
     // browser pans the rail (touch-action was resolved at gesture start)
@@ -418,7 +424,7 @@ describe("ServerRail drag wiring", () => {
     const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0), pointerType: "touch" });
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 350));
+      await vi.advanceTimersByTimeAsync(350);
     });
     firePointer(window, "pointermove", { x: 36, y: slotCenter(2), pointerType: "touch" });
     firePointer(window, "pointercancel", { x: 36, y: slotCenter(2), pointerType: "touch" });
@@ -569,7 +575,14 @@ describe("ServerRail DMs", () => {
     for (const key of Object.keys(authorNames)) delete authorNames[key];
     updateGroupList.mockClear();
     restoreGeometry = installGeometry();
-    return () => restoreGeometry();
+    // Fake timers so the two drag cases here cross the long-press pickup on the
+    // virtual clock rather than really sleeping; the render-only cases are
+    // unaffected by it.
+    vi.useFakeTimers();
+    return () => {
+      vi.useRealTimers();
+      restoreGeometry();
+    };
   });
 
   const dmBtn = () => document.querySelector(`[data-rail-anchor="${DM_ANCHOR}"]`)!;

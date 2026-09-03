@@ -19,7 +19,20 @@
  * and that file has no Electron knowledge.
  */
 
-const { Provider } = require("electron-updater");
+// `electron-updater` is a dependency of `electron/`, not of the repo root, so
+// it is present only in the packaged app — where this provider is actually
+// instantiated — and absent from the root `npm ci` that the test run and the
+// web build use. Its `Provider` base is exercised only at runtime inside that
+// app; the two pure functions this module is imported for (`updateInfoFrom`,
+// `resolveFiles`) never reach it. So, like the lazy `updateFeed.cjs` require in
+// getLatestVersion, tolerate its absence at load with a stand-in base, keeping
+// `require()` of this module working for tests and the build.
+let Provider;
+try {
+  ({ Provider } = require("electron-updater"));
+} catch {
+  Provider = class {};
+}
 
 /**
  * Map a resolved release onto electron-updater's `UpdateInfo`.
