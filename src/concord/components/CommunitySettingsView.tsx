@@ -10,6 +10,7 @@ import {
   Info,
   Loader2,
   Lock,
+  MoreVertical,
   Pencil,
   Plug,
   Plus,
@@ -41,6 +42,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -1103,7 +1107,7 @@ function ChannelRow({
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30"
+                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30 touch:size-11"
                 aria-label={`Move ${channel.name} up`}
                 disabled={!canMoveUp || disabled}
                 onClick={() => void onMove(-1)}
@@ -1114,7 +1118,7 @@ function ChannelRow({
                 type="button"
                 size="icon"
                 variant="ghost"
-                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30"
+                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30 touch:size-11"
                 aria-label={`Move ${channel.name} down`}
                 disabled={!canMoveDown || disabled}
                 onClick={() => void onMove(1)}
@@ -1123,19 +1127,6 @@ function ChannelRow({
               </Button>
             </>
           )}
-          {showAccessButton && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className={cn("size-7 shrink-0 text-muted-foreground", accessOpen && "text-foreground")}
-              aria-label="Channel access"
-              aria-expanded={accessOpen}
-              onClick={() => setAccessOpen((v) => !v)}
-            >
-              <Shield className="size-3.5" />
-            </Button>
-          )}
           {canManage && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1143,62 +1134,73 @@ function ChannelRow({
                   type="button"
                   size="icon"
                   variant="ghost"
-                  className="size-7 shrink-0 text-muted-foreground"
-                  aria-label={`Category for ${channel.name}`}
+                  className="size-7 shrink-0 text-muted-foreground touch:size-11"
+                  aria-label={`Actions for ${channel.name}`}
                   disabled={disabled}
                 >
-                  <Folder className="size-3.5" />
+                  <MoreVertical className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="text-xs text-muted-foreground">Category</DropdownMenuLabel>
-                {categories.map((name) => (
-                  <DropdownMenuItem
-                    key={name}
-                    onSelect={() => void file(name)}
-                    disabled={categoryKey(name) === categoryKey(channel.category ?? "")}
-                  >
-                    <Folder className="size-3.5" />
-                    <span className="truncate">{name}</span>
-                  </DropdownMenuItem>
-                ))}
-                {categories.length > 0 && <DropdownMenuSeparator />}
-                <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setNaming(true); }}>
-                  <Plus className="size-3.5" />
-                  New category…
+                <DropdownMenuItem onSelect={() => setEditing(true)}>
+                  <Pencil className="size-3.5" />
+                  Rename
                 </DropdownMenuItem>
-                {channel.category && (
-                  <DropdownMenuItem onSelect={() => void file(undefined)}>
-                    <X className="size-3.5" />
-                    Remove from category
+                {showAccessButton && (
+                  <DropdownMenuItem onSelect={() => setAccessOpen((v) => !v)}>
+                    <Shield className="size-3.5" />
+                    {channel.isPrivate ? "Channel access" : "Make private…"}
                   </DropdownMenuItem>
+                )}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Folder className="size-3.5" />
+                    Category
+                    {channel.category && (
+                      <span className="ml-auto max-w-24 truncate text-xs text-muted-foreground">
+                        {channel.category}
+                      </span>
+                    )}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-52">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">Category</DropdownMenuLabel>
+                    {categories.map((name) => (
+                      <DropdownMenuItem
+                        key={name}
+                        onSelect={() => void file(name)}
+                        disabled={categoryKey(name) === categoryKey(channel.category ?? "")}
+                      >
+                        <Folder className="size-3.5" />
+                        <span className="truncate">{name}</span>
+                      </DropdownMenuItem>
+                    ))}
+                    {categories.length > 0 && <DropdownMenuSeparator />}
+                    <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setNaming(true); }}>
+                      <Plus className="size-3.5" />
+                      New category…
+                    </DropdownMenuItem>
+                    {channel.category && (
+                      <DropdownMenuItem onSelect={() => void file(undefined)}>
+                        <X className="size-3.5" />
+                        Remove from category
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                {onDelete && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={onDelete}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                      Delete channel
+                    </DropdownMenuItem>
+                  </>
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-          )}
-          {canManage && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-7 shrink-0 text-muted-foreground"
-              aria-label="Rename channel"
-              onClick={() => setEditing(true)}
-            >
-              <Pencil className="size-3.5" />
-            </Button>
-          )}
-          {onDelete && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
-              aria-label="Delete channel"
-              onClick={onDelete}
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
           )}
         </>
       )}
