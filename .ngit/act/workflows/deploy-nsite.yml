@@ -195,6 +195,62 @@ jobs:
           fi
           echo "Announcing Flatpak signing key $value."
 
+      # Fold the Flatpak update repository into the build before deploying it.
+      #
+      # The desktop `.flatpak` bundle embeds https://armada.buzz/downloads/flatpak/
+      # as its OSTree origin, and the Flatpak update portal pulls from there — so
+      # armada.buzz has to SERVE that repository, or the portal finds nothing to
+      # install while the release event correctly advertises the new version.
+      # `nsyte deploy` REPLACES the whole `armada` manifest with what is in
+      # `dist/`, so anything not laid into `dist/` here is dropped from the served
+      # site. The release workflow publishes the signed repository to its own
+      # named site (kind 35128, id `armada-flatpak`); this step recovers that
+      # site's files from Blossom and overlays them under `dist/downloads/flatpak/`
+      # so every push to main reconciles the served repository to the newest one.
+      #
+      # The blobs are already on Blossom, so the deploy below re-publishes only
+      # the `armada` manifest that names them — it does not re-upload the ~390 MB
+      # repository. A `dl` that finds nothing (the site has never been published,
+      # e.g. before the first release that carries this step) is not an error: the
+      # overlay is simply skipped and the site deploys without it, exactly as it
+      # did before.
+      - name: Fold in the Flatpak update repository
+        timeout-minutes: 15
+        env:
+          NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
+        run: |
+          set -eu
+          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for the #ALIAS of this repo.}"
+
+          # Same source of truth as the release workflow that publishes it, so
+          # the two agree on where the site lives.
+          relays="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).relays.join(","))')"
+          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
+          test -n "$relays" && test -n "$servers"
+
+          repo_out="$(mktemp -d)"
+          set +e
+          nsyte download \
+            --name armada-flatpak \
+            --relays "$relays" \
+            --servers "$servers" \
+            --sec "$NSYTE_BUNKER" \
+            --output "$repo_out" 2>&1 | tee /tmp/nsyte-flatpak-download.log
+          status="${PIPESTATUS[0]}"
+          set -e
+
+          # The repository's own summary is the marker that a real one landed. A
+          # download that failed or found no site leaves it absent, and the
+          # overlay is skipped rather than deploying a half-populated tree.
+          if [ "$status" -ne 0 ] || [ ! -s "$repo_out/summary" ]; then
+            echo "No armada-flatpak site to fold in yet; deploying without it."
+          else
+            mkdir -p dist/downloads/flatpak
+            cp -rT "$repo_out" dist/downloads/flatpak
+            test -s dist/downloads/flatpak/summary
+            echo "Folded the Flatpak update repository into dist/downloads/flatpak/."
+          fi
+
       - name: Publish to Blossom + relays
         # act does NOT enforce a job's `timeout-minutes` (it parses the field
         # and only debug-logs it); the step-level one below is the only
@@ -239,3 +295,35 @@ jobs:
           if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-deploy.log; then
             exit "$status"
           fi
+
+      # Prove the origin the desktop bundle embeds actually SERVES the OSTree
+      # repository, rather than the gateway's 200 index.html fallback. This is
+      # the guard against the exact failure that shipped once: a green deploy
+      # while /summary returned SPA HTML, so the Flatpak update portal silently
+      # found nothing to install. Only runs when this deploy carried the repo
+      # (the fold above found an armada-flatpak site); a first deploy before any
+      # release has nothing to check.
+      #
+      # NON-exact: the release workflow may, moments later, refresh the armada
+      # site with a NEWER repo (it is the last writer on a release), so this
+      # asserts only that real repository bytes are served — not that they are
+      # the exact ones this run folded in. Bytes-are-not-HTML and
+      # bytes-are-not-the-fallback both hold whichever version is live.
+      #
+      # The "only when a repo was folded in" gate is IN-SHELL, not a step-level
+      # `if: hashFiles(...)`. act does not evaluate every GitHub expression
+      # function, and a gate that silently evaluated false would skip this guard
+      # entirely — reinstating the exact silent-skip this step exists to catch.
+      # An in-shell `[ -s ]` cannot be skipped by the runner: the step always
+      # runs, and either verifies or logs precisely why it did not.
+      - name: Verify the served Flatpak origin
+        timeout-minutes: 15
+        run: |
+          set -eu
+          if [ ! -s dist/downloads/flatpak/summary ]; then
+            echo "No Flatpak repository was folded into this deploy (no armada-flatpak site yet); nothing to verify."
+            exit 0
+          fi
+          scripts/verify-flatpak-origin.sh \
+            https://armada.buzz/downloads/flatpak \
+            dist/downloads/flatpak

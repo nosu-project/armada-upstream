@@ -734,10 +734,13 @@ jobs:
       # under the same name. `src/lib/downloads.test.ts` reads those names back
       # and fails if the client can't file one under a platform.
       #
-      # The OSTree repository flatpak-builder produced is NOT staged. Nothing
-      # is published over SSH any more, so the bundle in this directory — named
-      # by the release event and fetched from Blossom by hash, like every other
-      # installer — is the only thing that leaves this job.
+      # The OSTree repository flatpak-builder produced is not staged as a
+      # release artifact: the `.flatpak` bundle is the only installer that
+      # leaves this directory, named by the release event and fetched from
+      # Blossom by hash like every other one. The repository ITSELF is published
+      # separately — to the nsite, by the step at the end of this job — so the
+      # portal update path has an OSTree remote to pull from. Nothing goes over
+      # SSH.
       - name: Collect installers
         id: collect
         env:
@@ -814,6 +817,204 @@ jobs:
             electron/release/*.flatpak
             electron/release/mac/*.zip
           if-no-files-found: warn
+
+      # Publish the signed Flatpak update repository to the nsite, so the origin
+      # the desktop bundle embeds — https://armada.buzz/downloads/flatpak/ —
+      # actually serves an OSTree remote the Flatpak update portal can pull from.
+      # Without this the portal finds nothing to install while the release event
+      # correctly advertises the new version, which is the bug this fixes.
+      #
+      # It goes to its OWN named site (kind 35128, id `armada-flatpak`), NOT the
+      # `armada` web site. `nsyte deploy` REPLACES a site's whole manifest, and
+      # the `dist/` in this job is the DESKTOP-configured web bundle (Plausible
+      # on, no push gateway), so deploying it as `armada` would clobber the live
+      # client. deploy-nsite.yml owns the `armada` site and folds this site in
+      # under downloads/flatpak/ — armada.buzz then serves it. The blobs are
+      # content-addressed on Blossom, so that fold is a manifest entry over bytes
+      # uploaded here, never a re-upload.
+      #
+      # Freshness: deploy-nsite runs concurrently on the release commit, so it
+      # may fold the PREVIOUS release's repo this run and pick this one up on the
+      # next push to main (or a manual deploy-nsite re-run). Bounded and
+      # self-healing — every push reconciles downloads/flatpak/ to the newest
+      # armada-flatpak — and the release's `.flatpak` bundle is fetched from
+      # Blossom by hash regardless, so a fresh install is never blocked on it.
+      - name: Publish the Flatpak update repository to the nsite
+        if: startsWith(github.ref, 'refs/tags/v')
+        timeout-minutes: 15
+        env:
+          NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
+        run: |
+          set -eu
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          # No apostrophe in that message: bash treats a single quote inside
+          # ${var:?word} as opening a quoted section even within double quotes.
+          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for the #ALIAS of this repo.}"
+
+          flatpak_repo="$PWD/electron/release/flatpak-repo"
+          test -s "$flatpak_repo/summary"
+          test -s "$flatpak_repo/summary.sig"
+
+          # nsyte is baked into the armada-ci runner image; the download is the
+          # fallback for a stock one. Same floor-pin idiom as deploy-nsite.yml:
+          # accept anything at or above the floor, and run the binary before
+          # trusting it.
+          NSYTE_MIN_VERSION=0.28.0
+          baked="$(NO_COLOR=1 nsyte --version 2>/dev/null \
+                   | sed 's/\x1b\[[0-9;]*m//g' | awk 'NR == 1 { print $2 }')"
+          oldest="$(printf '%s\n%s\n' "$NSYTE_MIN_VERSION" "$baked" | sort -V | head -1)"
+          if [ -n "$baked" ] && [ "$oldest" = "$NSYTE_MIN_VERSION" ]; then
+            echo "using the nsyte baked into the runner image ($baked)"
+          else
+            test -z "$baked" || echo "baked nsyte $baked is below $NSYTE_MIN_VERSION; downloading"
+            NSYTE_URL="https://github.com/sandwichfarm/nsyte/releases/download/v${NSYTE_MIN_VERSION}/nsyte-linux-${NSYTE_MIN_VERSION}"
+            ok=""
+            for attempt in 1 2 3 4 5; do
+              if curl -fsSL --http1.1 --retry 2 --retry-delay 5 --retry-all-errors \
+                   --connect-timeout 20 --max-time 900 -o /usr/local/bin/nsyte "$NSYTE_URL" \
+                 && chmod +x /usr/local/bin/nsyte \
+                 && nsyte --version >/dev/null; then
+                ok=yes
+                break
+              fi
+              echo "nsyte download attempt $attempt failed; retrying in 10s"
+              sleep 10
+            done
+            test -n "$ok" || { echo "could not download a working nsyte after 5 attempts"; exit 1; }
+          fi
+          nsyte --version
+
+          # Relays and Blossom servers come from .nsite/config.json, so they
+          # stay versioned with the client and match where the `armada` site
+          # lives (deploy-nsite reads the same file to find this site again).
+          # --no-config otherwise, so the config's `armada` id and its
+          # `/index.html` fallback — which this repository has no file for —
+          # are NOT applied to the deploy; --name sets the site id instead.
+          relays="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).relays.join(","))')"
+          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
+          test -n "$relays" && test -n "$servers"
+
+          set +e
+          nsyte deploy "$flatpak_repo" \
+            --name armada-flatpak \
+            --no-config \
+            --relays "$relays" \
+            --servers "$servers" \
+            --sec "$NSYTE_BUNKER" \
+            --concurrency 2 \
+            --non-interactive \
+            --skip-secrets-scan 2>&1 | tee /tmp/nsyte-flatpak-deploy.log
+          status="${PIPESTATUS[0]}"
+          set -e
+          # A deploy that changes no file exits non-zero with "No new files to
+          # upload". That is success: the manifest already describes this repo.
+          if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-flatpak-deploy.log; then
+            exit "$status"
+          fi
+
+      # Close the freshness lag by making the RELEASE the last writer of the
+      # served `armada` site. deploy-nsite runs concurrently on the release
+      # commit, but the desktop build takes ~40 min, so this step lands after
+      # it — and after the newest signed repository has just been published to
+      # armada-flatpak above. Without this, deploy-nsite folds the PREVIOUS
+      # release's repo (the new one did not exist when it ran), so the in-place
+      # update of already-installed clients would lag by one push to main.
+      #
+      # The armada web manifest is never rebuilt here (this job's dist is the
+      # desktop-configured build — Plausible on, no push gateway — and deploying
+      # it as `armada` would corrupt the live client). Instead the LIVE armada
+      # site is downloaded, the freshly-built repository overlaid under
+      # downloads/flatpak/, and the whole thing redeployed as `armada`. The web
+      # blobs are content-addressed and already on Blossom, so the redeploy
+      # re-publishes only the manifest that names them.
+      #
+      # SAFETY: this can only refresh downloads/flatpak/, never damage the web
+      # client. A download that is not provably COMPLETE (any failure, or a
+      # missing core file) aborts the refresh — degrading to the old behaviour,
+      # where deploy-nsite reconciles on the next push to main — rather than
+      # redeploying a partial web tree. So the worst case is the pre-existing
+      # lag, and the normal case removes it.
+      - name: Refresh the served Flatpak origin and verify it
+        if: startsWith(github.ref, 'refs/tags/v')
+        timeout-minutes: 20
+        env:
+          NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
+        run: |
+          set -eu
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for the #ALIAS of this repo.}"
+
+          flatpak_repo="$PWD/electron/release/flatpak-repo"
+          test -s "$flatpak_repo/summary"
+          origin="https://armada.buzz/downloads/flatpak"
+
+          relays="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).relays.join(","))')"
+          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
+          test -n "$relays" && test -n "$servers"
+
+          # Pull the live armada site whole. --overwrite so a re-run starts clean.
+          web="$(mktemp -d)"
+          set +e
+          nsyte download \
+            --name armada \
+            --relays "$relays" \
+            --servers "$servers" \
+            --sec "$NSYTE_BUNKER" \
+            --overwrite \
+            --output "$web" 2>&1 | tee /tmp/nsyte-armada-download.log
+          dl_status="${PIPESTATUS[0]}"
+          set -e
+
+          # Completeness gate. Any failed blob, a non-zero exit, or a missing
+          # core file means the download does NOT faithfully reproduce the live
+          # site — so redeploying it would DROP web files from the manifest.
+          # Refuse, and leave the served repo to deploy-nsite's next reconcile.
+          failed="$(grep -ioE 'failed[^0-9]*[0-9]+' /tmp/nsyte-armada-download.log \
+                    | grep -oE '[0-9]+' | tail -1 || true)"
+          incomplete=0
+          [ "$dl_status" -ne 0 ] && incomplete=1
+          { [ -n "$failed" ] && [ "$failed" -ne 0 ]; } && incomplete=1
+          for core in index.html 404.html manifest.webmanifest \
+                      .well-known/armada-flatpak.fingerprint; do
+            [ -s "$web/$core" ] || incomplete=1
+          done
+
+          if [ "$incomplete" -ne 0 ]; then
+            echo "WARNING: could not download a provably complete copy of the armada site;" >&2
+            echo "leaving downloads/flatpak/ for deploy-nsite to reconcile on the next push." >&2
+            # Not a release failure: the .flatpak bundle installs from Blossom by
+            # hash regardless, and the served repo self-heals. But confirm the
+            # origin at least still serves a real (older) repository, so a SILENT
+            # shadow can never hide behind this early exit.
+            scripts/verify-flatpak-origin.sh "$origin" "$flatpak_repo"
+            exit 0
+          fi
+
+          # Overlay the fresh repository and redeploy the whole site as armada.
+          # `nsyte deploy` with the project config republishes as id `armada`
+          # with the /index.html fallback, exactly as deploy-nsite does.
+          rm -rf "$web/downloads/flatpak"
+          mkdir -p "$web/downloads/flatpak"
+          cp -rT "$flatpak_repo" "$web/downloads/flatpak"
+          test -s "$web/downloads/flatpak/summary"
+
+          set +e
+          nsyte deploy "$web" \
+            --sec "$NSYTE_BUNKER" \
+            --concurrency 2 \
+            --non-interactive \
+            --skip-secrets-scan 2>&1 | tee /tmp/nsyte-armada-refresh.log
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-armada-refresh.log; then
+            exit "$status"
+          fi
+
+          # This job is now the last writer, so the served origin must be the
+          # EXACT repository just built. --exact turns the shipped-once failure
+          # (and any propagation stall) into a red release rather than a broken
+          # update path the release event still advertises.
+          scripts/verify-flatpak-origin.sh "$origin" "$flatpak_repo" --exact
 
 
   android:
