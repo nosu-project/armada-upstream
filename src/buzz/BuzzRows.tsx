@@ -1,11 +1,13 @@
 /**
  * Buzz-specific timeline rows: relay-signed system messages (40099), diff
- * cards (40008), agent-job lifecycle rows (43001–43006) and huddle session
- * cards (48100). Chat-like kinds (9/40001/40002, forum posts/comments) render
- * through the shared ChatMessage instead.
+ * cards (40008) and huddle session cards (48100). Chat-like kinds
+ * (9/40001/40002, forum posts/comments) render through the shared ChatMessage
+ * instead — as do agent-job lifecycle events (43001–43006): Buzz treats an
+ * agent as a member, so its job output is an ordinary message from it, not a
+ * muted system line.
  */
 
-import { AudioLines, Bot, GitBranch, Workflow } from "lucide-react";
+import { AudioLines, GitBranch, Workflow } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -13,7 +15,7 @@ import {
   KIND_HUDDLE_PARTICIPANT_JOINED,
   KIND_HUDDLE_PARTICIPANT_LEFT,
 } from "@/buzz/kinds";
-import { jobKindLabel, parseSystemMessage } from "@/buzz/protocol";
+import { parseSystemMessage } from "@/buzz/protocol";
 import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -162,19 +164,6 @@ export function BuzzDiffRow({ event }: { event: NostrRumor }) {
         )}
       </div>
     </div>
-  );
-}
-
-/** Kinds 43001–43006: an agent-job lifecycle row. */
-export function BuzzJobRow({ event }: { event: NostrRumor }) {
-  const preview = event.content.replace(/\s+/g, " ").trim();
-  return (
-    <SystemLine icon={<Bot className="size-3.5 shrink-0" />} createdAt={event.created_at}>
-      <span className="font-medium text-foreground/80">{jobKindLabel(event.kind)}</span>
-      {preview && <span className="opacity-80"> — {preview.length > 160 ? `${preview.slice(0, 159)}…` : preview}</span>}
-      {" "}
-      <Name pubkey={event.pubkey} />
-    </SystemLine>
   );
 }
 

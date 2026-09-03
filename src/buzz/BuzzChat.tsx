@@ -3,7 +3,7 @@ import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { BuzzDiffRow, BuzzHuddleRow, BuzzJobRow, BuzzSystemRow, BuzzWorkflowDefinitionRow, BuzzWorkflowEventRow } from "@/buzz/BuzzRows";
+import { BuzzDiffRow, BuzzHuddleRow, BuzzSystemRow, BuzzWorkflowDefinitionRow, BuzzWorkflowEventRow } from "@/buzz/BuzzRows";
 import {
   KIND_FORUM_COMMENT,
   KIND_FORUM_POST,
@@ -70,9 +70,20 @@ import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Chat-like kinds that render through the shared ChatMessage row. */
+/**
+ * Chat-like kinds that render through the shared ChatMessage row. Agent job
+ * events (43001–43006) are here too: Buzz renders them as ordinary agent
+ * messages (author, avatar, content, reactions, threading), not muted system
+ * lines — an agent is a member, so its job output is just a message from it.
+ */
 function isChatRow(kind: number): boolean {
-  return kind === 9 || kind === 40001 || kind === KIND_STREAM_MESSAGE_V2 || kind === KIND_FORUM_POST;
+  return (
+    kind === 9 ||
+    kind === 40001 ||
+    kind === KIND_STREAM_MESSAGE_V2 ||
+    kind === KIND_FORUM_POST ||
+    (kind >= KIND_JOB_REQUEST && kind <= KIND_JOB_ERROR)
+  );
 }
 
 interface BuzzChatMessageProps {
@@ -750,9 +761,6 @@ export function BuzzChat({
     (msg: ChatMsg, continuation: boolean, highlight?: string) => {
       if (msg.kind === KIND_SYSTEM_MESSAGE) return <BuzzSystemRow key={msg.id} event={msg} />;
       if (msg.kind === KIND_STREAM_MESSAGE_DIFF) return <BuzzDiffRow key={msg.id} event={msg} />;
-      if (msg.kind >= KIND_JOB_REQUEST && msg.kind <= KIND_JOB_ERROR) {
-        return <BuzzJobRow key={msg.id} event={msg} />;
-      }
       if (msg.kind === KIND_HUDDLE_STARTED) {
         return <BuzzHuddleRow key={msg.id} event={msg} lifecycle={huddleLifecycle} />;
       }

@@ -271,21 +271,6 @@ export function buzzChannelArchived(event: NostrRumor): boolean {
   return event.tags.some(([n, v]) => n === "archived" && v === "true");
 }
 
-// ── Jobs (43001–43006) ──────────────────────────────────────────────────────
-
-/** Human label for a job-lifecycle kind. */
-export function jobKindLabel(kind: number): string {
-  switch (kind) {
-    case 43001: return "Job requested";
-    case 43002: return "Job accepted";
-    case 43003: return "Job progress";
-    case 43004: return "Job result";
-    case 43005: return "Job cancelled";
-    case 43006: return "Job error";
-    default: return "Job event";
-  }
-}
-
 // ── Forum votes (45002) ─────────────────────────────────────────────────────
 
 export interface BuzzVoteTally {
