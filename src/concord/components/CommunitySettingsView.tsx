@@ -1153,7 +1153,7 @@ function ChannelRow({
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
+                  <DropdownMenuSubTrigger className="gap-2">
                     <Folder className="size-3.5" />
                     Category
                     {channel.category && (
