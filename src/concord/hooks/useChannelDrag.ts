@@ -110,6 +110,12 @@ export function useChannelDrag({
       if (landed) onDrop(idHex, landed);
     },
     onAbort: finish,
+    // The slots are frozen in viewport coordinates at pickup, so an edge
+    // auto-scroll moves the rows out from under them — re-measure so the
+    // re-aim that follows lands on the row now under the pointer.
+    onContainerScroll: () => {
+      slots.current = measureRef.current();
+    },
   });
 
   /**

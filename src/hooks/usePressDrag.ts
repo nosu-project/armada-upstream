@@ -16,6 +16,17 @@ const SCROLL_SLOP_PX = 10;
  * become a scroll (and never picked up).
  */
 const DRAG_MOVE_SLOP_PX = 10;
+/**
+ * While a drag is in flight, a pointer this close to the container's top or
+ * bottom edge scrolls it toward that edge, so a list taller than the viewport
+ * is reachable without letting go. Zero at the boundary, ramping to
+ * {@link EDGE_SCROLL_MAX_PX} per frame at the very edge.
+ */
+const EDGE_SCROLL_ZONE_PX = 56;
+/** Fastest the edge auto-scroll pans, per animation frame. */
+const EDGE_SCROLL_MAX_PX = 14;
+/** Slowest it pans while still inside the zone, so it never stalls sub-pixel. */
+const EDGE_SCROLL_MIN_PX = 2;
 
 export interface PressDragOptions<T> {
   /**
@@ -35,6 +46,13 @@ export interface PressDragOptions<T> {
   onDrop: (source: T) => void;
   /** The browser reclaimed the pointer: abort WITHOUT applying. */
   onAbort: () => void;
+  /**
+   * The container was auto-scrolled under a stationary pointer during a drag.
+   * Called before the ensuing re-aim, so a caller that froze slot geometry at
+   * pickup can re-measure it against the new scroll offset. Optional: a caller
+   * whose geometry doesn't move with the container needs nothing here.
+   */
+  onContainerScroll?: () => void;
 }
 
 /**
@@ -77,6 +95,7 @@ export function usePressDrag<T>({
   onAim,
   onDrop,
   onAbort,
+  onContainerScroll,
 }: PressDragOptions<T>) {
   const [source, setSource] = useState<T | null>(null);
   /** The in-flight drag, read inside listeners where state would be stale. */
@@ -86,8 +105,8 @@ export function usePressDrag<T>({
   const didDrag = useRef(false);
   // Held by ref so the listeners never close over a stale callback and `begin`
   // stays referentially stable across renders.
-  const handlers = useRef({ onPickup, onAim, onDrop, onAbort });
-  handlers.current = { onPickup, onAim, onDrop, onAbort };
+  const handlers = useRef({ onPickup, onAim, onDrop, onAbort, onContainerScroll });
+  handlers.current = { onPickup, onAim, onDrop, onAbort, onContainerScroll };
 
   const onTouchMove = useCallback((ev: TouchEvent) => {
     if (active.current !== null && ev.cancelable) ev.preventDefault();
@@ -142,10 +161,51 @@ export function usePressDrag<T>({
       // mouse can drag to the target during the hold). A pickup that never did
       // is a long-held tap that must still navigate, not a (no-op) reorder.
       let everMovedFar = false;
+      // The rAF handle for the edge auto-scroll loop below, live only between
+      // pickup and release.
+      let autoScrollRaf: number | null = null;
+
+      const stopAutoScroll = () => {
+        if (autoScrollRaf !== null) cancelAnimationFrame(autoScrollRaf);
+        autoScrollRaf = null;
+      };
+
+      // While a live drag holds the pointer near the container's top or bottom
+      // edge, pan toward it and re-aim — no pointer event fires while the
+      // finger is still, so this runs on its own frame loop rather than in
+      // onMove. The slot geometry was frozen at pickup in viewport
+      // coordinates, so scrolling moves the rows out from under it;
+      // onContainerScroll lets the caller re-measure before the re-aim.
+      const autoScrollTick = () => {
+        autoScrollRaf = requestAnimationFrame(autoScrollTick);
+        if (active.current === null) return;
+        const el = containerRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        // Never let the two zones overlap on a short container.
+        const zone = Math.min(EDGE_SCROLL_ZONE_PX, rect.height / 2);
+        const fromTop = lastY - rect.top;
+        const fromBottom = rect.bottom - lastY;
+        let delta = 0;
+        if (fromTop < zone && el.scrollTop > 0) {
+          const ramp = (zone - Math.max(0, fromTop)) / zone;
+          delta = -Math.max(EDGE_SCROLL_MIN_PX, ramp * EDGE_SCROLL_MAX_PX);
+        } else if (fromBottom < zone && el.scrollTop + el.clientHeight < el.scrollHeight - 1) {
+          const ramp = (zone - Math.max(0, fromBottom)) / zone;
+          delta = Math.max(EDGE_SCROLL_MIN_PX, ramp * EDGE_SCROLL_MAX_PX);
+        }
+        if (delta === 0) return;
+        const before = el.scrollTop;
+        el.scrollTop = before + delta;
+        if (el.scrollTop === before) return;
+        handlers.current.onContainerScroll?.();
+        handlers.current.onAim(active.current, lastX, lastY);
+      };
 
       const clear = () => {
         if (timer.current) clearTimeout(timer.current);
         timer.current = null;
+        stopAutoScroll();
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
@@ -190,6 +250,10 @@ export function usePressDrag<T>({
           return;
         }
         if (ev.cancelable) ev.preventDefault();
+        // Keep the latest pointer position for the edge auto-scroll loop,
+        // which re-aims from it while the finger is otherwise still.
+        lastX = ev.clientX;
+        lastY = ev.clientY;
         handlers.current.onAim(active.current, ev.clientX, ev.clientY);
       };
 
@@ -248,6 +312,9 @@ export function usePressDrag<T>({
         handlers.current.onPickup(from, lastX, lastY);
         setSource(from);
         impact("medium");
+        // Run the edge auto-scroll loop for the life of the drag, so the
+        // pointer resting near an edge keeps scrolling with no further move.
+        autoScrollTick();
       }, PICKUP_MS);
     },
     [containerRef],
