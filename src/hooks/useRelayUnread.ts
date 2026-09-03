@@ -90,10 +90,19 @@ export function useRelayUnread(
       });
     },
     enabled: Boolean(relayUrl && groupIds.length > 0 && user),
-    staleTime: 5_000,
-    // Backstop poll (cheap local read); the bus below is the fast path.
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: true,
+    // NO refetch interval or focus refetch: the wire bus below is the complete
+    // in-process live path. Every ingested NIP-29 activity event rings
+    // `nip29:<h>` once it commits, and the handler below invalidates this query
+    // in response — so the derivation stays current without polling.
+    //
+    // This mirrors what the Concord side already concluded (see
+    // useCommunityRumors' staleTime note): the always-mounted rail mounts one
+    // of these per NIP-29 server 2-3x over, so a 30s `refetchInterval` was N
+    // servers' worth of unaligned periodic store scans, and
+    // `refetchOnWindowFocus: true` fired every one of them at once on refocus —
+    // the "freeze when I come back to the app" the single store connection paid
+    // for. The bus ring is the live path the poll was only ever a backstop to.
+    staleTime: Infinity,
   });
 
   // Re-derive as soon as the wire ingests activity for any watched group.
