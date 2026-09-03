@@ -255,6 +255,45 @@ describe("NativeArmadaDB", () => {
     expect((await db.tenant("t").query([{}])).length).toBe(3);
   });
 
+  // The other half of the story the write test above tells. Writes fold a
+  // same-tick burst into ONE crossing (`flush()`); reads have no such fold, so
+  // this pins the cost as a number. It is a characterization, not a wish: the
+  // adapter's own comment says "The call count matters as much as the total,"
+  // and until there is a coalescing or dedup layer to beat it, these are the
+  // baselines it has to beat.
+  it("crosses the bridge ONCE PER READ — reads are not coalesced", async () => {
+    await db.tenant("t").event(rumor({ id: "a" }));
+    native.calls.query = 0;
+
+    // Three reads issued in the same tick, before anyone awaits. Unlike the
+    // write burst, each is its own hop onto the single plugin thread and its
+    // own turn of the native lock.
+    await Promise.all([
+      db.tenant("t").query([{ ids: ["a"] }]),
+      db.tenant("t").query([{ ids: ["a"] }]),
+      db.tenant("t").query([{ ids: ["a"] }]),
+    ]);
+
+    expect(native.calls.query).toBe(3);
+  });
+
+  it("does not dedup identical in-flight reads — call count scales with fan-out", async () => {
+    await db.tenant("t").event(rumor({ id: "a" }));
+
+    // The concrete lever for the perceived lag: a component tree that fans out
+    // into N reads pays N crossings, even when the reads are byte-identical and
+    // in flight at the same moment. Nothing between `query()` and the bridge
+    // collapses them, so the crossing count is exactly the read count — the
+    // number a future in-flight cache would drive toward 1.
+    for (const fanOut of [1, 5, 20]) {
+      native.calls.query = 0;
+      await Promise.all(
+        Array.from({ length: fanOut }, () => db.tenant("t").query([{ ids: ["a"] }])),
+      );
+      expect(native.calls.query).toBe(fanOut);
+    }
+  });
+
   it("carries every filter term across", async () => {
     await db.tenant("t").event(rumor({ id: "a", pubkey: "alice", kind: 1, created_at: 100 }));
     await db.tenant("t").event(rumor({ id: "b", pubkey: "bob", kind: 7, created_at: 200 }));
