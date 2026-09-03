@@ -47,10 +47,17 @@ export function useSharedCommunities(pubkey: string | undefined) {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     queryFn: async () => {
-      const out: SharedCommunity[] = [];
-      for (const entry of entries) {
+      // Each community is its own tenant, so the guestbook reads can't merge
+      // into one query — but they're independent, so issue them CONCURRENTLY
+      // rather than awaiting each in turn. On the native builds every read is a
+      // bridge crossing plus a turn of the store's global lock; a sequential
+      // loop paid each community's latency in series, which is the worst shape
+      // on Android. `Promise.all` keeps the crossing COUNT (one per membership,
+      // unavoidable) but overlaps their latency. Order is preserved by mapping
+      // in place and filtering after.
+      const resolved = await Promise.all(entries.map(async (entry): Promise<SharedCommunity | undefined> => {
         const community = rehydrateCommunity(entry);
-        if (!community) continue;
+        if (!community) return undefined;
         try {
           const stored = await queryPlane(community.idHex, "guestbook");
           const coalesced = coalesceGuestbook(openGuestbookOpened(stored), {
@@ -59,14 +66,15 @@ export function useSharedCommunities(pubkey: string | undefined) {
             snapshotAuthorities: snapshotAuthorities(community),
           });
           if (coalesced.get(pubkey!)?.state === "join") {
-            out.push({ idHex: community.idHex, name: community.name });
+            return { idHex: community.idHex, name: community.name };
           }
         } catch {
           // An unreadable guestbook hides this community from the list; the
           // rest still answer.
         }
-      }
-      return out;
+        return undefined;
+      }));
+      return resolved.filter((c): c is SharedCommunity => c !== undefined);
     },
   });
 }
