@@ -100,9 +100,19 @@ const BECH32_CHARS = "023456789acdefghjklmnpqrstuvwxyz";
  * (`nevent`/`note`), addressable events (`naddr`), and profiles
  * (`nprofile`/`npub`). Ordered longest-prefix-first so `nprofile1` isn't
  * shadowed by a shorter alternative.
+ *
+ * The entity must be the TERMINAL path segment: a leading `/` and nothing but
+ * an optional trailing `/`, query, or fragment after it. A structured URL like
+ * `gitworkshop.dev/npub1…/relay.ngit.dev/armada/issues/nevent1…` carries a
+ * bech32 id MID-PATH (the repo owner's npub), and matching the first one
+ * anywhere turned the whole link into a profile mention. Anchoring to the last
+ * segment lets that mid-path npub fall through (its next char is `/…`, not a
+ * terminator) while the terminal `nevent1…` still unfolds — and a URL whose
+ * only entity sits mid-path stays a plain link rather than a mention. Captured
+ * in group 1, since the match now includes the delimiters.
  */
 const NOSTR_IN_URL_REGEX = new RegExp(
-  `(?:nevent1|nprofile1|naddr1|note1|npub1)[${BECH32_CHARS}]{10,}`,
+  `\\/((?:nevent1|nprofile1|naddr1|note1|npub1)[${BECH32_CHARS}]{10,})\\/?(?:[?#]|$)`,
   "i",
 );
 
@@ -122,7 +132,7 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
   const match = url.match(NOSTR_IN_URL_REGEX);
   if (!match) return null;
   try {
-    const decoded = nip19.decode(match[0]);
+    const decoded = nip19.decode(match[1]);
     switch (decoded.type) {
       case "naddr":
         return { kind: "addr", addr: decoded.data as AddrCoords };
@@ -428,7 +438,21 @@ const SEGMENT_RE = new RegExp(
   // the `![alt](` / `)` wrapper is consumed rather than left as stray text.
   "!\\[[^\\]]*\\]\\((https?:\\/\\/[^\\s)]+)\\)" +
   "|(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
-  "|((?:https?|wss?):\\/\\/[^\\s]+)" +
+  // A scheme (`https://`, `wss://`, …) OR a bare `domain.tld/path` — a
+  // scheme-less link like `gitworkshop.dev/npub1…/…` must be consumed whole
+  // here, or the bech32 entity inside it falls to the bare-nostr branch below
+  // and renders as a mention that splits the URL. The bare-domain form needs a
+  // `/path` (a lone `word.tld` isn't linkified) and can't match a bare `npub1…`
+  // (no dot). Normalized to `https://` at use — see below.
+  //
+  // The label and TLD repetitions are BOUNDED (`{1,63}` per DNS octet limit,
+  // `{1,10}` labels, `{2,24}` TLD) rather than open `+`/`{2,}`. Unbounded, a
+  // long run of word-characters with no dot-slash made the engine rescan the
+  // whole run from every start position — O(n²) over attacker-controlled
+  // message content, on the synchronous per-row tokenize path. The bounds cap
+  // the work per position to a constant, so the scan is linear; no real
+  // hostname exceeds them.
+  "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s]+)" +
   "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   `|(${HASHTAG_PATTERN})` +
@@ -563,6 +587,14 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               fullMatch = urlWithoutPunct;
             }
           }
+
+          // A scheme-less `domain.tld/path` link (the URL branch now matches
+          // one so a bech32 id inside it can't fall to the bare-entity branch
+          // and split the link into a mention) gets an `https://` so every
+          // downstream consumer — sanitizeUrl, cleanUrl, parseSelfLink,
+          // extractNostrFromUrl — has a URL to parse. `fullMatch` is left as
+          // the source text, so the added scheme never widens the consumed span.
+          if (!/^(?:https?|wss?):\/\//i.test(url)) url = `https://${url}`;
 
           // Canonicalize before anything classifies, renders or fetches the
           // link. `fullMatch` is deliberately left alone — it measures how much
