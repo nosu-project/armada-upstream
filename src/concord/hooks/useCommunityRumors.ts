@@ -71,11 +71,14 @@ export function useCommunityRumors(
     // periodic full scans on unaligned phases, smearing across the window and
     // contending on the one store connection — the recurring O(N) foreground
     // load behind the "fine for new users, bad for power users" hitches. Its
-    // stated reason ("a write from another tab") is the ONE case the local
-    // in-memory bus can't hear, and the right shape for that cross-context gap
-    // is a single shared doorbell, not N forever-polls. On the single-context
-    // platforms (Android/iOS/desktop) — the ones with the lag — no such writer
-    // exists, so the interval was pure redundancy.
+    // stated reason ("a write from another tab") is covered by the bus itself:
+    // each flushed batch is mirrored across same-origin contexts over a
+    // BroadcastChannel (bus.ts), so another tab's committed write rings this
+    // one's delta handler too — the single shared doorbell that cross-context
+    // gap wanted, not N forever-polls. On the single-context platforms
+    // (Android/iOS/desktop) — the ones with the lag — the mirror simply has no
+    // other subscriber, and the service-written rows ring through the drain's
+    // pass over wire ingest.
     staleTime: Infinity,
   });
 

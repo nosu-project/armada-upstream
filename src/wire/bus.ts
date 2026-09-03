@@ -30,6 +30,17 @@
  *
  * Emissions are coalesced on a short window so a backfill writing hundreds of
  * events produces one notification burst, not hundreds of invalidations.
+ *
+ * The bus is also the SHARED doorbell across same-origin contexts: each
+ * coalesced batch is mirrored over a BroadcastChannel, so a write committed in
+ * another tab — the one in-process case the local emit can't cover (your own
+ * send there, its expiry sweep's deletions) — still rings here, and the
+ * store-backed re-read finds the rows already in the shared store. Received
+ * scopes are delivered to local listeners but never rebroadcast (two tabs
+ * would ping-pong a batch forever), and the scopes that trigger work on an
+ * event IN HAND (`dm:wrap`, `c2inv:wrap`, `c2park:*`) stay local — mirroring
+ * those would make every tab force-sync the same wrap. On the single-context
+ * platforms the channel simply has no other subscriber.
  */
 
 export type WireScope = string;
@@ -46,13 +57,68 @@ const FLUSH_MS = 50;
 
 const listeners = new Set<WireListener>();
 let pending = new Set<WireScope>();
+/** The subset of `pending` this context emitted itself — what gets mirrored. */
+let localPending = new Set<WireScope>();
 let timer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Scopes that trigger work on an event this context holds IN HAND (a live wrap
+ * in a buffer, a parked stream), not a "the shared store changed" doorbell.
+ * Mirroring them would make every tab force-sync or drain the same wrap.
+ */
+function isLocalOnlyScope(scope: WireScope): boolean {
+  return scope === "dm:wrap" || scope === "c2inv:wrap" || scope.startsWith("c2park:");
+}
+
+/**
+ * The cross-context doorbell. Same-origin tabs/windows share the store, so a
+ * batch committed there is readable here the moment it's announced. Created at
+ * module load so an idle tab still hears; absent (jsdom, old runtimes) the bus
+ * is exactly the in-process doorbell it was.
+ */
+const bridge: BroadcastChannel | undefined = (() => {
+  if (typeof BroadcastChannel === "undefined") return undefined;
+  try {
+    const channel = new BroadcastChannel("armada-wire-bus");
+    channel.onmessage = (event: MessageEvent) => {
+      const scopes = Array.isArray(event.data)
+        ? (event.data as unknown[]).filter((s): s is string => typeof s === "string")
+        : [];
+      if (scopes.length === 0) return;
+      // Into `pending` only, never `localPending`: a received batch reaches
+      // this context's listeners but is not rebroadcast — two tabs would
+      // otherwise ping-pong it forever.
+      for (const s of scopes) pending.add(s);
+      schedule();
+    };
+    // Node's BroadcastChannel holds the process open; browsers have no unref.
+    (channel as { unref?: () => void }).unref?.();
+    return channel;
+  } catch {
+    return undefined;
+  }
+})();
+
+function schedule(): void {
+  if (pending.size > 0 && timer === undefined) {
+    timer = setTimeout(flush, FLUSH_MS);
+  }
+}
 
 function flush(): void {
   timer = undefined;
   if (pending.size === 0) return;
   const batch = pending;
+  const mirrored = [...localPending].filter((s) => !isLocalOnlyScope(s));
   pending = new Set();
+  localPending = new Set();
+  if (mirrored.length > 0) {
+    try {
+      bridge?.postMessage(mirrored);
+    } catch {
+      // A closed/failed channel must never break the local doorbell.
+    }
+  }
   for (const listener of listeners) {
     try {
       listener(batch);
@@ -64,10 +130,11 @@ function flush(): void {
 
 /** Announce that these conversations' stores changed. Coalesced. */
 export function emitWireScopes(scopes: Iterable<WireScope>): void {
-  for (const s of scopes) pending.add(s);
-  if (pending.size > 0 && timer === undefined) {
-    timer = setTimeout(flush, FLUSH_MS);
+  for (const s of scopes) {
+    pending.add(s);
+    localPending.add(s);
   }
+  schedule();
 }
 
 /** Subscribe to store-change announcements. Returns an unsubscribe. */
@@ -81,5 +148,6 @@ export function resetWireBus(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
   pending = new Set();
+  localPending = new Set();
   listeners.clear();
 }
