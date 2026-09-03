@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Check,
   Folder,
+  GripVertical,
   Hash,
   History,
   ImagePlus,
@@ -1325,6 +1326,14 @@ function ChannelRow({
   const row = (
     <div className="px-1">
     <div className="flex items-center gap-2">
+      {/* Drag affordance — the whole row is the press-and-hold target, so this
+          grip only advertises it (press-and-hold to reorder / categorize). */}
+      {canManage && !editing && (
+        <GripVertical
+          aria-hidden
+          className="-ml-1 size-4 shrink-0 cursor-grab text-muted-foreground/50"
+        />
+      )}
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       {editing ? (
         <form
