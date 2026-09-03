@@ -1,7 +1,5 @@
 import {
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
   Check,
   Folder,
   Hash,
@@ -21,7 +19,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -62,7 +60,18 @@ import {
   messageExpirationOf,
   publishTimerNotices,
 } from "@/concord/lib/disappearing";
-import { categoryKey, categoryNames } from "@/concord/lib/channelCategory";
+import { categoryKey, categoryNames, groupChannelsByCategory } from "@/concord/lib/channelCategory";
+import {
+  applyArrangement,
+  arrangementChanges,
+  arrangementSettled,
+  pendingFromPlan,
+  planChannelDrop,
+  type PendingArrangement,
+} from "@/concord/lib/channelArrangement";
+import { ChannelCategoryHeading } from "@/concord/components/ChannelCategoryHeading";
+import { CategoryNameDialog } from "@/concord/components/CategoryNameDialog";
+import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concord/hooks/useChannelDrag";
 import { useCommunityManagement } from "@/concord/hooks/useCommunityActions";
 import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
@@ -815,8 +824,15 @@ function OwnerRow({ pubkey }: { pubkey: string }) {
   );
 }
 
-/** The community's channels. Read-only for everyone; rename / delete / add for
- *  viewers with MANAGE_CHANNELS. */
+/** The community's channels. Read-only for everyone; rename / delete / add and
+ *  drag-to-reorder / categorize for viewers with MANAGE_CHANNELS.
+ *
+ *  The reorder gesture is the SAME press-and-hold drag the sidebar runs
+ *  (`useChannelDrag`): drop a channel between two rows to position it, or onto
+ *  a category heading to file it there, and the "New category" zone at the
+ *  bottom (present only while dragging) prompts for a name. One optimistic
+ *  arrangement overlay, dropped the moment the fold agrees — exactly as
+ *  ConcordPage's sidebar does it, so the two surfaces cannot disagree. */
 function ChannelsSection({
   community,
   canManage,
@@ -833,12 +849,83 @@ function ChannelsSection({
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
 }) {
   const channels = useChannels(community);
-  const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel, moveChannel, isMovingChannel } =
+  const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel, arrangeChannels } =
     useCommunityManagement(community);
 
+  // Optimistic arrangement, laid over the fold until the editions land — the
+  // same overlay the sidebar keeps, dropped the moment the fold agrees so a
+  // later change by anyone else is never masked (channelArrangement.ts).
+  const [pendingArrangement, setPendingArrangement] = useState<PendingArrangement | null>(null);
+  const arrangedChannels = useMemo(
+    () => applyArrangement(channels, pendingArrangement),
+    [channels, pendingArrangement],
+  );
+  useEffect(() => {
+    if (pendingArrangement && arrangementSettled(channels, pendingArrangement)) {
+      setPendingArrangement(null);
+    }
+  }, [channels, pendingArrangement]);
+
+  const { uncategorized: uncategorizedChannels, categories: channelCategories } = useMemo(
+    () => groupChannelsByCategory(arrangedChannels, (c) => c.category),
+    [arrangedChannels],
+  );
   // Existing category names, in sidebar order, offered when filing a channel
   // so a moderator picks "Voice" rather than retyping it as "voice".
-  const categories = useMemo(() => categoryNames(channels, (ch) => ch.category), [channels]);
+  const categoryPicklist = useMemo(
+    () => categoryNames(arrangedChannels, (c) => c.category),
+    [arrangedChannels],
+  );
+
+  // The rendered sequence, flattened exactly as drawn — a drop index is an
+  // index into THIS, so the drag reads a position straight off the screen.
+  const renderedChannels = useMemo(
+    () => [...uncategorizedChannels, ...channelCategories.flatMap((group) => group.channels)],
+    [uncategorizedChannels, channelCategories],
+  );
+  const renderedIndexOf = useMemo(
+    () => new Map(renderedChannels.map((c, index) => [c.idHex, index])),
+    [renderedChannels],
+  );
+
+  // Ephemeral collapse, local to this organizer (the sidebar persists its own).
+  const [collapsedCategories, setCollapsedCategories] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const toggleCategory = useCallback((key: string) => {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Naming prompt for a brand-new category (from the drop zone or a heading
+  // rename) — the same dialog the sidebar raises.
+  const [categoryPrompt, setCategoryPrompt] = useState<
+    { channels: readonly Channel[]; initial: string } | null
+  >(null);
+
+  const refileCategory = useCallback(
+    async (members: readonly Channel[], category: string | undefined) => {
+      let moved = 0;
+      try {
+        for (const member of members) {
+          await setChannelCategory({ channelIdHex: member.idHex, category });
+          moved += 1;
+        }
+      } catch (e) {
+        toast({
+          title: moved > 0 ? `Only moved ${moved} of ${members.length} channels` : "Couldn't move the channels",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        });
+      }
+    },
+    [setChannelCategory],
+  );
+
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
@@ -856,6 +943,137 @@ function ChannelsSection({
         variant: "destructive",
       });
     }
+  };
+
+  // ── Drag to reorder / categorize — same machinery as the sidebar ──────────
+  /** The scrolling list the drag pans by hand on touch (rows are touch-none). */
+  const channelScrollRef = useRef<HTMLElement | null>(null);
+
+  /** Measure the drop points off the DOM at pickup: each row's top and bottom
+   *  edge, plus the trailing "new category" zone once it has mounted. */
+  const measureDropSlots = useCallback((): ChannelDropSlot[] => {
+    const root = channelScrollRef.current;
+    if (!root) return [];
+    const out: ChannelDropSlot[] = [];
+    for (const el of root.querySelectorAll<HTMLElement>("[data-ch-slot]")) {
+      const index = Number(el.dataset.chIndex);
+      if (!Number.isInteger(index)) continue;
+      const category = el.dataset.chCategory || undefined;
+      const rect = el.getBoundingClientRect();
+      out.push({ index, category, y: rect.top });
+      out.push({ index: index + 1, category, y: rect.bottom });
+    }
+    const zone = root.querySelector<HTMLElement>("[data-ch-newzone]");
+    if (zone) {
+      const rect = zone.getBoundingClientRect();
+      out.push({
+        index: out.length / 2,
+        category: undefined,
+        y: rect.top + rect.height / 2,
+        newCategory: true,
+      });
+    }
+    return out;
+  }, []);
+
+  const commitDrop = useCallback(
+    (sourceIdHex: string, drop: ChannelDrop) => {
+      const source = renderedChannels.find((c) => c.idHex === sourceIdHex);
+      if (!source) return;
+      // A brand-new category has no name yet, so the drop becomes the prompt.
+      if (drop.newCategory) {
+        setCategoryPrompt({ channels: [source], initial: "" });
+        return;
+      }
+      const before = renderedChannels.map((c) => ({
+        idHex: c.idHex,
+        position: c.position,
+        category: c.category,
+      }));
+      const plan = planChannelDrop(before, sourceIdHex, drop.index, drop.category);
+      const changes = arrangementChanges(before, plan);
+      if (changes.length === 0) return;
+      setPendingArrangement(pendingFromPlan(plan));
+      void arrangeChannels(changes).catch((e: unknown) => {
+        // Nothing published — the optimistic order is a claim that isn't true.
+        setPendingArrangement(null);
+        toast({
+          title: "Couldn't rearrange the channels",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        });
+      });
+    },
+    [renderedChannels, arrangeChannels],
+  );
+
+  const channelDrag = useChannelDrag({
+    enabled: canManage,
+    columnRef: channelScrollRef,
+    measure: measureDropSlots,
+    onDrop: commitDrop,
+  });
+
+  /** What the floating ghost carries. */
+  const draggedChannel = channelDrag.sourceIdHex
+    ? (renderedChannels.find((c) => c.idHex === channelDrag.sourceIdHex) ?? null)
+    : null;
+
+  const renderChannelRow = (ch: Channel) => {
+    const index = renderedIndexOf.get(ch.idHex) ?? 0;
+    const dragged = channelDrag.sourceIdHex === ch.idHex;
+    return (
+      <div
+        key={ch.idHex}
+        data-ch-slot
+        data-ch-index={index}
+        data-ch-category={ch.category ?? ""}
+        onPointerDown={channelDrag.onPointerDown(ch.idHex)}
+        // Unconditional `touch-none` while a manager can drag, as the sidebar's
+        // rows carry: Chrome's gesture arbitration otherwise claims a touch
+        // drag as a pan and kills it with pointercancel (usePressDrag.ts).
+        className={cn("relative", canManage && "touch-none")}
+      >
+        {/* The dragged row stays MOUNTED and merely invisible, with the dashed
+            placeholder over it — unmounting the node the finger is on cancels
+            the touch gesture. */}
+        <span className={cn("contents", dragged && "invisible")}>
+          <ChannelRow
+            channel={ch}
+            canManage={canManage}
+            disabled={isRenaming || isFiling}
+            categories={categoryPicklist}
+            onRename={(name) => renameChannel({ channelIdHex: ch.idHex, name })}
+            accessRoles={channelRoles?.get(ch.idHex) ?? []}
+            onPrivatise={onPrivatiseChannel ? (roleName) => onPrivatiseChannel(ch.idHex, roleName) : undefined}
+            onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
+            onMintAccessRole={onMintAccessRole ? (name) => onMintAccessRole(ch.idHex, name) : undefined}
+            onSetCategory={(category) => setChannelCategory({ channelIdHex: ch.idHex, category })}
+            onNewCategory={() => setCategoryPrompt({ channels: [ch], initial: "" })}
+            onDelete={
+              canManage && channels.length > 1
+                ? async () => {
+                    if (!confirm(`Delete #${ch.name}? Its id is never reused.`)) return;
+                    try {
+                      await deleteChannel({ channelIdHex: ch.idHex });
+                      toast({ title: "Channel deleted" });
+                    } catch (e) {
+                      toast({
+                        title: "Couldn't delete",
+                        description: e instanceof Error ? e.message : undefined,
+                        variant: "destructive",
+                      });
+                    }
+                  }
+                : undefined
+            }
+          />
+        </span>
+        {dragged && (
+          <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-corner-lg border-2 border-dashed border-primary/50 bg-primary/5" />
+        )}
+      </div>
+    );
   };
 
   return (
@@ -877,48 +1095,54 @@ function ChannelsSection({
           </Button>
         )}
       </div>
-      <div className="space-y-1 rounded-lg bg-secondary/40 p-1">
-        {channels.map((ch, index) => (
-          <ChannelRow
-            key={ch.idHex}
-            channel={ch}
-            canManage={canManage}
-            disabled={isRenaming || isFiling || isMovingChannel}
-            categories={categories}
-            onRename={(name) => renameChannel({ channelIdHex: ch.idHex, name })}
-            onMove={canManage ? async (direction) => {
-              try {
-                await moveChannel({ channelIdHex: ch.idHex, direction });
-              } catch (e) {
-                toast({ title: "Couldn't reorder", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
-              }
-            } : undefined}
-            canMoveUp={index > 0}
-            canMoveDown={index < channels.length - 1}
-            accessRoles={channelRoles?.get(ch.idHex) ?? []}
-            onPrivatise={onPrivatiseChannel ? (roleName) => onPrivatiseChannel(ch.idHex, roleName) : undefined}
-            onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
-            onMintAccessRole={onMintAccessRole ? (name) => onMintAccessRole(ch.idHex, name) : undefined}
-            onSetCategory={(category) => setChannelCategory({ channelIdHex: ch.idHex, category })}
-            onDelete={
-              canManage && channels.length > 1
-                ? async () => {
-                    if (!confirm(`Delete #${ch.name}? Its id is never reused.`)) return;
-                    try {
-                      await deleteChannel({ channelIdHex: ch.idHex });
-                      toast({ title: "Channel deleted" });
-                    } catch (e) {
-                      toast({
-                        title: "Couldn't delete",
-                        description: e instanceof Error ? e.message : undefined,
-                        variant: "destructive",
-                      });
-                    }
-                  }
-                : undefined
-            }
-          />
-        ))}
+      <div
+        ref={channelDrag.attachColumn}
+        className="max-h-[60vh] space-y-1 overflow-y-auto rounded-lg bg-secondary/40 p-1"
+      >
+        {uncategorizedChannels.map(renderChannelRow)}
+        {channelCategories.map((group) => {
+          const collapsed = collapsedCategories.has(group.key);
+          return (
+            <div key={group.key} className="space-y-0.5">
+              <ChannelCategoryHeading
+                name={group.name}
+                collapsed={collapsed}
+                onToggle={() => toggleCategory(group.key)}
+                highlight={
+                  channelDrag.dragging &&
+                  !channelDrag.target?.newCategory &&
+                  channelDrag.target?.category === group.name
+                }
+                onRename={
+                  canManage
+                    ? () => setCategoryPrompt({ channels: group.channels, initial: group.name })
+                    : undefined
+                }
+                onUngroup={
+                  canManage ? () => void refileCategory(group.channels, undefined) : undefined
+                }
+              />
+              {!collapsed && group.channels.map(renderChannelRow)}
+            </div>
+          );
+        })}
+        {/* The trailing drop zone: dragging here asks for a name and files the
+            channel under it. Only while dragging — a category with no channel
+            in it can't exist to be created. */}
+        {canManage && channelDrag.dragging && (
+          <div
+            data-ch-newzone
+            className={cn(
+              "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
+              channelDrag.target?.newCategory
+                ? "border-primary bg-primary/5 text-primary"
+                : "border-primary/50 text-muted-foreground/70",
+            )}
+          >
+            <Plus className="size-3.5" />
+            New category
+          </div>
+        )}
         {creating && (
           <form
             className="flex items-center gap-1 px-1"
@@ -954,6 +1178,47 @@ function ChannelsSection({
           </form>
         )}
       </div>
+
+      {/* Drag chrome, in the sidebar's channel shape: the pointer-following
+          ghost, the grabbing-cursor layer and the insertion line. All `fixed`,
+          so they read viewport coordinates and don't care where they mount. */}
+      {channelDrag.pointer && draggedChannel && (
+        <div
+          className="pointer-events-none fixed z-[300] -translate-y-1/2 animate-in zoom-in-75 duration-150"
+          style={{ left: (channelDrag.columnX?.left ?? 0) + 12, top: channelDrag.pointer.y }}
+        >
+          <span className="flex max-w-48 items-center gap-2 rotate-[-2deg] scale-105 clip-corner-lg bg-muted px-3 py-1.5 text-sm font-medium ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+            {draggedChannel.isPrivate ? (
+              <Lock className="size-4 shrink-0" />
+            ) : (
+              <Hash className="size-4 shrink-0" />
+            )}
+            <span className="truncate">{draggedChannel.name}</span>
+          </span>
+        </div>
+      )}
+      {channelDrag.dragging && (
+        <div className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
+      )}
+      {channelDrag.indicatorY !== null && !channelDrag.target?.newCategory && (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed z-[299] h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)]"
+          style={{
+            top: channelDrag.indicatorY - 1,
+            left: (channelDrag.columnX?.left ?? 0) + 6,
+            width: (channelDrag.columnX?.width ?? 0) - 12,
+          }}
+        />
+      )}
+
+      <CategoryNameDialog
+        open={Boolean(categoryPrompt)}
+        initial={categoryPrompt?.initial ?? ""}
+        count={categoryPrompt?.channels.length ?? 0}
+        onOpenChange={(next) => !next && setCategoryPrompt(null)}
+        onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
+      />
     </div>
   );
 }
@@ -965,10 +1230,8 @@ function ChannelRow({
   categories,
   onRename,
   onSetCategory,
+  onNewCategory,
   onDelete,
-  onMove,
-  canMoveUp,
-  canMoveDown,
   accessRoles,
   onPrivatise,
   onRotateKey,
@@ -981,11 +1244,9 @@ function ChannelRow({
   categories: string[];
   onRename: (name: string) => Promise<void>;
   onSetCategory: (name: string | undefined) => Promise<void>;
+  /** Raise the shared naming dialog to file this channel under a new category. */
+  onNewCategory: () => void;
   onDelete?: () => void;
-  /** Move one slot up/down the sidebar; absent at the ends of the list. */
-  onMove?: (direction: -1 | 1) => Promise<void>;
-  canMoveUp?: boolean;
-  canMoveDown?: boolean;
   /** The Roles scoped to this channel — who may read it (CORD-03/04 §2). */
   accessRoles?: Array<{ id: string; name: string }>;
   /** Convert a public channel to private (CORD-03 §2), naming its access role. */
@@ -999,8 +1260,6 @@ function ChannelRow({
   const [value, setValue] = useState(channel.name);
   const [accessOpen, setAccessOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [naming, setNaming] = useState(false);
-  const [categoryDraft, setCategoryDraft] = useState("");
   // Drafts for the access panel: the role a privatise mints (left empty it
   // matches the channel), and an additional role for an already-private one.
   const [roleDraft, setRoleDraft] = useState("");
@@ -1101,32 +1360,6 @@ function ChannelRow({
               <span className="ml-1.5 text-xs text-muted-foreground">{channel.category}</span>
             )}
           </span>
-          {onMove && (
-            <>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30 touch:size-11"
-                aria-label={`Move ${channel.name} up`}
-                disabled={!canMoveUp || disabled}
-                onClick={() => void onMove(-1)}
-              >
-                <ArrowUp className="size-3.5" />
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-7 shrink-0 text-muted-foreground disabled:opacity-30 touch:size-11"
-                aria-label={`Move ${channel.name} down`}
-                disabled={!canMoveDown || disabled}
-                onClick={() => void onMove(1)}
-              >
-                <ArrowDown className="size-3.5" />
-              </Button>
-            </>
-          )}
           {canManage && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1175,7 +1408,7 @@ function ChannelRow({
                       </DropdownMenuItem>
                     ))}
                     {categories.length > 0 && <DropdownMenuSeparator />}
-                    <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setNaming(true); }}>
+                    <DropdownMenuItem onSelect={onNewCategory}>
                       <Plus className="size-3.5" />
                       New category…
                     </DropdownMenuItem>
@@ -1359,35 +1592,7 @@ function ChannelRow({
     </div>
   );
 
-  if (!naming) return row;
-  return (
-    <div className="space-y-1">
-      {row}
-      <form
-        className="flex items-center gap-1 px-1"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const trimmed = categoryDraft.trim();
-          setNaming(false);
-          setCategoryDraft("");
-          if (trimmed) void file(trimmed);
-        }}
-      >
-        <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-        <Input
-          value={categoryDraft}
-          onChange={(e) => setCategoryDraft(e.target.value)}
-          placeholder="Category name"
-          autoFocus
-          className="h-7 text-sm"
-          onBlur={() => { setNaming(false); setCategoryDraft(""); }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") { setNaming(false); setCategoryDraft(""); }
-          }}
-        />
-      </form>
-    </div>
-  );
+  return row;
 }
 
 /** Canonical relay URL: default to wss://, require a websocket scheme, and
