@@ -1087,6 +1087,9 @@ jobs:
           : "${ANDROID_KEYSTORE_BASE64:?Set the ANDROID_KEYSTORE_BASE64 secret.}"
           : "${KEYSTORE_PASSWORD:?Set the KEYSTORE_PASSWORD secret.}"
 
+          rm -f android/key.properties android/app/my-upload-key.jks android/app/my-upload-key.keystore
+          umask 077
+
           # Decode the JKS and migrate JKS -> PKCS12 for Gradle. PKCS12 uses a
           # single password, so key and store passwords must match (that is the
           # KEY_PASSWORD == KEYSTORE_PASSWORD invariant).
@@ -1192,7 +1195,7 @@ jobs:
       - name: Remove release signing material
         if: ${{ always() }}
         run: |
-          rm -f android/key.properties android/app/my-upload-key.keystore
+          rm -f android/key.properties android/app/my-upload-key.jks android/app/my-upload-key.keystore
 
       # Publish the APK + AAB as run artifacts (they surface on gitworkshop.dev
       # against the tagged commit). Done BEFORE the store publishes so the
@@ -1272,12 +1275,12 @@ jobs:
           # anywhere — a trace can capture more than intended, and it has no
           # business on a public store.
           out="${RUNNER_TEMP:-/tmp}/zsp-output.txt"
+          release_config="$(mktemp "${RUNNER_TEMP:-/tmp}/zapstore-release.XXXXXX.yaml")"
           set +e
           (
             set -x
             zsp --version || true
 
-            release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
             cp zapstore.yaml "$release_config"
             sed -i "2i release_source: $apk_path" "$release_config"
             sed -i "2i version: $VERSION_NAME" "$release_config"
@@ -1315,6 +1318,7 @@ jobs:
           ) 2>&1 | tee "$out"
           zsp_rc=${PIPESTATUS[0]}
           set -e
+          rm -f "$release_config"
           echo "=== zsp publish sequence finished (rc=$zsp_rc) ==="
           # 124 = timeout sent TERM; 137 = it had to follow up with KILL.
           if [ "$zsp_rc" -eq 124 ] || [ "$zsp_rc" -eq 137 ]; then

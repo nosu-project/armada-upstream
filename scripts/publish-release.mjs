@@ -333,7 +333,7 @@ async function connectSigner() {
   if (!clientKey) throw new Error('NOSTR_CLIENT_KEY is not set');
 
   const pointer = await parseBunkerInput(url);
-  if (!pointer) throw new Error(`could not parse NOSTR_BUNKER_URL: ${url}`);
+  if (!pointer) throw new Error('could not parse NOSTR_BUNKER_URL');
 
   const signer = BunkerSigner.fromBunker(parseSecretKey(clientKey), pointer);
   await signer.connect();
