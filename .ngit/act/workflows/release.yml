@@ -1244,38 +1244,38 @@ jobs:
             exit 1
           }
 
-          # Everything from here (bunker parsing, config prep, zsp) is traced
-          # into a single file that a later step ALWAYS uploads as an artifact.
-          # act truncates a failing step's console log at the failure point, so
-          # earlier attempts died invisibly — e.g. a bad ${SIGN_WITH} format made
-          # the `test` below exit under `set -e` with nothing on the console.
-          # Redact the client key; never trace it.
+          # Restore the persistent NIP-46 client key so the bunker recognizes
+          # this workflow as the same application across runs. zsp reads it from
+          # ~/.config/zsp/bunker-keys/<bunker-pubkey>.key.
           #
-          # The trace is `tee`d rather than redirected: v0.44.1 hung inside zsp
-          # for 55 minutes and, because the whole block was buffered into $out
-          # and only `cat`ed after zsp returned, the console showed NOTHING
-          # between "Run Main Publish to Zapstore" and the coordinator's
-          # "job timed out after 3600 seconds". A buffered trace is no trace at
-          # all when the failure mode is a hang. Stream it live.
+          # Kept out of the traced subshell below on purpose: the key only ever
+          # needs to reach a file, never the log, so it is handled here before
+          # `set -x` is turned on rather than fenced with an inline toggle.
+          bunker_pubkey="${SIGN_WITH#bunker://}"
+          bunker_pubkey="${bunker_pubkey%%\?*}"
+          # Report (don't silently `set -e`-exit) if the scheme wasn't stripped.
+          if [ "$bunker_pubkey" = "$SIGN_WITH" ]; then
+            echo "SIGN_WITH does not look like a bunker:// URL (no scheme stripped); cannot derive bunker pubkey." >&2
+            exit 1
+          fi
+          umask 077
+          mkdir -p ~/.config/zsp/bunker-keys
+          printf '%s\n' "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/"$bunker_pubkey".key
+
+          # The config prep and zsp invocation below are traced to the console.
+          # Stream it live (`tee`, not redirect-then-print): v0.44.1 hung inside
+          # zsp for 55 minutes and, because the whole block was buffered and only
+          # printed after zsp returned, the console showed NOTHING between "Run
+          # Main Publish to Zapstore" and the coordinator's "job timed out after
+          # 3600 seconds". A buffered trace is no trace at all when the failure
+          # mode is a hang. The file copy stays on the runner and is NOT uploaded
+          # anywhere — a trace can capture more than intended, and it has no
+          # business on a public store.
           out="${RUNNER_TEMP:-/tmp}/zsp-output.txt"
           set +e
           (
             set -x
             zsp --version || true
-
-            # Restore the persistent NIP-46 client key so the bunker recognizes
-            # this workflow as the same application across runs. zsp stores keys
-            # at ~/.config/zsp/bunker-keys/<bunker-pubkey>.key
-            bunker_pubkey="${SIGN_WITH#bunker://}"
-            bunker_pubkey="${bunker_pubkey%%\?*}"
-            # Report (don't silently `set -e`-exit) if the scheme wasn't stripped.
-            if [ "$bunker_pubkey" = "$SIGN_WITH" ]; then
-              echo "SIGN_WITH does not look like a bunker:// URL (no scheme stripped); cannot derive bunker pubkey." >&2
-              set +x; exit 1
-            fi
-            umask 077
-            mkdir -p ~/.config/zsp/bunker-keys
-            printf '%s\n' "$ZAPSTORE_CLIENT_KEY" > ~/.config/zsp/bunker-keys/"$bunker_pubkey".key
 
             release_config="$(mktemp zapstore-release.XXXXXX.yaml)"
             cp zapstore.yaml "$release_config"
@@ -1323,18 +1323,6 @@ jobs:
             echo "check the bunker signer and each host in RELAY_URLS/BLOSSOM_URL." >&2
           fi
           exit "$zsp_rc"
-
-      # act truncates the failing step's console log, so surface the captured
-      # output through the reliable artifact channel. `always()`, not
-      # `failure()`: a successful publish's trace is what tells us what "normal"
-      # timing looks like the next time this step misbehaves.
-      - name: Upload zsp output
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: zsp-output-${{ steps.version.outputs.name }}
-          path: ${{ runner.temp }}/zsp-output.txt
-          if-no-files-found: warn
 
       # Publish the AAB to Google Play in the SAME job (ported from ditto's
       # GitLab `publish-google-play` job). Cross-job artifact hand-off is broken
@@ -1400,10 +1388,11 @@ jobs:
           # supply talks to the Play Developer API and will sit on a stalled
           # connection indefinitely. 1800s is generous for a 14 MB AAB upload.
           #
-          # `tee`d to a file the next step ALWAYS uploads, for the same reason
-          # the zsp trace is: act truncates a failing step's console log, and
-          # this step's whole failure mode is one line near the end. Streamed
-          # rather than buffered so a hang still leaves a trace.
+          # `tee`d to a file so the App-content check below can grep it, and
+          # streamed live (not buffered) so a hang still leaves a trace on the
+          # console — act truncates a failing step's console log and this step's
+          # whole failure mode is one line near the end. The file stays on the
+          # runner and is NOT uploaded anywhere.
           out="${RUNNER_TEMP:-/tmp}/fastlane-supply-output.txt"
           set +e
           timeout --signal=TERM --kill-after=30 1800 \
@@ -1442,16 +1431,6 @@ jobs:
             echo "fastlane supply exceeded the 1800s deadline and was killed." >&2
           fi
           exit "$supply_rc"
-
-      # Always, and for the same reason as the zsp trace: the run this exists
-      # for is the one where the step failed and act cut the console log short.
-      - name: Upload fastlane supply output
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: fastlane-supply-output-${{ steps.version.outputs.name }}
-          path: ${{ runner.temp }}/fastlane-supply-output.txt
-          if-no-files-found: warn
 
       - name: Remove Google Play service account key
         if: ${{ always() }}
