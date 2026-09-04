@@ -894,8 +894,16 @@ jobs:
           servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
           test -n "$relays" && test -n "$servers"
 
+          # nsyte 0.28.0 resolves `deploy <dir>` RELATIVE to the working
+          # directory even when handed an absolute path (it joins CWD onto the
+          # argument), so an absolute path scans a doubled, non-existent
+          # directory, finds zero files, and silently uploads nothing while
+          # exiting 0. Hand it a workspace-relative path, like deploy-nsite.yml's
+          # `deploy dist`.
+          flatpak_repo_rel="electron/release/flatpak-repo"
+
           set +e
-          nsyte deploy "$flatpak_repo" \
+          nsyte deploy "$flatpak_repo_rel" \
             --name armada-fp \
             --no-config \
             --relays "$relays" \
@@ -910,6 +918,15 @@ jobs:
           # upload". That is success: the manifest already describes this repo.
           if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-flatpak-deploy.log; then
             exit "$status"
+          fi
+          # A scan that found ZERO files is never legitimate here — the signed
+          # repository has hundreds — so it means nsyte was pointed at the wrong
+          # directory and published nothing while exiting 0. This step has no
+          # verify backstop, so guard it explicitly rather than shipping a green
+          # no-op (which is exactly how v0.59.6 published no armada-fp site).
+          if grep -qE "0 files included|No files to upload after ignore rules" /tmp/nsyte-flatpak-deploy.log; then
+            echo "nsyte scanned 0 files from $flatpak_repo_rel; refusing a no-op deploy." >&2
+            exit 1
           fi
 
       # Close the freshness lag by making the RELEASE the last writer of the
@@ -953,7 +970,14 @@ jobs:
           test -n "$relays" && test -n "$servers"
 
           # Pull the live armada site whole. --overwrite so a re-run starts clean.
-          web="$(mktemp -d)"
+          # Keep it UNDER the workspace: nsyte 0.28.0 resolves `deploy <dir>`
+          # relative to the working directory (see the publish step), so the
+          # redeploy below must be handed a workspace-relative path — an absolute
+          # /tmp path from mktemp is scanned as a doubled, empty directory.
+          web_rel="armada-site-refresh"
+          web="$PWD/$web_rel"
+          rm -rf "$web"
+          mkdir -p "$web"
           set +e
           nsyte download \
             --name armada \
@@ -999,7 +1023,7 @@ jobs:
           test -s "$web/downloads/flatpak/summary"
 
           set +e
-          nsyte deploy "$web" \
+          nsyte deploy "$web_rel" \
             --sec "$NSYTE_BUNKER" \
             --concurrency 2 \
             --non-interactive \
@@ -1008,6 +1032,13 @@ jobs:
           set -e
           if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-armada-refresh.log; then
             exit "$status"
+          fi
+          # As in the publish step: a 0-file scan means nsyte was pointed at the
+          # wrong directory and republished nothing while exiting 0. The --exact
+          # verify below would catch it after ~7 min of polling; fail fast here.
+          if grep -qE "0 files included|No files to upload after ignore rules" /tmp/nsyte-armada-refresh.log; then
+            echo "nsyte scanned 0 files from $web_rel; refusing a no-op redeploy." >&2
+            exit 1
           fi
 
           # This job is now the last writer, so the served origin must be the
