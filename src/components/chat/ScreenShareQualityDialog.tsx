@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   getDesktopVideoEncoderState,
   setDesktopVideoEncoderMode,
@@ -356,6 +357,23 @@ export function ScreenShareQualityDialog({
               Estimated maximum encoder output: {estimatedCeiling.toFixed(2)} Mbps.
               This is a ceiling; static content usually needs less.
             </p>
+          </div>
+
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="screen-share-audio">Share audio</Label>
+              <p className="text-xs text-muted-foreground">
+                Capture sound from the shared screen or window. If a share fails with
+                &ldquo;Could not start audio source,&rdquo; turn this off and try again.
+              </p>
+            </div>
+            <Switch
+              id="screen-share-audio"
+              checked={quality.captureAudio}
+              onCheckedChange={(captureAudio) =>
+                setQuality((current) => ({ ...current, captureAudio }))
+              }
+            />
           </div>
 
           {active && senderStats && (

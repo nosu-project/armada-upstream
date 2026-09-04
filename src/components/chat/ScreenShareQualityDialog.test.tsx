@@ -69,7 +69,27 @@ describe("ScreenShareQualityDialog", () => {
       codec: "vp8",
       delivery: "full",
       maxBitrate: 8_500_000,
+      captureAudio: true,
     });
+  });
+
+  it("submits with audio off after toggling Share audio", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ScreenShareQualityDialog
+        open
+        active={false}
+        onOpenChange={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: /share audio/i }));
+    fireEvent.click(screen.getByRole("button", { name: /share screen/i }));
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ captureAudio: false }),
+    );
   });
 
   it("resets to the recommended 1080p30 at 5 Mbps default", () => {
@@ -102,6 +122,7 @@ describe("ScreenShareQualityDialog", () => {
       codec: "vp8",
       delivery: "full",
       maxBitrate: 5_000_000,
+      captureAudio: true,
     });
   });
 
@@ -249,6 +270,7 @@ describe("ScreenShareQualityDialog", () => {
       codec: "h265",
       delivery: "full",
       maxBitrate: 25_000_000,
+      captureAudio: true,
     });
   });
 });

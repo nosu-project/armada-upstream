@@ -54,6 +54,13 @@ export interface ScreenShareQuality {
   delivery: ScreenShareDeliveryMode;
   /** Maximum bitrate for the full-resolution layer, in bits per second. */
   maxBitrate: number;
+  /**
+   * Whether to request audio from the captured surface. Default on. Turning it
+   * off is the recovery for Windows/Chromium's "Could not start audio source"
+   * (`NotReadableError`), where a surface with no openable loopback endpoint
+   * fails the WHOLE capture — video included — rather than just the audio.
+   */
+  captureAudio: boolean;
 }
 
 export const DEFAULT_SCREEN_SHARE_QUALITY: ScreenShareQuality = {
@@ -62,6 +69,7 @@ export const DEFAULT_SCREEN_SHARE_QUALITY: ScreenShareQuality = {
   codec: "vp8",
   delivery: "full",
   maxBitrate: 5_000_000,
+  captureAudio: true,
 };
 
 function resolutionOption(id: ScreenShareResolutionId) {
@@ -108,6 +116,11 @@ export function normalizeScreenShareQuality(value: unknown): ScreenShareQuality 
       ? candidate.delivery
       : DEFAULT_SCREEN_SHARE_QUALITY.delivery,
     maxBitrate: normalizeBitrate(candidate.maxBitrate),
+    // Absent in older persisted selections; default to sharing audio so an
+    // upgrade never silently drops it.
+    captureAudio: typeof candidate.captureAudio === "boolean"
+      ? candidate.captureAudio
+      : DEFAULT_SCREEN_SHARE_QUALITY.captureAudio,
   };
 }
 
@@ -187,7 +200,7 @@ export function screenShareCaptureOptions(quality: ScreenShareQuality): ScreenSh
   const normalized = normalizeScreenShareQuality(quality);
   const resolution = resolutionOption(normalized.resolution);
   return {
-    audio: true,
+    audio: normalized.captureAudio,
     contentHint: "detail",
     resolution: {
       width: resolution.width,
@@ -212,7 +225,7 @@ export function screenShareDisplayMediaOptions(
   quality: ScreenShareQuality,
 ): DisplayMediaStreamOptions {
   return {
-    audio: true,
+    audio: normalizeScreenShareQuality(quality).captureAudio,
     video: screenShareVideoConstraints(quality),
   };
 }
@@ -251,5 +264,6 @@ export function formatScreenShareQuality(quality: ScreenShareQuality): string {
   const bitrate = Number((normalized.maxBitrate / 1_000_000).toFixed(2));
   const codec = SCREEN_SHARE_CODECS.find((option) => option.id === normalized.codec)!.label;
   const delivery = normalized.delivery === "full" ? "full quality" : "adaptive";
-  return `${resolution.width}×${resolution.height} at ${normalized.frameRate} FPS, ${bitrate} Mbps, ${codec}, ${delivery}`;
+  const audio = normalized.captureAudio ? "" : ", no audio";
+  return `${resolution.width}×${resolution.height} at ${normalized.frameRate} FPS, ${bitrate} Mbps, ${codec}, ${delivery}${audio}`;
 }

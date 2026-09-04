@@ -512,6 +512,24 @@ export function isScreenShareSwitchPartialFailure(error: unknown): boolean {
 }
 
 /**
+ * Whether a capture failed because its AUDIO source could not be opened.
+ *
+ * Chromium raises `NotReadableError: "Could not start audio source"` when the
+ * chosen surface has no loopback audio endpoint it can open (a specific window,
+ * a busy device) — most often on Windows. `getDisplayMedia({ audio: true })`
+ * makes that a whole-capture failure, video included, so the presenter shares
+ * nothing. The distinguishing signal is the message: a video device that will
+ * not start is the same error name with "video source", which turning audio off
+ * would not fix. Matched on both so a genuine video failure is not offered an
+ * audio retry.
+ */
+export function isScreenShareAudioSourceFailure(error: unknown): boolean {
+  return error instanceof Error &&
+    error.name === "NotReadableError" &&
+    /audio source/i.test(error.message);
+}
+
+/**
  * Replace an active LiveKit screen share without unpublishing its video track.
  *
  * The replacement stream is acquired first, so cancelling the picker leaves

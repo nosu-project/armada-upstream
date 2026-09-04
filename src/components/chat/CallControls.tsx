@@ -33,6 +33,7 @@ import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTal
 import {
   applyPublishedScreenShareQuality,
   installScreenShareCodecPreferences,
+  isScreenShareAudioSourceFailure,
   isScreenShareSwitchPartialFailure,
   switchPublishedScreenShare,
 } from "@/lib/screenShare";
@@ -289,6 +290,27 @@ export function ScreenShareButton({
       .catch(async (error) => {
         if (await handleCapturePermission(error)) return;
         console.warn("failed to update screen share quality", error);
+        // Windows/Chromium fails the WHOLE capture when it cannot open the
+        // surface's audio endpoint. Offer the one action that recovers it —
+        // retry with audio off — rather than a dead "try again" that would
+        // hit the same wall. Only when audio was actually requested.
+        if (quality.captureAudio && isScreenShareAudioSourceFailure(error)) {
+          toast({
+            title: "Couldn't share screen audio",
+            description:
+              "This screen or window has no audio Armada can capture. Share without audio instead?",
+            variant: "destructive",
+            action: (
+              <ToastAction
+                altText="Share without audio"
+                onClick={() => applyQuality({ ...quality, captureAudio: false })}
+              >
+                Share without audio
+              </ToastAction>
+            ),
+          });
+          return;
+        }
         toast({
           title: "Couldn't update screen share quality",
           description:

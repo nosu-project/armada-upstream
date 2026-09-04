@@ -7,6 +7,7 @@ import {
   getPublishedScreenShareSenderStats,
   getRemoteScreenShareReceiverStats,
   installScreenShareCodecPreferences,
+  isScreenShareAudioSourceFailure,
   isScreenShareSwitchPartialFailure,
   preferredE2eeH264Codecs,
   switchPublishedScreenShare,
@@ -179,6 +180,7 @@ describe("switchPublishedScreenShare", () => {
       codec: "vp8" as const,
       delivery: "full" as const,
       maxBitrate: 10_000_000,
+      captureAudio: true,
     };
 
     await applyPublishedScreenShareQuality(participant, quality);
@@ -273,6 +275,33 @@ describe("switchPublishedScreenShare", () => {
     ).catch((thrown: unknown) => thrown);
 
     expect(isScreenShareSwitchPartialFailure(error)).toBe(true);
+  });
+});
+
+describe("isScreenShareAudioSourceFailure", () => {
+  it("matches Chromium's unopenable audio-source failure", () => {
+    expect(
+      isScreenShareAudioSourceFailure(
+        new DOMException("Could not start audio source", "NotReadableError"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match a video-source failure that audio-off would not fix", () => {
+    expect(
+      isScreenShareAudioSourceFailure(
+        new DOMException("Could not start video source", "NotReadableError"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match a cancelled or denied picker", () => {
+    expect(
+      isScreenShareAudioSourceFailure(
+        new DOMException("Permission denied", "NotAllowedError"),
+      ),
+    ).toBe(false);
+    expect(isScreenShareAudioSourceFailure("Could not start audio source")).toBe(false);
   });
 });
 

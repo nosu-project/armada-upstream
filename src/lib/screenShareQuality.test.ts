@@ -8,6 +8,7 @@ import {
   normalizeScreenShareQuality,
   rememberScreenShareQuality,
   screenShareCaptureOptions,
+  screenShareDisplayMediaOptions,
   screenSharePublishOptions,
   screenShareVideoConstraints,
   supportedScreenShareCodecs,
@@ -26,6 +27,7 @@ describe("screen-share quality policy", () => {
       codec: "vp9" as const,
       delivery: "adaptive" as const,
       maxBitrate: 10_000_000,
+      captureAudio: true,
     };
 
     expect(screenShareCaptureOptions(quality)).toEqual({
@@ -83,10 +85,35 @@ describe("screen-share quality policy", () => {
       codec: "av1" as const,
       delivery: "adaptive" as const,
       maxBitrate: 15_000_000,
+      captureAudio: false,
     };
 
     expect(rememberScreenShareQuality(selected)).toEqual(selected);
     expect(getScreenShareQuality()).toEqual(selected);
+  });
+
+  it("defaults capture audio on for selections that predate the toggle", () => {
+    expect(
+      normalizeScreenShareQuality({
+        resolution: "1080p",
+        frameRate: 30,
+        codec: "vp8",
+        delivery: "full",
+        maxBitrate: 5_000_000,
+      }).captureAudio,
+    ).toBe(true);
+  });
+
+  it("drops audio from the capture request when audio is turned off", () => {
+    const quality = { ...DEFAULT_SCREEN_SHARE_QUALITY, captureAudio: false };
+
+    expect(screenShareCaptureOptions(quality).audio).toBe(false);
+    expect(screenShareDisplayMediaOptions(quality).audio).toBe(false);
+  });
+
+  it("requests audio by default", () => {
+    expect(screenShareCaptureOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
+    expect(screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
   });
 
   it("falls back when stored JSON is unreadable", () => {
