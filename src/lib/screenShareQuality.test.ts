@@ -109,11 +109,21 @@ describe("screen-share quality policy", () => {
 
     expect(screenShareCaptureOptions(quality).audio).toBe(false);
     expect(screenShareDisplayMediaOptions(quality).audio).toBe(false);
+    // No own-audio restriction where there is no captured audio to restrict.
+    expect(screenShareDisplayMediaOptions(quality).restrictOwnAudio).toBeUndefined();
   });
 
   it("requests audio by default", () => {
     expect(screenShareCaptureOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
     expect(screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
+  });
+
+  it("restricts own audio on the direct-capture path when audio is on", () => {
+    // The direct getDisplayMedia path (screen-share switching) must exclude the
+    // call's own playback so a sharer on speakers doesn't echo participants back
+    // (livekit/client-sdk-js#1799). The LiveKit-driven initial capture strips
+    // this flag; the getDisplayMedia wrapper reintroduces it there.
+    expect(screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).restrictOwnAudio).toBe(true);
   });
 
   it("falls back when stored JSON is unreadable", () => {

@@ -207,8 +207,35 @@ export default defineConfig({
   server: {
     host: "::",
     port: 8080,
+    // The dev-server file watcher (chokidar) must never descend into a local
+    // flatpak/OSTree build tree. It holds root-owned CIRCULAR symlinks (e.g.
+    // `.flatpak-builder/cache/objects/**/udev/watch/*` -> `b251:0`) that crash
+    // the watcher with `ELOOP` and take the whole dev server down mid-request —
+    // which looks exactly like a hung dependency optimize. These are the same
+    // host-absolute artifacts the vitest globs already dodge via
+    // BUILD_ARTIFACT_EXCLUDES; the watcher needs its own guard because Vite
+    // APPENDS `server.watch.ignored` to chokidar's defaults (`.git`,
+    // `node_modules`) rather than replacing them. CI never has these (fresh
+    // checkout); this only bites a machine that has run `npm run dist:flatpak`.
+    watch: {
+      ignored: BUILD_ARTIFACT_EXCLUDES,
+    },
   },
   plugins: [react(), buildStamp(), serveChangelog()],
+  optimizeDeps: {
+    // Pin the dep-scanner's entry points to the real HTML entries. Left to its
+    // default the scanner GLOBS `**/*.html` from the project root, and that
+    // glob ignores only `outDir`/`__tests__`/`coverage` — NOT the local
+    // flatpak/OSTree build tree. So on a machine that has run
+    // `npm run dist:flatpak` it walks the 830 MB `.flatpak-builder` tree and
+    // its root-owned circular symlinks, which reads as an optimize that never
+    // finishes (distinct from the chokidar `ELOOP` crash the `server.watch`
+    // guard above fixes — same tree, different traversal). Naming the entries
+    // replaces the root glob with these literal paths. `e2e/harness.html` is
+    // the Playwright harness (dev-server only, in no production build); listing
+    // it keeps its deps pre-bundled so the e2e run doesn't pay a cold optimize.
+    entries: ["index.html", "e2e/harness.html"],
+  },
   worker: {
     // The video worker is an ES module (`new Worker(…, { type: "module" })`).
     format: "es",

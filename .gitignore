@@ -51,3 +51,10 @@ src/wasm/
 
 # Release-event artifacts staged by CI (see .ngit/act/workflows/release.yml).
 .release-artifacts/
+
+# Playwright e2e outputs (npm run test:e2e). The browsers install to
+# ~/.cache/ms-playwright, not the repo; these are only the run artifacts.
+test-results/
+playwright-report/
+blob-report/
+.playwright/

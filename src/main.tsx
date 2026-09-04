@@ -8,6 +8,7 @@ import {
   registerDesktopDeepLinkHost,
   signalDesktopWebReady,
 } from "@/lib/desktop";
+import { installScreenShareAudioRestriction } from "@/lib/screenShareAudioRestriction";
 import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
@@ -23,6 +24,12 @@ import "./index.css";
 // stream. Install the desktop bridge before LiveKit can request a share; this
 // is a no-op in browsers and native mobile builds.
 installDesktopDisplayMediaAudio();
+
+// Keep a screen share's captured system audio from echoing the call back to it:
+// wrap getDisplayMedia so an audio capture carries restrictOwnAudio (Chrome
+// 141+; ignored elsewhere). AFTER the desktop wrapper above so this one is
+// outermost and the venmic path it delegates to still runs unchanged.
+installScreenShareAudioRestriction();
 
 // Mark the native (Capacitor APK) runtime on <html> so CSS can switch off
 // web-isms (text selection, tap highlight, document overscroll/bounce) that
