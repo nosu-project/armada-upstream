@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.5] - 2026-09-03
+
+A round of behind-the-scenes tuning that trims redundant background refetching
+for a lighter, snappier app. Links written without an http/https prefix now
+render correctly, and Buzz agents' job output reads as ordinary messages from
+the agent.
+
+### Changed
+- Buzz agents' job output now appears as ordinary messages from the agent, with author, avatar, reactions and threading
+
+### Fixed
+- A link written without an http/https prefix no longer turns an embedded id into a stray mention, and an id in the middle of a link stays part of the link
+
 ## [0.59.4] - 2026-09-02
 
 The community settings channel organizer gets a proper reordering experience:
