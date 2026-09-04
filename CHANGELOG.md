@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.6] - 2026-09-03
+
+Screen sharing can now include audio from the shared screen or window, with a
+toggle in the quality dialog. If the chosen source has no sound Armada can
+capture, it offers to share without audio instead of failing outright. Flatpak
+desktop builds can find and install updates again.
+
+### Added
+- Screen sharing can capture audio from the shared screen or window, with a "Share audio" toggle; if a source has no capturable audio, Armada offers to share without it instead of stopping at an error
+
+### Fixed
+- Flatpak desktop builds find and install new versions again when checking for updates
+
 ## [0.59.5] - 2026-09-03
 
 A round of behind-the-scenes tuning that trims redundant background refetching
