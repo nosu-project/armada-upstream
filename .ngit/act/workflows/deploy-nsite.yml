@@ -204,7 +204,7 @@ jobs:
       # `nsyte deploy` REPLACES the whole `armada` manifest with what is in
       # `dist/`, so anything not laid into `dist/` here is dropped from the served
       # site. The release workflow publishes the signed repository to its own
-      # named site (kind 35128, id `armada-flatpak`); this step recovers that
+      # named site (kind 35128, id `armada-fp`); this step recovers that
       # site's files from Blossom and overlays them under `dist/downloads/flatpak/`
       # so every push to main reconciles the served repository to the newest one.
       #
@@ -231,7 +231,7 @@ jobs:
           repo_out="$(mktemp -d)"
           set +e
           nsyte download \
-            --name armada-flatpak \
+            --name armada-fp \
             --relays "$relays" \
             --servers "$servers" \
             --sec "$NSYTE_BUNKER" \
@@ -243,7 +243,7 @@ jobs:
           # download that failed or found no site leaves it absent, and the
           # overlay is skipped rather than deploying a half-populated tree.
           if [ "$status" -ne 0 ] || [ ! -s "$repo_out/summary" ]; then
-            echo "No armada-flatpak site to fold in yet; deploying without it."
+            echo "No armada-fp site to fold in yet; deploying without it."
           else
             mkdir -p dist/downloads/flatpak
             cp -rT "$repo_out" dist/downloads/flatpak
@@ -301,7 +301,7 @@ jobs:
       # the guard against the exact failure that shipped once: a green deploy
       # while /summary returned SPA HTML, so the Flatpak update portal silently
       # found nothing to install. Only runs when this deploy carried the repo
-      # (the fold above found an armada-flatpak site); a first deploy before any
+      # (the fold above found an armada-fp site); a first deploy before any
       # release has nothing to check.
       #
       # NON-exact: the release workflow may, moments later, refresh the armada
@@ -321,7 +321,7 @@ jobs:
         run: |
           set -eu
           if [ ! -s dist/downloads/flatpak/summary ]; then
-            echo "No Flatpak repository was folded into this deploy (no armada-flatpak site yet); nothing to verify."
+            echo "No Flatpak repository was folded into this deploy (no armada-fp site yet); nothing to verify."
             exit 0
           fi
           scripts/verify-flatpak-origin.sh \

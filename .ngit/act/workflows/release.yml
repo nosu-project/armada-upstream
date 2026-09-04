@@ -824,7 +824,7 @@ jobs:
       # Without this the portal finds nothing to install while the release event
       # correctly advertises the new version, which is the bug this fixes.
       #
-      # It goes to its OWN named site (kind 35128, id `armada-flatpak`), NOT the
+      # It goes to its OWN named site (kind 35128, id `armada-fp`), NOT the
       # `armada` web site. `nsyte deploy` REPLACES a site's whole manifest, and
       # the `dist/` in this job is the DESKTOP-configured web bundle (Plausible
       # on, no push gateway), so deploying it as `armada` would clobber the live
@@ -837,7 +837,7 @@ jobs:
       # may fold the PREVIOUS release's repo this run and pick this one up on the
       # next push to main (or a manual deploy-nsite re-run). Bounded and
       # self-healing — every push reconciles downloads/flatpak/ to the newest
-      # armada-flatpak — and the release's `.flatpak` bundle is fetched from
+      # armada-fp — and the release's `.flatpak` bundle is fetched from
       # Blossom by hash regardless, so a fresh install is never blocked on it.
       - name: Publish the Flatpak update repository to the nsite
         if: startsWith(github.ref, 'refs/tags/v')
@@ -896,7 +896,7 @@ jobs:
 
           set +e
           nsyte deploy "$flatpak_repo" \
-            --name armada-flatpak \
+            --name armada-fp \
             --no-config \
             --relays "$relays" \
             --servers "$servers" \
@@ -916,7 +916,7 @@ jobs:
       # served `armada` site. deploy-nsite runs concurrently on the release
       # commit, but the desktop build takes ~40 min, so this step lands after
       # it — and after the newest signed repository has just been published to
-      # armada-flatpak above. Without this, deploy-nsite folds the PREVIOUS
+      # armada-fp above. Without this, deploy-nsite folds the PREVIOUS
       # release's repo (the new one did not exist when it ran), so the in-place
       # update of already-installed clients would lag by one push to main.
       #
