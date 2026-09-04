@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.7] - 2026-09-04
+
+Further work on Flatpak desktop updates, plus internal release-tooling fixes.
+
+### Fixed
+- Continued fixes to how Flatpak desktop updates are published
+
 ## [0.59.6] - 2026-09-03
 
 Screen sharing can now include audio from the shared screen or window, with a
