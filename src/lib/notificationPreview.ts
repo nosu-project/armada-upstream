@@ -50,6 +50,12 @@ export const NOTIFICATION_FALLBACK_ICON = "/favicon.png";
  * single-colour image on transparency: the platform discards colour and keeps
  * only the alpha channel, so a full-colour favicon here renders as a solid
  * blob.
+ *
+ * It is literally the same file the native build ships — a copy of
+ * `drawable-xxxhdpi/ic_stat_armada.png`, which is already 96px — so a redraw
+ * cannot leave the two clients showing different marks for the same
+ * notification. `android/icon-src/ic_stat_armada.svg` is the source both come
+ * from, and carries the Material live-area sizing rule.
  */
 export const NOTIFICATION_BADGE_ICON = "/badge-96.png";
 
