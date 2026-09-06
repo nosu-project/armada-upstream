@@ -214,6 +214,15 @@ jobs:
       # e.g. before the first release that carries this step) is not an error: the
       # overlay is simply skipped and the site deploys without it, exactly as it
       # did before.
+      #
+      # Blossom is REDUNDANT — every blob is mirrored on all three servers — so a
+      # single dead mirror must never fail this step. Each host is probed and
+      # only the reachable ones are handed to nsyte, so the download succeeds as
+      # long as one server and one relay answer instead of thrashing on a downed
+      # host until the runner is OOM-killed (a SIGKILL runs none of the fallback
+      # below, which is how a single-server outage failed the whole deploy). The
+      # `timeout` is the backstop for a host that answers the probe but then
+      # wedges mid-transfer.
       - name: Fold in the Flatpak update repository
         timeout-minutes: 15
         env:
@@ -228,22 +237,56 @@ jobs:
           servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
           test -n "$relays" && test -n "$servers"
 
+          # Keep only the hosts that answer an HTTP probe (any status is alive;
+          # only a refused connection or a stall past --max-time drops one), so a
+          # dead mirror is dropped rather than handed to nsyte. Liveness, not
+          # protocol — nsyte still speaks Blossom/Nostr to the survivors.
+          filter_live() {
+            live=""
+            saved_ifs="$IFS"
+            IFS=,
+            for url in $1; do
+              probe=$(printf '%s' "$url" | sed -e 's#^wss://#https://#' -e 's#^ws://#http://#')
+              if curl -sS -o /dev/null --connect-timeout 5 --max-time 10 "$probe"; then
+                live="${live:+$live,}$url"
+              else
+                echo "  drop (unreachable): $url" >&2
+              fi
+            done
+            IFS="$saved_ifs"
+            printf '%s' "$live"
+          }
+
+          echo "Probing Blossom servers..."
+          live_servers="$(filter_live "$servers")"
+          echo "Probing relays..."
+          live_relays="$(filter_live "$relays")"
+
+          if [ -z "$live_servers" ] || [ -z "$live_relays" ]; then
+            echo "No reachable Blossom server / relay to fold the Flatpak repo from; deploying without it."
+            exit 0
+          fi
+          echo "Downloading from servers=$live_servers relays=$live_relays"
+
           repo_out="$(mktemp -d)"
           set +e
-          nsyte download \
-            --name armada-fp \
-            --relays "$relays" \
-            --servers "$servers" \
-            --sec "$NSYTE_BUNKER" \
-            --output "$repo_out" 2>&1 | tee /tmp/nsyte-flatpak-download.log
+          # 124=TERM, 137=KILL. Fails fast and clean instead of climbing to OOM.
+          timeout --signal=TERM --kill-after=30 600 \
+            nsyte download \
+              --name armada-fp \
+              --relays "$live_relays" \
+              --servers "$live_servers" \
+              --sec "$NSYTE_BUNKER" \
+              --output "$repo_out" 2>&1 | tee /tmp/nsyte-flatpak-download.log
           status="${PIPESTATUS[0]}"
           set -e
 
           # The repository's own summary is the marker that a real one landed. A
-          # download that failed or found no site leaves it absent, and the
-          # overlay is skipped rather than deploying a half-populated tree.
+          # download that failed, was killed by the timeout, or found no site
+          # leaves it absent, and the overlay is skipped rather than deploying a
+          # half-populated tree.
           if [ "$status" -ne 0 ] || [ ! -s "$repo_out/summary" ]; then
-            echo "No armada-fp site to fold in yet; deploying without it."
+            echo "No armada-fp repo folded in this run (download rc=$status); deploying without it."
           else
             mkdir -p dist/downloads/flatpak
             cp -rT "$repo_out" dist/downloads/flatpak
