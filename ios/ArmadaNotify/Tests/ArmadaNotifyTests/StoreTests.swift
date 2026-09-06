@@ -358,9 +358,10 @@ final class StorelessTests: XCTestCase {
             true,
             "a future-dated message must not notify"
         )
-        // Baseline: with the clock at/after the rumor, the same wrap notifies.
+        // Baseline: with the clock at/after the rumor (dated 1_700_000_500),
+        // the same wrap notifies.
         XCTAssertNotEqual(
-            PushProcessor(store: nil, config: config, now: 1_700_000_000)
+            PushProcessor(store: nil, config: config, now: 1_700_000_500)
                 .prepare(userInfo: wrap)?.drop,
             true,
             "a message no longer in the future must notify"
@@ -392,7 +393,9 @@ final class StorelessTests: XCTestCase {
                     policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
                     nip46: nil, concord: [stream(mentionOnly: mentionOnly)]
                 ),
-                now: 1_700_000_000
+                // At/after the rumor's own time (dated 1_700_000_500), so the
+                // future-hold isn't what decides these — the mention rule is.
+                now: 1_700_000_500
             )
         }
         // Baseline: at "all messages" the same wrap (author bobPk, no `#p` for
