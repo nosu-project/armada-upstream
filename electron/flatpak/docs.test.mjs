@@ -24,33 +24,42 @@ const shellBlocks = [...flatpakDocs.matchAll(/```sh\n([\s\S]*?)```/g)].map(
 // where the exact bytes ARE the thing being asserted.
 const flatpakProse = flatpakDocs.replace(/\s+/g, " ");
 
-describe("Flatpak trust migration documentation", () => {
-  it("does not recreate the hosted Armada remote without GPG verification", () => {
-    expect(flatpakDocs).toContain(
-      "https://armada.buzz/downloads/flatpak/armada-flatpak.gpg",
-    );
-    expect(flatpakDocs).toContain("--gpg-import=./armada-flatpak.gpg");
-    expect(flatpakDocs).toContain("--gpg-verify");
-    const hostedRemoteBlocks = shellBlocks.filter(
-      (commands) =>
-        commands.includes("flatpak remote-add") &&
-        commands.includes("armada https://armada.buzz/downloads/flatpak/"),
-    );
-    expect(hostedRemoteBlocks.length).toBeGreaterThan(0);
-    for (const commands of hostedRemoteBlocks) {
-      expect(commands).not.toContain("--no-gpg-verify");
+describe("Flatpak documentation", () => {
+  // The hosted OSTree repository is gone. Instructions that add a remote for
+  // it would hand users a dead origin, and instructions that disable GPG
+  // verification for anything but a local file:// repo would be worse.
+  it("never adds the retired hosted remote, and never disables verification for a hosted one", () => {
+    for (const commands of shellBlocks) {
+      expect(commands).not.toContain("armada.buzz/downloads/flatpak/");
+      if (commands.includes("--no-gpg-verify")) {
+        expect(commands).toContain("file://");
+      }
     }
+    expect(flatpakProse).toContain("There is no update repository.");
+    expect(flatpakProse).toContain("The bundle embeds no origin URL");
+  });
+
+  it("describes the upgrade as installing the next bundle over the running one", () => {
+    expect(
+      shellBlocks.filter((commands) =>
+        commands.includes("flatpak install --user ./Armada-vX.Y.Z.flatpak"),
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(flatpakProse).toContain("`checkForWebBundleUpdate` in `electron/main.js`");
+    // The retired origin embedded in older bundles is disabled, not deleted,
+    // and the profile is preserved either way.
+    expect(flatpakDocs).toContain(
+      'flatpak remote-modify --user --disable \\\n  "$(flatpak info --user --show-origin buzz.armada.app)"',
+    );
+    expect(flatpakProse).toContain("keeps the profile under `~/.var/app/buzz.armada.app`");
   });
 
   it("keeps unsigned system installs recoverable without deleting profiles", () => {
     expect(flatpakDocs).toContain(
-      "sudo flatpak update --system buzz.armada.app",
-    );
-    expect(flatpakDocs).toContain(
       "sudo flatpak uninstall --system buzz.armada.app",
     );
     expect(flatpakDocs).toContain(
-      "flatpak install --user ./Armada.flatpak\n" +
+      "flatpak install --user ./Armada-vX.Y.Z.flatpak\n" +
         "flatpak info --user buzz.armada.app\n" +
         'armada_system_origin="$(flatpak info --system --show-origin buzz.armada.app)"\n' +
         "sudo flatpak uninstall --system buzz.armada.app",
@@ -58,14 +67,15 @@ describe("Flatpak trust migration documentation", () => {
     expect(flatpakProse).toContain("Do not add `--delete-data`");
   });
 
-  it("gates the trust flip and documents independent fingerprint verification", () => {
-    expect(flatpakProse).toContain(
-      "Never perform either trust flip before the signed release is available",
-    );
-    expect(flatpakProse).toContain(
-      "comparing only those files does not authenticate the key",
-    );
+  it("documents the signing secrets and independent fingerprint verification", () => {
     expect(flatpakProse).toContain("FLATPAK_GPG_EXPECTED_FINGERPRINT");
+    expect(flatpakProse).toContain("FLATPAK_GPG_PRIVATE_KEY_BASE64");
+    // The key travels with the bundle it vouches for, so the README must say
+    // plainly that comparing it against a same-host copy proves nothing.
+    expect(flatpakProse).toContain("cannot authenticate itself");
+    expect(flatpakProse).toContain(
+      "Comparing the embedded key only against a copy fetched from the same host would not authenticate it",
+    );
   });
 
   // The out-of-band channel has to be a place a reader can actually go. Prose
@@ -90,6 +100,12 @@ describe("Flatpak trust migration documentation", () => {
       expect(commands).toContain("nak verify");
       expect(commands).toContain(`select(.[1] == "${announcedPath}")`);
       expect(commands).toContain("sha256sum ./armada-flatpak.announced");
+      // The key being checked is the one the INSTALL trusts — read back out of
+      // Flatpak's own keyring for the origin — not a copy downloaded from
+      // anywhere.
+      expect(commands).toContain(
+        '~/.local/share/flatpak/repo/"$armada_origin".trustedkeys.gpg',
+      );
     }
     // The claim must stay honest about what the separation buys.
     expect(flatpakProse).toContain(

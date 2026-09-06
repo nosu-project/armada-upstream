@@ -131,10 +131,8 @@ describe("pickDesktopArtifact", () => {
   });
 
   it("takes the .flatpak bundle for a Flatpak install, never the AppImage", () => {
-    // The Flatpak self-update flow (electron/flatpakUpdate.js) runs outside
-    // electron-updater and downloads the signed bundle, so it resolves the
-    // .flatpak the `linux` row deliberately refuses. Same event, different
-    // artifact, keyed on the synthetic `flatpak` platform.
+    // The synthetic `flatpak` platform resolves the .flatpak the `linux` row
+    // deliberately refuses. Same event, different artifact.
     const picked = pickDesktopArtifact(release, { platform: "flatpak", arch: "x64" });
     expect(picked?.filename).toBe("Armada-v1.2.3.flatpak");
   });

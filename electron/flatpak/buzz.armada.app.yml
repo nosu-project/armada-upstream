@@ -35,24 +35,16 @@ finish-args:
   - --talk-name=com.canonical.AppMenu.Registrar
   - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
 
-# This permission set is DELIBERATELY complete, and the update path is written
-# to fit inside it rather than the other way round. Nothing here can swap the
+# This permission set is DELIBERATELY complete. Nothing here can swap the
 # read-only OSTree /app mount, and nothing should be added that can — in
 # particular no `--talk-name=org.freedesktop.Flatpak`, which is arbitrary
 # host-command execution through `flatpak-spawn --host` and spends the sandbox
 # boundary that is the reason to ship a Flatpak at all.
 #
-# Self-update works WITHOUT any grant: the app reads the same signed kind-30622
-# release event every other edition reads to notice a newer version
-# (`--share=network` is all that takes), then asks the Flatpak update portal —
-# org.freedesktop.portal.Flatpak, reachable from every sandbox by design — to
-# deploy the newer commit from the GPG-verified origin remote this bundle
-# embeds, and to spawn a fresh instance on the new deploy
-# (FLATPAK_SPAWN_FLAGS_LATEST_VERSION). The portal can only pull this app's own
-# ref from its own origin, refuses an update whose finish-args GREW (so adding
-# a permission here costs that release its in-app update — ship it, and the
-# hop is by system `flatpak update`), and may raise the desktop's one-time
-# consent dialog. See electron/flatpakUpdate.js.
+# The Flatpak itself is never updated in place (no origin URL, no repository).
+# Its WEB BUNDLE is: the shell fetches the site's dist archive into userData
+# and serves that (electron/webBundleUpdate.js). `--share=network` is all it
+# needs.
 
 modules:
   - name: armada

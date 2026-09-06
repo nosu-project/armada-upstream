@@ -186,14 +186,12 @@ function readCommandLog(fixture) {
     .map((line) => JSON.parse(line));
 }
 
-describe("Flatpak bundle update origin", () => {
-  it("defaults to Armada's published OSTree repository", () => {
-    expect(buildScript).toContain(
-      "ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/downloads/flatpak/}",
-    );
-  });
-
-  it("embeds the update origin in every builder path", () => {
+describe("Flatpak bundle origin", () => {
+  // Nothing serves an OSTree repository for this app any more — the
+  // self-hosted one was retired — so a bundle that embedded an origin would
+  // point every install at a dead remote. No builder path may pass one, and
+  // no environment variable may reintroduce one.
+  it("embeds no update origin in any builder path", () => {
     const bundleCommands = buildScript
       .split("\n")
       .map((line) => line.trim())
@@ -201,15 +199,12 @@ describe("Flatpak bundle update origin", () => {
 
     expect(bundleCommands).toHaveLength(3);
     for (const command of bundleCommands) {
-      expect(command).toContain('--repo-url="$ARMADA_FLATPAK_REPO_URL"');
+      expect(command).not.toContain("--repo-url");
     }
-  });
-
-  it("forwards the origin into both sandboxed Builder variants", () => {
-    const forwardedOrigins = buildScript.match(
-      /--env=ARMADA_FLATPAK_REPO_URL="\$ARMADA_FLATPAK_REPO_URL"/g,
-    );
-    expect(forwardedOrigins).toHaveLength(2);
+    expect(buildScript).not.toContain("ARMADA_FLATPAK_REPO_URL");
+    expect(buildScript).not.toContain("armada.buzz");
+    expect(signScript).not.toMatch(/^\s*flatpak build-bundle.*--repo-url|^\s*--repo-url/m);
+    expect(signScript).not.toContain("ARMADA_FLATPAK_REPO_URL");
   });
 
   it("keeps signing credentials out of every build path", () => {
@@ -301,7 +296,6 @@ describe("Flatpak post-build signing", () => {
       fs.writeFileSync(fixture.bundle, "unsigned bundle");
 
       const result = runSigningScript(fixture, {
-        ARMADA_FLATPAK_REPO_URL: "https://updates.example.test/flatpak/",
         FLATPAK_GPG_KEY: "0123 4567 89ab cdef 0123 4567 89ab cdef 0123 4567",
         FLATPAK_GPG_PUBLIC_KEY: publicKey,
         GNUPGHOME: gpgHome,
@@ -391,9 +385,10 @@ describe("Flatpak post-build signing", () => {
         `--gpg-import=${stagedPublicKey}`,
         repoDir,
       ]);
+      // No --repo-url: the bundle embeds the key (so the install verifies it)
+      // and nothing else, since there is no repository for it to name.
       expect(commands.find(([command]) => command === "build-bundle")).toEqual([
         "build-bundle",
-        "--repo-url=https://updates.example.test/flatpak/",
         `--gpg-keys=${stagedPublicKey}`,
         repoDir,
         expect.stringContaining("/.flatpak-sign."),

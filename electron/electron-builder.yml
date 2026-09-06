@@ -53,11 +53,6 @@ files:
   # itself again, which is the harder failure to notice.
   - nostrUpdateProvider.js
   - updateFeed.cjs
-  # The Flatpak self-update path: main.js requires it lazily on a packaged
-  # Flatpak to download and stage the signed .flatpak bundle. Unlisted, the
-  # require throws inside the asar and every Flatpak update check fails
-  # silently — the same shipped-app-that-can-never-update failure as above.
-  - flatpakUpdate.js
   - linuxAudioSources.js
   - linuxVideoAcceleration.js
   - displayMediaPolicy.js
@@ -71,6 +66,8 @@ files:
   # Resolves which web bundle app:// serves. Unlisted, the require fails inside
   # the asar and the shell cannot boot at all.
   - bundleStore.js
+  # Fetches and activates a newer web bundle (the Flatpak's only update path).
+  - webBundleUpdate.js
   # The ArmadaDB store, built from src/lib/db by vite.config.electron.ts. main.js
   # requires it at startup; unlisted, the require fails inside the asar and the
   # app silently falls back to IndexedDB with the user's data in the wrong place.

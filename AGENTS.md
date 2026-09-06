@@ -524,8 +524,12 @@ Things to know before touching it:
   into a content-hashed chunk, and a filename that changes with the dependency
   tree cannot be listed in `electron-builder.yml`'s `files:`. The static
   `latest*.yml` feed is GONE — not generated (`publishAutoUpdate: false`) and not
-  deployed; the Flatpak OSTree repository is now the only thing `release.yml`
-  sends over SSH. **The `publish:` block still has to exist**: electron-builder
+  deployed, and nothing is sent over SSH. The Flatpak is never replaced in
+  place: it fetches the web bundle every web deploy publishes at
+  `/downloads/armada-web.tar.gz` (`electron/webBundleUpdate.js`,
+  `bundleStore.js`) and serves that — Vesktop-style. Don't bring the OSTree
+  repository fold back into `deploy-nsite.yml`; it was most of every deploy's
+  running time. **The `publish:` block still has to exist**: electron-builder
   writes the packaged `app-update.yml` only when one does, and electron-updater
   reads that file on every DOWNLOAD (`updaterCacheDirName`, plus `publisherName`
   on Windows), so deleting it leaves the update check succeeding and the download
@@ -652,8 +656,8 @@ The nsite deploys (`deploy-nsite.yml`, `release.yml`), the release event
 Blossom servers listed in `.nsite/config.json`, and no ONE of them may be able
 to fail a run:
 
-- **Never call `nsyte deploy` or `nsyte download` from a workflow directly.**
-  Go through `scripts/nsite-deploy.sh` / `scripts/nsite-download.sh`. nsyte
+- **Never call `nsyte deploy` from a workflow directly.** Go through
+  `scripts/nsite-deploy.sh`. nsyte
   runs one upload queue per server and signs the manifest only after EVERY
   queue drains, with ~90 s of retries per file on a dead server, so a single
   broken mirror does not cost that mirror: it runs the step past its deadline

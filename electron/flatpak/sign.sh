@@ -20,7 +20,6 @@ if [ -n "${ARMADA_FLATPAK_RELEASE_DIR:-}" ]; then
 fi
 repo_dir="$release_dir/flatpak-repo"
 bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
-ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/downloads/flatpak/}
 
 FLATPAK_GPG_KEY=${FLATPAK_GPG_KEY:-}
 FLATPAK_GPG_PUBLIC_KEY=${FLATPAK_GPG_PUBLIC_KEY:-}
@@ -230,8 +229,9 @@ cleanup() {
 }
 trap cleanup 0 1 2 15
 
+# No --repo-url (see build.sh). --gpg-keys is what `flatpak install` verifies
+# the bundled commit against.
 flatpak build-bundle \
-  --repo-url="$ARMADA_FLATPAK_REPO_URL" \
   --gpg-keys="$staged_public_key" \
   "$repo_dir" "$signed_bundle" buzz.armada.app stable
 
@@ -246,4 +246,4 @@ rmdir -- "$key_stage_dir"
 rmdir -- "$bundle_stage_dir"
 
 echo "Signed Flatpak bundle: $bundle"
-echo "Signed update repository: $repo_dir"
+echo "Signed local repository: $repo_dir"

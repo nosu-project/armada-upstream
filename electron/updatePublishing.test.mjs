@@ -196,12 +196,12 @@ describe("desktop update publication", () => {
     );
   });
 
-  // The published key cannot vouch for itself: everything under
-  // /downloads/flatpak/ comes from one HTTPS host. The out-of-band channel is
-  // the committed announcement, which ships in the static build and is named
-  // by sha256 in the nsite manifest. These two gates are what keep the halves
-  // from drifting — a rotated secret whose announcement was never committed
-  // must fail the tag rather than ship a key nothing independent names.
+  // The embedded key cannot vouch for itself: it travels inside the bundle it
+  // signs. The out-of-band channel is the committed announcement, which ships
+  // in the static build and is named by sha256 in the nsite manifest. These
+  // two gates are what keep the halves from drifting — a rotated secret whose
+  // announcement was never committed must fail the tag rather than ship a key
+  // nothing independent names.
   it("refuses to sign a key the committed announcement does not name", () => {
     const signingScript = String(flatpakSigningStep?.run || "");
     // The announcement is read out of the object database, like sign.sh, and
@@ -306,12 +306,13 @@ describe("desktop update publication", () => {
   // nsyte runs one upload queue per Blossom server and signs the manifest only
   // after EVERY queue drains, with ~90 s of retries per file on a dead server,
   // so one broken mirror runs a deploy past its deadline and publishes nothing.
-  // Every nsite deploy and download therefore goes through the wrappers, which
-  // probe the hosts, bound the run, retry without the server a failed run
-  // blames, and deploy with --sync so a mirror that missed a deploy is
-  // backfilled by the next one. A workflow calling nsyte itself would get none
-  // of that and fail exactly the way this guards against.
-  it("reaches nsyte only through the probing, bounded wrappers", () => {
+  // Every nsite deploy therefore goes through the wrapper, which probes the
+  // hosts, bounds the run, retries without the server a failed run blames, and
+  // deploys with --sync so a mirror that missed a deploy is backfilled by the
+  // next one. A workflow calling nsyte itself would get none of that and fail
+  // exactly the way this guards against. There is exactly one nsite deploy:
+  // the web client, from deploy-nsite.
+  it("reaches nsyte only through the probing, bounded wrapper", () => {
     const workflows = ["deploy-nsite.yml", "release.yml"].map((file) =>
       loadYaml(
         fs.readFileSync(
@@ -337,22 +338,29 @@ describe("desktop update publication", () => {
         }
       }
     }
-    // deploy-nsite: fold (download) + publish; release: armada-fp publish,
-    // armada refresh (download + deploy).
-    expect(wrapperCalls.length).toBeGreaterThanOrEqual(5);
+    expect(wrapperCalls).toEqual(["scripts/nsite-deploy.sh dist"]);
+    expect(fs.existsSync(path.resolve(root, "scripts/nsite-download.sh"))).toBe(false);
+    expect(fs.existsSync(path.resolve(root, "scripts/verify-flatpak-origin.sh"))).toBe(false);
+    // No step may reintroduce the OSTree repository fold.
+    for (const file of ["deploy-nsite.yml", "release.yml"]) {
+      const source = fs.readFileSync(
+        path.resolve(root, ".ngit/act/workflows", file),
+        "utf8",
+      );
+      const active = source
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"))
+        .join("\n");
+      expect(active).not.toContain("armada-fp");
+      expect(active).not.toContain("downloads/flatpak");
+    }
 
     const deploy = fs.readFileSync(
       path.resolve(root, "scripts/nsite-deploy.sh"),
       "utf8",
     );
-    const download = fs.readFileSync(
-      path.resolve(root, "scripts/nsite-download.sh"),
-      "utf8",
-    );
-    for (const script of [deploy, download]) {
-      expect(script).toContain('live-hosts.sh" "$servers"');
-      expect(script).toContain("timeout --signal=TERM --kill-after=30");
-    }
+    expect(deploy).toContain('live-hosts.sh" "$servers"');
+    expect(deploy).toContain("timeout --signal=TERM --kill-after=30");
     // The mirroring: without --sync nsyte transfers only files whose hash
     // changed since the last manifest, and a server that missed one deploy
     // stays missing those blobs forever.
@@ -453,11 +461,10 @@ describe("desktop update publication", () => {
     expect(signingScript).toContain(
       "bundle_origin=$(flatpak info --user --show-origin buzz.armada.app)",
     );
-    expect(signingScript).toContain(
-      '[ "$bundle_url" = "https://armada.buzz/downloads/flatpak/" ]',
-    );
+    // No origin url (nothing serves a repository), but still GPG-verified.
+    expect(signingScript).toContain('[ -z "$bundle_url" ]');
+    expect(signingScript).not.toContain("armada.buzz/downloads/flatpak");
     expect(signingScript).toContain('[ "$bundle_gpg_verify" = true ]');
-    expect(signingScript).toContain('[ "$bundle_summary_verify" = true ]');
     expect(signingScript).toContain("cleanup_signing_home\n");
 
     const toolingScript = String(

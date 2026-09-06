@@ -153,7 +153,7 @@ function watchBundleBoot() {
       `[bundle] renderer did not report ready within ${BUNDLE_BOOT_GRACE_MS}ms`,
       activeBundleId ? `(bundle ${activeBundleId})` : "(shipped bundle)",
     );
-    // TODO: trigger an immediate bundle check once the fetch path lands.
+    if (flatpakUpdatesSupported()) void checkForDesktopUpdates(false);
   }, BUNDLE_BOOT_GRACE_MS).unref();
 }
 
@@ -774,13 +774,8 @@ function hideWindowToTray() {
 // electron-updater supports the installed NSIS build on Windows, signed macOS
 // builds, and AppImage on Linux. A portable .exe has nowhere stable to install
 // an update, and a deb stays owned by apt, so those formats never contact the
-// update feed. A Flatpak reads the SAME feed to NOTICE an update, but applies
-// it through the Flatpak update portal instead — its `/app` is a read-only
-// OSTree mount electron-updater cannot rewrite, and the portal
-// (org.freedesktop.portal.Flatpak, reachable from every sandbox with no
-// finish-args grant) is the one actor that can deploy the newer commit from the
-// GPG-verified origin remote and then spawn a fresh instance on it
-// (`checkForFlatpakUpdate` / electron/flatpakUpdate.js).
+// update feed. A Flatpak is never replaced; its web bundle is
+// (checkForWebBundleUpdate).
 //
 // The feed is the kind-30622 release event — the same one /downloads reads —
 // resolved by ./nostrUpdateProvider.js (electron-updater path) and directly by
@@ -792,12 +787,8 @@ function hideWindowToTray() {
 // provider outright. See electron/README.md.
 
 // A Flathub-managed build carries a marker at resources/ARMADA_FLATHUB_BUILD
-// (installed by packaging/flathub/buzz.armada.app.yml). Flathub owns the repo
-// and pushes updates itself, so BOTH self-update paths — electron-updater and
-// the Flatpak update portal — must stay dark: a build that reached for the
-// portal here would be asking to deploy from an armada.buzz origin remote it
-// was never installed with. Cached: the file cannot appear or vanish while the
-// process runs, and this is read on a timer and from the tray menu.
+// (installed by packaging/flathub/buzz.armada.app.yml). Flathub owns updates,
+// so both paths stay dark there. Cached: read on a timer and from the tray.
 function isFlathubManagedBuild() {
   if (flathubManagedBuild === undefined) {
     flathubManagedBuild =
@@ -840,22 +831,13 @@ function autoUpdatesSupported() {
   });
 }
 
-// Whether this is a packaged Flatpak, which updates through its OWN path rather
-// than electron-updater. `supportsSelfUpdate()` deliberately excludes Flatpak
-// (its `/app` is a read-only OSTree mount the process cannot rewrite, and
-// electron-updater has no installer for the format), so the two predicates are
-// mutually exclusive. The Flatpak path resolves the SAME kind-30622 event to
-// decide there is something to do, then has the update PORTAL deploy the newer
-// commit from the GPG-verified origin remote and spawn a fresh instance on it —
-// see electron/flatpakUpdate.js.
+// A packaged, bundle-installed Flatpak: read-only /app, so it updates its web
+// bundle instead of itself. Mutually exclusive with supportsSelfUpdate().
 function flatpakUpdatesSupported() {
   return (
     app.isPackaged &&
     process.platform === "linux" &&
     Boolean(process.env.FLATPAK_ID) &&
-    // A Flathub build sets FLATPAK_ID like any other, but must NOT drive the
-    // portal update path — Flathub owns updates. The marker is the only thing
-    // that distinguishes it from the self-hosted OSTree build.
     !isFlathubManagedBuild()
   );
 }
@@ -872,7 +854,7 @@ async function showUpdateMessage(options) {
 }
 
 async function checkForDesktopUpdates(manual = false) {
-  if (flatpakUpdatesSupported()) return checkForFlatpakUpdate(manual);
+  if (flatpakUpdatesSupported()) return checkForWebBundleUpdate(manual);
   if (!autoUpdatesSupported()) return;
   if (updateCheckInFlight) {
     if (manual) manualUpdateCheck = true;
@@ -899,124 +881,69 @@ async function checkForDesktopUpdates(manual = false) {
   }
 }
 
-// Resolve the release event, offer the update, install it through the Flatpak
-// update portal, and restart into the new deploy. The whole flow is synchronous
-// within this one call — unlike electron-updater, which drives the download and
-// install through events — so `manualUpdateCheck` is read directly rather than
-// handed to a later listener.
-//
-// The event decides WHETHER to offer (same feed, same comparator as every other
-// edition); the portal does the whole apply. `UpdateMonitor.Update()` pulls and
-// deploys this app's newer commit from the GPG-verified origin remote the
-// signed bundle embedded at install time — the portal cannot be handed
-// arbitrary bytes, which is why nothing is downloaded from Blossom here — and
-// `Spawn(LATEST_VERSION)` starts a fresh instance on the new deploy, which a
-// bare `app.relaunch()` cannot do: a child of this process inherits the OLD
-// sandbox, whose `/app` still mounts the commit it was launched from. See
-// electron/flatpakUpdate.js.
-async function checkForFlatpakUpdate(manual = false) {
+// Vesktop-style: the Flatpak shell is never replaced, its WEB BUNDLE is.
+// Fetch the site's dist archive from the public host the renderer registered,
+// activate it (electron/webBundleUpdate.js + bundleStore.js), offer a restart.
+async function checkForWebBundleUpdate(manual = false) {
   if (updateCheckInFlight) {
     if (manual) manualUpdateCheck = true;
     return;
   }
   updateCheckInFlight = true;
   manualUpdateCheck = manual;
-  // Whether the user pressed "Install and restart": a failure after that click
-  // is reported even on a background check — silence there would look like the
-  // update simply never happened.
-  let confirmedInstall = false;
-  let bus;
   try {
-    const { resolveDesktopUpdate } = require("./updateFeed.cjs");
-    const {
-      plannedFlatpakUpdate,
-      installFlatpakUpdate,
-      restartIntoLatest,
-    } = require("./flatpakUpdate");
-    // The synthetic `flatpak` target selects the .flatpak bundle over the
-    // AppImage the `linux` target would resolve (see src/lib/desktopUpdate.ts).
-    const update = await resolveDesktopUpdate({
-      target: { platform: "flatpak", arch: process.arch },
-    });
-    const planned = plannedFlatpakUpdate(update, app.getVersion());
+    const { updateWebBundle, WEB_BUNDLE_PATH } = require("./webBundleUpdate");
+    const { readBundleEtag } = require("./bundleStore");
     const wasManual = manualUpdateCheck;
     manualUpdateCheck = false;
-    if (!planned) {
+    if (!deepLinkHost) {
+      console.warn("[bundle] no public host registered; skipping bundle check");
+      return;
+    }
+    const outcome = await updateWebBundle({
+      bundlesDir: BUNDLES_DIR,
+      url: `https://${deepLinkHost}${WEB_BUNDLE_PATH}`,
+      activeId: activeBundleId,
+      etag: readBundleEtag(BUNDLES_DIR),
+    });
+    if (outcome.result !== "installed") {
       if (wasManual) {
         await showUpdateMessage({
           type: "info",
           title: "Armada is up to date",
-          message: `You are running Armada ${app.getVersion()}, the newest available version.`,
+          message: "You are running the newest available version.",
         });
       }
       return;
     }
+    console.log(`[bundle] installed ${outcome.id}`);
     const { response } = await showUpdateMessage({
       type: "info",
-      title: "Armada update available",
-      message: `Armada ${planned.version} is available.`,
-      detail: "Install it now? Armada will restart to finish updating.",
-      buttons: ["Install and restart", "Later"],
+      title: "Armada update ready",
+      message: "A new version of Armada has been downloaded.",
+      detail: "Restart now to use it?",
+      buttons: ["Restart", "Later"],
       defaultId: 0,
       cancelId: 1,
       noLink: true,
     });
     if (response !== 0) return;
-    confirmedInstall = true;
-
-    bus = require("@jellybrick/dbus-next").sessionBus();
-    const outcome = await installFlatpakUpdate({
-      bus,
-      onProgress: (progress) => {
-        if (progress.progress != null) {
-          console.log(`[updater] Flatpak update progress ${progress.progress}%`);
-        }
-      },
-    });
-    if (outcome.result === "nothing") {
-      // The release event and the OSTree repository are published by the same
-      // workflow but propagate independently, so the event can name a version
-      // the remote has not finished serving yet. The next timer tick retries.
-      await showUpdateMessage({
-        type: "info",
-        title: "Update not available yet",
-        message: `Armada ${planned.version} is not yet available from the update repository.`,
-        detail: "Armada will retry automatically. No restart is needed now.",
-      });
-      return;
-    }
-    // The new commit is deployed but this process still runs the old one, and
-    // its children would inherit the old sandbox. Release the single-instance
-    // lock so the spawned instance does not immediately quit as a "second"
-    // one, ask the portal for a fresh instance of the LATEST version, and get
-    // out of its way. isQuitting bypasses close-to-tray.
     isQuitting = true;
-    app.releaseSingleInstanceLock();
-    await restartIntoLatest({ bus });
+    app.relaunch();
     app.exit(0);
   } catch (error) {
-    console.warn("[updater] Flatpak update failed", error);
-    const shouldReport = confirmedInstall || (manual && manualUpdateCheck);
+    console.warn("[bundle] update failed", error);
+    const shouldReport = manual && manualUpdateCheck;
     manualUpdateCheck = false;
     if (shouldReport) {
       await showUpdateMessage({
         type: "error",
-        title: confirmedInstall ? "Update failed" : "Update check failed",
-        message: confirmedInstall
-          ? "Armada could not install the update."
-          : "Armada could not check for updates.",
-        detail: confirmedInstall
-          ? `Running \`flatpak update ${process.env.FLATPAK_ID || "buzz.armada.app"}\` installs it manually.\n\n${String(error?.message || error)}`
-          : "Check your connection and try again.",
+        title: "Update check failed",
+        message: "Armada could not check for updates.",
+        detail: "Check your connection and try again.",
       });
     }
   } finally {
-    try {
-      if (bus) bus.disconnect();
-    } catch {
-      // The check is over either way; a bus that will not disconnect is not
-      // worth more than this.
-    }
     updateCheckInFlight = false;
   }
 }

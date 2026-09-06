@@ -160,14 +160,26 @@ jobs:
         env:
           WEBXDC_RT_REQUIRED: "1"
 
+      # The web bundle as one archive, served beside the site. The desktop
+      # shell (electron/webBundleUpdate.js) fetches it and swaps its app://
+      # origin to it — the Flatpak's only update path. Deterministic tar+gzip
+      # so an unchanged build keeps its hash.
+      - name: Pack the web bundle
+        run: |
+          set -eu
+          mkdir -p dist/downloads
+          tar -C dist --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+            --exclude=./downloads -cf - . | gzip -n > dist/downloads/armada-web.tar.gz
+          ls -l dist/downloads/armada-web.tar.gz
+
       # This deploy IS the Flatpak signing key's out-of-band channel: the
       # manifest published below is signed by the nsite key and commits every
       # path to a sha256, so the fingerprint it attests is vouched for by a
       # Nostr key rather than by armada.buzz's TLS. The README tells users to
       # check the key against it, so a build that quietly dropped the file
       # would leave those instructions pointing at a 404 while this job stayed
-      # green — and the released repository would then be signed by a key no
-      # independent channel names. Refuse to deploy instead.
+      # green — and the released `.flatpak` bundle would then be signed by a
+      # key no independent channel names. Refuse to deploy instead.
       - name: Verify the published Flatpak key fingerprint
         run: |
           set -eu
@@ -194,66 +206,6 @@ jobs:
             exit 1
           fi
           echo "Announcing Flatpak signing key $value."
-
-      # Fold the Flatpak update repository into the build before deploying it.
-      #
-      # The desktop `.flatpak` bundle embeds https://armada.buzz/downloads/flatpak/
-      # as its OSTree origin, and the Flatpak update portal pulls from there — so
-      # armada.buzz has to SERVE that repository, or the portal finds nothing to
-      # install while the release event correctly advertises the new version.
-      # `nsyte deploy` REPLACES the whole `armada` manifest with what is in
-      # `dist/`, so anything not laid into `dist/` here is dropped from the served
-      # site. The release workflow publishes the signed repository to its own
-      # named site (kind 35128, id `armada-fp`); this step recovers that
-      # site's files from Blossom and overlays them under `dist/downloads/flatpak/`
-      # so every push to main reconciles the served repository to the newest one.
-      #
-      # The blobs are already on Blossom, so the deploy below re-publishes only
-      # the `armada` manifest that names them — it does not re-upload the ~390 MB
-      # repository. A `dl` that finds nothing (the site has never been published,
-      # e.g. before the first release that carries this step) is not an error: the
-      # overlay is simply skipped and the site deploys without it, exactly as it
-      # did before.
-      #
-      # Blossom is REDUNDANT — every blob is mirrored on all three servers — so a
-      # single dead mirror must never fail this step. scripts/nsite-download.sh
-      # probes each host at the Blossom level (a 5xx from a proxy in front of a
-      # dead backend counts as down) and hands nsyte only the reachable ones, so
-      # the download succeeds as long as one server and one relay answer instead
-      # of thrashing on a downed host until the runner is OOM-killed (a SIGKILL
-      # runs none of the fallback below, which is how a single-server outage
-      # failed the whole deploy). Its `timeout` is the backstop for a host that
-      # answers the probe but then wedges mid-transfer — `nsyte download`
-      # fetches with no deadline of its own.
-      - name: Fold in the Flatpak update repository
-        timeout-minutes: 15
-        env:
-          NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
-        run: |
-          set -eu
-          # The site's relays and servers come from .nsite/config.json, the same
-          # source of truth as the release workflow that publishes it, so the
-          # two agree on where the site lives.
-          repo_out="$(mktemp -d)"
-          set +e
-          # 3 = nothing reachable, 124/137 = the timeout fired; all of them are
-          # "not proven complete" below.
-          scripts/nsite-download.sh armada-fp "$repo_out" 2>&1 | tee /tmp/nsyte-flatpak-download.log
-          status="${PIPESTATUS[0]}"
-          set -e
-
-          # The repository's own summary is the marker that a real one landed. A
-          # download that failed, was killed by the timeout, or found no site
-          # leaves it absent, and the overlay is skipped rather than deploying a
-          # half-populated tree.
-          if [ "$status" -ne 0 ] || [ ! -s "$repo_out/summary" ]; then
-            echo "No armada-fp repo folded in this run (download rc=$status); deploying without it."
-          else
-            mkdir -p dist/downloads/flatpak
-            cp -rT "$repo_out" dist/downloads/flatpak
-            test -s dist/downloads/flatpak/summary
-            echo "Folded the Flatpak update repository into dist/downloads/flatpak/."
-          fi
 
       - name: Publish to Blossom + relays
         # act does NOT enforce a job's `timeout-minutes` (it parses the field
@@ -309,35 +261,3 @@ jobs:
           # in from its own environment. Job containers get no docker socket
           # and their own PID namespace, so a concurrent job cannot read it.
           scripts/nsite-deploy.sh dist
-
-      # Prove the origin the desktop bundle embeds actually SERVES the OSTree
-      # repository, rather than the gateway's 200 index.html fallback. This is
-      # the guard against the exact failure that shipped once: a green deploy
-      # while /summary returned SPA HTML, so the Flatpak update portal silently
-      # found nothing to install. Only runs when this deploy carried the repo
-      # (the fold above found an armada-fp site); a first deploy before any
-      # release has nothing to check.
-      #
-      # NON-exact: the release workflow may, moments later, refresh the armada
-      # site with a NEWER repo (it is the last writer on a release), so this
-      # asserts only that real repository bytes are served — not that they are
-      # the exact ones this run folded in. Bytes-are-not-HTML and
-      # bytes-are-not-the-fallback both hold whichever version is live.
-      #
-      # The "only when a repo was folded in" gate is IN-SHELL, not a step-level
-      # `if: hashFiles(...)`. act does not evaluate every GitHub expression
-      # function, and a gate that silently evaluated false would skip this guard
-      # entirely — reinstating the exact silent-skip this step exists to catch.
-      # An in-shell `[ -s ]` cannot be skipped by the runner: the step always
-      # runs, and either verifies or logs precisely why it did not.
-      - name: Verify the served Flatpak origin
-        timeout-minutes: 15
-        run: |
-          set -eu
-          if [ ! -s dist/downloads/flatpak/summary ]; then
-            echo "No Flatpak repository was folded into this deploy (no armada-fp site yet); nothing to verify."
-            exit 0
-          fi
-          scripts/verify-flatpak-origin.sh \
-            https://armada.buzz/downloads/flatpak \
-            dist/downloads/flatpak

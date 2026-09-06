@@ -36,11 +36,7 @@ import {
 } from "./releases";
 
 // Re-exported so `electron/updateFeed.cjs` — this file's bundled build — carries
-// the version comparison the Flatpak update path needs. electron-updater does
-// its own semver comparison for the AppImage/NSIS/mac formats, but the Flatpak
-// path in `electron/flatpakUpdate.js` runs outside electron-updater and decides
-// "is this newer than what I'm running" itself, against the same parser the rest
-// of the release contract uses rather than a second one.
+// the same version comparison the rest of the release contract uses.
 export { compareVersions } from "./releases";
 
 /** How long a single relay gets to answer before it is written off. */
@@ -74,13 +70,9 @@ const RELEASE_QUERY_LIMIT = 50;
  * set. It resolves the signed `.flatpak` bundle rather than the AppImage —
  * deliberately kept OUT of the `linux` row so electron-updater never receives
  * it: a Flatpak's `/app` is a read-only OSTree mount the process cannot rewrite,
- * and `quitAndInstall` has no installer for the format. The Flatpak update flow
- * (`electron/flatpakUpdate.js`) runs entirely outside electron-updater, and it
- * uses this resolution for DETECTION only: a release that carries a `.flatpak`
- * artifact is one whose OSTree commit the same workflow published, so resolving
- * it here is what decides "there is something to install". The install itself
- * is the Flatpak update portal deploying that commit from the GPG-verified
- * origin remote — nothing from this row's URL is ever downloaded on that path.
+ * and `quitAndInstall` has no installer for the format. The Flatpak shell
+ * updates its web bundle instead (`electron/webBundleUpdate.js`); this row is
+ * how a caller resolves the bundle artifact if it ever needs to.
  */
 const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) => boolean }> = {
   linux: { os: "linux", accepts: (name) => /\.appimage$/i.test(name) },

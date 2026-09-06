@@ -10,10 +10,9 @@ staged_appimage="$release_dir/Armada.AppImage"
 build_dir="$release_dir/flatpak-build"
 repo_dir="$release_dir/flatpak-repo"
 bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
-# A sideloaded bundle otherwise creates a disabled origin with no URL, leaving
-# Flatpak nowhere to check for Armada updates. Embedding the hosted OSTree
-# repository makes the normal `flatpak update` path own future releases.
-ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/downloads/flatpak/}
+# No --repo-url: nothing serves an OSTree repository for this app. The Flatpak
+# updates its web bundle in place instead (electron/webBundleUpdate.js); the
+# repository built here is only what sign.sh exports the bundle from.
 
 # Signing is deliberately a separate, post-build phase. Never let release-key
 # material enter flatpak-builder: the manifest executes the packaged AppImage
@@ -76,7 +75,7 @@ case "$builder" in
   system)
     flatpak-builder "$@" "$build_dir" "$manifest"
     flatpak build-update-repo "$repo_dir"
-    flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$repo_dir" "$bundle" buzz.armada.app stable
+    flatpak build-bundle "$repo_dir" "$bundle" buzz.armada.app stable
     ;;
   flatpak-user)
     flatpak run --user --filesystem="$repo_root" --command=sh \
@@ -84,14 +83,13 @@ case "$builder" in
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
-      --env=ARMADA_FLATPAK_REPO_URL="$ARMADA_FLATPAK_REPO_URL" \
       org.flatpak.Builder -c '
         set -eu
         export XDG_DATA_HOME="$HOME/.local/share"
         flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
         wait "$!"
         flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
-        flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
   flatpak-system)
@@ -100,17 +98,16 @@ case "$builder" in
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
-      --env=ARMADA_FLATPAK_REPO_URL="$ARMADA_FLATPAK_REPO_URL" \
       org.flatpak.Builder -c '
         set -eu
         export XDG_DATA_HOME="$HOME/.local/share"
         flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
         wait "$!"
         flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
-        flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
 esac
 
 echo "Flatpak bundle: $bundle"
-echo "Update repository: $repo_dir"
+echo "Local repository (signing input): $repo_dir"
