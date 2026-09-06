@@ -52,6 +52,11 @@ src/wasm/
 # Release-event artifacts staged by CI (see .ngit/act/workflows/release.yml).
 .release-artifacts/
 
+# flatpak-builder leaves these in the cwd when a from-source build is run from
+# the repo (packaging/flathub/). The state dir alone is ~1GB of cached sources.
+.flatpak-builder/
+.flatpak-build-tools/
+
 # Playwright e2e outputs (npm run test:e2e). The browsers install to
 # ~/.cache/ms-playwright, not the repo; these are only the run artifacts.
 test-results/

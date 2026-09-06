@@ -221,6 +221,15 @@ modules:
         url: https://git.shakespeare.diy/npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/armada.git
         tag: v0.59.7
         commit: 51ecd845c51b55c9745db2111d4a8cd07e1fc092
+        # Flathub's external-data-checker bot reads this: on a schedule it lists
+        # this remote's tags, and on a newer `vX.Y.Z` it opens a PR bumping BOTH
+        # `tag` and the resolved `commit` above — collapsing two of the three
+        # release-bump edits into an automated PR. The `<release>` entry in the
+        # metainfo stays manual (the bot writes no changelog). The pattern only
+        # matches plain vMAJOR.MINOR.PATCH, so a pre-release tag is ignored.
+        x-checker-data:
+          type: git
+          tag-pattern: ^v([\d.]+)$
       # The build helpers and app-shell assets live in THIS flathub repo, not in
       # the app checkout — the pinned release tag predates packaging/flathub/, so
       # they are overlaid into the checkout as file sources rather than read from
