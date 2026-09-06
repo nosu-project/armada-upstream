@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Armada screenshot seed harness</title>
+  </head>
+  <body>
+    <!-- Loaded by e2e/dm-screenshot.spec.ts through the Vite dev server. Not an
+         app entry: it is never listed in a production build input, so it ships
+         in no bundle and only the dev server ever serves it. It exposes
+         window.__armadaSeed, which writes the app's OWN ArmadaDB (IndexedDB,
+         per-origin) so the real app served from `/` on the same port reads the
+         seeded DM history back. -->
+    <script type="module" src="./screenshotSeed.ts"></script>
+  </body>
+</html>

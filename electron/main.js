@@ -313,6 +313,7 @@ let isQuitting = false;
 let manualUpdateCheck = false;
 let updateCheckInFlight = false;
 let macSelfUpdateEligible;
+let flathubManagedBuild;
 let updateCheckTimer = null;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
@@ -790,8 +791,25 @@ function hideWindowToTray() {
 // directory name. Its url is never fetched — setFeedURL below replaces the
 // provider outright. See electron/README.md.
 
+// A Flathub-managed build carries a marker at resources/ARMADA_FLATHUB_BUILD
+// (installed by packaging/flathub/buzz.armada.app.yml). Flathub owns the repo
+// and pushes updates itself, so BOTH self-update paths — electron-updater and
+// the Flatpak update portal — must stay dark: a build that reached for the
+// portal here would be asking to deploy from an armada.buzz origin remote it
+// was never installed with. Cached: the file cannot appear or vanish while the
+// process runs, and this is read on a timer and from the tray menu.
+function isFlathubManagedBuild() {
+  if (flathubManagedBuild === undefined) {
+    flathubManagedBuild =
+      app.isPackaged &&
+      fs.existsSync(path.join(process.resourcesPath, "ARMADA_FLATHUB_BUILD"));
+  }
+  return flathubManagedBuild;
+}
+
 function autoUpdatesSupported() {
   if (!app.isPackaged) return false;
+  if (isFlathubManagedBuild()) return false;
   if (process.platform === "darwin" && macSelfUpdateEligible === undefined) {
     const disabledMarker = fs.existsSync(
       path.join(process.resourcesPath, "armada-no-self-update"),
@@ -834,7 +852,11 @@ function flatpakUpdatesSupported() {
   return (
     app.isPackaged &&
     process.platform === "linux" &&
-    Boolean(process.env.FLATPAK_ID)
+    Boolean(process.env.FLATPAK_ID) &&
+    // A Flathub build sets FLATPAK_ID like any other, but must NOT drive the
+    // portal update path — Flathub owns updates. The marker is the only thing
+    // that distinguishes it from the self-hosted OSTree build.
+    !isFlathubManagedBuild()
   );
 }
 

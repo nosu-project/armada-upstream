@@ -1,0 +1,8 @@
+This file marks a Flathub-managed Armada build.
+
+Its presence at resources/ARMADA_FLATHUB_BUILD inside the packaged app tells
+electron/main.js that updates are owned by Flathub, so the app disables every
+self-update path (electron-updater AND the Flatpak update portal). The contents
+are ignored; only the file's existence matters.
+
+See the update gate in electron/main.js.

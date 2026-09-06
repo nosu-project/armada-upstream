@@ -44,6 +44,16 @@ export default defineConfig({
           args: [
             "--use-fake-ui-for-media-stream",
             "--use-fake-device-for-media-stream",
+            // Some sandboxes (restricted user namespaces — containers, hardened
+            // dev boxes) can't spawn Chromium's zygote/renderer children, and
+            // the renderer dies on boot with a bare `Page crashed` and no JS
+            // error. That only bites specs that boot the whole app (the
+            // dm-screenshot capture); the minimal harness pages are unaffected.
+            // `--single-process` collapses the process model so there is no
+            // child to fail — off by default (it disables the multiprocess
+            // architecture and is not what CI or a healthy machine wants) and
+            // opt-in via ARMADA_E2E_SINGLE_PROCESS=1.
+            ...(process.env.ARMADA_E2E_SINGLE_PROCESS ? ["--single-process"] : []),
           ],
         },
       },
