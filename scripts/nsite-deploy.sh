@@ -135,7 +135,7 @@ servers_now="$live_servers"
 status=1
 for attempt in $(seq 1 "$attempts"); do
   log="$log_dir/nsyte-deploy-$(basename "$dir")-$attempt.log"
-  echo "nsyte deploy $dir (attempt $attempt/$attempts) servers=$servers_now relays=$live_relays"
+  echo "nsyte deploy $dir (attempt $attempt/$attempts) servers=$servers_now relays=$live_relays timeout=${run_timeout}s"
 
   # The session goes on the command line because that is the only
   # non-interactive way in: nsyte's `--prompt-sec` is a hidden TTY prompt that

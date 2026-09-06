@@ -263,11 +263,25 @@ jobs:
         # result act has already produced with a single synthetic one — so the
         # logs that would explain the hang are the first thing lost.
         # `nsyte deploy` has no internal deadline of its own; the wrapper below
-        # bounds each of its (at most two) runs at NSITE_DEPLOY_TIMEOUT, 420 s,
-        # and this step's budget is those plus the probes.
+        # bounds each of its (at most two) runs at NSITE_DEPLOY_TIMEOUT and this
+        # step's budget is those plus the probes.
+        #
+        # NSITE_DEPLOY_TIMEOUT is PINNED here rather than left to the wrapper's
+        # 420 s default so the failover bound is deterministic — the coordinator
+        # image was observed running a single deploy ~750 s without the bound
+        # firing, which is exactly the window in which a mirror that passed the
+        # probe and then wedged (blossom.ditto.pub: 10 s per HEAD/PUT × retries)
+        # grinds the step out to 12+ min while still "succeeding" on the healthy
+        # two. This deploy is a manifest reconcile — every blob it names is
+        # already on Blossom (the SPA's changed chunks aside), so a healthy run
+        # finishes in well under 240 s; a wedged mirror hits the bound instead,
+        # nsyte is killed (rc 124), and the wrapper's retry drops the server its
+        # log blames and re-runs on the live remainder. The wrapper now echoes
+        # the effective timeout so a future run's log proves it was honored.
         timeout-minutes: 20
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
+          NSITE_DEPLOY_TIMEOUT: "240"
         run: |
           set -eu
 
