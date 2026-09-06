@@ -180,6 +180,25 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual(Bech32.mentionPubkey("nostr:\(npub)"), vectorString("alicePk"))
     }
 
+    /// The encode direction, against the same nostr-tools-generated vector the
+    /// decode test reads — so a DM deep link's `/dm/<npub>` is the string the
+    /// web client would have written, not merely something that round-trips
+    /// through this file.
+    func testEncodesAHexPubkeyAsItsNpub() {
+        XCTAssertEqual(Bech32.npub(vectorString("alicePk")), npub)
+        XCTAssertEqual(Bech32.mentionPubkey(Bech32.npub(vectorString("alicePk"))!),
+                       vectorString("alicePk"))
+    }
+
+    func testRefusesToEncodeAnythingThatIsNotAPubkey() {
+        XCTAssertNil(Bech32.npub(""))
+        XCTAssertNil(Bech32.npub("nope"))
+        // Right length, not hex.
+        XCTAssertNil(Bech32.npub(String(repeating: "z", count: 64)))
+        // Hex, wrong length.
+        XCTAssertNil(Bech32.npub(String(repeating: "ab", count: 16)))
+    }
+
     func testDecodesAnNprofileByWalkingItsTlv() {
         // The pubkey is TLV type 0; the relay hints beside it are skipped.
         XCTAssertEqual(Bech32.mentionPubkey(nprofile), vectorString("alicePk"))

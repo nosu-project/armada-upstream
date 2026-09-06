@@ -162,8 +162,18 @@ struct PushProcessor {
         return config.dmLevels[key] ?? (config.directMessages ? .all : .nothing)
     }
 
+    /// The `/dm/<peers>` route a tap on this notification opens.
+    ///
+    /// Participants are NPUBS, not the hex the conversation key is made of —
+    /// the mirror of `dmPathSegment` in the web client's `chatRoute`
+    /// (`src/lib/routes.ts`) and of `dmRoute` in the Android service. A route
+    /// string is an identity in the app (the share stash is keyed by one, a
+    /// share shortcut is published under one), so a hex path from here would be
+    /// a second name for a conversation the rest of the app calls something
+    /// else. A participant that isn't a pubkey is left as-is, so a malformed
+    /// key still yields a parseable path rather than a dropped destination.
     static func dmPath(peers: [String]) -> String {
-        "/dm/\(dmConversationKey(peers: peers))"
+        "/dm/\(peers.map { Bech32.npub($0) ?? $0 }.joined(separator: ","))"
     }
 
     static func dmThreadId(peers: [String]) -> String {

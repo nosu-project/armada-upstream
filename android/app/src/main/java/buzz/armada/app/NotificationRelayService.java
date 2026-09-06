@@ -41,6 +41,8 @@ import androidx.core.graphics.drawable.IconCompat;
 import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 
+import com.bitchat.android.nostr.Bech32;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -6385,6 +6387,15 @@ public class NotificationRelayService extends Service {
      * The `/dm/<key>` route for a conversation key — the mirror of the `dm`
      * case of the web client's `chatRoute` (`src/lib/routes.ts`).
      *
+     * Each participant is an NPUB, not the hex the conversation key is made
+     * of. A DM route has one spelling across the client, and the two are not
+     * interchangeable even though both resolve: a route string is an identity
+     * (the share stash is keyed by it, a Direct Share shortcut is published
+     * under it, the sent-rooms ledger records one), so a hex path from here
+     * would be a second name for a conversation the rest of the app calls
+     * something else. Mirrors `dmPathSegment` in the web client's `chatRoute`
+     * (`src/lib/routes.ts`) and `PushProcessor.dmPath` on iOS.
+     *
      * Each participant is encoded ON ITS OWN so the separator survives as a
      * literal: `,` is a legal sub-delim in a path segment, and `/dm/<a>,<b>`
      * reads as what it is rather than as `%2C`. Encoding matters because the
@@ -6392,16 +6403,29 @@ public class NotificationRelayService extends Service {
      * #isDmConvKey} is what should keep a malformed one from reaching a route
      * at all, and this is the second line: every other route builder here
      * encodes its variable segment, and a base handed to {@link
-     * #appendFocusSegment} is not encoded by it.
+     * #appendFocusSegment} is not encoded by it. A participant that is not a
+     * pubkey is passed through as-is rather than dropped, so a malformed key
+     * still produces a parseable (if unresolvable) path.
      */
     private static String dmRoute(String convKey) {
         StringBuilder sb = new StringBuilder("/dm/");
         List<String> peers = ServiceStore.dm17ConvPeers(convKey);
         for (int i = 0; i < peers.size(); i++) {
             if (i > 0) sb.append(',');
-            sb.append(uriEncode(peers.get(i)));
+            sb.append(uriEncode(npubOrRaw(peers.get(i))));
         }
         return sb.toString();
+    }
+
+    /** A hex pubkey as its npub, or the input unchanged when it isn't one. */
+    static String npubOrRaw(String pubkey) {
+        byte[] raw = pubkey != null && pubkey.length() == 64 ? ConcordCrypto.hexToBytes(pubkey) : null;
+        if (raw == null) return pubkey;
+        try {
+            return Bech32.INSTANCE.encode("npub", raw);
+        } catch (RuntimeException e) {
+            return pubkey;
+        }
     }
 
     /**

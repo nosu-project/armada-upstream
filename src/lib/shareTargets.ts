@@ -27,6 +27,7 @@
  */
 
 import { KvPrefixCache } from "@/lib/db/kvCache";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 /** One room the viewer has sent to. */
 export interface LastSentEntry {
@@ -124,9 +125,27 @@ function readAll(self: string): { route: string; entry: LastSentEntry }[] {
 /**
  * This account's rooms, newest send first. Synchronous, and empty until
  * {@link warmSentRooms} resolves.
+ *
+ * Routes are re-emitted through `chatRoute`, and rows that normalize to the
+ * same path are collapsed to the newest. New writes are already canonical —
+ * `recordSent` is called with `roomPath(parseChatRoute(…))` — but rows written
+ * before DM routes were canonicalized name the same conversation in hex, and
+ * this ledger is read to BUILD shortcut ids. Left alone, one person would get
+ * two suggestions under two ids, and the timestamp the publisher ranks by would
+ * be split across them. The stale row keeps its KV key (so {@link prune} can
+ * still find and drop it) and ages out on its own.
  */
 export function sentRooms(self: string): { route: string; entry: LastSentEntry }[] {
-  return self ? readAll(self) : [];
+  if (!self) return [];
+  const byRoute = new Map<string, LastSentEntry>();
+  // Newest first, so the first row to claim a route is the one that wins and
+  // later duplicates are dropped rather than merged field by field.
+  for (const { route, entry } of readAll(self)) {
+    const parsed = parseChatRoute(route);
+    const canonical = parsed ? chatRoute(parsed) : route;
+    if (!byRoute.has(canonical)) byRoute.set(canonical, entry);
+  }
+  return [...byRoute].map(([route, entry]) => ({ route, entry }));
 }
 
 /** Fill the ledger from KV. Idempotent and shared by concurrent callers. */

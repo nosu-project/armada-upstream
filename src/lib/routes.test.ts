@@ -1,5 +1,7 @@
+import { nip19 } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
+import { parseDmRouteParam } from "./dmConversation";
 import {
   type ChatRoute,
   chatRoute,
@@ -8,6 +10,12 @@ import {
   roomPath,
   withoutMessage,
 } from "./routes";
+
+/** The `:peer` param a path parses to, for feeding back to the DM parser. */
+function dmPeerOf(path: string): string | undefined {
+  const route = parseChatRoute(path);
+  return route?.kind === "dm" ? route.peer : undefined;
+}
 
 /** Every legal shape, as the pair the builder and parser must agree on. */
 const ROUNDTRIPS: Array<[ChatRoute, string, string]> = [
@@ -127,6 +135,49 @@ describe("chatRoute / parseChatRoute", () => {
 
   it("parses the pre-rename /dms path so a stale link still reports as a DM", () => {
     expect(parseChatRoute("/dms/npub1abc")).toEqual({ kind: "dm", peer: "npub1abc" });
+  });
+
+  /**
+   * A DM route has ONE spelling, whichever form the caller happens to hold.
+   *
+   * Callers hold the conversation key in whatever their layer speaks — the
+   * store and the wire folds carry hex, the DM page carries `dmRouteParam`'s
+   * npubs — and a route string is used as an identity elsewhere (the share
+   * stash is keyed by the destination path, a Direct Share shortcut is
+   * published under one, the sent-rooms ledger records one). Two spellings
+   * meant a share routed to `/dm/<hex>` was never claimed by the composer
+   * declaring itself at `/dm/<npub>`.
+   */
+  it("spells a DM peer as an npub whichever form it is given", () => {
+    const hex = "a1".repeat(32);
+    const npub = nip19.npubEncode(hex);
+
+    expect(chatRoute({ kind: "dm", peer: hex })).toBe(`/dm/${npub}`);
+    expect(chatRoute({ kind: "dm", peer: npub })).toBe(`/dm/${npub}`);
+    // Idempotent, so a path may be re-emitted through the builder safely.
+    expect(chatRoute({ kind: "dm", peer: hex, messageId: "m1" })).toBe(`/dm/${npub}/m/m1`);
+    // Both forms still parse, so links already in the wild keep resolving.
+    expect(parseDmRouteParam(dmPeerOf(`/dm/${hex}`))).toBe(hex);
+    expect(parseDmRouteParam(dmPeerOf(`/dm/${npub}`))).toBe(hex);
+  });
+
+  it("encodes each participant of a group DM, keeping the separator literal", () => {
+    const a = "a1".repeat(32);
+    const b = "b2".repeat(32);
+    const path = chatRoute({ kind: "dm", peer: `${a},${b}` });
+
+    expect(path).toBe(`/dm/${nip19.npubEncode(a)},${nip19.npubEncode(b)}`);
+    expect(path).not.toContain("%2C");
+    expect(parseDmRouteParam(dmPeerOf(path))).toBe(`${a},${b}`);
+  });
+
+  it("passes a segment that is not a pubkey through unchanged", () => {
+    // A malformed key must still produce a path that round-trips, rather than
+    // being dropped or mangled into something that names a different room.
+    for (const peer of ["npub1abc", "not a pubkey", "zz".repeat(32)]) {
+      const path = chatRoute({ kind: "dm", peer });
+      expect(parseChatRoute(path)).toEqual({ kind: "dm", peer });
+    }
   });
 
   it("rejects shapes that name no location", () => {

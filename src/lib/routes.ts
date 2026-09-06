@@ -27,8 +27,11 @@
  * `sanitizePlausibleUrl` is built on.
  */
 
+import { nip19 } from "nostr-tools";
+
 import { DM_PEER_SEP } from "@/lib/nip17/protocol";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { resolvePubkey } from "@/lib/resolvePubkey";
 import { shareOrigin } from "@/lib/shareOrigin";
 
 /** Non-channel panes of a Concord community. */
@@ -110,6 +113,40 @@ function isNip29Pane(value: string): value is Nip29Pane {
  * A message id is only meaningful under a room, so a `messageId` with no room
  * is dropped rather than producing a path that names nothing.
  */
+/**
+ * The `/dm/` segment for a conversation key: every participant as an npub.
+ *
+ * A DM route is spelled ONE way, and this is where that is enforced, because a
+ * conversation key is hex and a route is not. Callers hold the key in whichever
+ * form their layer speaks — the store and the wire folds carry hex pubkeys, the
+ * DM page carries `dmRouteParam`'s npubs — and before this normalization both
+ * reached the URL verbatim, so the same conversation had two path spellings
+ * that no `===` could reconcile.
+ *
+ * That is not cosmetic. A route string is used as an IDENTITY in three places:
+ * the share stash is keyed by the destination's path (`consumeShareFor`), a
+ * Direct Share shortcut is published under one, and the sent-rooms ledger
+ * records one per room. Two spellings meant a share picked in the picker
+ * (`/dm/<hex>`) was never claimed by the composer that declared itself at
+ * `/dm/<npub>`, so the conversation opened with the shared text dropped; and
+ * one person accumulated two shortcuts and two ledger rows.
+ *
+ * Each participant is encoded ON ITS OWN so the separator survives as a
+ * literal — it is a legal sub-delim in a path segment, and `/dm/<a>,<b>` reads
+ * as what it is instead of `%2C`. A segment that is not a pubkey is passed
+ * through URL-escaped and otherwise untouched, so it still round-trips through
+ * {@link parseChatRoute} rather than being silently dropped or mangled.
+ */
+function dmPathSegment(peer: string): string {
+  return peer
+    .split(DM_PEER_SEP)
+    .map((part) => {
+      const pubkey = resolvePubkey(part);
+      return pubkey ? nip19.npubEncode(pubkey) : encodeURIComponent(part);
+    })
+    .join(DM_PEER_SEP);
+}
+
 function withFocus(
   base: string,
   focus: { threadRoot?: string; messageId?: string },
@@ -137,14 +174,7 @@ export function chatRoute(route: ChatRoute): string {
     }
     case "dm": {
       if (!route.peer) return "/dm";
-      // Each participant is escaped on its own so the separator survives as a
-      // literal — it is a legal sub-delim in a path segment, and `/dm/<a>,<b>`
-      // reads as what it is instead of `%2C`.
-      const segment = route.peer
-        .split(DM_PEER_SEP)
-        .map(encodeURIComponent)
-        .join(DM_PEER_SEP);
-      return withFocus(`/dm/${segment}`, { messageId: route.messageId });
+      return withFocus(`/dm/${dmPathSegment(route.peer)}`, { messageId: route.messageId });
     }
   }
 }

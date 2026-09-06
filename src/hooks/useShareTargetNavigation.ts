@@ -3,10 +3,10 @@ import { useNavigate } from "react-router-dom";
 
 import {
   hasShareTarget,
-  isShareableRoomRoute,
   onLateColdShareRoute,
   resolveNativeShare,
   ShareTarget,
+  shortcutShareRoute,
 } from "@/lib/shareTarget";
 import { signalDeepLinkNavigated } from "@/lib/webReady";
 
@@ -36,10 +36,7 @@ export function useShareTargetNavigation(): void {
       try {
         const peek = await ShareTarget.peekShare();
         if (!peek.pending) return;
-        const route =
-          peek.shortcutId && isShareableRoomRoute(peek.shortcutId)
-            ? peek.shortcutId
-            : "/share";
+        const route = (peek.shortcutId && shortcutShareRoute(peek.shortcutId)) || "/share";
         if (!cancelled) navigate(route);
       } finally {
         // MainActivity threw the crest gate over the WebView on the share

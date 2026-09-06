@@ -1,6 +1,6 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-import { parseChatRoute } from "@/lib/routes";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 /**
  * Android share-target bridge (ShareTargetPlugin.java) + the in-memory share
@@ -219,22 +219,32 @@ export function discardShare(): void {
 // ── Native share resolution ──────────────────────────────────────────────────
 
 /**
- * Whether a tapped Direct Share shortcut id is a route a composer actually
- * mounts at. Requires a ROOM (a peer / group / channel): community- or
- * list-level routes redirect on mount, which would strand the path-matched
- * payload. Anything else falls back to the /share picker.
+ * The destination a tapped Direct Share shortcut id names, or null when it
+ * names none.
+ *
+ * Two jobs, deliberately in one function because the answers must agree. It
+ * requires a ROOM (a peer / group / channel): community- or list-level routes
+ * redirect on mount, which would strand the path-matched payload, so anything
+ * else falls back to the /share picker. And it re-emits the id through
+ * `chatRoute` rather than returning it verbatim, because the id was written by
+ * a PREVIOUS version of this app and handed back by the OS — a shortcut
+ * published before DM routes were canonicalized still carries a hex peer, and
+ * would key the stash at a path no composer declares. Republishing retires
+ * those ids eventually; this makes the ones already on the launcher work now.
+ *
+ * The same value is used as the navigation target and as the stash key, so
+ * normalizing it here is what keeps those two from disagreeing again.
  */
-export function isShareableRoomRoute(path: string): boolean {
+export function shortcutShareRoute(path: string): string | null {
   const route = parseChatRoute(path);
-  if (!route) return false;
-  switch (route.kind) {
-    case "dm":
-      return !!route.peer;
-    case "nip29":
-      return !!route.groupId;
-    case "concord":
-      return !!route.channelId;
-  }
+  if (!route) return null;
+  const hasRoom =
+    route.kind === "dm"
+      ? !!route.peer
+      : route.kind === "nip29"
+        ? !!route.groupId
+        : !!route.channelId;
+  return hasRoom ? chatRoute(route) : null;
 }
 
 async function sharedFileToFile(meta: SharedFileMeta): Promise<File | null> {
@@ -263,8 +273,7 @@ export async function resolveNativeShare(): Promise<string | null> {
   const parts: string[] = [];
   if (res.subject && !(res.text ?? "").includes(res.subject)) parts.push(res.subject);
   if (res.text) parts.push(res.text);
-  const route =
-    res.shortcutId && isShareableRoomRoute(res.shortcutId) ? res.shortcutId : null;
+  const route = res.shortcutId ? shortcutShareRoute(res.shortcutId) : null;
   stashShare({ text: parts.join("\n"), files }, route);
   return route ?? "/share";
 }
@@ -304,8 +313,7 @@ if (hasShareTarget()) {
         settleColdShare(null);
         return;
       }
-      const route =
-        res.shortcutId && isShareableRoomRoute(res.shortcutId) ? res.shortcutId : "/share";
+      const route = (res.shortcutId && shortcutShareRoute(res.shortcutId)) || "/share";
       if (!coldResolved) {
         settleColdShare(route);
       } else {

@@ -455,7 +455,14 @@ final class SenderIdentityTests: XCTestCase {
             "group participation must not trust the author in an unrelated 1:1"
         )
         XCTAssertEqual(PushProcessor.dmThreadId(peers: peers), "dm-\(key)")
-        XCTAssertEqual(PushProcessor.dmPath(peers: peers), "/dm/\(key)")
+        // The thread id is the conversation KEY (hex, an internal identity);
+        // the path is a ROUTE, and every route in the app spells a pubkey as
+        // an npub. The two are deliberately not the same string.
+        XCTAssertEqual(
+            PushProcessor.dmPath(peers: peers),
+            "/dm/\(peers.map { Bech32.npub($0)! }.joined(separator: ","))"
+        )
+        XCTAssertFalse(PushProcessor.dmPath(peers: peers).contains(peer))
         XCTAssertTrue(
             PushProcessor.isMutedDm(
                 peers: peers,

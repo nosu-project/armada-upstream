@@ -1,14 +1,37 @@
 import Foundation
 
 /// Just enough NIP-19 to turn a `npub1…` / `nprofile1…` mention into the hex
-/// pubkey a name can be looked up by.
+/// pubkey a name can be looked up by, and to spell a pubkey back as an npub
+/// for the deep link a notification tap opens.
 ///
-/// Decode only, and only the two person-shaped types. A notification never
-/// encodes anything, and the other NIP-19 types name events and relays, which
-/// no notification body renders.
+/// Only the person-shaped types: the others name events and relays, which no
+/// notification body renders and no route here names.
 enum Bech32 {
 
     private static let charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
+
+    /// A hex pubkey as its `npub1…` form, or nil when it isn't one.
+    ///
+    /// Encoding exists here for one reason: a DM deep link names its
+    /// participants as npubs (`PushProcessor.dmPath`), matching the web
+    /// client's `chatRoute` and the Android service's `dmRoute`. A route
+    /// string is an identity elsewhere in the app, so a second spelling of it
+    /// is a second name for the same conversation.
+    static func npub(_ pubkeyHex: String) -> String? {
+        guard let bytes = Hex.decode(pubkeyHex), bytes.count == 32 else { return nil }
+        return encode(hrp: "npub", bytes: bytes)
+    }
+
+    private static func encode(hrp: String, bytes: [UInt8]) -> String? {
+        guard let values = convertBits(bytes, from: 8, to: 5, pad: true) else { return nil }
+        let combined = values + createChecksum(hrp: hrp, values: values)
+        return hrp + "1" + String(combined.map { charset[Int($0)] })
+    }
+
+    private static func createChecksum(hrp: String, values: [UInt8]) -> [UInt8] {
+        let checksum = polymod(hrpExpand(hrp) + values + [0, 0, 0, 0, 0, 0]) ^ 1
+        return (0..<6).map { UInt8((checksum >> (5 * (5 - UInt32($0)))) & 31) }
+    }
 
     /// The hex pubkey a NIP-27 mention token refers to, or nil when the token
     /// is not a valid, checksummed reference to a person. A bad checksum is
