@@ -296,11 +296,76 @@ describe("desktop update publication", () => {
       (step) => step.name === "Publish to Blossom + relays",
     );
     const publishScript = String(publishStep?.run || "");
-    expect(publishScript).toContain("nsyte deploy dist");
+    expect(publishScript).toContain("scripts/nsite-deploy.sh dist");
     expect(publishScript).not.toContain("nsyte snapshot");
     // Nothing here writes the config, so no run can leave the live site
     // titled with a version.
     expect(publishScript).not.toContain("config.title");
+  });
+
+  // nsyte runs one upload queue per Blossom server and signs the manifest only
+  // after EVERY queue drains, with ~90 s of retries per file on a dead server,
+  // so one broken mirror runs a deploy past its deadline and publishes nothing.
+  // Every nsite deploy and download therefore goes through the wrappers, which
+  // probe the hosts, bound the run, retry without the server a failed run
+  // blames, and deploy with --sync so a mirror that missed a deploy is
+  // backfilled by the next one. A workflow calling nsyte itself would get none
+  // of that and fail exactly the way this guards against.
+  it("reaches nsyte only through the probing, bounded wrappers", () => {
+    const workflows = ["deploy-nsite.yml", "release.yml"].map((file) =>
+      loadYaml(
+        fs.readFileSync(
+          path.resolve(root, ".ngit/act/workflows", file),
+          "utf8",
+        ),
+      ),
+    );
+    const invocation = /(^|[\s;|&(])nsyte\s+(deploy|download|upload)\b/;
+    const wrapperCalls = [];
+    for (const workflow of workflows) {
+      for (const job of Object.values(workflow.jobs)) {
+        for (const step of job.steps) {
+          const lines = String(step.run || "")
+            .split("\n")
+            .filter((line) => !line.trim().startsWith("#"));
+          for (const line of lines) {
+            expect(line, `${step.name}: ${line.trim()}`).not.toMatch(invocation);
+            if (/scripts\/nsite-(deploy|download)\.sh/.test(line)) {
+              wrapperCalls.push(line.trim());
+            }
+          }
+        }
+      }
+    }
+    // deploy-nsite: fold (download) + publish; release: armada-fp publish,
+    // armada refresh (download + deploy).
+    expect(wrapperCalls.length).toBeGreaterThanOrEqual(5);
+
+    const deploy = fs.readFileSync(
+      path.resolve(root, "scripts/nsite-deploy.sh"),
+      "utf8",
+    );
+    const download = fs.readFileSync(
+      path.resolve(root, "scripts/nsite-download.sh"),
+      "utf8",
+    );
+    for (const script of [deploy, download]) {
+      expect(script).toContain('live-hosts.sh" "$servers"');
+      expect(script).toContain("timeout --signal=TERM --kill-after=30");
+    }
+    // The mirroring: without --sync nsyte transfers only files whose hash
+    // changed since the last manifest, and a server that missed one deploy
+    // stays missing those blobs forever.
+    expect(deploy).toMatch(/nsyte deploy "\$dir"[\s\S]*?--sync/);
+    // The failover: the servers a failed run's log blames are dropped on the
+    // retry, and the retry does not silently give up the set.
+    expect(deploy).toContain('blamed="$(blamed_servers "$log" "$servers_now")"');
+    // A 5xx answered by a proxy in front of a dead backend is down, not alive.
+    const probe = fs.readFileSync(
+      path.resolve(root, "scripts/live-hosts.sh"),
+      "utf8",
+    );
+    expect(probe).toMatch(/5\*\)\s*\n\s*echo "  drop \(HTTP \$code\)/);
   });
 
   // ngit-ci's ref matcher special-cases a bare `*` to true and handles a

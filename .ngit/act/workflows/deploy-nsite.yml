@@ -216,68 +216,29 @@ jobs:
       # did before.
       #
       # Blossom is REDUNDANT — every blob is mirrored on all three servers — so a
-      # single dead mirror must never fail this step. Each host is probed and
-      # only the reachable ones are handed to nsyte, so the download succeeds as
-      # long as one server and one relay answer instead of thrashing on a downed
-      # host until the runner is OOM-killed (a SIGKILL runs none of the fallback
-      # below, which is how a single-server outage failed the whole deploy). The
-      # `timeout` is the backstop for a host that answers the probe but then
-      # wedges mid-transfer.
+      # single dead mirror must never fail this step. scripts/nsite-download.sh
+      # probes each host at the Blossom level (a 5xx from a proxy in front of a
+      # dead backend counts as down) and hands nsyte only the reachable ones, so
+      # the download succeeds as long as one server and one relay answer instead
+      # of thrashing on a downed host until the runner is OOM-killed (a SIGKILL
+      # runs none of the fallback below, which is how a single-server outage
+      # failed the whole deploy). Its `timeout` is the backstop for a host that
+      # answers the probe but then wedges mid-transfer — `nsyte download`
+      # fetches with no deadline of its own.
       - name: Fold in the Flatpak update repository
         timeout-minutes: 15
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
         run: |
           set -eu
-          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for the #ALIAS of this repo.}"
-
-          # Same source of truth as the release workflow that publishes it, so
-          # the two agree on where the site lives.
-          relays="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).relays.join(","))')"
-          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
-          test -n "$relays" && test -n "$servers"
-
-          # Keep only the hosts that answer an HTTP probe (any status is alive;
-          # only a refused connection or a stall past --max-time drops one), so a
-          # dead mirror is dropped rather than handed to nsyte. Liveness, not
-          # protocol — nsyte still speaks Blossom/Nostr to the survivors.
-          filter_live() {
-            live=""
-            saved_ifs="$IFS"
-            IFS=,
-            for url in $1; do
-              probe=$(printf '%s' "$url" | sed -e 's#^wss://#https://#' -e 's#^ws://#http://#')
-              if curl -sS -o /dev/null --connect-timeout 5 --max-time 10 "$probe"; then
-                live="${live:+$live,}$url"
-              else
-                echo "  drop (unreachable): $url" >&2
-              fi
-            done
-            IFS="$saved_ifs"
-            printf '%s' "$live"
-          }
-
-          echo "Probing Blossom servers..."
-          live_servers="$(filter_live "$servers")"
-          echo "Probing relays..."
-          live_relays="$(filter_live "$relays")"
-
-          if [ -z "$live_servers" ] || [ -z "$live_relays" ]; then
-            echo "No reachable Blossom server / relay to fold the Flatpak repo from; deploying without it."
-            exit 0
-          fi
-          echo "Downloading from servers=$live_servers relays=$live_relays"
-
+          # The site's relays and servers come from .nsite/config.json, the same
+          # source of truth as the release workflow that publishes it, so the
+          # two agree on where the site lives.
           repo_out="$(mktemp -d)"
           set +e
-          # 124=TERM, 137=KILL. Fails fast and clean instead of climbing to OOM.
-          timeout --signal=TERM --kill-after=30 600 \
-            nsyte download \
-              --name armada-fp \
-              --relays "$live_relays" \
-              --servers "$live_servers" \
-              --sec "$NSYTE_BUNKER" \
-              --output "$repo_out" 2>&1 | tee /tmp/nsyte-flatpak-download.log
+          # 3 = nothing reachable, 124/137 = the timeout fired; all of them are
+          # "not proven complete" below.
+          scripts/nsite-download.sh armada-fp "$repo_out" 2>&1 | tee /tmp/nsyte-flatpak-download.log
           status="${PIPESTATUS[0]}"
           set -e
 
@@ -301,8 +262,10 @@ jobs:
         # for the coordinator's run-level timeout, which replaces every job
         # result act has already produced with a single synthetic one — so the
         # logs that would explain the hang are the first thing lost.
-        # `nsyte deploy` has no internal deadline of its own.
-        timeout-minutes: 15
+        # `nsyte deploy` has no internal deadline of its own; the wrapper below
+        # bounds each of its (at most two) runs at NSITE_DEPLOY_TIMEOUT, 420 s,
+        # and this step's budget is those plus the probes.
+        timeout-minutes: 20
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
         run: |
@@ -313,31 +276,25 @@ jobs:
           # file — and this job never writes to it, so there is no site state
           # a failed run can leave behind.
           #
-          # The secrets scan is skipped because it prompts on false positives
-          # in our own bundle (pubkeys, bunker:// parsing code), and a prompt
-          # is unanswerable here — with -i it defaults to N and aborts.
+          # scripts/nsite-deploy.sh is where a Blossom outage is absorbed, and
+          # every nsite this repo publishes goes through it (see its header):
+          # it probes the servers and hands nsyte only the live ones, bounds
+          # and retries the run without the servers a failed one blames, and
+          # deploys with --sync so every file of the site is HEAD-checked on
+          # every live server and re-uploaded where missing — which is what
+          # backfills a mirror that was down for an earlier deploy. It also
+          # refuses a zero-file scan (nsyte pointed at the wrong directory
+          # publishes nothing while exiting 0) and skips nsyte's secrets scan,
+          # which prompts on false positives in our own bundle (pubkeys,
+          # bunker:// parsing code) — with -i that prompt defaults to N.
           #
-          # The session goes on the command line because that is the only
-          # non-interactive way in: nsyte's `--prompt-sec` is a Cliffy
-          # `Secret.prompt`, a hidden TTY input that cannot be piped. So the
-          # nbunksec is visible in the runner's process list, to host root —
-          # which already holds it, since the coordinator passes it in from
-          # its own environment. Job containers get no docker socket and their
-          # own PID namespace, so a concurrent job cannot read it.
-          set +e
-          nsyte deploy dist \
-            --sec "$NSYTE_BUNKER" \
-            --concurrency 2 \
-            --non-interactive \
-            --skip-secrets-scan 2>&1 | tee /tmp/nsyte-deploy.log
-          status="${PIPESTATUS[0]}"
-          set -e
-          # A deploy that changes no file exits NON-ZERO with "No new files
-          # to upload". That is success: the manifest already on the relays
-          # describes exactly this build.
-          if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-deploy.log; then
-            exit "$status"
-          fi
+          # The nbunksec goes on nsyte's command line because that is the only
+          # non-interactive way in (`--prompt-sec` is a hidden TTY prompt that
+          # cannot be piped). It is visible in the runner's process list, to
+          # host root — which already holds it, since the coordinator passes it
+          # in from its own environment. Job containers get no docker socket
+          # and their own PID namespace, so a concurrent job cannot read it.
+          scripts/nsite-deploy.sh dist
 
       # Prove the origin the desktop bundle embeds actually SERVES the OSTree
       # repository, rather than the gateway's 200 index.html fallback. This is

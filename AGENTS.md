@@ -645,6 +645,39 @@ Things to know before touching it:
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.
 
+## CI: Blossom failover and mirroring
+
+The nsite deploys (`deploy-nsite.yml`, `release.yml`), the release event
+(`scripts/publish-release.mjs`) and the Zapstore publish all write to the
+Blossom servers listed in `.nsite/config.json`, and no ONE of them may be able
+to fail a run:
+
+- **Never call `nsyte deploy` or `nsyte download` from a workflow directly.**
+  Go through `scripts/nsite-deploy.sh` / `scripts/nsite-download.sh`. nsyte
+  runs one upload queue per server and signs the manifest only after EVERY
+  queue drains, with ~90 s of retries per file on a dead server, so a single
+  broken mirror does not cost that mirror: it runs the step past its deadline
+  and no manifest is published at all, while the healthy servers' finished
+  uploads sit unreferenced. The wrappers probe the hosts
+  (`scripts/live-hosts.sh`: a Blossom-level HEAD where a 5xx counts as down —
+  a proxy up in front of a dead backend is the common outage, and a probe of
+  `/` reports it alive), hand nsyte only the live ones, bound each run with
+  `timeout`, and retry once without the servers the failed run's log blames.
+- **`--sync` on every deploy is the mirroring.** Without it nsyte transfers
+  only files whose hash changed since the last manifest, so a server that
+  missed one deploy stays missing those blobs forever. With it every file of
+  the site is HEAD-checked on every live server and uploaded where absent, so
+  a dropped mirror is backfilled by the next deploy that finds it healthy.
+- The servers nsyte is given are also the manifest's `server` tags (the hints
+  gateways read), which is why it is one run over the live set rather than a
+  primary pass plus a mirror pass: the manifest the second pass republished
+  would name only the mirrors.
+- `publish-release.mjs` probes the same list, stores each artifact on the
+  first server that takes it, publishes the release, and only THEN asks the
+  rest to mirror it (BUD-04 `/mirror`) under a fixed budget — so mirroring can
+  delay a release but never block one. `zsp` takes exactly one server, so the
+  Zapstore step picks the first live one at run time.
+
 ## Conventions
 
 - **Never publish a user's Nostr lists without an explicit user action.** This

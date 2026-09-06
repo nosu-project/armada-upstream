@@ -12,6 +12,18 @@
  * cap, a budget it ran out of). Uploading unconditionally would re-send most of
  * a gigabyte for blobs already sitting there under the same hash.
  *
+ * Blossom is redundant and no one server may be able to fail a release:
+ *   - servers are probed first (a Blossom-level HEAD; a 5xx counts as down,
+ *     because a proxy up in front of a dead backend is the common outage), so
+ *     a dead one is skipped rather than given three fifteen-minute upload
+ *     attempts per artifact;
+ *   - an artifact is stored on the FIRST live server that takes it, and that
+ *     is enough to publish;
+ *   - only AFTER the release event is out are the other servers asked to
+ *     mirror each blob (BUD-04 `PUT /mirror`), under one fixed budget. A slow
+ *     or failing mirror can therefore delay the job, never block the release.
+ *     Whatever it misses, the next release's probe-and-mirror finds again.
+ *
  * Exactly ONE process may publish a given release. Kind 30622 is addressable,
  * replacement is whole-event rather than a tag union, and Nostr has no
  * compare-and-swap — two publishers racing the same `d` silently lose one
@@ -36,7 +48,10 @@
  *                       halves are required: a bunker URL whose one-time
  *                       `secret=` has been consumed is useless without the
  *                       client key the bunker authorized.
- *   BLOSSOM_SERVERS     Comma-separated. Default https://blossom.ditto.pub
+ *   BLOSSOM_SERVERS     Comma-separated, most trusted first. Default: the
+ *                       `servers` of .nsite/config.json, the same list every
+ *                       nsite deploy uses; https://blossom.ditto.pub if that
+ *                       file cannot be read.
  *   RELAY_URLS          Comma-separated. Default: the relays /downloads reads.
  */
 
@@ -55,14 +70,36 @@ import { hexToBytes } from '@noble/hashes/utils';
 
 /** See docs/releases.md. 30619-30621 are squatted; this is the first free slot. */
 const RELEASE_KIND = 30622;
-/** BUD-02 upload authorization. */
+/** BUD-02 upload authorization (BUD-04 mirroring reuses it). */
 const BLOSSOM_AUTH_KIND = 24242;
 /** Attempts per blob per server, before the release is refused. */
 const UPLOAD_ATTEMPTS = 3;
 /** How long one relay gets to acknowledge the release event. */
 const PUBLISH_TIMEOUT_MS = 30_000;
+/** How long a server gets to answer the liveness probe. */
+const PROBE_TIMEOUT_MS = 10_000;
+/**
+ * The whole post-publish mirror pass, all servers and artifacts together. It
+ * runs after the release event is out, so this bounds how late the job ends,
+ * never whether the release happens.
+ */
+const MIRROR_BUDGET_MS = 5 * 60_000;
+/** sha256("") — well-formed, and no server stores an empty blob under it. */
+const PROBE_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const DEFAULT_BLOSSOM = 'https://blossom.ditto.pub';
+
+/** The servers every nsite deploy uses, so the release artifacts live beside the site. */
+function configuredServers() {
+  try {
+    const config = JSON.parse(readFileSync('.nsite/config.json', 'utf8'));
+    const servers = Array.isArray(config.servers) ? config.servers.filter((s) => typeof s === 'string') : [];
+    if (servers.length > 0) return servers.join(',');
+  } catch {
+    // Not run from the repo root, or no config: fall through to the default.
+  }
+  return DEFAULT_BLOSSOM;
+}
 /**
  * Where the release is broadcast. Must match `RELEASE_RELAYS` in
  * `src/lib/releases.ts` — a relay that is written but not read publishes into
@@ -177,6 +214,36 @@ async function hasBlob(server, hash) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a server is answering at the Blossom level right now.
+ *
+ * A HEAD for a hash no server has: 404 is the healthy answer, and any 2xx/3xx/4xx
+ * proves the blob endpoint is alive. A 5xx is a reverse proxy up in front of a
+ * backend that is not — the common shape of an outage, and the one a probe of
+ * `/` misses. Same rule as scripts/live-hosts.sh.
+ */
+async function isLive(server) {
+  try {
+    const res = await fetch(`${server}/${PROBE_HASH}`, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    return res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/** The configured servers that answer the probe, in the configured order. */
+async function liveServers(servers) {
+  const answers = await Promise.all(servers.map((server) => isLive(server)));
+  const live = servers.filter((_, i) => answers[i]);
+  servers.forEach((server, i) => {
+    if (!answers[i]) stderr.write(`  drop ${server} (not answering)\n`);
+  });
+  return live;
 }
 
 /** BUD-02 upload, authorized by a kind-24242 event the signer produces. */
@@ -295,6 +362,79 @@ async function resolveArtifact(path, { servers, sign, dryRun }) {
   ];
 }
 
+/**
+ * BUD-04: ask `server` to fetch the blob from `sourceUrl`, where it is already
+ * served, rather than sending it the bytes again from here. The authorization is
+ * the same kind-24242 `upload` event, naming the blob by hash; one signed per
+ * artifact covers every server it is mirrored to.
+ */
+async function mirrorOnce(server, sourceUrl, auth, signal) {
+  const res = await fetch(`${server}/mirror`, {
+    method: 'PUT',
+    body: JSON.stringify({ url: sourceUrl }),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Nostr ${Buffer.from(JSON.stringify(auth)).toString('base64')}`,
+    },
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`${res.status} ${await res.text().catch(() => '')}`.trim());
+  }
+}
+
+/**
+ * Best-effort: put every artifact on every live server it is not on yet.
+ *
+ * Runs only after the release event has been published, all requests in
+ * flight together under one budget, and never throws — the release is out
+ * whatever happens here. Each miss is reported; the next release's pass (or a
+ * client walking the mirrors by hash) is what makes it up.
+ */
+async function mirrorArtifacts(artifacts, servers, sign) {
+  const signal = AbortSignal.timeout(MIRROR_BUDGET_MS);
+  const jobs = [];
+  for (const tag of artifacts) {
+    const url = tag.find((v) => v.startsWith('url '))?.slice(4);
+    const hash = tag.find((v) => v.startsWith('x '))?.slice(2);
+    if (!url || !hash) continue;
+    const host = url.slice(0, url.lastIndexOf('/'));
+    const targets = servers.filter((server) => server !== host);
+    if (targets.length === 0) continue;
+
+    jobs.push((async () => {
+      const missing = [];
+      for (const server of targets) {
+        if (!(await hasBlob(server, hash))) missing.push(server);
+      }
+      if (missing.length === 0) return;
+
+      const now = Math.floor(Date.now() / 1000);
+      const auth = await sign({
+        kind: BLOSSOM_AUTH_KIND,
+        created_at: now,
+        content: `Mirror ${basename(url)}`,
+        tags: [
+          ['t', 'upload'],
+          ['x', hash],
+          ['expiration', String(now + 600)],
+        ],
+      });
+      await Promise.all(missing.map(async (server) => {
+        try {
+          await mirrorOnce(server, url, auth, signal);
+          stderr.write(`  mirrored ${hash.slice(0, 12)}… to ${server}\n`);
+        } catch (err) {
+          stderr.write(`  warn mirror ${hash.slice(0, 12)}… to ${server}: ${err.message}\n`);
+        }
+      }));
+    })());
+  }
+  if (jobs.length === 0) return;
+  stderr.write(`mirroring ${jobs.length} artifact(s) across ${servers.length} server(s)\n`);
+  await Promise.allSettled(jobs);
+}
+
 function releaseNotes({ notes, notesFile, version }) {
   if (notes) return notes;
   if (notesFile) return readFileSync(notesFile, 'utf8').trim();
@@ -378,11 +518,22 @@ function ephemeralSigner() {
 
 async function main() {
   const opts = parseArgs(argv.slice(2));
-  const servers = (env.BLOSSOM_SERVERS || DEFAULT_BLOSSOM).split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
+  const configured = (env.BLOSSOM_SERVERS || configuredServers()).split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
   const relays = (env.RELAY_URLS ? env.RELAY_URLS.split(',') : DEFAULT_RELAYS).map((s) => s.trim()).filter(Boolean);
 
   const paths = await collectArtifacts(opts);
   if (paths.length === 0) usage('no artifacts found; pass --dir or --file');
+
+  // Dead servers are dropped up front: an artifact is tried on every server
+  // in turn, and a server that accepts the connection and never answers costs
+  // three fifteen-minute attempts per artifact before the next one is tried.
+  // A dry run has nothing to upload, so it keeps the list rather than failing.
+  stderr.write(`probing ${configured.length} Blossom server(s)\n`);
+  let servers = await liveServers(configured);
+  if (servers.length === 0) {
+    if (!opts.dryRun) throw new Error('no configured Blossom server is answering');
+    servers = configured;
+  }
 
   const signer = opts.dryRun ? ephemeralSigner() : await connectSigner();
 
@@ -444,6 +595,11 @@ async function main() {
     stderr.write(`published ${event.id} to ${ok}/${relays.length} relay(s)\n`);
     // One relay is enough for the release to exist; zero means it does not.
     if (ok === 0) throw new Error('no relay accepted the release event');
+
+    // The release is out. Only now are the other servers asked for copies, so
+    // a slow mirror lengthens the job and a failing one costs a copy — neither
+    // touches whether the version shipped.
+    await mirrorArtifacts(artifacts, servers, signer.sign);
   } finally {
     await signer.close();
   }

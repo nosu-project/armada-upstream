@@ -841,7 +841,11 @@ jobs:
       # Blossom by hash regardless, so a fresh install is never blocked on it.
       - name: Publish the Flatpak update repository to the nsite
         if: startsWith(github.ref, 'refs/tags/v')
-        timeout-minutes: 15
+        # Two bounded nsyte runs (scripts/nsite-deploy.sh, 420 s each) plus
+        # probes; the first-time upload of the repository to three servers is
+        # the long pole, and a stalled mirror is cut off rather than run out
+        # the clock.
+        timeout-minutes: 20
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
         run: |
@@ -884,50 +888,27 @@ jobs:
           fi
           nsyte --version
 
-          # Relays and Blossom servers come from .nsite/config.json, so they
-          # stay versioned with the client and match where the `armada` site
-          # lives (deploy-nsite reads the same file to find this site again).
-          # --no-config otherwise, so the config's `armada` id and its
-          # `/index.html` fallback — which this repository has no file for —
-          # are NOT applied to the deploy; --name sets the site id instead.
-          relays="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).relays.join(","))')"
-          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
-          test -n "$relays" && test -n "$servers"
-
+          # Relays and Blossom servers come from .nsite/config.json, read by
+          # scripts/nsite-deploy.sh, so they stay versioned with the client and
+          # match where the `armada` site lives (deploy-nsite reads the same
+          # file to find this site again). --no-config otherwise, so the
+          # config's `armada` id and its `/index.html` fallback — which this
+          # repository has no file for — are NOT applied to the deploy; --name
+          # sets the site id instead.
+          #
+          # The wrapper is where a Blossom outage is absorbed (probe, bounded
+          # and retried runs, --sync backfill of a mirror that missed an earlier
+          # deploy — see its header), and it refuses a zero-file scan: nsyte
+          # pointed at the wrong directory publishes nothing while exiting 0,
+          # which is exactly how v0.59.6 published no armada-fp site. This step
+          # has no verify backstop of its own.
+          #
           # nsyte 0.28.0 resolves `deploy <dir>` RELATIVE to the working
           # directory even when handed an absolute path (it joins CWD onto the
           # argument), so an absolute path scans a doubled, non-existent
-          # directory, finds zero files, and silently uploads nothing while
-          # exiting 0. Hand it a workspace-relative path, like deploy-nsite.yml's
-          # `deploy dist`.
-          flatpak_repo_rel="electron/release/flatpak-repo"
-
-          set +e
-          nsyte deploy "$flatpak_repo_rel" \
-            --name armada-fp \
-            --no-config \
-            --relays "$relays" \
-            --servers "$servers" \
-            --sec "$NSYTE_BUNKER" \
-            --concurrency 2 \
-            --non-interactive \
-            --skip-secrets-scan 2>&1 | tee /tmp/nsyte-flatpak-deploy.log
-          status="${PIPESTATUS[0]}"
-          set -e
-          # A deploy that changes no file exits non-zero with "No new files to
-          # upload". That is success: the manifest already describes this repo.
-          if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-flatpak-deploy.log; then
-            exit "$status"
-          fi
-          # A scan that found ZERO files is never legitimate here — the signed
-          # repository has hundreds — so it means nsyte was pointed at the wrong
-          # directory and published nothing while exiting 0. This step has no
-          # verify backstop, so guard it explicitly rather than shipping a green
-          # no-op (which is exactly how v0.59.6 published no armada-fp site).
-          if grep -qE "0 files included|No files to upload after ignore rules" /tmp/nsyte-flatpak-deploy.log; then
-            echo "nsyte scanned 0 files from $flatpak_repo_rel; refusing a no-op deploy." >&2
-            exit 1
-          fi
+          # directory. The wrapper refuses one; hand it a workspace-relative
+          # path, like deploy-nsite.yml's `deploy dist`.
+          scripts/nsite-deploy.sh electron/release/flatpak-repo --name armada-fp --no-config
 
       # Close the freshness lag by making the RELEASE the last writer of the
       # served `armada` site. deploy-nsite runs concurrently on the release
@@ -953,7 +934,10 @@ jobs:
       # lag, and the normal case removes it.
       - name: Refresh the served Flatpak origin and verify it
         if: startsWith(github.ref, 'refs/tags/v')
-        timeout-minutes: 20
+        # Budget: the bounded site download (scripts/nsite-download.sh, 600 s)
+        # plus two bounded deploy runs (420 s each) plus the ~7.5 min verify
+        # window, so a stalled mirror in any phase still leaves the verify.
+        timeout-minutes: 35
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
         run: |
@@ -965,27 +949,19 @@ jobs:
           test -s "$flatpak_repo/summary"
           origin="https://armada.buzz/downloads/flatpak"
 
-          relays="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).relays.join(","))')"
-          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
-          test -n "$relays" && test -n "$servers"
-
           # Pull the live armada site whole. --overwrite so a re-run starts clean.
           # Keep it UNDER the workspace: nsyte 0.28.0 resolves `deploy <dir>`
           # relative to the working directory (see the publish step), so the
           # redeploy below must be handed a workspace-relative path — an absolute
           # /tmp path from mktemp is scanned as a doubled, empty directory.
+          # Relays and servers come from .nsite/config.json through the wrapper,
+          # which probes them and hands nsyte only the live ones.
           web_rel="armada-site-refresh"
           web="$PWD/$web_rel"
           rm -rf "$web"
           mkdir -p "$web"
           set +e
-          nsyte download \
-            --name armada \
-            --relays "$relays" \
-            --servers "$servers" \
-            --sec "$NSYTE_BUNKER" \
-            --overwrite \
-            --output "$web" 2>&1 | tee /tmp/nsyte-armada-download.log
+          scripts/nsite-download.sh armada "$web" --overwrite 2>&1 | tee /tmp/nsyte-armada-download.log
           dl_status="${PIPESTATUS[0]}"
           set -e
 
@@ -1022,24 +998,13 @@ jobs:
           cp -rT "$flatpak_repo" "$web/downloads/flatpak"
           test -s "$web/downloads/flatpak/summary"
 
-          set +e
-          nsyte deploy "$web_rel" \
-            --sec "$NSYTE_BUNKER" \
-            --concurrency 2 \
-            --non-interactive \
-            --skip-secrets-scan 2>&1 | tee /tmp/nsyte-armada-refresh.log
-          status="${PIPESTATUS[0]}"
-          set -e
-          if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-armada-refresh.log; then
-            exit "$status"
-          fi
-          # As in the publish step: a 0-file scan means nsyte was pointed at the
-          # wrong directory and republished nothing while exiting 0. The --exact
-          # verify below would catch it after ~7 min of polling; fail fast here.
-          if grep -qE "0 files included|No files to upload after ignore rules" /tmp/nsyte-armada-refresh.log; then
-            echo "nsyte scanned 0 files from $web_rel; refusing a no-op redeploy." >&2
-            exit 1
-          fi
+          # Through the same wrapper as every other nsite deploy: probed live
+          # servers, bounded and retried, --sync so the redeployed copy is also
+          # backfilled onto any mirror missing part of it. It refuses a 0-file
+          # scan (nsyte pointed at the wrong directory republishes nothing while
+          # exiting 0) up front, where the --exact verify below would only catch
+          # it after ~7 min of polling.
+          scripts/nsite-deploy.sh "$web_rel"
 
           # This job is now the last writer, so the served origin must be the
           # EXACT repository just built. --exact turns the shipped-once failure
@@ -1256,11 +1221,27 @@ jobs:
           VERSION_NAME: ${{ steps.version.outputs.name }}
           ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
           RELAY_URLS: wss://relay.zapstore.dev,wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net
-          BLOSSOM_URL: https://blossom.ditto.pub
         run: |
           set -eu
           : "${SIGN_WITH:?Set the ZAPSTORE_BUNKER_URL secret.}"
           : "${ZAPSTORE_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
+
+          # zsp takes exactly ONE Blossom server, and the URL it is given is the
+          # one it writes into the file-metadata event, so it has to be a server
+          # that is up NOW: the first of the client's configured servers
+          # (.nsite/config.json, the same list every nsite deploy uses) to
+          # answer a Blossom-level probe. An outage on one mirror then moves the
+          # APK to the next instead of failing the publish — the APK is also in
+          # the kind-30622 release event, whose script mirrors it to the rest.
+          servers="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
+          live="$(scripts/live-hosts.sh "$servers")"
+          BLOSSOM_URL="${live%%,*}"
+          if [ -z "$BLOSSOM_URL" ]; then
+            echo "No configured Blossom server is reachable; cannot publish to Zapstore." >&2
+            exit 1
+          fi
+          export BLOSSOM_URL
+          echo "Using Blossom server $BLOSSOM_URL"
 
           apk_path="$ARTIFACT_DIR/Armada-v$VERSION_NAME.apk"
           test -f "$apk_path"
@@ -1538,14 +1519,22 @@ jobs:
           ls -lh .release-artifacts
 
           # Most blobs are already on Blossom — ngit-ci uploads run artifacts to
-          # the same server — so this mostly hashes files and confirms hits. It
-          # uploads only what the coordinator dropped, which is why a 413 or an
-          # exhausted upload budget upstream costs a little time here rather
-          # than a missing download.
+          # the first of these servers — so this mostly hashes files and
+          # confirms hits. It uploads only what the coordinator dropped, which
+          # is why a 413 or an exhausted upload budget upstream costs a little
+          # time here rather than a missing download.
+          #
+          # All three of the client's servers (.nsite/config.json, the same
+          # list every nsite deploy uses), so an artifact that no server holds
+          # yet lands on the first live one and the others are asked to mirror
+          # it AFTER the release event is out — a dead mirror can slow the
+          # release, never block it.
           #
           # GITHUB_SHA is the tagged commit; the event records it because kind
           # 30618 goes stale and a release that can't state its own provenance
           # isn't self-sufficient.
+          BLOSSOM_SERVERS="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).servers.join(","))')"
+          export BLOSSOM_SERVERS
           node scripts/publish-release.mjs \
             --version "$TAG" \
             --commit "$GITHUB_SHA" \
