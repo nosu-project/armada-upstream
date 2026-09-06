@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.8] - 2026-09-06
+
+Screen sharing with audio no longer echoes the call back to itself, plus a
+small notification-icon refinement.
+
+### Changed
+- Push notifications now show the same simplified mark as the Android status-bar icon
+
+### Fixed
+- Sharing your screen with audio while listening on speakers no longer captures and republishes other participants' voices back to the call
+
 ## [0.59.7] - 2026-09-04
 
 Further work on Flatpak desktop updates, plus internal release-tooling fixes.
