@@ -1315,6 +1315,15 @@ jobs:
             cp zapstore.yaml "$release_config"
             sed -i "2i release_source: $apk_path" "$release_config"
             sed -i "2i version: $VERSION_NAME" "$release_config"
+            # zsp resolves the config's relative asset paths (release_notes,
+            # icon) against the CONFIG'S directory, not the repo root. The config
+            # now lives in a temp dir, so `release_notes: ./CHANGELOG.md` would
+            # resolve to $RUNNER_TEMP/CHANGELOG.md and zsp fails "no such file or
+            # directory". Rewrite them to absolute paths off the checkout ($PWD
+            # is the repo root here, which is why `cp zapstore.yaml` above works).
+            repo_root="$PWD"
+            sed -i "s#^release_notes: \./#release_notes: $repo_root/#" "$release_config"
+            sed -i "s#^icon: \./#icon: $repo_root/#" "$release_config"
             cat "$release_config"
 
             # --json is a GLOBAL flag and MUST precede `publish`; after it, it is
