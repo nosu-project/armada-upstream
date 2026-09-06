@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.9] - 2026-09-06
+
+Chat message verification now runs off the main thread, so busy conversations
+stay smooth, and adding a relay works again on older Android devices.
+
+### Changed
+- Message signature checks now run in the background, keeping the interface responsive in busy conversations
+
+### Fixed
+- "Use this relay" and relay reads no longer fail on older Android devices
+
 ## [0.59.8] - 2026-09-06
 
 Screen sharing with audio no longer echoes the call back to itself, plus a
