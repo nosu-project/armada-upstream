@@ -1,3 +1,8 @@
+// FIRST: fills in AbortSignal.any / .timeout on WebViews that predate them
+// (Android System WebView before Chromium 116). Must precede every other
+// import so the statics exist before any module that reads them evaluates.
+import "./polyfills";
+
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 

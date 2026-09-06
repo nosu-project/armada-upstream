@@ -8,6 +8,7 @@ import {
   useNip65RelaySetup,
 } from "@/hooks/useNip65RelaySetup";
 import { fetchPortableWireState } from "@/hooks/usePublishPortableSetup";
+import { installAbortSignalPolyfills } from "@/lib/abortSignalPolyfill";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
@@ -429,6 +430,33 @@ describe("useNip65RelaySetup two-phase publish", () => {
 
     expect(h.relayEvent).toHaveBeenCalled();
     expect(h.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("publishes on a WebView that predates AbortSignal.any", async () => {
+    // Android System WebView before Chromium 116 (a stock Android 13 Samsung
+    // was reported) has AbortSignal.timeout but not AbortSignal.any. "Use this
+    // relay" then failed with "AbortSignal.any is not a function" from the
+    // portable-state mirror. The polyfill main.tsx installs first is what
+    // keeps the flow working there, so run it after removing the static.
+    const statics = AbortSignal as unknown as Record<string, unknown>;
+    const originalAny = statics.any;
+    delete statics.any;
+    try {
+      installAbortSignalPolyfills();
+      h.relayQuery.mockImplementation(async () => h.lastPublished ? [h.lastPublished] : []);
+      const result = renderHook(() => useNip65RelaySetup(), { wrapper }).result;
+
+      await act(async () => {
+        await expect(result.current.publish([
+          { url: "wss://new.example", read: true, write: true },
+        ])).resolves.toMatchObject({ rejected: [] });
+      });
+
+      expect(h.relayEvent).toHaveBeenCalled();
+      expect(h.updateConfig).toHaveBeenCalled();
+    } finally {
+      statics.any = originalAny;
+    }
   });
 
   it("requests enough dynamic topic coordinates for the bounded DM shard set", async () => {
