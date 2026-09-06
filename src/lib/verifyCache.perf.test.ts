@@ -1,26 +1,32 @@
 /**
- * Measurement harness for the "move Schnorr verify off the main thread"
- * question (NOT a correctness gate — see the loose assertions).
+ * Measurement harness behind the off-thread Schnorr verify (NOT a correctness
+ * gate — see the loose assertions).
  *
  * The live profile put first-time signature verification at ~28% of GeckoMain
  * inclusive CPU during sync, on the main thread. The memo in `verifyCache.ts`
- * already makes verification O(unique events) rather than O(copies received),
- * so what remains is genuinely necessary work whose only escape is parallelism.
- * Before committing to the architectural change that would allow it (an async
- * verifier through `NRelay1` + auditing every direct pool consumer), this puts
- * an ABSOLUTE number on two things the profile could only show as a percentage:
+ * makes verification O(unique events) rather than O(copies received), so what
+ * remains is genuinely necessary work whose only escape is parallelism — which
+ * is what `verifyPool.ts` + `verify.worker.ts` now provide for the chat plane's
+ * batched decode (`openChatBatch` → `verifyEventsOnce` → `ecVerifyBatch`).
  *
- *   1. What one boot's worth of unique verifies actually costs on this machine
- *      (and a rough phone projection), through the real `verifyEventOnce` path.
+ * This file does NOT exercise that shipped pool: there is no `Worker` global in
+ * the node test environment, so `ecVerifyBatch` would run inline here. It puts
+ * an ABSOLUTE number on the two quantities that sized the pool and its inline
+ * threshold, which the profile could only show as a percentage:
+ *
+ *   1. What one boot's worth of unique verifies costs on this machine (and a
+ *      rough phone projection), through the real sync `verifyEventOnce` path.
  *   2. The parallel speedup CEILING — the same batch split across a small
  *      `worker_threads` pool, INCLUDING the structured-clone cost of shipping
- *      the (sig, id, pubkey) triples both ways, which is the overhead a real
- *      crypto worker would pay and the thing that decides the break-even.
+ *      the (sig, id, pubkey) triples both ways, which is the fixed overhead a
+ *      round pays and the thing that decides the break-even
+ *      (`INLINE_THRESHOLD` in `verifyPool.ts`).
  *
  * `worker_threads` stands in for the browser `Worker`: same @noble code, same
  * postMessage/structured-clone cost model. The parallel leg is best-effort — if
  * a worker can't spawn in this environment it is skipped and the baseline still
- * reports.
+ * reports. The pool's failure contract is pinned by `verifyPool.test.ts`, and
+ * the batched path's correctness by `verifyCache.test.ts` and `chat.test.ts`.
  */
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hexToBytes } from "@noble/hashes/utils.js";

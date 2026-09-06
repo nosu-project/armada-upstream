@@ -2,7 +2,8 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it, vi } from "vitest";
 
-import { buildConcordCommentTags, filterEpochCutoff, foldTimeline, openChatBatch, replyTargetOf } from "@/concord/lib/chat";
+import { _resetChatMemoForTests, buildConcordCommentTags, filterEpochCutoff, foldTimeline, openChatBatch, replyTargetOf } from "@/concord/lib/chat";
+import { ecVerifyBatch } from "@/lib/verifyPool";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord/lib/derive";
 import { KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_TIMER_NOTICE, KIND_ZAP } from "@/concord/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
@@ -18,6 +19,13 @@ import type { OpenedChat } from "@/concord/lib/chat";
 vi.mock("light-bolt11-decoder", async (importOriginal) => {
   const { mockBolt11Decoder } = await import("@/test/bolt11Mock");
   return mockBolt11Decoder(await importOriginal<typeof import("light-bolt11-decoder")>());
+});
+
+// The real verifier, observable: the batched-verify tests below need to see
+// whether (and with what) openChatBatch consulted it.
+vi.mock("@/lib/verifyPool", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@/lib/verifyPool")>();
+  return { ...mod, ecVerifyBatch: vi.fn(mod.ecVerifyBatch) };
 });
 
 const root = new Uint8Array(32).fill(3);
@@ -922,4 +930,67 @@ describe("foldTimeline — replies never precede their parent", () => {
   });
 });
 
+describe("openChatBatch seal verification (the batched, off-thread phase)", () => {
+  it("drops a wrap whose seal signature is mangled, memoizes it, and still opens the honest copy", async () => {
+    _resetChatMemoForTests();
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const group = channel.current.group;
+
+    // A keyholder can mint exactly this: take Alice's real seal, mangle its
+    // sig, re-wrap it. The content still hashes to the seal's id, so only the
+    // EC verify — the step this refactor moved off the main thread — tells it
+    // from the honest copy.
+    const rumor = chatRumor(alice, KIND_MESSAGE, "im alice", 1000);
+    const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, alice);
+    const mangled = wrapSeal({ ...seal, sig: "00".repeat(64) }, group);
+    const honest = wrapSeal(seal, group);
+    const other = await wrapChat(chatRumor(bob, KIND_MESSAGE, "hi", 1100), channel, bob);
+
+    vi.mocked(ecVerifyBatch).mockClear();
+    const opened = await openChatBatch([mangled, other], channel);
+    expect(opened.map((o) => o.content)).toEqual(["hi"]);
+    expect(ecVerifyBatch).toHaveBeenCalledTimes(1);
+
+    // The bad verdict is memoized per WRAP: the mangled wrap is refused again
+    // without another verify, and the honest wrap of the same seal is opened
+    // — a forged copy poisons neither the seal id nor the message.
+    vi.mocked(ecVerifyBatch).mockClear();
+    expect(await openChatBatch([mangled], channel)).toEqual([]);
+    expect(ecVerifyBatch).not.toHaveBeenCalled();
+    expect((await openChatBatch([honest], channel)).map((o) => o.content)).toEqual(["im alice"]);
+  });
+
+  it("skips the verify round when aborted during the decrypt phase", async () => {
+    _resetChatMemoForTests();
+    const channel = makeChannel();
+    const alice = signer();
+    const wraps = await Promise.all(
+      [0, 1, 2].map((i) => wrapChat(chatRumor(alice, KIND_MESSAGE, `m${i}`, 1000 + i), channel, alice)),
+    );
+
+    // Make every decrypt slice look over-budget so phase 1 yields after each
+    // wrap, and abort in the macrotask that yield lets through: phase 1 then
+    // has seals in hand and an aborted signal, and must not pay to verify them.
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 10));
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 0);
+    vi.mocked(ecVerifyBatch).mockClear();
+    try {
+      const opened = await openChatBatch(wraps, channel, { signal: controller.signal });
+      expect(controller.signal.aborted).toBe(true);
+      expect(opened).toEqual([]);
+      expect(ecVerifyBatch).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
+
+    // Nothing was memoized as failed by the interruption: the same wraps open
+    // in full on the next, uninterrupted round.
+    const opened = await openChatBatch(wraps, channel);
+    expect(opened.map((o) => o.content).sort()).toEqual(["m0", "m1", "m2"]);
+  });
+});
 

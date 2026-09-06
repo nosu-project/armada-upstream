@@ -77,8 +77,8 @@ mocks and jest-dom matchers just the same.
 `*.perf.test.*` files assert on how long something takes or how many times it
 re-renders. That is not a correctness property: a loaded machine fails them
 while nothing is wrong, and they were ~13% of the suite's test time. The
-default run excludes them; `npm run test:perf` runs those seven files and
-nothing else (~19s). Both modes come out of one `testFilesFor()` in
+default run excludes them; `npm run test:perf` runs those files (nine at the
+time of writing) and nothing else (~19s). Both modes come out of one `testFilesFor()` in
 `vite.config.ts`, so the benchmarks stay reachable from the same config that
 hides them, and they are typechecked and linted either way — only the runner
 ignores them.

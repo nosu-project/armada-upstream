@@ -13,13 +13,20 @@
  * tricked by. See `verify.worker.ts`.
  *
  * Failure never changes an ANSWER, only where it is computed. A worker that
- * errors, or whose channel throws, hands its chunk back to this thread — a
- * missing reply must not read as "forged", because callers (`openChatBatch`)
- * memoize a false verdict per wrap and a transient worker death would poison
- * good messages for the session. An errored worker is marked dead and never
+ * errors, whose channel throws, or that simply never replies hands its chunk
+ * back to this thread — a missing reply must not read as "forged", because
+ * callers (`openChatBatch`) memoize a false verdict per wrap and a transient
+ * worker death would poison good messages for the session. This is the
+ * contract `verifyEventsOnce`'s callers lean on: {@link ecVerifyBatch} never
+ * throws and never answers "unverified" for a reason other than the signature.
+ * A worker that has failed in any of those ways is retired and never
  * dispatched to again: a message posted to a dead worker vanishes without an
  * error, so re-using it would leave a batch awaiting a reply that can never
- * come. Two more paths keep the pool from ever being worse than inline:
+ * come. The "never replies" case is the one no event announces — a module
+ * fetch that stalls rather than fails fires neither `message` nor `error` —
+ * so every round carries a deadline ({@link roundDeadlineMs}) after which the
+ * chunk is verified inline and the worker retired. Two more paths keep the
+ * pool from ever being worse than inline:
  *
  *  - **No `Worker`** (SSR, a locked-down runtime, a CSP that forbids the
  *    blob/module worker): construction is attempted ONCE, and any failure pins
@@ -55,6 +62,24 @@ const INLINE_THRESHOLD = 24;
  * budget on the same thread.
  */
 const INLINE_SLICE_MS = 5;
+
+/**
+ * How long a round may go unanswered before its chunk is verified inline and
+ * the worker retired: a fixed allowance for the worker's first module load,
+ * plus a per-triple budget generous enough that a slow phone under load (tens
+ * of ms per verify) still finishes with room to spare. A deadline that fires
+ * early costs nothing but the duplicated work — the inline answer is the same
+ * answer — but it also retires the worker for the session, which is why the
+ * budget errs long.
+ */
+const ROUND_DEADLINE_BASE_MS = 2_000;
+const ROUND_DEADLINE_PER_TRIPLE_MS = 50;
+
+let roundDeadlineOverride: number | undefined;
+
+function roundDeadlineMs(triples: number): number {
+  return roundDeadlineOverride ?? ROUND_DEADLINE_BASE_MS + ROUND_DEADLINE_PER_TRIPLE_MS * triples;
+}
 
 /**
  * Worker ceiling: a couple of cores fewer than the machine has, capped small.
@@ -94,13 +119,39 @@ async function verifyInline(triples: VerifyTriple[]): Promise<boolean[]> {
   return out;
 }
 
+/** One round in flight: how to settle it, and the deadline that settles it "unanswered". */
+interface PendingRound {
+  /** `null` settles as "unanswered" — the caller re-verifies inline. */
+  settle: (results: boolean[] | null) => void;
+  deadline: ReturnType<typeof setTimeout>;
+}
+
 /** A worker plus the replies it still owes, keyed by round id. */
 interface PoolWorker {
   worker: Worker;
-  /** `null` settles as "unanswered" — the caller re-verifies inline. */
-  pending: Map<number, (results: boolean[] | null) => void>;
-  /** Set on `error`: a dead worker swallows messages, so never dispatch again. */
+  pending: Map<number, PendingRound>;
+  /** Set on any failure: a dead worker swallows messages, so never dispatch again. */
   dead: boolean;
+}
+
+/**
+ * Take a worker out of service for good: every round it still owes settles
+ * "unanswered" (so those chunks are re-verified inline, not declared forged),
+ * and the worker itself is terminated so a stalled one holds no resources and
+ * a late reply lands nowhere.
+ */
+function retire(entry: PoolWorker): void {
+  entry.dead = true;
+  for (const round of entry.pending.values()) {
+    clearTimeout(round.deadline);
+    round.settle(null);
+  }
+  entry.pending.clear();
+  try {
+    entry.worker.terminate();
+  } catch {
+    // Already gone; nothing to release.
+  }
 }
 
 /**
@@ -124,21 +175,16 @@ function ensurePool(): PoolWorker[] | null {
       const entry: PoolWorker = { worker, pending: new Map(), dead: false };
       worker.onmessage = (event: MessageEvent<VerifyResponse>) => {
         const { id, results } = event.data;
-        const settle = entry.pending.get(id);
-        if (settle) {
+        const round = entry.pending.get(id);
+        if (round) {
+          clearTimeout(round.deadline);
           entry.pending.delete(id);
-          settle(results);
+          round.settle(results);
         }
       };
       // A worker that dies is retired for good — a later postMessage to it
-      // would vanish silently and hang its round. Whatever it still owed is
-      // settled "unanswered" so those chunks are re-verified inline, not
-      // declared forged.
-      worker.onerror = () => {
-        entry.dead = true;
-        for (const settle of entry.pending.values()) settle(null);
-        entry.pending.clear();
-      };
+      // would vanish silently and hang its round.
+      worker.onerror = () => retire(entry);
       return entry;
     });
     return pool;
@@ -151,20 +197,24 @@ function ensurePool(): PoolWorker[] | null {
 
 /**
  * One chunk to one worker. Resolves the worker's answer, or `null` when no
- * answer will come (the channel threw, or the worker errored mid-round) — the
- * caller then verifies the chunk inline.
+ * answer will come (the channel threw, the worker errored mid-round, or the
+ * round's deadline passed with no reply) — the caller then verifies the chunk
+ * inline. Every path that yields `null` also retires the worker.
  */
 function dispatch(entry: PoolWorker, triples: VerifyTriple[]): Promise<boolean[] | null> {
   const id = nextRoundId++;
   const request: VerifyRequest = { id, triples };
   return new Promise<boolean[] | null>((resolve) => {
-    entry.pending.set(id, resolve);
+    const deadline = setTimeout(() => {
+      // Still owed: the worker is stalled. Retiring it settles this round
+      // (and anything else it owes) as unanswered.
+      if (entry.pending.has(id)) retire(entry);
+    }, roundDeadlineMs(triples.length));
+    entry.pending.set(id, { settle: resolve, deadline });
     try {
       entry.worker.postMessage(request);
     } catch {
-      entry.pending.delete(id);
-      entry.dead = true;
-      resolve(null);
+      retire(entry);
     }
   });
 }
@@ -206,9 +256,14 @@ export const ecVerifyBatch: EcVerifyBatch = async (triples: VerifyTriple[]): Pro
   return out;
 };
 
-/** Test seam: tear the pool down and forget it (a fresh test rebuilds it). */
-export function _resetVerifyPoolForTests(): void {
-  if (Array.isArray(pool)) for (const entry of pool) entry.worker.terminate();
+/**
+ * Test seam: tear the pool down and forget it (a fresh test rebuilds it), and
+ * optionally pin the round deadline so a stalled-worker test needn't wait out
+ * the production budget.
+ */
+export function _resetVerifyPoolForTests(opts?: { roundDeadlineMs?: number }): void {
+  if (Array.isArray(pool)) for (const entry of pool) retire(entry);
   pool = undefined;
   nextRoundId = 0;
+  roundDeadlineOverride = opts?.roundDeadlineMs;
 }

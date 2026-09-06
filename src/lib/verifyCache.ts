@@ -90,8 +90,9 @@ export function verifyEventOnce(event: NostrEvent): boolean {
 
   const gate = hashGate(event);
   if (gate.state === "decided") {
+    // A decided `true` can only have come from the memo.
     perfCount(
-      gate.result && verified.has(event.id) ? "crypto.verifyEvent (memo hit)" : "crypto.verifyEvent",
+      gate.result ? "crypto.verifyEvent (memo hit)" : "crypto.verifyEvent",
       performance.now() - start,
       1,
       "events",

@@ -10,7 +10,10 @@
  *     poison the decode memo for perfectly good messages for the session;
  *  3. the inline path yields — it runs on the main thread precisely when the
  *     pool can't, and an unsliced loop over a batch of ~ms-each EC verifies is
- *     the jank the pool exists to remove.
+ *     the jank the pool exists to remove;
+ *  4. a worker that never replies AND never errors (a module fetch that
+ *     stalls) cannot hang a batch: the round's deadline hands the chunk back
+ *     to this thread and retires the worker.
  *
  * `Worker` doesn't exist in the node test environment, which is what makes the
  * pool testable: a stubbed global stands in, and the tests drive its failures
@@ -46,8 +49,11 @@ function realVerify(t: VerifyTriple): boolean {
 class FakeWorker {
   static instances: FakeWorker[] = [];
   static messages = 0;
-  behavior: "reply" | "die-on-message" | "throw-on-message" = "reply";
+  behavior: "reply" | "die-on-message" | "throw-on-message" | "silent" = "reply";
   broken = false;
+  terminated = false;
+  /** Requests a "silent" worker swallowed, so a test can answer them late. */
+  swallowed: VerifyRequest[] = [];
   onmessage: ((event: { data: VerifyResponse }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
 
@@ -63,11 +69,17 @@ class FakeWorker {
       this.die();
       return;
     }
+    if (this.behavior === "silent") {
+      this.swallowed.push(request);
+      return;
+    }
     const results = request.triples.map(realVerify);
     queueMicrotask(() => this.onmessage?.({ data: { id: request.id, results } }));
   }
 
-  terminate(): void {}
+  terminate(): void {
+    this.terminated = true;
+  }
 
   die(): void {
     this.broken = true;
@@ -170,6 +182,43 @@ describe("ecVerifyBatch", () => {
 
     expect(results).toHaveLength(30);
     expect(results.every(Boolean)).toBe(true);
+  });
+
+  it("completes a batch when a worker never replies, and retires it", async () => {
+    // A stalled worker fires no event at all — nothing but a deadline can
+    // notice it. Pin the deadline short so the test needn't wait out the
+    // production budget.
+    _resetVerifyPoolForTests({ roundDeadlineMs: 20 });
+    await ecVerifyBatch(triples(30));
+    const stalled = FakeWorker.instances[0];
+    stalled.behavior = "silent";
+
+    const batch = triples(30);
+    const outcome = await Promise.race([
+      ecVerifyBatch(batch).then((results) => ({ results })),
+      new Promise<"hang">((resolve) => setTimeout(() => resolve("hang"), 500)),
+    ]);
+
+    expect(outcome).not.toBe("hang");
+    if (outcome !== "hang") {
+      expect(outcome.results).toHaveLength(30);
+      // Every signature is valid: the stalled chunk was re-verified here.
+      expect(outcome.results.every(Boolean)).toBe(true);
+    }
+    expect(stalled.swallowed).toHaveLength(1);
+    expect(stalled.terminated).toBe(true);
+
+    // Retired: the next round goes nowhere near it.
+    const before = stalled.swallowed.length;
+    expect((await ecVerifyBatch(triples(30))).every(Boolean)).toBe(true);
+    expect(stalled.swallowed).toHaveLength(before);
+
+    // A reply that turns up after the deadline lands nowhere — no throw, and
+    // no second settle of an already-settled round.
+    const late = stalled.swallowed[0];
+    expect(() =>
+      stalled.onmessage?.({ data: { id: late.id, results: late.triples.map(() => false) } }),
+    ).not.toThrow();
   });
 
   it("yields to the event loop while verifying inline", async () => {

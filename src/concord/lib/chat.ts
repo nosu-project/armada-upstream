@@ -219,13 +219,21 @@ export async function openChatBatch(
     }
   }
 
-  if (pending.length > 0) {
+  // An abort during phase 1 leaves seals collected but nothing to do with
+  // them: skip the verify round rather than pay it for a result phase 3 would
+  // only discard.
+  if (pending.length > 0 && !opts?.signal?.aborted) {
     // ── Phase 2: batch-verify every pending seal (off-thread when it pays).
     const oks = await verifyEventsOnce(pending.map((p) => p.chat.seal), ecVerifyBatch);
 
     // ── Phase 3: finish the rumors of the seals that verified; memoize the
-    // rest as failures (a bad signature won't become good). The rumor recover
-    // is a synchronous NIP-44 decrypt, so slice it like phase 1.
+    // rest as failures (a bad signature won't become good). That memo is only
+    // sound because `ecVerifyBatch` answers "unverified" for NO reason other
+    // than the signature itself — a worker that dies, throws or stalls has its
+    // chunk re-verified inline rather than reported false (see verifyPool.ts).
+    // A verifier that could fail transiently would turn this into session-long
+    // suppression of good messages. The rumor recover is a synchronous NIP-44
+    // decrypt, so slice it like phase 1.
     sliceStart = performance.now();
     for (let j = 0; j < pending.length; j++) {
       if (opts?.signal?.aborted) break;
