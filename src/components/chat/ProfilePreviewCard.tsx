@@ -9,6 +9,7 @@ import { FollowButton } from "@/components/FollowButton";
 import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -115,9 +116,7 @@ function ProfilePreviewBody({
     <>
       {/* Mini banner */}
       <div className="h-16 bg-secondary relative">
-        {banner && (
-          <img src={banner} alt="" className="w-full h-full object-cover" loading="lazy" />
-        )}
+        <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" />
 
         {/* Overflow menu, floated top-right over the banner. Holds the negative,
             easy-to-misfire actions (unfollow, mute, report) so the card body

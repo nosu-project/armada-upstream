@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { emojify } from "@/components/chat/emojify";
+import { useImageFallback } from "@/hooks/useBlossomCandidates";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
 
@@ -34,7 +35,9 @@ export function CustomEmojiImg({
   fallback = null,
 }: CustomEmojiImgProps) {
   const [pixelated, setPixelated] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // Emoji-pack images are Blossom blobs more often than not; walk the viewer's
+  // other servers before the emoji disappears.
+  const { src, onError, failed } = useImageFallback(url);
 
   const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -43,19 +46,19 @@ export function CustomEmojiImg({
     }
   }, []);
 
-  // A custom emoji whose image URL doesn't resolve shows its fallback (or
-  // nothing) rather than a broken-image icon or the raw shortcode/URL text.
+  // A custom emoji whose image URL doesn't resolve anywhere shows its fallback
+  // (or nothing) rather than a broken-image icon or the raw shortcode/URL text.
   //
   // A URL pointing at a loopback/private address (a leaked dev-instance emoji,
   // e.g. http://localhost:8080/…) is never rendered: pointing an <img> at it
   // makes armada.buzz request a local address, which trips Chrome's Local
   // Network Access prompt ("… wants to access other apps and services on this
   // device") for everyone who views the message.
-  if (failed || isLocalNetworkUrl(url)) return <>{fallback}</>;
+  if (failed || !src || isLocalNetworkUrl(url)) return <>{fallback}</>;
 
   return (
     <img
-      src={url}
+      src={src}
       alt={`:${name}:`}
       title={`:${name}:`}
       className={className}
@@ -63,7 +66,7 @@ export function CustomEmojiImg({
       loading="lazy"
       decoding="async"
       onLoad={handleLoad}
-      onError={() => setFailed(true)}
+      onError={onError}
     />
   );
 }

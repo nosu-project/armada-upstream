@@ -22,11 +22,12 @@ import { PollView } from "@/components/chat/PollView";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { parseCalendarEvent, type RsvpTally } from "@/lib/calendar";
@@ -380,7 +381,7 @@ function EmbeddedZapCard({ event }: { event: NostrRumor }) {
  * until it paints. Clicking opens the shared cinematic {@link Lightbox}.
  */
 function PreviewImage({ item, onClick, className }: { item: LightboxItem; onClick?: () => void; className?: string }) {
-  const resolved = useResolvedMediaSrc(item);
+  const { resolved, onError, failed } = useMediaWithFallback(item);
   const [loaded, setLoaded] = useState(false);
   return (
     <button
@@ -394,12 +395,13 @@ function PreviewImage({ item, onClick, className }: { item: LightboxItem; onClic
       {item.blurhash && !loaded && (
         <BlurhashCanvas hash={item.blurhash} className="absolute inset-0 h-full w-full" />
       )}
-      {resolved.status === "ready" && (
+      {resolved.status === "ready" && !failed && (
         <img
           src={resolved.src}
           alt=""
           loading="lazy"
           onLoad={() => setLoaded(true)}
+          onError={onError}
           className={cn(
             "h-full w-full object-cover transition-opacity duration-300",
             loaded ? "opacity-100" : "opacity-0",
@@ -664,14 +666,13 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
   return (
     <div className="space-y-2 min-w-0">
       {banner && (
-        <div className="overflow-hidden rounded-xl">
-          <img
+        <div className="overflow-hidden rounded-xl empty:hidden">
+          <FallbackImage
             src={banner}
             alt={title ?? "Magic deck"}
             className="w-full max-h-[200px] object-cover"
             loading="lazy"
             decoding="async"
-            onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = "none"; }}
           />
         </div>
       )}

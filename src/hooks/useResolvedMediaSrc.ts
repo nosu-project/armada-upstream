@@ -62,11 +62,29 @@ function ready(src: string) {
  * which is worse than a placeholder in every way: it can't succeed, and it
  * leaks a fetch of a blob the user was never able to open.
  */
-export function useResolvedMediaSrc(ref: EncryptedRef | string, opts: { maxBytes?: number } = {}): State {
+export function useResolvedMediaSrc(
+  ref: EncryptedRef | string,
+  opts: {
+    maxBytes?: number;
+    /**
+     * Other hosts holding the same ciphertext, tried in order INSIDE one
+     * resolve when the primary fails (see `decryptAttachmentToObjectURL`). Only
+     * the encrypted path fetches, so only it walks these; a plain URL is walked
+     * by the element that renders it.
+     */
+    alternates?: readonly string[];
+    /** Bump to re-run a resolve whose inputs are unchanged — the manual retry. */
+    retryKey?: number;
+  } = {},
+): State {
   const url = typeof ref === "string" ? ref : ref.url;
   const encryption = typeof ref === "string" ? undefined : ref.encryption;
   const mime = typeof ref === "string" ? undefined : ref.mime;
   const { maxBytes } = opts;
+  // Content identity: callers rebuild the array every render, and a URL cannot
+  // contain a newline.
+  const alternatesKey = opts.alternates?.join("\n") ?? "";
+  const retryKey = opts.retryKey ?? 0;
 
   // Key the effect on primitive identity only. Callers commonly pass a fresh
   // `EncryptedRef`/`encryption` object every render (tokens are rebuilt on each
@@ -146,7 +164,13 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string, opts: { maxBytes
     let cancelled = false;
     const controller = new AbortController();
     setState({ status: "loading" });
-    decryptAttachmentToObjectURL(url, enc, mime, { signal: controller.signal, maxBytes })
+    // `retryKey` is a dependency only: it exists to re-run this effect.
+    void retryKey;
+    decryptAttachmentToObjectURL(url, enc, mime, {
+      signal: controller.signal,
+      maxBytes,
+      alternates: alternatesKey ? alternatesKey.split("\n") : undefined,
+    })
       .then((src) => {
         if (!cancelled) setState(ready(src));
       })
@@ -163,7 +187,7 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string, opts: { maxBytes
       controller.abort();
     };
     // Re-resolve only when the blob URL or its crypto params actually change.
-  }, [url, encrypted, decryptable, encKey, encNonce, encAlgo, encOx, mime, needsBuzzAuth, maxBytes]);
+  }, [url, encrypted, decryptable, encKey, encNonce, encAlgo, encOx, mime, needsBuzzAuth, maxBytes, alternatesKey, retryKey]);
 
   return state;
 }

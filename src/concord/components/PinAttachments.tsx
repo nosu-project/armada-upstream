@@ -1,7 +1,5 @@
-import { useState } from "react";
-
 import { FileAttachment } from "@/components/chat/FileAttachment";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import {
   isImageAttachment,
   pinAttachmentEntries,
@@ -28,15 +26,17 @@ const MAX_INLINE = 4;
 /** Preview box height — enough to recognise an image, not enough to take over. */
 const PREVIEW_CLASS = "max-h-32 max-w-full rounded object-contain";
 
-/** One image, decrypted client-side when the imeta carried a key. */
+/** One image, decrypted client-side when the imeta carried a key, walked across mirrors like the timeline's. */
 function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void }) {
-  const resolved = useResolvedMediaSrc(
-    entry.encryption ? { url: entry.url, encryption: entry.encryption, mime: entry.mime } : entry.url,
-  );
-  const [broken, setBroken] = useState(false);
+  const { resolved, onError, failed } = useMediaWithFallback({
+    url: entry.url,
+    encryption: entry.encryption,
+    mime: entry.mime,
+    fallbacks: entry.fallbacks,
+  });
   const src = resolved.status === "ready" ? resolved.src : undefined;
 
-  if (broken || resolved.status === "error" || resolved.status === "oversized") {
+  if (failed) {
     // Never a dead end: fall back to the download affordance, which fetches
     // and decrypts by the same route. That is also the right landing place for
     // an oversized blob — a pin preview is not worth tens of megabytes unasked,
@@ -60,7 +60,7 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
       alt={entry.name ?? "Pinned image"}
       loading="lazy"
       className={PREVIEW_CLASS}
-      onError={() => setBroken(true)}
+      onError={onError}
     />
   );
   // The shared gallery when the bar offers one — the same surface an in-chat

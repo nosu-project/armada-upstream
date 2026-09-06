@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { decryptImagePointer } from "@/concord/lib/image";
 import type { ImagePointer } from "@/concord/lib/types";
+import { useBlossomServers } from "@/hooks/useBlossomCandidates";
 
 /**
  * Resolve an encrypted Concord {@link ImagePointer} (icon / banner) to a
@@ -26,15 +27,19 @@ function cacheKey(image: ImagePointer): string {
  * Shares this module's caches deliberately: a community whose icon is already
  * on screen costs the notifier nothing, and the two never mint two object URLs
  * for one image.
+ *
+ * `servers` are the Blossom hosts to try after the pointer's own (the hook
+ * passes the viewer's effective list; a caller with no config in reach gets
+ * the app defaults).
  */
-export function resolveDecryptedImage(image: ImagePointer): Promise<string> {
+export function resolveDecryptedImage(image: ImagePointer, servers?: readonly string[]): Promise<string> {
   const ck = cacheKey(image);
   const ready = resolved.get(ck);
   if (ready) return Promise.resolve(ready);
 
   let promise = cache.get(ck);
   if (!promise) {
-    promise = decryptImagePointer(image);
+    promise = decryptImagePointer(image, undefined, servers);
     cache.set(ck, promise);
     promise
       .then((u) => {
@@ -60,6 +65,7 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
   const url = image?.url;
   const key = image?.key;
   const nonce = image?.nonce;
+  const servers = useBlossomServers();
   const [src, setSrc] = useState<string | null>(() =>
     image ? resolved.get(cacheKey(image)) ?? null : null,
   );
@@ -78,7 +84,7 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
 
     let cancelled = false;
     setSrc(null);
-    resolveDecryptedImage(image)
+    resolveDecryptedImage(image, servers)
       .then((u) => {
         if (!cancelled) setSrc(u);
       })
@@ -88,6 +94,8 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
     return () => {
       cancelled = true;
     };
+    // The server list is read once per resolve; a later change is picked up by
+    // the next pointer, not by re-decrypting every icon on screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, key, nonce]);
 

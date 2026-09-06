@@ -50,6 +50,8 @@ import {
   type ExportProfile,
 } from "@/concord/lib/historyExport";
 import { sniffImageMime } from "@/concord/lib/image";
+import { useBlossomServers } from "@/hooks/useBlossomCandidates";
+import { mediaCandidates } from "@/lib/blossom";
 import {
   controlSweepQuorum,
   controlSweepRelayReached,
@@ -143,13 +145,16 @@ async function fetchImageDataUri(
   enc: ImetaEntry["encryption"],
   signal: AbortSignal,
   budget: { left: number },
+  servers: readonly string[],
 ): Promise<{ dataUri?: string; mime?: string; failed: boolean }> {
   try {
     // Cap the READ at the budget we'd enforce afterwards anyway (+ the GCM
     // tag), so an oversized asset costs nothing rather than being buffered in
     // full and then discarded. A `FileTooLargeError` lands in the catch below,
     // which is the same outcome as the explicit check.
-    const raw = await fetchCapped(url, {
+    // A content-addressed blob is walked across the viewer's other Blossom
+    // servers: an export must not lose an image to one host being down.
+    const raw = await fetchCapped(mediaCandidates(url, undefined, servers), {
       signal,
       maxBytes: Math.min(ASSET_MAX_EACH, budget.left) + GCM_TAG_BYTES,
     });
@@ -248,6 +253,7 @@ export function useHistoryAudit(community: Community | undefined) {
   const channels = useChannels(community);
   const { data: folded } = useControlFold(community);
   const moderation = useChatModeration(community);
+  const servers = useBlossomServers();
 
   const [progress, setProgress] = useState<AuditProgress>({ phase: "idle", done: 0, total: 0 });
   const [result, setResult] = useState<HistoryAuditResult | null>(null);
@@ -379,7 +385,7 @@ export function useHistoryAudit(community: Community | undefined) {
           const budget = { left: ASSET_TOTAL_BUDGET };
           const icon = folded.metadata?.icon;
           if (icon) {
-            const r = await fetchImageDataUri(icon.url, { algorithm: "aes-gcm", key: icon.key, nonce: icon.nonce }, signal, budget);
+            const r = await fetchImageDataUri(icon.url, { algorithm: "aes-gcm", key: icon.key, nonce: icon.nonce }, signal, budget, servers);
             if (r.dataUri) iconDataUri = r.dataUri;
           }
           const total = authorList.length + pendingAssets.length;
@@ -391,7 +397,7 @@ export function useHistoryAudit(community: Community | undefined) {
             // Already scheme-checked above, so every picture is inlined or
             // dropped — none is left as a remote URL the opened file fetches.
             if (pic) {
-              const r = await fetchImageDataUri(pic, undefined, signal, budget);
+              const r = await fetchImageDataUri(pic, undefined, signal, budget, servers);
               // Drop a remote avatar we couldn't inline: a self-contained file
               // must not phone home for it on open.
               if (r.dataUri) {
@@ -405,7 +411,7 @@ export function useHistoryAudit(community: Community | undefined) {
           }
           for (const { ref, entry } of pendingAssets) {
             if (signal.aborted) throw new Error("cancelled");
-            const r = await fetchImageDataUri(entry.url, entry.encryption, signal, budget);
+            const r = await fetchImageDataUri(entry.url, entry.encryption, signal, budget, servers);
             if (r.dataUri) {
               ref.dataUri = r.dataUri;
               if (r.mime) ref.mime = r.mime;
@@ -447,7 +453,7 @@ export function useHistoryAudit(community: Community | undefined) {
         return undefined;
       }
     },
-    [community, folded, channels, moderation, nostr],
+    [community, folded, channels, moderation, nostr, servers],
   );
 
   const channelCount = useMemo(() => channels.length, [channels]);

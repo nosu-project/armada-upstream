@@ -14,6 +14,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
+import { APP_BLOSSOM_SERVERS, mediaCandidates } from "@/lib/blossom";
 import { decryptBuffer, fetchCapped } from "@/lib/encryptedMedia";
 
 import type { ImagePointer } from "@/concord/lib/types";
@@ -96,10 +97,14 @@ async function writeCached(hash: string, plaintext: Uint8Array, mime: string): P
  * unmount. Content-addressed disk cache (Cache Storage) skips re-fetch +
  * re-decrypt across reloads.
  */
-export async function decryptImagePointer(pointer: ImagePointer, signal?: AbortSignal): Promise<string> {
+export async function decryptImagePointer(
+  pointer: ImagePointer,
+  signal?: AbortSignal,
+  servers?: readonly string[],
+): Promise<string> {
   const cached = await readCached(pointer.hash);
   if (cached) return URL.createObjectURL(cached);
-  const { bytes, mime } = await decryptImageBytes(pointer, signal);
+  const { bytes, mime } = await decryptImageBytes(pointer, signal, servers);
   return URL.createObjectURL(new Blob([buf(bytes)], { type: mime }));
 }
 
@@ -112,10 +117,16 @@ export async function decryptImagePointer(pointer: ImagePointer, signal?: AbortS
  * so a worker has to inline the image as a `data:` URL instead. Keeping the
  * crypto and the SHA-256 verification here means the worker cannot end up with
  * a laxer check than the app: a swapped blob still fails closed for both.
+ *
+ * The pointer names the one server that won the upload race; the ciphertext
+ * was mirrored to the uploader's other servers (BUD-04), so the fetch walks
+ * `servers` — the viewer's effective list, or the app defaults where there is
+ * no config to read, as in the worker — before the icon is given up on.
  */
 export async function decryptImageBytes(
   pointer: ImagePointer,
   signal?: AbortSignal,
+  servers: readonly string[] = APP_BLOSSOM_SERVERS,
 ): Promise<{ bytes: Uint8Array; mime: string }> {
   const cached = await readCached(pointer.hash);
   if (cached) {
@@ -127,7 +138,10 @@ export async function decryptImageBytes(
   // moment a community renders — including in the push service worker, where
   // there is no user and no UI to report a stall. Cap the read rather than
   // letting a pointer choose how much memory a community costs to display.
-  const ciphertext = await fetchCapped(pointer.url, { signal, maxBytes: MAX_IMAGE_BYTES });
+  const ciphertext = await fetchCapped(mediaCandidates(pointer.url, undefined, servers), {
+    signal,
+    maxBytes: MAX_IMAGE_BYTES,
+  });
 
   const pt = await decryptBuffer(ciphertext, pointer.key, pointer.nonce);
   const plaintext = new Uint8Array(pt);

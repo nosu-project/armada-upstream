@@ -2,6 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { Download, File, FileArchive, FileText, Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 
+import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
 import { toast } from "@/hooks/useToast";
 import { downloadBinaryFile } from "@/lib/downloadFile";
 import {
@@ -25,6 +26,8 @@ interface FileAttachmentProps {
   size?: number;
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
+  /** Sender-declared alternative sources (imeta `fallback`), tried after `url`. */
+  fallbacks?: string[];
   className?: string;
 }
 
@@ -53,11 +56,14 @@ function iconFor(mime: string | undefined) {
  * traversal or control-char name from escaping is `safeFilename`. The sender's
  * MIME is used only to choose an icon.
  */
-export function FileAttachment({ url, mime, name, size, encryption, className }: FileAttachmentProps) {
+export function FileAttachment({ url, mime, name, size, encryption, fallbacks, className }: FileAttachmentProps) {
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
 
   const displayName = safeFilename(name);
   const Icon = iconFor(mime);
+  // The same blob on the viewer's other Blossom servers, for when the one the
+  // sender named is down (the mirrors hold identical ciphertext).
+  const candidates = useBlossomCandidates(url, fallbacks);
 
   const download = useCallback(async () => {
     if (status === "loading") return;
@@ -66,7 +72,7 @@ export function FileAttachment({ url, mime, name, size, encryption, className }:
       // The ceiling is enforced while READING, not after: checking a fully
       // buffered body has already spent the memory it was meant to protect,
       // and a `size` field is sender-controlled so it proves nothing.
-      const raw = await fetchCapped(url, { maxBytes: MAX_EXPLICIT_DECRYPT_BYTES });
+      const raw = await fetchCapped(candidates, { maxBytes: MAX_EXPLICIT_DECRYPT_BYTES });
 
       const bytes = encryption
         ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
@@ -86,7 +92,7 @@ export function FileAttachment({ url, mime, name, size, encryption, className }:
     } catch {
       setStatus("error");
     }
-  }, [status, url, encryption, displayName]);
+  }, [status, candidates, encryption, displayName]);
 
   return (
     <button

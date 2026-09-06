@@ -7,11 +7,70 @@ import {
   decryptBytes,
   encryptBytes,
   encryptFileWithParams,
+  fetchCapped,
   FileTooLargeError,
   peekAttachmentObjectURL,
   readCapped,
   verifyPlaintextHash,
 } from "./encryptedMedia";
+
+/**
+ * The fetch-side half of cross-server fallback: given the same blob on several
+ * hosts, a dead one costs a round-trip, not the attachment. Two failures are
+ * final — an abort, and a blob too large, which is exactly as large everywhere.
+ */
+describe("fetchCapped", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+  const calls = () => fetchMock.mock.calls.map((c) => String(c[0]));
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stub(impl: (url: string) => Promise<Response>) {
+    fetchMock.mockReset();
+    fetchMock.mockImplementation((input) => impl(String(input)));
+    vi.stubGlobal("fetch", fetchMock);
+  }
+
+  it("moves to the next host on a network error and on a non-2xx", async () => {
+    stub(async (url) => {
+      if (url === "https://one/x") throw new TypeError("Failed to fetch");
+      if (url === "https://two/x") return new Response(null, { status: 502 });
+      return new Response(new Uint8Array([1, 2, 3]));
+    });
+    const out = await fetchCapped(["https://one/x", "https://two/x", "https://three/x"]);
+    expect(Array.from(new Uint8Array(out))).toEqual([1, 2, 3]);
+    expect(calls()).toEqual(["https://one/x", "https://two/x", "https://three/x"]);
+  });
+
+  it("surfaces the last error once every host has failed", async () => {
+    stub(async () => new Response(null, { status: 404 }));
+    await expect(fetchCapped(["https://one/x", "https://two/x"])).rejects.toThrow(/HTTP 404/);
+    expect(calls()).toEqual(["https://one/x", "https://two/x"]);
+  });
+
+  it("stops at a blob that is too large rather than asking every mirror", async () => {
+    stub(async () => new Response(new Uint8Array(100), { headers: { "content-length": "100" } }));
+    await expect(fetchCapped(["https://one/x", "https://two/x"], { maxBytes: 10 })).rejects.toBeInstanceOf(
+      FileTooLargeError,
+    );
+    expect(calls()).toEqual(["https://one/x"]);
+  });
+
+  it("stops on abort", async () => {
+    const controller = new AbortController();
+    stub(async () => {
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    });
+    await expect(fetchCapped(["https://one/x", "https://two/x"], { signal: controller.signal })).rejects.toThrow();
+    expect(calls()).toEqual(["https://one/x"]);
+  });
+
+  it("still takes a single URL", async () => {
+    stub(async () => new Response(new Uint8Array([9])));
+    const out = await fetchCapped("https://one/x");
+    expect(Array.from(new Uint8Array(out))).toEqual([9]);
+  });
+});
 
 /**
  * Interop guarantees for client-encrypted Blossom attachments (Vector / 0xChat):

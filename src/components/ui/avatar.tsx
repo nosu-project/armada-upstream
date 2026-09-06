@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { useBuzzMediaSrc } from "@/buzz/useBuzzMediaSrc"
+import { useImageFallback } from "@/hooks/useBlossomCandidates"
 import { cn } from "@/lib/utils"
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl"
 import { type AvatarShape, isEmoji, getAvatarMaskUrl, isValidAvatarShape } from "@/lib/avatarShape"
@@ -86,7 +87,7 @@ function upgradeToHttps(src: string | undefined): string | undefined {
   return src
 }
 
-/** Timed retries after a failed load: 3s, 6s, 12s, 24s — then only on online/visible. */
+/** Timed retries after every server failed: 3s, 6s, 12s, 24s — then only on online/visible. */
 const RETRY_BASE_MS = 3000
 const MAX_TIMED_RETRIES = 4
 
@@ -99,7 +100,6 @@ const AvatarImage = React.forwardRef<
   HTMLImageElement,
   React.ImgHTMLAttributes<HTMLImageElement>
 >(({ className, onError, src: rawSrc, ...props }, ref) => {
-  const [hasError, setHasError] = React.useState(false)
   const hasSrcRef = React.useContext(AvatarHasSrcContext)
   // Avatars are untrusted event data (a kind-0 `picture`, a relay icon, a
   // community's decrypted blob URL), and this is the one place all of them
@@ -111,26 +111,31 @@ const AvatarImage = React.forwardRef<
   // can't send; useBuzzMediaSrc fetches them into an object URL and passes any
   // other URL straight through unchanged.
   const { src: resolvedSrc } = useBuzzMediaSrc(src0)
-  const src = upgradeToHttps(resolvedSrc)
+  const primary = upgradeToHttps(resolvedSrc)
+  // A picture uploaded through the app is a content-addressed Blossom URL
+  // naming whichever server won the upload race, and the same bytes were
+  // mirrored to the others (BUD-04). Walk those before showing the initial:
+  // one server going down must not blank every avatar it happened to win.
+  const { src, onError: advance, failed, reset } = useImageFallback(primary)
 
-  // Reset error state when src changes
-  const prevSrc = React.useRef(src)
+  // Reset the backoff when the picture changes (the walk resets itself).
+  const prevSrc = React.useRef(primary)
   const attemptsRef = React.useRef(0)
-  if (src !== prevSrc.current) {
-    prevSrc.current = src
+  if (primary !== prevSrc.current) {
+    prevSrc.current = primary
     attemptsRef.current = 0
-    if (hasError) setHasError(false)
   }
 
-  // A failed load must NOT latch the fallback forever: transient fetch
+  // An exhausted walk must NOT latch the fallback forever: transient fetch
   // failures are routine on mobile (radio not up at cold start, Doze, the
   // WebView freezing in-flight loads on background→foreground), and this
-  // component stays mounted across them. Retry with backoff, and whenever
-  // the network or the app comes back — remounting the <img> re-issues the
-  // fetch.
+  // component stays mounted across them. Retry from the first server with
+  // backoff, and whenever the network or the app comes back — remounting the
+  // <img> re-issues the fetch.
   React.useEffect(() => {
-    if (!hasError) return
-    const retry = () => setHasError(false)
+    if (!failed) return
+    attemptsRef.current += 1
+    const retry = () => reset()
     const timer = attemptsRef.current <= MAX_TIMED_RETRIES
       ? setTimeout(retry, RETRY_BASE_MS * 2 ** (attemptsRef.current - 1))
       : undefined
@@ -144,9 +149,9 @@ const AvatarImage = React.forwardRef<
       window.removeEventListener("online", retry)
       document.removeEventListener("visibilitychange", onVisible)
     }
-  }, [hasError])
+  }, [failed, reset])
 
-  const showImage = !hasError && !!src
+  const showImage = !failed && !!src
 
   // Signal to AvatarFallback synchronously during this render frame
   if (showImage) {
@@ -167,8 +172,7 @@ const AvatarImage = React.forwardRef<
       referrerPolicy="no-referrer"
       className={cn("absolute inset-0 h-full w-full object-cover", className)}
       onError={(e) => {
-        attemptsRef.current += 1
-        setHasError(true)
+        advance()
         onError?.(e)
       }}
     />

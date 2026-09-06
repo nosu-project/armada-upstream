@@ -25,6 +25,7 @@ import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -340,9 +341,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
           {/* Header card: banner, avatar, identity, actions. */}
           <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
             <div className="h-32 md:h-44 bg-secondary relative">
-              {banner && (
-                <img src={banner} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
-              )}
+              <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" decoding="async" />
             </div>
 
             <div className="px-4 pb-4 md:px-6 md:pb-6">
@@ -769,16 +768,23 @@ function Favicon({ url }: { url: string }) {
 function BadgeTile({ badge }: { badge: ProfileBadge }) {
   const naddr = tryNaddrEncode({ kind: 30009, pubkey: badge.issuer, identifier: badge.identifier });
   const href = naddr ? dittoNip19Url(naddr) : undefined;
-  const img = badge.thumb || badge.image;
+  // Badge art is usually a content-addressed Blossom blob the issuer uploaded,
+  // so it is walked across the viewer's servers before the placeholder shows.
+  const placeholder = (
+    <div className="size-14 mx-auto rounded-lg border border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent flex items-center justify-center">
+      <Award className="size-7 text-primary/30" />
+    </div>
+  );
   const inner = (
     <>
-      {img ? (
-        <img src={img} alt={badge.name} className="size-14 rounded-lg object-cover mx-auto" loading="lazy" decoding="async" />
-      ) : (
-        <div className="size-14 mx-auto rounded-lg border border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent flex items-center justify-center">
-          <Award className="size-7 text-primary/30" />
-        </div>
-      )}
+      <FallbackImage
+        src={badge.thumb || badge.image || undefined}
+        alt={badge.name}
+        className="size-14 rounded-lg object-cover mx-auto"
+        loading="lazy"
+        decoding="async"
+        fallback={placeholder}
+      />
       <div className="mt-1 text-xs text-center truncate">{badge.name}</div>
     </>
   );

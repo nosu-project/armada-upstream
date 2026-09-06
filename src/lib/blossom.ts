@@ -1,3 +1,5 @@
+import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
+
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
@@ -117,7 +119,7 @@ export const BLOSSOM_SHA256_PATH_REGEX = /^\/[a-f0-9]{64}\b/i;
  * external image has no equivalent elsewhere, so it returns `[]`. Origins are
  * deduped and the source URL's own origin is excluded.
  */
-export function blossomFallbackUrls(url: string, servers: string[]): string[] {
+export function blossomFallbackUrls(url: string, servers: readonly string[]): string[] {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -138,6 +140,43 @@ export function blossomFallbackUrls(url: string, servers: string[]): string[] {
     if (seen.has(origin)) continue;
     seen.add(origin);
     out.push(`${origin}${parsed.pathname}${parsed.search}`);
+  }
+  return out;
+}
+
+/**
+ * The ordered list of sources to try for one media reference — the ONE place
+ * that order is decided, whether the walk is then driven by an `<img>`'s
+ * `onError`, by a `fetch` loop, or by a service worker.
+ *
+ * The primary URL first, then the sender's own `fallback` entries, then the
+ * same content-addressed blob on every other Blossom server. Declared
+ * fallbacks outrank derived mirrors because the sender knows where they
+ * actually put the blob, while a mirror is only a guess that a copy exists
+ * there (the BUD-04 mirroring the uploader does is best-effort).
+ *
+ * The declared ones are raw event data, so they are sanitized HERE rather than
+ * at each of the dozen places a ref is built — a `javascript:` or LAN fallback
+ * must not reach a `fetch` or an `<img src>` by any route. Pure, so the walk is
+ * checkable without a renderer.
+ */
+export function mediaCandidates(
+  url: string,
+  declaredFallbacks: readonly string[] | undefined,
+  blossomServers: readonly string[],
+): string[] {
+  const seen = new Set<string>([url]);
+  const out = [url];
+  for (const raw of declaredFallbacks ?? []) {
+    const safe = sanitizeUrl(raw);
+    if (!safe || isLocalNetworkUrl(safe) || seen.has(safe)) continue;
+    seen.add(safe);
+    out.push(safe);
+  }
+  for (const mirror of blossomFallbackUrls(url, blossomServers)) {
+    if (seen.has(mirror)) continue;
+    seen.add(mirror);
+    out.push(mirror);
   }
   return out;
 }

@@ -114,8 +114,12 @@ function appendExtensionIfMissing(urlString: string, ext: string): string {
   }
 }
 
-/** Mirror a blob to additional Blossom servers (BUD-04). */
-async function mirrorToServers(
+/**
+ * Mirror a blob to additional Blossom servers (BUD-04), each with its own
+ * `PUT /mirror`, so every server gets a copy rather than the first to answer.
+ * Exported for testing.
+ */
+export async function mirrorToServers(
   sourceUrl: string,
   servers: string[],
   signer: NostrSigner,

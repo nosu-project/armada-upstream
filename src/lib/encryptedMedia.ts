@@ -154,14 +154,35 @@ function createSemaphore(limit: number) {
 
 const withDecryptSlot = createSemaphore(3);
 
-/** Fetch a blob with a hard byte ceiling, for the callers that then decrypt it. */
+/**
+ * Fetch a blob with a hard byte ceiling, for the callers that then decrypt it.
+ *
+ * Given several URLs — the order {@link mediaCandidates} produces — they are
+ * the SAME bytes on different hosts, and are tried in turn: a network error or
+ * a non-2xx moves to the next, so a dead or not-yet-mirrored server costs one
+ * round-trip rather than the attachment. Two failures end the walk at once:
+ * an abort, because the caller stopped wanting the bytes; and
+ * {@link FileTooLargeError}, because a content-addressed blob is exactly as
+ * big on every mirror. The last error is what surfaces when every host fails.
+ */
 export async function fetchCapped(
-  url: string,
+  urls: string | readonly string[],
   opts: { signal?: AbortSignal; maxBytes?: number } = {},
 ): Promise<ArrayBuffer> {
-  const res = await fetch(url, { signal: opts.signal });
-  if (!res.ok) throw new Error(`attachment fetch failed: HTTP ${res.status}`);
-  return readCapped(res, opts.maxBytes ?? MAX_DECRYPT_BYTES);
+  const list = typeof urls === "string" ? [urls] : urls;
+  if (list.length === 0) throw new Error("attachment fetch failed: no source");
+  let lastError: unknown;
+  for (const url of list) {
+    try {
+      const res = await fetch(url, { signal: opts.signal });
+      if (!res.ok) throw new Error(`attachment fetch failed: HTTP ${res.status}`);
+      return await readCapped(res, opts.maxBytes ?? MAX_DECRYPT_BYTES);
+    } catch (e) {
+      if (opts.signal?.aborted || e instanceof FileTooLargeError) throw e;
+      lastError = e;
+    }
+  }
+  throw lastError;
 }
 
 interface Entry {
@@ -255,12 +276,17 @@ export function peekAttachmentObjectURL(url: string, enc: ImetaEncryption): stri
  * Throws on fetch / decrypt / integrity failure, and a {@link FileTooLargeError}
  * when the blob is past `maxBytes` — which callers should surface as its own
  * state, since unlike the others it's retryable with a bigger budget.
+ *
+ * `alternates` are other hosts holding the same ciphertext (declared
+ * `fallback`s and derived Blossom mirrors), walked INSIDE this one resolve by
+ * {@link fetchCapped}. The cache is keyed on the primary URL alone: whichever
+ * host answered, it is the same blob under the same key and nonce.
  */
 export async function decryptAttachmentToObjectURL(
   url: string,
   enc: ImetaEncryption,
   mime: string | undefined,
-  opts: { signal?: AbortSignal; maxBytes?: number } = {},
+  opts: { signal?: AbortSignal; maxBytes?: number; alternates?: readonly string[] } = {},
 ): Promise<string> {
   const k = cacheKey(url, enc);
   const existing = cache.get(k);
@@ -272,7 +298,7 @@ export async function decryptAttachmentToObjectURL(
   const entry: Entry = { promise: Promise.resolve(""), bytes: 0 };
 
   entry.promise = withDecryptSlot(async () => {
-    const ciphertext = await fetchCapped(url, opts);
+    const ciphertext = await fetchCapped([url, ...(opts.alternates ?? [])], opts);
     // Hand the ArrayBuffer straight through: `readCapped` and `crypto.subtle`
     // both already return one and a Blob accepts one, so threading buffers
     // rather than views saves two full copies of a video.

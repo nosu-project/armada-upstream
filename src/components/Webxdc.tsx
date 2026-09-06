@@ -15,6 +15,7 @@ import type {
 } from "@webxdc/types/webxdc";
 
 import { SandboxFrame, type SandboxFrameHandle } from "@/components/SandboxFrame";
+import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
 import { getMimeType, bytesToBase64, injectScriptTags } from "@/lib/sandbox";
 import type { FileResponse } from "@/lib/sandbox";
 import { decryptBuffer, fetchCapped, verifyPlaintextHash } from "@/lib/encryptedMedia";
@@ -70,15 +71,20 @@ const WEBXDC_CSP = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve `xdc` prop to a Uint8Array, decrypting the blob if it's encrypted. */
+/**
+ * Resolve `xdc` prop to a Uint8Array, decrypting the blob if it's encrypted.
+ * `candidates` is the URL plus the same blob on the viewer's other Blossom
+ * servers, walked by `fetchCapped` when the first is down.
+ */
 async function resolveXdc(
   xdc: Uint8Array | string,
-  encryption?: ImetaEncryption,
+  encryption: ImetaEncryption | undefined,
+  candidates: readonly string[],
 ): Promise<Uint8Array> {
   if (typeof xdc === "string") {
     // Capped: an app bundle is opened on a tap, but the size is still the
     // sender's choice, and unzipping multiplies whatever we let through.
-    const raw = await fetchCapped(xdc, { maxBytes: MAX_XDC_BYTES });
+    const raw = await fetchCapped(candidates.length ? candidates : [xdc], { maxBytes: MAX_XDC_BYTES });
     // Concord attachments are AES-GCM ciphertext on Blossom; decrypt to the
     // real ZIP before unzip (a plaintext attachment has no encryption params).
     const bytes = encryption
@@ -254,6 +260,8 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   const webxdcRef = useRef(webxdc);
   const xdcRef = useRef(xdc);
   const encryptionRef = useRef(encryption);
+  const candidates = useBlossomCandidates(typeof xdc === "string" ? xdc : undefined);
+  const candidatesRef = useRef(candidates);
   useEffect(() => {
     webxdcRef.current = webxdc;
   }, [webxdc]);
@@ -263,6 +271,9 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   useEffect(() => {
     encryptionRef.current = encryption;
   }, [encryption]);
+  useEffect(() => {
+    candidatesRef.current = candidates;
+  }, [candidates]);
 
   // The unzipped file map, populated on first `onReady`.
   const fileMapRef = useRef<Map<string, Uint8Array> | null>(null);
@@ -306,7 +317,7 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   const onReady = useCallback(() => {
     loadPromiseRef.current ??= (async () => {
       try {
-        const bytes = await resolveXdc(xdcRef.current, encryptionRef.current);
+        const bytes = await resolveXdc(xdcRef.current, encryptionRef.current, candidatesRef.current);
         fileMapRef.current = unzipXdc(bytes);
         bridgeScriptRef.current = generateWebxdcBridge(webxdcRef.current);
       } catch (err) {
