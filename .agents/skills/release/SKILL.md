@@ -173,15 +173,14 @@ external-data-checker bot bumps them from the new tag. The one exception is the
 submission only, also set `tag:` to the new `vX.Y.Z` and `commit:` to
 `git rev-list -n1 vX.Y.Z` so the submitted manifest builds the current release.
 
-Whether that metainfo line also has to be copied into the **Flathub repo**
-(`github.com/flathub/buzz.armada.app`, separate from this one) depends on how the
-manifest sources the metainfo. The build helpers/desktop/marker are read from the
-tagged checkout, so the bot's bump carries them for free; the metainfo is still a
-`type: file` sidecar in the Flathub repo, so its `<release>` line must be added
-there too when merging the bot's bump PR. This stops being manual once the
-manifest is switched to read the metainfo from the checkout as well, which is
-safe once the pinned tag is a release cut with this step (its own commit then
-carries its own entry). See the sources comment in the manifest.
+Nothing has to be copied into the **Flathub repo**
+(`github.com/flathub/buzz.armada.app`, separate from this one). The manifest
+reads the metainfo from the tagged checkout, alongside the build
+helpers/desktop/marker, so when the external-data-checker bot bumps `tag`+`commit`
+to the new `vX.Y.Z`, the new `<release>` entry rides along for free. The one
+thing this depends on is ordering: the entry must be committed **before** the tag
+(Step 4/5 land it in the `Release vX.Y.Z` commit, Step 7 tags that commit), so the
+tag's own tree carries it. See the sources comment in the manifest.
 
 ### Step 5: Commit the Changelog
 
