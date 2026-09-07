@@ -4,6 +4,18 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.13] - 2026-09-07
+
+Linux and Android builds can now be installed and kept up to date through the
+Soapbox package repositories — APT and Flatpak on Linux, F-Droid on Android —
+so the downloads page offers your package manager instead of a one-off file.
+
+### Added
+- Install and auto-update Linux (APT, Flatpak) and Android (F-Droid) builds from the Soapbox package repositories, with the commands to add them shown on the downloads page
+
+### Changed
+- The downloads page now installs the Linux Debian and Flatpak builds through those repositories rather than offering them as single-file downloads
+
 ## [0.59.12] - 2026-09-07
 
 Maintenance release covering the Linux Flathub packaging and release tooling.
