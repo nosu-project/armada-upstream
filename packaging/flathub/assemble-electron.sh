@@ -3,17 +3,13 @@ set -eu
 
 # Assemble the Electron application directory into /app/armada, offline.
 #
-# electron-builder is unusable on Flathub: it downloads Electron and produces an
-# AppImage, both disallowed in the network-isolated sandbox. @electron/packager
-# (already an electron/ devDependency) does the one thing we need — lay the app
-# out around an Electron runtime — and takes that runtime from a local ZIP via
-# `electronZipDir` rather than the network. The ZIP is the one the flatpak-node
-# offline cache already holds (generated-sources.npm.json,
-# flatpak-node/cache/electron/<url-hash>/electron-v<ver>-linux-<arch>.zip).
-#
-# The result is /app/armada/armada (Electron renamed) plus resources/app/, which
-# is exactly the path packaging/flathub/armada-wrapper execs through zypak.
-# @electron/packager runs offline from the cached ZIP and emits that layout.
+# electron-builder is unusable here: it downloads Electron and produces an
+# AppImage, both disallowed in the sandbox. @electron/packager (an electron/
+# devDependency) lays the app out around an Electron runtime taken from a local
+# ZIP via `electronZipDir`, the one the flatpak-node offline cache already holds
+# (flatpak-node/cache/electron/<url-hash>/electron-v<ver>-linux-<arch>.zip). The
+# result is /app/armada/armada plus resources/app/, the path armada-wrapper
+# execs through zypak.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 
@@ -41,16 +37,12 @@ zipdir=$(dirname "$zip")
 out="$root/electron-pkg"
 rm -rf "$out"
 
-# `prune: true` drops devDependencies (electron, electron-builder,
-# @electron/packager, …) from the copied tree without invoking a package
-# manager, so it stays offline. venmic/uiohook (optional, native) and
-# electron-updater/@jellybrick/dbus-next (prod) are kept.
-# `ignore` drops build-only cruft that lives under electron/ but has no place in
-# the shipped app — the Go publisher's 35 MB vendor tree, venmic's CPM git
-# checkouts, the self-hosted flatpak/ scripts, tests. This mirrors what
-# electron-builder.yml's `files:` excludes. (packager already ignores .git,
-# node_modules/.bin and lockfiles.) The bundled runtime code the shell needs —
-# db.cjs, updateFeed.cjs, dist/, build/ icons, the *.js modules — is kept.
+# `prune: true` drops devDependencies from the copied tree without a package
+# manager, so it stays offline; native (venmic/uiohook) and prod deps are kept.
+# `ignore` drops build-only cruft with no place in the shipped app: the Go
+# publisher's vendor tree, venmic's CPM checkouts, the self-hosted flatpak/
+# scripts, and tests, mirroring electron-builder.yml's `files:` excludes. The
+# runtime code the shell needs (db.cjs, updateFeed.cjs, dist/, icons, *.js) stays.
 EL_DIR="$root/electron" EL_OUT="$out" EL_ARCH="$el_arch" EL_VER="$ver" EL_ZIPDIR="$zipdir" \
 node -e '
 const packager = require(process.env.EL_DIR + "/node_modules/@electron/packager");

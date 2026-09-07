@@ -1,41 +1,21 @@
 app-id: buzz.armada.app
 
-# ── Flathub from-source manifest ──────────────────────────────────────────────
-#
-# This is NOT the self-hosted OSTree build in electron/flatpak/. That one
-# repackages the prebuilt Armada.AppImage and embeds an --repo-url so the app
-# self-updates from armada.buzz. Flathub forbids repackaging an opaque bundle
-# and OWNS updates itself, so this manifest builds every input from source in
-# Flathub's network-isolated sandbox and carries no update machinery.
-#
-# Every network input is pinned: the app source by git tag+commit, and all
-# dependency trees by the generated-sources.*.json lists beside this manifest.
-# Nothing here reaches the network at build time except through those hashed
-# sources.
-#
-# The from-source components:
-#   * the iroh-gossip wasm transport (build-std on stable + llvm21 clang for
-#     ring, no wasm-pack) — packaging/flathub/build-wasm-flatpak.sh;
-#   * the Go H.265 publisher (proxy-archive vendor + the codec patch);
-#   * uiohook-napi and venmic, compiled from source (venmic's CPM dependency
-#     closure vendored as pinned git sources, not downloaded);
-#   * app assembly without electron-builder — packaging/flathub/assemble-electron.sh.
+# From-source Flathub build. Every network input is pinned: the app by git
+# tag+commit, all dependency trees by the generated-sources.*.json lists beside
+# this manifest. The sandbox reaches the network only through those hashed
+# sources. (Not the self-hosted OSTree build in electron/flatpak/, which
+# repackages the AppImage and self-updates; neither is allowed here.)
 
 runtime: org.freedesktop.Platform
 runtime-version: &runtime-version '25.08'
 sdk: org.freedesktop.Sdk
 
-# zypak sandboxes Electron's setuid helper; the app is launched through the
-# armada-wrapper below, which execs `zypak-wrapper`.
+# zypak sandboxes Electron's setuid sandbox helper; armada-wrapper execs it.
 base: org.electronjs.Electron2.BaseApp
 base-version: *runtime-version
 
-# node for the offline npm install + vite build, rust for the wasm transport,
-# golang for the HEVC publisher, llvm for the C/asm the wasm transport's `ring`
-# dependency compiles (the rust-stable extension ships no clang, and cc-rs
-# shells out to a bare `clang`). All four confirmed present for 25.08:
-# node22 22.23.2, rust-stable 1.98.0, golang 1.27.1, llvm21 21.1.8. The node
-# extension version tracks the runtime (node20/node22); re-check on a bump.
+# node: offline npm install + vite build. rust: the wasm transport. golang: the
+# HEVC publisher. llvm: clang for the transport's `ring` C (rust-stable ships none).
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.node22
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -48,79 +28,57 @@ separate-locales: false
 build-options:
   append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/golang/bin
   env:
-    # npm: install strictly from the offline cache the node generator laid down
-    # at flatpak-node/ in the build root.
+    # npm/cargo/go/cmake all build from the offline caches the generators laid
+    # down; none may reach the network.
     npm_config_offline: 'true'
     npm_config_cache: /run/build/armada/flatpak-node/npm-cache
     XDG_CACHE_HOME: /run/build/armada/flatpak-node/cache
-    # node-gyp (uiohook-napi, and any other gyp addon) reads its headers from
-    # here instead of downloading them. The node22 extension ships them at
-    # include/node, which is exactly what --nodedir expects.
+    # node-gyp reads headers from the node22 extension rather than downloading.
     npm_config_nodedir: /usr/lib/sdk/node22
-    # playwright is a root devDependency whose postinstall otherwise downloads
-    # ~1 GB of Chromium/Firefox/WebKit browser builds from cdn.playwright.dev.
-    # The Flathub build only runs vite (never the e2e/screenshot specs), so those
-    # builds are dropped from generated-sources.npm.json entirely — and with them
-    # gone from the offline cache, the postinstall MUST be told to skip, or
-    # `npm ci --offline` reaches the network for them and the build fails.
+    # playwright's browser downloads are dropped from the offline cache, so its
+    # postinstall must skip or `npm ci --offline` fails reaching for them.
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-    # cargo: the vendored crate closure (app deps + std's build-std deps +
-    # wasm-bindgen-cli's own deps) lives under cargo/ here.
     CARGO_HOME: /run/build/armada/cargo
-    # venmic's CMake pulls its dependency closure through CPM; point CPM at the
-    # cache reconstructed from pinned git sources (generated-sources.venmic-cpm.json)
-    # so a configure never reaches the network.
+    # venmic's CMake resolves its CPM closure from this reconstructed cache.
     CPM_SOURCE_CACHE: /run/build/armada/electron/vendor-cpm
-    # go: build strictly from the pre-populated vendor/ tree, and never fetch a
-    # toolchain (golang 1.27 satisfies the module's `go 1.26` directive).
     GOFLAGS: -mod=vendor
     GOTOOLCHAIN: local
 
 finish-args:
-  # Nostr relays, LiveKit voice brokers, Blossom media — all user-configured
-  # runtime URLs over wss/https. The app has no function without it.
+  # User-configured Nostr relays, voice brokers and media hosts over wss/https.
   - --share=network
   - --share=ipc
-  # fallback-x11 (not bare x11): use Wayland when the compositor offers it, X11
-  # otherwise. Flathub's linter rejects shipping both --socket=x11 and
-  # --socket=wayland, since bare x11 is granted unconditionally.
+  # fallback-x11 + wayland: Wayland when offered, X11 otherwise (bare x11 is
+  # rejected by the linter alongside wayland).
   - --socket=fallback-x11
   - --socket=wayland
-  # PulseAudio/PipeWire for voice calls and screen-share audio.
+  # Voice calls and screen-share audio.
   - --socket=pulseaudio
   - --filesystem=xdg-run/pipewire-0
-  # NARROWED from the self-hosted build's --device=all: GPU for video
-  # accel/rendering only. Flathub review rejects --device=all.
+  # GPU for video accel/rendering.
   - --device=dri
   - --filesystem=xdg-download
   - --filesystem=xdg-pictures:ro
   - --filesystem=xdg-videos:ro
-  # nsec lives in the OS keyring via libsecret.
+  # nsec in the OS keyring via libsecret.
   - --talk-name=org.freedesktop.secrets
-  # Tray icon + app menu (Electron/venmic desktop integration).
+  # Tray icon + app menu.
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=com.canonical.AppMenu.Registrar
   - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
 
-# NOTE: there is deliberately NO --talk-name=org.freedesktop.Flatpak and no
-# embedded --repo-url. On Flathub the app must not update itself — the
-# ARMADA_FLATHUB_BUILD marker installed below makes electron/main.js treat this
-# as a managed build and no-op every update path (see the main.js gate).
+# No --talk-name=org.freedesktop.Flatpak and no --repo-url: the
+# ARMADA_FLATHUB_BUILD marker installed below makes electron/main.js no-op every
+# self-update path, since Flathub owns updates.
 
 modules:
-  # A single module: one git checkout of the app, over which every dependency
-  # tree is overlaid by the generated-sources lists, then built in place. The
-  # HEVC publisher is an early step here rather than a separate module because
-  # it lives inside that same checkout (electron/hevc-publisher/) and its vendor
-  # tree is overlaid into it.
+  # One module: a single app checkout, with each dependency tree overlaid from a
+  # generated-sources list and built in place. The HEVC publisher builds here
+  # rather than as its own module because it lives inside the checkout.
   - name: armada
     buildsystem: simple
     build-commands:
-      # 1. The H.265 screen-share publisher (Go). Its module deps are the
-      #    proxy-archive vendor/ overlaid by generated-sources.hevc.json (plus
-      #    modules.txt); apply the same primary-codec patch the self-hosted
-      #    build uses, run its test, and install where hevcScreenShare.js expects
-      #    it (/app/bin/armada-hevc-publisher).
+      # 1. H.265 screen-share publisher (Go), from the vendored module tree.
       - |
         set -eu
         export PATH="/usr/lib/sdk/golang/bin:$PATH"
@@ -130,33 +88,24 @@ modules:
         GOOS=linux go build -mod=vendor -trimpath -buildvcs=false \
           -ldflags='-s -w' -o /app/bin/armada-hevc-publisher .
 
-      # 2. Offline npm install for the web client (root package-lock.json). npm
-      #    ci runs no `prebuild` hook, so the wasm build is not triggered here.
+      # 2. Web client deps (root package-lock). Runs no prebuild hook.
       - npm ci --offline
 
-      # 3. Build the iroh-gossip wasm transport WITHOUT wasm-pack, into
-      #    src/wasm/webxdc-rt so vite can import it. The prebuild hook
-      #    (scripts/build-wasm.mjs) then finds no wasm-pack, sees the output is
-      #    present and newer than src, and no-ops — it never rebuilds.
+      # 3. iroh-gossip wasm transport without wasm-pack, into src/wasm/webxdc-rt.
+      #    The prebuild hook then finds the output present and no-ops.
       - sh packaging/flathub/build-wasm-flatpak.sh
 
-      # 4. Build the web bundle (vite). prebuild=build:wasm is now a no-op.
+      # 4. Web bundle.
       - npm run build
 
-      # 5. Electron shell deps: offline install of electron/package-lock.json.
+      # 5. Electron shell deps (electron/package-lock).
       - npm --prefix electron ci --offline
 
-      # 6. Recompile the two native addons FROM SOURCE rather than shipping their
-      #    prebuilt .node blobs. Drop the prebuilds, then invoke each package's
-      #    OWN build directly rather than `npm rebuild`: npm rebuild runs venmic's
-      #    `install` script (cmake-js) but, because uiohook-napi declares
-      #    `gypfile: true`, substitutes its own internal node-gyp step for that
-      #    package's `install` (`node-gyp-build`) and silently produces nothing —
-      #    which shipped uiohook without its addon. Calling the tools directly is
-      #    deterministic. venmic's cmake-js pulls its CPM closure from
-      #    CPM_SOURCE_CACHE; uiohook's node-gyp-build reads headers from
-      #    npm_config_nodedir. Both resolve entirely offline. The asserts turn a
-      #    future silent miss into a build failure rather than a dead feature.
+      # 6. Rebuild the two native addons from source instead of shipping their
+      #    prebuilds. Each package's own tool is invoked directly: `npm rebuild`
+      #    routes uiohook-napi through node-gyp and silently produces nothing.
+      #    Then keep only the loadable .node; the rest of the CMake/gyp tree is
+      #    dead weight and CMakeCache.txt records absolute host paths.
       - rm -rf electron/node_modules/@vencord/venmic/prebuilds
           electron/node_modules/uiohook-napi/prebuilds
       - |
@@ -164,9 +113,6 @@ modules:
         cd electron/node_modules/@vencord/venmic
         ../../.bin/cmake-js compile --CDvenmic_addon=ON
         test -f build/Release/venmic-addon.node
-        # Keep only the loadable addon. The rest of the CMake build tree is dead
-        # weight in the shipped app, and CMakeCache.txt records absolute host
-        # paths — which Flathub review flags.
         find build -mindepth 1 -maxdepth 1 ! -name Release -exec rm -rf {} +
         find build/Release -mindepth 1 ! -name 'venmic-addon.node' -exec rm -rf {} +
       - |
@@ -174,95 +120,58 @@ modules:
         cd electron/node_modules/uiohook-napi
         ../.bin/node-gyp-build
         test -f build/Release/uiohook_napi.node
-        # Same: drop the node-gyp object tree, keep only the addon.
         find build -mindepth 1 -maxdepth 1 ! -name Release -exec rm -rf {} +
         find build/Release -mindepth 1 ! -name 'uiohook_napi.node' -exec rm -rf {} +
 
-      # 7. Build the bundled ArmadaDB store + update feed the shell requires
-      #    (db.cjs, updateFeed.cjs), then stage the web bundle into electron/dist.
+      # 7. Bundled store + update feed (db.cjs, updateFeed.cjs), then stage the
+      #    web bundle into electron/dist.
       - npm run build:electron
       - node electron/scripts/stage-web.mjs
 
-      # 8. Assemble the Electron app dir into /app/armada (armada + resources/app)
-      #    with @electron/packager against the cached Electron zip — no
-      #    electron-builder, no network. This is the /app/armada/armada path the
-      #    wrapper execs through zypak.
+      # 8. Assemble the Electron app dir into /app/armada with @electron/packager
+      #    against the cached Electron zip (no electron-builder, no network).
       - sh packaging/flathub/assemble-electron.sh
 
-      # 9. Launcher, desktop entry, metainfo, icons.
+      # 9. Launcher, desktop entry, metainfo, scalable + raster icons.
       - install -Dm755 packaging/flathub/armada-wrapper /app/bin/armada
       - install -Dm644 packaging/flathub/buzz.armada.app.desktop
           /app/share/applications/buzz.armada.app.desktop
       - install -Dm644 packaging/flathub/buzz.armada.app.metainfo.xml
           /app/share/metainfo/buzz.armada.app.metainfo.xml
-      # Scalable icon (preferred over a single raster size).
       - install -Dm644 public/logo.svg
           /app/share/icons/hicolor/scalable/apps/buzz.armada.app.svg
-      # Raster fallback for launchers that don't render SVG.
       - install -Dm644 electron/build/linux-icon.png
           /app/share/icons/hicolor/512x512/apps/buzz.armada.app.png
 
-      # 10. Mark this as a Flathub-managed build so the app disables its own
-      #     updater (electron/main.js reads this file; Flathub owns updates).
+      # 10. Marker that disables the app's own updater (read by electron/main.js).
       - install -Dm644 packaging/flathub/ARMADA_FLATHUB_BUILD
           /app/armada/resources/ARMADA_FLATHUB_BUILD
 
     sources:
-      # RELEASE BUMP: three edits have to move together, and nothing enforces
-      # it — a stale `commit` against a new `tag` still builds, just the wrong
-      # source. (1) `tag` below, (2) `commit` below from
-      # `git rev-list -n1 vX.Y.Z`, (3) a matching <release> entry at the top of
-      # <releases> in buzz.armada.app.metainfo.xml.
-      # Armada is a nostr git (ngit) repository. flatpak-builder can't clone
-      # nostr://, so this points at the repo's https clone URL on its grasp
-      # server — the same commits, served over plain git-http. No GitHub is in
-      # the build path.
+      # A release bump is three edits with nothing to enforce them: `tag` and
+      # `commit` below (the checker bot automates these), plus a matching
+      # <release> entry in buzz.armada.app.metainfo.xml (manual; the bot writes
+      # no changelog). The url is the repo's https git-http mirror, since
+      # flatpak-builder can't clone the canonical nostr:// remote.
       - type: git
         url: https://git.shakespeare.diy/npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/armada.git
         tag: v0.59.11
         commit: 764a8afdb8a6ac3c126a00a4eb1e9b7fc1483158
-        # Flathub's external-data-checker bot reads this: on a schedule it lists
-        # this remote's tags, and on a newer `vX.Y.Z` it opens a PR bumping BOTH
-        # `tag` and the resolved `commit` above — collapsing two of the three
-        # release-bump edits into an automated PR. The `<release>` entry in the
-        # metainfo stays manual (the bot writes no changelog). The pattern only
-        # matches plain vMAJOR.MINOR.PATCH, so a pre-release tag is ignored.
         x-checker-data:
           type: git
           tag-pattern: ^v([\d.]+)$
-      # The build helpers and app-shell assets live in THIS flathub repo, not in
-      # the app checkout — the pinned release tag predates packaging/flathub/, so
-      # they are overlaid into the checkout as file sources rather than read from
-      # it. (build-commands reference them at packaging/flathub/… all the same.)
-      - type: file
-        path: build-wasm-flatpak.sh
-        dest: packaging/flathub
-      - type: file
-        path: assemble-electron.sh
-        dest: packaging/flathub
-      - type: file
-        path: armada-wrapper
-        dest: packaging/flathub
-      - type: file
-        path: buzz.armada.app.desktop
-        dest: packaging/flathub
+      # Build helpers, wrapper, desktop entry and marker are read from the
+      # checkout above (packaging/flathub/ ships in every tag from v0.59.8).
+      # Only the metainfo is a sidecar: it needs a <release> entry for the exact
+      # version built, which a tag's own tree carries only from the first release
+      # cut with the metainfo step. Once the pin is such a release, read it from
+      # the checkout too and drop this.
       - type: file
         path: buzz.armada.app.metainfo.xml
         dest: packaging/flathub
-      - type: file
-        path: ARMADA_FLATHUB_BUILD
-        dest: packaging/flathub
-      # Offline dependency source lists. Each is a JSON
-      # array of hashed sources flatpak-builder resolves by filename beside this
-      # manifest.
-      #
-      #   npm        both package-lock trees (root + electron/), one deduped
-      #              flatpak-node/ cache incl. the Electron dist zips.
-      #   cargo      the wasm crate's deps + std's build-std deps +
-      #              wasm-bindgen-cli's own closure, one cargo/ vendor tree.
-      #   hevc       the Go module proxy archives (+ modules.txt) → the publisher's
-      #              vendor/.
-      #   venmic-cpm venmic's CMake/CPM dependency closure as pinned git checkouts.
+      # Offline dependency source lists (hashed): npm (root + electron/ locks and
+      # the Electron zips), cargo (wasm crate + build-std + wasm-bindgen-cli), go
+      # (HEVC publisher vendor), and venmic's CPM closure.
       - generated-sources.npm.json
       - generated-sources.cargo.json
       - generated-sources.hevc.json

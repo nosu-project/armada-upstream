@@ -160,7 +160,7 @@ Prepend one `<release>` line directly below the `<releases>` open tag in
   `tag`+`commit` when it sees a new `vX.Y.Z`, but **it writes no changelog and
   never touches the metainfo** (the manifest header's "RELEASE BUMP" note spells
   this out). So a release that skips this step ships a Flathub build whose newest
-  listed version is older than the version actually built — a stale version in
+  listed version is older than the version actually built: a stale version in
   every software center and a missing release entry for the built version, which
   nothing downstream can self-heal.
 - Validate before committing, if the tool is present:
@@ -169,9 +169,19 @@ Prepend one `<release>` line directly below the `<releases>` open tag in
 The manifest's `tag`+`commit` (in `packaging/flathub/buzz.armada.app.yml`) are
 **not** part of this per-release step: once the app is live on Flathub the
 external-data-checker bot bumps them from the new tag. The one exception is the
-**initial Flathub submission** (the app is not yet published) — for that first
+**initial Flathub submission** (the app is not yet published): for that first
 submission only, also set `tag:` to the new `vX.Y.Z` and `commit:` to
 `git rev-list -n1 vX.Y.Z` so the submitted manifest builds the current release.
+
+Whether that metainfo line also has to be copied into the **Flathub repo**
+(`github.com/flathub/buzz.armada.app`, separate from this one) depends on how the
+manifest sources the metainfo. The build helpers/desktop/marker are read from the
+tagged checkout, so the bot's bump carries them for free; the metainfo is still a
+`type: file` sidecar in the Flathub repo, so its `<release>` line must be added
+there too when merging the bot's bump PR. This stops being manual once the
+manifest is switched to read the metainfo from the checkout as well, which is
+safe once the pinned tag is a release cut with this step (its own commit then
+carries its own entry). See the sources comment in the manifest.
 
 ### Step 5: Commit the Changelog
 
