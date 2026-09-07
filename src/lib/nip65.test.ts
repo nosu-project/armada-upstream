@@ -1,4 +1,5 @@
-import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from "nostr-tools";
+import type { UnsignedEvent } from "nostr-tools";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,6 +18,25 @@ import {
 } from "@/lib/nip65";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+
+/**
+ * Lets one test hold the EC verify open across a macrotask, which is what the
+ * real one does: `ecVerifyBatch` yields to the timer queue every 5ms of inline
+ * work (`verifyPool`'s `INLINE_SLICE_MS`) and, when the pool is live, spans a
+ * whole worker round trip. Pass-through otherwise.
+ */
+const ec = vi.hoisted(() => ({ stall: undefined as (() => Promise<void>) | undefined }));
+
+vi.mock("@/lib/verifyPool", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/verifyPool")>();
+  return {
+    ...actual,
+    ecVerifyBatch: async (triples: Parameters<typeof actual.ecVerifyBatch>[0]) => {
+      if (ec.stall) await ec.stall();
+      return actual.ecVerifyBatch(triples);
+    },
+  };
+});
 
 const sk = generateSecretKey();
 const pubkey = getPublicKey(sk);
@@ -148,6 +168,25 @@ describe("NIP-65 relay lists", () => {
     expect(events).toEqual([event]);
   });
 
+  it("drops a forged event whose id matches its content but whose signature is invalid", async () => {
+    // id "0"*64 is caught before any EC verify (the hash gate). A forged event
+    // must clear that gate — id recomputed to match the tampered content — so
+    // that only the Schnorr verify (now the worker-pool batch) can reject it.
+    const real = relayList([["r", "wss://real.example"]], 4_100);
+    const tampered = { ...real, tags: [["r", "wss://attacker.example"]] };
+    const forged = { ...tampered, id: getEventHash(tampered as UnsignedEvent) } as NostrEvent;
+    const nostr = {
+      relay: () => ({ query: async () => [real, forged] }),
+    };
+    const events = await queryExplicitRelays(
+      nostr,
+      ["wss://one.example"],
+      [{ kinds: [KIND_RELAY_LIST] }],
+      new AbortController().signal,
+    );
+    expect(events).toEqual([real]);
+  });
+
   it("falls back to a pool-wide read when no explicit relays are given", async () => {
     const event = relayList([["r", "wss://one.example"]], 4_500);
     const relay = vi.fn(() => ({ query: async () => [] as NostrEvent[] }));
@@ -243,6 +282,44 @@ describe("NIP-65 relay lists", () => {
       expect(result.events).toHaveLength(2);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("leaves a laggard that answers during verification out of `answered`", async () => {
+    // `answered` and the events must describe the same instant. Verification is
+    // awaited between collecting the events and reading the settle states, and
+    // `settleWithGrace` keeps mutating those states after it resolves — so a
+    // laggard answering inside that window would be reported as having answered
+    // while the events it returned were already left out. That pair reads as an
+    // authoritative empty read from a relay we never actually heard.
+    const fast = relayList([["r", "wss://fast.example"]], 8_000);
+    const slow = relayList([["r", "wss://slow.example"]], 8_001);
+    let arrive!: () => void;
+    const laggard = new Promise<NostrEvent[]>((resolve) => {
+      arrive = () => resolve([slow]);
+    });
+    const nostr = {
+      relay: (url: string) => ({
+        query: () => (url === "wss://slow.example" ? laggard : Promise.resolve([fast])),
+      }),
+    };
+    ec.stall = async () => {
+      arrive();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    try {
+      const result = await queryExplicitRelaysWithStatus(
+        nostr,
+        ["wss://fast.example", "wss://slow.example"],
+        [{ kinds: [KIND_RELAY_LIST] }],
+        new AbortController().signal,
+        { graceMs: 1 },
+      );
+      expect(result.events).toEqual([fast]);
+      expect(result.answered).toEqual(["wss://fast.example"]);
+      expect(result.failed).toEqual([]);
+    } finally {
+      ec.stall = undefined;
     }
   });
 

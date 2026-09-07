@@ -40,11 +40,13 @@
  * independently deletable.
  */
 
-import { finalizeEvent } from "nostr-tools/pure";
+import { finalizeEvent, getEventHash } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
 
 import type { StreamKeyView } from "@/concord/lib/derive";
 import { normalizeRelayUrl } from "@/lib/platform";
+import { ecSignBatch } from "@/lib/verifyPool";
+import type { SignJob } from "@/lib/verifyWorkerTypes";
 
 interface StreamKeyEntry {
   /**
@@ -183,9 +185,9 @@ export function onStreamKeysAdded(listener: Listener): () => void {
  * (raw secret keys), so this never touches the user's signer / bunker.
  * Returns the kind-22242 events to send on the connection.
  *
- * Each signature is ~4ms of main-thread EC work — for more than a handful of
- * keys, prefer {@link signStreamAuthsChunked} so the loop yields between
- * chunks instead of blocking frames.
+ * Each signature is ~4ms of main-thread EC work — for anything beyond the one
+ * key NostrProvider answers a slow bunker with, use
+ * {@link signStreamAuthsChunked}, which signs in the worker pool.
  */
 export function signStreamAuths(
   challenge: string,
@@ -197,43 +199,76 @@ export function signStreamAuths(
   for (const pk of pubkeys ?? streamPubkeysForRelay(relayUrl)) {
     const sk = registry.get(pk)?.sk;
     if (!sk) continue;
-    out.push(
-      finalizeEvent(
-        {
-          kind: 22242,
-          content: "",
-          tags: [
-            ["relay", relayUrl],
-            ["challenge", challenge],
-          ],
-          created_at: createdAt,
-        },
-        sk,
-      ),
-    );
+    out.push(finalizeEvent(unsignedAuth(challenge, relayUrl, createdAt), sk));
   }
   return out;
 }
 
-/** Keys signed per event-loop turn by {@link signStreamAuthsChunked} (~4ms each). */
-const SIGN_CHUNK = 16;
+function unsignedAuth(challenge: string, relayUrl: string, createdAt: number) {
+  return {
+    kind: 22242,
+    content: "",
+    tags: [
+      ["relay", relayUrl],
+      ["challenge", challenge],
+    ],
+    created_at: createdAt,
+  };
+}
 
 /**
- * Like {@link signStreamAuths}, but yields the events in chunks with an
- * event-loop turn between them, so signing dozens of keys doesn't block
- * rendering for hundreds of milliseconds. The caller sends each chunk as it
- * arrives (a NIP-42 AUTH is valid whenever it lands on the live challenge)
- * and can stop iterating if the challenge dies mid-flight (socket reopened).
+ * Keys per pool round in {@link signStreamAuthsChunked}. Each round's events
+ * are yielded (and sent) as soon as it returns, so a large registry
+ * authenticates progressively rather than all at once at the end.
+ */
+const SIGN_BATCH = 64;
+
+/**
+ * Like {@link signStreamAuths}, but signs OFF the main thread: the event ids
+ * are hashed here (microseconds), and the Schnorr signatures — each a sign
+ * plus @noble's self-verify, the ~4ms — come from the EC worker pool
+ * (`verifyPool.ts`, `ecSignBatch`), inline and time-sliced only where a
+ * `Worker` can't run. Yields the signed events in batches; the caller sends
+ * each as it arrives (a NIP-42 AUTH is valid whenever it lands on the live
+ * challenge) and can stop iterating if the challenge dies mid-flight (socket
+ * reopened).
+ *
+ * The pubkey goes into the event straight from the registry rather than being
+ * recomputed from the secret (what `finalizeEvent` does): a stream key's pk is
+ * derived from its sk at registration, and a mismatch could only yield a
+ * signature the relay rejects, never one it wrongly accepts.
+ *
+ * The previous form signed in fixed chunks of 16 with an event-loop turn
+ * between them, which bounded nothing: each chunk was still ~64ms of
+ * uninterruptible main-thread work (several hundred on a phone), and a
+ * community switch profiled at ~1.6s of it in total.
  */
 export async function* signStreamAuthsChunked(
   challenge: string,
   relayUrl: string,
   pubkeys?: Iterable<string>,
 ): AsyncGenerator<NostrEvent[]> {
+  const createdAt = Math.floor(Date.now() / 1000);
   const pks = [...(pubkeys ?? streamPubkeysForRelay(relayUrl))];
-  for (let i = 0; i < pks.length; i += SIGN_CHUNK) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 0));
-    yield signStreamAuths(challenge, relayUrl, pks.slice(i, i + SIGN_CHUNK));
+  for (let i = 0; i < pks.length; i += SIGN_BATCH) {
+    const unsigned: Omit<NostrEvent, "sig">[] = [];
+    const jobs: SignJob[] = [];
+    for (const pk of pks.slice(i, i + SIGN_BATCH)) {
+      const sk = registry.get(pk)?.sk;
+      if (!sk) continue;
+      const event = { ...unsignedAuth(challenge, relayUrl, createdAt), pubkey: pk };
+      const id = getEventHash(event);
+      unsigned.push({ ...event, id });
+      jobs.push({ hash: id, sk });
+    }
+    if (jobs.length === 0) continue;
+    const sigs = await ecSignBatch(jobs);
+    const signed: NostrEvent[] = [];
+    for (let j = 0; j < unsigned.length; j++) {
+      const sig = sigs[j];
+      if (sig) signed.push({ ...unsigned[j], sig });
+    }
+    if (signed.length > 0) yield signed;
   }
 }
 

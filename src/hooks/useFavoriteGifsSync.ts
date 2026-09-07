@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { verifyEvent } from "nostr-tools/pure";
+import { verifyEventOnce } from "@/lib/verifyCache";
 
 import { selfStateRelays } from "@/contexts/AppContext";
 import {
@@ -129,7 +129,7 @@ export async function signCurrentFavoriteGifEvents(
   // Network editions must verify. ArmadaDB rumors have had their signatures
   // stripped after verified ingest, but remain trusted semantic inputs during
   // an explicit relay migration.
-  const verified = remoteEvents.filter((event) => !isSigned(event) || verifyEvent(event));
+  const verified = remoteEvents.filter((event) => !isSigned(event) || verifyEventOnce(event));
   const decoded = await decodeFavoriteGifEvents(
     pubkey,
     (author, content) => signer.nip44!.decrypt(author, content),
@@ -279,10 +279,10 @@ export function useFavoriteGifsSync(): void {
       if (completed.length === 0) throw new Error("No self-state relay completed the GIF pull");
       const byId = new Map<string, NostrRumor>();
       for (const event of cached) {
-        if (!isSigned(event) || verifyEvent(event)) byId.set(event.id, event);
+        if (!isSigned(event) || verifyEventOnce(event)) byId.set(event.id, event);
       }
       for (const event of completed.flatMap(({ events }) => events)) {
-        if (verifyEvent(event)) byId.set(event.id, event);
+        if (verifyEventOnce(event)) byId.set(event.id, event);
       }
       const decoded = await decodeFavoriteGifEvents(
         user.pubkey,

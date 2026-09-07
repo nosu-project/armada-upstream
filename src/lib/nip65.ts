@@ -1,6 +1,6 @@
-import { verifyEvent } from "nostr-tools";
-
 import { normalizeRelayUrl } from "@/lib/platform";
+import { verifyEventOnce, verifyEventsOnce } from "@/lib/verifyCache";
+import { ecVerifyBatch } from "@/lib/verifyPool";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -217,10 +217,33 @@ export function buildRelayListTags(relays: RelayPreference[]): string[][] {
   });
 }
 
-/** Newest replaceable event: highest timestamp, then lowest id on a tie. */
+/**
+ * Batch-verify a relay result set OFF the main thread, deduped by id, and drop
+ * the copies that fail. A cold community/DM switch resolves several of these
+ * lists at once (follow, mute, groups, DM relays, portable setup), each a
+ * first-seen batch, and verifying them one synchronous Schnorr at a time on
+ * this thread profiled at ~950ms of a switch — a single frozen frame. This
+ * routes the EC through the worker pool (`verifyPool`) via the same memoized
+ * batch verifier the relay inbox uses, so a duplicate — or a later
+ * {@link newestRelayList} over the same events — pays no EC at all.
+ */
+async function verifyRelayEvents(events: NostrEvent[]): Promise<NostrEvent[]> {
+  if (events.length === 0) return [];
+  const verdicts = await verifyEventsOnce(events, ecVerifyBatch);
+  return events.filter((_, index) => verdicts[index]);
+}
+
+/**
+ * Newest replaceable event: highest timestamp, then lowest id on a tie.
+ *
+ * Verifies through the memo (`verifyEventOnce`): its inputs have usually
+ * already passed {@link verifyRelayEvents}, so this is a memo hit with no EC —
+ * and the single-candidate path (`newerRelayListUpdate`) still pays exactly one
+ * Schnorr verify.
+ */
 export function newestRelayList(events: NostrEvent[]): NostrEvent | undefined {
   return events
-    .filter((event) => event.kind === KIND_RELAY_LIST && verifyEvent(event))
+    .filter((event) => event.kind === KIND_RELAY_LIST && verifyEventOnce(event))
     .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
 }
 
@@ -283,7 +306,7 @@ export async function queryExplicitRelaysWithStatus(
     if (!nostr.query) return { events: [], answered: [], failed: [] };
     try {
       const events = await nostr.query(filters, { signal });
-      return { events: events.filter((event) => verifyEvent(event)), answered: [], failed: [] };
+      return { events: await verifyRelayEvents(events), answered: [], failed: [] };
     } catch {
       return { events: [], answered: [], failed: [] };
     }
@@ -292,18 +315,22 @@ export async function queryExplicitRelaysWithStatus(
     urls.map((url) => nostr.relay(url).query(filters, { signal })),
     opts?.graceMs,
   );
-  const byId = new Map<string, NostrEvent>();
+  const all: NostrEvent[] = [];
   for (const result of settled) {
-    if (result.status !== "fulfilled") continue;
-    for (const event of result.value) {
-      if (verifyEvent(event)) byId.set(event.id, event);
-    }
+    if (result.status === "fulfilled") all.push(...result.value);
   }
-  return {
-    events: [...byId.values()],
-    answered: urls.filter((_, index) => settled[index]?.status === "fulfilled"),
-    failed: urls.filter((_, index) => settled[index]?.status === "rejected"),
-  };
+  // Read the settle states with the events they came with, BEFORE the verify is
+  // awaited. `settleWithGrace` keeps writing into `settled` as laggards land,
+  // and the await below is not free of macrotasks — the inline verify yields
+  // every 5ms and a pool round is longer still. Read after it, a relay that
+  // answered inside that window would be reported as having answered while the
+  // events it returned were already left out of `all`; that pair is exactly
+  // what a list write reads as an authoritative empty read.
+  const answered = urls.filter((_, index) => settled[index]?.status === "fulfilled");
+  const failed = urls.filter((_, index) => settled[index]?.status === "rejected");
+  const byId = new Map<string, NostrEvent>();
+  for (const event of await verifyRelayEvents(all)) byId.set(event.id, event);
+  return { events: [...byId.values()], answered, failed };
 }
 
 /** Find a user's newest signed NIP-65 list on a bounded discovery set. */

@@ -55,9 +55,9 @@ vi.mock("@tanstack/react-query", () => ({
   },
 }));
 
-vi.mock("nostr-tools/pure", async (importOriginal) => ({
-  ...await importOriginal<typeof import("nostr-tools/pure")>(),
-  verifyEvent: () => true,
+vi.mock("@/lib/verifyCache", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/verifyCache")>(),
+  verifyEventOnce: () => true,
 }));
 
 vi.mock("@/contexts/AppContext", () => ({

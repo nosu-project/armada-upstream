@@ -10,7 +10,7 @@ import { broadcastWriteRelays, userReadRelays, userWriteRelays } from "@/context
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
 import { poolReqTargets } from "@/lib/poolRouting";
-import { verifyEventOnce } from "@/lib/verifyCache";
+import { VerifiedRelay } from "@/lib/verifiedRelay";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { detachableClient, NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
@@ -62,7 +62,9 @@ const USER_AUTH_HEADSTART_MS = 1_200;
 const WRAP_KINDS = new Set([1059, 21059]);
 
 /**
- * Skip Schnorr signature verification for gift-wraps, verify everything else.
+ * Skip Schnorr signature verification for gift-wraps; everything else is
+ * verified by the relay's inbox (`VerifiedRelay`), once per id and in batches
+ * that reach the worker pool.
  *
  * A 1059/21059 wrap's outer signature is cryptographically meaningless to the
  * client: NIP-59 wraps are signed either by a single-use ephemeral key (direct
@@ -77,12 +79,8 @@ const WRAP_KINDS = new Set([1059, 21059]);
  * win. Every other kind (NIP-29 group events, DMs, profiles, …) still relies on
  * its outer signature for identity, so those keep full verification.
  */
-function verifyEventSkippingWraps(event: NostrEvent): boolean {
-  if (WRAP_KINDS.has(event.kind)) return true;
-  // Once per id, not per copy: every relay's duplicate of the same event used
-  // to pay a fresh main-thread Schnorr verify (see verifyCache for the memo's
-  // soundness argument).
-  return verifyEventOnce(event);
+function isWrap(event: NostrEvent): boolean {
+  return WRAP_KINDS.has(event.kind);
 }
 
 /**
@@ -276,8 +274,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   /**
    * Send NIP-42 AUTH frames for the stream pubkeys scoped to this relay.
-   * Signing is chunked with event-loop yields; aborts if the socket reopens
-   * mid-flight (the challenge is then a dead nonce). Each frame is recorded
+   * Signing runs in the EC worker pool, a batch at a time, each batch sent as
+   * it returns; aborts if the socket reopens mid-flight (the challenge is
+   * then a dead nonce). Each frame is recorded
    * so the relay's `["OK", id, true]` ack marks the key authenticated
    * (streamAuth ack state — plane sweeps gate on it).
    */
@@ -423,10 +422,12 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           throw new TypeError(`Refusing to open non-relay URL: ${JSON.stringify(url)}`);
         }
         logRelayOpen(url);
-        const relay: NRelay1 = new NRelay1(url, {
+        const relay: NRelay1 = new VerifiedRelay(url, {
           // Gift-wrap (1059/21059) outer signatures are redundant on the client
-          // (see verifyEventSkippingWraps); skip them, verify everything else.
-          verifyEvent: verifyEventSkippingWraps,
+          // (see isWrap); skip them. Everything else is verified by the relay's
+          // inbox — once per id, in batches, through the worker pool — instead
+          // of one synchronous Schnorr verify per message on this thread.
+          skipVerify: isWrap,
           // NIP-42: respond to relay AUTH challenges by signing a kind 22242
           // ephemeral event. The user's signer answers when it's fast (local
           // nsec / extension, or a healthy bunker); a slow NIP-46 bunker is

@@ -2,7 +2,7 @@ import { verifyEvent } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { controlGroupKey, random32 } from "@/concord/lib/derive";
+import { controlGroupKey, random32, type StreamKeyView } from "@/concord/lib/derive";
 import {
   _resetStreamAuthRegistry,
   isStreamPubkey,
@@ -136,10 +136,21 @@ describe("streamAuth registry", () => {
     expect(seen).toEqual([[a.pk]]);
   });
 
-  it("signStreamAuthsChunked yields the event loop between chunks", async () => {
-    // 40 keys spans 3 chunks of 16. A macrotask queued at start must run
-    // BEFORE iteration finishes — proving the loop yields instead of
-    // monopolizing the thread (each signature is ~4ms of EC work).
+  // ── Off-thread signing ─────────────────────────────────────────────────────
+  //
+  // `signStreamAuthsChunked` hashes the ids here and signs through the EC
+  // worker pool (verifyPool.ts). There is no `Worker` in this environment, so
+  // the pool's INLINE path runs — on this thread, precisely when blocking
+  // matters — and these tests pin what that path must do: produce the same
+  // valid events `signStreamAuths` would, and cede the thread while doing it.
+  // (The pool's worker dispatch and failure contract are pinned in
+  // verifyPool.test.ts, with a stubbed Worker.)
+
+  it("signStreamAuthsChunked signs every scoped key with a valid AUTH and yields to the event loop while doing so", async () => {
+    // 40 keys is ~160ms of EC work on desktop. A macrotask queued at the start
+    // must run before the drain finishes: the inline path is time-sliced
+    // (~5ms per run), not one uninterruptible block — the old fixed chunk of 16
+    // signs ran ~64ms straight, several hundred ms on a phone.
     const keys = Array.from({ length: 40 }, () => makeKey());
     registerStreamKeys(keys, [RELAY]);
 
@@ -157,86 +168,38 @@ describe("streamAuth registry", () => {
 
     expect(events).toHaveLength(40);
     expect(new Set(events.map((e) => e.pubkey))).toEqual(new Set(keys.map((k) => k.pk)));
-    for (const ev of events.slice(0, 2)) expect(verifyEvent(ev)).toBe(true);
+    for (const ev of events) {
+      expect(ev.kind).toBe(22242);
+      expect(ev.tags).toContainEqual(["relay", RELAY]);
+      expect(ev.tags).toContainEqual(["challenge", "ch"]);
+      // A real BIP-340 signature over the real id, by the registered key.
+      expect(verifyEvent(ev)).toBe(true);
+    }
     expect(interleaved).toBe(true);
   });
 
-  // ── The paint-block mechanism ──────────────────────────────────────────────
-  //
-  // The three tests below prove WHY "chunked" doesn't get the signing under a
-  // frame. The yield is `await setTimeout(0)` and it sits BETWEEN chunks
-  // (guarded by `i > 0`); a single chunk of SIGN_CHUNK (16) signs runs
-  // start-to-finish with no yield inside it. Each sign is ~4ms of EC work, so
-  // one chunk is a ~64ms uninterruptible block on the main thread (several
-  // hundred ms on a phone, 5-10x slower) — long past the 16.7ms frame budget.
-  // The proof is deterministic: draining a single-chunk generator is
-  // microtask-only, so a macrotask (setTimeout, ~ the timers/paint the block
-  // would starve) queued before the drain cannot run until the whole chunk
-  // finishes.
+  it("signStreamAuthsChunked honours an explicit subset and skips address-only keys", async () => {
+    const a = makeKey();
+    const b = makeKey();
+    // A split control_pk held without its staff secret (CORD-02 §2).
+    const addressOnly: StreamKeyView = { ...makeKey(), sk: undefined };
+    registerStreamKeys([a, b, addressOnly], [RELAY]);
 
-  it("does NOT yield WITHIN a chunk — one full chunk blocks the macrotask queue", async () => {
-    // Exactly SIGN_CHUNK (16) keys = one chunk, so the loop's only
-    // `await setTimeout(0)` (which is guarded by `i > 0`) never runs. A
-    // macrotask queued before the drain therefore cannot interleave: the 16
-    // synchronous signs run as one uninterruptible block. THIS is the paint
-    // stall — the block that "chunking" is assumed to prevent but doesn't.
-    const keys = Array.from({ length: 16 }, () => makeKey());
-    registerStreamKeys(keys, [RELAY]);
+    const collect = async (gen: AsyncGenerator<NostrEvent[]>) => {
+      const out: NostrEvent[] = [];
+      for await (const chunk of gen) out.push(...chunk);
+      return out;
+    };
 
-    let macrotaskRanDuringDrain = false;
-    let draining = true;
-    setTimeout(() => {
-      macrotaskRanDuringDrain = draining;
-    }, 0);
+    const scoped = await collect(signStreamAuthsChunked("ch", RELAY));
+    expect(new Set(scoped.map((e) => e.pubkey)), "no secret, no AUTH").toEqual(new Set([a.pk, b.pk]));
 
-    const events: NostrEvent[] = [];
-    for await (const chunk of signStreamAuthsChunked("ch", RELAY)) {
-      events.push(...chunk);
-    }
-    draining = false;
-
-    expect(events).toHaveLength(16);
-    // The macrotask did NOT run during the drain: the single chunk never ceded
-    // the thread. (Contrast the 17-key case below, where a second chunk exists
-    // and the between-chunk yield lets the same macrotask through.)
-    expect(macrotaskRanDuringDrain).toBe(false);
+    const subset = await collect(signStreamAuthsChunked("ch", RELAY, [a.pk, addressOnly.pk]));
+    expect(subset.map((e) => e.pubkey)).toEqual([a.pk]);
   });
 
-  it("yields ONLY between chunks — one key past the boundary is what admits a macrotask", async () => {
-    // 17 keys forces a SECOND chunk, and with it the `await setTimeout(0)`
-    // between chunk 1 and chunk 2. That single between-chunk yield is the only
-    // place the loop cedes the thread — so the exact macrotask that a 16-key
-    // (one-chunk) drain blocked now runs mid-drain. Same code, one more key:
-    // the difference isolates the yield to the chunk BOUNDARY, never inside a
-    // chunk.
-    const keys = Array.from({ length: 17 }, () => makeKey());
-    registerStreamKeys(keys, [RELAY]);
-
-    let macrotaskRanDuringDrain = false;
-    let draining = true;
-    setTimeout(() => {
-      macrotaskRanDuringDrain = draining;
-    }, 0);
-
-    const events: NostrEvent[] = [];
-    for await (const chunk of signStreamAuthsChunked("ch", RELAY)) {
-      events.push(...chunk);
-    }
-    draining = false;
-
-    expect(events).toHaveLength(17);
-    expect(macrotaskRanDuringDrain).toBe(true);
-  });
-
-  it("chunks by a fixed COUNT (16), so a chunk's blocking length scales with keys, not a time budget", async () => {
-    // 33 keys → [16, 16, 1]. The boundary is a hardcoded count, independent of
-    // how long each signature actually takes. The decode/verify paths slice by
-    // a ~5ms WALL-CLOCK budget (DECODE_SLICE_MS / INLINE_SLICE_MS), which bounds
-    // every blocking run to ~one frame on ANY device; here the longest
-    // uninterruptible run is always 16 signs — ~64ms on desktop, several
-    // hundred ms on a phone. That mismatch (count where it should be time) is
-    // the fix target.
-    const keys = Array.from({ length: 33 }, () => makeKey());
+  it("signStreamAuthsChunked yields per pool round, so a large registry authenticates progressively", async () => {
+    const keys = Array.from({ length: 70 }, () => makeKey());
     registerStreamKeys(keys, [RELAY]);
 
     const chunkSizes: number[] = [];
@@ -244,10 +207,9 @@ describe("streamAuth registry", () => {
       chunkSizes.push(chunk.length);
     }
 
-    expect(chunkSizes).toEqual([16, 16, 1]);
-    // The block length is capped by COUNT, not a time budget: a slower per-sign
-    // cost makes each of these chunks proportionally longer with no adaptation.
-    expect(Math.max(...chunkSizes)).toBe(16);
+    // Each round's events are sent as soon as it returns — the relay acks the
+    // first 64 keys while the rest are still being signed.
+    expect(chunkSizes).toEqual([64, 6]);
   });
 });
 

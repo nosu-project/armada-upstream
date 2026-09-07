@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { verifyEvent } from "nostr-tools/pure";
+import { verifyEventOnce } from "@/lib/verifyCache";
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
 
@@ -162,10 +162,10 @@ export function verifiedDmConversationIndexEvents(
 ): NostrRumor[] {
   const byId = new Map<string, NostrRumor>();
   for (const event of cached) {
-    if (!isSigned(event) || verifyEvent(event)) byId.set(event.id, event);
+    if (!isSigned(event) || verifyEventOnce(event)) byId.set(event.id, event);
   }
   for (const event of remote) {
-    if (verifyEvent(event)) byId.set(event.id, event);
+    if (verifyEventOnce(event)) byId.set(event.id, event);
   }
   return [...byId.values()];
 }

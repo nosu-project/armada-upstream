@@ -721,7 +721,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       // that connection. These signatures are local (derived stream secret
       // keys, see streamAuth.ts) and scoped to the keys THIS relay hosts, so
       // they never wait on the user's signer and never sign for communities
-      // the relay doesn't carry. Chunked so the burst doesn't block frames.
+      // the relay doesn't carry. Signed in the EC worker pool, a batch at a
+      // time, so the burst doesn't block frames.
       try {
         for await (const chunk of signStreamAuthsChunked(challenge, relayUrl)) {
           for (const event of chunk) {

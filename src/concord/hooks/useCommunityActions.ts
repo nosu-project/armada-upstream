@@ -1,6 +1,5 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { verifyEvent } from "nostr-tools/pure";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
@@ -10,6 +9,7 @@ import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord/
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { verifyEventOnce } from "@/lib/verifyCache";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { channelKeysToWire, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord/lib/communityList";
 import { mintCommunity } from "@/concord/lib/community";
@@ -219,7 +219,7 @@ async function queryBundleCoordinate(
             if (
               e.kind === KIND_INVITE_BUNDLE &&
               e.pubkey === invite.linkSigner &&
-              verifyEvent(e as Parameters<typeof verifyEvent>[0])
+              verifyEventOnce(e)
             ) {
               valid.push(e);
             }

@@ -25,16 +25,27 @@ import { hexToBytes } from "@noble/hashes/utils.js";
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { _resetVerifyPoolForTests, ecVerifyBatch } from "./verifyPool";
+import { _resetVerifyPoolForTests, ecSignBatch, ecVerifyBatch } from "./verifyPool";
+
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 import type { VerifyTriple } from "./verifyCache";
-import type { VerifyRequest, VerifyResponse } from "./verifyWorkerTypes";
+import type { SignJob, WorkerRequest, WorkerResponse } from "./verifyWorkerTypes";
 
 function realVerify(t: VerifyTriple): boolean {
   try {
     return schnorr.verify(hexToBytes(t.sig), hexToBytes(t.id), hexToBytes(t.pubkey));
   } catch {
     return false;
+  }
+}
+
+function realSign(job: SignJob): string | null {
+  try {
+    return bytesToHex(schnorr.sign(hexToBytes(job.hash), job.sk));
+  } catch {
+    return null;
   }
 }
 
@@ -53,15 +64,15 @@ class FakeWorker {
   broken = false;
   terminated = false;
   /** Requests a "silent" worker swallowed, so a test can answer them late. */
-  swallowed: VerifyRequest[] = [];
-  onmessage: ((event: { data: VerifyResponse }) => void) | null = null;
+  swallowed: WorkerRequest[] = [];
+  onmessage: ((event: { data: WorkerResponse }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
 
   constructor() {
     FakeWorker.instances.push(this);
   }
 
-  postMessage(request: VerifyRequest): void {
+  postMessage(request: WorkerRequest): void {
     FakeWorker.messages++;
     if (this.behavior === "throw-on-message") throw new Error("dead channel");
     if (this.broken) return;
@@ -73,8 +84,10 @@ class FakeWorker {
       this.swallowed.push(request);
       return;
     }
-    const results = request.triples.map(realVerify);
-    queueMicrotask(() => this.onmessage?.({ data: { id: request.id, results } }));
+    const response: WorkerResponse = request.op === "sign"
+      ? { id: request.id, results: request.jobs.map(realSign) }
+      : { id: request.id, results: request.triples.map(realVerify) };
+    queueMicrotask(() => this.onmessage?.({ data: response }));
   }
 
   terminate(): void {
@@ -216,8 +229,9 @@ describe("ecVerifyBatch", () => {
     // A reply that turns up after the deadline lands nowhere — no throw, and
     // no second settle of an already-settled round.
     const late = stalled.swallowed[0];
+    const swallowedCount = late.op === "verify" ? late.triples.length : late.jobs.length;
     expect(() =>
-      stalled.onmessage?.({ data: { id: late.id, results: late.triples.map(() => false) } }),
+      stalled.onmessage?.({ data: { id: late.id, results: Array<boolean>(swallowedCount).fill(false) } }),
     ).not.toThrow();
   });
 
@@ -241,6 +255,81 @@ describe("ecVerifyBatch", () => {
 
     expect(results).toHaveLength(batch.length);
     expect(results.every(Boolean)).toBe(true);
+    expect(interleaved).toBe(true);
+  });
+});
+
+describe("ecSignBatch", () => {
+  /** Fresh keys and distinct 32-byte messages, with the pubkey to check against. */
+  function jobs(n: number): { job: SignJob; pubkey: Uint8Array }[] {
+    return Array.from({ length: n }, (_, i) => {
+      const sk = generateSecretKey();
+      return {
+        job: { hash: bytesToHex(sha256(new TextEncoder().encode(`msg ${i}`))), sk },
+        pubkey: schnorr.getPublicKey(sk),
+      };
+    });
+  }
+
+  function validSig(sig: string | null, hash: string, pubkey: Uint8Array): boolean {
+    return sig !== null && schnorr.verify(hexToBytes(sig), hexToBytes(hash), pubkey);
+  }
+
+  it("splits a batch across workers and returns valid signatures in input order", async () => {
+    const set = jobs(30);
+    const sigs = await ecSignBatch(set.map((s) => s.job));
+
+    expect(sigs).toHaveLength(30);
+    expect(FakeWorker.messages).toBeGreaterThan(0);
+    set.forEach((s, i) => expect(validSig(sigs[i], s.job.hash, s.pubkey), `job ${i}`).toBe(true));
+  });
+
+  it("signs a lone job inline without a worker round trip", async () => {
+    // The one stream key NostrProvider answers a slow bunker with: its
+    // latency matters more than the thread, and a round trip costs more than
+    // one sign.
+    const [one] = jobs(1);
+    const [sig] = await ecSignBatch([one.job]);
+    expect(validSig(sig, one.job.hash, one.pubkey)).toBe(true);
+    expect(FakeWorker.messages).toBe(0);
+  });
+
+  it("answers null for an unusable key instead of throwing, in the pool and inline", async () => {
+    const set = jobs(30);
+    const zero = { hash: set[0].job.hash, sk: new Uint8Array(32) }; // not a valid scalar
+    const pooled = await ecSignBatch([zero, ...set.map((s) => s.job)]);
+    expect(pooled[0]).toBeNull();
+    set.forEach((s, i) => expect(validSig(pooled[i + 1], s.job.hash, s.pubkey)).toBe(true));
+
+    expect(await ecSignBatch([zero])).toEqual([null]);
+  });
+
+  it("moves signing back to this thread when a worker dies mid-round — no signature is lost", async () => {
+    await ecSignBatch(jobs(30).map((s) => s.job));
+    FakeWorker.instances[0].behavior = "die-on-message";
+
+    const set = jobs(30);
+    const sigs = await ecSignBatch(set.map((s) => s.job));
+
+    // A dead worker's chunk is signed here rather than reported unsigned: a
+    // stream key with no AUTH would leave its plane unreadable on an
+    // auth-gating relay for the socket's life.
+    set.forEach((s, i) => expect(validSig(sigs[i], s.job.hash, s.pubkey), `job ${i}`).toBe(true));
+  });
+
+  it("yields to the event loop while signing inline", async () => {
+    _resetVerifyPoolForTests();
+    vi.stubGlobal("Worker", undefined);
+
+    const set = jobs(40); // ~160ms of sign + self-verify on desktop
+    let interleaved = false;
+    setTimeout(() => {
+      interleaved = true;
+    }, 0);
+
+    const sigs = await ecSignBatch(set.map((s) => s.job));
+
+    set.forEach((s, i) => expect(validSig(sigs[i], s.job.hash, s.pubkey)).toBe(true));
     expect(interleaved).toBe(true);
   });
 });
