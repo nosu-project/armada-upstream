@@ -10,6 +10,9 @@ runtime: org.freedesktop.Platform
 runtime-version: &runtime-version '25.08'
 sdk: org.freedesktop.Sdk
 
+separate-locales: false
+command: armada
+
 # zypak sandboxes Electron's setuid sandbox helper; armada-wrapper execs it.
 base: org.electronjs.Electron2.BaseApp
 base-version: *runtime-version
@@ -21,28 +24,6 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
   - org.freedesktop.Sdk.Extension.golang
   - org.freedesktop.Sdk.Extension.llvm21
-
-command: armada
-separate-locales: false
-
-build-options:
-  append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/golang/bin
-  env:
-    # npm/cargo/go/cmake all build from the offline caches the generators laid
-    # down; none may reach the network.
-    npm_config_offline: 'true'
-    npm_config_cache: /run/build/armada/flatpak-node/npm-cache
-    XDG_CACHE_HOME: /run/build/armada/flatpak-node/cache
-    # node-gyp reads headers from the node22 extension rather than downloading.
-    npm_config_nodedir: /usr/lib/sdk/node22
-    # playwright's browser downloads are dropped from the offline cache, so its
-    # postinstall must skip or `npm ci --offline` fails reaching for them.
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-    CARGO_HOME: /run/build/armada/cargo
-    # venmic's CMake resolves its CPM closure from this reconstructed cache.
-    CPM_SOURCE_CACHE: /run/build/armada/electron/vendor-cpm
-    GOFLAGS: -mod=vendor
-    GOTOOLCHAIN: local
 
 finish-args:
   # User-configured Nostr relays, voice brokers and media hosts over wss/https.
@@ -70,6 +51,25 @@ finish-args:
 # No --talk-name=org.freedesktop.Flatpak and no --repo-url: the
 # ARMADA_FLATHUB_BUILD marker installed below makes electron/main.js no-op every
 # self-update path, since Flathub owns updates.
+
+build-options:
+  append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/golang/bin
+  env:
+    # npm/cargo/go/cmake all build from the offline caches the generators laid
+    # down; none may reach the network.
+    npm_config_offline: 'true'
+    npm_config_cache: /run/build/armada/flatpak-node/npm-cache
+    XDG_CACHE_HOME: /run/build/armada/flatpak-node/cache
+    # node-gyp reads headers from the node22 extension rather than downloading.
+    npm_config_nodedir: /usr/lib/sdk/node22
+    # playwright's browser downloads are dropped from the offline cache, so its
+    # postinstall must skip or `npm ci --offline` fails reaching for them.
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    CARGO_HOME: /run/build/armada/cargo
+    # venmic's CMake resolves its CPM closure from this reconstructed cache.
+    CPM_SOURCE_CACHE: /run/build/armada/electron/vendor-cpm
+    GOFLAGS: -mod=vendor
+    GOTOOLCHAIN: local
 
 modules:
   # One module: a single app checkout, with each dependency tree overlaid from a
