@@ -25,6 +25,11 @@ struct ConcordStream {
     /// drops a message that doesn't `#p`-tag the viewer. Mirrors the Android
     /// service's per-community `mentionOnly` (older configs omit it → notify all).
     let mentionOnly: Bool
+    /// The channel/community is muted (level `nothing`). It raises no gateway
+    /// subscription, but a lingering one can still wake the device; the channel
+    /// is kept in the config with its key so `prepareConcord` OPENS the wrap and
+    /// drops it, rather than presenting the gateway's static fallback text.
+    let muted: Bool
 
     init(
         pubkey: String,
@@ -34,7 +39,8 @@ struct ConcordStream {
         channelId: String,
         banned: Set<String>,
         mentionEveryoneAuthors: Set<String> = [],
-        mentionOnly: Bool = false
+        mentionOnly: Bool = false,
+        muted: Bool = false
     ) {
         self.pubkey = pubkey
         self.conversationKey = conversationKey
@@ -44,6 +50,7 @@ struct ConcordStream {
         self.banned = banned
         self.mentionEveryoneAuthors = mentionEveryoneAuthors
         self.mentionOnly = mentionOnly
+        self.muted = muted
     }
 }
 
@@ -209,7 +216,8 @@ struct PushConfig {
                 channelId: channelId,
                 banned: Set((entry["banned"] as? [String]) ?? []),
                 mentionEveryoneAuthors: Set((entry["mentionEveryoneAuthors"] as? [String]) ?? []),
-                mentionOnly: (entry["mentionOnly"] as? Bool) ?? false
+                mentionOnly: (entry["mentionOnly"] as? Bool) ?? false,
+                muted: (entry["muted"] as? Bool) ?? false
             ))
         }
 

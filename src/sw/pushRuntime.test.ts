@@ -765,4 +765,71 @@ describe("preparePush — showing nothing on purpose", () => {
     const rows = await queryChannelRumors(COMMUNITY, CHANNEL, { limit: 10 });
     expect(rows.map((r) => r.content)).toContain("message from a banned member");
   });
+
+  it("drops a muted Concord channel's message that still wakes the worker", async () => {
+    // Reporter's scenario: a community (and a channel inside it) muted to
+    // `nothing`, plus "All channel messages" off — yet notifications keep
+    // arriving from that community.
+    //
+    // Muting drops a `nothing` channel from the gateway subscription, but a
+    // subscription that lingers past the mute (the prune is gated on the watch
+    // set being authoritative — see useNostrPush.ts) still wakes the device.
+    // Before the fix the wrap reached the worker with NO matching stream in the
+    // config, `prepareConcord` returned `undefined`, and `public/sw.js` rendered
+    // the gateway's visible static "New message" (sw.js:661-676) — a
+    // notification from a muted community.
+    //
+    // The muted channel is now kept in the sealed config, flagged `muted`, so
+    // `prepareConcord` opens the wrap and drops it — matching `prepareDm`, which
+    // drops a `nothing` conversation on-device (pushRuntime.ts).
+    const CHANNEL = "ab".repeat(32);
+    const COMMUNITY = "cd".repeat(32);
+    const streamSk = generateSecretKey();
+    const streamPk = getPublicKey(streamSk);
+    const convKey = getConversationKey(streamSk, streamPk);
+    const authorSk = generateSecretKey();
+    const authorPk = getPublicKey(authorSk);
+    const rumor = {
+      pubkey: authorPk,
+      kind: 9,
+      content: "chatter in a muted channel",
+      tags: [["channel", CHANNEL], ["epoch", "1"]],
+      created_at: now(),
+    };
+    const withId = { ...rumor, id: getEventHash(rumor as Parameters<typeof getEventHash>[0]) };
+    const sealed = finalizeEvent(
+      { kind: 20013, content: nip44Encrypt(JSON.stringify(withId), convKey), tags: [], created_at: rumor.created_at },
+      authorSk,
+    );
+    const streamed = finalizeEvent(
+      {
+        kind: 1059,
+        content: nip44Encrypt(JSON.stringify(sealed), convKey),
+        tags: [["p", getPublicKey(generateSecretKey())]],
+        created_at: now(),
+      },
+      streamSk,
+    );
+
+    // The stream reaches the worker (lingering subscription) but is muted: it is
+    // kept in the sealed config, with its key, precisely so the worker can open
+    // and drop it rather than fall back to the visible static wake-up.
+    const p = await preparePush({ scope: "c2", event: streamed as never }, {
+      policy: "generic",
+      self: getPublicKey(generateSecretKey()),
+      knownPeers: [],
+      concord: [{
+        pk: streamPk,
+        convKey: bytesToHex(convKey),
+        epoch: "1",
+        communityId: COMMUNITY,
+        channelId: CHANNEL,
+        muted: true,
+      }],
+    });
+    expect(p?.drop).toBe(true);
+    // Still stored — a muted channel's timeline stays complete.
+    const rows = await queryChannelRumors(COMMUNITY, CHANNEL, { limit: 10 });
+    expect(rows.map((r) => r.content)).toContain("chatter in a muted channel");
+  });
 });

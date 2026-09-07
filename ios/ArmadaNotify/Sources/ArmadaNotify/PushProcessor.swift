@@ -333,6 +333,13 @@ struct PushProcessor {
         // decrypted author says so, and that is here.
         if opened.author == config.selfPubkey { return .dropped }
 
+        // A muted channel/community (level `nothing`): stored above so its
+        // timeline stays complete, and — here — never announced. The mute
+        // normally means no gateway subscription at all, but a lingering one can
+        // still wake the device, and this is where a leaked wrap is silenced
+        // rather than presented as the gateway's static fallback text.
+        if stream.muted { return .dropped }
+
         // A banned member (CORD-04): stored above like every other message,
         // folded off the timeline on read, and — here — never announced. The
         // author is on the encrypted rumor, so this is the first place it can

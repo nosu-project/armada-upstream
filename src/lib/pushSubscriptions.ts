@@ -97,7 +97,12 @@ export interface PushSubscriptionInput {
   dmFollows: string[];
   /** Explicit per-conversation DM levels, keyed by canonical conversation key. */
   dmLevels: Record<string, "all" | "mentions" | "nothing">;
-  concord: ConcordSub[];
+  /**
+   * Watched Concord channels. A `muted` channel is present so callers can seal
+   * it into the decrypt config, but it MUST NOT become a gateway subscription —
+   * it is skipped here.
+   */
+  concord: Array<ConcordSub & { muted?: boolean }>;
 }
 
 /**
@@ -331,9 +336,14 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     });
   }
 
-  // Concord (kind-1059 stream authors), merged by relay set.
+  // Concord (kind-1059 stream authors), merged by relay set. A muted channel is
+  // in `input.concord` only so the caller can seal its decrypt key — it must
+  // raise no gateway subscription, or the mute would be the thing that starts
+  // the wake-ups.
   for (const spec of mergeByRelaySet(
-    input.concord.map((s) => ({ relays: s.relays, values: s.streams.map((st) => st.pk) })),
+    input.concord
+      .filter((s) => !s.muted)
+      .map((s) => ({ relays: s.relays, values: s.streams.map((st) => st.pk) })),
     "c2",
     (values, relays) => ({
       id: `armada-c2-${relaySetTag(relays)}`,

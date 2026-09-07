@@ -482,6 +482,13 @@ async function prepareConcord(
   // tells us, and that is here.
   if (cfg?.self && opened.author === cfg.self) return DROP;
 
+  // A muted channel/community (level `nothing`): stored above like every other
+  // message so its timeline stays complete, and — here — never announced. The
+  // mute normally means no gateway subscription at all, but a lingering one can
+  // still wake the device, and this is where a leaked wrap is silenced rather
+  // than shown as the gateway's static wake-up.
+  if (stream.muted) return DROP;
+
   // A banned member (CORD-04): stored above like every other message, folded
   // off the timeline on read, and — here — never announced. The author is on
   // the encrypted rumor, so this is the first place it can be checked.

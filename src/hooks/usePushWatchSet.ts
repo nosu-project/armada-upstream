@@ -44,12 +44,16 @@ export interface PushWatchSet {
   /** The content-blind subscriptions to register with the gateway. */
   specs: PushSubscriptionSpec[];
   /**
-   * Concord channels at their current epoch, above the `nothing` level. Each
-   * carries `mentionOnly` (the channel is at the `mentions` level) so the iOS
-   * extension can suppress non-mention messages after decrypt — the gateway is
-   * content-blind and can't, so it wakes on every message either way.
+   * Concord channels at their current epoch. Each carries `mentionOnly` (the
+   * channel is at the `mentions` level) so the iOS extension can suppress
+   * non-mention messages after decrypt — the gateway is content-blind and
+   * can't, so it wakes on every message either way — and `muted` (level
+   * `nothing`). A muted channel is deliberately kept in this set, and in the
+   * sealed decrypt config, but NOT subscribed (`buildPushSubscriptions` skips
+   * it): it exists only so a lingering gateway subscription's wrap can be
+   * opened and dropped after decrypt rather than shown as a static wake-up.
    */
-  concord: Array<ConcordSub & { mentionOnly: boolean }>;
+  concord: Array<ConcordSub & { mentionOnly: boolean; muted: boolean }>;
   /** Peers whose DMs are not requests, including authored synced conversations. */
   dmKnownPeers: string[];
   /** Exact pinned/authored NIP-17 rooms, without promoting group members to 1:1 trust. */
@@ -284,12 +288,18 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
           sub,
           level: concordChannelLevel("c2", sub.communityId, sub.channelId),
         }))
-        .filter(({ level }) => level !== "nothing")
-        // Carry the mentions-only flag through so the iOS extension (which CAN
-        // decrypt Concord) can suppress non-mention messages, mirroring the
-        // Android service. The gateway stays content-blind; enforcement is on
-        // the device after decrypt.
-        .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
+        // Carry the mentions-only and muted flags through so the worker / iOS
+        // extension (which CAN decrypt Concord) can suppress after decrypt,
+        // mirroring the Android service. A `nothing` channel is kept rather
+        // than filtered here — `buildPushSubscriptions` drops it from the
+        // gateway subscription, but it stays in the sealed config so a wrap
+        // from a lingering subscription is opened and dropped, not shown. The
+        // gateway stays content-blind; enforcement is on the device.
+        .map(({ sub, level }) => ({
+          ...sub,
+          mentionOnly: level === "mentions",
+          muted: level === "nothing",
+        })),
     [allConcordSubs, concordChannelLevel],
   );
 

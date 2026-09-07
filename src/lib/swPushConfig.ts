@@ -71,6 +71,17 @@ export interface SwConcordStream {
   mentionEveryoneAuthors?: string[];
   /** Drop non-mention messages after decrypting this encrypted stream. */
   mentionOnly?: boolean;
+  /**
+   * The channel/community is muted (notification level `nothing`). It carries
+   * NO gateway subscription — but a subscription that lingers past the mute
+   * (the gateway prune is gated on the watch set being authoritative) can still
+   * wake the device, and the wrap then reaches the worker. Kept here, with its
+   * decrypt key, precisely so the worker can OPEN it and DROP it rather than
+   * fall back to the gateway's visible "New message". Defense-in-depth, the
+   * same shape as `banned`/`mentionOnly`: the gateway is content-blind and the
+   * only enforcement point is after decrypt.
+   */
+  muted?: boolean;
 }
 
 export interface SwPushConfig {

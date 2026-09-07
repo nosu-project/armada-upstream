@@ -501,6 +501,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
             banned: sub.banned,
             mentionEveryoneAuthors: sub.mentionEveryoneAuthors,
             mentionOnly: sub.mentionOnly,
+            muted: sub.muted,
           }))
         ),
         ...(dmSk ? { sk: dmSk } : {}),

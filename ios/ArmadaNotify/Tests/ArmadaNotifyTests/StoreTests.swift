@@ -414,6 +414,51 @@ final class StorelessTests: XCTestCase {
             "a non-mention must not notify a mentions-only channel"
         )
     }
+
+    /// A muted channel (level `nothing`) raises no gateway subscription, but a
+    /// lingering one can still wake iOS. The stream is kept in the config with
+    /// its key so the extension OPENS the wrap and drops it, rather than
+    /// presenting the gateway's static fallback text. Mirrors the web worker's
+    /// `prepareConcord` and the Android service.
+    func testDropsAMutedChannelMessage() {
+        let concord = vectorObject("concord")
+        let wrap = concord["wrap"] as! [String: Any]
+        func stream(muted: Bool) -> ConcordStream {
+            ConcordStream(
+                pubkey: concord["streamPk"] as! String,
+                conversationKey: concord["convKey"] as! String,
+                epoch: concord["epoch"] as! String,
+                communityId: "cc",
+                channelId: concord["channelId"] as! String,
+                banned: [],
+                muted: muted
+            )
+        }
+        func processor(muted: Bool) -> PushProcessor {
+            PushProcessor(
+                store: nil,
+                config: PushConfig(
+                    policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+                    nip46: nil, concord: [stream(muted: muted)]
+                ),
+                now: 1_700_000_500
+            )
+        }
+        // Baseline: not muted, the same wrap notifies.
+        XCTAssertNotEqual(
+            processor(muted: false)
+                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+            true,
+            "a message on an unmuted channel notifies"
+        )
+        // Muted: the same wrap is dropped rather than shown.
+        XCTAssertEqual(
+            processor(muted: true)
+                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+            true,
+            "a message on a muted channel must not notify"
+        )
+    }
 }
 
 /// Who a notification says it is FROM.
@@ -491,9 +536,10 @@ final class SenderIdentityTests: XCTestCase {
         {"policy":"generic","self":"\(self_)","knownPeers":[],
          "concord":[{"pk":"\(peer)","convKey":"\(peer)","epoch":"1",
          "communityId":"cc","channelId":"dd",
-         "mentionEveryoneAuthors":["\(moderator)"],"mentionOnly":true}]}
+         "mentionEveryoneAuthors":["\(moderator)"],"mentionOnly":true,"muted":true}]}
         """)
         XCTAssertEqual(parsed?.concord.first?.mentionEveryoneAuthors, Set([moderator]))
+        XCTAssertEqual(parsed?.concord.first?.muted, true)
         XCTAssertTrue(PushProcessor.hasEveryoneMention("Heads up @everyone!"))
         XCTAssertFalse(PushProcessor.hasEveryoneMention("mail@everyone.example"))
         XCTAssertFalse(PushProcessor.hasEveryoneMention("@everyone_else"))

@@ -320,6 +320,42 @@ describe("buildPushSubscriptions", () => {
     expect(c2.filter).toEqual({ kinds: [1059], authors: ["s1", "s2"] });
   });
 
+  it("raises no subscription for a muted Concord channel", () => {
+    // A muted channel is carried in `concord` only so the caller can seal its
+    // decrypt key into the device config (for the drop-after-decrypt defense).
+    // It must never become a gateway subscription, or the mute would be the
+    // thing that starts the wake-ups.
+    const specs = buildPushSubscriptions(
+      baseInput({
+        concord: [
+          {
+            relays: ["wss://c"],
+            communityId: "c",
+            communityName: "",
+            channelId: "muted",
+            channelName: "",
+            streams: [{ pk: "s-muted", convKey: "k", epoch: "0" }],
+            timerSecs: 0,
+            gitAttachments: [],
+            muted: true,
+          },
+          {
+            relays: ["wss://c"],
+            communityId: "c",
+            communityName: "",
+            channelId: "live",
+            channelName: "",
+            streams: [{ pk: "s-live", convKey: "k", epoch: "0" }],
+            timerSecs: 0,
+            gitAttachments: [],
+          },
+        ],
+      }),
+    ).filter((s) => s.id.startsWith("armada-c2-"));
+    expect(specs).toHaveLength(1);
+    expect(specs[0].filter).toEqual({ kinds: [1059], authors: ["s-live"] });
+  });
+
   it("merges Concord channels that share a relay set into one authors filter", () => {
     const sub = (relays: string[], pk: string) => ({
       relays,

@@ -148,6 +148,13 @@ export interface IosPushConfig {
      * Mirrors the Android service's per-community `mentionOnly`.
      */
     mentionOnly?: boolean;
+    /**
+     * The channel/community is muted (level `nothing`). It raises no gateway
+     * subscription, but a lingering one can still wake the device; the channel
+     * is kept here with its key so the extension OPENS the wrap and drops it,
+     * rather than presenting the gateway's static fallback text.
+     */
+    muted?: boolean;
   }>;
 }
 

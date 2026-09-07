@@ -205,6 +205,7 @@ export function useIosPush(): UsePushNotificationsReturn {
             banned: sub.banned,
             mentionEveryoneAuthors: sub.mentionEveryoneAuthors,
             mentionOnly: sub.mentionOnly,
+            muted: sub.muted,
           }))
         ),
         // An nsec login decrypts on the device; a bunker login hands over the
