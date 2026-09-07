@@ -84,6 +84,22 @@ describe("ChatContent nostr-in-URL", () => {
     expect(links.some((h) => h.includes(NPUB))).toBe(false);
   });
 
+  it("keeps a mid-sentence npub URL as a link to that URL", () => {
+    // `https://ditto.pub/<npub>` is a link to ditto.pub. Unfolding it to a
+    // mention chip (a `<button>`, so: no links at all) dropped the href the
+    // sender wrote and pointed the reader at a profile page instead.
+    const { container } = renderContent(`see https://ditto.pub/${NPUB} for more`);
+    expect(hrefs(container)).toEqual([`https://ditto.pub/${NPUB}`]);
+  });
+
+  it("gives a standalone npub URL the ordinary link preview, not a mention", () => {
+    // Alone on its line it takes the same LinkEmbed any other URL would (here
+    // still in its loading state, hence no anchor yet) — the point is that it
+    // is not a NostrMention chip, which renders as a button.
+    const { container } = renderContent(`https://ditto.pub/${NPUB}`);
+    expect(container.querySelector("button")).toBeNull();
+  });
+
   it("still unfolds a terminal nostr id (njump-style link)", () => {
     const { container } = renderContent(`https://njump.me/${NEVENT}`);
     // With embeds disabled the terminal nevent folds to a single off-ramp

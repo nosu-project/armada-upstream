@@ -97,30 +97,30 @@ const BECH32_CHARS = "023456789acdefghjklmnpqrstuvwxyz";
 /**
  * Regex to extract a NIP-19 entity embedded in a URL path — an njump.me /
  * habla.news / snort style link whose path IS a nostr id. Matches events
- * (`nevent`/`note`), addressable events (`naddr`), and profiles
- * (`nprofile`/`npub`). Ordered longest-prefix-first so `nprofile1` isn't
- * shadowed by a shorter alternative.
+ * (`nevent`/`note`) and addressable events (`naddr`) only: a URL is a
+ * destination, and the unfold is a preview of it that keeps the url as a
+ * source back-link. `npub`/`nprofile` are deliberately absent — a mention has
+ * no room for a source link, so unfolding `https://ditto.pub/npub1…` to a
+ * chip discarded the link the sender wrote and silently sent the reader to
+ * this app's profile page instead. Such a URL stays a plain link.
  *
  * The entity must be the TERMINAL path segment: a leading `/` and nothing but
  * an optional trailing `/`, query, or fragment after it. A structured URL like
  * `gitworkshop.dev/npub1…/relay.ngit.dev/armada/issues/nevent1…` carries a
- * bech32 id MID-PATH (the repo owner's npub), and matching the first one
- * anywhere turned the whole link into a profile mention. Anchoring to the last
- * segment lets that mid-path npub fall through (its next char is `/…`, not a
- * terminator) while the terminal `nevent1…` still unfolds — and a URL whose
- * only entity sits mid-path stays a plain link rather than a mention. Captured
- * in group 1, since the match now includes the delimiters.
+ * bech32 id MID-PATH, and matching the first one anywhere claimed the whole
+ * link for it. Anchoring to the last segment lets a mid-path id fall through
+ * (its next char is `/…`, not a terminator) while the terminal `nevent1…`
+ * still unfolds. Captured in group 1, since the match includes the delimiters.
  */
 const NOSTR_IN_URL_REGEX = new RegExp(
-  `\\/((?:nevent1|nprofile1|naddr1|note1|npub1)[${BECH32_CHARS}]{10,})\\/?(?:[?#]|$)`,
+  `\\/((?:nevent1|naddr1|note1)[${BECH32_CHARS}]{10,})\\/?(?:[?#]|$)`,
   "i",
 );
 
 /** A NIP-19 entity found inside a plain URL (njump-style link). */
 type NostrInUrl =
   | { kind: "event"; eventId: string; relays?: string[]; author?: string }
-  | { kind: "addr"; addr: AddrCoords }
-  | { kind: "profile"; pubkey: string };
+  | { kind: "addr"; addr: AddrCoords };
 
 /**
  * Try to extract a nostr entity from a URL whose path encodes one (e.g.
@@ -145,10 +145,6 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
           relays: decoded.data.relays,
           author: decoded.data.author,
         };
-      case "npub":
-        return { kind: "profile", pubkey: decoded.data };
-      case "nprofile":
-        return { kind: "profile", pubkey: decoded.data.pubkey };
     }
   } catch {
     // invalid identifier — fall through to a plain link
@@ -711,10 +707,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           // claim a `/dm/npub1…/m/<id>` path by the npub inside it. Invites
           // are excluded — they already have their own card, matched by path.
           const selfTarget = isInvite ? null : parseSelfLink(url);
-          // A URL whose path IS a nostr id (njump.me/nevent1…, habla.news/…
-          // /naddr1…) unfolds to the rich card for that entity, keeping the
-          // original url as a "source" back-link. Skipped for invite links,
-          // whose naddr points at encrypted content (handled above).
+          // A URL whose path IS an event or naddr (njump.me/nevent1…,
+          // habla.news/…/naddr1…) unfolds to the rich card for that entity,
+          // keeping the original url as a "source" back-link. Skipped for
+          // invite links, whose naddr points at encrypted content (handled
+          // above). A profile URL never unfolds — see NOSTR_IN_URL_REGEX.
           const nostrFromUrl = isInvite || selfTarget ? null : extractNostrFromUrl(url);
           if (selfTarget?.kind === "profile") {
             // A bare `/<npub>` link is exactly a mention, wherever it sits.
@@ -747,8 +744,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               author: nostrFromUrl.author,
               sourceUrl: url,
             });
-          } else if (nostrFromUrl?.kind === "profile") {
-            out.push({ type: "mention", pubkey: nostrFromUrl.pubkey });
           } else if (isEndOfLine) {
             out.push({ type: "link-embed", url });
           } else {
