@@ -1,10 +1,12 @@
-import { ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { InstagramEmbed } from "@/components/chat/InstagramEmbed";
 import { TweetEmbed } from "@/components/chat/TweetEmbed";
+import { toast } from "@/hooks/useToast";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
+import { writeClipboardText } from "@/lib/clipboard";
 import {
   extractInstagramShortcode,
   extractSpotifyEmbed,
@@ -140,42 +142,94 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
   }
 
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
+    // A `<button>` can't nest in an `<a>`, so instead of wrapping the card in a
+    // link we lay a full-card link OVERLAY under inert content: clicks fall
+    // through the `pointer-events-none` content to the anchor, and the copy
+    // button re-enables pointer events to sit in the footer flow as the one
+    // exception. That keeps the button in normal layout (no overlay gutter /
+    // empty gap) while the whole card still behaves as a link.
+    <div
       className={cn(
-        "group block max-w-md rounded-xl border border-border overflow-hidden",
+        "group relative block max-w-md rounded-xl border border-border overflow-hidden",
         "hover:bg-secondary/40 transition-colors",
         className,
       )}
-      onClick={(e) => e.stopPropagation()}
     >
-      {sanitizeImageSrc(data.thumbnail_url) && (
-        <div className="w-full overflow-hidden">
-          <img
-            src={sanitizeImageSrc(data.thumbnail_url)}
-            alt=""
-            className="w-full max-h-[180px] object-cover"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget.parentElement as HTMLElement).style.display = "none";
-            }}
-          />
-        </div>
-      )}
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={data.title || data.provider_name || displayDomain(url)}
+        className="absolute inset-0 z-0"
+        onClick={(e) => e.stopPropagation()}
+      />
 
-      <div className="px-3.5 py-2.5 space-y-0.5">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="truncate">{data.provider_name || displayDomain(url)}</span>
-          <ExternalLink className="size-3 ml-auto shrink-0 opacity-0 group-hover:opacity-100 touch:opacity-100 transition-opacity" />
-        </div>
-        {data.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
-        {data.author_name && (
-          <p className="text-xs text-muted-foreground leading-relaxed line-clamp-1">{data.author_name}</p>
+      <div className="pointer-events-none relative">
+        {sanitizeImageSrc(data.thumbnail_url) && (
+          <div className="w-full overflow-hidden">
+            <img
+              src={sanitizeImageSrc(data.thumbnail_url)}
+              alt=""
+              className="w-full max-h-[180px] object-cover"
+              loading="lazy"
+              onError={(e) => {
+                (e.currentTarget.parentElement as HTMLElement).style.display = "none";
+              }}
+            />
+          </div>
         )}
+
+        <div className="px-3.5 py-2.5 space-y-0.5">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="truncate">{data.provider_name || displayDomain(url)}</span>
+          </div>
+          {data.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
+          {data.author_name && (
+            <p className="text-xs text-muted-foreground leading-relaxed line-clamp-1">{data.author_name}</p>
+          )}
+        </div>
       </div>
-    </a>
+
+      <CopyLinkButton url={url} />
+    </div>
+  );
+}
+
+/**
+ * Copy-link affordance in the lower-right corner of a link preview card. It
+ * copies the URL rather than following it, and re-enables pointer events (its
+ * container is inert) so it's the one interactive element in front of the
+ * card-wide link overlay. Always visible.
+ */
+function CopyLinkButton({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    writeClipboardText(url).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+        toast({ title: "Copied link" });
+      },
+      () => toast({ title: "Couldn't copy link", variant: "destructive" }),
+    );
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy link"
+      aria-label="Copy link"
+      className={cn(
+        "absolute bottom-1.5 right-1.5 z-10 grid place-items-center size-7 touch:size-9 rounded-md",
+        "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
+      )}
+    >
+      {copied ? <Check className="size-3.5 shrink-0" /> : <Copy className="size-3.5 shrink-0" />}
+    </button>
   );
 }
 

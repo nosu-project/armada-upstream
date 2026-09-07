@@ -199,6 +199,12 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
   const dittoHref = dittoEventUrl(event);
   // NIP-21 identifier to copy for pasting into any other Nostr client.
   const nostrUri = eventNostrUri(event);
+  // When this card was unfolded from a link on another host, that host is the
+  // primary off-ramp — "View on <host>" takes the footer's left slot and the
+  // Ditto link moves beside the copy button. A ditto.pub source is not
+  // "another host": it's the same off-ramp the DittoLink already is.
+  const safeSource = externalUrl(sourceUrl);
+  const externalSource = safeSource && displayHost(safeSource) !== "ditto.pub" ? safeSource : undefined;
 
   return (
     <div
@@ -285,15 +291,21 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           </EmbedTruncatedBody>
         )}
 
-        {/* Source back-link: when this card was unfolded from a link on
-            another host, a favicon+host chip that opens the original. */}
-        <SourceLink url={sourceUrl} />
-
-        {/* Off-ramp footer: view on Ditto (left) + copy id (lower-right) */}
-        {(dittoHref || nostrUri) && (
-          <div className="mt-0.5 flex items-center">
-            {dittoHref && <DittoLink href={dittoHref} />}
-            {nostrUri && <CopyIdButton uri={nostrUri} className="ml-auto" />}
+        {/* Off-ramp footer. Normally "View on Ditto" (left) + copy id
+            (lower-right). When the card came from a link on another host, that
+            host leads on the left and the Ditto link joins the copy button on
+            the right. */}
+        {(dittoHref || nostrUri || externalSource) && (
+          <div className="mt-0.5 flex items-center gap-2 min-w-0">
+            {externalSource ? (
+              <SourceLink url={externalSource} />
+            ) : (
+              dittoHref && <DittoLink href={dittoHref} />
+            )}
+            <div className="ml-auto flex items-center gap-1 shrink-0">
+              {externalSource && dittoHref && <DittoLink href={dittoHref} iconOnly />}
+              {nostrUri && <CopyIdButton uri={nostrUri} />}
+            </div>
           </div>
         )}
       </div>
@@ -1053,14 +1065,15 @@ function EmbedTruncatedBody({ children }: { children: ReactNode }) {
 }
 
 /**
- * Favicon + hostname chip shown when an embedded event card was unfolded from
- * a link on another host (e.g. an `njump.me/nevent1…` URL pasted into chat).
- * Clicking it opens the original source. Renders nothing when there is no
- * source URL, or when it's same-host/invalid (`externalUrl`).
+ * "View on <host>" off-ramp shown when an embedded event card was unfolded from
+ * a link on another host (e.g. an `njump.me/nevent1…` URL pasted into chat) —
+ * favicon + host + open icon, clicking opens the original source. It leads the
+ * footer's left slot in place of the Ditto link. Renders nothing when there is
+ * no source URL, or when it's same-host/invalid (`externalUrl`).
  *
  * A ditto.pub source is suppressed on purpose: the card already carries a
- * "View on Ditto" off-ramp footer, so a second chip pointing at the same host
- * would be redundant.
+ * "View on Ditto" off-ramp, so a second link pointing at the same host would be
+ * redundant.
  */
 function SourceLink({ url }: { url: string | undefined }) {
   const safe = externalUrl(url);
@@ -1075,15 +1088,13 @@ function SourceLink({ url }: { url: string | undefined }) {
         e.stopPropagation();
         void openUrl(safe);
       }}
-      className={cn(
-        "mt-0.5 flex items-center gap-1 max-w-full min-w-0 px-2 py-0.5 rounded-full",
-        "text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors",
-      )}
+      className="inline-flex items-center gap-1.5 min-w-0 text-xs text-muted-foreground hover:text-primary transition-colors"
     >
       {favicon
         ? <img src={favicon} alt="" className="size-3.5 shrink-0 rounded-sm object-contain" loading="lazy" />
         : <ExternalLink className="size-3 shrink-0" />}
-      <span className="truncate">{displayHost(safe)}</span>
+      <span className="truncate">View on {displayHost(safe)}</span>
+      <ExternalLink className="size-3 shrink-0" />
     </button>
   );
 }
@@ -1092,8 +1103,31 @@ function SourceLink({ url }: { url: string | undefined }) {
  * "View on Ditto" off-ramp — a small primary-tinted link appended to an
  * embedded event card so readers can jump to the full social thread on
  * ditto.pub (images, quotes, zaps, replies) that Armada doesn't render.
+ *
+ * `iconOnly` renders just the Ditto glyph as an icon button matching
+ * {@link CopyIdButton}, for the lower-right corner when a "View on <host>"
+ * source link has taken the footer's leading slot.
  */
-function DittoLink({ href, label = "View on Ditto" }: { href: string; label?: string }) {
+function DittoLink({ href, label = "View on Ditto", iconOnly = false }: { href: string; label?: string; iconOnly?: boolean }) {
+  if (iconOnly) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        title={label}
+        aria-label={label}
+        className={cn(
+          "shrink-0 grid place-items-center size-6 touch:size-8 rounded-md",
+          "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
+        )}
+      >
+        <DittoIcon className="size-3.5 shrink-0" />
+      </a>
+    );
+  }
+
   return (
     <a
       href={href}
