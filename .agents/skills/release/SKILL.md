@@ -139,13 +139,47 @@ This is the headline for the GitLab Release.
 - **Omit purely internal changes** (CI tweaks, build pipeline, dev tooling)
   unless they have a direct, visible user impact.
 
+#### Also add the Flathub metainfo release entry (REQUIRED, every release)
+
+Prepend one `<release>` line directly below the `<releases>` open tag in
+`packaging/flathub/buzz.armada.app.metainfo.xml`, keeping entries newest-first:
+
+```xml
+  <releases>
+    <release version="X.Y.Z" date="YYYY-MM-DD"/>
+    <!-- older entries below, unchanged -->
+```
+
+- `date` is today (the release date), the same date as the CHANGELOG entry.
+- Match the existing style: a bare `version`+`date`, **no** `<description>`.
+  `appstreamcli validate` accepts it, and the file's other entries are bare.
+- **Why this is not optional and must not be deferred:** Flathub builds Armada
+  from source out of `packaging/flathub/`, and the version shown in software
+  centers (GNOME Software, KDE Discover) comes from this `<releases>` list, not
+  from the git tag. Flathub's external-data-checker bot auto-bumps the manifest's
+  `tag`+`commit` when it sees a new `vX.Y.Z`, but **it writes no changelog and
+  never touches the metainfo** (the manifest header's "RELEASE BUMP" note spells
+  this out). So a release that skips this step ships a Flathub build whose newest
+  listed version is older than the version actually built — a stale version in
+  every software center and a missing release entry for the built version, which
+  nothing downstream can self-heal.
+- Validate before committing, if the tool is present:
+  `appstreamcli validate packaging/flathub/buzz.armada.app.metainfo.xml`.
+
+The manifest's `tag`+`commit` (in `packaging/flathub/buzz.armada.app.yml`) are
+**not** part of this per-release step: once the app is live on Flathub the
+external-data-checker bot bumps them from the new tag. The one exception is the
+**initial Flathub submission** (the app is not yet published) — for that first
+submission only, also set `tag:` to the new `vX.Y.Z` and `commit:` to
+`git rev-list -n1 vX.Y.Z` so the submitted manifest builds the current release.
+
 ### Step 5: Commit the Changelog
 
-The version is carried by the tag, so the only file to commit is the changelog
-(plus any release-prep changes the user asked for).
+The tag carries the version, so the files to commit are the changelog and the
+Flathub metainfo entry (plus any release-prep changes the user asked for).
 
 ```bash
-git add CHANGELOG.md
+git add CHANGELOG.md packaging/flathub/buzz.armada.app.metainfo.xml
 git commit -m "Release vX.Y.Z"
 ```
 

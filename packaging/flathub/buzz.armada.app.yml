@@ -219,8 +219,8 @@ modules:
       # the build path.
       - type: git
         url: https://git.shakespeare.diy/npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/armada.git
-        tag: v0.59.7
-        commit: 51ecd845c51b55c9745db2111d4a8cd07e1fc092
+        tag: v0.59.11
+        commit: 764a8afdb8a6ac3c126a00a4eb1e9b7fc1483158
         # Flathub's external-data-checker bot reads this: on a schedule it lists
         # this remote's tags, and on a newer `vX.Y.Z` it opens a PR bumping BOTH
         # `tag` and the resolved `commit` above — collapsing two of the three
