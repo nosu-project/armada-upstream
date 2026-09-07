@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.11] - 2026-09-07
+
+Link previews gain a one-tap copy button, and a post embedded from a link on
+another site now points back to that source. Muting a community channel
+reliably silences it, a screen share from a source with no audio no longer
+mutes your later shares, and a profile link pasted into chat stays clickable
+instead of collapsing into a mention.
+
+### Added
+- Copy a link straight from its preview card with a button in the corner
+
+### Changed
+- A post embedded from a link on another site now leads with a "View on <site>" link back to the original source
+- More work (relay verification, sign-in signing, and relay-list reads) moved off the main thread to keep the interface responsive
+
+### Fixed
+- Muting a community channel now reliably stops its notifications, including a stray generic alert that could still slip through
+- A screen share from a source with no capturable audio no longer leaves your following screen shares silent, and the share button now shows when a share has no audio
+- Pasting a profile link into chat keeps it as a clickable link instead of turning it into a mention and dropping the link
+
 ## [0.59.10] - 2026-09-06
 
 Pictures, avatars, emoji and file downloads now try every storage server that
