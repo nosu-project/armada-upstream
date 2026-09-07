@@ -143,7 +143,12 @@ modules:
       - install -Dm644 electron/build/linux-icon.png
           /app/share/icons/hicolor/512x512/apps/buzz.armada.app.png
 
-      # 10. Marker that disables the app's own updater (read by electron/main.js).
+      # 10. The app's AGPL-3.0-only license text (Flathub requires each module's
+      #     license under share/licenses/$FLATPAK_ID); read from the checkout root.
+      - install -Dm644 LICENSE
+          /app/share/licenses/buzz.armada.app/LICENSE
+
+      # 11. Marker that disables the app's own updater (read by electron/main.js).
       - install -Dm644 packaging/flathub/ARMADA_FLATHUB_BUILD
           /app/armada/resources/ARMADA_FLATHUB_BUILD
 
