@@ -13,6 +13,7 @@ import {
   Smile,
   Video,
   VideoOff,
+  VolumeX,
 } from "lucide-react";
 import { Track } from "livekit-client";
 import { useEffect, useState } from "react";
@@ -185,6 +186,14 @@ export function ScreenShareButton({
   const customHevcActive = Boolean(hevcScreenShare?.active);
   const shareActive = isScreenShareEnabled || customHevcActive;
   const screenSharePublication = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+  // A share that is publishing video but no audio track is silent — the state
+  // the audio-source failure used to leave behind invisibly. Surface it so a
+  // muted share is never a surprise. Scoped to the standard LiveKit path; the
+  // custom H.265 publisher carries its audio separately.
+  const screenShareAudioMissing =
+    isScreenShareEnabled &&
+    !customHevcActive &&
+    !localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
   useEffect(
     () => installScreenShareCodecPreferences(localParticipant, { endToEndEncrypted }),
     [endToEndEncrypted, localParticipant],
@@ -228,7 +237,10 @@ export function ScreenShareButton({
     return navigator.mediaDevices.getDisplayMedia(screenShareDisplayMediaOptions(quality));
   };
 
-  const applyQuality = (value: ScreenShareQuality) => {
+  const applyQuality = (
+    value: ScreenShareQuality,
+    options?: { rememberAs?: ScreenShareQuality },
+  ) => {
     if (working) return;
     setWorking(true);
     const quality = normalizeScreenShareQuality({
@@ -279,7 +291,14 @@ export function ScreenShareButton({
       await applyPublishedScreenShareQuality(localParticipant, quality);
     })()
       .then(() => {
-        rememberScreenShareQuality(quality);
+        // `rememberAs` lets the audio-off recovery below capture this ONE
+        // surface without audio while persisting the user's real preference
+        // unchanged. Without it, one window with no openable loopback endpoint
+        // would write `captureAudio: false` globally and silently mute every
+        // later share — a different window, or the entire screen — until the
+        // user found the buried toggle. The persisted preference is not scoped
+        // to a surface, so a per-surface failure must never rewrite it.
+        rememberScreenShareQuality(options?.rememberAs ?? quality);
         if (shareActive) {
           toast({
             title: "Screen share quality updated",
@@ -303,7 +322,9 @@ export function ScreenShareButton({
             action: (
               <ToastAction
                 altText="Share without audio"
-                onClick={() => applyQuality({ ...quality, captureAudio: false })}
+                onClick={() =>
+                  applyQuality({ ...quality, captureAudio: false }, { rememberAs: quality })
+                }
               >
                 Share without audio
               </ToastAction>
@@ -399,12 +420,20 @@ export function ScreenShareButton({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label="Screen share options"
-            title="Screen share options"
+            aria-label={
+              screenShareAudioMissing
+                ? "Screen share options — audio is not being captured"
+                : "Screen share options"
+            }
+            title={
+              screenShareAudioMissing
+                ? "Screen share options — audio is not being captured"
+                : "Screen share options"
+            }
             disabled={working}
             className={cn(
               CTRL,
-              "bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-60",
+              "relative bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-60",
               className,
             )}
           >
@@ -412,6 +441,14 @@ export function ScreenShareButton({
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <MonitorUp className="size-4" />
+            )}
+            {screenShareAudioMissing && !working && (
+              <span
+                aria-hidden
+                className="absolute -right-0.5 -top-0.5 flex size-3.5 items-center justify-center rounded-full bg-background text-destructive"
+              >
+                <VolumeX className="size-2.5" />
+              </span>
             )}
           </button>
         </DropdownMenuTrigger>
