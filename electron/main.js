@@ -313,7 +313,6 @@ let isQuitting = false;
 let manualUpdateCheck = false;
 let updateCheckInFlight = false;
 let macSelfUpdateEligible;
-let flathubManagedBuild;
 let updateCheckTimer = null;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
@@ -786,21 +785,8 @@ function hideWindowToTray() {
 // directory name. Its url is never fetched — setFeedURL below replaces the
 // provider outright. See electron/README.md.
 
-// A Flathub-managed build carries a marker at resources/ARMADA_FLATHUB_BUILD
-// (installed by packaging/flathub/buzz.armada.app.yml). Flathub owns updates,
-// so both paths stay dark there. Cached: read on a timer and from the tray.
-function isFlathubManagedBuild() {
-  if (flathubManagedBuild === undefined) {
-    flathubManagedBuild =
-      app.isPackaged &&
-      fs.existsSync(path.join(process.resourcesPath, "ARMADA_FLATHUB_BUILD"));
-  }
-  return flathubManagedBuild;
-}
-
 function autoUpdatesSupported() {
   if (!app.isPackaged) return false;
-  if (isFlathubManagedBuild()) return false;
   if (process.platform === "darwin" && macSelfUpdateEligible === undefined) {
     const disabledMarker = fs.existsSync(
       path.join(process.resourcesPath, "armada-no-self-update"),
@@ -831,14 +817,16 @@ function autoUpdatesSupported() {
   });
 }
 
-// A packaged, bundle-installed Flatpak: read-only /app, so it updates its web
-// bundle instead of itself. Mutually exclusive with supportsSelfUpdate().
+// A packaged Flatpak: read-only /app, so the in-app updater swaps its web
+// bundle rather than replacing itself. The shell (and major versions) update
+// through `flatpak update` from whichever remote it was installed from —
+// pkg.soapbox.pub for the published build — the same way Vesktop does it.
+// Mutually exclusive with supportsSelfUpdate().
 function flatpakUpdatesSupported() {
   return (
     app.isPackaged &&
     process.platform === "linux" &&
-    Boolean(process.env.FLATPAK_ID) &&
-    !isFlathubManagedBuild()
+    Boolean(process.env.FLATPAK_ID)
   );
 }
 

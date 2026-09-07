@@ -3,7 +3,14 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { DOWNLOAD_PLATFORMS, detectOs, installCommand } from "@/lib/downloads";
+import {
+  ANDROID_STORES,
+  DOWNLOAD_PLATFORMS,
+  PACKAGE_MANAGERS,
+  detectOs,
+  installCommand,
+  isRepublishedPackage,
+} from "@/lib/downloads";
 import { artifactOs } from "@/lib/releases";
 
 /** Real user-agent strings, since the ordering bugs only show up in real ones. */
@@ -55,21 +62,53 @@ describe("download platforms", () => {
 });
 
 describe("installCommand", () => {
-  it("installs the Flatpak bundle into the current user's package store", () => {
-    expect(installCommand("Armada-v1.2.3.flatpak")).toBe("flatpak install --user ./Armada-v1.2.3.flatpak");
-  });
-
   it("writes the command against the versioned name the release actually carries", () => {
     // Filenames come off the release event now, so a command referring to some
     // fixed `Armada.AppImage` would name a file the user does not have.
     expect(installCommand("Armada-v1.2.3.AppImage")).toBe("chmod +x Armada-v1.2.3.AppImage && ./Armada-v1.2.3.AppImage");
-    expect(installCommand("Armada-v1.2.3.deb")).toBe("sudo apt install ./Armada-v1.2.3.deb");
   });
 
-  it("says nothing for the builds that are just opened", () => {
+  it("says nothing for a file the page does not offer a raw command for", () => {
+    // .deb and .flatpak install through pkg.soapbox.pub, not a per-file command,
+    // and the page never renders them; the rest are just opened.
+    expect(installCommand("Armada-v1.2.3.deb")).toBeUndefined();
+    expect(installCommand("Armada-v1.2.3.flatpak")).toBeUndefined();
     expect(installCommand("Armada-v1.2.3.exe")).toBeUndefined();
     expect(installCommand("Armada-v1.2.3-mac-arm64.zip")).toBeUndefined();
     expect(installCommand("Armada-v1.2.3.apk")).toBeUndefined();
+  });
+});
+
+describe("package repositories (pkg.soapbox.pub / npkg)", () => {
+  it("treats the formats npkg republishes as repository-served, not sideload", () => {
+    expect(isRepublishedPackage("Armada-v1.2.3.deb")).toBe(true);
+    expect(isRepublishedPackage("Armada-v1.2.3.flatpak")).toBe(true);
+    // The AppImage has no repository, so it stays a direct download.
+    expect(isRepublishedPackage("Armada-v1.2.3.AppImage")).toBe(false);
+    expect(isRepublishedPackage("Armada-v1.2.3.apk")).toBe(false);
+  });
+
+  it("offers apt and flatpak install commands that point at pkg.soapbox.pub", () => {
+    const linux = PACKAGE_MANAGERS.filter((manager) => manager.os === "linux");
+    expect(linux.map((manager) => manager.label)).toEqual([
+      "Debian / Ubuntu (APT)",
+      "Flatpak",
+    ]);
+    for (const manager of linux) {
+      expect(manager.install).toBeTruthy();
+      const lines = [...manager.setup, manager.install].join("\n");
+      expect(lines).toContain("pkg.soapbox.pub");
+    }
+    // The flatpak path installs from the soapbox remote, not a local bundle.
+    const flatpak = linux.find((manager) => manager.label === "Flatpak");
+    expect(flatpak?.install).toBe("flatpak install soapbox buzz.armada.app");
+  });
+
+  it("lists the npkg F-Droid repository among the Android sources", () => {
+    const fdroid = ANDROID_STORES.find((store) => store.label === "F-Droid");
+    expect(fdroid?.url).toContain("pkg.soapbox.pub/fdroid");
+    // The F-Droid client needs the pinned fingerprint in the URL.
+    expect(fdroid?.url).toContain("fingerprint=");
   });
 });
 

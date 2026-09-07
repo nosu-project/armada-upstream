@@ -26,8 +26,8 @@ It also adds desktop-native behavior the web build can't:
   uses the trusted Global Shortcuts portal, including sandboxed Flatpak builds.
 - **Package-aware updates** — installed Windows and AppImage editions update
   themselves; portable and deb builds defer to their actual package owner. The
-  Flatpak updates its web bundle in place, Vesktop-style, and is never
-  replaced as a whole.
+  Flatpak updates its web bundle in place, and its shell through
+  `flatpak update` from the remote it was installed from.
 - **Encrypted login store** — the web build keeps the login blob (which for an
   nsec login holds the raw secret key) in plaintext `localStorage`. Here it is
   encrypted at rest with `safeStorage`, i.e. the OS credential store
@@ -222,7 +222,7 @@ Every edition has exactly one update owner:
 | CI cross-built ad-hoc macOS zip | Replace manually; marked no-self-update |
 | Linux AppImage | Armada replaces the running AppImage from the release event |
 | Linux deb | Download and install the newer deb; in-app updater disabled |
-| Linux Flatpak | Armada updates its web bundle in place (Vesktop-style); the shell only changes by installing a newer bundle |
+| Linux Flatpak | Armada updates its web bundle in place; the shell and major versions update via `flatpak update` from the install's remote (pkg.soapbox.pub for the published build) |
 
 ### The feed is the release event
 
@@ -293,10 +293,6 @@ AppImage with Electron BaseApp and grants PipeWire audio and the narrow session
 bus permissions needed for screen audio, the shortcut portal and tray
 registration.
 
-This is the bundle-installed edition, distinct from the Flathub one
-(`packaging/flathub/`, which builds from source under Flathub's rules and is
-updated by Flathub). Everything below is about the bundle.
-
 Install the builder and runtimes (Debian/Ubuntu example):
 
 ```sh
@@ -325,7 +321,8 @@ flatpak install --user ./release/Armada-flatpak-x86_64.flatpak
 ```
 
 `build.sh` also leaves an OSTree repository at `release/flatpak-repo/`
-(the signing input; nothing publishes it). For a local update cycle against it:
+(the intermediate `flatpak build-bundle` exports from; nothing publishes it).
+For a local update cycle against it:
 
 ```sh
 flatpak remote-add --user --no-gpg-verify armada-local \
@@ -334,87 +331,65 @@ flatpak install --user armada-local buzz.armada.app
 flatpak update --user buzz.armada.app
 ```
 
-Users install the signed release bundle. Every release names one in the
-kind-30622 release event (`docs/releases.md`), which `/downloads` renders with
-the install command:
+### Distribution
+
+The published Flatpak comes from **pkg.soapbox.pub**, run by
+[npkg](https://github.com/soapbox-pub/npkg). npkg watches for Armada's
+kind-30622 release events (`docs/releases.md`), downloads the `.flatpak` bundle
+from Blossom, verifies its bytes against the `x` sha256 the signed event
+declares, imports it into its own OSTree repository, and re-signs the summary
+with its own key. Users add one remote and install:
+
+```sh
+flatpak remote-add --if-not-exists soapbox \
+  https://pkg.soapbox.pub/flatpak/soapbox.flatpakrepo
+flatpak install soapbox buzz.armada.app
+```
+
+That is a normal remote-tracked install, so `flatpak update` upgrades the whole
+app — shell, native modules and web bundle — from the soapbox remote.
+
+The same `.flatpak` bundle is also named in the release event and rendered by
+`/downloads` for a direct sideload:
 
 ```sh
 flatpak install --user ./Armada-vX.Y.Z.flatpak
 flatpak run buzz.armada.app
 ```
 
-Armada itself comes from that bundle, not Flathub. Its Freedesktop and Electron
-runtimes still need a configured Flathub remote; most Flatpak installations
-already have one. If needed, add it first with the `flathub` command in the
-builder setup above.
+**Armada does not sign this bundle.** Authenticity rests on the sha256 in the
+kind-30622 event, which is signed by a build-pinned maintainer key
+(`RELEASE_AUTHORS`); npkg verifies that hash before re-signing under its own
+key, which is the key the soapbox remote is trusted by. A direct sideload of the
+raw bundle is unsigned — the trust for it is the same event hash, checked out of
+band. Its Freedesktop and Electron runtimes need a configured Flathub remote;
+most Flatpak installations already have one. If needed, add it first with the
+`flathub` command in the builder setup above.
 
 ### Updating
 
-**There is no update repository.** The bundle embeds no origin URL, so
-`flatpak update` has nothing to pull for this app. The Flatpak is never
-replaced in place. Like Vesktop, the shell updates its **web bundle**: it
-fetches `/downloads/armada-web.tar.gz` from the public site (published by
-every web deploy), unpacks it into the app's userData and serves that, then
-offers a restart (`checkForWebBundleUpdate` in `electron/main.js`,
-`electron/webBundleUpdate.js`). Only the shell itself — Electron and the
-native modules — needs a new bundle, installed over the old one, which keeps
-the profile under `~/.var/app/buzz.armada.app`:
+Two update paths, and they do not conflict:
 
-```sh
-flatpak install --user ./Armada-vX.Y.Z.flatpak
-```
+- **The web bundle updates in place.** Armada fetches
+  `/downloads/armada-web.tar.gz` from the public site — published by every web
+  deploy — unpacks it into the app's userData and serves that, then offers a
+  restart (`checkForWebBundleUpdate` in `electron/main.js`,
+  `electron/webBundleUpdate.js`). Most releases touch only `src/`, so this is
+  what carries them, without a `flatpak update`.
+- **The shell updates through `flatpak update`.** Electron, the native modules
+  and any major version bump arrive when the soapbox remote publishes a newer
+  bundle and the user (or GNOME Software) runs `flatpak update`. The web bundle
+  the new shell ships is content-addressed like any other, so it slots in beside
+  whatever the in-place updater last fetched with no version file to reconcile.
 
-Installs from an older bundle embedded a now-dead origin. If a global
-`flatpak update` complains about it, disable it:
+Installs from an older, self-hosted bundle embedded a now-dead origin. If a
+global `flatpak update` complains about it, disable it — this keeps the profile
+under `~/.var/app/buzz.armada.app`:
 
 ```sh
 flatpak remote-modify --user --disable \
   "$(flatpak info --user --show-origin buzz.armada.app)"
 ```
-
-### Verifying the signing key
-
-A signed bundle embeds the release public key, and `flatpak install` verifies
-the bundled commit against it before deploying anything. That check is only as
-good as the key, and the key travels with the bundle it vouches for, so it
-cannot authenticate itself. The independent channel is the **nsite
-manifest**: the key's full primary fingerprint ships in the static web build at
-`/.well-known/armada-flatpak.fingerprint`, and every path in that build is
-committed by sha256 in a Nostr event signed by Armada's publishing key. After
-installing, read the fingerprint of the key the install trusts and check it
-against that announcement, with [`nak`](https://github.com/fiatjaf/nak) and
-`jq`:
-
-```sh
-armada_npub=npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj
-armada_origin="$(flatpak info --user --show-origin buzz.armada.app)"
-gpg --show-keys --with-fingerprint \
-  ~/.local/share/flatpak/repo/"$armada_origin".trustedkeys.gpg
-curl --fail --location --output armada-flatpak.announced \
-  https://armada.buzz/.well-known/armada-flatpak.fingerprint
-
-# The newest site manifest signed by that key, verified, then the sha256 it
-# commits the announcement file to.
-nak req -k 35128 -a "$armada_npub" -d armada \
-  wss://relay.ditto.pub wss://relay.dreamith.to wss://relay.primal.net |
-  jq -s 'max_by(.created_at)' > armada-nsite.json
-nak verify < armada-nsite.json
-jq -r '.tags[] | select(.[0] == "path")
-       | select(.[1] == "/.well-known/armada-flatpak.fingerprint") | .[2]' \
-  < armada-nsite.json
-sha256sum ./armada-flatpak.announced
-```
-
-`nak verify` must exit 0, the two hashes must match, and
-`armada-flatpak.announced` must then equal the first fingerprint
-`gpg --show-keys` printed for the `pub` key. Do not substitute a short key ID
-or a fingerprint copied from this README. The manifest is addressed by the
-coordinate
-`35128:781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5:armada`,
-which is the same identity that signs this repository — so the check is
-independent of the web server, not of Armada. Comparing the embedded key
-only against a copy fetched from the same host would not authenticate it; it
-would prove that whoever serves armada.buzz agrees with themselves.
 
 ### Migrating an older system-wide installation
 
@@ -447,50 +422,13 @@ sudo flatpak remote-delete --system "$armada_system_origin"
 ```
 
 For an installation deliberately kept system-wide, install each release's
-bundle with `sudo flatpak install --system` instead; there is nothing to
-`flatpak update` either way.
+bundle with `sudo flatpak install --system` instead.
 
-### Release signing
+### Notes
 
-Production release signing is provisioned with
-`FLATPAK_GPG_PRIVATE_KEY_BASE64`, a base64-encoded export of exactly one
-long-lived Flatpak signing key, and
-`FLATPAK_GPG_EXPECTED_FINGERPRINT`, that key's full primary fingerprint. CI
-normalizes the expected value to uppercase without whitespace, imports the key
-into a temporary GnuPG home, derives exactly one full primary fingerprint, and
-requires an exact match before signing. The secret key must be usable by CI
-without an interactive passphrase; a noninteractive signing probe checks that
-before the release proceeds.
-
-The package build and signing are deliberately separate. `flatpak/build.sh`
-runs without credentials and rejects `FLATPAK_GPG_KEY` or
-`FLATPAK_GPG_PUBLIC_KEY`. CI then starts a fresh dependent container, verifies
-the committed `flatpak/sign.sh` against the digest pinned in the already-loaded
-workflow, and only then imports the release key. That signer signs the app,
-AppStream commits, and repository summary, then replaces the bundle with one
-carrying the public key (`flatpak build-bundle --gpg-keys`), which is what
-`flatpak install` verifies the bundle against. A deployable release fails
-closed when the secret or expected fingerprint is absent, when the export does
-not contain exactly one primary key, or when the fingerprints differ.
-
-The announcement is not prose an operator has to remember to write. The full
-fingerprint is COMMITTED at `public/.well-known/armada-flatpak.fingerprint`,
-ships in the static build like `assetlinks.json`, and is therefore named by
-sha256 in the nsite manifest `deploy-nsite.yml` signs — so the channel that
-vouches for the key is a Nostr key rather than the same file the bundle
-carries. Two gates keep the two halves in step: the signing step compares that
-committed file, read out of the object database, against the fingerprint of
-the key it actually imported and fails the tag if they differ; and the nsite
-deploy refuses to publish a manifest whose copy is missing, malformed, or not
-byte-identical to the committed one. A rotation is therefore one commit plus
-one secret change, and forgetting either half fails a release rather than
-shipping a key nothing independent names.
-
-Changing the expected-fingerprint secret is an explicit key rotation, not
-routine release maintenance: once installs verify against a key, a lost or
-expired one stops their updates with no in-band recovery, and every affected
-user has to import the replacement by hand. Create the signing key without an
-expiry date.
+CI builds the bundle unsigned (`flatpak/build.sh`, no GPG key) and stages it for
+the release event beside the other installers; npkg re-signs on import, so there
+is no release signing key to provision or rotate.
 
 The manifest swaps only venmic's native prebuild to its
 Freedesktop-25.08-compatible 6.1 build; AppImage and deb retain the

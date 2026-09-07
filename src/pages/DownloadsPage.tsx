@@ -14,8 +14,11 @@ import {
   DOWNLOAD_PLATFORMS,
   type DownloadOs,
   type DownloadPlatform,
+  NPKG_HOST,
+  PACKAGE_MANAGERS,
   detectCurrentOs,
   installCommand,
+  isRepublishedPackage,
 } from "@/lib/downloads";
 import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
@@ -54,16 +57,56 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** The release's artifacts, filed under the platform card each belongs on. */
+/**
+ * The release's artifacts, filed under the platform card each belongs on.
+ *
+ * The `.deb` and `.flatpak` are dropped: they are served through the
+ * pkg.soapbox.pub package repositories ({@link PACKAGE_MANAGERS}), not offered
+ * as a raw download. They remain in the release event — npkg reads them from
+ * there — so this only affects what the page renders, not what is published.
+ */
 function groupByOs(release: Release | undefined): Map<DownloadOs, ReleaseArtifact[]> {
   const grouped = new Map<DownloadOs, ReleaseArtifact[]>();
   for (const artifact of release?.artifacts ?? []) {
     if (!artifact.os) continue;
+    if (isRepublishedPackage(artifact.filename)) continue;
     const existing = grouped.get(artifact.os);
     if (existing) existing.push(artifact);
     else grouped.set(artifact.os, [artifact]);
   }
   return grouped;
+}
+
+/** The pkg.soapbox.pub install commands for a platform, if it has any. */
+function PackageManagers({ os }: { os: DownloadOs }) {
+  const managers = PACKAGE_MANAGERS.filter((manager) => manager.os === os);
+  if (managers.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      {managers.map((manager) => (
+        <div key={manager.label} className="space-y-1.5">
+          <p className="font-mono text-xs lowercase tracking-wide text-muted-foreground">{manager.label}</p>
+          {manager.setup.map((command) => (
+            <CommandLine key={command} command={command} />
+          ))}
+          <CommandLine command={manager.install} />
+        </div>
+      ))}
+      <p className="text-xs text-muted-foreground/70 leading-relaxed">
+        Packages are republished from Nostr by{" "}
+        <a
+          href={`https://${NPKG_HOST}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-primary hover:underline"
+        >
+          {NPKG_HOST}
+        </a>
+        , which verifies each build against the hash its signed release names.
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -151,6 +194,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
 }) {
   const Icon = OS_ICON[platform.os];
   const caveat = OS_CAVEAT[platform.os];
+  const hasPackageManagers = PACKAGE_MANAGERS.some((manager) => manager.os === platform.os);
 
   return (
     // A borderless translucent panel, so the swell stays faintly visible
@@ -178,8 +222,17 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
         )}
       </header>
 
+      {/* The package repositories lead: they are the recommended path and the
+          only one that keeps updating after install. The direct downloads below
+          are the fallback for anyone without a package manager (AppImage). */}
+      <PackageManagers os={platform.os} />
+
       {artifacts.length > 0 || platform.os === "android" ? (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="space-y-2">
+          {hasPackageManagers && artifacts.length > 0 && (
+            <p className="font-mono text-xs lowercase tracking-wide text-muted-foreground">or download directly</p>
+          )}
+          <div className="grid gap-2 sm:grid-cols-2">
           {artifacts.map((artifact, i) => (
             <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} primary={featured && i === 0} />
           ))}
@@ -202,6 +255,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
                 </a>
               </Button>
             ))}
+          </div>
         </div>
       ) : (
         // iOS: no App Store build ships through this pipeline, so tease it. The
@@ -261,9 +315,11 @@ function OlderRelease({ release }: { release: Release }) {
         </span>
       </summary>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {release.artifacts.map((artifact) => (
-          <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} />
-        ))}
+        {release.artifacts
+          .filter((artifact) => !isRepublishedPackage(artifact.filename))
+          .map((artifact) => (
+            <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} />
+          ))}
       </div>
     </details>
   );

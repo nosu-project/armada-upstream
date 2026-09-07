@@ -10,18 +10,13 @@ staged_appimage="$release_dir/Armada.AppImage"
 build_dir="$release_dir/flatpak-build"
 repo_dir="$release_dir/flatpak-repo"
 bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
-# No --repo-url: nothing serves an OSTree repository for this app. The Flatpak
-# updates its web bundle in place instead (electron/webBundleUpdate.js); the
-# repository built here is only what sign.sh exports the bundle from.
-
-# Signing is deliberately a separate, post-build phase. Never let release-key
-# material enter flatpak-builder: the manifest executes the packaged AppImage
-# while assembling /app. sign.sh signs only the already-exported commit.
-if [ -n "${FLATPAK_GPG_KEY:-}" ] || [ -n "${FLATPAK_GPG_PUBLIC_KEY:-}" ]; then
-  echo "Do not pass FLATPAK_GPG_KEY or FLATPAK_GPG_PUBLIC_KEY to build.sh." >&2
-  echo "Build unsigned first, then run ./flatpak/sign.sh with both variables set." >&2
-  exit 1
-fi
+# No --repo-url and no GPG signing: the bundle is the only artifact, and it is
+# consumed by npkg (pkg.soapbox.pub), which imports it into its OWN OSTree repo
+# and re-signs the summary with its OWN key — so a signature or an embedded
+# origin here would be discarded. The local repo built below is only the
+# intermediate `flatpak build-bundle` exports from. The installed app's web
+# bundle still updates in place (electron/webBundleUpdate.js); its shell updates
+# through `flatpak update` from whichever remote it was installed from.
 
 builder=system
 if command -v flatpak-builder >/dev/null 2>&1; then
@@ -110,4 +105,4 @@ case "$builder" in
 esac
 
 echo "Flatpak bundle: $bundle"
-echo "Local repository (signing input): $repo_dir"
+echo "Local repository (bundle export input): $repo_dir"

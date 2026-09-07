@@ -41,13 +41,70 @@ export const DOWNLOAD_PLATFORMS: DownloadPlatform[] = [
  * Keyed off the extension rather than a table of known filenames, because the
  * names now come from the release event and carry its version — there is no
  * fixed `Armada.AppImage` to write a command against any more.
+ *
+ * Only the AppImage has one: the `.deb` and `.flatpak` are served through the
+ * pkg.soapbox.pub package repositories (see {@link PACKAGE_MANAGERS}), so the
+ * page points at the repo rather than offering the raw file to sideload.
  */
 export function installCommand(filename: string): string | undefined {
   if (/\.AppImage$/i.test(filename)) return `chmod +x ${filename} && ./${filename}`;
-  if (/\.deb$/i.test(filename)) return `sudo apt install ./${filename}`;
-  if (/\.flatpak$/i.test(filename)) return `flatpak install --user ./${filename}`;
   return undefined;
 }
+
+/**
+ * A build format that pkg.soapbox.pub republishes as a real package repository,
+ * so `/downloads` hides the raw file and shows the repo's install commands
+ * instead. The artifact stays in the release event — it is npkg's input — but
+ * a user installs it through their package manager, not by downloading it here.
+ */
+export function isRepublishedPackage(filename: string): boolean {
+  return /\.(deb|flatpak)$/i.test(filename);
+}
+
+/**
+ * The npkg (https://github.com/soapbox-pub/npkg) instance that turns Armada's
+ * Nostr releases into installable package repositories. It watches the kind-30622
+ * release events, verifies each artifact against the hash the event published,
+ * and re-signs the repositories with its own keys — so a package manager pointed
+ * at it trusts this instance, which in turn trusts the release event's hash.
+ */
+export const NPKG_HOST = "pkg.soapbox.pub";
+
+/**
+ * A package repository pkg.soapbox.pub serves, and the commands that add it and
+ * install from it. Rendered as copyable command blocks on the platform card, in
+ * place of the raw `.deb`/`.flatpak` download the repository replaces.
+ */
+export interface PackageManager {
+  os: DownloadOs;
+  label: string;
+  /** Run once, to add the repository. */
+  setup: string[];
+  /** Installs Armada afterward; `flatpak/apt update` upgrades it thereafter. */
+  install: string;
+}
+
+export const PACKAGE_MANAGERS: PackageManager[] = [
+  {
+    os: "linux",
+    label: "Debian / Ubuntu (APT)",
+    setup: [
+      "sudo install -d -m 0755 /etc/apt/keyrings",
+      `curl -fsSL https://${NPKG_HOST}/apt/key.asc | sudo tee /etc/apt/keyrings/soapbox.asc > /dev/null`,
+      `echo "deb [signed-by=/etc/apt/keyrings/soapbox.asc] https://${NPKG_HOST}/apt stable main" | sudo tee /etc/apt/sources.list.d/soapbox.list`,
+      "sudo apt update",
+    ],
+    install: "sudo apt install armada-desktop",
+  },
+  {
+    os: "linux",
+    label: "Flatpak",
+    setup: [
+      `flatpak remote-add --if-not-exists soapbox https://${NPKG_HOST}/flatpak/soapbox.flatpakrepo`,
+    ],
+    install: "flatpak install soapbox buzz.armada.app",
+  },
+];
 
 /** An external app store listing, as opposed to a file CI publishes. */
 export interface AppStore {
@@ -77,6 +134,14 @@ export const ANDROID_STORES: AppStore[] = [
     hint: "Install from the Play Store",
     url: "https://play.google.com/store/apps/details?id=buzz.armada.app&hl=en-US",
     icon: "/stores/google-play.svg",
+  },
+  {
+    label: "F-Droid",
+    hint: "Add the Soapbox repository",
+    // The npkg F-Droid repo on pkg.soapbox.pub. Opening the link on-device
+    // hands the whole URL — repo plus pinned fingerprint — to the F-Droid app.
+    url: `https://${NPKG_HOST}/fdroid/main/repo?fingerprint=CEA02E48815EC61244B5ECB35680B745A7A9A41A9257382F1D8BDDC14E533A17`,
+    icon: "/stores/fdroid.svg",
   },
   {
     label: "Zapstore",

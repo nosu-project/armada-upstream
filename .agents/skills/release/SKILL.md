@@ -139,56 +139,15 @@ This is the headline for the GitLab Release.
 - **Omit purely internal changes** (CI tweaks, build pipeline, dev tooling)
   unless they have a direct, visible user impact.
 
-#### Also add the Flathub metainfo release entry (REQUIRED, every release)
-
-Prepend one `<release>` line directly below the `<releases>` open tag in
-`packaging/flathub/buzz.armada.app.metainfo.xml`, keeping entries newest-first:
-
-```xml
-  <releases>
-    <release version="X.Y.Z" date="YYYY-MM-DD"/>
-    <!-- older entries below, unchanged -->
-```
-
-- `date` is today (the release date), the same date as the CHANGELOG entry.
-- Match the existing style: a bare `version`+`date`, **no** `<description>`.
-  `appstreamcli validate` accepts it, and the file's other entries are bare.
-- **Why this is not optional and must not be deferred:** Flathub builds Armada
-  from source out of `packaging/flathub/`, and the version shown in software
-  centers (GNOME Software, KDE Discover) comes from this `<releases>` list, not
-  from the git tag. Flathub's external-data-checker bot auto-bumps the manifest's
-  `tag`+`commit` when it sees a new `vX.Y.Z`, but **it writes no changelog and
-  never touches the metainfo** (the manifest header's "RELEASE BUMP" note spells
-  this out). So a release that skips this step ships a Flathub build whose newest
-  listed version is older than the version actually built: a stale version in
-  every software center and a missing release entry for the built version, which
-  nothing downstream can self-heal.
-- Validate before committing, if the tool is present:
-  `appstreamcli validate packaging/flathub/buzz.armada.app.metainfo.xml`.
-
-The manifest's `tag`+`commit` (in `packaging/flathub/buzz.armada.app.yml`) are
-**not** part of this per-release step: once the app is live on Flathub the
-external-data-checker bot bumps them from the new tag. The one exception is the
-**initial Flathub submission** (the app is not yet published): for that first
-submission only, also set `tag:` to the new `vX.Y.Z` and `commit:` to
-`git rev-list -n1 vX.Y.Z` so the submitted manifest builds the current release.
-
-Nothing has to be copied into the **Flathub repo**
-(`github.com/flathub/buzz.armada.app`, separate from this one). The manifest
-reads the metainfo from the tagged checkout, alongside the build
-helpers/desktop/marker, so when the external-data-checker bot bumps `tag`+`commit`
-to the new `vX.Y.Z`, the new `<release>` entry rides along for free. The one
-thing this depends on is ordering: the entry must be committed **before** the tag
-(Step 4/5 land it in the `Release vX.Y.Z` commit, Step 7 tags that commit), so the
-tag's own tree carries it. See the sources comment in the manifest.
-
 ### Step 5: Commit the Changelog
 
-The tag carries the version, so the files to commit are the changelog and the
-Flathub metainfo entry (plus any release-prep changes the user asked for).
+The tag carries the version, so the file to commit is the changelog (plus any
+release-prep changes the user asked for). Distribution to Flatpak/APT/F-Droid is
+handled downstream by npkg (`pkg.soapbox.pub`), which reads the release event —
+there is no per-release Flathub metainfo or manifest to update here.
 
 ```bash
-git add CHANGELOG.md packaging/flathub/buzz.armada.app.metainfo.xml
+git add CHANGELOG.md
 git commit -m "Release vX.Y.Z"
 ```
 
@@ -255,23 +214,21 @@ Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
 per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
 `release.yml` is ONE workflow whose jobs are chained
-`desktop → publish → android → release`. They must stay chained: act
+`desktop → android → release`. They must stay chained: act
 binds one checkout into every job container, so unchained jobs would run in
 parallel over the same working tree, and `android` and `desktop` each build a
 web bundle with different env. `android` goes LAST and is `if: always()`: it
 publishes to Zapstore and Google Play, which can reject for reasons unrelated
 to the artifacts, and `if: always()` rescues only the job carrying it — not
-the jobs downstream — so when it ran first a Play rejection skipped `publish`
-and shipped a release with no signed Flatpak.
+the jobs downstream — so when it ran first a Play rejection skipped the desktop
+build and shipped a release with no desktop installers.
 
-1. **desktop** — Electron AppImage, deb, Flatpak bundle, NSIS Setup +
-   portable `.exe` (cross-built from Linux via wine), and ad-hoc-signed macOS
-   `.zip`s per arch.
-2. **publish** — GPG-signs and verifies the Flatpak OSTree repository in a fresh
-   container, the credential boundary for the signing key, then stages the
-   signed `.flatpak` bundle into `.release-artifacts/` for the release event.
-   Nothing is deployed over SSH.
-3. **android** — signed Android APK + AAB, then Zapstore publish
+1. **desktop** — Electron AppImage, deb, Flatpak bundle (UNSIGNED — npkg
+   re-signs on import), NSIS Setup + portable `.exe` (cross-built from Linux via
+   wine), and ad-hoc-signed macOS `.zip`s per arch, all staged into
+   `.release-artifacts/` for the release event. Nothing is signed or deployed
+   over SSH; there is no separate `publish` job any more.
+2. **android** — signed Android APK + AAB, then Zapstore publish
    and Google Play publish, all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
    `versionCode = major*1_000_000 + minor*1_000 + patch` (from the tag), build web assets,
@@ -286,12 +243,12 @@ and shipped a release with no signed Flatpak.
    Build and publish share one job on purpose: act's local artifact
    server round-trips a multi-file wildcard upload back as a 3-byte stub, so a
    separate `publish-zapstore` job used to receive an empty APK and fail.
-4. **release** — publishes the kind-30622 NIP-34 release event naming every
+3. **release** — publishes the kind-30622 NIP-34 release event naming every
    artifact by hash (`docs/releases.md`), uploading to Blossom only the blobs
-   ngit-ci's own artifact channel dropped. `needs: [android, publish]`, so it is
-   the single writer of an addressable event that has no compare-and-swap, and
-   the `.flatpak` bundle can't be announced before its signature has been
-   verified.
+   ngit-ci's own artifact channel dropped. `needs: [android, desktop]`, so it is
+   the single writer of an addressable event that has no compare-and-swap. npkg
+   (`pkg.soapbox.pub`) then reads that event and rebuilds the apt/flatpak/fdroid
+   repositories from the `.deb`/`.flatpak`/`.apk` it names.
 
 `deploy-nsite.yml` is a separate workflow on a separate trigger: it publishes
 the web client to Blossom + relays as the nsite `armada` on **pushes to `main`

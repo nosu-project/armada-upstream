@@ -3,7 +3,7 @@ name: Release
 # Every artifact of a version tag (vX.Y.Z), and the one Nostr release event
 # that names them all.
 #
-#   desktop → publish → android → release
+#   desktop → android → release
 #
 # ── Why one workflow file ────────────────────────────────────────────────────
 # The `release` job publishes a kind-30622 NIP-34 repository release
@@ -33,8 +33,8 @@ name: Release
 # downstream of that job. So the build whose failure must not block anything
 # goes LAST. `android` publishes to Zapstore and Google Play, both of which can
 # reject for reasons that have nothing to do with the artifacts; when it ran
-# first, a Play policy rejection skipped `publish` and shipped a
-# release with no signed Flatpak.
+# first, a Play policy rejection skipped the desktop build and shipped a
+# release with no desktop installers.
 #
 # What they do NOT share is RUNNER_TEMP. Anything one job hands another lives
 # in the checkout: `.release-artifacts/`, the files the release event names.
@@ -82,13 +82,6 @@ name: Release
 #                            and what actually authorizes signing is this key,
 #                            which the bunker already approved.
 #   KLIPY_API_KEY            (optional) GIF search key baked into the bundles
-#   FLATPAK_GPG_PRIVATE_KEY_BASE64   base64 of the Flatpak repository signing
-#                            key. REQUIRED on a tag: unlike the optional ones
-#                            below, an unset value fails the release rather
-#                            than skipping, because an unsigned OSTree repo
-#                            would publish as if it were signed.
-#   FLATPAK_GPG_EXPECTED_FINGERPRINT the pinned full primary fingerprint of
-#                            that key, cross-checked three ways.
 #   WINDOWS_CSC_LINK         (optional) base64 PFX for Authenticode signing
 #   WINDOWS_CSC_KEY_PASSWORD (optional) its password
 #   GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (optional) base64 of the Play Console
@@ -230,8 +223,9 @@ jobs:
           test ! -e "$asar_check/windows/hevc-publisher"
 
       # Flatpak is deliberately derived from the just-built AppImage, so it
-      # contains the identical application bundle. build.sh emits both a
-      # sideloadable bundle and an OSTree repository that Flatpak can track.
+      # contains the identical application bundle. build.sh emits a sideloadable
+      # `.flatpak` bundle; the OSTree repo it builds is only the intermediate
+      # `flatpak build-bundle` exports from and is never published.
       - name: Install Flatpak tooling (fallback for stock runner images)
         run: |
           set -eu
@@ -263,14 +257,11 @@ jobs:
               org.electronjs.Electron2.BaseApp//25.08
           fi
 
-      - name: Build Flatpak bundle and repository
-        # The application build is deliberately credential-free. The finished
-        # commit is signed only after every installer build has completed, so
-        # neither flatpak-builder nor an application build script can read the
-        # release private key.
-        env:
-          FLATPAK_GPG_KEY: ""
-          FLATPAK_GPG_PUBLIC_KEY: ""
+      # The bundle is unsigned: npkg (pkg.soapbox.pub) is the distribution
+      # channel, and it hash-verifies the bundle against the signed kind-30622
+      # release event and re-signs its own OSTree summary — so a signature here
+      # would be discarded. There is no release GPG key any more.
+      - name: Build Flatpak bundle
         run: cd electron && npm run dist:flatpak
 
       # macOS is cross-built rather than skipped: assembling a .app needs no
@@ -332,17 +323,14 @@ jobs:
           done
           ls -lh ./*.zip
 
-      # Stage everything Flatpak signing has NO bearing on, here in the job that
-      # built it — beside the APK the android job already staged. The .flatpak
-      # bundle is deliberately absent: it is staged by `publish`, and only after
-      # its repository signature verifies, because installing it configures a
-      # GPG-verified remote.
-      #
-      # The split is the point. These installers have nothing to do with the
-      # OSTree repository, so a Flatpak signing failure must cost the release
-      # its Flatpak bundle and nothing else. Staging them in `publish` after the
-      # signing step — which is where this used to live — meant one unsigned
-      # commit turned an otherwise perfect build into an Android-only release.
+      # Stage every desktop installer, here in the job that built them — beside
+      # the APK the android job already staged. All seven land in one directory
+      # named exactly as the release event will name them, so the artifact
+      # upload and the event describe the same bytes under the same name.
+      # `src/lib/downloads.test.ts` reads those names back and fails if the
+      # client can't file one under a platform. The `.flatpak` bundle is staged
+      # here with the rest now that it is unsigned — there is no signing gate to
+      # defer it past.
       - name: Stage installers for the release event
         env:
           TAG: ${{ github.ref_name }}
@@ -364,439 +352,38 @@ jobs:
           # .zip names its platform, since the extension doesn't.
           cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
           cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
-          ls -lh "$out"
-
-
-  # ngit-ci runs dependent jobs in fresh containers while bind-mounting the
-  # same checkout, so this job sees electron/release from `desktop` without an
-  # artifact round-trip. This is intentionally ngit-ci-specific: another
-  # coordinator must transfer that directory explicitly. Do not add checkout
-  # here; its clean step would delete the ignored release outputs.
-  publish:
-    needs: desktop
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Install publishing tooling (fallback for stock runner images)
-        run: |
-          set -euo pipefail
-          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-          packages=()
-          command -v node >/dev/null 2>&1 || packages+=(nodejs)
-          case "$GITHUB_REF" in
-            refs/tags/v*)
-              command -v flatpak >/dev/null 2>&1 || packages+=(flatpak)
-              command -v gpg >/dev/null 2>&1 || packages+=(gnupg)
-              command -v ostree >/dev/null 2>&1 || packages+=(ostree)
-              # The signing step reads the committed signer out of the object
-              # database rather than the working tree, so git is as required
-              # here as the Flatpak tooling is.
-              command -v git >/dev/null 2>&1 || packages+=(git)
-              ;;
-          esac
-          if [ "${#packages[@]}" -gt 0 ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
-          fi
-
-      # Every real release tag must carry the publisher identity, even when
-      # server deployment is disabled: an unsigned run artifact would create
-      # the same untrusted remote on first install. Branch workflow_dispatch
-      # builds may still produce unsigned artifacts for review. Keep this
-      # tag-only so branch builds never receive the publisher key.
-      - name: Enforce signed Flatpak release configuration
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          FLATPAK_GPG_PRIVATE_KEY_BASE64: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY_BASE64 }}
-          FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
-        run: |
-          set -eu
-          if { [ -n "${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}" ] && \
-               [ -z "${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}" ]; } || \
-             { [ -z "${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}" ] && \
-               [ -n "${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}" ]; }; then
-            echo "FLATPAK_GPG_PRIVATE_KEY_BASE64 and FLATPAK_GPG_EXPECTED_FINGERPRINT must be provisioned together." >&2
-            exit 1
-          fi
-          if [ -z "${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}" ]; then
-            echo "FLATPAK_GPG_PRIVATE_KEY_BASE64 is required for release tags." >&2
-            exit 1
-          fi
-          if [ -z "${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}" ]; then
-            echo "FLATPAK_GPG_EXPECTED_FINGERPRINT is required for release tags." >&2
-            exit 1
-          fi
-
-      # Import the release key only in this fresh post-build container. The
-      # private export is never written as a file or forwarded to sign.sh; that
-      # helper receives only the temporary GnuPG home, the selected full
-      # fingerprint, and the exported public key. The GnuPG home is destroyed
-      # before any action or deploy step runs. Branch/manual artifacts remain
-      # unsigned and this step receives no publisher credentials at all.
-      - name: Sign and verify the Flatpak repository
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          FLATPAK_GPG_PRIVATE_KEY_BASE64: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY_BASE64 }}
-          FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
-          # Parsed into the workflow plan before the application build runs.
-          # Keep this literal synchronized with electron/flatpak/sign.sh.
-          TRUSTED_SIGN_SCRIPT_SHA256: 8fa24bdff1426af21c588b67ff8a0f36f4caab73ee351f74b47ea934f85cdf48
-        run: |
-          set -euo pipefail
-          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-          private_key_base64="${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}"
-          expected_fingerprint_raw="${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}"
-          unset FLATPAK_GPG_PRIVATE_KEY_BASE64
-          unset FLATPAK_GPG_EXPECTED_FINGERPRINT
-
-          if { [ -n "$private_key_base64" ] && [ -z "$expected_fingerprint_raw" ]; } || \
-             { [ -z "$private_key_base64" ] && [ -n "$expected_fingerprint_raw" ]; }; then
-            echo "Flatpak private key and expected fingerprint must be provisioned together." >&2
-            exit 1
-          fi
-          if [ -z "$private_key_base64" ]; then
-            echo "Refusing to publish an unsigned Flatpak artifact from a release tag." >&2
-            exit 1
-          fi
-          if [ -z "$expected_fingerprint_raw" ]; then
-            echo "FLATPAK_GPG_EXPECTED_FINGERPRINT is required whenever Flatpak signing is enabled." >&2
-            exit 1
-          fi
-          for required_command in git gpg flatpak ostree; do
-            command -v "$required_command" >/dev/null 2>&1 || {
-              echo "$required_command is required for Flatpak release signing." >&2
-              exit 1
-            }
-          done
-
-          # What this protects is the long-lived SIGNING KEY, not the release
-          # contents: the repository being signed was produced by the build job
-          # out of the same checkout, and this step faithfully signs whatever
-          # bytes that job left behind. A bad build is one revocable release; an
-          # exfiltrated key is permanent. So the one program that runs in the
-          # same process as the key is materialized from the object database
-          # with replacements disabled and checked against a digest that was
-          # parsed into the workflow plan before the build job started. Git does
-          # not rehash a loose object when reading it, so both halves are
-          # needed. `cat-file blob` rather than `git show`: a writable checkout
-          # also controls .gitattributes and .git/config, and `show` is the path
-          # that consults textconv and other attribute-driven filters.
-          export GIT_NO_REPLACE_OBJECTS=1
-          trusted_sign_script=$(mktemp "$RUNNER_TEMP/armada-flatpak-sign.XXXXXX")
-          git cat-file blob "${GITHUB_SHA}:electron/flatpak/sign.sh" > "$trusted_sign_script"
-          printf '%s  %s\n' "$TRUSTED_SIGN_SCRIPT_SHA256" "$trusted_sign_script" | \
-            sha256sum -c -
-          chmod 0700 "$trusted_sign_script"
-
-          signing_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-gnupg.XXXXXX")
-          chmod 700 "$signing_home"
-          cleanup_signing_home() {
-            gpgconf --homedir "$signing_home" --kill all >/dev/null 2>&1 || true
-            rm -rf -- "$signing_home"
-          }
-          trap cleanup_signing_home EXIT HUP INT TERM
-
-          # Keep the encoded private export in the shell only long enough to
-          # stream it into GnuPG. Neither the encoded nor decoded key is logged.
-          if ! printf '%s' "$private_key_base64" | base64 -d | \
-              gpg --batch --homedir "$signing_home" --import >/dev/null 2>&1; then
-            echo "Unable to import FLATPAK_GPG_PRIVATE_KEY_BASE64." >&2
-            exit 1
-          fi
-          unset private_key_base64
-
-          secret_listing=$(gpg --batch --homedir "$signing_home" \
-            --with-colons --list-secret-keys 2>/dev/null)
-          mapfile -t secret_fingerprints < <(
-            printf '%s\n' "$secret_listing" | awk -F: '
-              $1 == "sec" { primary = 1; next }
-              primary && $1 == "fpr" { print toupper($10); primary = 0 }
-            '
-          )
-          unset secret_listing
-          if [ "${#secret_fingerprints[@]}" -ne 1 ]; then
-            echo "Flatpak signing export must contain exactly one primary secret key." >&2
-            exit 1
-          fi
-          fingerprint="${secret_fingerprints[0]}"
-          expected_fingerprint=$(printf '%s' "$expected_fingerprint_raw" | \
-            tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
-          unset expected_fingerprint_raw
-          if [ -z "$expected_fingerprint" ] || [ "$fingerprint" != "$expected_fingerprint" ]; then
-            echo "Imported Flatpak key does not match FLATPAK_GPG_EXPECTED_FINGERPRINT." >&2
-            exit 1
-          fi
-
-          # Publishing the key is not the same as ANNOUNCING it: everything
-          # under /downloads/flatpak/ comes from one HTTPS host, so it cannot
-          # attest itself. The announcement is the committed copy at
-          # public/.well-known/armada-flatpak.fingerprint, which ships in the
-          # static build and is therefore named, by sha256, in the nsite
-          # manifest deploy-nsite.yml signs — a Nostr identity rather than a
-          # web server. Tie it to the key HERE, where the real fingerprint is
-          # in hand: a rotated secret whose announcement was not committed
-          # fails the tag instead of shipping a key nothing vouches for.
-          # Read from the object database for the same reason sign.sh is:
-          # the build job was allowed to write to this checkout.
-          announced_fingerprint=$(
-            git cat-file blob \
-              "${GITHUB_SHA}:public/.well-known/armada-flatpak.fingerprint" |
-              tr -d '[:space:]' | tr '[:lower:]' '[:upper:]'
-          )
-          if [ "$announced_fingerprint" != "$fingerprint" ]; then
-            echo "public/.well-known/armada-flatpak.fingerprint does not announce the signing key." >&2
-            echo "Commit the full fingerprint of the release key before tagging." >&2
-            exit 1
-          fi
-
-          # An actual non-interactive signature rejects a public-only export,
-          # an encryption-only key, a secret-key stub, or a passphrase-locked
-          # key before any release metadata is touched.
-          signing_scratch=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-signing.XXXXXX")
-          signing_probe="$signing_scratch/probe"
-          printf 'Armada Flatpak release signing probe\n' > "$signing_probe"
-          gpg --batch --yes --pinentry-mode loopback --passphrase '' \
-            --homedir "$signing_home" --local-user "$fingerprint" \
-            --output "$signing_probe.sig" --detach-sign "$signing_probe"
-          gpg --batch --homedir "$signing_home" \
-            --verify "$signing_probe.sig" "$signing_probe" >/dev/null 2>&1
-
-          public_key="$signing_scratch/armada-flatpak.gpg"
-          gpg --batch --homedir "$signing_home" \
-            --export "$fingerprint" > "$public_key"
-          test -s "$public_key"
-          mapfile -t public_fingerprints < <(
-            gpg --batch --show-keys --with-colons "$public_key" 2>/dev/null | awk -F: '
-              $1 == "pub" { primary = 1; next }
-              primary && $1 == "fpr" { print toupper($10); primary = 0 }
-            '
-          )
-          if [ "${#public_fingerprints[@]}" -ne 1 ] || \
-             [ "${public_fingerprints[0]}" != "$fingerprint" ]; then
-            echo "Exported Flatpak public key does not match the selected signing key." >&2
-            exit 1
-          fi
-
-          GNUPGHOME="$signing_home" \
-          ARMADA_FLATPAK_RELEASE_DIR="$PWD/electron/release" \
-          FLATPAK_GPG_KEY="$fingerprint" \
-          FLATPAK_GPG_PUBLIC_KEY="$public_key" \
-            "$trusted_sign_script"
-
-          # No later verification or publication command needs the private
-          # key. Destroy it before inspecting any generated release content.
-          cleanup_signing_home
-          trap - EXIT HUP INT TERM
-          rm -f -- "$trusted_sign_script" "$signing_probe" "$signing_probe.sig"
-
-          flatpak_repo="$PWD/electron/release/flatpak-repo"
-          test -s "$flatpak_repo/summary"
-          test -s "$flatpak_repo/summary.sig"
-          test -s "$flatpak_repo/summary.idx"
-          test -s "$flatpak_repo/summary.idx.sig"
-          test -s "$flatpak_repo/armada-flatpak.gpg"
-          test -s "$flatpak_repo/armada-flatpak.fingerprint"
-          test -d "$flatpak_repo/summaries"
-          summary_index_sha=$(sha256sum "$flatpak_repo/summary.idx" | cut -d ' ' -f1)
-          summary_index_signature="$flatpak_repo/summaries/$summary_index_sha.idx.sig"
-          if [ ! -s "$summary_index_signature" ]; then
-            echo "Flatpak summary index is missing its immutable signature shard." >&2
-            exit 1
-          fi
-          cmp "$public_key" "$flatpak_repo/armada-flatpak.gpg"
-          published_fingerprint=$(tr -d '[:space:]' \
-            < "$flatpak_repo/armada-flatpak.fingerprint" | \
-            tr '[:lower:]' '[:upper:]')
-          [ "$published_fingerprint" = "$fingerprint" ] || {
-            echo "Published Flatpak fingerprint does not match the signing key." >&2
-            exit 1
-          }
-
-          # Verify through a fresh OSTree remote configured to require the
-          # summary and every release metadata commit signature. This reads
-          # only the exported public key and proves the repository the bundle
-          # was exported from is signed and usable.
-          #
-          # Note this walks EVERY ref `ostree refs` reports, not just the app
-          # and appstream ones checked for below — flatpak-builder also emits a
-          # `runtime/buzz.armada.app.Debug/<arch>/stable` extension carrying the
-          # separated debug symbols. `sign.sh` signs each ref it finds and
-          # asserts none are left over; one unsigned commit fails the whole pull.
-          mapfile -t verify_refs < <(
-            ostree refs --repo="$flatpak_repo"
-          )
-          if [ "${#verify_refs[@]}" -eq 0 ]; then
-            echo "Flatpak release repository contains no refs." >&2
-            exit 1
-          fi
-          mapfile -t flatpak_refs < <(
-            printf '%s\n' "${verify_refs[@]}" | \
-              awk '/^app\/buzz[.]armada[.]app\/[^/]+\/stable$/ { print }'
-          )
-          if [ "${#flatpak_refs[@]}" -ne 1 ]; then
-            echo "Expected exactly one stable Armada app ref in the Flatpak repository." >&2
-            exit 1
-          fi
-          mapfile -t appstream_refs < <(
-            printf '%s\n' "${verify_refs[@]}" | \
-              awk '/^appstream2?\/[^/]+$/ { print }'
-          )
-          if [ "${#appstream_refs[@]}" -eq 0 ]; then
-            echo "Expected Flatpak AppStream refs in the release repository." >&2
-            exit 1
-          fi
-          verify_repo=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-verify.XXXXXX")
-          ostree init --repo="$verify_repo" --mode=archive-z2
-          ostree remote add --repo="$verify_repo" \
-            --set=gpg-verify=true --set=gpg-verify-summary=true \
-            --gpg-import="$public_key" armada-ci "file://$flatpak_repo"
-          for ref in "${verify_refs[@]}"; do
-            # Named, because the pull reports only a commit id on
-            # failure and every ref in the repository is verified —
-            # including metadata refs nothing else in this file
-            # mentions. Without this the log says which COMMIT has no
-            # signature but not which ref failed to get one.
-            echo "verifying signature of armada-ci ref: $ref"
-            ostree pull --repo="$verify_repo" --commit-metadata-only \
-              armada-ci "$ref"
-          done
-
-          # OSTree's raw pull consumes the legacy summary. Exercise the modern
-          # summary.idx path separately through a completely isolated Flatpak
-          # installation, including an AppStream refresh.
-          staged_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-cli-verify.XXXXXX")
-          (
-            export HOME="$staged_flatpak_home/home"
-            export XDG_DATA_HOME="$staged_flatpak_home/data"
-            export XDG_CONFIG_HOME="$staged_flatpak_home/config"
-            export XDG_CACHE_HOME="$staged_flatpak_home/cache"
-            export XDG_RUNTIME_DIR="$staged_flatpak_home/runtime"
-            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
-              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
-            chmod 700 "$XDG_RUNTIME_DIR"
-            flatpak remote-add --user --gpg-import="$public_key" \
-              armada-staged-flatpak "file://$flatpak_repo"
-            flatpak remote-ls --user --app --columns=application \
-              armada-staged-flatpak | grep -Fx buzz.armada.app >/dev/null
-            flatpak update --user --appstream --noninteractive -y \
-              armada-staged-flatpak
-          )
-
-          # Finally install the artifact users receive. The embedded key must
-          # validate the bundle and create a GPG-verified origin with NO url:
-          # nothing serves a repository, and an embedded one would leave every
-          # install pointed at a dead remote (electron/flatpak/build.sh).
-          signed_bundle="$PWD/electron/release/Armada-flatpak-$(uname -m).flatpak"
-          test -s "$signed_bundle"
-          bundle_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-bundle-verify.XXXXXX")
-          (
-            export HOME="$bundle_flatpak_home/home"
-            export XDG_DATA_HOME="$bundle_flatpak_home/data"
-            export XDG_CONFIG_HOME="$bundle_flatpak_home/config"
-            export XDG_CACHE_HOME="$bundle_flatpak_home/cache"
-            export XDG_RUNTIME_DIR="$bundle_flatpak_home/runtime"
-            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
-              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
-            chmod 700 "$XDG_RUNTIME_DIR"
-            flatpak install --user --no-deps --bundle --noninteractive -y \
-              "$signed_bundle"
-            bundle_origin=$(flatpak info --user --show-origin buzz.armada.app)
-            if [ -z "$bundle_origin" ]; then
-              echo "Installed Flatpak bundle has no update origin." >&2
-              exit 1
-            fi
-            bundle_repo="$XDG_DATA_HOME/flatpak/repo"
-            bundle_url=$(ostree config --repo="$bundle_repo" get \
-              "remote \"$bundle_origin\".url")
-            bundle_gpg_verify=$(ostree config --repo="$bundle_repo" get \
-              "remote \"$bundle_origin\".gpg-verify")
-            [ -z "$bundle_url" ] || {
-              echo "Installed Flatpak bundle embeds an update origin ($bundle_url); nothing serves one." >&2
-              exit 1
-            }
-            [ "$bundle_gpg_verify" = true ] || {
-              echo "Installed Flatpak origin does not verify commit signatures." >&2
-              exit 1
-            }
-          )
-          echo "Signed Flatpak bundle verified with key $fingerprint."
-
-      # Add the signed Flatpak bundle to .release-artifacts/. Every human-facing
-      # file lands in that one directory named exactly as the release event will
-      # name it, so the artifact upload and the event describe the same bytes
-      # under the same name. `src/lib/downloads.test.ts` reads those names back
-      # and fails if the client can't file one under a platform.
-      #
-      # The OSTree repository flatpak-builder produced is neither staged nor
-      # published: the `.flatpak` bundle is the only Flatpak artifact, and the
-      # installed app updates its web bundle rather than itself.
-      - name: Collect installers
-        id: collect
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          # The installers go where the `release` job will find them, beside the
-          # APK the android job already staged there. Dependent ngit-ci jobs
-          # share this checkout, so no artifact action is involved.
-          out="$PWD/.release-artifacts"
-          mkdir -p "$out"
-          # ONLY the Flatpak bundle is staged here. The other six installers were
-          # staged by the `desktop` job, which is what keeps them in the release
-          # when this job fails — see the note on that step. This one is gated on
-          # the signature check above having passed, because installing the
-          # bundle configures a GPG-verified remote and announcing it before its
-          # repository verifies hands the user an app whose first update fails.
+          # The unsigned Flatpak bundle. npkg re-signs on import.
           cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
-
-          # No unversioned aliases, no latest-*.json manifest and no
-          # latest*.yml update feed are written any more. All of them existed
-          # because something had to name a file at build time, before it could
-          # know a version; /downloads and the desktop updater both read the
-          # release event now, which names every artifact by its exact filename
-          # and hash. A stable alias would be a second, uncontent-addressed way
-          # to get the same bytes.
-
           ls -lh "$out"
-          echo "dir=$out" >> "$GITHUB_OUTPUT"
 
-      # The private signing home has already been destroyed. Upload actions
-      # remain in this job because their paths are step outputs.
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-linux-${{ github.ref_name }}
           path: |
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.AppImage
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.deb
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.flatpak
+            .release-artifacts/Armada-${{ github.ref_name }}.AppImage
+            .release-artifacts/Armada-${{ github.ref_name }}.deb
+            .release-artifacts/Armada-${{ github.ref_name }}.flatpak
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-windows-${{ github.ref_name }}
           path: |
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.exe
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-portable.exe
+            .release-artifacts/Armada-${{ github.ref_name }}.exe
+            .release-artifacts/Armada-${{ github.ref_name }}-portable.exe
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-mac-${{ github.ref_name }}
           path: |
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-x64.zip
-            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-arm64.zip
+            .release-artifacts/Armada-${{ github.ref_name }}-mac-x64.zip
+            .release-artifacts/Armada-${{ github.ref_name }}-mac-arm64.zip
           if-no-files-found: error
 
-      # Signing and its verification now run BEFORE the installers are staged,
-      # so a tag that fails there would otherwise upload nothing at all and
-      # leave the maintainer with only a log. Publish the raw build output
-      # instead: the installers are the same bytes the build job produced, and
-      # the unsigned Flatpak bundle is what the signing step was working on.
-      # `warn`, not `error`: this runs after failures anywhere in the job,
-      # including ones that happen before an installer exists.
+      # Runs after any failure in this job — including one before an installer
+      # exists — so `warn`, not `error`. The raw build output is the same bytes
+      # the staging step copies.
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -814,7 +401,7 @@ jobs:
     # the working tree with `desktop` (see there), so it cannot run beside it;
     # running it after the desktop chain means a Play Console rejection or a
     # Zapstore hiccup costs the Android publish alone.
-    needs: [publish]
+    needs: [desktop]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1264,16 +851,12 @@ jobs:
   # Nostr has no compare-and-swap, so a second publisher would silently drop
   # one side's artifacts rather than merge with them.
   #
-  # Depending on `publish` is what keeps the .flatpak bundle from being
-  # announced before its signature has been verified — `publish` stages the
-  # bundle only after that check passes.
-  #
   # `always()` so a release still goes out when one platform failed, carrying
   # whatever was built. The script refuses to publish an empty release, so a
   # run where nothing built fails here instead of announcing a version with no
   # downloads.
   release:
-    needs: [android, publish]
+    needs: [android, desktop]
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30

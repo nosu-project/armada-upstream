@@ -524,12 +524,19 @@ Things to know before touching it:
   into a content-hashed chunk, and a filename that changes with the dependency
   tree cannot be listed in `electron-builder.yml`'s `files:`. The static
   `latest*.yml` feed is GONE — not generated (`publishAutoUpdate: false`) and not
-  deployed, and nothing is sent over SSH. The Flatpak is never replaced in
-  place: it fetches the web bundle every web deploy publishes at
-  `/downloads/armada-web.tar.gz` (`electron/webBundleUpdate.js`,
-  `bundleStore.js`) and serves that — Vesktop-style. Don't bring the OSTree
-  repository fold back into `deploy-nsite.yml`; it was most of every deploy's
-  running time. **The `publish:` block still has to exist**: electron-builder
+  deployed, and nothing is sent over SSH. The Flatpak updates on two clocks: its
+  web bundle in place (it fetches the archive every web deploy publishes at
+  `/downloads/armada-web.tar.gz` — `electron/webBundleUpdate.js`,
+  `bundleStore.js` — and serves that), and its shell through `flatpak update`
+  from whichever remote it was installed from. The published build is
+  distributed by npkg at `pkg.soapbox.pub`, which watches the kind-30622 release
+  events, hash-verifies each artifact, and re-signs the apt/flatpak/fdroid
+  repositories under its own keys — so Armada ships the `.flatpak` (and `.deb`
+  and `.apk`) UNSIGNED and does no OSTree/GPG signing of its own. Don't bring the
+  OSTree repository fold, a release signing key, or a
+  `public/.well-known/armada-flatpak.fingerprint` back into `deploy-nsite.yml` or
+  the release workflow; the self-hosted signing path was retired with the
+  self-hosted remote. **The `publish:` block still has to exist**: electron-builder
   writes the packaged `app-update.yml` only when one does, and electron-updater
   reads that file on every DOWNLOAD (`updaterCacheDirName`, plus `publisherName`
   on Windows), so deleting it leaves the update check succeeding and the download

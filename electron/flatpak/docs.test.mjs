@@ -17,110 +17,70 @@ const shellBlocks = [...flatpakDocs.matchAll(/```sh\n([\s\S]*?)```/g)].map(
   ([, commands]) => commands,
 );
 // Prose is hard-wrapped at 80 columns, so a sentence a reader sees as one line
-// is not one line in the file, and which words land either side of a break
-// moves whenever a paragraph is edited. Assert prose against a whitespace-
-// collapsed copy: what these tests care about is that the claim is still made,
-// not where it wraps. Command text keeps using `flatpakDocs`/`shellBlocks`,
-// where the exact bytes ARE the thing being asserted.
+// is not one line in the file. Assert prose against a whitespace-collapsed copy;
+// command text keeps using `shellBlocks`, where the exact bytes are the point.
 const flatpakProse = flatpakDocs.replace(/\s+/g, " ");
 
 describe("Flatpak documentation", () => {
-  // The hosted OSTree repository is gone. Instructions that add a remote for
-  // it would hand users a dead origin, and instructions that disable GPG
-  // verification for anything but a local file:// repo would be worse.
-  it("never adds the retired hosted remote, and never disables verification for a hosted one", () => {
+  it("points installs at the pkg.soapbox.pub (npkg) remote", () => {
+    const addsRemote = shellBlocks.some(
+      (commands) =>
+        commands.includes("flatpak remote-add --if-not-exists soapbox") &&
+        commands.includes(
+          "https://pkg.soapbox.pub/flatpak/soapbox.flatpakrepo",
+        ),
+    );
+    expect(addsRemote).toBe(true);
+    expect(
+      shellBlocks.some((commands) =>
+        commands.includes("flatpak install soapbox buzz.armada.app"),
+      ),
+    ).toBe(true);
+    expect(flatpakProse).toContain("pkg.soapbox.pub");
+  });
+
+  // npkg re-signs on import; Armada ships an unsigned bundle. The docs must not
+  // describe a self-hosted signing key, an out-of-band fingerprint, or the
+  // committed announcement file — all of which were retired with it.
+  it("keeps no self-hosted signing apparatus", () => {
+    expect(flatpakDocs).not.toContain("FLATPAK_GPG");
+    expect(flatpakDocs).not.toContain("armada-flatpak.fingerprint");
+    expect(flatpakDocs).not.toContain("nak req -k 35128");
+    expect(flatpakProse).toContain("Armada does not sign this bundle");
+  });
+
+  // The self-hosted OSTree remote is gone. Instructions that add it would hand
+  // users a dead origin, and disabling GPG verification is only ever for the
+  // local file:// build repo.
+  it("never adds the retired hosted remote, and only disables verification for a local repo", () => {
     for (const commands of shellBlocks) {
       expect(commands).not.toContain("armada.buzz/downloads/flatpak/");
       if (commands.includes("--no-gpg-verify")) {
         expect(commands).toContain("file://");
       }
     }
-    expect(flatpakProse).toContain("There is no update repository.");
-    expect(flatpakProse).toContain("The bundle embeds no origin URL");
   });
 
-  it("describes the upgrade as installing the next bundle over the running one", () => {
-    expect(
-      shellBlocks.filter((commands) =>
-        commands.includes("flatpak install --user ./Armada-vX.Y.Z.flatpak"),
-      ).length,
-    ).toBeGreaterThan(0);
-    expect(flatpakProse).toContain("`checkForWebBundleUpdate` in `electron/main.js`");
-    // The retired origin embedded in older bundles is disabled, not deleted,
-    // and the profile is preserved either way.
+  it("documents both update paths: the web bundle in place and the shell via flatpak update", () => {
+    expect(flatpakProse).toContain("The web bundle updates in place");
+    expect(flatpakProse).toContain(
+      "`checkForWebBundleUpdate` in `electron/main.js`",
+    );
+    expect(flatpakProse).toContain("The shell updates through `flatpak update`");
+  });
+
+  it("keeps older-install recovery without deleting profiles", () => {
+    // The now-dead origin embedded in older self-hosted bundles is disabled,
+    // not deleted, and the profile is preserved.
     expect(flatpakDocs).toContain(
       'flatpak remote-modify --user --disable \\\n  "$(flatpak info --user --show-origin buzz.armada.app)"',
     );
-    expect(flatpakProse).toContain("keeps the profile under `~/.var/app/buzz.armada.app`");
-  });
-
-  it("keeps unsigned system installs recoverable without deleting profiles", () => {
     expect(flatpakDocs).toContain(
       "sudo flatpak uninstall --system buzz.armada.app",
     );
-    expect(flatpakDocs).toContain(
-      "flatpak install --user ./Armada-vX.Y.Z.flatpak\n" +
-        "flatpak info --user buzz.armada.app\n" +
-        'armada_system_origin="$(flatpak info --system --show-origin buzz.armada.app)"\n' +
-        "sudo flatpak uninstall --system buzz.armada.app",
-    );
     expect(flatpakProse).toContain("Do not add `--delete-data`");
-  });
-
-  it("documents the signing secrets and independent fingerprint verification", () => {
-    expect(flatpakProse).toContain("FLATPAK_GPG_EXPECTED_FINGERPRINT");
-    expect(flatpakProse).toContain("FLATPAK_GPG_PRIVATE_KEY_BASE64");
-    // The key travels with the bundle it vouches for, so the README must say
-    // plainly that comparing it against a same-host copy proves nothing.
-    expect(flatpakProse).toContain("cannot authenticate itself");
     expect(flatpakProse).toContain(
-      "Comparing the embedded key only against a copy fetched from the same host would not authenticate it",
-    );
-  });
-
-  // The out-of-band channel has to be a place a reader can actually go. Prose
-  // naming "an independently authenticated channel" is what these instructions
-  // used to say, and nothing published one — so assert the coordinate, the
-  // path, and a check that runs.
-  it("names the nsite manifest as the channel that vouches for the key", () => {
-    const announcedPath = "/.well-known/armada-flatpak.fingerprint";
-    expect(flatpakDocs).toContain(
-      `https://armada.buzz${announcedPath}`,
-    );
-    expect(flatpakProse).toContain(
-      "35128:781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5:armada",
-    );
-    const verificationBlocks = shellBlocks.filter((commands) =>
-      commands.includes("nak req -k 35128"),
-    );
-    expect(verificationBlocks.length).toBeGreaterThan(0);
-    for (const commands of verificationBlocks) {
-      // The signature check is the whole point; a hash comparison against an
-      // unverified event proves nothing.
-      expect(commands).toContain("nak verify");
-      expect(commands).toContain(`select(.[1] == "${announcedPath}")`);
-      expect(commands).toContain("sha256sum ./armada-flatpak.announced");
-      // The key being checked is the one the INSTALL trusts — read back out of
-      // Flatpak's own keyring for the origin — not a copy downloaded from
-      // anywhere.
-      expect(commands).toContain(
-        '~/.local/share/flatpak/repo/"$armada_origin".trustedkeys.gpg',
-      );
-    }
-    // The claim must stay honest about what the separation buys.
-    expect(flatpakProse).toContain(
-      "independent of the web server, not of Armada",
-    );
-  });
-
-  it("keeps the announcement a committed file rather than an operator's memory", () => {
-    const committed = fs.readFileSync(
-      path.resolve(process.cwd(), "public/.well-known/armada-flatpak.fingerprint"),
-      "utf8",
-    );
-    expect(committed).toMatch(/^[0-9A-F]{40}\n$/);
-    expect(flatpakDocs).toContain(
-      "`public/.well-known/armada-flatpak.fingerprint`",
+      "keeps the profile under `~/.var/app/buzz.armada.app`",
     );
   });
 });
