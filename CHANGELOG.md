@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.10] - 2026-09-06
+
+Pictures, avatars, emoji and file downloads now try every storage server that
+might hold them instead of giving up on the first one that is unreachable.
+Sharing something from another app into a direct message hands it to the
+composer again, and Flatpak desktop builds update themselves in place.
+
+### Changed
+- Images, avatars, custom emoji, attachments, Mini Apps and community icons fall back to other storage servers when one is down or missing the file, and a retry restarts the search
+- Flatpak desktop builds update in place instead of waiting on a separate package repository
+
+### Fixed
+- Sharing content from another app into a direct message now fills the composer instead of opening it empty
+- Repeat shares to the same conversation no longer show up as duplicate suggestions
+
 ## [0.59.9] - 2026-09-06
 
 Chat message verification now runs off the main thread, so busy conversations
