@@ -1,0 +1,7 @@
+# Flathub app verification for armada.buzz.
+# One verification token per line; lines beginning with "#" are ignored.
+# The token is unique and constant per app and is shown in the Flathub
+# Developer Portal (Developer Portal -> buzz.armada.app -> Verification), once
+# the app has been accepted and you have collaborator access to its repo.
+# Paste that token on its own line below (leave this comment for the next app):
+# buzz.armada.app
