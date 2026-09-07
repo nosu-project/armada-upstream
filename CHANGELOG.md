@@ -4,6 +4,11 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.12] - 2026-09-07
+
+Maintenance release covering the Linux Flathub packaging and release tooling.
+No user-facing changes.
+
 ## [0.59.11] - 2026-09-07
 
 Link previews gain a one-tap copy button, and a post embedded from a link on
