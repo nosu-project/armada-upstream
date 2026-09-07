@@ -1,11 +1,5 @@
 app-id: buzz.armada.app
 
-# From-source Flathub build. Every network input is pinned: the app by git
-# tag+commit, all dependency trees by the generated-sources.*.json lists beside
-# this manifest. The sandbox reaches the network only through those hashed
-# sources. (Not the self-hosted OSTree build in electron/flatpak/, which
-# repackages the AppImage and self-updates; neither is allowed here.)
-
 runtime: org.freedesktop.Platform
 runtime-version: &runtime-version '25.08'
 sdk: org.freedesktop.Sdk
@@ -48,33 +42,22 @@ finish-args:
   - --talk-name=com.canonical.AppMenu.Registrar
   - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
 
-# No --talk-name=org.freedesktop.Flatpak and no --repo-url: the
-# ARMADA_FLATHUB_BUILD marker installed below makes electron/main.js no-op every
-# self-update path, since Flathub owns updates.
-
 build-options:
   append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/golang/bin
   env:
-    # npm/cargo/go/cmake all build from the offline caches the generators laid
-    # down; none may reach the network.
     npm_config_offline: 'true'
     npm_config_cache: /run/build/armada/flatpak-node/npm-cache
     XDG_CACHE_HOME: /run/build/armada/flatpak-node/cache
-    # node-gyp reads headers from the node22 extension rather than downloading.
     npm_config_nodedir: /usr/lib/sdk/node22
     # playwright's browser downloads are dropped from the offline cache, so its
     # postinstall must skip or `npm ci --offline` fails reaching for them.
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     CARGO_HOME: /run/build/armada/cargo
-    # venmic's CMake resolves its CPM closure from this reconstructed cache.
     CPM_SOURCE_CACHE: /run/build/armada/electron/vendor-cpm
     GOFLAGS: -mod=vendor
     GOTOOLCHAIN: local
 
 modules:
-  # One module: a single app checkout, with each dependency tree overlaid from a
-  # generated-sources list and built in place. The HEVC publisher builds here
-  # rather than as its own module because it lives inside the checkout.
   - name: armada
     buildsystem: simple
     build-commands:
@@ -153,9 +136,7 @@ modules:
           /app/armada/resources/ARMADA_FLATHUB_BUILD
 
     sources:
-      # A release bump is just `tag`+`commit` below (the checker bot automates
-      # these); the metainfo <release> entry rides the same tag (see the note
-      # below the source). The url is the repo's https git-http mirror, since
+      # The url is the repo's https git-http mirror, since
       # flatpak-builder can't clone the canonical nostr:// remote.
       - type: git
         url: https://git.shakespeare.diy/npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj/armada.git
@@ -164,15 +145,6 @@ modules:
         x-checker-data:
           type: git
           tag-pattern: ^v([\d.]+)$
-      # Build helpers, wrapper, desktop entry, marker AND metainfo are all read
-      # from the checkout above (packaging/flathub/ ships in every tag). The
-      # metainfo's <release> entry for the built version rides the same tag,
-      # since the release commit that adds it is the commit the tag names — so a
-      # release bump is just the `tag`+`commit` above (the checker bot automates
-      # these), with no separate metainfo file to keep in step.
-      # Offline dependency source lists (hashed): npm (root + electron/ locks and
-      # the Electron zips), cargo (wasm crate + build-std + wasm-bindgen-cli), go
-      # (HEVC publisher vendor), and venmic's CPM closure.
       - generated-sources.npm.json
       - generated-sources.cargo.json
       - generated-sources.hevc.json
