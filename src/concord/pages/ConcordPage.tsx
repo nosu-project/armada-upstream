@@ -412,10 +412,9 @@ function SidebarFooter() {
   );
 }
 
-const ChannelRow = memo(function ChannelRow({
+export const ChannelRow = memo(function ChannelRow({
   community,
   channel,
-  avBrokers,
   active,
   inCall,
   speaking,
@@ -429,8 +428,6 @@ const ChannelRow = memo(function ChannelRow({
 }: {
   community: Community | undefined;
   channel: Channel;
-  /** The community's own AV brokers (CORD-02 §6) — the §5 rendezvous's middle tier. */
-  avBrokers: string[];
   active: boolean;
   /** Whether the user's current call is THIS channel's voice room. */
   inCall: boolean;
@@ -449,10 +446,13 @@ const ChannelRow = memo(function ChannelRow({
   onNewCategory?: (channel: Channel) => void;
 }) {
   // Every Channel is callable (CORD-07): live presence drives the Discord-style
-  // nested roster under the row whenever a call is active, and the rendezvous
-  // broker is resolved ahead of the click so joining a call is instant.
+  // nested roster under the row whenever a call is active. The rendezvous broker
+  // is NOT resolved here — a sidebar mounts every row in one commit (the channel
+  // list can't be viewport-gated, its rows being drag-reorder targets), so a
+  // per-row `useVoiceBroker` stood up one query observer per channel on every
+  // page switch. It is resolved lazily by `handleJoinVoice` instead, which
+  // already falls back to a live `resolveVoiceBroker` when handed no broker.
   const fold = useVoicePresence(community, channel);
-  const { data: broker } = useVoiceBroker(channel, avBrokers);
   const { voiceRoomPubkeys } = useVoiceActivity();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
@@ -533,7 +533,7 @@ const ChannelRow = memo(function ChannelRow({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onJoinVoice(channel, broker ?? null);
+                  onJoinVoice(channel, null);
                 }}
                 aria-label={occupied ? "Join call" : "Start call"}
                 title={occupied ? "Join call" : "Start call"}
@@ -2822,7 +2822,6 @@ export function ConcordPage() {
       <ChannelRow
         community={community}
         channel={c}
-        avBrokers={avBrokers}
         active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
         inCall={inCall}
         speaking={inCall ? speakingPubkeys : undefined}
