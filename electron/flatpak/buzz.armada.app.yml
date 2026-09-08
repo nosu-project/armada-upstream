@@ -31,6 +31,7 @@ finish-args:
   - --filesystem=xdg-videos:ro
   - --filesystem=xdg-run/pipewire-0
   - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=com.canonical.AppMenu.Registrar
   - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
@@ -40,6 +41,12 @@ finish-args:
 # particular no `--talk-name=org.freedesktop.Flatpak`, which is arbitrary
 # host-command execution through `flatpak-spawn --host` and spends the sandbox
 # boundary that is the reason to ship a Flatpak at all.
+#
+# `org.freedesktop.Notifications` is the session-bus notification daemon that
+# Electron's libnotify-backed `new Notification()` posts to on Linux. Without
+# this talk-name the sandbox silently drops every banner — the foreground
+# notifier is the desktop build's only notifier, so this is the whole of it.
+# It only lets the app post notifications; it cannot touch the /app mount.
 #
 # The Flatpak itself is never updated in place (no origin URL, no repository).
 # Its WEB BUNDLE is: the shell fetches the site's dist archive into userData

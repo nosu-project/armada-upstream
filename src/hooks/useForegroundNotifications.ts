@@ -16,6 +16,7 @@ import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettin
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
 import { isRoomActive } from "@/lib/activeRooms";
+import { isDesktop } from "@/lib/desktop";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { dmConvPeers } from "@/lib/nip17/protocol";
@@ -104,6 +105,13 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
  * preferable to two banners/sounds for one event when its PushEvent arrives.
  */
 export async function pageMayShowOsNotification(): Promise<boolean> {
+  // The desktop shell serves the app from a custom scheme (app://armada) that
+  // Chromium refuses service-worker registration lookups for — the call throws
+  // a SecurityError, which would fail this closed. It has no Web Push worker to
+  // defer to anyway (see showPageOsNotification), so the page always owns
+  // presentation; without this an unfocused desktop window suppresses every
+  // notification, since the loop's fallback to this gate returns false.
+  if (isDesktop()) return true;
   if (!("serviceWorker" in navigator)) return true;
   try {
     const registration = await navigator.serviceWorker.getRegistration();
@@ -143,7 +151,15 @@ export async function showPageOsNotification(
   };
 
   if (abort()) return null;
-  if ("serviceWorker" in navigator) {
+  // Electron registers the push service worker (it's a secure custom-scheme
+  // context) but does not wire up Chromium's persistent-notification presenter,
+  // so `registration.showNotification()` resolves and draws nothing. The
+  // renderer's `Notification` constructor DOES reach the OS (libnotify on
+  // Linux), so the desktop shell must take the constructor path below. Guard it
+  // by the same no-subscription proof the registration branch uses, though
+  // Electron ships no Web Push so a subscription is not expected here.
+  const preferPageConstructor = isDesktop();
+  if (!preferPageConstructor && "serviceWorker" in navigator) {
     try {
       const current = await navigator.serviceWorker.getRegistration();
       if (current) {
@@ -181,6 +197,79 @@ export async function showPageOsNotification(
   if (abort()) return null;
   beginPresentation();
   return new Notification(title, options);
+}
+
+/** Draw an image URL's first frame to a static PNG data URL, or undefined. */
+function rasterizeFirstFrame(url: string, size = 128): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    // Ask for a CORS-clean pixel buffer; without it `toDataURL` throws on a
+    // cross-origin image (every avatar host is cross-origin from app://armada).
+    img.crossOrigin = "anonymous";
+    let settled = false;
+    const done = (value?: string) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return done(undefined);
+        ctx.drawImage(img, 0, 0, size, size);
+        done(canvas.toDataURL("image/png"));
+      } catch {
+        done(undefined); // tainted canvas: host sent no CORS headers
+      }
+    };
+    img.onerror = () => done(undefined);
+    img.src = url;
+    setTimeout(() => done(undefined), 4000);
+  });
+}
+
+/**
+ * The desktop shell presents through libnotify, which renders an animated GIF
+ * notification icon as a BLANK frame — so a GIF avatar shows nothing. Flatten a
+ * GIF to a static first-frame PNG so the real face still appears; if the host
+ * refuses a CORS-clean read the icon is dropped (the app mark fallback then
+ * shows) rather than left blank. Non-GIF icons already embed correctly on every
+ * platform and are returned untouched, so nothing else changes.
+ */
+export async function desktopSafeNotificationIcon(
+  icon: string | undefined,
+): Promise<string | undefined> {
+  if (!icon || !isDesktop()) return icon;
+  if (!/^https:\/\//i.test(icon) || !/\.gif(\?|#|$)/i.test(icon)) return icon;
+  return await rasterizeFirstFrame(icon);
+}
+
+/**
+ * Discard the accumulated notification body of every room the viewer has read.
+ * A room is read once its read-state entry reaches the newest message we
+ * notified it for; its lines (and alert history) are then cleared so the next
+ * message starts a fresh thread instead of re-listing what was already seen.
+ * A room with no recorded read key (e.g. git activity) is left untouched.
+ */
+export function retireSeenRoomLines(
+  roomLines: Map<string, string[]>,
+  roomReadKeys: Map<string, string>,
+  lastNotified: Map<string, number>,
+  alertTimes: Map<string, number[]>,
+  readState: Record<string, number>,
+): void {
+  for (const [roomKey, lines] of roomLines) {
+    if (lines.length === 0) continue;
+    const readKey = roomReadKeys.get(roomKey);
+    const lastAt = lastNotified.get(roomKey) ?? 0;
+    if (readKey && lastAt > 0 && (readState[readKey] ?? 0) >= lastAt) {
+      roomLines.delete(roomKey);
+      alertTimes.delete(roomKey);
+    }
+  }
 }
 
 export type PagePushOutcome = "presenting" | "presented" | "suppressed";
@@ -302,6 +391,9 @@ export function useForegroundNotifications(): void {
   // a room's notification body accumulates, both keyed by room key.
   const alertTimes = useRef(new Map<string, number[]>());
   const roomLines = useRef(new Map<string, string[]>());
+  // roomKey → the read-state key of its conversation, recorded when a line is
+  // added so a read can later retire the room's accumulated body.
+  const roomReadKeys = useRef(new Map<string, string>());
 
   // `useKnownDmPeers` supplies durable exact authored/pinned rooms. The sink
   // also refreshes local conversation rows so a just-authored room is known
@@ -309,6 +401,22 @@ export function useForegroundNotifications(): void {
   // participants) is load-bearing for group privacy.
   const mineConversationKeys = useRef(new Set<string>());
   const mineLoading = useRef(false);
+
+  // Retire a room's accumulated notification body once the viewer has read it.
+  // Without this a later message re-lists everything already seen — the tag
+  // collapses repeated notifications into one, so its body only ever grew. A
+  // read advancing to the newest message we notified for the room (here, or on
+  // another device/tab) is the signal it has been seen; the next message then
+  // starts a fresh thread. isRoomActive already covers the live-focused case.
+  useEffect(() => {
+    retireSeenRoomLines(
+      roomLines.current,
+      roomReadKeys.current,
+      lastNotified.current,
+      alertTimes.current,
+      readState,
+    );
+  }, [readState]);
 
   useEffect(() => {
     if (!user) return;
@@ -741,6 +849,10 @@ export function useForegroundNotifications(): void {
         }
         lastNotified.current.set(roomKey, cand.createdAt);
         if (eventKey) notifiedEvents.current.add(eventKey);
+        // Remember which read-state entry governs this room, so reading it
+        // clears the accumulated body below rather than letting a later message
+        // re-list everything already seen.
+        if (readKey) roomReadKeys.current.set(roomKey, readKey);
 
         // Past this room's interruption ceiling the notification is still shown
         // and its lines still accumulate — it just stops making noise. A
@@ -857,10 +969,13 @@ export function useForegroundNotifications(): void {
               );
             }
             if (!presented) return;
+            // Flatten a GIF avatar to a static frame on desktop; libnotify
+            // draws an animated GIF icon blank. A no-op on other platforms.
+            const icon = await desktopSafeNotificationIcon(presented.icon);
             const allowActivePush = canCoordinateExactEvent();
             const n = await showPageOsNotification(presented.title, {
               body: presented.body,
-              icon: presented.icon,
+              icon,
               badge: presented.badge,
               // Armada owns foreground audio so the selected sound isn't
               // doubled by the browser's default notification tone.

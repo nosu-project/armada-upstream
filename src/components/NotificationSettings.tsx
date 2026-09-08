@@ -25,6 +25,7 @@ import {
   requestIgnoreBatteryOptimizations,
 } from "@/lib/nativeNotifications";
 import { isIOS, isNativeRuntime, isStandalonePwa } from "@/lib/platform";
+import { isDesktop } from "@/lib/desktop";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -583,21 +584,27 @@ function IosNotificationHint({
 }
 
 /**
- * Foreground-only notifications for browsers without Web Push (e.g. Brave).
- * Fires OS notifications while Armada is open (needs Notification permission);
- * for closed-app delivery the user needs a browser that supports Web Push, or
- * the Android app.
+ * Foreground-only notifications where Web Push is unavailable — a browser
+ * without it (e.g. Brave), or the desktop shell, whose Electron Chromium
+ * exposes the Push API but has no push service behind it. Fires OS
+ * notifications while Armada is open (needs Notification permission). The
+ * desktop shell keeps its relay sockets alive while minimized to the tray
+ * (backgroundThrottling is off), so "while open" covers the tray too; there is
+ * no closed-app delivery on desktop.
  */
 function ForegroundOnlySettings() {
   const { apiAvailable, permission, enabled, setEnabled, prefs, setPrefs } =
     useForegroundNotificationSettings();
 
+  const desktop = isDesktop();
   const blocked = apiAvailable && permission === "denied";
 
   if (!apiAvailable) {
     return (
       <p className="text-sm text-muted-foreground">
-        This browser doesn&rsquo;t support notifications. Use Chrome, Firefox, or the Android app.
+        {desktop
+          ? "This version of Armada can't show notifications."
+          : "This browser doesn't support notifications. Use Chrome, Firefox, or the Android app."}
       </p>
     );
   }
@@ -606,26 +613,34 @@ function ForegroundOnlySettings() {
     <div className="space-y-4">
       <NotificationToggles
         title="Notifications while Armada is open"
-        description="This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get a system notification for new messages when you're not looking at the conversation."
+        description={desktop
+          ? "Armada shows a system notification for new messages while it's running, including when it's minimized to the tray."
+          : "This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get a system notification for new messages when you're not looking at the conversation."}
         enabled={enabled}
         busy={false}
         blocked={blocked}
-        blockedMessage="Notifications are blocked in your browser settings."
+        blockedMessage={desktop
+          ? "Notifications are blocked. Allow Armada in your system notification settings."
+          : "Notifications are blocked in your browser settings."}
         // Distinct from blocked, and the state this panel spent a long time
         // showing as simply "on": the master wish defaults to on, so without
         // saying so here a profile that has never been asked looks enabled and
         // silently never fires.
         hint={apiAvailable && permission === "default"
-          ? "Your browser hasn't allowed notifications yet — turn this on to ask."
+          ? desktop
+            ? "Armada hasn't been allowed to notify yet — turn this on to ask."
+            : "Your browser hasn't allowed notifications yet — turn this on to ask."
           : undefined}
         prefs={prefs}
         onToggle={(v) => setEnabled(v).catch(() => {})}
         onSetPrefs={setPrefs}
       />
-      <p className="text-xs text-muted-foreground">
-        For notifications when Armada is closed, use a browser that supports Web Push (Chrome,
-        Firefox, or Brave with Google push services enabled), or the Android app.
-      </p>
+      {!desktop && (
+        <p className="text-xs text-muted-foreground">
+          For notifications when Armada is closed, use a browser that supports Web Push (Chrome,
+          Firefox, or Brave with Google push services enabled), or the Android app.
+        </p>
+      )}
     </div>
   );
 }

@@ -15,6 +15,7 @@ export interface WebPushCapabilities {
 
 export type WebPushUnavailableReason =
   | "native-runtime"
+  | "desktop"
   | "gateway"
   | "insecure-context"
   | "service-worker"

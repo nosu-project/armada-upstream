@@ -5,8 +5,10 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  desktopSafeNotificationIcon,
   foregroundPushRoomKey,
   pageMayShowOsNotification,
+  retireSeenRoomLines,
   showPageOsNotification,
 } from "@/hooks/useForegroundNotifications";
 
@@ -310,6 +312,78 @@ describe("page / service-worker presentation ownership", () => {
     expect(await pageMayShowOsNotification()).toBe(false);
   });
 
+  it("retires a room's accumulated lines once it is read, but keeps unread ones", () => {
+    const roomLines = new Map<string, string[]>([
+      ["read-room", ["msg1", "msg2"]],
+      ["unread-room", ["msg1"]],
+      ["no-readkey-room", ["msg1"]],
+    ]);
+    const roomReadKeys = new Map<string, string>([
+      ["read-room", "rk:read"],
+      ["unread-room", "rk:unread"],
+      // no-readkey-room deliberately absent
+    ]);
+    const lastNotified = new Map<string, number>([
+      ["read-room", 100],
+      ["unread-room", 100],
+      ["no-readkey-room", 100],
+    ]);
+    const alertTimes = new Map<string, number[]>([["read-room", [1, 2, 3]]]);
+
+    retireSeenRoomLines(roomLines, roomReadKeys, lastNotified, alertTimes, {
+      "rk:read": 100, // read up to the newest notified message → clear
+      "rk:unread": 50, // behind the newest → keep
+    });
+
+    expect(roomLines.has("read-room")).toBe(false);
+    expect(alertTimes.has("read-room")).toBe(false);
+    expect(roomLines.get("unread-room")).toEqual(["msg1"]);
+    // Without a read key there is no "seen" signal, so the body is retained.
+    expect(roomLines.get("no-readkey-room")).toEqual(["msg1"]);
+  });
+
+  it("leaves a GIF avatar untouched off desktop", async () => {
+    // Browsers render an animated GIF notification icon fine; only the desktop
+    // shell's libnotify blanks it, so the flatten is desktop-only.
+    const gif = "https://host.example/a.gif";
+    expect(await desktopSafeNotificationIcon(gif)).toBe(gif);
+  });
+
+  it("passes a non-GIF icon straight through on desktop", async () => {
+    vi.stubGlobal("window", { armadaDesktop: { isDesktop: true } });
+    const png = "https://host.example/a.png";
+    expect(await desktopSafeNotificationIcon(png)).toBe(png);
+    expect(await desktopSafeNotificationIcon("/favicon.png")).toBe("/favicon.png");
+  });
+
+  it("drops a GIF on desktop when the host refuses a CORS-clean read", async () => {
+    vi.stubGlobal("window", { armadaDesktop: { isDesktop: true } });
+    // Stand in for an <img> whose cross-origin load fails: the rasterize
+    // resolves undefined and the presenter falls back to the app mark.
+    class FakeImage {
+      crossOrigin = "";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_v: string) { queueMicrotask(() => this.onerror?.()); }
+    }
+    vi.stubGlobal("Image", FakeImage);
+    expect(await desktopSafeNotificationIcon("https://host.example/a.gif")).toBeUndefined();
+  });
+
+  it("lets the page own presentation on desktop even when the SW lookup throws", async () => {
+    // Electron serves from app://armada, where getRegistration() throws a
+    // SecurityError. Desktop has no Web Push worker to defer to, so the page
+    // always owns presentation rather than failing closed and suppressing every
+    // unfocused notification.
+    const getRegistration = vi.fn(async () => {
+      throw new Error("The URL protocol of the current origin ('app://armada') is not supported.");
+    });
+    vi.stubGlobal("navigator", { serviceWorker: { getRegistration } });
+    vi.stubGlobal("window", { armadaDesktop: { isDesktop: true } });
+    expect(await pageMayShowOsNotification()).toBe(true);
+    expect(getRegistration).not.toHaveBeenCalled();
+  });
+
   it("uses registration presentation when the mobile page constructor is illegal", async () => {
     const showNotification = vi.fn(async () => undefined);
     const registration = {
@@ -334,6 +408,29 @@ describe("page / service-worker presentation ownership", () => {
       data: { url: "/dm/alice" },
     });
     expect(pageConstructor).not.toHaveBeenCalled();
+  });
+
+  it("uses the page constructor on desktop even though a service worker is registered", async () => {
+    const showNotification = vi.fn(async () => undefined);
+    const registration = {
+      pushManager: { getSubscription: vi.fn(async () => null) },
+      showNotification,
+    };
+    vi.stubGlobal("navigator", {
+      serviceWorker: {
+        getRegistration: vi.fn(async () => registration),
+        ready: Promise.resolve(registration),
+      },
+    });
+    vi.stubGlobal("window", { armadaDesktop: { isDesktop: true } });
+    const pageConstructor = vi.fn(function () { return {}; });
+    vi.stubGlobal("Notification", pageConstructor);
+
+    await showPageOsNotification("Alice", { body: "hello" });
+    // Electron never surfaces registration.showNotification(); the OS banner
+    // only appears through the renderer's Notification constructor.
+    expect(showNotification).not.toHaveBeenCalled();
+    expect(pageConstructor).toHaveBeenCalledWith("Alice", { body: "hello" });
   });
 
   it("re-checks ownership at presentation and never races an active PushEvent", async () => {

@@ -31,6 +31,7 @@ import {
   mergePushReplacementSpec,
   reconcilePushRegistrations,
 } from "@/lib/pushRegistration";
+import { isDesktop } from "@/lib/desktop";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import {
   scopePushSubscriptionId,
@@ -394,7 +395,15 @@ export function useNostrPush(): UsePushNotificationsReturn {
 
   const unavailableReason = isNativeRuntime()
     ? "native-runtime" as const
-    : webPushUnavailableReason(nostrPushConfigured());
+    : isDesktop()
+      // Electron exposes window.PushManager and registers a service worker, so
+      // the plain capability probe reports Web Push "supported" — but its
+      // Chromium has no push service behind that API, so getVapidKey/subscribe
+      // can only fail (misleadingly, as "check your connection"). Report it
+      // unavailable so Settings offers the foreground notifier — the only
+      // notifier the desktop shell has — instead of a toggle that never works.
+      ? "desktop" as const
+      : webPushUnavailableReason(nostrPushConfigured());
   const supported = unavailableReason === undefined;
 
   const [permission, setPermission] = useState<NotificationPermission>(

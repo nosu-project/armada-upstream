@@ -45,6 +45,47 @@ function icon(out, size, { frac = 0.72, bg = BG, round = false, flatten = false 
   console.log("  " + out.replace(ROOT + "/", ""));
 }
 
+/**
+ * The cut-corner "vessel" tile — the single chrome shape from index.css
+ * `.clip-corner-lg`: two opposite corners sliced to a flat chamfer, the other
+ * two rounded, the mark centered on the brand background. This is the crest the
+ * UI gives server icons, rendered at app-icon scale for Linux's packaged
+ * launcher + window icon. The proportions track the CSS on a 48px tile
+ * (`--cut: 0.7rem`, `border-radius: 0.55rem`).
+ */
+function vesselTile(out, size, { frac = 0.72, bg = BG } = {}) {
+  // Two resamples, each done exactly once, so nothing is downsampled twice:
+  //  - the chamfer/rounded MASK is drawn at 4x and shrunk to size, which is
+  //    what smooths its edges (drawing it straight at size looked crunchy);
+  //  - the MARK is resized straight to its final size and composited, the same
+  //    single-resize path every other app icon uses — putting it through the 4x
+  //    canvas too would resample it a second time on the way down and blur the
+  //    three fine cyan wave lines into each other.
+  const ss = size * 4;
+  const cut = Math.round(ss * (0.7 / 3)); // 0.7rem of a 3rem (48px) tile
+  const radius = Math.round(ss * (0.55 / 3));
+  const s1 = ss - 1;
+  const roundMask = join(TMP, "vessel-round.png");
+  const polyMask = join(TMP, "vessel-poly.png");
+  const mask = join(TMP, "vessel-mask.png");
+  // Rounded-rect on all four corners, then intersect with a polygon that cuts
+  // the top-left and bottom-right into chamfers — the round survives only where
+  // the polygon leaves the corner at full extent (top-right, bottom-left).
+  sh("magick", ["-size", `${ss}x${ss}`, "xc:black", "-fill", "white",
+    "-draw", `roundrectangle 0,0,${s1},${s1},${radius},${radius}`, roundMask]);
+  sh("magick", ["-size", `${ss}x${ss}`, "xc:black", "-fill", "white",
+    "-draw", `polygon ${cut},0 ${ss},0 ${ss},${ss - cut} ${ss - cut},${ss} 0,${ss} 0,${cut}`,
+    polyMask]);
+  sh("magick", [roundMask, polyMask, "-compose", "multiply", "-composite",
+    "-resize", `${size}x${size}`, mask]);
+  const m = Math.round(size * frac);
+  mkdirSync(dirname(out), { recursive: true });
+  sh("magick", ["-size", `${size}x${size}`, `xc:${bg}`,
+    "(", MASTER, "-resize", `${m}x${m}`, ")", "-gravity", "center", "-composite",
+    mask, "-alpha", "off", "-compose", "CopyOpacity", "-composite", out]);
+  console.log("  " + out.replace(ROOT + "/", ""));
+}
+
 // Android density buckets -> px, for a given base dp size.
 const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
 const androidRes = (name) => join(ROOT, "android/app/src/main/res", name);
@@ -81,8 +122,9 @@ for (const s of ["splash-2732x2732.png", "splash-2732x2732-1.png", "splash-2732x
 
 console.log("electron/:");
 icon(join(ROOT, "electron/build/icon.png"), 1024, { frac: 0.72 });
-// electron/build/linux-icon.png — the cut-corner launcher tile Linux uses for
-// the packaged icon, the window icon and the AppImage's hicolor icons — is
-// hand-finished art, not composed from the mark, so nothing regenerates it.
+// The cut-corner launcher tile Linux uses for the packaged icon, the window
+// icon and the AppImage's hicolor icons. Composed from the mark like the rest
+// so it can't drift behind a mark change (which is exactly what it did once).
+vesselTile(join(ROOT, "electron/build/linux-icon.png"), 512);
 
 console.log("Done.");
