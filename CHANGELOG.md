@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.14] - 2026-09-07
+
+Desktop update reliability fixes: after the app updates itself, it no longer
+keeps showing an older version of the interface, and a fresh launch now checks
+for an update as soon as it can instead of potentially waiting hours.
+
+### Fixed
+- The desktop app now shows the newer interface bundled with a shell update instead of continuing to serve a previously downloaded one
+- A cold start no longer skips its update check and wait hours to try again when it happens before the app is fully ready
+
 ## [0.59.13] - 2026-09-07
 
 Linux and Android builds can now be installed and kept up to date through the
