@@ -140,6 +140,43 @@ describe("updateWebBundle", () => {
     expect(readBundleShellVersion(bundlesDir)).toBe("0.59.13");
   });
 
+  it("refuses to activate a download older than the running shell", async () => {
+    // A `flatpak update` can land a newer shell before the web deploy publishes
+    // the matching bundle, so the site briefly serves an OLDER bundle. Fetching
+    // and activating it would downgrade the web layer under the new shell.
+    const changelog = "# Changelog\n\n## [0.59.12] - 2026-01-01\n\n- old\n";
+    const archive = archiveOf({ "index.html": "<!doctype html>old", "CHANGELOG.md": changelog });
+    const bundlesDir = tmp();
+    const outcome = await updateWebBundle({
+      bundlesDir,
+      url: "https://example.test/x",
+      activeId: null,
+      etag: null,
+      shellVersion: "0.59.14",
+      fetchImpl: async () => response(200, archive, '"e-old"'),
+    });
+    expect(outcome).toEqual({ result: "unchanged" });
+    // Nothing was activated, and the stale extraction was cleaned up.
+    expect(fs.existsSync(path.join(bundlesDir, BUNDLE_POINTER))).toBe(false);
+    expect(fs.existsSync(path.join(bundlesDir, contentId(archive)))).toBe(false);
+  });
+
+  it("activates a download whose own version matches the shell", async () => {
+    const changelog = "# Changelog\n\n## [0.59.14] - 2026-01-01\n\n- new\n";
+    const archive = archiveOf({ "index.html": "<!doctype html>new", "CHANGELOG.md": changelog });
+    const bundlesDir = tmp();
+    const outcome = await updateWebBundle({
+      bundlesDir,
+      url: "https://example.test/x",
+      activeId: null,
+      etag: null,
+      shellVersion: "0.59.14",
+      fetchImpl: async () => response(200, archive, '"e-new"'),
+    });
+    expect(outcome).toEqual({ result: "installed", id: contentId(archive) });
+    expect(readBundleShellVersion(bundlesDir)).toBe("0.59.14");
+  });
+
   it("sends the ETag and treats 304 as unchanged", async () => {
     const outcome = await updateWebBundle({
       bundlesDir: tmp(),

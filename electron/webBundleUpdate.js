@@ -13,7 +13,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const zlib = require("node:zlib");
 
-const { commitBundle, contentId, pruneBundles } = require("./bundleStore");
+const { bundleVersion, commitBundle, contentId, pruneBundles, versionOrdinal } = require("./bundleStore");
 
 /** Where a web deploy publishes its own dist as one archive. */
 const WEB_BUNDLE_PATH = "/downloads/armada-web.tar.gz";
@@ -91,7 +91,10 @@ function extractBundle({ bundlesDir, archive }) {
  *
  * `shellVersion` is recorded alongside the activated bundle so a later shell —
  * one whose self-update brought a newer shipped bundle — can tell a download it
- * made from one an older shell made (bundleStore.resolveDistRoot).
+ * made from one an older shell made (bundleStore.resolveDistRoot). It also gates
+ * activation: a freshly fetched bundle whose own version is older than this
+ * shell is dropped rather than activated, so a site that is briefly behind the
+ * shell cannot downgrade the web layer.
  */
 async function updateWebBundle({ bundlesDir, url, activeId, etag, shellVersion, fetchImpl = fetch }) {
   const headers = etag ? { "If-None-Match": etag } : {};
@@ -109,6 +112,19 @@ async function updateWebBundle({ bundlesDir, url, activeId, etag, shellVersion, 
     return { result: "unchanged" };
   }
   const id = extractBundle({ bundlesDir, archive });
+  // Refuse to activate a bundle OLDER than this shell's own shipped copy. The
+  // site can be behind the shell — a `flatpak update` lands the new shell
+  // before the web deploy publishes the matching bundle — and activating what
+  // the site serves then would downgrade the web layer under a newer shell.
+  // resolveDistRoot would decline to serve it anyway, so committing here only
+  // moves the pointer to a bundle nothing displays and offers a restart that
+  // changes nothing; drop it instead and wait for the site to catch up.
+  const shellOrdinal = versionOrdinal(shellVersion);
+  const downloadedOrdinal = versionOrdinal(bundleVersion(path.join(bundlesDir, id, "dist")));
+  if (shellOrdinal !== null && downloadedOrdinal !== null && downloadedOrdinal < shellOrdinal) {
+    fs.rmSync(path.join(bundlesDir, id), { recursive: true, force: true });
+    return { result: "unchanged" };
+  }
   commitBundle(bundlesDir, id, newEtag, shellVersion);
   pruneBundles(bundlesDir, id);
   return { result: "installed", id };

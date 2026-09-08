@@ -73,6 +73,25 @@ function readBundleShellVersion(bundlesDir) {
 }
 
 /**
+ * The version a dist tree DECLARES, read from the newest entry of the CHANGELOG
+ * shipped inside it — the same `## [x.y.z]` line the web build's getVersion()
+ * reads. This is the bundle's OWN version, a property of its CONTENTS rather
+ * than of when it was fetched, so a downloaded bundle can be ordered against
+ * the running shell directly. Null when the file is missing or unparseable (an
+ * older bundle predating this), which leaves the shell-version stamp as the
+ * fallback. Works for the shipped dist and a downloaded one alike.
+ */
+function bundleVersion(distRoot) {
+  try {
+    const changelog = fs.readFileSync(path.join(distRoot, "CHANGELOG.md"), "utf8");
+    const match = /^## \[([^\]]+)\]/m.exec(changelog);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Pick the dist directory to serve.
  *
  * Forward-only: there is no revert to a previous bundle. If the active one is
@@ -109,11 +128,26 @@ function resolveDistRoot({ bundlesDir, shippedDist, shellVersion }) {
     return shipped;
   }
 
+  const current = versionOrdinal(shellVersion);
+
+  // Authoritative freshness check, ahead of the stamp below: a downloaded
+  // bundle whose OWN version is older than the running shell is never served,
+  // however recently it was fetched. The stamp records WHEN a download was made
+  // (the shell running at the time), not WHAT it contains, so a shell that has
+  // run ahead of the site re-fetches the site's older bundle and re-stamps it
+  // as its own — the stamp then wrongly clears it. Comparing the bundle's own
+  // version against the shell closes that: an upgrade that outran the web
+  // deploy keeps serving the shipped copy until the site actually catches up.
+  if (current !== null) {
+    const downloaded = versionOrdinal(bundleVersion(root));
+    if (downloaded !== null && downloaded < current) return shipped;
+  }
+
   // A shell that has moved on from the version that downloaded this bundle
   // carries a shipped bundle at least as new; serve that and let the updater
   // catch up. A download with no recorded shell version predates this stamping
-  // and is treated the same way — its one-time re-pull is harmless.
-  const current = versionOrdinal(shellVersion);
+  // and is treated the same way — its one-time re-pull is harmless. This still
+  // covers bundles too old to declare a version above.
   if (current !== null) {
     const downloadedUnder = versionOrdinal(readBundleShellVersion(bundlesDir));
     if (downloadedUnder === null || downloadedUnder < current) return shipped;
@@ -174,6 +208,7 @@ module.exports = {
   BUNDLE_ETAG,
   BUNDLE_POINTER,
   BUNDLE_SHELL_VERSION,
+  bundleVersion,
   commitBundle,
   contentId,
   pruneBundles,

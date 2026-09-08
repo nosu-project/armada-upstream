@@ -12,6 +12,7 @@ const {
   BUNDLE_ETAG,
   BUNDLE_POINTER,
   BUNDLE_SHELL_VERSION,
+  bundleVersion,
   commitBundle,
   contentId,
   pruneBundles,
@@ -33,14 +34,22 @@ afterEach(() => {
 const ID_A = "a".repeat(32);
 const ID_B = "b".repeat(32);
 
+/** A CHANGELOG whose newest entry declares `version`, as every dist ships. */
+function changelog(version) {
+  return `# Changelog\n\n## [${version}] - 2026-01-01\n\n- a change\n`;
+}
+
 /** A userData tree with a shipped (asar) dist and zero or more bundles. */
-function workspace({ current, etag, shellVersion, bundles = {} } = {}) {
+function workspace({ current, etag, shellVersion, shippedVersion, bundles = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "armada-bundles-"));
   workspaces.push(root);
 
   const shipped = path.join(root, "asar", "dist");
   fs.mkdirSync(shipped, { recursive: true });
   fs.writeFileSync(path.join(shipped, "index.html"), "<!doctype html>shipped");
+  if (shippedVersion !== undefined) {
+    fs.writeFileSync(path.join(shipped, "CHANGELOG.md"), changelog(shippedVersion));
+  }
 
   const bundlesDir = path.join(root, "bundles");
   fs.mkdirSync(bundlesDir, { recursive: true });
@@ -49,6 +58,9 @@ function workspace({ current, etag, shellVersion, bundles = {} } = {}) {
     fs.mkdirSync(dist, { recursive: true });
     if (spec?.index !== false) {
       fs.writeFileSync(path.join(dist, "index.html"), `<!doctype html>${id}`);
+    }
+    if (spec?.version !== undefined) {
+      fs.writeFileSync(path.join(dist, "CHANGELOG.md"), changelog(spec.version));
     }
   }
   if (current !== undefined) fs.writeFileSync(path.join(bundlesDir, BUNDLE_POINTER), current);
@@ -137,6 +149,58 @@ describe("shell-version-aware resolution", () => {
     expect(versionOrdinal("0.59.13-rc.1")).toBe(59_013);
     expect(versionOrdinal("")).toBeNull();
     expect(versionOrdinal(undefined)).toBeNull();
+  });
+});
+
+describe("content-version-aware resolution", () => {
+  const resolveAs = (space, shellVersion) =>
+    resolveDistRoot({ bundlesDir: space.bundlesDir, shippedDist: space.shipped, shellVersion });
+
+  it("reads the version a dist declares in its CHANGELOG", () => {
+    const space = workspace({ shippedVersion: "0.59.14" });
+    expect(bundleVersion(space.shipped)).toBe("0.59.14");
+    expect(bundleVersion(path.join(space.root, "nope"))).toBeNull();
+  });
+
+  it("refuses a download older than the shell even when freshly stamped", () => {
+    // The exact residual bug: a shell that ran ahead of the site re-fetched the
+    // site's OLD bundle and re-stamped it as its own, so the stale download
+    // cleared the shell-version guard. Its declared version does not lie.
+    const space = workspace({
+      current: ID_A,
+      shellVersion: "0.59.14",
+      bundles: { [ID_A]: { version: "0.59.12" } },
+    });
+    expect(resolveAs(space, "0.59.14").source).toBe("shipped");
+  });
+
+  it("serves a download whose own version matches the shell", () => {
+    const space = workspace({
+      current: ID_A,
+      shellVersion: "0.59.14",
+      bundles: { [ID_A]: { version: "0.59.14" } },
+    });
+    expect(resolveAs(space, "0.59.14").id).toBe(ID_A);
+  });
+
+  it("serves a download newer than the shell (forward-only self-heal)", () => {
+    const space = workspace({
+      current: ID_A,
+      shellVersion: "0.59.14",
+      bundles: { [ID_A]: { version: "0.59.15" } },
+    });
+    expect(resolveAs(space, "0.59.14").id).toBe(ID_A);
+  });
+
+  it("falls back to the shell-version stamp for a bundle that declares no version", () => {
+    // A bundle too old to carry a CHANGELOG version is still ordered by the
+    // stamp, so the pre-content-version behaviour is preserved for it.
+    const space = workspace({
+      current: ID_A,
+      shellVersion: "0.59.12",
+      bundles: { [ID_A]: {} },
+    });
+    expect(resolveAs(space, "0.59.14").source).toBe("shipped");
   });
 });
 
