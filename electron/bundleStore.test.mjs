@@ -11,11 +11,14 @@ const require = createRequire(import.meta.url);
 const {
   BUNDLE_ETAG,
   BUNDLE_POINTER,
+  BUNDLE_SHELL_VERSION,
   commitBundle,
   contentId,
   pruneBundles,
   readBundleEtag,
+  readBundleShellVersion,
   resolveDistRoot,
+  versionOrdinal,
 } = require("./bundleStore.js");
 
 let workspaces = [];
@@ -31,7 +34,7 @@ const ID_A = "a".repeat(32);
 const ID_B = "b".repeat(32);
 
 /** A userData tree with a shipped (asar) dist and zero or more bundles. */
-function workspace({ current, etag, bundles = {} } = {}) {
+function workspace({ current, etag, shellVersion, bundles = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "armada-bundles-"));
   workspaces.push(root);
 
@@ -50,6 +53,7 @@ function workspace({ current, etag, bundles = {} } = {}) {
   }
   if (current !== undefined) fs.writeFileSync(path.join(bundlesDir, BUNDLE_POINTER), current);
   if (etag !== undefined) fs.writeFileSync(path.join(bundlesDir, BUNDLE_ETAG), etag);
+  if (shellVersion !== undefined) fs.writeFileSync(path.join(bundlesDir, BUNDLE_SHELL_VERSION), shellVersion);
 
   return { root, bundlesDir, shipped };
 }
@@ -88,6 +92,54 @@ describe("desktop bundle resolution", () => {
   });
 });
 
+describe("shell-version-aware resolution", () => {
+  const resolveAs = (space, shellVersion) =>
+    resolveDistRoot({ bundlesDir: space.bundlesDir, shippedDist: space.shipped, shellVersion });
+
+  it("serves a download made by this shell", () => {
+    const space = workspace({ current: ID_A, shellVersion: "0.59.13", bundles: { [ID_A]: {} } });
+    expect(resolveAs(space, "0.59.13").id).toBe(ID_A);
+  });
+
+  it("prefers the shipped bundle after the shell was upgraded past the download", () => {
+    // The exact bug: `flatpak update` brought a newer shipped bundle, but a
+    // stale download kept winning and the web layer lagged the shell.
+    const space = workspace({ current: ID_A, shellVersion: "0.59.12", bundles: { [ID_A]: {} } });
+    expect(resolveAs(space, "0.59.13").source).toBe("shipped");
+  });
+
+  it("prefers the shipped bundle for a download that predates version stamping", () => {
+    // No recorded shell version: we cannot prove the download is this shell's,
+    // so the shipped copy (which arrived with this shell) wins once, and the
+    // updater re-pulls. Harmless self-heal on first run of the fixed shell.
+    const space = workspace({ current: ID_A, bundles: { [ID_A]: {} } });
+    expect(resolveAs(space, "0.59.13").source).toBe("shipped");
+  });
+
+  it("still serves a download made by a newer shell than the one now running", () => {
+    // A downgrade should not happen (updates are forward-only), but if it does,
+    // a download from a newer shell is not stale — keep serving it.
+    const space = workspace({ current: ID_A, shellVersion: "0.59.14", bundles: { [ID_A]: {} } });
+    expect(resolveAs(space, "0.59.13").id).toBe(ID_A);
+  });
+
+  it("honours the pointer unconditionally when no shell version is supplied", () => {
+    // Backward compatible: an older caller that passes no shellVersion gets the
+    // pre-stamp behaviour.
+    const space = workspace({ current: ID_A, shellVersion: "0.1.0", bundles: { [ID_A]: {} } });
+    expect(resolve(space).id).toBe(ID_A);
+  });
+
+  it("orders versions by the shared major/minor/patch scheme", () => {
+    expect(versionOrdinal("0.59.13")).toBe(59_013);
+    expect(versionOrdinal("1.2.3")).toBe(1_002_003);
+    // A prerelease suffix is ignored; a non-version is null.
+    expect(versionOrdinal("0.59.13-rc.1")).toBe(59_013);
+    expect(versionOrdinal("")).toBeNull();
+    expect(versionOrdinal(undefined)).toBeNull();
+  });
+});
+
 describe("installing a bundle", () => {
   it("commits the pointer last, so an interrupted install is never served", () => {
     const space = workspace({ bundles: { [ID_A]: {} } });
@@ -112,6 +164,16 @@ describe("installing a bundle", () => {
     const space = workspace({ etag: 'W/"old"', bundles: { [ID_A]: {} } });
     commitBundle(space.bundlesDir, ID_A, null);
     expect(readBundleEtag(space.bundlesDir)).toBeNull();
+  });
+
+  it("records the shell version, and clears a stale one when omitted", () => {
+    const space = workspace({ shellVersion: "0.59.11", bundles: { [ID_A]: {} } });
+    commitBundle(space.bundlesDir, ID_A, null, "0.59.13");
+    expect(readBundleShellVersion(space.bundlesDir)).toBe("0.59.13");
+    // Committing without one clears it, so a stale version can't outlive the
+    // bundle it described and wrongly keep it winning over a shipped copy.
+    commitBundle(space.bundlesDir, ID_A, null);
+    expect(readBundleShellVersion(space.bundlesDir)).toBeNull();
   });
 
   it("addresses a bundle by its content", () => {

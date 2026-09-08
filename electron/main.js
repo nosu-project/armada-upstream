@@ -173,6 +173,13 @@ function installBundleIpc() {
   ipcMain.on("armada:register-deep-link-host", (event, host) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
     deepLinkHost = typeof host === "string" && host ? host.toLowerCase() : null;
+    // Run a web-bundle check that was deferred because the host wasn't known
+    // yet, so a startup check that beat this registration doesn't leave the
+    // update path idle until the next scheduled poll.
+    if (deepLinkHost && bundleCheckAwaitingHost) {
+      bundleCheckAwaitingHost = false;
+      void checkForDesktopUpdates(false);
+    }
   });
 }
 
@@ -184,6 +191,11 @@ function selectActiveBundle() {
   const selected = resolveDistRoot({
     bundlesDir: BUNDLES_DIR,
     shippedDist: SHIPPED_DIST,
+    // A shell upgraded since the last download (a `flatpak update`, an AppImage
+    // or NSIS self-update) ships a bundle at least as new; serving it rather
+    // than the stale download is what keeps the web layer from lagging the
+    // shell after an upgrade. The updater then re-pulls whatever the site has.
+    shellVersion: app.getVersion(),
   });
   activeDist = selected.root;
   activeBundleId = selected.id;
@@ -253,6 +265,12 @@ async function openExternalUrl(url) {
 // out to the system browser (there is no OS-level https handoff into a desktop
 // app short of being the default browser).
 let deepLinkHost = null;
+// A web-bundle update check that fired before the renderer reported its host
+// (the update fetch needs it) sets this rather than skipping until the next
+// four-hourly poll. The host arrives on first paint, and its IPC handler runs
+// the deferred check then — so a cold start that loses the race against the
+// 10s startup check still updates promptly instead of hours later.
+let bundleCheckAwaitingHost = false;
 
 /**
  * Ask the renderer to route an in-app path through its own router.
@@ -885,7 +903,11 @@ async function checkForWebBundleUpdate(manual = false) {
     const wasManual = manualUpdateCheck;
     manualUpdateCheck = false;
     if (!deepLinkHost) {
-      console.warn("[bundle] no public host registered; skipping bundle check");
+      // Deferred, not dropped: the register-deep-link-host handler re-runs this
+      // once the renderer reports the host, so losing the race against the
+      // startup check costs a moment rather than the next four-hour poll.
+      console.warn("[bundle] no public host registered yet; deferring bundle check");
+      bundleCheckAwaitingHost = true;
       return;
     }
     const outcome = await updateWebBundle({
@@ -893,6 +915,7 @@ async function checkForWebBundleUpdate(manual = false) {
       url: `https://${deepLinkHost}${WEB_BUNDLE_PATH}`,
       activeId: activeBundleId,
       etag: readBundleEtag(BUNDLES_DIR),
+      shellVersion: app.getVersion(),
     });
     if (outcome.result !== "installed") {
       if (wasManual) {

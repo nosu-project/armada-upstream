@@ -10,7 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const { extractBundle, parseTar, updateWebBundle } = require("./webBundleUpdate.js");
-const { BUNDLE_POINTER, contentId, resolveDistRoot } = require("./bundleStore.js");
+const { BUNDLE_POINTER, BUNDLE_SHELL_VERSION, contentId, readBundleShellVersion, resolveDistRoot } =
+  require("./bundleStore.js");
 
 let workspaces = [];
 afterEach(() => {
@@ -96,6 +97,47 @@ describe("updateWebBundle", () => {
     expect(fs.readFileSync(path.join(bundlesDir, BUNDLE_POINTER), "utf8")).toBe(contentId(archive));
     expect(fs.readFileSync(path.join(bundlesDir, "etag"), "utf8")).toBe('"e2"');
     expect(resolveDistRoot({ bundlesDir, shippedDist: "/nope" }).source).toBe("bundle");
+  });
+
+  it("records the shell version it was downloaded under", async () => {
+    const archive = archiveOf({ "index.html": "<!doctype html>v2" });
+    const bundlesDir = tmp();
+    await updateWebBundle({
+      bundlesDir,
+      url: "https://example.test/x",
+      activeId: null,
+      etag: null,
+      shellVersion: "0.59.13",
+      fetchImpl: async () => response(200, archive, '"e2"'),
+    });
+    expect(readBundleShellVersion(bundlesDir)).toBe("0.59.13");
+    // And a later shell keeps serving its own shipped bundle over this download.
+    expect(
+      resolveDistRoot({ bundlesDir, shippedDist: "/nope", shellVersion: "0.59.14" }).source,
+    ).toBe("shipped");
+    // The same shell still serves the download.
+    expect(
+      resolveDistRoot({ bundlesDir, shippedDist: "/nope", shellVersion: "0.59.13" }).source,
+    ).toBe("bundle");
+  });
+
+  it("re-stamps the shell version when the active bundle is unchanged", async () => {
+    // The same bytes under a newer shell means the download is this shell's, so
+    // it must keep winning — the stamp has to advance even on a no-op fetch.
+    const archive = archiveOf({ "index.html": "same" });
+    const bundlesDir = tmp();
+    const id = extractBundle({ bundlesDir, archive });
+    fs.writeFileSync(path.join(bundlesDir, BUNDLE_SHELL_VERSION), "0.59.12");
+    const outcome = await updateWebBundle({
+      bundlesDir,
+      url: "https://example.test/x",
+      activeId: id,
+      etag: null,
+      shellVersion: "0.59.13",
+      fetchImpl: async () => response(200, archive, '"e3"'),
+    });
+    expect(outcome).toEqual({ result: "unchanged" });
+    expect(readBundleShellVersion(bundlesDir)).toBe("0.59.13");
   });
 
   it("sends the ETag and treats 304 as unchanged", async () => {

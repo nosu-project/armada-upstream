@@ -88,8 +88,12 @@ function extractBundle({ bundlesDir, archive }) {
 /**
  * Fetch, extract and activate the bundle at `url` unless it is the one already
  * active. Resolves `{ result: "unchanged" }` or `{ result: "installed", id }`.
+ *
+ * `shellVersion` is recorded alongside the activated bundle so a later shell —
+ * one whose self-update brought a newer shipped bundle — can tell a download it
+ * made from one an older shell made (bundleStore.resolveDistRoot).
  */
-async function updateWebBundle({ bundlesDir, url, activeId, etag, fetchImpl = fetch }) {
+async function updateWebBundle({ bundlesDir, url, activeId, etag, shellVersion, fetchImpl = fetch }) {
   const headers = etag ? { "If-None-Match": etag } : {};
   const response = await fetchImpl(url, { headers, redirect: "follow" });
   if (response.status === 304) return { result: "unchanged" };
@@ -99,11 +103,13 @@ async function updateWebBundle({ bundlesDir, url, activeId, etag, fetchImpl = fe
   const newEtag = response.headers?.get?.("etag") || null;
   fs.mkdirSync(bundlesDir, { recursive: true });
   if (activeId && contentId(archive) === activeId) {
-    commitBundle(bundlesDir, activeId, newEtag);
+    // Re-stamp: the same bytes under this shell means the active download is
+    // this shell's, so it must keep winning over the shipped copy.
+    commitBundle(bundlesDir, activeId, newEtag, shellVersion);
     return { result: "unchanged" };
   }
   const id = extractBundle({ bundlesDir, archive });
-  commitBundle(bundlesDir, id, newEtag);
+  commitBundle(bundlesDir, id, newEtag, shellVersion);
   pruneBundles(bundlesDir, id);
   return { result: "installed", id };
 }
