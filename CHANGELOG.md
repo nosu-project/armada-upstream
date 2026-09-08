@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.15] - 2026-09-08
+
+Desktop notifications now actually appear: the app shows a banner for messages
+that arrive while it is open, the Flatpak build reaches the system notification
+daemon, and Settings offers the notifier that works on desktop instead of a
+toggle that never could. Sender avatars render correctly, a room stops
+re-listing messages you have already read, and the Linux app ships a refreshed
+launcher icon.
+
+### Fixed
+- Desktop notifications for messages received while the app is open now show a banner instead of silently doing nothing
+- The Linux Flatpak build's notifications now reach the system notification daemon
+- Notifications for messages you are not currently looking at are no longer suppressed on desktop
+- Animated GIF sender avatars now render on desktop instead of showing blank
+- A room's notification no longer re-lists messages you have already read once you catch up to them
+- Refreshed the Linux launcher, window, and taskbar icon
+- The desktop app more reliably serves the newest interface bundle after a shell update
+
+### Changed
+- Desktop notification settings now offer the foreground notifier that works there rather than a Web Push toggle that cannot function on the desktop shell
+
 ## [0.59.14] - 2026-09-07
 
 Desktop update reliability fixes: after the app updates itself, it no longer
