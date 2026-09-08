@@ -434,6 +434,55 @@
   }
 
   /*
+   * A hairline frame for a cut-corner vessel. A plain `border` CANNOT be used
+   * with clip-corner-*: clip-path slices the rectangular border off along the
+   * two chamfered corners, leaving them bare — the shorter the element, the
+   * more of it that is. This traces the chamfer instead. The element's own
+   * background is the frame colour and fills the whole clipped shape; an inset
+   * ::before, clipped to the SAME polygon on a 1px-smaller box, lays the
+   * translucent fill back over everything but a 1px edge that follows the cut.
+   * `--fill`/`--edge` are overridable; content stays above the fill (the pseudo
+   * is at z-index:-1 within the element's own isolated stacking context).
+   */
+  .clip-hairline-lg {
+    --cut: 0.7rem;
+    --fill: var(--background) / 0.4;
+    --fill-hover: var(--background) / 0.6;
+    --edge: var(--border) / 0.6;
+    position: relative;
+    isolation: isolate;
+    border-radius: 0.55rem;
+    clip-path: polygon(
+      var(--cut) 0,
+      100% 0,
+      100% calc(100% - var(--cut)),
+      calc(100% - var(--cut)) 100%,
+      0 100%,
+      0 var(--cut)
+    );
+    background: hsl(var(--edge));
+  }
+  .clip-hairline-lg::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    z-index: -1;
+    clip-path: polygon(
+      var(--cut) 0,
+      100% 0,
+      100% calc(100% - var(--cut)),
+      calc(100% - var(--cut)) 100%,
+      0 100%,
+      0 var(--cut)
+    );
+    background: hsl(var(--fill));
+    transition: background-color 150ms;
+  }
+  .clip-hairline-lg:hover::before {
+    background: hsl(var(--fill-hover));
+  }
+
+  /*
    * Chart-rule gutter tick. Apply to a relatively-positioned row; the ::before
    * is a thin vertical bar in the left gutter that lights up on hover and
    * glows when the row also has .is-active. Replaces full-bleed hover blocks.

@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { Download, HardDriveDownload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -62,6 +62,23 @@ export function LandingPage({
       </div>
 
       <div className="relative z-10">
+        {/* A quiet way to the downloads page in the top-right. `absolute`, not
+            `fixed`: it sits at the top of the page and scrolls away with the
+            hero rather than following the reader down the deck. `safe-area-top`
+            drops it below a notch/status bar. Mono and lowercase to echo
+            {@link BrandMark}; no frame, so it's a link rather than a CTA
+            competing with Join. The cyan disk-download glyph — same `$`-prompt
+            cyan as the sign-off — carries the accent instead of a border. */}
+        <div className="absolute right-3 top-3 z-20 safe-area-top">
+          <Link
+            to="/downloads"
+            className="inline-flex h-10 items-center gap-2 px-3 font-mono text-sm lowercase tracking-tight text-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <HardDriveDownload className="size-4 shrink-0 text-[hsl(var(--accent2,180_90%_55%))]" />
+            get armada
+          </Link>
+        </div>
+
         {/* ── Hero ────────────────────────────────────────────────────── */}
         <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-10 px-6 py-16 safe-area-top">
           <div className="flex flex-col items-center gap-8">
@@ -235,30 +252,26 @@ export function LandingPage({
               else presses — it is a peer, not a footnote. */}
           <div className="flex flex-wrap items-center justify-center gap-3">
             {ANDROID_STORES.map((store) => (
-              <Button
+              <a
                 key={store.url}
-                asChild
-                variant="outline"
-                className="h-11 touch:h-12 clip-corner-lg bg-background/40 px-5"
+                href={store.url}
+                target="_blank"
+                rel="noreferrer"
+                className="clip-hairline-lg inline-flex h-11 touch:h-12 items-center gap-2 px-5 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                <a href={store.url} target="_blank" rel="noreferrer">
-                  {/* An <img> of the store's own mark: it is the thing being
-                      scanned for, and neither logo is ours to redraw. */}
-                  <img src={store.icon} alt="" className="size-5 shrink-0" />
-                  {store.label}
-                </a>
-              </Button>
+                {/* An <img> of the store's own mark: it is the thing being
+                    scanned for, and neither logo is ours to redraw. */}
+                <img src={store.icon} alt="" className="size-5 shrink-0" />
+                {store.label}
+              </a>
             ))}
-            <Button
-              asChild
-              variant="outline"
-              className="h-11 touch:h-12 clip-corner-lg bg-background/40 px-5"
+            <Link
+              to="/downloads"
+              className="clip-hairline-lg inline-flex h-11 touch:h-12 items-center gap-2 px-5 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
-              <Link to="/downloads">
-                <Download className="size-4 shrink-0" />
-                All downloads
-              </Link>
-            </Button>
+              <Download className="size-4 shrink-0" />
+              All downloads
+            </Link>
           </div>
 
           {/* The sign-off returns to the hero's prompt: same cyan `$`, same
