@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.18] - 2026-09-10
+
+Sharing your screen with audio on Windows now includes system sound again while
+still leaving the call itself out, so it no longer falls back to sharing video
+only.
+
+### Fixed
+- Windows screen sharing now captures system audio minus the call, so a share with audio works instead of dropping to video-only
+
 ## [0.59.17] - 2026-09-10
 
 Screen sharing now withholds its audio on platforms that cannot guarantee the
