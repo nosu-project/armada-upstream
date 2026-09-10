@@ -80,14 +80,16 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
     return (
       <div className={cn("max-w-md", className)} onClick={(e) => e.stopPropagation()}>
         <div
-          className="relative w-full overflow-hidden rounded-xl border border-border"
+          className="relative w-full overflow-hidden rounded-xl border border-border bg-black"
           style={{ paddingBottom: "56.25%" }}
         >
           <iframe
             src={`https://streamable.com/e/${streamableId}`}
             title="Streamable video"
+            // `allow="fullscreen"` supersedes the `allowFullScreen` attribute
+            // (which the browser warns about if both are set), so this is the
+            // only fullscreen grant.
             allow="autoplay; fullscreen; picture-in-picture"
-            allowFullScreen
             loading="lazy"
             className="absolute inset-0 h-full w-full border-0"
           />

@@ -19,7 +19,7 @@
            decrypted attachment playback respectively.
          - frame-ancestors is ignored in a meta-delivered policy, so the
            clickjacking defense lives in nginx.conf only. -->
-    <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' https://www.youtube-nocookie.com https://open.spotify.com https://platform.twitter.com https://www.instagram.com https://*.iframe.diy; object-src 'none'; font-src 'self' https: data:; base-uri 'self'; manifest-src 'self'; connect-src 'self' blob: https: wss:; img-src 'self' data: blob: https:; media-src 'self' blob: https:" />
+    <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' https://www.youtube-nocookie.com https://open.spotify.com https://platform.twitter.com https://www.instagram.com https://streamable.com https://*.iframe.diy; object-src 'none'; font-src 'self' https: data:; base-uri 'self'; manifest-src 'self'; connect-src 'self' blob: https: wss:; img-src 'self' data: blob: https:; media-src 'self' blob: https:" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
