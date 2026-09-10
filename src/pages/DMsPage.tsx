@@ -8,8 +8,10 @@ import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
-import { lastEditableOwnMessage } from "@/components/chat/transport";
+import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
+import { ChatShell } from "@/components/chat/ChatShell";
 import type { ChatMsg } from "@/components/chat/transport";
+import { useChatEditing } from "@/components/chat/useChatEditing";
 import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { ReplyContext } from "@/components/chat/ReplyContext";
 import { MessageRow } from "@/components/chat/MessageRow";
@@ -18,7 +20,6 @@ import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
-import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
 import { DeferredRow } from "@/components/DeferredRow";
@@ -32,7 +33,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -689,33 +689,13 @@ function Conversation({
   );
   const sharedCommunity = useSharedCommunities(requestPeers, isRequest && !group).get(peer);
 
-  // The shared row owns the inline field and keyboard behavior; this page only
-  // tracks which NIP-17 row is active and hands the edit to the DM transport.
-  // Reach the latest transport through a ref so unchanged rows keep stable
-  // callback identities, matching Concord's channel implementation.
-  const transportRef = useRef(transport);
-  transportRef.current = transport;
-  const [editingId, setEditingId] = useState<string | undefined>(undefined);
-  const startEditing = useCallback((event: ChatMsg) => setEditingId(event.id), []);
-  const cancelEditing = useCallback(() => setEditingId(undefined), []);
-  useEffect(() => setEditingId(undefined), [conversation]);
-  const handleEditSubmit = useCallback(async (original: ChatMsg, content: string) => {
-    const trimmed = content.trim();
-    if (!trimmed || trimmed === original.content.trim()) {
-      setEditingId(undefined);
-      return;
-    }
-    setEditingId(undefined);
-    try {
-      await transportRef.current.editMessage?.(original, trimmed);
-    } catch {
-      toast({
-        title: "Edit failed",
-        description: "Could not publish the edit.",
-        variant: "destructive",
-      });
-    }
-  }, [toast]);
+  // NIP-17 rows only; the edit goes to the DM transport.
+  const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
+    edit: (original, content) => transport.editMessage?.(original, content),
+    messages: transport.messages,
+    isPending: (id) => transport.sendStatusFor?.(id) !== undefined,
+    self: user?.pubkey,
+  });
 
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
@@ -783,20 +763,12 @@ function Conversation({
   const [searchQuery, setSearchQuery] = useState("");
   const [muteConfirmOpen, setMuteConfirmOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Reset the inline search whenever we switch conversations.
   useEffect(() => {
     setSearchOpen(false);
     setSearchQuery("");
   }, [conversation]);
-
-  // Focus the search field when it expands. `preventScroll` is essential: the
-  // input starts off-screen (translate-x-full) and slides in, so a default
-  // focus() would make the browser scroll the page to reveal it — a visible jolt.
-  useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
-  }, [searchOpen]);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -1233,43 +1205,13 @@ function Conversation({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Inline search bar: smoothly expands across the header (covering the
-            title and actions) when open. On mobile it leaves the back button
-            visible; on desktop it covers the full bar. An X dismisses it.
-            Slides via GPU-composited transform (not `left`) so it animates on
-            the compositor and never forces a per-frame reflow / jitter. */}
-        <div
-          className={cn(
-            "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
-            "bg-chrome clip-corner-lg overflow-hidden",
-            "transition-transform duration-300 ease-in-out",
-            searchOpen
-              ? "translate-x-0 pointer-events-auto"
-              : "translate-x-full pointer-events-none",
-          )}
-        >
-          <Search className="size-4 text-muted-foreground shrink-0" />
-          <Input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") closeSearch();
-            }}
-            placeholder="Search messages…"
-            aria-label="Search messages"
-            className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Close search"
-            className="size-8 touch:size-10 shrink-0 text-muted-foreground"
-            onClick={closeSearch}
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
+        <ChatSearchBar
+          open={searchOpen}
+          value={searchQuery}
+          onChange={setSearchQuery}
+          onClose={closeSearch}
+          placeholder="Search messages…"
+        />
       </header>
 
       {/* Top-of-chat call stage portal target (active when this DM is in call). */}
@@ -1487,12 +1429,7 @@ function Conversation({
           // the user turned typing indicators on.
           onTyping={publishTyping}
           sendOverride={handleSubmit}
-          onEditLast={() => {
-            const target = lastEditableOwnMessage(transportRef.current.messages, user?.pubkey, (id) => transportRef.current.sendStatusFor?.(id) !== undefined);
-            if (!target) return false;
-            setEditingId(target.id);
-            return true;
-          }}
+          onEditLast={editLast}
         />
       )}
 
@@ -2948,11 +2885,13 @@ export function DMsPage() {
   const listRevealed = !activePeer && !composing;
 
   return (
-    <SwipeReveal
-      open={listRevealed}
-      onReveal={revealList}
-      onClose={returnToThread}
-      underlay={
+    <ChatShell
+      scope={renderedPeer ? { kind: "dm", conversation: renderedPeer } : undefined}
+      reveal={{
+        open: listRevealed,
+        onReveal: revealList,
+        onClose: returnToThread,
+        underlay: (
         <>
           {/* Leftmost rail + conversation list — the persistent DM-list view,
               revealed underneath as the thread slides away. */}
@@ -2982,14 +2921,13 @@ export function DMsPage() {
             className="flex-1 sidebar:flex-none sidebar:w-72 xl:w-80"
           />
         </>
-      }
+        ),
+      }}
     >
       {/* Thread / compose pane. On mobile it's the swipeable overlay; on desktop
           a static side-by-side pane (SwipeReveal renders it inline). A new-DM
           recipient picker takes this column in place of the empty state. */}
-      <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
         {renderedPeer ? (
-          <ChatScopeContext.Provider value={{ kind: "dm", conversation: renderedPeer }}>
             <Conversation
               key={renderedPeer}
               conversation={renderedPeer}
@@ -2998,7 +2936,6 @@ export function DMsPage() {
               onAccept={() => acceptConversation(renderedPeer)}
               onBack={revealList}
             />
-          </ChatScopeContext.Provider>
         ) : composing ? (
           <NewDMPane onSelectRecipients={openNewRecipients} onCancel={revealList} />
         ) : (
@@ -3013,7 +2950,6 @@ export function DMsPage() {
             </div>
           </div>
         )}
-      </main>
-    </SwipeReveal>
+    </ChatShell>
   );
 }

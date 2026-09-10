@@ -1,4 +1,4 @@
-import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MessageSquareText, MoreVertical, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus, Users, Volume2, X } from "lucide-react";
+import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MessageSquareText, MoreVertical, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -11,6 +11,7 @@ import { useBuzzOpenDm } from "@/buzz/useBuzzDms";
 import { useBuzzPresence } from "@/buzz/useBuzzPresence";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
+import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";
 import { MemberList } from "@/components/chat/MemberList";
@@ -259,13 +260,6 @@ export function GroupPage() {
   const eventsCollapsed = showEvents && overflowCount >= 1;
   const pinsCollapsed = showPins && overflowCount >= (showEvents ? 2 : 1);
 
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  // Focus the search field when it expands. `preventScroll` is essential: the
-  // input starts off-screen (left-full) and slides in, so a default focus()
-  // makes the browser scroll the whole page to reveal it — a visible jolt.
-  useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
-  }, [searchOpen]);
   // Collapse the pinned bar if everything gets unpinned while it's open.
   useEffect(() => {
     if (pinsOpen && !hasPins) setPinsOpen(false);
@@ -700,42 +694,13 @@ export function GroupPage() {
             </DropdownMenu>
           )}
 
-          {/* Inline search bar: smoothly expands across the header (covering the
-              title and actions) when open. On mobile it leaves the menu button
-              visible; on desktop it covers the full bar. An X dismisses it.
-              Slides via GPU-composited transform (not `left`) so it animates on
-              the compositor and never forces a per-frame reflow / jitter. */}
-          <div
-            className={cn(
-              "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
-              "bg-chrome clip-corner-lg overflow-hidden",
-              "transition-transform duration-300 ease-in-out",
-              searchOpen
-                ? "translate-x-0 pointer-events-auto"
-                : "translate-x-full pointer-events-none",
-            )}
-          >
-            <Search className="size-4 text-muted-foreground shrink-0" />
-            <Input
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") closeSearch();
-              }}
-              placeholder="Search this channel…"
-              className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Close search"
-              className="size-8 touch:size-10 shrink-0 text-muted-foreground"
-              onClick={closeSearch}
-            >
-              <X className="size-4" />
-            </Button>
-          </div>
+          <ChatSearchBar
+            open={searchOpen}
+            value={searchQuery}
+            onChange={setSearchQuery}
+            onClose={closeSearch}
+            placeholder="Search this channel…"
+          />
         </header>
 
         {/* Channel banner — the kind-39000 `banner` tag, a header image above

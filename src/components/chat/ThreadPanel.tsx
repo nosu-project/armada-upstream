@@ -62,7 +62,7 @@ import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
-import { lastEditableOwnMessage } from "@/components/chat/transport";
+import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
 /**
@@ -559,7 +559,13 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const { user } = useCurrentUser();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
 
-  const [editingId, setEditingId] = useState<string | undefined>(undefined);
+  const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
+    edit: (original, content) => editMessage?.(original, content),
+    // The thread's own messages, oldest-first: the root, then its replies.
+    messages: [root, ...replies],
+    isPending: (id) => transport.sendStatusFor?.(id) !== undefined,
+    self: user?.pubkey,
+  });
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Notify parent when expand state changes so it can resize the container.
@@ -579,16 +585,6 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
     onClose();
     return true;
   }, open);
-
-  const handleEditSubmit = (original: ChatMsg, content: string) => {
-    const trimmed = content.trim();
-    if (!trimmed || trimmed === original.content.trim()) {
-      setEditingId(undefined);
-      return;
-    }
-    setEditingId(undefined);
-    void editMessage?.(original, trimmed);
-  };
 
   // --- Auto-scroll + jump-to-latest ---
   // A plain scroller, like the main timeline: replies are real DOM in normal
@@ -720,7 +716,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         </div>
       ) : (
         <div data-event-id={root.id} data-scroll-anchor={`root:${root.id}`}>
-        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} everyoneMention={transport.mentionsEveryone?.(root)} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} everyoneMention={transport.mentionsEveryone?.(root)} onDelete={onDelete} isEditing={editingId === root.id} onEdit={startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} />
         </div>
       )}
       <div className="flex items-center gap-2 px-3 py-1 mt-1">
@@ -791,7 +787,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
                 reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
               return (
                 <div key={reply.id} data-event-id={reply.id} data-scroll-anchor={`reply:${reply.id}`} className="pt-1">
-                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} everyoneMention={transport.mentionsEveryone?.(reply)} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} everyoneMention={transport.mentionsEveryone?.(reply)} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} />
                 </div>
               );
             })}
@@ -835,13 +831,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
             // reader is parked at some older one.
             clearReplyFocus();
           }}
-          onEditLast={editMessage ? () => {
-            // The thread's own messages, oldest-first: the root, then its replies.
-            const target = lastEditableOwnMessage([root, ...replies], user?.pubkey, (id) => transport.sendStatusFor?.(id) !== undefined);
-            if (!target) return false;
-            setEditingId(target.id);
-            return true;
-          } : undefined}
+          onEditLast={editMessage ? editLast : undefined}
         />
       ) : (
         <div className="p-3 shrink-0 pb-safe">

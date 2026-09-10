@@ -40,11 +40,11 @@ import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
-import { lastEditableOwnMessage, threadSummary } from "@/components/chat/transport";
+import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar } from "@/components/chat/transport";
+import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { CalendarTransport } from "@/lib/calendar";
 import type { NostrEvent } from "@nostrify/nostrify";
-import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-29 reply context: fetch the replied-to event from the relay, then render
  *  the shared chrome with the author name + a content preview. Clicking jumps
@@ -353,7 +353,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     tallyIds,
   );
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
-  const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
 
@@ -371,10 +370,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     // While search results replace the timeline there is nothing to jump.
     enabled: !searching,
   });
-
-  // Stable identities so an unchanged row's props don't churn (React.memo).
-  const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
-  const cancelEditing = useCallback(() => setEditingId(undefined), []);
 
   // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
@@ -460,32 +455,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     [isPinned, pin, unpin],
   );
 
-  const handleEditSubmit = useCallback(
-    async (original: NostrRumor, content: string) => {
-      const trimmed = content.trim();
-      if (!trimmed || trimmed === original.content.trim()) {
-        setEditingId(undefined);
-        return;
-      }
-      setEditingId(undefined);
-      try {
-        const edited = await editMessage({ original, content: trimmed });
-        if (edited && edited.id !== original.id) {
-          removeOptimistic(original.id);
-          insertOptimistic(edited);
-          markSent(edited.id);
-        }
-      } catch {
-        toast({
-          title: "Edit failed",
-          description: "The relay rejected the edit.",
-          variant: "destructive",
-        });
-      }
-    },
-    [editMessage, removeOptimistic, insertOptimistic, markSent],
-  );
-
   // Calendar events render inline in the timeline as event cards, alongside the
   // header's events bar. They come from a separate relay query (not
   // `useGroupMessages`), so merge them into a display timeline by created_at and
@@ -501,6 +470,21 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       a.created_at !== b.created_at ? a.created_at - b.created_at : a.id < b.id ? -1 : 1,
     );
   }, [messages, calendarMsgs]);
+
+  const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
+    edit: async (original, content) => {
+      const edited = await editMessage({ original, content });
+      if (edited && edited.id !== original.id) {
+        removeOptimistic(original.id);
+        insertOptimistic(edited);
+        markSent(edited.id);
+      }
+    },
+    messages: timelineMessages,
+    isPending: (id) => sendStatus[id] !== undefined,
+    self: user?.pubkey,
+  });
+
   const calendarFor = useMemo(() => {
     if (!calendar) return undefined;
     const map = new Map<string, MessageCalendar>();
@@ -603,9 +587,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                       isEditing={false}
                       highlight={searchQuery}
                       continuation={false}
-                      onEdit={(e) => setEditingId(e.id)}
+                      onEdit={startEditing}
                       onEditSubmit={handleEditSubmit}
-                      onEditCancel={() => setEditingId(undefined)}
+                      onEditCancel={cancelEditing}
                       onJumpToReply={jumpToReply}
                       onReply={setReplyTo}
                     />
@@ -672,12 +656,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             canModerate={canModerate}
             botCommands
             onSlashAction={handleSlashAction}
-            onEditLast={() => {
-              const target = lastEditableOwnMessage(timelineMessages, user?.pubkey, (id) => sendStatus[id] !== undefined);
-              if (!target) return false;
-              setEditingId(target.id);
-              return true;
-            }}
+            onEditLast={editLast}
           />
         ) : membershipPending ? (
           // Membership is still resolving — don't flash the "join to message"

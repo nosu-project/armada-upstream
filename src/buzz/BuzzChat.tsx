@@ -65,10 +65,10 @@ import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
-import { lastEditableOwnMessage, threadSummary } from "@/components/chat/transport";
+import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
+import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { NostrEvent } from "@nostrify/nostrify";
-import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Chat-like kinds that render through the shared ChatMessage row. Agent job
@@ -551,7 +551,16 @@ export function BuzzChat({
   const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
-  const [editingId, setEditingId] = useState<string | undefined>(undefined);
+  const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
+    edit: async (original, content) => {
+      const edit = await editMessage({ original, content });
+      // Fold the edit in immediately (the wire echo lands later).
+      if (edit && edit.id !== original.id) mergeEvents([edit]);
+    },
+    messages: timeline,
+    isPending: (id) => sendStatus[id] !== undefined,
+    self: user?.pubkey,
+  });
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
   // Message permalinks (`/m/<id>` — notification taps, copied links).
@@ -670,29 +679,6 @@ export function BuzzChat({
     [user?.pubkey, deleteOwnMessage, deleteEvent],
   );
 
-  const handleEditSubmit = useCallback(
-    async (original: NostrRumor, content: string) => {
-      const trimmed = content.trim();
-      if (!trimmed || trimmed === original.content.trim()) {
-        setEditingId(undefined);
-        return;
-      }
-      setEditingId(undefined);
-      try {
-        const edit = await editMessage({ original, content: trimmed });
-        // Fold the edit in immediately (the wire echo lands later).
-        if (edit && edit.id !== original.id) mergeEvents([edit]);
-      } catch {
-        toast({
-          title: "Edit failed",
-          description: "The relay rejected the edit.",
-          variant: "destructive",
-        });
-      }
-    },
-    [editMessage, mergeEvents],
-  );
-
   // Thread replies adapted to ChatMsg (they already are NostrEvents).
   const threadRepliesFor = useCallback(
     (rootId: string): ChatMsg[] => threadRepliesForRaw(rootId),
@@ -797,9 +783,9 @@ export function BuzzChat({
           active={activeId === msg.id}
           onToggleActive={toggleActive}
           continuation={continuation}
-          onEdit={(e) => setEditingId(e.id)}
+          onEdit={startEditing}
           onEditSubmit={handleEditSubmit}
-          onEditCancel={() => setEditingId(undefined)}
+          onEditCancel={cancelEditing}
           onReply={setReplyTo}
           votes={votes ? { up: votes.up, down: votes.down, mine: votes.mine?.value } : undefined}
           onVote={forum ? handleVote : undefined}
@@ -817,6 +803,8 @@ export function BuzzChat({
       editingId,
       activeId,
       toggleActive,
+      startEditing,
+      cancelEditing,
       handleEditSubmit,
       handleVote,
       channelRoute,
@@ -899,12 +887,7 @@ export function BuzzChat({
             canModerate={canModerate}
             onTyping={publishTyping}
             onSlashAction={handleSlashAction}
-            onEditLast={() => {
-              const target = lastEditableOwnMessage(timeline, user?.pubkey, (id) => sendStatus[id] !== undefined);
-              if (!target) return false;
-              setEditingId(target.id);
-              return true;
-            }}
+            onEditLast={editLast}
           />
         ) : membershipPending ? (
           <div className="p-2" aria-hidden>

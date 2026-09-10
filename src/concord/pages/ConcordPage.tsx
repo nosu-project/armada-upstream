@@ -57,7 +57,9 @@ import { useSelfRemove } from "@/concord/hooks/useSelfRemove";
 import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
-import { SwipeReveal } from "@/components/layout/SwipeReveal";
+import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
+import { ChatShell } from "@/components/chat/ChatShell";
+import { useChatEditing } from "@/components/chat/useChatEditing";
 import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -82,12 +84,10 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
-import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -166,7 +166,7 @@ import { useApps } from "@/hooks/useApps";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
-import { authorsByRecency, lastEditableOwnMessage, threadSummary } from "@/components/chat/transport";
+import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
@@ -1977,7 +1977,6 @@ export function ConcordPage() {
   const [eventsOpen, setEventsOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [createEventOpen, setCreateEventOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   // Mobile: landing on the community root (no channel in the URL) shows the
   // channel list, not a chat pane — selecting a community should let you pick a
   // channel, not auto-dive into one. A deep link with a channel opens chat
@@ -2052,7 +2051,6 @@ export function ConcordPage() {
     setSearchFilters(EMPTY_SEARCH_FILTERS);
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
-  const [editingId, setEditingId] = useState<string | undefined>(undefined);
 
   // Tell the native notification service this channel (and, if a thread panel
   // is open, that specific thread) is on screen, so it suppresses redundant
@@ -2334,12 +2332,6 @@ export function ConcordPage() {
     return m;
   }, [allMessages]);
 
-  // Focus the search field when it expands. `preventScroll` matters: the input
-  // starts off-screen (translated right) and slides in, so a default focus()
-  // would scroll the page to reveal it — a visible jolt.
-  useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
-  }, [searchOpen]);
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchFilters(EMPTY_SEARCH_FILTERS);
@@ -2489,26 +2481,12 @@ export function ConcordPage() {
     if (communityPaused) return "This community is paused. A moderator must resume it before anyone can post.";
     return transportRef.current.canSend?.() ?? null;
   }, [communityPaused]);
-  const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
-  const cancelEditing = useCallback(() => setEditingId(undefined), []);
-
-  const handleEditSubmit = useCallback(async (original: ChatMsg, content: string) => {
-    const trimmed = content.trim();
-    if (!trimmed || trimmed === original.content.trim()) {
-      setEditingId(undefined);
-      return;
-    }
-    setEditingId(undefined);
-    try {
-      await transportRef.current.editMessage?.(original, trimmed);
-    } catch {
-      toast({
-        title: "Edit failed",
-        description: "Could not publish the edit.",
-        variant: "destructive",
-      });
-    }
-  }, []);
+  const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
+    edit: (original, content) => transport.editMessage?.(original, content),
+    messages: transport.messages,
+    isPending: (id) => transport.sendStatusFor?.(id) !== undefined,
+    self: user?.pubkey,
+  });
 
   // Keep the open thread's read stamp advancing as new replies land while its
   // panel is on screen — mirrors the channel read effect above so the Threads
@@ -3223,24 +3201,26 @@ export function ConcordPage() {
           the pool's general routing never asks. */}
       <ProfileRelayHints relays={community?.relays} />
       <MemberRolesContext.Provider value={memberRolesValue}>
-      <SwipeReveal
-        open={channelsOpen}
-        onReveal={() => setChannelsOpen(true)}
-        onClose={() => setChannelsOpen(false)}
-        underlay={
-          <>
-            {/* The rail only ever navigates to *other* servers/communities, so
-                it must NOT close this community's channel list on click: doing
-                so slides this community's chat pane back in for a frame before
-                the route changes — the "flash of the previous chat" glitch. The
-                destination governs its own reveal state. (DMsPage omits the prop
-                for the same reason.) */}
-            <ServerRail />
-            {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
-          </>
-        }
+      <ChatShell
+        scope={appScope}
+        reveal={{
+          open: channelsOpen,
+          onReveal: () => setChannelsOpen(true),
+          onClose: () => setChannelsOpen(false),
+          underlay: (
+            <>
+              {/* The rail only ever navigates to *other* servers/communities, so
+                  it must NOT close this community's channel list on click: doing
+                  so slides this community's chat pane back in for a frame before
+                  the route changes — the "flash of the previous chat" glitch. The
+                  destination governs its own reveal state. (DMsPage omits the prop
+                  for the same reason.) */}
+              <ServerRail />
+              {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
+            </>
+          ),
+        }}
       >
-        <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
           <header className="relative h-12 touch:h-14 max-sidebar:h-auto max-sidebar:py-2 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
             <Button
               variant="ghost"
@@ -3500,48 +3480,22 @@ export function ConcordPage() {
               </DropdownMenu>
             </div>
 
-            {/* Inline search bar: slides in over the header when open, covering
-                the title + actions (leaves the mobile back button visible; on
-                desktop it covers the full bar). Slides via a GPU-composited
-                transform so it never forces a per-frame reflow. Mirrors NIP-29. */}
             {view === "channel" && channel && (
-              <div
-                className={cn(
-                  "absolute inset-y-0 right-0 left-10 sidebar:left-0 z-10 flex items-center gap-1.5 px-2 sidebar:px-3",
-                  "bg-chrome clip-corner-lg overflow-hidden",
-                  "transition-transform duration-300 ease-in-out",
-                  searchOpen
-                    ? "translate-x-0 pointer-events-auto"
-                    : "translate-x-full pointer-events-none",
-                )}
-              >
-                <Search className="size-4 text-muted-foreground shrink-0" />
-                <Input
-                  ref={searchInputRef}
-                  value={searchFilters.query}
-                  onChange={(e) => setSearchFilters((f) => ({ ...f, query: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") closeSearch();
-                  }}
-                  placeholder="Search all channels…"
-                  className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                />
-                <SearchFiltersPopover
-                  channels={channels}
-                  members={memberPubkeys}
-                  filters={searchFilters}
-                  onChange={setSearchFilters}
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Close search"
-                  className="size-8 touch:size-10 shrink-0 text-muted-foreground"
-                  onClick={closeSearch}
-                >
-                  <X className="size-4" />
-                </Button>
-              </div>
+              <ChatSearchBar
+                open={searchOpen}
+                value={searchFilters.query}
+                onChange={(query) => setSearchFilters((f) => ({ ...f, query }))}
+                onClose={closeSearch}
+                placeholder="Search all channels…"
+                filters={
+                  <SearchFiltersPopover
+                    channels={channels}
+                    members={memberPubkeys}
+                    filters={searchFilters}
+                    onChange={setSearchFilters}
+                  />
+                }
+              />
             )}
           </header>
 
@@ -3552,7 +3506,6 @@ export function ConcordPage() {
           {/* Top-of-chat app stage (webxdc apps) for this channel. */}
           {appScope && <AppStageSlot scope={appScope} />}
 
-          <ChatScopeContext.Provider value={appScope}>
           <div className="relative flex flex-1 min-h-0">
             <ComposerBoundsProvider value={composerBoundsRef}>
             <div className={cn("flex-1 min-w-0 flex flex-col", chatColumnClass)}>
@@ -3911,12 +3864,7 @@ export function ConcordPage() {
                           onCancelReply={() => setReplyTo(undefined)}
                           onTyping={publishTyping}
                           encryptAttachments
-                          onEditLast={canWrite ? () => {
-                            const target = lastEditableOwnMessage(transportRef.current.messages, user?.pubkey, (id) => transportRef.current.sendStatusFor?.(id) !== undefined);
-                            if (!target) return false;
-                            setEditingId(target.id);
-                            return true;
-                          } : undefined}
+                          onEditLast={canWrite ? editLast : undefined}
                         />
                       </>
                     )
@@ -4010,9 +3958,7 @@ export function ConcordPage() {
               </div>
             </div>
           </div>
-          </ChatScopeContext.Provider>
-        </main>
-      </SwipeReveal>
+      </ChatShell>
 
       <InviteDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
       {channel?.isPrivate && (
