@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.17] - 2026-09-10
+
+Screen sharing now withholds its audio on platforms that cannot guarantee the
+call itself is left out, closing the last way other participants' voices could
+leak into a shared screen, and Windows desktop notifications now appear in the
+Action Center with the right app name and icon.
+
+### Fixed
+- Screen-share audio is now withheld unless your system can confirm it excludes the call, so other participants' voices can never be captured into a shared screen
+- Windows desktop notifications now reliably appear in the Action Center, attributed to Armada instead of being dropped or mislabelled
+
 ## [0.59.16] - 2026-09-10
 
 Screen sharing with audio during a call no longer echoes other participants'
