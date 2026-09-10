@@ -33,4 +33,8 @@ test("restrictOwnAudio reaches getDisplayMedia on an audio screen share", async 
   // ...and the own-audio restriction rode on the audio track, where the browser
   // honors it — not the top level, which it drops.
   expect((audio as { restrictOwnAudio?: boolean }).restrictOwnAudio).toBe(true);
+  // Chrome refuses that restriction below Windows 11, so the web build also
+  // asks for the display-audio echo canceller, whose reference is this page's
+  // own call playout.
+  expect((audio as MediaTrackConstraints).echoCancellation).toBe(true);
 });

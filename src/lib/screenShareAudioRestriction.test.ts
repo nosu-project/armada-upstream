@@ -203,4 +203,57 @@ describe("installScreenShareAudioRestriction", () => {
     expect(clean.stop).not.toHaveBeenCalled();
     expect(consumeOwnAudioDrop()).toBeNull();
   });
+
+  it("asks Chrome to cancel the call's playout out of the display audio on the web", async () => {
+    // Chrome refuses restrictOwnAudio below Windows 11; echoCancellation on
+    // the display audio is the request Chromium honors there, with this
+    // page's peer-connection playout as the canceller's reference.
+    stubMediaDevices(base);
+    const install = await freshInstall();
+    install({ cancelCallPlayout: true });
+
+    await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+
+    expect(calls[0]!.audio).toMatchObject({ restrictOwnAudio: true, echoCancellation: true });
+  });
+
+  it("does not add the canceller on the desktop shell, which excludes its own audio at the device", async () => {
+    stubMediaDevices(base);
+    const install = await freshInstall();
+    install({ cancelCallPlayout: false });
+
+    await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+
+    const audio = calls[0]!.audio as MediaTrackConstraints;
+    expect(audio.restrictOwnAudio).toBe(true);
+    expect(audio.echoCancellation).toBeUndefined();
+  });
+
+  it("leaves a caller's own echoCancellation decision alone", async () => {
+    stubMediaDevices(base);
+    const install = await freshInstall();
+    install({ cancelCallPlayout: true });
+
+    await navigator.mediaDevices.getDisplayMedia({ audio: { echoCancellation: false } });
+
+    expect((calls[0]!.audio as MediaTrackConstraints).echoCancellation).toBe(false);
+  });
+
+  it("keeps a track Chrome confirmed it cancelled the call out of", async () => {
+    const cancelled = fakeAudioTrack({
+      displaySurface: "monitor",
+      restrictOwnAudio: false,
+      echoCancellation: true,
+    });
+    stubMediaDevices(vi.fn(async () => fakeStream([cancelled])));
+    const install = await freshInstall();
+    install({ cancelCallPlayout: true });
+    const { consumeOwnAudioDrop } = await import("@/lib/screenShareOwnAudio");
+
+    const stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+
+    expect(stream.getAudioTracks()).toEqual([cancelled]);
+    expect(cancelled.stop).not.toHaveBeenCalled();
+    expect(consumeOwnAudioDrop()).toBeNull();
+  });
 });

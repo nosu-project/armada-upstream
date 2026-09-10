@@ -62,6 +62,33 @@ describe("ownAudioVerdict", () => {
     ).toEqual({ publish: false, reason: "unrestrictedLoopback" });
   });
 
+  it("admits a Chrome/Windows 10 entire-screen capture once Chrome confirms the call is cancelled out", () => {
+    // Chrome refuses restrictOwnAudio below Windows 11, so the web build asks
+    // for echoCancellation on the display audio instead; Chromium then runs
+    // its canceller against this page's peer-connection playout. The setting
+    // is Chrome's confirmation that it did.
+    expect(
+      ownAudioVerdict({
+        settings: {
+          displaySurface: "monitor",
+          restrictOwnAudio: false,
+          echoCancellation: true,
+          deviceId: "loopback",
+        },
+        label: "",
+      }),
+    ).toEqual({ publish: true, basis: "callPlayoutCancelled" });
+  });
+
+  it("still refuses the mix when Chrome declined the canceller", () => {
+    expect(
+      ownAudioVerdict({
+        settings: { displaySurface: "monitor", restrictOwnAudio: false, echoCancellation: false },
+        label: "",
+      }),
+    ).toEqual({ publish: false, reason: "unconfirmed" });
+  });
+
   it("refuses a monitor capture with no confirmation at all", () => {
     expect(
       ownAudioVerdict({

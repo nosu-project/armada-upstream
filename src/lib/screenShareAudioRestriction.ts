@@ -28,12 +28,26 @@
 // (Vencord/Vesktop#1294); the constraint here still rides along for the web
 // build and is harmless on the desktop one.
 //
-// Injected only when audio is requested (the flag is meaningless for a
-// video-only capture) and only where the caller has not already decided
-// restrictOwnAudio. It is unknown to browsers before Chrome 141 and to
+// Chrome refuses restrictOwnAudio below Windows 11 outright, so on the WEB
+// build on Windows 10 there is a second request beside it: `echoCancellation`
+// on the display audio. Chromium's display-capture path
+// (MaybeMakeForProcessedDisplayCapture) then runs its WebRTC echo canceller on
+// the captured system audio with this page's own peer-connection playout as
+// the reference — "to only remove PeerConnection playout", i.e. exactly the
+// other participants' voices — and it has no Windows-version gate. This is how
+// Google Meet shares system audio on Windows 10 without echo. It is requested
+// on the web build only: the desktop shell already excludes its own audio at
+// the device (displayMediaPolicy.js), and a canceller on top of a clean signal
+// can only cost fidelity. Chrome confirms it in the track's settings, which is
+// the basis ownAudioVerdict() admits it on.
+//
+// Injected only when audio is requested (the flags are meaningless for a
+// video-only capture) and only where the caller has not already decided them.
+// restrictOwnAudio is unknown to browsers before Chrome 141 and to
 // Firefox/Safari, where an unrecognized constraint is simply ignored — so this
 // is safe to set unconditionally on the audio path.
 
+import { isDesktop } from "@/lib/desktop";
 import { enforceOwnAudioExclusion } from "@/lib/screenShareOwnAudio";
 
 declare global {
@@ -57,21 +71,34 @@ let installed = false;
  * from PipeWire, not from getDisplayMedia's own audio, so the browser ignores
  * the flag while the venmic path is untouched.
  */
-export function installScreenShareAudioRestriction(): void {
+export function installScreenShareAudioRestriction(
+  options: {
+    /**
+     * Ask Chrome to cancel this page's own call playout out of the captured
+     * system audio. Defaults to the web build only; the desktop shell excludes
+     * its own audio at the device instead.
+     */
+    cancelCallPlayout?: boolean;
+  } = {},
+): void {
   if (installed || typeof navigator === "undefined") return;
   const mediaDevices = navigator.mediaDevices;
   if (typeof mediaDevices?.getDisplayMedia !== "function") return;
 
   installed = true;
+  const cancelCallPlayout = options.cancelCallPlayout ?? !isDesktop();
   const original = mediaDevices.getDisplayMedia.bind(mediaDevices);
   mediaDevices.getDisplayMedia = async (constraints?: DisplayMediaStreamOptions) => {
     if (constraints?.audio) {
       // Merge onto the audio track constraints, coercing `audio: true` to an
       // object — the only placement Chromium and Electron read. A caller that
-      // already decided restrictOwnAudio is left untouched.
+      // already decided a flag is left untouched.
       const audio: MediaTrackConstraints =
         constraints.audio === true ? {} : { ...constraints.audio };
       if (audio.restrictOwnAudio === undefined) audio.restrictOwnAudio = true;
+      if (cancelCallPlayout && audio.echoCancellation === undefined) {
+        audio.echoCancellation = true;
+      }
       constraints = {
         ...constraints,
         audio,

@@ -16,6 +16,12 @@
 // Each is a measured platform signal or a structural scope — never an
 // assumption that a flag worked:
 //   restrictOwnAudio        the platform confirmed the restriction in settings.
+//   callPlayoutCancelled    Chrome confirmed echo cancellation on the display
+//                           audio. For display capture Chromium builds that
+//                           canceller with this page's peer-connection playout
+//                           as its reference and nothing else, so what it
+//                           removes is the call. Google Meet's approach, and
+//                           the only one Chrome allows below Windows 11.
 //   processExcludedLoopback Chromium's "loopbackWithoutChrome" device: system
 //                           audio minus this app's audio service (WASAPI
 //                           process loopback). The desktop shell grants it by
@@ -61,6 +67,7 @@ const VENMIC_LABEL = "vencord-screen-share";
 
 export type OwnAudioBasis =
   | "restrictOwnAudio"
+  | "callPlayoutCancelled"
   | "processExcludedLoopback"
   | "venmic"
   | "windowScoped"
@@ -92,6 +99,13 @@ export function ownAudioVerdict(evidence: OwnAudioEvidence): OwnAudioVerdict {
 
   if (settings.restrictOwnAudio === true) {
     return { publish: true, basis: "restrictOwnAudio" };
+  }
+  // Checked ahead of the loopback refusal below: on the web the cancelled
+  // track IS the system loopback, and the canceller is what makes it clean.
+  // Display capture gets no processing unless it was asked for, so a true here
+  // is Chrome confirming the request rather than a default.
+  if (settings.echoCancellation === true) {
+    return { publish: true, basis: "callPlayoutCancelled" };
   }
   if (settings.deviceId === PROCESS_EXCLUDED_LOOPBACK) {
     return { publish: true, basis: "processExcludedLoopback" };
