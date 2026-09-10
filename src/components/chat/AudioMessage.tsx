@@ -190,7 +190,7 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
       </button>
 
       <div
-        className="flex-1 flex items-center gap-[2px] h-8 cursor-pointer"
+        className="flex-1 min-w-0 overflow-hidden flex items-center gap-[2px] h-8 cursor-pointer"
         onClick={handleSeek}
         role="slider"
         aria-label="Seek"
