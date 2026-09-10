@@ -16,12 +16,14 @@ import {
   screenShareCaptureOptions,
 } from "@/lib/screenShareQuality";
 
-interface DisplayMediaWithRestrict extends DisplayMediaStreamOptions {
-  restrictOwnAudio?: boolean;
+interface RecordedConstraints extends DisplayMediaStreamOptions {
+  // Chrome 141+ reads restrictOwnAudio only as an audio-track constraint, so the
+  // fix nests it inside `audio`; recorded here to prove that is where it landed.
+  audio?: boolean | (MediaTrackConstraints & { restrictOwnAudio?: boolean });
 }
 
 interface ScreenShareHarness {
-  startShare(): Promise<DisplayMediaWithRestrict[]>;
+  startShare(): Promise<RecordedConstraints[]>;
 }
 
 declare global {
@@ -30,7 +32,7 @@ declare global {
   }
 }
 
-const recorded: DisplayMediaWithRestrict[] = [];
+const recorded: RecordedConstraints[] = [];
 
 // The downstream capture: record the constraints `getDisplayMedia` is actually
 // called with, and hand back a synthetic surface with a video track so
@@ -41,7 +43,7 @@ function installRecorder(): void {
   const base = async (
     constraints?: DisplayMediaStreamOptions,
   ): Promise<MediaStream> => {
-    recorded.push((constraints ?? {}) as DisplayMediaWithRestrict);
+    recorded.push((constraints ?? {}) as RecordedConstraints);
     const canvas = document.createElement("canvas");
     canvas.width = 2;
     canvas.height = 2;

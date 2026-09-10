@@ -37,7 +37,7 @@ describe("installScreenShareAudioRestriction", () => {
     });
   });
 
-  it("adds restrictOwnAudio when a capture requests audio", async () => {
+  it("delivers restrictOwnAudio INSIDE the audio constraints, where the platform reads it", async () => {
     stubMediaDevices(base);
     const install = await freshInstall();
     install();
@@ -45,7 +45,32 @@ describe("installScreenShareAudioRestriction", () => {
     await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ audio: true, video: true, restrictOwnAudio: true });
+    const delivered = calls[0]!;
+    // Chromium/Electron only honor the flag as a MediaTrackConstraint on the
+    // audio track (the sibling of suppressLocalAudioPlayback). A top-level
+    // member of the options dictionary is silently dropped, so `audio: true`
+    // must be coerced to an object carrying the flag.
+    expect(delivered.video).toBe(true);
+    const audio = delivered.audio as { restrictOwnAudio?: boolean } | boolean | undefined;
+    expect(typeof audio).toBe("object");
+    expect((audio as { restrictOwnAudio?: boolean }).restrictOwnAudio).toBe(true);
+    // And it must NOT be smuggled in at the top level the platform ignores.
+    expect((delivered as { restrictOwnAudio?: boolean }).restrictOwnAudio).toBeUndefined();
+  });
+
+  it("merges the flag into existing audio constraints without dropping them", async () => {
+    stubMediaDevices(base);
+    const install = await freshInstall();
+    install();
+
+    await navigator.mediaDevices.getDisplayMedia({
+      audio: { echoCancellation: false } as MediaTrackConstraints,
+      video: true,
+    });
+
+    const audio = calls[0]!.audio as MediaTrackConstraints & { restrictOwnAudio?: boolean };
+    expect(audio.echoCancellation).toBe(false);
+    expect(audio.restrictOwnAudio).toBe(true);
   });
 
   it("leaves a video-only capture untouched", async () => {
@@ -55,8 +80,9 @@ describe("installScreenShareAudioRestriction", () => {
 
     await navigator.mediaDevices.getDisplayMedia({ video: true });
 
+    // No audio requested, so the constraints pass through verbatim — no audio
+    // object is synthesized just to carry the flag.
     expect(calls[0]).toEqual({ video: true });
-    expect(calls[0]?.restrictOwnAudio).toBeUndefined();
   });
 
   it("does not override a caller that set restrictOwnAudio explicitly", async () => {
@@ -64,9 +90,12 @@ describe("installScreenShareAudioRestriction", () => {
     const install = await freshInstall();
     install();
 
-    await navigator.mediaDevices.getDisplayMedia({ audio: true, restrictOwnAudio: false });
+    await navigator.mediaDevices.getDisplayMedia({
+      audio: { restrictOwnAudio: false } as MediaTrackConstraints & { restrictOwnAudio?: boolean },
+    });
 
-    expect(calls[0]?.restrictOwnAudio).toBe(false);
+    const audio = calls[0]?.audio as { restrictOwnAudio?: boolean } | undefined;
+    expect(audio?.restrictOwnAudio).toBe(false);
   });
 
   it("is a no-op when getDisplayMedia is unavailable", async () => {

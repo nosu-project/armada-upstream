@@ -108,22 +108,27 @@ describe("screen-share quality policy", () => {
     const quality = { ...DEFAULT_SCREEN_SHARE_QUALITY, captureAudio: false };
 
     expect(screenShareCaptureOptions(quality).audio).toBe(false);
+    // No audio object at all, so there is nothing to restrict.
     expect(screenShareDisplayMediaOptions(quality).audio).toBe(false);
-    // No own-audio restriction where there is no captured audio to restrict.
-    expect(screenShareDisplayMediaOptions(quality).restrictOwnAudio).toBeUndefined();
   });
 
   it("requests audio by default", () => {
     expect(screenShareCaptureOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
-    expect(screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio).toBe(true);
+    // The direct getDisplayMedia path carries the flag on the audio track, so
+    // audio is a constraints object rather than a bare boolean.
+    expect(typeof screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).audio)
+      .toBe("object");
   });
 
   it("restricts own audio on the direct-capture path when audio is on", () => {
     // The direct getDisplayMedia path (screen-share switching) must exclude the
     // call's own playback so a sharer on speakers doesn't echo participants back
-    // (livekit/client-sdk-js#1799). The LiveKit-driven initial capture strips
-    // this flag; the getDisplayMedia wrapper reintroduces it there.
-    expect(screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY).restrictOwnAudio).toBe(true);
+    // (livekit/client-sdk-js#1799). Chromium/Electron read the flag only as an
+    // audio-track constraint — a top-level member is ignored — so it lives
+    // inside `audio`.
+    const audio = screenShareDisplayMediaOptions(DEFAULT_SCREEN_SHARE_QUALITY)
+      .audio as MediaTrackConstraints;
+    expect(audio.restrictOwnAudio).toBe(true);
   });
 
   it("falls back when stored JSON is unreadable", () => {

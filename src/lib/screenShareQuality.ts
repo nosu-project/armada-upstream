@@ -226,15 +226,16 @@ export function screenShareDisplayMediaOptions(
 ): DisplayMediaStreamOptions {
   const captureAudio = normalizeScreenShareQuality(quality).captureAudio;
   return {
-    audio: captureAudio,
-    video: screenShareVideoConstraints(quality),
     // Exclude the call's own playback from the captured system audio so a
     // sharer on speakers doesn't echo other participants back (Chrome 141+;
-    // ignored elsewhere). This is the DIRECT getDisplayMedia path (screen-share
-    // switching); the LiveKit-driven initial capture strips this flag, so the
-    // installScreenShareAudioRestriction() wrapper reintroduces it there. Only
-    // meaningful when audio is captured.
-    ...(captureAudio ? { restrictOwnAudio: true } : {}),
+    // Electron 43.4.0+ maps it to loopbackWithoutChrome; ignored elsewhere).
+    // The flag is an audio-track constraint — a top-level member is dropped —
+    // so audio is an object whenever it is captured. This is the DIRECT
+    // getDisplayMedia path (screen-share switching); the LiveKit-driven initial
+    // capture strips the flag, so installScreenShareAudioRestriction() nests it
+    // back on that path.
+    audio: captureAudio ? { restrictOwnAudio: true } : false,
+    video: screenShareVideoConstraints(quality),
   };
 }
 

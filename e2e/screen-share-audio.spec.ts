@@ -12,7 +12,10 @@ import { expect, test } from "@playwright/test";
 // one place the SDK strips the flag today and the one place a future SDK bump
 // could silently re-break it — a vitest test that mocks around the SDK cannot
 // see either. The harness records the constraints getDisplayMedia was actually
-// called with; we assert the flag survived the whole path to the boundary.
+// called with; we assert the flag survived the whole path to the boundary AND
+// landed where the browser reads it: inside the audio track constraints. A
+// top-level member is silently ignored, so checking placement — not mere
+// presence — is what keeps this honest.
 test("restrictOwnAudio reaches getDisplayMedia on an audio screen share", async ({
   page,
 }) => {
@@ -23,9 +26,11 @@ test("restrictOwnAudio reaches getDisplayMedia on an audio screen share", async 
     window.__screenShareHarness!.startShare(),
   );
 
-  // The capture ran and asked for audio (the precondition for the echo).
+  // The capture ran and asked for audio (the precondition for the echo)...
   expect(recorded).toHaveLength(1);
-  expect(recorded[0].audio).toBeTruthy();
-  // The fix: the own-audio restriction was forwarded to the browser.
-  expect(recorded[0].restrictOwnAudio).toBe(true);
+  const audio = recorded[0].audio;
+  expect(typeof audio).toBe("object");
+  // ...and the own-audio restriction rode on the audio track, where the browser
+  // honors it — not the top level, which it drops.
+  expect((audio as { restrictOwnAudio?: boolean }).restrictOwnAudio).toBe(true);
 });
