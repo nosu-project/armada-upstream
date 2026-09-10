@@ -1,5 +1,10 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { nip19 } from "nostr-tools";
 import { useEffect, useMemo } from "react";
 
@@ -134,19 +139,37 @@ function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
   return [...newest.values()].sort((a, b) => b.created_at - a.created_at);
 }
 
-/** Shared fetch across the app relays. */
-async function fetchDiscover(
+/** One page of a Discover feed, plus whether the relays had nothing older. */
+interface DiscoverFeedPage {
+  /** Newest-first, deduped by addressable coordinate within the page. */
+  events: NostrRumor[];
+  /** The recent window came back under-full — there is nothing older to page. */
+  complete: boolean;
+}
+
+/** The `until` cursor for the page AFTER this one: its oldest event's time. */
+function oldestCreatedAt(events: NostrRumor[]): number | undefined {
+  // `events` is newest-first (newestPerAddr sorts descending), so the tail is
+  // the oldest. `until` is inclusive; cross-page addr/id dedup absorbs the
+  // one-event overlap.
+  return events.length > 0 ? events[events.length - 1].created_at : undefined;
+}
+
+/** Shared paginated fetch across the app relays (one page per `until`). */
+async function fetchDiscoverPage(
   nostr: ReturnType<typeof useNostr>["nostr"],
   relays: string[],
   kind: number,
   query: string,
   authors: string[] | undefined,
   signal: AbortSignal,
-): Promise<NostrRumor[]> {
+  until: number | undefined,
+): Promise<DiscoverFeedPage> {
   // `authors === undefined` means the allow-list is bypassed (the unfiltered
   // firehose). An empty array would be sent as-is, which callers guard against.
   const base: NostrFilter = { kinds: [kind], limit: FETCH_LIMIT };
   if (authors) base.authors = authors;
+  if (until !== undefined) base.until = until;
   const filters: NostrFilter[] = [base];
   // Add a NIP-50 search filter alongside the recent one so search-capable
   // relays surface deeper matches; relays that ignore `search` still answer the
@@ -156,7 +179,10 @@ async function fetchDiscover(
   const events = await nostr
     .group(relays)
     .query(filters, { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) });
-  return newestPerAddr(events);
+  // A full window may have more behind it; an under-full one is the end. Judged
+  // on the raw merged count (pre-dedup), so a page whose addresses collapse
+  // still pages on rather than stopping early.
+  return { events: newestPerAddr(events), complete: events.length < FETCH_LIMIT };
 }
 
 /** The app relays Discover reads from (de-duplicated). */
@@ -219,21 +245,25 @@ async function fetchCommunityAnnouncements(
   relays: string[],
   authorFilter: string[] | undefined,
   signal: AbortSignal,
+  until?: number,
 ): Promise<DiscoveredInvite[]> {
   const filter: NostrFilter = { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT };
   if (authorFilter) filter.authors = authorFilter;
+  if (until !== undefined) filter.until = until;
   // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
   // removes the listing (anyone else's delete is ignored). Fetched in the
   // SAME round trip as the announcements — un-listing always attaches a
   // `["k", "3314"]` tag (ShareToDiscoverDialog), so the deletes are
   // addressable by kind up front instead of by the announcement ids,
-  // which would serialize a second relay hop behind the first.
+  // which would serialize a second relay hop behind the first. Windowed by the
+  // same `until` so a deeper page carries the deletes for its own announcements.
   const delFilter: NostrFilter = {
     kinds: [5],
     "#k": [String(KIND_COMMUNITY_ANNOUNCEMENT)],
     limit: FETCH_LIMIT,
   };
   if (authorFilter) delFilter.authors = authorFilter;
+  if (until !== undefined) delFilter.until = until;
   const timeout = () => AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
   const [events, dels] = await Promise.all([
     nostr.group(relays).query([filter], { signal: timeout() }),
@@ -367,6 +397,74 @@ async function fetchDiscoverDirectory(
   return directory;
 }
 
+/** One page of the paginated Communities directory. */
+interface CommunitiesPage {
+  /** Team follow-pack members — carried only by page 1 (`until === undefined`). */
+  packAuthors: string[];
+  /** Announcements in this window, deduped by link signer, un-publishes removed. */
+  invites: DiscoveredInvite[];
+  /** Page 1's unfiltered window overflowed — arm the authors-filtered fallback. */
+  overflow: boolean;
+  /** The announcement window came back under-full — nothing older to page. */
+  complete: boolean;
+}
+
+/**
+ * Fetch one page of the directory. Page 1 is the full one-round-trip
+ * {@link fetchDiscoverDirectory} (pack + newest announcements + un-publishes,
+ * with the warm seeds and fail-open rules). Deeper pages are older
+ * announcements only, kept UNFILTERED — the allow-list stays client-side so a
+ * follow list that widens later never re-keys and refetches the whole feed.
+ */
+async function fetchCommunitiesPage(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+  until: number | undefined,
+  signal: AbortSignal,
+): Promise<CommunitiesPage> {
+  if (until === undefined) {
+    const dir = await fetchDiscoverDirectory(nostr, relays, signal);
+    // A full window (overflow) has older pages behind it; an under-full one is
+    // the end. A seeded/failed read reports overflow false, so it never paginates.
+    return { packAuthors: dir.packAuthors, invites: dir.invites, overflow: dir.overflow, complete: !dir.overflow };
+  }
+  const invites = await fetchCommunityAnnouncements(nostr, relays, undefined, signal, until);
+  return { packAuthors: [], invites, overflow: false, complete: invites.length < FETCH_LIMIT };
+}
+
+/** The `until` cursor for the page after this one — its oldest announcement. */
+function oldestInviteCursor(invites: DiscoveredInvite[]): number | undefined {
+  let oldest: number | undefined;
+  for (const invite of invites) {
+    if (oldest === undefined || invite.source.created_at < oldest) oldest = invite.source.created_at;
+  }
+  return oldest;
+}
+
+/** The infinite-query key for the directory (authors-independent — see the hook). */
+function directoryInfiniteKey(relays: string[]): QueryKey {
+  return ["discover", "directory-infinite", relays];
+}
+
+/**
+ * Shared `useInfiniteQuery`/`fetchInfiniteQuery` options for the directory, so
+ * the page hook and the boot warmup ({@link useWarmDiscover}) prime the exact
+ * same cache entry through the same cursor logic.
+ */
+function communitiesInfiniteOptions(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+) {
+  return {
+    queryKey: directoryInfiniteKey(relays),
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam, signal }: { pageParam: number | undefined; signal: AbortSignal }) =>
+      fetchCommunitiesPage(nostr, relays, pageParam, signal),
+    getNextPageParam: (lastPage: CommunitiesPage) =>
+      lastPage.complete ? undefined : oldestInviteCursor(lastPage.invites),
+  };
+}
+
 /**
  * The author allow-list that gates every Discover feed.
  *
@@ -467,58 +565,79 @@ export function useDiscoverAuthors(): {
  */
 const NO_AUTHORS: string[] = [];
 
-/**
- * Drop events authored by someone the user has muted.
- *
- * Discover's own gate is an author ALLOW-list, which `discoverAllContent`
- * turns off wholesale — so the allow-list can't be the only place muting is
- * honoured, or the setting that widens the directory would also un-mute
- * everyone in it.
- */
-function useMuteFiltered<T extends { pubkey: string }>(events: T[] | undefined): T[] | undefined {
-  const { mutedPubkeys } = useMutedPubkeys();
-  return useMemo(() => {
-    if (!events || mutedPubkeys.size === 0) return events;
-    return events.filter((e) => !mutedPubkeys.has(e.pubkey));
-  }, [events, mutedPubkeys]);
-}
-
-export function useDiscoverCommunities() {
+export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
+  packAuthors: string[];
+  trustedAuthors: string[];
+} {
   const { nostr } = useNostr();
   const { mutedPubkeys } = useMutedPubkeys();
   const { config } = useAppContext();
   const relays = useDiscoverRelays();
   const { user } = useCurrentUser();
   const followList = useFollowList();
+  const queryClient = useQueryClient();
 
   const unrestricted = config.discoverAllContent;
 
-  const directoryKey: QueryKey = ["discover", "directory", relays];
-  // Warm loads: last session's directory paints immediately, then refreshes.
-  useKvQuerySeed<DiscoverDirectory>(DIRECTORY_SEED_KV, directoryKey);
+  // Warm load: last session's directory paints immediately, seeded as the
+  // infinite query's first page (STALE, so the live fetch still runs and
+  // overwrites it — a seed accelerates first paint, it never suppresses a
+  // refresh). The plain-shaped KV seed is wrapped into the `{ pages }` shape.
+  useEffect(() => {
+    if (relays.length === 0) return;
+    const key = directoryInfiniteKey(relays);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await getArmadaDB().kv.get<DiscoverDirectory>(DIRECTORY_SEED_KV);
+        if (cancelled || !stored) return;
+        if (queryClient.getQueryData(key) !== undefined) return;
+        const firstPage: CommunitiesPage = {
+          packAuthors: stored.packAuthors,
+          invites: stored.invites,
+          overflow: stored.overflow,
+          complete: !stored.overflow,
+        };
+        queryClient.setQueryData(
+          key,
+          { pages: [firstPage], pageParams: [undefined] },
+          { updatedAt: 0 },
+        );
+      } catch {
+        // Best-effort: an unreadable seed just means a skeleton first paint.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [relays, queryClient]);
 
-  const result = useQuery<DiscoverDirectory>({
-    queryKey: directoryKey,
+  const result = useInfiniteQuery({
+    ...communitiesInfiniteOptions(nostr, relays),
     enabled: relays.length > 0,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
-    queryFn: ({ signal }) => fetchDiscoverDirectory(nostr, relays, signal),
   });
+
+  // The pack is fetched once, on page 1.
+  const packAuthors = result.data?.pages[0]?.packAuthors ?? NO_AUTHORS;
 
   // The allow-list, assembled reactively: follows landing later just widen the
   // rendered set — no query re-keys, no refetch, no skeleton.
   const authors = useMemo(() => {
-    const set = new Set<string>(result.data?.packAuthors ?? []);
+    const set = new Set<string>(packAuthors);
     if (user) {
       set.add(user.pubkey);
       for (const pk of followList.data?.pubkeys ?? []) set.add(pk);
     }
     for (const pk of mutedPubkeys) set.delete(pk);
     return [...set].sort();
-  }, [result.data?.packAuthors, user, followList.data, mutedPubkeys]);
+  }, [packAuthors, user, followList.data, mutedPubkeys]);
 
-  // Completeness fallback for the (rare) overflowed window — see the doc.
-  const overflowed = !unrestricted && !!result.data?.overflow && authors.length > 0;
+  // Completeness fallback for the (rare) overflowed FIRST window — a flooder
+  // could crowd allow-listed announcements out of the newest 100. Pagination
+  // reaches older ones by scroll; this fills the first screen server-side.
+  const overflowed = !unrestricted && !!result.data?.pages[0]?.overflow && authors.length > 0;
   const fallback = useQuery<DiscoveredInvite[]>({
     queryKey: communitiesQueryKey(relays, authors),
     enabled: overflowed,
@@ -528,20 +647,17 @@ export function useDiscoverCommunities() {
 
   const data = useMemo(() => {
     if (!result.data) return undefined;
+    const allInvites = result.data.pages.flatMap((p) => p.invites);
     const allowed = unrestricted ? null : new Set(authors);
-    const base = result.data.invites.filter(
+    const base = allInvites.filter(
       (invite) =>
         !mutedPubkeys.has(invite.source.pubkey)
         && (!allowed || allowed.has(invite.source.pubkey)),
     );
-    if (!overflowed || !fallback.data) return base;
-    // Union with the fallback's complete allow-listed set, newest-first,
-    // link-signer deduped like the fetchers.
+    // Newest announcement wins per link signer, across pages and the fallback.
+    const source = !overflowed || !fallback.data ? base : [...base, ...fallback.data];
     const byLinkSigner = new Map<string, DiscoveredInvite>();
-    const all = [...base, ...fallback.data].sort(
-      (a, b) => b.source.created_at - a.source.created_at,
-    );
-    for (const invite of all) {
+    for (const invite of [...source].sort((a, b) => b.source.created_at - a.source.created_at)) {
       if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
     }
     return [...byLinkSigner.values()];
@@ -552,10 +668,14 @@ export function useDiscoverCommunities() {
   // nothing to show.
   return {
     data,
-    packAuthors: result.data?.packAuthors ?? NO_AUTHORS,
+    packAuthors,
     trustedAuthors: authors,
     isLoading: result.isLoading,
     isError: result.isError && !data,
+    fetchNextPage: result.fetchNextPage,
+    hasNextPage: result.hasNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+    pageCount: result.data?.pages.length,
   };
 }
 
@@ -589,11 +709,13 @@ export function useWarmDiscover(): void {
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const directory = await queryClient.fetchQuery({
-            queryKey: ["discover", "directory", relays],
+          // Prime the SAME infinite-query cache entry the page reads, through
+          // the same cursor options — its first page is the directory.
+          const infinite = await queryClient.fetchInfiniteQuery({
+            ...communitiesInfiniteOptions(nostr, relays),
             staleTime: 30_000,
-            queryFn: ({ signal }) => fetchDiscoverDirectory(nostr, relays, signal),
           });
+          const directory = infinite.pages[0] ?? { packAuthors: [], invites: [] };
           // Only warm bundles the page would actually render: the allow-list
           // applies here too (with whatever the follow list holds right now).
           const allowed = new Set(directory.packAuthors);
@@ -636,22 +758,6 @@ export function useWarmDiscover(): void {
     }, WARM_DELAY_MS);
     return () => clearTimeout(timer);
   }, [nostr, queryClient, relays, unrestricted, pubkey]);
-}
-
-/**
- * A refetch that comes back with NOTHING where the same query previously had
- * results is a probable relay miss (cold pool, dropped REQ), not a directory
- * that emptied — an empty success would swap a painted grid for the empty
- * state. Applies only to no-query reads: an empty SEARCH result is an answer.
- */
-function keepLastGoodPage(
-  queryClient: ReturnType<typeof useQueryClient>,
-  queryKey: QueryKey,
-  q: string,
-): NostrRumor[] | undefined {
-  if (q) return undefined;
-  const prev = queryClient.getQueryData<NostrRumor[]>(queryKey);
-  return prev && prev.length > 0 ? prev : undefined;
 }
 
 /**
@@ -717,77 +823,117 @@ export function useDiscoverCommunityActivity(
   return result.data ?? {};
 }
 
-/** NIP-30 emoji packs (kind 30030). */
-export function useDiscoverEmojiPacks(query: string) {
+/**
+ * A paginated Discover feed's return shape — what the tab needs to render the
+ * grid and drive {@link useInfiniteScroll}.
+ */
+export interface DiscoverFeed<T> {
+  data: T[] | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  fetchNextPage: () => void;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  /** Loaded page count — lets the sentinel auto-fetch page 2 after page 1. */
+  pageCount: number | undefined;
+}
+
+/** NIP-30 emoji packs (kind 30030), cursor-paginated. */
+export function useDiscoverEmojiPacks(query: string): DiscoverFeed<NostrRumor> {
   const { nostr } = useNostr();
-  const queryClient = useQueryClient();
+  const { mutedPubkeys } = useMutedPubkeys();
   const relays = useDiscoverRelays();
   const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;
+  const q = debounced.trim();
 
-  const queryKey: QueryKey = ["discover", "emoji-packs", relays, authorFilter ?? "all", debounced.trim()];
-  const result = useQuery<NostrRumor[]>({
-    queryKey,
+  const result = useInfiniteQuery({
+    queryKey: ["discover", "emoji-packs", relays, authorFilter ?? "all", q],
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
-    queryFn: async ({ signal }) => {
-      const q = debounced.trim();
-      const events = await fetchDiscover(nostr, relays, KIND_EMOJI_SET, q, authorFilter, signal);
-      if (events.length === 0) {
-        const kept = keepLastGoodPage(queryClient, queryKey, q);
-        if (kept) return kept;
-      }
-      // Only packs that actually carry emojis are worth showing.
-      const usable = events.filter((e) => emojiPackEntries(e).length > 0);
-      if (!q) return usable;
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam, signal }) =>
+      fetchDiscoverPage(nostr, relays, KIND_EMOJI_SET, q, authorFilter, signal, pageParam),
+    getNextPageParam: (lastPage: DiscoverFeedPage) =>
+      lastPage.complete ? undefined : oldestCreatedAt(lastPage.events),
+  });
+
+  // Narrow the flattened pages once, here: cross-page addr dedup (a newer
+  // version paged in later wins), the "carries emojis" usability gate, the
+  // client-side search match, and muting — the last outside the query so it
+  // covers `discoverAllContent`, where no author filter reaches the relay.
+  const data = useMemo(() => {
+    if (!result.data) return undefined;
+    const events = newestPerAddr(result.data.pages.flatMap((p) => p.events));
+    let usable = events.filter((e) => emojiPackEntries(e).length > 0);
+    if (q) {
       const needle = q.toLowerCase();
-      return usable.filter((e) => {
+      usable = usable.filter((e) => {
         const shortcodes = emojiPackEntries(e).map((x) => x.shortcode).join(" ");
         return `${emojiPackName(e)} ${shortcodes}`.toLowerCase().includes(needle);
       });
-    },
-  });
+    }
+    if (mutedPubkeys.size > 0) usable = usable.filter((e) => !mutedPubkeys.has(e.pubkey));
+    return usable;
+  }, [result.data, q, mutedPubkeys]);
 
-  // Outside the query so it also covers `discoverAllContent`, where no author
-  // filter is sent to the relay at all.
-  const data = useMuteFiltered(result.data);
-  return { ...result, data, isLoading: result.isLoading || authorsLoading };
+  return {
+    data,
+    isLoading: result.isLoading || authorsLoading,
+    isError: result.isError && !data,
+    fetchNextPage: result.fetchNextPage,
+    hasNextPage: result.hasNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+    pageCount: result.data?.pages.length,
+  };
 }
 
-/** Shareable theme definitions (Ditto kind 36767). */
-export function useDiscoverThemes(query: string) {
+/** Shareable theme definitions (Ditto kind 36767), cursor-paginated. */
+export function useDiscoverThemes(query: string): DiscoverFeed<NostrRumor> {
   const { nostr } = useNostr();
-  const queryClient = useQueryClient();
+  const { mutedPubkeys } = useMutedPubkeys();
   const relays = useDiscoverRelays();
   const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;
+  const q = debounced.trim();
 
-  const queryKey: QueryKey = ["discover", "themes", relays, authorFilter ?? "all", debounced.trim()];
-  const result = useQuery<NostrRumor[]>({
-    queryKey,
+  const result = useInfiniteQuery({
+    queryKey: ["discover", "themes", relays, authorFilter ?? "all", q],
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
-    queryFn: async ({ signal }) => {
-      const q = debounced.trim();
-      const events = await fetchDiscover(nostr, relays, THEME_DEFINITION_KIND, q, authorFilter, signal);
-      if (events.length === 0) {
-        const kept = keepLastGoodPage(queryClient, queryKey, q);
-        if (kept) return kept;
-      }
-      // Drop anything we can't render as a 3-color theme.
-      const usable = events.filter((e) => parseDittoTheme(e) !== null);
-      if (!q) return usable;
-      const needle = q.toLowerCase();
-      return usable.filter((e) => parseDittoTheme(e)?.title.toLowerCase().includes(needle));
-    },
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam, signal }) =>
+      fetchDiscoverPage(nostr, relays, THEME_DEFINITION_KIND, q, authorFilter, signal, pageParam),
+    getNextPageParam: (lastPage: DiscoverFeedPage) =>
+      lastPage.complete ? undefined : oldestCreatedAt(lastPage.events),
   });
 
-  const data = useMuteFiltered(result.data);
-  return { ...result, data, isLoading: result.isLoading || authorsLoading };
+  const data = useMemo(() => {
+    if (!result.data) return undefined;
+    const events = newestPerAddr(result.data.pages.flatMap((p) => p.events));
+    // Drop anything we can't render as a 3-color theme.
+    let usable = events.filter((e) => parseDittoTheme(e) !== null);
+    if (q) {
+      const needle = q.toLowerCase();
+      usable = usable.filter((e) => parseDittoTheme(e)?.title.toLowerCase().includes(needle));
+    }
+    if (mutedPubkeys.size > 0) usable = usable.filter((e) => !mutedPubkeys.has(e.pubkey));
+    return usable;
+  }, [result.data, q, mutedPubkeys]);
+
+  return {
+    data,
+    isLoading: result.isLoading || authorsLoading,
+    isError: result.isError && !data,
+    fetchNextPage: result.fetchNextPage,
+    hasNextPage: result.hasNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+    pageCount: result.data?.pages.length,
+  };
 }

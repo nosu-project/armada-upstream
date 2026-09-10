@@ -1,4 +1,4 @@
-import { Compass, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
+import { Compass, Loader2, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
@@ -7,6 +7,7 @@ import {
 } from "@/components/discover/CommunityListingCard";
 import { CreateCommunityCard } from "@/components/discover/CreateCommunityCard";
 import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
+import { DeferredRow } from "@/components/DeferredRow";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
   useDiscoverEmojiPacks,
   useDiscoverThemes,
 } from "@/hooks/useDiscover";
+import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 
 const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
@@ -213,6 +215,26 @@ export function DiscoverPage() {
 const GRID = "grid gap-4 sm:grid-cols-2 lg:grid-cols-3 items-stretch";
 
 /**
+ * The infinite-scroll trigger, placed after a grid. The `ref` is
+ * {@link useInfiniteScroll}'s sentinel — reaching it (a screenful early) fetches
+ * the next page. A spinner shows only while that fetch is in flight; the div
+ * keeps a little height either way so the observer has something to catch.
+ */
+function LoadMore({
+  sentinelRef,
+  loading,
+}: {
+  sentinelRef: (node: Element | null) => void;
+  loading: boolean;
+}) {
+  return (
+    <div ref={sentinelRef} className="flex justify-center py-6" aria-hidden={!loading}>
+      {loading && <Loader2 className="size-5 animate-spin text-muted-foreground" />}
+    </div>
+  );
+}
+
+/**
  * Card-shaped placeholders while the first page loads — the grid keeps its
  * final shape instead of collapsing to a centred spinner and jumping.
  */
@@ -239,7 +261,23 @@ function TabState({ icon: Icon, children }: { icon: typeof Users; children: Reac
 }
 
 function CommunitiesTab({ query }: { query: string }) {
-  const { data, packAuthors, trustedAuthors, isLoading, isError } = useDiscoverCommunities();
+  const {
+    data,
+    packAuthors,
+    trustedAuthors,
+    isLoading,
+    isError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    pageCount,
+  } = useDiscoverCommunities();
+  const sentinelRef = useInfiniteScroll({
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+    pageCount,
+  });
 
   // Cross-link de-duplication and owner-based ranking: an announcement names
   // no community and no owner (only its resolved bundle does, verifiably), so
@@ -356,6 +394,7 @@ function CommunitiesTab({ query }: { query: string }) {
     );
   }
   return (
+    <>
     <div className={GRID}>
       {/* Founding a community is always the first vessel in the fleet. */}
       <CreateCommunityCard />
@@ -364,21 +403,38 @@ function CommunitiesTab({ query }: { query: string }) {
       {(ordered ?? [])
         .filter((invite) => !duplicates.has(invite.linkSigner))
         .map((invite) => (
-          <CommunityListingCard
-            key={invite.linkSigner}
-            invite={invite}
-            filter={query}
-            onResolved={onResolved}
-            onActivityTarget={onActivityTarget}
-            lastActiveAt={lastActiveBySigner[invite.linkSigner]}
-          />
+          // Deferred mount: the grid has no windowing, so mapping every listing
+          // used to mount all ~FETCH_LIMIT cards at once — each a live bundle
+          // resolve, an IntersectionObserver, two image decrypts and effects
+          // that re-sort the parent as they land, O(n²) as the grid grows. Gate
+          // on a screenful of lead time so first paint mounts only what's in
+          // view. Disabled while searching: a card hides itself on a miss, and a
+          // placeholder must not reserve height for a row that renders nothing.
+          <DeferredRow key={invite.linkSigner} active={!query.trim()} minHeight={240}>
+            <CommunityListingCard
+              invite={invite}
+              filter={query}
+              onResolved={onResolved}
+              onActivityTarget={onActivityTarget}
+              lastActiveAt={lastActiveBySigner[invite.linkSigner]}
+            />
+          </DeferredRow>
         ))}
     </div>
+    <LoadMore sentinelRef={sentinelRef} loading={isFetchingNextPage} />
+    </>
   );
 }
 
 function EmojisTab({ query }: { query: string }) {
-  const { data, isLoading, isError } = useDiscoverEmojiPacks(query);
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage, pageCount } =
+    useDiscoverEmojiPacks(query);
+  const sentinelRef = useInfiniteScroll({
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+    pageCount,
+  });
 
   if (isLoading && !data) return <TabSkeleton />;
   if (isError) return <TabState icon={Smile}>Couldn't reach the relays. Try again.</TabState>;
@@ -392,16 +448,32 @@ function EmojisTab({ query }: { query: string }) {
     );
   }
   return (
-    <div className={GRID}>
-      {data.map((event) => (
-        <EmojiPackCard key={event.id} event={event} className="my-0 max-w-none" />
-      ))}
-    </div>
+    <>
+      <div className={GRID}>
+        {/* Deferred mount, like the Communities grid: an unbounded paginated
+            list of emoji cards (each decoding a strip of images) mounts only a
+            screenful at a time. Not gated on search — these cards never
+            self-hide, so a placeholder always resolves to a real card. */}
+        {data.map((event) => (
+          <DeferredRow key={event.id} active minHeight={160}>
+            <EmojiPackCard event={event} className="my-0 max-w-none" />
+          </DeferredRow>
+        ))}
+      </div>
+      <LoadMore sentinelRef={sentinelRef} loading={isFetchingNextPage} />
+    </>
   );
 }
 
 function ThemesTab({ query }: { query: string }) {
-  const { data, isLoading, isError } = useDiscoverThemes(query);
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage, pageCount } =
+    useDiscoverThemes(query);
+  const sentinelRef = useInfiniteScroll({
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+    pageCount,
+  });
 
   if (isLoading && !data) return <TabSkeleton />;
   if (isError) return <TabState icon={Palette}>Couldn't reach the relays. Try again.</TabState>;
@@ -415,11 +487,16 @@ function ThemesTab({ query }: { query: string }) {
     );
   }
   return (
-    <div className={GRID}>
-      {data.map((event) => (
-        <ThemeDiscoverCard key={event.id} event={event} />
-      ))}
-    </div>
+    <>
+      <div className={GRID}>
+        {data.map((event) => (
+          <DeferredRow key={event.id} active minHeight={160}>
+            <ThemeDiscoverCard event={event} />
+          </DeferredRow>
+        ))}
+      </div>
+      <LoadMore sentinelRef={sentinelRef} loading={isFetchingNextPage} />
+    </>
   );
 }
 
