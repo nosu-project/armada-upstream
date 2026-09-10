@@ -1001,9 +1001,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
 
     try {
-      const isImage = file.type.startsWith("image/");
-      const isVideo = file.type.startsWith("video/");
-      const isAudio = file.type.startsWith("audio/");
+      // Browsers report an empty (or occasionally wrong) type for some
+      // containers — `.avi` is commonly `""` — so fall back to the extension.
+      // Without this an `.avi` is misclassified as a generic file: it hits the
+      // non-media 100 MB gate ("File too large"), skips the video pipeline, and
+      // uploads with no usable type for the server or the receive-side render.
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+      const mime = file.type || mimeFromExt(ext);
+      const isImage = mime.startsWith("image/");
+      const isVideo = mime.startsWith("video/");
+      const isAudio = mime.startsWith("audio/");
       const isMedia = isImage || isVideo || isAudio;
 
       if (!isMedia && file.size > MAX_FILE_BYTES) {
@@ -1046,7 +1053,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         if (!dimTag && meta.dim) dimTag = meta.dim;
         blurhashTag = meta.blurhash || undefined;
       }
-      const originalMime = uploadableFile.type;
+      const originalMime = uploadableFile.type || mime;
 
       // The video poster frame is a second blob, uploaded alongside and
       // referenced from the video's imeta as `image`/`thumb`.
