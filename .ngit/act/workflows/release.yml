@@ -138,6 +138,9 @@ jobs:
           # the provisioned secret; empty = tracker never initialized.
           VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
           VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
+          # Discord bridge portal origin (only the origin of links the user
+          # clicks — nothing dialed, no data sent). Empty = affordances hidden.
+          VITE_BRIDGE_PORTAL_URL: ${{ secrets.VITE_BRIDGE_PORTAL_URL }}
         run: |
           set -eu
           npm ci
@@ -494,6 +497,11 @@ jobs:
       - name: Build web assets and sync into Capacitor
         env:
           VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
+          # Discord bridge portal origin. Only the origin of links the user
+          # clicks (nothing is dialed on boot, no Armada data is sent), so
+          # unlike VITE_PLAUSIBLE_* below there is no sovereignty reason to
+          # keep it out of the APK. Empty = every Discord affordance hidden.
+          VITE_BRIDGE_PORTAL_URL: ${{ secrets.VITE_BRIDGE_PORTAL_URL }}
         run: |
           set -eu
           # Analytics is structurally EXCLUDED from the APK. Baking armada.buzz
