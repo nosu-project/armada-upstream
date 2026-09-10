@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.19] - 2026-09-10
+
+Streamable links now play inline, tapping an emoji in a message opens the pack
+it came from, Discover loads in pages so it stays smooth, and a handful of media
+and screen-share fixes round it out.
+
+### Added
+- Streamable links embed as an inline video player
+- Tapping an emoji in a message opens a popover showing the pack it came from
+
+### Changed
+- Discover feeds now load in pages and defer off-screen cards, so the page stays responsive
+- Screen sharing with audio on the web now removes the call's own sound, and stream details show whether audio is included
+
+### Fixed
+- Audio message waveforms no longer push the duration out of view
+- Videos that can't be played now show a download card instead of a blank frame
+- Attachments are recognised by their file extension when the browser doesn't report a type
+- All-day dates in the date picker no longer shift by a day across time zones
+
 ## [0.59.18] - 2026-09-10
 
 Sharing your screen with audio on Windows now includes system sound again while
