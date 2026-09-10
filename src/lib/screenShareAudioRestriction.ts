@@ -31,6 +31,8 @@
 // Firefox/Safari, where an unrecognized constraint is simply ignored — so this
 // is safe to set unconditionally on the audio path.
 
+import { enforceOwnAudioExclusion } from "@/lib/screenShareOwnAudio";
+
 declare global {
   // Not yet in lib.dom. Chrome 141+ audio-track constraint, read only inside
   // `audio` (never as a top-level getDisplayMedia option).
@@ -59,18 +61,28 @@ export function installScreenShareAudioRestriction(): void {
 
   installed = true;
   const original = mediaDevices.getDisplayMedia.bind(mediaDevices);
-  mediaDevices.getDisplayMedia = (constraints?: DisplayMediaStreamOptions) => {
+  mediaDevices.getDisplayMedia = async (constraints?: DisplayMediaStreamOptions) => {
     if (constraints?.audio) {
       // Merge onto the audio track constraints, coercing `audio: true` to an
       // object — the only placement Chromium and Electron read. A caller that
       // already decided restrictOwnAudio is left untouched.
       const audio: MediaTrackConstraints =
         constraints.audio === true ? {} : { ...constraints.audio };
-      if (audio.restrictOwnAudio === undefined) {
-        audio.restrictOwnAudio = true;
-        constraints = { ...constraints, audio };
-      }
+      if (audio.restrictOwnAudio === undefined) audio.restrictOwnAudio = true;
+      constraints = {
+        ...constraints,
+        audio,
+        // Scope a window share to that window's own audio, and keep this tab
+        // out of the picker. Both make a capture structurally unable to carry
+        // the call — which is what ownAudioVerdict() can then confirm.
+        windowAudio: constraints.windowAudio ?? "window",
+        selfBrowserSurface: constraints.selfBrowserSurface ?? "exclude",
+      };
     }
-    return original(constraints);
+    const stream = await original(constraints);
+    // Everything above is a REQUEST. This reads back what the platform did and
+    // drops any audio it cannot confirm is free of our own playback.
+    enforceOwnAudioExclusion(stream, { windowAudio: constraints?.windowAudio });
+    return stream;
   };
 }

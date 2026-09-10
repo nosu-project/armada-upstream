@@ -48,6 +48,7 @@ import {
   screenSharePublishOptions,
   type ScreenShareQuality,
 } from "@/lib/screenShareQuality";
+import { consumeOwnAudioDrop, describeOwnAudioDrop } from "@/lib/screenShareOwnAudio";
 import { cn } from "@/lib/utils";
 import { ScreenShareQualityDialog } from "@/components/chat/ScreenShareQualityDialog";
 import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
@@ -299,7 +300,13 @@ export function ScreenShareButton({
         // user found the buried toggle. The persisted preference is not scoped
         // to a surface, so a per-surface failure must never rewrite it.
         rememberScreenShareQuality(options?.rememberAs ?? quality);
-        if (shareActive) {
+        // A capture whose audio could not be confirmed free of the call's own
+        // playback goes out without it (screenShareOwnAudio.ts). Say so — a
+        // silent share is exactly the surprise this exists to prevent.
+        const dropped = consumeOwnAudioDrop();
+        if (dropped) {
+          toast({ title: "Sharing without audio", description: describeOwnAudioDrop(dropped) });
+        } else if (shareActive) {
           toast({
             title: "Screen share quality updated",
             description: formatScreenShareQuality(quality),
@@ -307,6 +314,8 @@ export function ScreenShareButton({
         }
       })
       .catch(async (error) => {
+        // A failed apply must not explain a later success.
+        consumeOwnAudioDrop();
         if (await handleCapturePermission(error)) return;
         console.warn("failed to update screen share quality", error);
         // Windows/Chromium fails the WHOLE capture when it cannot open the
@@ -363,7 +372,12 @@ export function ScreenShareButton({
       } else {
         await switchPublishedScreenShare(localParticipant, quality);
       }
+      const dropped = consumeOwnAudioDrop();
+      if (dropped) {
+        toast({ title: "Sharing without audio", description: describeOwnAudioDrop(dropped) });
+      }
     } catch (error) {
+      consumeOwnAudioDrop();
       if (await handleCapturePermission(error)) return;
       console.warn("failed to switch screen share", error);
       toast({
