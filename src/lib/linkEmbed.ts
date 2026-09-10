@@ -125,6 +125,23 @@ export function extractSpotifyEmbed(url: string): SpotifyEmbedInfo | null {
 }
 
 /**
+ * Extract a Streamable video id from a streamable.com URL, or null if it isn't
+ * one. Handles the share form `streamable.com/<id>` and the embed form
+ * `streamable.com/e/<id>` (with an optional trailing path/query). The id is
+ * alphanumeric.
+ */
+export function extractStreamableId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname.replace(/^www\./, "") !== "streamable.com") return null;
+    const match = u.pathname.match(/^\/(?:e\/)?([a-zA-Z0-9]+)/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Extract an Instagram post shortcode from an instagram.com URL, or null if it
  * isn't an embeddable post link. Handles posts (`/p/…`), reels (`/reel/…` and
  * `/reels/…`) and IGTV (`/tv/…`), including the `/<user>/p/…` and

@@ -10,6 +10,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import {
   extractInstagramShortcode,
   extractSpotifyEmbed,
+  extractStreamableId,
   extractTweetId,
   extractYouTubeId,
 } from "@/lib/linkEmbed";
@@ -36,6 +37,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const spotify = extractSpotifyEmbed(url);
   const tweetId = extractTweetId(url);
   const instagramShortcode = extractInstagramShortcode(url);
+  const streamableId = extractStreamableId(url);
 
   if (youtubeId) {
     return (
@@ -70,6 +72,27 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
           // an "open other apps and services on this device" prompt on load.
           sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
         />
+      </div>
+    );
+  }
+
+  if (streamableId) {
+    return (
+      <div className={cn("max-w-md", className)} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="relative w-full overflow-hidden rounded-xl border border-border"
+          style={{ paddingBottom: "56.25%" }}
+        >
+          <iframe
+            src={`https://streamable.com/e/${streamableId}`}
+            title="Streamable video"
+            allow="autoplay; fullscreen; picture-in-picture"
+            allowFullScreen
+            loading="lazy"
+            className="absolute inset-0 h-full w-full border-0"
+          />
+        </div>
+        <EmbedInfoBar url={url} />
       </div>
     );
   }
