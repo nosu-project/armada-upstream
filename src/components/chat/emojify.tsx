@@ -1,15 +1,23 @@
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
+import { EmojiSourcePopover } from "@/components/chat/EmojiSourcePopover";
 
 import type { ReactNode } from "react";
 
 /** Regex matching `:shortcode:` patterns in text. */
 const SHORTCODE_REGEX = /:([a-zA-Z0-9_-]+):/g;
 
-/** Replaces `:shortcode:` patterns in text with inline custom emoji images. */
+/**
+ * Replaces `:shortcode:` patterns in text with inline custom emoji images.
+ *
+ * When `clickable` is set, each emoji becomes a trigger for its source popover
+ * (which pack it came from, with a one-tap add). Left off for compact previews
+ * — DM lists, reply quotes, display names — where a tappable popover is noise.
+ */
 export function emojify(
   text: string,
   emojiMap: Map<string, string>,
   imgClassName?: string,
+  clickable = false,
 ): ReactNode[] {
   if (emojiMap.size === 0) return [text];
 
@@ -30,12 +38,21 @@ export function emojify(
     }
 
     result.push(
-      <CustomEmojiImg
-        key={`emoji-${match.index}`}
-        name={shortcode}
-        url={url}
-        className={imgClassName}
-      />,
+      clickable ? (
+        <EmojiSourcePopover
+          key={`emoji-${match.index}`}
+          name={shortcode}
+          url={url}
+          imgClassName={imgClassName}
+        />
+      ) : (
+        <CustomEmojiImg
+          key={`emoji-${match.index}`}
+          name={shortcode}
+          url={url}
+          className={imgClassName}
+        />
+      ),
     );
 
     lastIndex = match.index + fullMatch.length;

@@ -280,7 +280,9 @@ function highlightText(
   emojiMap: Map<string, string>,
   imgClassName?: string,
 ): ReactNode[] {
-  if (!term || !term.trim()) return emojify(text, emojiMap, imgClassName);
+  // Inline emojis in the message body are clickable — tapping one opens its
+  // source pack, the same popover a reaction pill shows.
+  if (!term || !term.trim()) return emojify(text, emojiMap, imgClassName, true);
 
   const needle = term.trim().toLowerCase();
   const out: ReactNode[] = [];
@@ -291,13 +293,13 @@ function highlightText(
   for (;;) {
     const idx = hay.indexOf(needle, from);
     if (idx === -1) {
-      out.push(...emojify(text.slice(from), emojiMap, imgClassName));
+      out.push(...emojify(text.slice(from), emojiMap, imgClassName, true));
       break;
     }
-    if (idx > from) out.push(...emojify(text.slice(from, idx), emojiMap, imgClassName));
+    if (idx > from) out.push(...emojify(text.slice(from, idx), emojiMap, imgClassName, true));
     out.push(
       <mark key={`hl-${key++}`} className="bg-primary/30 text-foreground rounded-[2px]">
-        {emojify(text.slice(idx, idx + needle.length), emojiMap, imgClassName)}
+        {emojify(text.slice(idx, idx + needle.length), emojiMap, imgClassName, true)}
       </mark>,
     );
     from = idx + needle.length;
