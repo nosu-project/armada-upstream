@@ -14,10 +14,11 @@ import {
 //     getSupportedConstraints().restrictOwnAudio === true, yet the track
 //     reported { displaySurface: "monitor", restrictOwnAudio: false }.
 //   Chrome 141+ / Windows, a window: no audio track at all.
-//   Electron 43.4.0+ (its own api-media-handler spec): a restrictOwnAudio
-//     loopback grant yields deviceId "loopbackWithoutChrome",
-//     restrictOwnAudio true.
-//   Electron < 43.4.0: the same grant yields deviceId "loopback".
+//   Electron / Windows 10 desktop app, handler granting "loopback": every
+//     surface, windows included, came back as deviceId "loopback" — the mix.
+//   Electron (its own api-media-handler spec) with the handler granting
+//     "loopbackWithoutChrome": deviceId "loopbackWithoutChrome",
+//     restrictOwnAudio true. This is what displayMediaPolicy.js now grants.
 
 interface FakeTrack {
   kind: "audio";
@@ -76,15 +77,16 @@ describe("ownAudioVerdict", () => {
     ).toEqual({ publish: true, basis: "restrictOwnAudio" });
   });
 
-  it("admits Electron's process-excluded loopback (43.4.0+)", () => {
+  it("admits the process-excluded loopback the desktop shell grants on Windows", () => {
     expect(
       ownAudioVerdict({ settings: { deviceId: "loopbackWithoutChrome" }, label: "" }),
     ).toEqual({ publish: true, basis: "processExcludedLoopback" });
   });
 
   it("refuses Electron's unrestricted loopback even on a window share", () => {
-    // An Electron build before 43.4.0 grants plain loopback whatever the
-    // surface; the window-scoping rule must not admit the system mix.
+    // The desktop shell grants plain loopback whatever the surface on a
+    // Windows build too old for process loopback; the window-scoping rule must
+    // not admit the system mix.
     expect(
       ownAudioVerdict({
         settings: { displaySurface: "window", deviceId: "loopback" },

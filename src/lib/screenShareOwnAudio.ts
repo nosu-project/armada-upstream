@@ -5,8 +5,9 @@
 // speakers — and would republish it, so everyone who spoke hears themselves.
 // Requesting `restrictOwnAudio` asks the platform to leave our own output out,
 // but a request is not a guarantee: Chrome on Windows reports it as NOT applied
-// to an entire-screen (system audio) capture, and an Electron build older than
-// 43.4.0 drops it entirely. So nothing here trusts the request. The decision
+// to an entire-screen (system audio) capture, and the Electron desktop build's
+// display-media handler was observed handing back the plain "loopback" mix for
+// every surface with the constraint set. So nothing here trusts the request. The decision
 // reads what the platform actually did back out of the track's settings, and a
 // track that cannot be CONFIRMED clean is dropped before it is ever published.
 // No shared audio is a gap; echo is the bug.
@@ -16,8 +17,9 @@
 // assumption that a flag worked:
 //   restrictOwnAudio        the platform confirmed the restriction in settings.
 //   processExcludedLoopback Chromium's "loopbackWithoutChrome" device: system
-//                           audio minus this process. Electron 43.4.0+ maps a
-//                           restrictOwnAudio loopback grant to it.
+//                           audio minus this app's audio service (WASAPI
+//                           process loopback). The desktop shell grants it by
+//                           name on Windows 10 2004+ (displayMediaPolicy.js).
 //   venmic                  the Linux PipeWire virtual mic, which excludes the
 //                           Electron audio service by pid (desktop.ts).
 //   windowScoped            a window share captured with windowAudio:"window",

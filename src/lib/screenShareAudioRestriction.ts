@@ -17,13 +17,16 @@
 // itself, which sits below every capture path (LiveKit's and our own direct
 // `getDisplayMedia` in screenShare.ts).
 //
-// On the Electron desktop build the renderer's getDisplayMedia is served by the
-// main process's setDisplayMediaRequestHandler, which grants Windows system
-// audio as a native "loopback" source. Electron only swaps that for the
-// own-audio-excluding "loopbackWithoutChrome" when it sees this constraint on
-// the audio track, and only from Electron 43.4.0+ (electron/electron#52455;
-// electronVersion.test.mjs guards the floor). Below that the flag is dropped and
-// a Windows sharer on speakers still echoes every participant back.
+// On the Electron desktop build this constraint is NOT what keeps the call out
+// of a Windows share. There the renderer's getDisplayMedia is served by the
+// main process's setDisplayMediaRequestHandler, and the audio track is whatever
+// loopback device that handler names — Electron maps this constraint onto it
+// only from 43.4.0, and only when Chromium populates the request, which in the
+// field it did not (every surface came back as the plain "loopback" mix). So
+// electron/displayMediaPolicy.js grants Chromium's own-process-excluding
+// "loopbackWithoutChrome" device DIRECTLY, the way Vesktop does
+// (Vencord/Vesktop#1294); the constraint here still rides along for the web
+// build and is harmless on the desktop one.
 //
 // Injected only when audio is requested (the flag is meaningless for a
 // video-only capture) and only where the caller has not already decided

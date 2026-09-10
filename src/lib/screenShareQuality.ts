@@ -228,7 +228,8 @@ export function screenShareDisplayMediaOptions(
   return {
     // Exclude the call's own playback from the captured system audio so a
     // sharer on speakers doesn't echo other participants back (Chrome 141+;
-    // Electron 43.4.0+ maps it to loopbackWithoutChrome; ignored elsewhere).
+    // ignored elsewhere — the desktop shell excludes its own audio by naming
+    // the loopback device itself, see electron/displayMediaPolicy.js).
     // The flag is an audio-track constraint — a top-level member is dropped —
     // so audio is an object whenever it is captured. This is the DIRECT
     // getDisplayMedia path (screen-share switching); the LiveKit-driven initial

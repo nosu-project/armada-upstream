@@ -17,9 +17,12 @@ It also adds desktop-native behavior the web build can't:
   unread badge (tray tooltip + macOS dock + Windows taskbar overlay), and a
   `--hidden`/`--minimized` flag to launch minimized (for autostart).
 - **Screen and application sharing** — the in-app picker can switch the active
-  screen/window without ending the share. Windows captures system audio;
-  Linux uses PipeWire plus `@vencord/venmic` for either the entire system or a
-  selected application's audio. Resolution, frame rate, bitrate, codec and
+  screen/window without ending the share. Windows captures system audio minus
+  Armada's own playback (Chromium's `loopbackWithoutChrome` process loopback,
+  granted by name in `displayMediaPolicy.js` on Windows 10 2004+, so a share
+  never carries the call back to the people in it); Linux uses PipeWire plus
+  `@vencord/venmic` for either the entire system or a selected application's
+  audio. Resolution, frame rate, bitrate, codec and
   delivery mode are configurable, and either side can open live stream details
   or make the shared content genuinely full-screen.
 - **Global push to talk** — Windows, macOS and X11 use `uiohook-napi`; Wayland
