@@ -21,6 +21,16 @@ function toDateTimeString(d: Date): string {
 /** Parse a `YYYY-MM-DD` or `YYYY-MM-DDTHH:mm` string into a local Date. */
 function parseValue(value: string): Date | undefined {
   if (!value) return undefined;
+  // A date-only `YYYY-MM-DD` is parsed by `new Date()` as UTC midnight, but we
+  // read it back with local getters (toDateString/formatLabel), so a user west
+  // of UTC would see the day before. Build a local-midnight Date from the parts
+  // instead. Datetime strings carry a `THH:mm` and are meant to be local, which
+  // `new Date()` already does.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dateOnly) {
+    const [, y, m, d] = dateOnly;
+    return new Date(Number(y), Number(m) - 1, Number(d));
+  }
   const ms = new Date(value).getTime();
   return Number.isNaN(ms) ? undefined : new Date(ms);
 }
