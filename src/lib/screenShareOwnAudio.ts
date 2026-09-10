@@ -28,14 +28,15 @@
 //                           name on Windows 10 2004+ (displayMediaPolicy.js).
 //   venmic                  the Linux PipeWire virtual mic, which excludes the
 //                           Electron audio service by pid (desktop.ts).
-//   windowScoped            a window share captured with windowAudio:"window",
-//                           i.e. that window's audio alone.
 //   tabScoped               another tab's audio. The capturing tab itself is
 //                           kept out of the picker (selfBrowserSurface).
 // Chromium's bare "loopback" device is the unrestricted system mix — the exact
-// source of the echo — and is refused BEFORE any scoping rule can admit it, so
-// an Electron window share granted plain loopback is not mistaken for a
-// window-scoped one.
+// source of the echo — and is refused BEFORE any scoping rule can admit it.
+// A WINDOW share is deliberately not a basis: the capture asks for that
+// window's audio alone (windowAudio:"window"), but Chrome cannot scope audio
+// to a window below Windows 11 and hands back the system mix without saying
+// so — measured on Windows 10, call included. What was requested confirms
+// nothing; a window share is admitted only on one of the signals above.
 //
 // This is what makes the invariant testable without a human: the verdict is a
 // pure function of the settings, and the fixtures are the values measured on
@@ -70,7 +71,6 @@ export type OwnAudioBasis =
   | "callPlayoutCancelled"
   | "processExcludedLoopback"
   | "venmic"
-  | "windowScoped"
   | "tabScoped";
 
 export type OwnAudioDropReason = "unrestrictedLoopback" | "unconfirmed";
@@ -84,8 +84,6 @@ export interface OwnAudioEvidence {
   settings: MediaTrackSettings;
   /** The track's label (identifies venmic). */
   label: string;
-  /** The `windowAudio` the capture REQUESTED, which scopes a window share. */
-  requestedWindowAudio?: WindowAudioPreference;
 }
 
 /**
@@ -95,7 +93,7 @@ export interface OwnAudioEvidence {
  * becomes a fixture. Refuses anything it cannot positively confirm.
  */
 export function ownAudioVerdict(evidence: OwnAudioEvidence): OwnAudioVerdict {
-  const { settings, label, requestedWindowAudio } = evidence;
+  const { settings, label } = evidence;
 
   if (settings.restrictOwnAudio === true) {
     return { publish: true, basis: "restrictOwnAudio" };
@@ -118,9 +116,6 @@ export function ownAudioVerdict(evidence: OwnAudioEvidence): OwnAudioVerdict {
   if (label === VENMIC_LABEL) {
     return { publish: true, basis: "venmic" };
   }
-  if (settings.displaySurface === "window" && requestedWindowAudio === "window") {
-    return { publish: true, basis: "windowScoped" };
-  }
   if (settings.displaySurface === "browser") {
     return { publish: true, basis: "tabScoped" };
   }
@@ -142,18 +137,11 @@ let lastDrop: DroppedOwnAudio | null = null;
  * call's own playback, stopping each so the capture releases it. Returns what
  * was dropped, or null when every audio track (if any) was admitted.
  */
-export function enforceOwnAudioExclusion(
-  stream: MediaStream,
-  requested: { windowAudio?: WindowAudioPreference } = {},
-): DroppedOwnAudio | null {
+export function enforceOwnAudioExclusion(stream: MediaStream): DroppedOwnAudio | null {
   let dropped: DroppedOwnAudio | null = null;
   for (const track of stream.getAudioTracks()) {
     const settings = track.getSettings();
-    const verdict = ownAudioVerdict({
-      settings,
-      label: track.label,
-      requestedWindowAudio: requested.windowAudio,
-    });
+    const verdict = ownAudioVerdict({ settings, label: track.label });
     if (verdict.publish) continue;
     track.stop();
     stream.removeTrack(track);
@@ -168,6 +156,44 @@ export function consumeOwnAudioDrop(): DroppedOwnAudio | null {
   const drop = lastDrop;
   lastDrop = null;
   return drop;
+}
+
+/** Read the most recent capture's drop without clearing it (diagnostics). */
+export function peekOwnAudioDrop(): DroppedOwnAudio | null {
+  return lastDrop;
+}
+
+/**
+ * What a published screen-share audio track is, and why it was allowed out —
+ * for the presenter's stream details, so a report names the basis rather than
+ * guessing at it.
+ */
+export function describeOwnAudioBasis(basis: OwnAudioBasis): string {
+  switch (basis) {
+    case "restrictOwnAudio":
+      return "System audio, this app excluded by the browser";
+    case "callPlayoutCancelled":
+      return "System audio, the call cancelled out by the browser";
+    case "processExcludedLoopback":
+      return "System audio, this app excluded at the device";
+    case "venmic":
+      return "Application audio (PipeWire)";
+    case "tabScoped":
+      return "That tab's audio";
+  }
+}
+
+/** The stream-details line for a share's audio: what is going out, or why nothing is. */
+export function describeOwnAudioState(track: MediaStreamTrack | undefined): string {
+  if (track) {
+    const verdict = ownAudioVerdict({ settings: track.getSettings(), label: track.label });
+    return verdict.publish ? describeOwnAudioBasis(verdict.basis) : "Unconfirmed";
+  }
+  const drop = peekOwnAudioDrop();
+  if (!drop) return "Not captured";
+  return drop.reason === "unrestrictedLoopback"
+    ? "Left out: the system mix would carry the call"
+    : "Left out: the browser did not confirm the call was excluded";
 }
 
 /** A user-facing explanation of why a share is going out without audio. */

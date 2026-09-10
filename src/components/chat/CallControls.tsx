@@ -508,6 +508,7 @@ export function ScreenShareButton({
         open={detailsOpen}
         portalContainer={portalContainer}
         track={screenSharePublication?.videoTrack}
+        audioTrack={localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.audioTrack}
         encrypted={customHevcActive ? true : screenSharePublication?.isEncrypted}
         participantName="you"
         nativeHevcStatus={customHevcActive ? hevcScreenShare?.status : undefined}

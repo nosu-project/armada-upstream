@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeOwnAudioDrop,
   describeOwnAudioDrop,
+  describeOwnAudioState,
   enforceOwnAudioExclusion,
   ownAudioVerdict,
 } from "@/lib/screenShareOwnAudio";
@@ -57,7 +58,6 @@ describe("ownAudioVerdict", () => {
       ownAudioVerdict({
         settings: { displaySurface: "monitor", restrictOwnAudio: false, deviceId: "loopback" },
         label: "",
-        requestedWindowAudio: "window",
       }),
     ).toEqual({ publish: false, reason: "unrestrictedLoopback" });
   });
@@ -118,7 +118,6 @@ describe("ownAudioVerdict", () => {
       ownAudioVerdict({
         settings: { displaySurface: "window", deviceId: "loopback" },
         label: "",
-        requestedWindowAudio: "window",
       }),
     ).toEqual({ publish: false, reason: "unrestrictedLoopback" });
   });
@@ -129,16 +128,18 @@ describe("ownAudioVerdict", () => {
     ).toEqual({ publish: true, basis: "venmic" });
   });
 
-  it("admits a window share only when window-scoped audio was requested", () => {
+  it("does not admit a window share on the strength of having asked for window audio", () => {
+    // Measured on Chrome/Windows 10: a window share requested with
+    // windowAudio:"window" came back carrying the system mix, call included —
+    // Chrome cannot scope audio to a window below Windows 11 and says nothing.
+    // A request is not a confirmation; only a confirmed signal admits it.
     const settings: MediaTrackSettings = { displaySurface: "window", deviceId: "win-audio" };
-    expect(ownAudioVerdict({ settings, label: "", requestedWindowAudio: "window" }))
-      .toEqual({ publish: true, basis: "windowScoped" });
-    // Requested as system audio, or with no request at all: nothing confirms
-    // this is the window's own audio rather than the mix.
-    expect(ownAudioVerdict({ settings, label: "", requestedWindowAudio: "system" }))
-      .toEqual({ publish: false, reason: "unconfirmed" });
     expect(ownAudioVerdict({ settings, label: "" }))
       .toEqual({ publish: false, reason: "unconfirmed" });
+    expect(ownAudioVerdict({ settings: { ...settings, echoCancellation: true }, label: "" }))
+      .toEqual({ publish: true, basis: "callPlayoutCancelled" });
+    expect(ownAudioVerdict({ settings: { ...settings, restrictOwnAudio: true }, label: "" }))
+      .toEqual({ publish: true, basis: "restrictOwnAudio" });
   });
 
   it("admits another tab's audio", () => {
@@ -153,7 +154,7 @@ describe("enforceOwnAudioExclusion", () => {
     const echo = audioTrack({ displaySurface: "monitor", restrictOwnAudio: false, deviceId: "loopback" });
     const s = stream([echo]);
 
-    const dropped = enforceOwnAudioExclusion(s, { windowAudio: "window" });
+    const dropped = enforceOwnAudioExclusion(s);
 
     expect(dropped).toEqual({ reason: "unrestrictedLoopback", displaySurface: "monitor" });
     expect(echo.stop).toHaveBeenCalledOnce();
@@ -184,6 +185,25 @@ describe("enforceOwnAudioExclusion", () => {
     );
     enforceOwnAudioExclusion(stream([audioTrack({ restrictOwnAudio: true })]));
     expect(consumeOwnAudioDrop()).toBeNull();
+  });
+});
+
+describe("describeOwnAudioState", () => {
+  it("names the basis a live audio track was admitted on", () => {
+    const track = audioTrack({ deviceId: "loopbackWithoutChrome" }) as unknown as MediaStreamTrack;
+    expect(describeOwnAudioState(track)).toBe("System audio, this app excluded at the device");
+    const cancelled = audioTrack({ echoCancellation: true }) as unknown as MediaStreamTrack;
+    expect(describeOwnAudioState(cancelled)).toBe("System audio, the call cancelled out by the browser");
+  });
+
+  it("explains the most recent drop when no audio is going out", () => {
+    enforceOwnAudioExclusion(
+      stream([audioTrack({ displaySurface: "window", restrictOwnAudio: false })]),
+    );
+    expect(describeOwnAudioState(undefined)).toMatch(/^Left out: the browser did not confirm/);
+    // Peeking does not consume the record; the toast still gets it.
+    expect(consumeOwnAudioDrop()).not.toBeNull();
+    expect(describeOwnAudioState(undefined)).toBe("Not captured");
   });
 });
 

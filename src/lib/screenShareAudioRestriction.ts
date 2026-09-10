@@ -112,7 +112,7 @@ export function installScreenShareAudioRestriction(
     const stream = await original(constraints);
     // Everything above is a REQUEST. This reads back what the platform did and
     // drops any audio it cannot confirm is free of our own playback.
-    enforceOwnAudioExclusion(stream, { windowAudio: constraints?.windowAudio });
+    enforceOwnAudioExclusion(stream);
     return stream;
   };
 }

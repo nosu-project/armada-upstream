@@ -1,4 +1,4 @@
-import type { LocalVideoTrack, RemoteVideoTrack } from "livekit-client";
+import type { LocalAudioTrack, LocalVideoTrack, RemoteVideoTrack } from "livekit-client";
 import { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 
@@ -9,6 +9,7 @@ import {
   type ScreenShareReceiverStats,
   type ScreenShareSenderStats,
 } from "@/lib/screenShare";
+import { describeOwnAudioState } from "@/lib/screenShareOwnAudio";
 import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
 
 type ScreenShareVideoTrack = LocalVideoTrack | RemoteVideoTrack;
@@ -17,6 +18,8 @@ interface ScreenShareDiagnosticsDialogProps {
   open: boolean;
   portalContainer?: HTMLElement;
   track?: ScreenShareVideoTrack;
+  /** The presenter's published screen-share audio, if any (local only). */
+  audioTrack?: LocalAudioTrack;
   encrypted?: boolean;
   participantName?: string;
   nativeHevcStatus?: DesktopHevcScreenShareStatus;
@@ -45,6 +48,7 @@ export function ScreenShareDiagnosticsDialog({
   open,
   portalContainer,
   track,
+  audioTrack,
   encrypted,
   participantName,
   nativeHevcStatus,
@@ -145,6 +149,10 @@ export function ScreenShareDiagnosticsDialog({
               <Detail label="Frames / keyframes" value={`${sender?.framesEncoded ?? 0} / ${sender?.keyFramesEncoded ?? 0}`} />
               <Detail label="Packets / retransmits" value={`${sender?.packetsSent ?? 0} / ${sender?.retransmittedPacketsSent ?? 0}`} />
               <Detail label="NACK / PLI requests" value={`${sender?.nackCount ?? 0} / ${sender?.pliCount ?? 0}`} />
+              {/* Which signal let the audio out (or why none did), read from the
+                  live track's settings — so a report names the basis instead of
+                  guessing at it. */}
+              <Detail label="Audio" value={describeOwnAudioState(audioTrack?.mediaStreamTrack)} />
             </>
           ) : (
             <>
