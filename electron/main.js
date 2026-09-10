@@ -119,6 +119,17 @@ if (process.platform === "linux") {
   app.setDesktopName("buzz.armada.app.desktop");
 }
 
+// Windows' analog of the desktop-file identity: the AppUserModelID. A renderer
+// `new Notification()` becomes an Action Center toast only when the process's
+// AUMID matches an installed Start Menu shortcut's — otherwise Windows drops
+// the toast (or shows it under "electron.app.Electron" with the wrong icon).
+// The NSIS installer stamps the shortcut's AUMID with electron-builder.yml's
+// appId, so this must be that same string, and — like setDesktopName — must be
+// set before `ready` so the first toast is already associated.
+if (process.platform === "win32") {
+  app.setAppUserModelId("buzz.armada.app");
+}
+
 // The web bundle that shipped inside the asar. This is the floor: a fresh
 // install serves it, and the shell falls back to it whenever it cannot host a
 // downloaded bundle. `activeDist` is what the app:// handler actually reads.

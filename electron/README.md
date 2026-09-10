@@ -146,6 +146,19 @@ verifies its own registration before allowing close-to-tray; without a usable
 host the close button exits instead of leaving calls running in an invisible
 process. Non-GNOME X11 desktops may use Electron's legacy tray fallback.
 
+Native notifications come from the renderer's own `new Notification()` — the
+foreground notifier and the push runtime both post through the Web Notifications
+API, and Electron backs it with the OS notifier (libnotify on Linux, the Action
+Center on Windows, `NSUserNotification`/`UNUserNotification` on macOS). Two
+platforms need an identity set before `ready` for those toasts to appear and
+be attributed correctly: Linux via `app.setDesktopName("buzz.armada.app.desktop")`
+(matching the installed `.desktop` entry the Flatpak's
+`--talk-name=org.freedesktop.Notifications` permission also depends on), and
+Windows via `app.setAppUserModelId("buzz.armada.app")` — the AUMID the NSIS
+installer stamps onto the Start Menu shortcut, without which Windows silently
+drops the toast or shows it as `electron.app.Electron`. Both live in `main.js`
+right after the app object is created.
+
 ## Screen-share quality and codecs
 
 The screen-share dialog controls the requested output resolution, frames per
