@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.16] - 2026-09-10
+
+Screen sharing with audio during a call no longer echoes other participants'
+voices back to them, the landing page gains a download link, and close buttons
+get a lighter look.
+
+### Added
+- A download link in the top-right corner of the landing page
+
+### Changed
+- Softened the appearance of close buttons by dropping their hard borders
+
+### Fixed
+- Sharing your screen with audio during a call no longer plays the other participants' voices back to them
+
 ## [0.59.15] - 2026-09-08
 
 Desktop notifications now actually appear: the app shows a banner for messages
