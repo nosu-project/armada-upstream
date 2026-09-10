@@ -1124,6 +1124,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const sizeTag = tags.find((t) => t[0] === "size");
         if (sizeTag) sizeTag[1] = String(file.size);
         else tags.push(["size", String(file.size)]);
+      } else if (isVideo && file.name && !hasTag("name")) {
+        // A video whose container the recipient can't play inline (AVI/FLV/WMV)
+        // renders as a download card too; carry the original filename so it
+        // names the saved file and shows its type, since the Blossom URL is a
+        // content hash. `size` is left to the server's value — a transcode
+        // changes it, so the original file's size would be wrong here.
+        tags.push(["name", file.name]);
       }
 
       // A .xdc is a webxdc app. Browsers report an empty type for `.xdc`, so

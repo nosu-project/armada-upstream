@@ -40,7 +40,8 @@ import { EVERYONE_MENTION_PATTERN } from "@/concord/lib/everyoneMention";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
-import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, mimeFromExt } from "@/lib/mediaUrls";
+import { filenameFromUrl } from "@/lib/fileBytes";
+import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { parseSelfLink } from "@/lib/selfLink";
@@ -1295,6 +1296,22 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               fallbacks={fallbacks}
               waveform={waveform}
               duration={duration}
+            />
+          );
+        }
+        // A container no browser can decode (AVI, FLV, WMV, …) would only ever
+        // fail the <video> and show "Video unavailable", so render it as a
+        // download card instead — the file is there, it just can't play inline.
+        if (isUnplayableVideo(token.url, mime)) {
+          return (
+            <FileAttachment
+              key={key}
+              url={token.url}
+              mime={mediaMime}
+              name={imeta?.name ?? filenameFromUrl(token.url, mediaMime)}
+              size={imeta?.size ? Number(imeta.size) : undefined}
+              encryption={encryption}
+              fallbacks={fallbacks}
             />
           );
         }

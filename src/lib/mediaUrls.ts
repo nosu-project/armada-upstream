@@ -83,6 +83,42 @@ export function isGifLikeUrl(url: string): boolean {
   return /\.gif\.(mp4|webm)$/i.test(parsed.pathname);
 }
 
+/**
+ * Video container extensions no browser can decode in a `<video>` element —
+ * they are in {@link VIDEO_EXTS} (so they classify as video) but only ever
+ * render as "unavailable" if handed to the player. mp4/webm/mov play; these
+ * never do, so the render path offers a download instead. mkv is deliberately
+ * omitted: Chromium plays it when the codecs inside are supported.
+ */
+const UNPLAYABLE_VIDEO_EXTS = /^(avi|flv|wmv|asf|mpg|mpeg|vob|rm|rmvb|divx)$/;
+
+/**
+ * MIME types for the same never-playable containers, for URLs whose type is
+ * only known from an imeta `m` tag (extension-less Blossom URLs) — the AVI a
+ * browser reports as `video/x-msvideo` or `video/vnd.avi`, etc.
+ */
+const UNPLAYABLE_VIDEO_MIME =
+  /^video\/(x-msvideo|vnd\.avi|avi|msvideo|x-ms-wmv|x-ms-asf|x-flv|flv|mpeg|vnd\.rn-realvideo|divx)$/;
+
+/**
+ * Whether a video URL/MIME is a container the browser cannot play inline, so it
+ * should render as a download card rather than a `<video>` that fails to a
+ * "Video unavailable" placeholder. Checks the imeta/declared MIME first, then
+ * the URL extension.
+ */
+export function isUnplayableVideo(url: string, mime?: string): boolean {
+  if (mime && UNPLAYABLE_VIDEO_MIME.test(mime.toLowerCase())) return true;
+  let ext = "";
+  try {
+    const seg = new URL(url).pathname.split("/").pop() ?? "";
+    const dot = seg.lastIndexOf(".");
+    if (dot > 0 && dot < seg.length - 1) ext = seg.slice(dot + 1).toLowerCase();
+  } catch {
+    // not a URL — no extension to read
+  }
+  return ext ? UNPLAYABLE_VIDEO_EXTS.test(ext) : false;
+}
+
 /** Infers a MIME type from a file extension string (lowercase). */
 export function mimeFromExt(ext: string): string {
   switch (ext) {

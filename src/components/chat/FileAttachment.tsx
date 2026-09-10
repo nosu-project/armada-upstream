@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { Download, File, FileArchive, FileText, Loader2 } from "lucide-react";
+import { Download, File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
@@ -34,11 +34,29 @@ interface FileAttachmentProps {
 /** Pick a coarse icon from the MIME family. Cosmetic only. */
 function iconFor(mime: string | undefined) {
   const m = (mime ?? "").toLowerCase();
+  if (m.startsWith("video/")) return FileVideo;
+  if (m.startsWith("audio/")) return FileAudio;
+  if (m.startsWith("image/")) return FileImage;
   if (/(zip|tar|gzip|rar|7z|compress)/.test(m)) return FileArchive;
   if (m.startsWith("text/") || /(pdf|json|xml|csv|msword|document|spreadsheet|presentation)/.test(m)) {
     return FileText;
   }
   return File;
+}
+
+/**
+ * A short, always-visible type token for the card's subtitle (e.g. "AVI") —
+ * the filename is often a content-addressed hash whose extension the `truncate`
+ * ellipsis hides, so the format would otherwise be invisible. Prefers the
+ * name's extension, falling back to the MIME subtype with its `x-`/`vnd.`
+ * noise stripped.
+ */
+function typeLabel(name: string, mime: string | undefined): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot > 0 && dot < name.length - 1) return name.slice(dot + 1).toUpperCase();
+  const sub = (mime ?? "").split("/")[1];
+  if (sub) return sub.replace(/^x-/, "").replace(/^vnd\./, "").toUpperCase();
+  return null;
 }
 
 /**
@@ -61,6 +79,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
 
   const displayName = safeFilename(name);
   const Icon = iconFor(mime);
+  const kind = typeLabel(displayName, mime);
   // The same blob on the viewer's other Blossom servers, for when the one the
   // sender named is down (the mirrors hold identical ciphertext).
   const candidates = useBlossomCandidates(url, fallbacks);
@@ -114,7 +133,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
         <span className="block text-[11px] text-muted-foreground tabular-nums">
           {status === "error"
             ? "Download failed — tap to retry"
-            : [size ? formatBytes(size) : null, "Tap to download"].filter(Boolean).join(" · ")}
+            : [kind, size ? formatBytes(size) : null, "Tap to download"].filter(Boolean).join(" · ")}
         </span>
       </span>
       <span className="size-8 shrink-0 rounded-full flex items-center justify-center text-muted-foreground group-hover:text-foreground">
