@@ -7,6 +7,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { configDefaults } from "vitest/config";
 
+import { manualChunks } from "./src/build/manualChunks";
+
 /**
  * Short commit SHA — prefer CI env var, fall back to git. Empty string if
  * unavailable (e.g. no git repo).
@@ -288,33 +290,7 @@ export default defineConfig({
     target: "esnext",
     rollupOptions: {
       output: {
-        manualChunks(id: string) {
-          if (id.includes("node_modules/lucide-react")) {
-            return "lucide-icons";
-          }
-          if (id.includes("node_modules")) {
-            if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
-              return "vendor-react";
-            }
-            // Code-block grammars: only ever reached through the dynamic import
-            // in src/lib/codeHighlight.ts, so this chunk loads on demand.
-            if (id.includes("node_modules/highlight.js") || id.includes("node_modules/lowlight")) {
-              return "vendor-highlight";
-            }
-            if (id.includes("node_modules/@nostrify") || id.includes("node_modules/nostr-tools") || id.includes("node_modules/@noble") || id.includes("node_modules/@scure")) {
-              return "vendor-nostr";
-            }
-            if (id.includes("node_modules/@radix-ui")) {
-              return "vendor-radix";
-            }
-            if (id.includes("node_modules/@tanstack")) {
-              return "vendor-tanstack";
-            }
-            if (id.includes("livekit")) {
-              return "vendor-livekit";
-            }
-          }
-        },
+        manualChunks,
       },
     },
   },
