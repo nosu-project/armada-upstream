@@ -568,6 +568,11 @@ export function BuzzChat({
     () => ({ kind: "nip29", relayUrl, groupId: channelId }) as const,
     [relayUrl, channelId],
   );
+  // Stable thread-panel permalink — an inline object would defeat the thread rows' memo.
+  const threadPermalink = useMemo(
+    () => (lastThreadRoot ? ({ kind: "nip29", relayUrl, groupId: channelId, threadRoot: lastThreadRoot.id } as const) : undefined),
+    [relayUrl, channelId, lastThreadRoot],
+  );
   const permalinkScroll = useCallback(
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
     [],
@@ -936,7 +941,7 @@ export function BuzzChat({
               canWrite={Boolean(user && canWrite)}
               autoFocus={threadAutoFocus}
               open={Boolean(threadRoot)}
-              permalink={{ kind: "nip29", relayUrl, groupId: channelId, threadRoot: lastThreadRoot.id }}
+              permalink={threadPermalink}
               onClose={closeThread}
               onExpandChange={setThreadExpanded}
             />

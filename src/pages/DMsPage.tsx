@@ -104,7 +104,7 @@ import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { dmRouteParam, parseDmRouteParam } from "@/lib/dmConversation";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { forwardableTags } from "@/lib/forwardMessage";
-import { chatRoute, parseChatRoute } from "@/lib/routes";
+import { chatRoute, parseChatRoute, type ChatRoute } from "@/lib/routes";
 import { stashShare } from "@/lib/shareTarget";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { tryNpubEncode } from "@/lib/safeNip19";
@@ -686,6 +686,11 @@ function Conversation({
   const requestPeers = useMemo(
     () => (isRequest && !group ? [peer] : []),
     [isRequest, group, peer],
+  );
+  // Stable permalink — a fresh object per row would defeat every message's memo.
+  const dmPermalink = useMemo<ChatRoute>(
+    () => ({ kind: "dm", peer: dmRouteParam(conversation) }),
+    [conversation],
   );
   const sharedCommunity = useSharedCommunities(requestPeers, isRequest && !group).get(peer);
 
@@ -1322,7 +1327,7 @@ function Conversation({
               <ChatMessage
                 key={msg.id}
                 event={msg}
-                permalink={{ kind: "dm", peer: dmRouteParam(conversation) }}
+                permalink={dmPermalink}
                 canWrite={transport.canWrite}
                 canModerate={transport.canModerate}
                 sendStatus={transport.sendStatusFor?.(msg.id)}

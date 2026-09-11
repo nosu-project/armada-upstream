@@ -320,6 +320,12 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     closeThread,
   } = useThreadPanel({ room, messages });
 
+  // Stable thread-panel permalink — an inline object would defeat the thread rows' memo.
+  const threadPermalink = useMemo(
+    () => (lastThreadRoot ? ({ kind: "nip29", relayUrl, groupId, threadRoot: lastThreadRoot.id } as const) : undefined),
+    [relayUrl, groupId, lastThreadRoot],
+  );
+
   // Tell the native notification service this NIP-29 room (and, if a thread
   // panel is open, that specific thread) is on screen, so it suppresses
   // redundant tray entries. Cleared on unmount/background. The roomKey shapes
@@ -711,7 +717,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             botCommands
             autoFocus={threadAutoFocus}
             open={Boolean(threadRoot)}
-            permalink={{ kind: "nip29", relayUrl, groupId, threadRoot: lastThreadRoot.id }}
+            permalink={threadPermalink}
             onClose={closeThread}
             onExpandChange={setThreadExpanded}
           />

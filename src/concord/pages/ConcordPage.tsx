@@ -1401,6 +1401,13 @@ export function ConcordPage() {
     [community, channel],
   );
 
+  // Stable "Copy message link" route — a fresh object per row in `renderMessage`
+  // would defeat every message's memo.
+  const permalink = useMemo<ChatRoute | undefined>(
+    () => (communityId && channel ? { kind: "concord", communityId, channelId: channel.idHex } : undefined),
+    [communityId, channel],
+  );
+
   // A running Mini App captured this scope when it launched, and a rotation
   // replaces the channel's keys without changing its id — so hand the live one
   // back, or the app keeps sealing under an epoch the channel has retired and
@@ -3717,7 +3724,7 @@ export function ConcordPage() {
                       <ConcordChatMessage
                         key={msg.id}
                         event={msg}
-                        permalink={communityId && channel ? { kind: "concord", communityId, channelId: channel.idHex } : undefined}
+                        permalink={permalink}
                         reactions={reactionsFor(msg.id)}
                         zaps={transport.zapsFor?.(msg.id)}
                         onSendZap={config.zapsEnabled ? transport.sendZap : undefined}
