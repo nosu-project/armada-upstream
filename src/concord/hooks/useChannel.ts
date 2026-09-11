@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { citationFor, dissolvedAt, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { persistTimelineSnapshot, prewarmTimelineSnapshot } from "@/concord/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useKeyedMemo } from "@/hooks/useKeyedMemo";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
   buildConcordCommentTags,
@@ -428,7 +429,11 @@ export function useChannelTimeline(
   // them in the channel cache. Retention matters after `/m/` is cleared: the
   // row the reader just visited must not disappear merely because it lies
   // outside the newest bounded window.
-  const raw = useMemo(
+  // Keyed per channel (not a plain useMemo) so cycling back to a channel whose
+  // query data is unchanged returns the SAME array — letting `folded` and the
+  // whole downstream `useTransport` chain bail instead of reallocating.
+  const raw = useKeyedMemo(
+    channelIdHex,
     () =>
       channel
         ? filterEpochCutoff(upsert(query.data, focusQuery.data ?? EMPTY_RAW), channel)
@@ -577,7 +582,10 @@ export function useChannelTimeline(
     return oldest;
   }, [community?.heldRoots, firstSeen]);
 
-  const folded: FoldedTimeline = useMemo(() => {
+  // Keyed per channel so a switch-back returns the cached fold (stable
+  // reference) rather than re-folding the whole set — the switch's dominant
+  // allocation. Same deps as a useMemo, so a real input change still recomputes.
+  const folded: FoldedTimeline = useKeyedMemo(channelIdHex, () => {
     void memoryRev;
     void revealTick;
     const result = foldTimeline(raw, moderation, {
