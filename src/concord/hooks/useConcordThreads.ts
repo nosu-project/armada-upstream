@@ -1,6 +1,7 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useIdleMemo } from "@/hooks/useIdleMemo";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
@@ -82,17 +83,10 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
 
   // Bucket each channel's folded rumors into the threads the user is in. Pure
   // computation over the shared scan — no store, no readMap dependency (that is
-  // layered on below).
-  const scanned = useMemo(() => {
-    const out: Array<{
-      root: ChatMsg;
-      rootId: string;
-      newestReplyAuthor: string;
-      channelIdHex: string;
-      replyCount: number;
-      lastReplyAt: number;
-      participants: string[];
-    }> = [];
+  // layered on below). Deferred off the render path: it folds every channel's
+  // window, and it ran in the render that switched communities.
+  const scanned = useIdleMemo(communityIdHex ?? null, () => {
+    const out: ScannedThread[] = [];
 
     for (const [idHex, rumors] of rumorsByChannel) {
       // Drop muted authors before folding, so a muted person contributes
@@ -163,10 +157,17 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
   }, [rumorsByChannel, pubkey, mutedPubkeys, moderation]);
 
   // Layer per-thread "new" on top as pure arithmetic against the shared
-  // read-state map (`c2t:<rootId>` stamps).
+  // read-state map (`c2t:<rootId>` stamps). Depends on the stamps read here,
+  // not on `readState` itself (a new object on every markRead anywhere).
+  const readStateRef = useRef(readState);
+  readStateRef.current = readState;
+  const scannedList = scanned ?? NO_SCANNED;
+  let threadReadSig = "";
+  for (const t of scannedList) threadReadSig += `${readState[concordThreadReadKey(t.rootId)] ?? 0},`;
   const threads = useMemo<ConcordThread[]>(
-    () =>
-      scanned.map((t) => ({
+    () => {
+      void threadReadSig;
+      return scannedList.map((t) => ({
         root: t.root,
         channelIdHex: t.channelIdHex,
         replyCount: t.replyCount,
@@ -174,9 +175,10 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
         participants: t.participants,
         hasNew:
           t.newestReplyAuthor !== pubkey &&
-          t.lastReplyAt > (readState[concordThreadReadKey(t.rootId)] ?? 0),
-      })),
-    [scanned, readState, pubkey],
+          t.lastReplyAt > (readStateRef.current[concordThreadReadKey(t.rootId)] ?? 0),
+      }));
+    },
+    [scannedList, threadReadSig, pubkey],
   );
 
   const markRead = useCallback(
@@ -197,11 +199,24 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
     }
   }, [threads, markRead]);
 
+  const loading = isLoading || scanned === undefined;
   return useMemo(
-    () => ({ threads, isLoading, hasNew, markRead, markAllRead }),
-    [threads, isLoading, hasNew, markRead, markAllRead],
+    () => ({ threads, isLoading: loading, hasNew, markRead, markAllRead }),
+    [threads, loading, hasNew, markRead, markAllRead],
   );
 }
+
+interface ScannedThread {
+  root: ChatMsg;
+  rootId: string;
+  newestReplyAuthor: string;
+  channelIdHex: string;
+  replyCount: number;
+  lastReplyAt: number;
+  participants: string[];
+}
+
+const NO_SCANNED: ScannedThread[] = [];
 
 /**
  * Create a synthetic placeholder `ChatMsg` for a thread root that hasn't been

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
@@ -102,11 +102,19 @@ export function useConcordUnread(
     }
   }, [communityIdHex, rumorsByChannel, pubkey]);
 
+  // Depend on this community's stamps only: `readState` is a new object on every
+  // markRead anywhere, and the rail mounts one of these per community.
+  const readStateRef = useRef(readState);
+  readStateRef.current = readState;
+  let readSig = "";
+  for (const idHex of rumorsByChannel.keys()) readSig += `${readState[concordReadKey(idHex)] ?? 0},`;
+
   const byChannel = useMemo<Record<string, ConcordUnread>>(() => {
     void memoryRev;
+    void readSig;
     const next: Record<string, ConcordUnread> = {};
     for (const [idHex, rumors] of rumorsByChannel) {
-      const lastRead = readState[concordReadKey(idHex)] ?? 0;
+      const lastRead = readStateRef.current[concordReadKey(idHex)] ?? 0;
       // A visual flood renders as ONE collapsed row, so counting its members
       // here would badge a channel — and on a big enough wave, every channel in
       // the community — for something the reader will see as a single line they
@@ -190,7 +198,7 @@ export function useConcordUnread(
       if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
     }
     return next;
-  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev]);
+  }, [rumorsByChannel, readSig, pubkey, gitByChannel, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {
