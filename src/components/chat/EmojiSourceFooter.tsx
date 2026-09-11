@@ -2,6 +2,7 @@ import { Check, Loader2, Plus } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAddEmojiPack, useHasEmojiPack } from "@/hooks/useEmojiPacks";
 import { useEmojiSource } from "@/hooks/useEmojiSource";
@@ -12,13 +13,18 @@ import { toast } from "@/hooks/useToast";
  * one-tap add so seeing an emoji you like — as a reaction or inline in a
  * message — is enough to get it.
  *
- * Renders nothing when the emoji's origin can't be resolved — a reaction tag
- * (and an inline `emoji` tag) carries only `[emoji, code, url]`, so a pack we've
- * never seen stays unnamed rather than being guessed at.
+ * While the author-scoped relay lookup is in flight it shows a skeleton rather
+ * than an empty gap — that lookup is several relay round-trips, so the answer
+ * can arrive a beat after the popover opens. Renders nothing only once it
+ * settles with no pack — a reaction tag (and an inline `emoji` tag) carries only
+ * `[emoji, code, url]`, so a pack we've never seen stays unnamed rather than
+ * being guessed at. When `authorPubkey` (who typed the message / left the
+ * reaction) is known, an unknown pack is chased down over THAT author's own
+ * relays before giving up.
  */
-export function EmojiSourceFooter({ url }: { url: string }) {
+export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPubkey?: string }) {
   const { user } = useCurrentUser();
-  const source = useEmojiSource(url);
+  const { source, isLoading } = useEmojiSource(url, authorPubkey);
   const alreadyAdded = useHasEmojiPack(source?.coord);
   const { mutateAsync: addPack, isPending } = useAddEmojiPack();
   // Flip the button the moment the publish lands, rather than waiting for the
@@ -44,7 +50,20 @@ export function EmojiSourceFooter({ url }: { url: string }) {
     }
   }, [addPack, source, user]);
 
-  if (!source) return null;
+  if (!source) {
+    if (!isLoading) return null;
+    // Author-scoped lookup in flight — mirror the resolved footer's layout so
+    // the popover doesn't jump when the name lands.
+    return (
+      <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2">
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">From</div>
+          <Skeleton className="h-3 w-24" />
+        </div>
+        <Skeleton className="h-7 w-14 shrink-0 rounded-lg touch:h-9" />
+      </div>
+    );
+  }
   const isAdded = justAdded || alreadyAdded;
 
   return (

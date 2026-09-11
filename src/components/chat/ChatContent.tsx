@@ -279,10 +279,12 @@ function highlightText(
   term: string | undefined,
   emojiMap: Map<string, string>,
   imgClassName?: string,
+  authorPubkey?: string,
 ): ReactNode[] {
   // Inline emojis in the message body are clickable — tapping one opens its
-  // source pack, the same popover a reaction pill shows.
-  if (!term || !term.trim()) return emojify(text, emojiMap, imgClassName, true);
+  // source pack, the same popover a reaction pill shows. The message author is
+  // forwarded so an unknown pack can be resolved over their own relays.
+  if (!term || !term.trim()) return emojify(text, emojiMap, imgClassName, true, authorPubkey);
 
   const needle = term.trim().toLowerCase();
   const out: ReactNode[] = [];
@@ -293,13 +295,13 @@ function highlightText(
   for (;;) {
     const idx = hay.indexOf(needle, from);
     if (idx === -1) {
-      out.push(...emojify(text.slice(from), emojiMap, imgClassName, true));
+      out.push(...emojify(text.slice(from), emojiMap, imgClassName, true, authorPubkey));
       break;
     }
-    if (idx > from) out.push(...emojify(text.slice(from, idx), emojiMap, imgClassName, true));
+    if (idx > from) out.push(...emojify(text.slice(from, idx), emojiMap, imgClassName, true, authorPubkey));
     out.push(
       <mark key={`hl-${key++}`} className="bg-primary/30 text-foreground rounded-[2px]">
-        {emojify(text.slice(idx, idx + needle.length), emojiMap, imgClassName, true)}
+        {emojify(text.slice(idx, idx + needle.length), emojiMap, imgClassName, true, authorPubkey)}
       </mark>,
     );
     from = idx + needle.length;
@@ -1143,7 +1145,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           <span key={key}>
             {renderInlineMarkdown(
               token.value,
-              (leaf) => highlightText(leaf, highlight, emojiMap, imgClass),
+              (leaf) => highlightText(leaf, highlight, emojiMap, imgClass, event.pubkey),
               `${key}-`,
             )}
           </span>

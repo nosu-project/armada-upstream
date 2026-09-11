@@ -12,6 +12,8 @@ interface EmojiSourcePopoverProps {
   url: string;
   /** CSS class name forwarded to the inline emoji image. */
   imgClassName?: string;
+  /** Who typed the message, for the author-scoped pack lookup on an unknown emoji. */
+  authorPubkey?: string;
 }
 
 /**
@@ -24,7 +26,7 @@ interface EmojiSourcePopoverProps {
  * pack can't be resolved — so an unknown emoji still names its shortcode in the
  * header but offers no add.
  */
-export function EmojiSourcePopover({ name, url, imgClassName }: EmojiSourcePopoverProps) {
+export function EmojiSourcePopover({ name, url, imgClassName, authorPubkey }: EmojiSourcePopoverProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -58,7 +60,7 @@ export function EmojiSourcePopover({ name, url, imgClassName }: EmojiSourcePopov
           />
           <span className="truncate text-xs font-medium">:{name}:</span>
         </div>
-        <EmojiSourceFooter url={url} />
+        <EmojiSourceFooter url={url} authorPubkey={authorPubkey} />
       </PopoverContent>
     </Popover>
   );

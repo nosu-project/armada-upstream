@@ -105,7 +105,7 @@ function ReactionDetail({ tally }: { tally: ReactionTally }) {
           <ReactorRow key={pubkey} pubkey={pubkey} />
         ))}
       </div>
-      {tally.url && <EmojiSourceFooter url={tally.url} />}
+      {tally.url && <EmojiSourceFooter url={tally.url} authorPubkey={tally.pubkeys[0]} />}
     </>
   );
 }

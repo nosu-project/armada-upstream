@@ -12,12 +12,17 @@ const SHORTCODE_REGEX = /:([a-zA-Z0-9_-]+):/g;
  * When `clickable` is set, each emoji becomes a trigger for its source popover
  * (which pack it came from, with a one-tap add). Left off for compact previews
  * — DM lists, reply quotes, display names — where a tappable popover is noise.
+ *
+ * `authorPubkey` is who typed the text; the popover uses it to resolve an
+ * unknown pack over that author's own relays rather than blindly (see
+ * `useEmojiSource`). Harmless to omit — resolution just stays local-only.
  */
 export function emojify(
   text: string,
   emojiMap: Map<string, string>,
   imgClassName?: string,
   clickable = false,
+  authorPubkey?: string,
 ): ReactNode[] {
   if (emojiMap.size === 0) return [text];
 
@@ -44,6 +49,7 @@ export function emojify(
           name={shortcode}
           url={url}
           imgClassName={imgClassName}
+          authorPubkey={authorPubkey}
         />
       ) : (
         <CustomEmojiImg
