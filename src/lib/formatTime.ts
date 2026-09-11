@@ -48,10 +48,11 @@ export function relativeTime(timestamp: number): string {
   return "just now";
 }
 
+// toLocaleTimeString builds a new Intl.DateTimeFormat per call; every row calls this.
+let clockFormat: Intl.DateTimeFormat | undefined;
+
 /** Format a unix-seconds timestamp as a short local clock time ("3:07 PM"). */
 export function shortClockTime(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  clockFormat ??= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+  return clockFormat.format(new Date(timestamp * 1000));
 }

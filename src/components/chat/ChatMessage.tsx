@@ -598,6 +598,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // moderators in principle but no way to reach them privately (a legacy
   // Concord epoch), and offers no report at all.
   const [reportOpen, setReportOpen] = useState(false);
+  // The menu's collision padding forces a layout flush; compute it only while open.
+  const [menuOpen, setMenuOpen] = useState(false);
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   // A mesh/proxied identity isn't a Nostr pubkey a report could name, and a
@@ -1091,9 +1093,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
       // Clearing image actions on close, and again in the trigger's capture
       // phase (which runs before an image's own contextmenu handler restages
       // them), keeps a right-click on text from inheriting the last image's.
-      <ContextMenu onOpenChange={(open) => { if (!open) setImageActions(null); }}>
+      <ContextMenu onOpenChange={(open) => { setMenuOpen(open); if (!open) setImageActions(null); }}>
         <ContextMenuTrigger className="block" onContextMenuCapture={() => setImageActions(null)}>{row}</ContextMenuTrigger>
-        <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
+        <ContextMenuContent className="w-52" collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
           {withImageActions(imageActions, menuActions).map((action) => (
             <div key={action.id}>
               {action.groupStart && <ContextMenuSeparator />}

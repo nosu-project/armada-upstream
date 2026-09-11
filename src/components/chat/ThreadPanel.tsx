@@ -175,6 +175,8 @@ function ThreadMessage({
   // where a report goes, and an absent destination (a legacy Concord epoch,
   // which has no staff-only address) offers none.
   const [reportOpen, setReportOpen] = useState(false);
+  // The menu's collision padding forces a layout flush; compute it only while open.
+  const [menuOpen, setMenuOpen] = useState(false);
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
@@ -281,7 +283,7 @@ function ThreadMessage({
 
   return (
     <>
-    <ContextMenu>
+    <ContextMenu onOpenChange={setMenuOpen}>
       {/* On touch the long-press gesture belongs to the action sheet; Radix's
           own long-press would otherwise open this menu at the same time. */}
       <ContextMenuTrigger asChild disabled={isTouch}>
@@ -402,7 +404,7 @@ function ThreadMessage({
           ) : null}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
+      <ContextMenuContent className="w-52" collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
         {menuActions.map((action) => (
           <div key={action.id}>
             {action.groupStart && <ContextMenuSeparator />}

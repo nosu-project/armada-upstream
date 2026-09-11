@@ -184,10 +184,16 @@ export function useDeferredFold<T>(
     // Keep the in-memory cache hot so cycling back to this key repaints
     // synchronously (see the key-change seed above).
     memCache.set(key, live);
-    const serialized = encode(live);
-    if (serialized === lastWritten.current) return;
-    lastWritten.current = serialized;
-    void writeFolded(key, live);
+    const persist = () => {
+      const serialized = encode(live);
+      if (serialized === lastWritten.current) return;
+      lastWritten.current = serialized;
+      void writeFolded(key, live);
+    };
+    // Encoding a fold is not cheap; do it on the next task, not in the commit.
+    // A timer, not an idle callback, so it never takes the fold's idle slot.
+    const handle = setTimeout(persist, 0);
+    return () => clearTimeout(handle);
   }, [key, live]);
 
   return live ?? restored;
