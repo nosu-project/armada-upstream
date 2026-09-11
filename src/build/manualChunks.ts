@@ -16,10 +16,12 @@ export function manualChunks(id: string): string | undefined {
     if (id.includes("node_modules/highlight.js") || id.includes("node_modules/lowlight")) {
       return "vendor-highlight";
     }
-    // Reached only lazily (WalletDialog → @/lib/bitcoin); keep it off the eager
-    // vendor-nostr chunk. Must precede the @scure catch-all below.
+    // Lazy (WalletDialog → @/lib/bitcoin), so keep it and its nested @noble
+    // copies out of vendor-nostr. Left unnamed on purpose: rolldown pulls a
+    // named chunk's dependencies in with it, which moved the shared
+    // @scure/base out of vendor-nostr.
     if (id.includes("node_modules/@scure/btc-signer")) {
-      return "vendor-btc";
+      return undefined;
     }
     if (id.includes("node_modules/@nostrify") || id.includes("node_modules/nostr-tools") || id.includes("node_modules/@noble") || id.includes("node_modules/@scure")) {
       return "vendor-nostr";
@@ -37,7 +39,7 @@ export function manualChunks(id: string): string | undefined {
   return undefined;
 }
 
-/** Vendor chunks index.html `modulepreload`s (on the first-paint path). */
+/** Named chunks the entry reaches statically (and so preloads). Hand-maintained. */
 export const EAGERLY_PRELOADED_CHUNKS: ReadonlySet<string> = new Set([
   "vendor-react",
   "vendor-nostr",

@@ -42,6 +42,9 @@ describe("manualChunks router", () => {
     const chunk = manualChunks(mod("@scure/btc-signer", "esm/transaction.js"));
     expect(EAGERLY_PRELOADED_CHUNKS.has(chunk ?? "")).toBe(false);
     expect(chunk).not.toBe("vendor-nostr");
+    // Unnamed: a named chunk drags its dependencies (the shared @scure/base) in.
+    expect(chunk).toBeUndefined();
+    expect(manualChunks("/repo/node_modules/@scure/btc-signer/node_modules/@noble/curves/secp256k1.js")).toBeUndefined();
   });
 
   it("still groups the other @scure/@noble crypto into vendor-nostr", () => {
