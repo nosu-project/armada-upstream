@@ -8,7 +8,7 @@ import type {
   RealtimeListener,
 } from "@webxdc/types/webxdc";
 
-import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCurrentUserProfile } from "@/hooks/useCurrentUser";
 import { getDisplayName } from "@/lib/getDisplayName";
 
 /**
@@ -59,7 +59,7 @@ export interface AppStateMeta {
  * share one implementation.
  */
 export function useWebxdcApi(sync: AppSync): WebxdcAPI<unknown> {
-  const { user, metadata } = useCurrentUser();
+  const { user, metadata } = useCurrentUserProfile();
 
   const selfPubkey = user?.pubkey;
   const selfAddr = useMemo(

@@ -132,8 +132,15 @@ export function useCurrentUser() {
   }, [logins, loginToUser]);
 
   const user = users[0] as NUser | undefined;
-  const author = useAuthor(user?.pubkey);
 
+  // No profile read here: this is called per message row. See useCurrentUserProfile.
+  return { user, users };
+}
+
+/** The current user plus their kind-0 profile. One query observer per call. */
+export function useCurrentUserProfile() {
+  const { user, users } = useCurrentUser();
+  const author = useAuthor(user?.pubkey);
   return {
     user,
     users,

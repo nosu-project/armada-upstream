@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "r
 
 import { MeshContext, type MeshContextType, type MeshState } from "@/contexts/MeshContext";
 import { useAppContext } from "@/hooks/useAppContext";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCurrentUserProfile } from "@/hooks/useCurrentUser";
 import { BluetoothMesh, type MeshMessage, type MeshPeer } from "@/lib/bluetoothMesh";
 import { meshAnonName } from "@/lib/meshIdentity";
 
@@ -46,7 +46,7 @@ function meshToEvent(m: MeshMessage): ChatMsg {
  * UI code should call {@link useMeshTransport}, which reads the provider value.
  */
 export function useMeshTransportState(): MeshContextType {
-  const { user, metadata } = useCurrentUser();
+  const { user, metadata } = useCurrentUserProfile();
   const { config, updateConfig } = useAppContext();
   const incognito = config.meshIncognito;
   // Opt-in gate: the mesh never starts (no permission prompt, no foreground

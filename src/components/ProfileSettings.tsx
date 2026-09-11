@@ -12,7 +12,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { ProfileCard } from '@/components/ProfileCard';
 import { ImageCropDialog } from '@/components/ImageCropDialog';
-import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useCurrentUserProfile } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useUploadFile } from '@/hooks/useUploadFile';
 import { useToast } from '@/hooks/useToast';
@@ -446,7 +446,7 @@ interface ProfileSettingsProps {
  * wallets, links, etc.). Publishes a kind-0 metadata event on save.
  */
 export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = true }: ProfileSettingsProps = {}) {
-  const { user, metadata, event } = useCurrentUser();
+  const { user, metadata, event } = useCurrentUserProfile();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent, isPending } = useNostrPublish();
   const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();

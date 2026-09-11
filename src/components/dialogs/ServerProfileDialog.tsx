@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCurrentUserProfile } from "@/hooks/useCurrentUser";
 import { useServerProfile, useUpdateServerProfile } from "@/hooks/useServerProfile";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -40,7 +40,7 @@ const PRESET_COLORS = [
  * — they never appear on other servers or in your global profile.
  */
 export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProfileDialogProps) {
-  const { user, metadata } = useCurrentUser();
+  const { user, metadata } = useCurrentUserProfile();
   const { data: profile, isLoading } = useServerProfile(relayUrl, user?.pubkey);
   const { mutateAsync: save, isPending } = useUpdateServerProfile(relayUrl);
 
