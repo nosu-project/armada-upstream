@@ -49,6 +49,21 @@ const decodeMemo = new Map<string, OpenedChat | null>();
 /** Memo keys that failed as "no held stream key" — retryable after a rekey catch-up. */
 const skippedNoKey = new Set<string>();
 
+/** Working-set ceiling (~2KB/entry, so lower than verifyCache's id-only 20k). */
+const DECODE_MEMO_CAP = 5_000;
+
+/** Record a decode verdict, evicting oldest-first at the cap. All writes route here. */
+function rememberDecode(memoKey: string, value: OpenedChat | null): void {
+  if (!decodeMemo.has(memoKey) && decodeMemo.size >= DECODE_MEMO_CAP) {
+    const oldest = decodeMemo.keys().next();
+    if (!oldest.done) {
+      decodeMemo.delete(oldest.value);
+      skippedNoKey.delete(oldest.value);
+    }
+  }
+  decodeMemo.set(memoKey, value);
+}
+
 /** Forget remembered no-key failures (a caught-up rekey may now decode them). */
 export function forgetChatSkips(): void {
   for (const id of skippedNoKey) decodeMemo.delete(id);
@@ -59,6 +74,11 @@ export function forgetChatSkips(): void {
 export function _resetChatMemoForTests(): void {
   decodeMemo.clear();
   skippedNoKey.clear();
+}
+
+/** Test seam: current decode-memo entry count, for the unbounded-growth guard. */
+export function _chatDecodeMemoSizeForTests(): number {
+  return decodeMemo.size;
 }
 
 /**
@@ -97,7 +117,7 @@ function openChatToSeal(
 
   const stream = channel.streams.find((s) => s.group.pk === wrap.pubkey);
   if (!stream) {
-    decodeMemo.set(memoKey, null);
+    rememberDecode(memoKey, null);
     skippedNoKey.add(memoKey);
     return { done: null };
   }
@@ -108,7 +128,7 @@ function openChatToSeal(
     if (seal.kind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
     return { pending: { memoKey, epoch: stream.epoch, retiredAt: stream.retiredAt, seal, finish } };
   } catch {
-    decodeMemo.set(memoKey, null);
+    rememberDecode(memoKey, null);
     return { done: null };
   }
 }
@@ -135,7 +155,7 @@ function finishChat(pending: PendingChat, channel: Channel): OpenedChat | null {
   } catch {
     opened = null;
   }
-  decodeMemo.set(pending.memoKey, opened);
+  rememberDecode(pending.memoKey, opened);
   return opened;
 }
 
@@ -242,7 +262,7 @@ export async function openChatBatch(
       if (oks[j]) {
         resolved[slot] = finishChat(chat, channel);
       } else {
-        decodeMemo.set(chat.memoKey, null);
+        rememberDecode(chat.memoKey, null);
       }
       cryptoMs += performance.now() - finishStart;
       if (j + 1 < pending.length && performance.now() - sliceStart >= DECODE_SLICE_MS) {

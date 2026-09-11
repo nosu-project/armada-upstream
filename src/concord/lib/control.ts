@@ -175,6 +175,18 @@ export async function sealEdition(rumor: NostrRumor, control: GroupKey, signer: 
  */
 const parsedEditionMemo = new Map<string, ParsedEdition | null>();
 
+/** FIFO ceiling; a recompute cache, so eviction only re-pays a parse. */
+const PARSED_EDITION_MEMO_CAP = 20_000;
+
+/** Record a parsed edition, evicting oldest-first at the cap. All writes route here. */
+function rememberEdition(id: string, parsed: ParsedEdition | null): void {
+  if (!parsedEditionMemo.has(id) && parsedEditionMemo.size >= PARSED_EDITION_MEMO_CAP) {
+    const oldest = parsedEditionMemo.keys().next();
+    if (!oldest.done) parsedEditionMemo.delete(oldest.value);
+  }
+  parsedEditionMemo.set(id, parsed);
+}
+
 /** Open every control wrap that decodes under one of `groups` into editions. */
 export function openControlWraps(wraps: NostrEvent[], groups: StreamKeyView[]): ParsedEdition[] {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
@@ -193,7 +205,7 @@ export function openControlWraps(wraps: NostrEvent[], groups: StreamKeyView[]): 
     } catch {
       parsed = null;
     }
-    parsedEditionMemo.set(wrap.id, parsed);
+    rememberEdition(wrap.id, parsed);
     if (parsed) out.push(parsed);
   }
   return out;
@@ -219,11 +231,21 @@ export function openControlEditions(opened: OpenedEvent[]): ParsedEdition[] {
     } catch {
       parsed = null;
     }
-    parsedEditionMemo.set(ev.rumorId, parsed);
+    rememberEdition(ev.rumorId, parsed);
     if (parsed) out.push(parsed);
   }
   perfCount("fold.openControlEditions", performance.now() - start, opened.length, "editions");
   return out;
+}
+
+/** Test seam: empty the parsed-edition memo, i.e. what a reload does to it. */
+export function _resetControlMemosForTests(): void {
+  parsedEditionMemo.clear();
+}
+
+/** Test seam: current parsed-edition memo entry count, for the unbounded-growth guard. */
+export function _parsedEditionMemoSizeForTests(): number {
+  return parsedEditionMemo.size;
 }
 
 // ── Edition builders ─────────────────────────────────────────────────────────
