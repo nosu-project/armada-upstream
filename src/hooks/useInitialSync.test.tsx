@@ -105,6 +105,29 @@ vi.mock("@/lib/nip65", () => ({
   uniqueRelayUrls: (urls: Iterable<string>) => [...new Set(urls)],
 }));
 
+/**
+ * Route queryExplicitRelays responses by the first filter's kind rather than by
+ * call order. The post-relay phases now run CONCURRENTLY (settings, the NIP-29
+ * group list and Concord fire in parallel), so the order a test's reads arrive
+ * in is no longer fixed — dispatching on kind keeps each read's mocked payload
+ * attached to the read it belongs to.
+ */
+const SERVICE_LIST_KINDS = [10007, 10050, 10063];
+function respondByKind(byKind: {
+  settings?: unknown[];
+  groups?: unknown[];
+  service?: unknown[];
+}): void {
+  h.queryExplicitRelays.mockReset().mockImplementation(async (...args: unknown[]) => {
+    const filters = (args[2] ?? []) as Array<{ kinds?: number[] }>;
+    const kinds = filters.flatMap((f) => f.kinds ?? []);
+    if (kinds.includes(30078)) return byKind.settings ?? [];
+    if (kinds.includes(10009)) return byKind.groups ?? [];
+    if (kinds.some((k) => SERVICE_LIST_KINDS.includes(k))) return byKind.service ?? [];
+    return [];
+  });
+}
+
 describe("useInitialSync", () => {
   beforeEach(async () => {
     localStorage.clear();
@@ -313,11 +336,10 @@ describe("useInitialSync", () => {
     const priorSigner = h.user.signer;
     h.user.signer = { nip44: { decrypt: vi.fn(async () => JSON.stringify(legacy)) } };
 
-    h.queryExplicitRelays.mockReset()
-      // 1. No canonical kind-10007/10050/10063 lists exist for this account.
-      .mockResolvedValueOnce([])
-      // 2. The encrypted settings blob still carries the pre-migration values.
-      .mockResolvedValueOnce([
+    // No canonical kind-10007/10050/10063 lists exist; the encrypted settings
+    // blob still carries the pre-migration values.
+    respondByKind({
+      settings: [
         {
           pubkey: PUBKEY,
           id: "settings",
@@ -327,8 +349,8 @@ describe("useInitialSync", () => {
           tags: [["d", "armada/metadata"]],
           content: "cipher",
         },
-      ])
-      .mockResolvedValue([]);
+      ],
+    });
 
     const view = renderHook(() => useInitialSync(PUBKEY));
     await waitFor(() => expect(view.result.current.done).toBe(true));
@@ -355,13 +377,12 @@ describe("useInitialSync", () => {
       tags: [["d", "armada/metadata"]],
       content: "cipher",
     };
-    h.queryExplicitRelays.mockReset()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
+    respondByKind({
+      settings: [
         { ...base, id: "f".repeat(64) },
         { ...base, id: "0".repeat(64) },
-      ])
-      .mockResolvedValue([]);
+      ],
+    });
 
     const view = renderHook(() => useInitialSync(PUBKEY));
     await waitFor(() => expect(view.result.current.done).toBe(true));
@@ -411,9 +432,8 @@ describe("useInitialSync", () => {
         decrypt: vi.fn(async () => JSON.stringify(payload)),
       },
     };
-    h.queryExplicitRelays.mockReset()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
+    respondByKind({
+      settings: [{
         pubkey: PUBKEY,
         id: "d".repeat(64),
         kind: 30078,
@@ -424,14 +444,17 @@ describe("useInitialSync", () => {
           ["t", DM_CONVERSATIONS_EVENT_TAG],
         ],
         content: "cipher",
-      }])
-      .mockResolvedValue([]);
+      }],
+    });
 
     const view = renderHook(() => useInitialSync(PUBKEY));
     await waitFor(() => expect(view.result.current.done).toBe(true));
 
     expect(await getDmConversationIndexRecords(PUBKEY)).toEqual([entry]);
-    const settingsFilters = h.queryExplicitRelays.mock.calls[1]?.[2] as Array<Record<string, unknown>>;
+    const settingsCall = h.queryExplicitRelays.mock.calls.find(
+      (call) => ((call[2] ?? []) as Array<{ kinds?: number[] }>).some((f) => f.kinds?.includes(30078)),
+    );
+    const settingsFilters = settingsCall?.[2] as Array<Record<string, unknown>>;
     expect(settingsFilters).toContainEqual(expect.objectContaining({
       kinds: [30078],
       authors: [PUBKEY],

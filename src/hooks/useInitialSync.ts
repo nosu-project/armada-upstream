@@ -388,398 +388,419 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
       if (cancelled) return;
 
-      // Hydrate the standard portable service lists from the same discovered
-      // account relays. Their normal queries may have already cached an empty
-      // read against app defaults before NIP-65 discovery completed.
-      let canonicalSearch: SearchRelayListQuery | undefined;
-      let canonicalDm: DmRelayListQuery | undefined;
-      let canonicalBlossom: (BlossomServerListQuery & { event: NostrRumor }) | undefined;
-      try {
-        const deadline = stepSignal();
-        const [wireEvents, stored] = await Promise.all([
-          queryExplicitRelays(
-            nostr,
-            accountRelays,
-            [{
-              kinds: [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
-              authors: [pubkey],
-            }],
-            deadline,
-            { graceMs: STEP_GRACE_MS },
-          ),
-          readStoredCanonicalSelfLists(
-            eventStore,
-            pubkey,
-            [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
-            deadline,
-          ),
-        ]);
-        const cachedSearch = queryClient.getQueryData<SearchRelayListQuery>(
-          ["search-relay-list", pubkey],
-        );
-        const cachedDm = queryClient.getQueryData<DmRelayListQuery>(["dm-relay-list", pubkey]);
-        const cachedBlossom = queryClient.getQueryData<BlossomServerListQuery>(
-          ["blossom-server-list", pubkey],
-        );
-        const candidates: NostrRumor[] = [
-          ...wireEvents,
-          ...stored.events,
-          ...(cachedSearch?.event ? [cachedSearch.event] : []),
-          ...(cachedDm?.event ? [cachedDm.event] : []),
-          ...(cachedBlossom?.event ? [cachedBlossom.event] : []),
-        ];
-        const newest = (kind: number) => newestCanonicalSelfList(candidates, pubkey, kind);
+      // ── Steps 2–6 run concurrently ──────────────────────────────────────
+      // Given the relay map resolved above, these three branches share no
+      // data: the settings/service-list reads, the NIP-29 group catch-up and
+      // the Concord warm-up are independent (the Concord list reads
+      // selfStateRelays — fixed by step 1 — and settings folds only its own
+      // canonical lists). Run serially they SUMMED; run concurrently the gate
+      // waits on the longest branch, in practice the Concord warm-up, under
+      // which the others hide. Every ordering that matters (a phase feeding the
+      // next) stays intact WITHIN its branch, and `done` awaits all three, so
+      // the gate never lifts onto empty rooms or a pre-settings default theme.
 
-        const searchEvent = newest(KIND_SEARCH_RELAYS);
-        if (searchEvent) {
-          canonicalSearch = {
-            event: searchEvent,
-            ...(await readSearchRelayList(searchEvent, user.signer)),
-          };
-          if (!canonicalSearch.decryptFailed) {
-            queryClient.setQueryData(["search-relay-list", pubkey], canonicalSearch);
-          }
-        }
-
-        const dmEvent = newest(KIND_DM_RELAYS);
-        if (dmEvent) {
-          canonicalDm = { event: dmEvent, relays: parseDmRelays(dmEvent) };
-          queryClient.setQueryData(["dm-relay-list", pubkey], canonicalDm);
-        }
-
-        const blossomEvent = newest(KIND_BLOSSOM_SERVERS);
-        if (blossomEvent) {
-          canonicalBlossom = {
-            event: blossomEvent,
-            servers: parseBlossomServerList(blossomEvent),
-          };
-          queryClient.setQueryData(["blossom-server-list", pubkey], canonicalBlossom);
-        }
-
-        if (!cancelled && (canonicalSearch || canonicalDm || canonicalBlossom)) {
-          const search = canonicalSearch && !canonicalSearch.decryptFailed
-            ? canonicalSearch.relays
-            : undefined;
-          updateConfigRef.current((current) => ({
-            ...current,
-            ...(search ? { searchRelays: search } : {}),
-            ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
-            ...(canonicalBlossom
-              && replaceableIsNewerThanMetadata(
-                canonicalBlossom.event,
-                current.blossomServerMetadata,
-              )
-              ? {
-                  blossomServerMetadata: {
-                    servers: canonicalBlossom.servers,
-                    updatedAt: canonicalBlossom.event.created_at,
-                    eventId: canonicalBlossom.event.id,
-                  },
-                }
-              : {}),
-          }));
-        }
-      } catch {
-        // Best-effort; the owning hooks retry after the pool adopts NIP-65.
-      }
-
-      // ── 2. Encrypted settings ───────────────────────────────────────────
-      const sId = begin("settings");
-      let settingsFound = false;
-      const automaticSettingsSync = configRef.current.automaticSettingsSync !== false;
-      try {
-        if (user.signer.nip44 && automaticSettingsSync) {
-          // All six documents in one filter. No `limit`: it would cap the
-          // whole filter rather than each `d`, so five of the six could come
-          // back missing purely because the sixth answered first.
-          const settingsFilter = {
-            kinds: [SETTINGS_KIND],
-            authors: [pubkey],
-            "#d": SETTINGS_DTAGS,
-          };
-          const settingsRead = await queryExplicitRelaysWithStatus(
-            nostr,
-            accountRelays,
-            [
-              settingsFilter,
-              // Unlike ordinary settings reads, the DM index must never widen
-              // to queryExplicitRelays' general-pool fallback. With no explicit
-              // self-state destination, leave it local and retry after relay
-              // discovery rather than leaking the topic query to the pool.
-              ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
-            ],
-            stepSignal(),
-            { graceMs: STEP_GRACE_MS },
+      // ── Branch A: portable service lists + encrypted settings ───────────
+      const branchSettings = async () => {
+        // Hydrate the standard portable service lists from the same discovered
+        // account relays. Their normal queries may have already cached an empty
+        // read against app defaults before NIP-65 discovery completed.
+        let canonicalSearch: SearchRelayListQuery | undefined;
+        let canonicalDm: DmRelayListQuery | undefined;
+        let canonicalBlossom: (BlossomServerListQuery & { event: NostrRumor }) | undefined;
+        try {
+          const deadline = stepSignal();
+          const [wireEvents, stored] = await Promise.all([
+            queryExplicitRelays(
+              nostr,
+              accountRelays,
+              [{
+                kinds: [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+                authors: [pubkey],
+              }],
+              deadline,
+              { graceMs: STEP_GRACE_MS },
+            ),
+            readStoredCanonicalSelfLists(
+              eventStore,
+              pubkey,
+              [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+              deadline,
+            ),
+          ]);
+          const cachedSearch = queryClient.getQueryData<SearchRelayListQuery>(
+            ["search-relay-list", pubkey],
           );
-          const events = settingsRead.events;
-          const expectedSettingsRelays = uniqueRelayUrls(accountRelays);
-          const settingsAbsenceAuthoritative = expectedSettingsRelays.length > 0
-            && settingsRead.failed.length === 0
-            && settingsRead.answered.length === expectedSettingsRelays.length;
+          const cachedDm = queryClient.getQueryData<DmRelayListQuery>(["dm-relay-list", pubkey]);
+          const cachedBlossom = queryClient.getQueryData<BlossomServerListQuery>(
+            ["blossom-server-list", pubkey],
+          );
+          const candidates: NostrRumor[] = [
+            ...wireEvents,
+            ...stored.events,
+            ...(cachedSearch?.event ? [cachedSearch.event] : []),
+            ...(cachedDm?.event ? [cachedDm.event] : []),
+            ...(cachedBlossom?.event ? [cachedBlossom.event] : []),
+          ];
+          const newest = (kind: number) => newestCanonicalSelfList(candidates, pubkey, kind);
 
-          // Hydrate before SyncGate opens so a fresh device can draw restored
-          // rows immediately. The helper caches successful decryptions, so the
-          // standing owner will not prompt again for unchanged shard events.
-          if (accountRelays.length > 0) {
-            await decodeAndHydrateDmConversationIndex(events, user.signer, pubkey);
-          }
-
-          // Seed every split document straight into its own query cache. Their
-          // events are already in ArmadaDB — `queryExplicitRelays` reads
-          // through the batcher, which mirrors what it returns — so this is
-          // purely to spare each hook the store round-trip on first render.
-          const newestByDTag = new Map<string, NostrEvent>();
-          for (const candidate of events) {
-            const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
-            if (dTag === undefined) continue;
-            const held = newestByDTag.get(dTag);
-            if (
-              !held
-              || candidate.created_at > held.created_at
-              || (candidate.created_at === held.created_at && candidate.id < held.id)
-            ) {
-              newestByDTag.set(dTag, candidate);
-            }
-          }
-          for (const [dTag, candidate] of newestByDTag) {
-            const name = settingsDocForDTag(dTag);
-            if (!name || name === "metadata") continue; // metadata is seeded below
-            const decoded = await decodeSettingsDoc(candidate, user.signer, pubkey, name);
-            if (decoded && !cancelled) {
-              queryClient.setQueryData(settingsDocQueryKey(name, pubkey), decoded);
+          const searchEvent = newest(KIND_SEARCH_RELAYS);
+          if (searchEvent) {
+            canonicalSearch = {
+              event: searchEvent,
+              ...(await readSearchRelayList(searchEvent, user.signer)),
+            };
+            if (!canonicalSearch.decryptFailed) {
+              queryClient.setQueryData(["search-relay-list", pubkey], canonicalSearch);
             }
           }
 
-          let legacyNotificationsPresent = false;
-          const event = newestByDTag.get(settingsDTag("metadata"));
-          if (event?.content) {
-            const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
-            const parsed = MetadataDocSchema.safeParse(JSON.parse(decrypted));
-            if (parsed.success && !cancelled) {
-              legacyNotificationsPresent = hasMigratedKeys(parsed.data, "notifications");
-              // Fold this run's canonical relay reads (NIP-65 bootstrap, and
-              // the standard 10007/10050/10063 lists) over the NIP-78 blob so
-              // the seeded config already reflects them.
-              const merged = {
-                ...parsed.data,
-                ...(canonicalSearch && !canonicalSearch.decryptFailed
-                  ? { searchRelays: canonicalSearch.relays }
-                  : {}),
-                ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
-                ...(canonicalBlossom
-                  ? {
-                      blossomServerMetadata: {
-                        servers: canonicalBlossom.servers,
-                        updatedAt: canonicalBlossom.event.created_at,
-                        eventId: canonicalBlossom.event.id,
-                      },
-                    }
-                  : {}),
-              };
-              // The event itself is already in ArmadaDB — `queryExplicitRelays`
-              // reads through the batcher, which mirrors what it returns — so
-              // the settings query would find it on its own. Seeding is for
-              // `merged`, which folds this run's canonical relay reads over the
-              // document and exists only in memory.
-              queryClient.setQueryData<StoredSettingsDoc<"metadata">>(
-                settingsDocQueryKey("metadata", pubkey),
-                { event, doc: merged },
-              );
-              settingsFound = true;
+          const dmEvent = newest(KIND_DM_RELAYS);
+          if (dmEvent) {
+            canonicalDm = { event: dmEvent, relays: parseDmRelays(dmEvent) };
+            queryClient.setQueryData(["dm-relay-list", pubkey], canonicalDm);
+          }
 
-              // Migration: kinds 10007/10050/10063 are the canonical home for
-              // these lists as of this release, and they were dropped from the
-              // synced config keys so the NIP-78 document no longer applies them.
-              // Pre-migration clients stored them ONLY in that blob, so a fresh
-              // device with no canonical event yet would otherwise revert to
-              // defaults. Keep the blob's value alive locally; a later explicit
-              // publish promotes it to the real list. Nothing is published here.
-              const legacySearch = !canonicalSearch && Array.isArray(parsed.data.searchRelays)
-                ? parsed.data.searchRelays
-                : undefined;
-              const legacyDm = !canonicalDm && Array.isArray(parsed.data.dmRelays)
-                ? parsed.data.dmRelays
-                : undefined;
-              const legacyBlossom = !canonicalBlossom && parsed.data.blossomServerMetadata
-                ? parsed.data.blossomServerMetadata
-                : undefined;
-              if (legacySearch || legacyDm || legacyBlossom) {
-                updateConfigRef.current((current) => ({
-                  ...current,
-                  ...(legacySearch ? { searchRelays: legacySearch } : {}),
-                  ...(legacyDm ? { dmRelays: legacyDm } : {}),
-                  ...(legacyBlossom ? { blossomServerMetadata: legacyBlossom } : {}),
-                }));
+          const blossomEvent = newest(KIND_BLOSSOM_SERVERS);
+          if (blossomEvent) {
+            canonicalBlossom = {
+              event: blossomEvent,
+              servers: parseBlossomServerList(blossomEvent),
+            };
+            queryClient.setQueryData(["blossom-server-list", pubkey], canonicalBlossom);
+          }
+
+          if (!cancelled && (canonicalSearch || canonicalDm || canonicalBlossom)) {
+            const search = canonicalSearch && !canonicalSearch.decryptFailed
+              ? canonicalSearch.relays
+              : undefined;
+            updateConfigRef.current((current) => ({
+              ...current,
+              ...(search ? { searchRelays: search } : {}),
+              ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+              ...(canonicalBlossom
+                && replaceableIsNewerThanMetadata(
+                  canonicalBlossom.event,
+                  current.blossomServerMetadata,
+                )
+                ? {
+                    blossomServerMetadata: {
+                      servers: canonicalBlossom.servers,
+                      updatedAt: canonicalBlossom.event.created_at,
+                      eventId: canonicalBlossom.event.id,
+                    },
+                  }
+                : {}),
+            }));
+          }
+        } catch {
+          // Best-effort; the owning hooks retry after the pool adopts NIP-65.
+        }
+
+        // ── 2. Encrypted settings ───────────────────────────────────────────
+        const sId = begin("settings");
+        let settingsFound = false;
+        const automaticSettingsSync = configRef.current.automaticSettingsSync !== false;
+        try {
+          if (user.signer.nip44 && automaticSettingsSync) {
+            // All six documents in one filter. No `limit`: it would cap the
+            // whole filter rather than each `d`, so five of the six could come
+            // back missing purely because the sixth answered first.
+            const settingsFilter = {
+              kinds: [SETTINGS_KIND],
+              authors: [pubkey],
+              "#d": SETTINGS_DTAGS,
+            };
+            const settingsRead = await queryExplicitRelaysWithStatus(
+              nostr,
+              accountRelays,
+              [
+                settingsFilter,
+                // Unlike ordinary settings reads, the DM index must never widen
+                // to queryExplicitRelays' general-pool fallback. With no explicit
+                // self-state destination, leave it local and retry after relay
+                // discovery rather than leaking the topic query to the pool.
+                ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
+              ],
+              stepSignal(),
+              { graceMs: STEP_GRACE_MS },
+            );
+            const events = settingsRead.events;
+            const expectedSettingsRelays = uniqueRelayUrls(accountRelays);
+            const settingsAbsenceAuthoritative = expectedSettingsRelays.length > 0
+              && settingsRead.failed.length === 0
+              && settingsRead.answered.length === expectedSettingsRelays.length;
+
+            // Hydrate before SyncGate opens so a fresh device can draw restored
+            // rows immediately. The helper caches successful decryptions, so the
+            // standing owner will not prompt again for unchanged shard events.
+            if (accountRelays.length > 0) {
+              await decodeAndHydrateDmConversationIndex(events, user.signer, pubkey);
+            }
+
+            // Seed every split document straight into its own query cache. Their
+            // events are already in ArmadaDB — `queryExplicitRelays` reads
+            // through the batcher, which mirrors what it returns — so this is
+            // purely to spare each hook the store round-trip on first render.
+            const newestByDTag = new Map<string, NostrEvent>();
+            for (const candidate of events) {
+              const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
+              if (dTag === undefined) continue;
+              const held = newestByDTag.get(dTag);
+              if (
+                !held
+                || candidate.created_at > held.created_at
+                || (candidate.created_at === held.created_at && candidate.id < held.id)
+              ) {
+                newestByDTag.set(dTag, candidate);
               }
             }
-          }
-
-          // An empty notifications document is authoritative only after every
-          // declared self-state relay reached EOSE. If a split or legacy
-          // document exists, useConfigDocSync marks readiness only after that
-          // exact version has actually been folded into AppConfig.
-          if (
-            !cancelled
-            && settingsAbsenceAuthoritative
-            && !newestByDTag.has(settingsDTag("notifications"))
-            && !legacyNotificationsPresent
-          ) {
-            markNotificationSettingsReady(pubkey);
-          }
-        }
-      } catch {
-        // Best-effort; fall through to the next step.
-      }
-      resolve(
-        sId,
-        automaticSettingsSync ? (settingsFound ? "RESTORED" : "DEFAULTS") : "OFF",
-        settingsFound ? "ok" : "info",
-      );
-      if (cancelled) return;
-
-      // ── 3. Group list (kind 10009) ──────────────────────────────────────
-      const gId = begin("groups");
-      let groups: GroupRef[] = [];
-      try {
-        const groupSignal = stepSignal();
-        const [wireEvents, storedGroups] = await Promise.all([
-          queryExplicitRelays(
-            nostr,
-            accountRelays,
-            [{ kinds: [KIND_USER_GROUPS], authors: [pubkey], limit: 1 }],
-            groupSignal,
-            { graceMs: STEP_GRACE_MS },
-          ),
-          readStoredCanonicalSelfLists(
-            eventStore,
-            pubkey,
-            [KIND_USER_GROUPS],
-            groupSignal,
-          ),
-        ]);
-        const queryKey = ["nip29", "user-groups", pubkey];
-        const previous = queryClient.getQueryData<UserGroupListQuery>(queryKey);
-        const persisted = await readFolded<PersistedGroupList>(groupListFoldKey(pubkey));
-        const list = await resolveGroupListRead(
-          [...wireEvents, ...storedGroups.events].filter((event) => event.pubkey === pubkey),
-          user.signer,
-          previous,
-          persisted,
-        );
-        groups = list.groups;
-        if (!cancelled && (list.event || previous || persisted)) {
-          queryClient.setQueryData(queryKey, list);
-          if (list.event && !list.decryptFailed) {
-            void writeFolded(groupListFoldKey(pubkey), {
-              event: list.event,
-              groups: list.groups,
-              servers: list.servers,
-            } satisfies PersistedGroupList);
-          }
-        }
-      } catch {
-        // Best-effort.
-      }
-      if (groups.length > 0) {
-        resolve(gId, `${groups.length} ${groups.length === 1 ? "channel" : "channels"}`);
-      } else {
-        drop(gId);
-      }
-      if (cancelled) return;
-
-      // ── 4. Warm the store with recent messages for joined channels ──────
-      // Skipped outright with no NIP-29 channels to catch up on — there is
-      // nothing to sync and nothing worth showing.
-      const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);
-      if (channels.length > 0) {
-        const mId = begin("messages");
-        let messageCount = 0;
-        const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
-        await Promise.all(
-          channels.map(async ({ id, relay }) => {
-            try {
-              const events = await nostr.relay(relay).query(
-                [{ kinds: TIMELINE_KINDS, "#h": [id], since, limit: PAGE_SIZE }],
-                { signal: stepSignal() },
-              );
-              if (cancelled) return;
-              messageCount += events.length;
-              // The relay() wrapper mirrors these into the shared IndexedDB
-              // store — the single layer every timeline and unread scan
-              // hydrates from. No cache seeding: hooks read the store.
-            } catch {
-              // Best-effort per channel.
+            for (const [dTag, candidate] of newestByDTag) {
+              const name = settingsDocForDTag(dTag);
+              if (!name || name === "metadata") continue; // metadata is seeded below
+              const decoded = await decodeSettingsDoc(candidate, user.signer, pubkey, name);
+              if (decoded && !cancelled) {
+                queryClient.setQueryData(settingsDocQueryKey(name, pubkey), decoded);
+              }
             }
-          }),
-        );
-        resolve(mId, `${messageCount} cached`);
-      }
-      if (cancelled) return;
 
-      // ── 5. Concord: seed the community list. ──────────────────────────
-      let concordLive: ReturnType<typeof liveEntries> = [];
-      if (user.signer.nip44) {
-        const vId = begin("communities");
-        try {
-          // The login gate is the natural seeding moment for an account
-          // migrating off the retired single-event list: pass the self-state
-          // write set so a confirmed-empty read can seed §8 from local state.
-          const listData = await syncCommunityList(
-            nostr,
-            user,
-            queryClient,
-            stepSignal(),
-            selfStateRelays(configRef.current, pubkey),
-          );
-          logSync(
-            "gate",
-            `concord list fetched: event=${listData.event ? listData.event.id.slice(0, 8) : "none"} entries=${listData.list.entries.length} live=${liveEntries(listData.list).length} decryptFailed=${Boolean(listData.decryptFailed)}`,
-          );
-          if (!cancelled && !listData.decryptFailed) {
-            queryClient.setQueryData(listQueryKey(pubkey), listData);
-            concordLive = liveEntries(listData.list);
+            let legacyNotificationsPresent = false;
+            const event = newestByDTag.get(settingsDTag("metadata"));
+            if (event?.content) {
+              const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
+              const parsed = MetadataDocSchema.safeParse(JSON.parse(decrypted));
+              if (parsed.success && !cancelled) {
+                legacyNotificationsPresent = hasMigratedKeys(parsed.data, "notifications");
+                // Fold this run's canonical relay reads (NIP-65 bootstrap, and
+                // the standard 10007/10050/10063 lists) over the NIP-78 blob so
+                // the seeded config already reflects them.
+                const merged = {
+                  ...parsed.data,
+                  ...(canonicalSearch && !canonicalSearch.decryptFailed
+                    ? { searchRelays: canonicalSearch.relays }
+                    : {}),
+                  ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+                  ...(canonicalBlossom
+                    ? {
+                        blossomServerMetadata: {
+                          servers: canonicalBlossom.servers,
+                          updatedAt: canonicalBlossom.event.created_at,
+                          eventId: canonicalBlossom.event.id,
+                        },
+                      }
+                    : {}),
+                };
+                // The event itself is already in ArmadaDB — `queryExplicitRelays`
+                // reads through the batcher, which mirrors what it returns — so
+                // the settings query would find it on its own. Seeding is for
+                // `merged`, which folds this run's canonical relay reads over the
+                // document and exists only in memory.
+                queryClient.setQueryData<StoredSettingsDoc<"metadata">>(
+                  settingsDocQueryKey("metadata", pubkey),
+                  { event, doc: merged },
+                );
+                settingsFound = true;
+
+                // Migration: kinds 10007/10050/10063 are the canonical home for
+                // these lists as of this release, and they were dropped from the
+                // synced config keys so the NIP-78 document no longer applies them.
+                // Pre-migration clients stored them ONLY in that blob, so a fresh
+                // device with no canonical event yet would otherwise revert to
+                // defaults. Keep the blob's value alive locally; a later explicit
+                // publish promotes it to the real list. Nothing is published here.
+                const legacySearch = !canonicalSearch && Array.isArray(parsed.data.searchRelays)
+                  ? parsed.data.searchRelays
+                  : undefined;
+                const legacyDm = !canonicalDm && Array.isArray(parsed.data.dmRelays)
+                  ? parsed.data.dmRelays
+                  : undefined;
+                const legacyBlossom = !canonicalBlossom && parsed.data.blossomServerMetadata
+                  ? parsed.data.blossomServerMetadata
+                  : undefined;
+                if (legacySearch || legacyDm || legacyBlossom) {
+                  updateConfigRef.current((current) => ({
+                    ...current,
+                    ...(legacySearch ? { searchRelays: legacySearch } : {}),
+                    ...(legacyDm ? { dmRelays: legacyDm } : {}),
+                    ...(legacyBlossom ? { blossomServerMetadata: legacyBlossom } : {}),
+                  }));
+                }
+              }
+            }
+
+            // An empty notifications document is authoritative only after every
+            // declared self-state relay reached EOSE. If a split or legacy
+            // document exists, useConfigDocSync marks readiness only after that
+            // exact version has actually been folded into AppConfig.
+            if (
+              !cancelled
+              && settingsAbsenceAuthoritative
+              && !newestByDTag.has(settingsDTag("notifications"))
+              && !legacyNotificationsPresent
+            ) {
+              markNotificationSettingsReady(pubkey);
+            }
           }
-        } catch (err) {
-          // Best-effort; never block login on Concord.
-          logSync("gate", `concord list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
+        } catch {
+          // Best-effort; fall through to the next step.
         }
-        if (concordLive.length > 0) {
-          resolve(vId, `${concordLive.length} ${concordLive.length === 1 ? "community" : "communities"}`);
-        } else {
-          drop(vId);
-        }
-      }
-      if (cancelled) return;
+        resolve(
+          sId,
+          automaticSettingsSync ? (settingsFound ? "RESTORED" : "DEFAULTS") : "OFF",
+          settingsFound ? "ok" : "info",
+        );
+      };
 
-      // ── 6. Concord warm-up: planes, folds, newest channel pages. ──────
-      // This is what makes the gate honest — without it the app shows through
-      // with rail icons but hollow, empty rooms. Raced against the overall
-      // budget: if it can't finish in time the gate lifts anyway and the
-      // warm-up keeps running, visible in the in-chat sync status bar.
-      if (concordLive.length > 0) {
-        const hId = begin("channels");
-        const warmup = warmupCommunities(nostr, concordLive, {
-          signal: overall,
-          onProgress: (done, total) => progress(hId, `${done}/${total}`),
-          // With a second account logged in, "retired epoch" cannot be judged
-          // from this account's list entry alone — see the opt's docstring.
-          pruneSnapshots: soleAccountRef.current,
-        });
-        // The abandoned branch of the race must never surface as unhandled.
-        warmup.catch(() => undefined);
-        const warm = await Promise.race([
-          warmup,
-          new Promise<undefined>((settle) => {
-            if (overall.aborted) settle(undefined);
-            else overall.addEventListener("abort", () => settle(undefined), { once: true });
-          }),
-        ]);
-        if (warm) {
-          resolve(hId, `${warm.messages} decrypted`);
-        } else {
-          resolve(hId, "CONTINUING", "warn");
+      // ── Branch B: NIP-29 group list (kind 10009) + recent-message catch-up ─
+      const branchGroups = async () => {
+        // ── 3. Group list (kind 10009) ──────────────────────────────────────
+        const gId = begin("groups");
+        let groups: GroupRef[] = [];
+        try {
+          const groupSignal = stepSignal();
+          const [wireEvents, storedGroups] = await Promise.all([
+            queryExplicitRelays(
+              nostr,
+              accountRelays,
+              [{ kinds: [KIND_USER_GROUPS], authors: [pubkey], limit: 1 }],
+              groupSignal,
+              { graceMs: STEP_GRACE_MS },
+            ),
+            readStoredCanonicalSelfLists(
+              eventStore,
+              pubkey,
+              [KIND_USER_GROUPS],
+              groupSignal,
+            ),
+          ]);
+          const queryKey = ["nip29", "user-groups", pubkey];
+          const previous = queryClient.getQueryData<UserGroupListQuery>(queryKey);
+          const persisted = await readFolded<PersistedGroupList>(groupListFoldKey(pubkey));
+          const list = await resolveGroupListRead(
+            [...wireEvents, ...storedGroups.events].filter((event) => event.pubkey === pubkey),
+            user.signer,
+            previous,
+            persisted,
+          );
+          groups = list.groups;
+          if (!cancelled && (list.event || previous || persisted)) {
+            queryClient.setQueryData(queryKey, list);
+            if (list.event && !list.decryptFailed) {
+              void writeFolded(groupListFoldKey(pubkey), {
+                event: list.event,
+                groups: list.groups,
+                servers: list.servers,
+              } satisfies PersistedGroupList);
+            }
+          }
+        } catch {
+          // Best-effort.
         }
-      }
+        if (groups.length > 0) {
+          resolve(gId, `${groups.length} ${groups.length === 1 ? "channel" : "channels"}`);
+        } else {
+          drop(gId);
+        }
+        if (cancelled) return;
+
+        // ── 4. Warm the store with recent messages for joined channels ──────
+        // Skipped outright with no NIP-29 channels to catch up on — there is
+        // nothing to sync and nothing worth showing.
+        const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);
+        if (channels.length > 0) {
+          const mId = begin("messages");
+          let messageCount = 0;
+          const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
+          await Promise.all(
+            channels.map(async ({ id, relay }) => {
+              try {
+                const events = await nostr.relay(relay).query(
+                  [{ kinds: TIMELINE_KINDS, "#h": [id], since, limit: PAGE_SIZE }],
+                  { signal: stepSignal() },
+                );
+                if (cancelled) return;
+                messageCount += events.length;
+                // The relay() wrapper mirrors these into the shared IndexedDB
+                // store — the single layer every timeline and unread scan
+                // hydrates from. No cache seeding: hooks read the store.
+              } catch {
+                // Best-effort per channel.
+              }
+            }),
+          );
+          resolve(mId, `${messageCount} cached`);
+        }
+      };
+
+      // ── Branch C: Concord community list + warm-up ──────────────────────
+      const branchConcord = async () => {
+        // ── 5. Concord: seed the community list. ──────────────────────────
+        let concordLive: ReturnType<typeof liveEntries> = [];
+        if (user.signer.nip44) {
+          const vId = begin("communities");
+          try {
+            // The login gate is the natural seeding moment for an account
+            // migrating off the retired single-event list: pass the self-state
+            // write set so a confirmed-empty read can seed §8 from local state.
+            const listData = await syncCommunityList(
+              nostr,
+              user,
+              queryClient,
+              stepSignal(),
+              selfStateRelays(configRef.current, pubkey),
+            );
+            logSync(
+              "gate",
+              `concord list fetched: event=${listData.event ? listData.event.id.slice(0, 8) : "none"} entries=${listData.list.entries.length} live=${liveEntries(listData.list).length} decryptFailed=${Boolean(listData.decryptFailed)}`,
+            );
+            if (!cancelled && !listData.decryptFailed) {
+              queryClient.setQueryData(listQueryKey(pubkey), listData);
+              concordLive = liveEntries(listData.list);
+            }
+          } catch (err) {
+            // Best-effort; never block login on Concord.
+            logSync("gate", `concord list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          if (concordLive.length > 0) {
+            resolve(vId, `${concordLive.length} ${concordLive.length === 1 ? "community" : "communities"}`);
+          } else {
+            drop(vId);
+          }
+        }
+        if (cancelled) return;
+
+        // ── 6. Concord warm-up: planes, folds, newest channel pages. ──────
+        // This is what makes the gate honest — without it the app shows through
+        // with rail icons but hollow, empty rooms. Raced against the overall
+        // budget: if it can't finish in time the gate lifts anyway and the
+        // warm-up keeps running, visible in the in-chat sync status bar.
+        if (concordLive.length > 0) {
+          const hId = begin("channels");
+          const warmup = warmupCommunities(nostr, concordLive, {
+            signal: overall,
+            onProgress: (done, total) => progress(hId, `${done}/${total}`),
+            // With a second account logged in, "retired epoch" cannot be judged
+            // from this account's list entry alone — see the opt's docstring.
+            pruneSnapshots: soleAccountRef.current,
+          });
+          // The abandoned branch of the race must never surface as unhandled.
+          warmup.catch(() => undefined);
+          const warm = await Promise.race([
+            warmup,
+            new Promise<undefined>((settle) => {
+              if (overall.aborted) settle(undefined);
+              else overall.addEventListener("abort", () => settle(undefined), { once: true });
+            }),
+          ]);
+          if (warm) {
+            resolve(hId, `${warm.messages} decrypted`);
+          } else {
+            resolve(hId, "CONTINUING", "warn");
+          }
+        }
+        if (cancelled) return;
+      };
+
+      await Promise.all([branchSettings(), branchGroups(), branchConcord()]);
       if (cancelled) return;
 
       // NOTE: we deliberately do NOT write the settings sync watermark here.
