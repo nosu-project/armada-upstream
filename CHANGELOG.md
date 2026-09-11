@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.59.20] - 2026-09-11
+
+Switching channels and scrolling chat are smoother, signing in reaches your
+messages faster, and custom emoji from packs you don't already have now show up
+instead of staying blank.
+
+### Changed
+- Channel switching and chat scrolling are smoother, with less work repeated as you move around
+- Signing in now runs its sync steps together after finding your relays, so your messages appear sooner
+
+### Fixed
+- Custom emoji from a pack you don't have are now fetched from the sender's own relays, so they display instead of showing nothing
+
 ## [0.59.19] - 2026-09-10
 
 Streamable links now play inline, tapping an emoji in a message opens the pack
