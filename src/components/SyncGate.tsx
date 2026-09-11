@@ -1,10 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
 import { SignalStatic } from "@/components/brand/SignalStatic";
 import { TerminalProgress } from "@/components/brand/TerminalProgress";
 import { markBootPainted } from "@/lib/bootGate";
+import { setSyncGateActive } from "@/components/syncGateState";
 import { useFreshLogin } from "@/hooks/useFreshLogin";
 import { useInitialSync } from "@/hooks/useInitialSync";
 
@@ -39,34 +40,10 @@ export function SyncGate() {
   return <SyncOverlay pubkey={freshPubkey} onDone={acknowledge} />;
 }
 
-// ── "Is the gate up?" ────────────────────────────────────────────────────────
 // The post-login setup flow must not start stacking its steps while the sync
-// overlay is still running, so it subscribes here rather than mounting a second
-// useFreshLogin (whose baseline/acknowledge state is per-instance and would
-// never clear).
-
-let gateActive = false;
-const gateListeners = new Set<() => void>();
-
-function setGateActive(next: boolean): void {
-  if (gateActive === next) return;
-  gateActive = next;
-  for (const l of gateListeners) l();
-}
-
-/** Whether the full-screen post-login sync overlay is currently showing. */
-export function useSyncGateActive(): boolean {
-  return useSyncExternalStore(
-    (listener) => {
-      gateListeners.add(listener);
-      return () => {
-        gateListeners.delete(listener);
-      };
-    },
-    () => gateActive,
-    () => false,
-  );
-}
+// overlay is still running (`LoginSetup` reads `useSyncGateActive`), and the
+// rail's occluded unread badges skip their warm-up churn the same way — both
+// through the standalone `syncGateState` store this component drives.
 
 function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void }) {
   const { log, done } = useInitialSync(pubkey);
@@ -83,11 +60,11 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
   const wireSignal = log.map((line) => `${line.id}:${line.status ?? ""}`).join("|");
 
   useEffect(() => {
-    setGateActive(true);
+    setSyncGateActive(true);
     // A fresh login has no local data for a first paint — the initial sync IS
     // the boot. Open the boot gate so the deferred ingest drivers mount now.
     markBootPainted();
-    return () => setGateActive(false);
+    return () => setSyncGateActive(false);
   }, []);
 
   // When the sync finishes, hold a brief beat so the final line lands, then
@@ -109,7 +86,7 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
   // prompt among them) queue behind useSyncGateActive and would otherwise
   // wait out the unmount timer too.
   useEffect(() => {
-    if (leaving) setGateActive(false);
+    if (leaving) setSyncGateActive(false);
   }, [leaving]);
 
   return (

@@ -3,7 +3,7 @@ import { BatteryCharging, Bell, Lock, Waypoints } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { WizardShell, WizardStepBody } from "@/components/onboarding/WizardShell";
-import { useSyncGateActive } from "@/components/SyncGate";
+import { useSyncGateActive } from "@/components/syncGateState";
 import { Button } from "@/components/ui/button";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { useAppContext } from "@/hooks/useAppContext";

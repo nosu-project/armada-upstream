@@ -62,6 +62,13 @@ let localPending = new Set<WireScope>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 
 /**
+ * While the post-login SyncGate overlay is up, re-read doorbells are held here
+ * (see {@link setWireGateHold}) and the in-hand-work scopes still pass through.
+ */
+let gateHold = false;
+let gateHeld = new Set<WireScope>();
+
+/**
  * Scopes that trigger work on an event this context holds IN HAND (a live wrap
  * in a buffer, a parked stream), not a "the shared store changed" doorbell.
  * Mirroring them would make every tab force-sync or drain the same wrap.
@@ -105,6 +112,17 @@ function schedule(): void {
   }
 }
 
+function deliver(scopes: ReadonlySet<WireScope>): void {
+  if (scopes.size === 0) return;
+  for (const listener of listeners) {
+    try {
+      listener(scopes);
+    } catch {
+      // A listener must never break the bus for the others.
+    }
+  }
+}
+
 function flush(): void {
   timer = undefined;
   if (pending.size === 0) return;
@@ -119,13 +137,25 @@ function flush(): void {
       // A closed/failed channel must never break the local doorbell.
     }
   }
-  for (const listener of listeners) {
-    try {
-      listener(batch);
-    } catch {
-      // A listener must never break the bus for the others.
+  // While the post-login SyncGate overlay is up, every LOCAL subscriber that
+  // re-reads on a doorbell — the rail's unread badges (items, folder rollups,
+  // pinned DMs) and any occluded timeline — is hidden behind it, so ringing
+  // them is invisible work that still re-renders the shell mounted underneath.
+  // Hold those doorbells and deliver them as ONE coalesced batch when the gate
+  // lifts (see setWireGateHold). The in-hand-work scopes must NOT wait — they
+  // are login-time INGEST (force-sync a live wrap, drain a parked stream), not
+  // a re-render — so they pass through immediately, and they are exactly the
+  // ones already excluded from the cross-tab mirror above (isLocalOnlyScope).
+  if (gateHold) {
+    const passThrough = new Set<WireScope>();
+    for (const s of batch) {
+      if (isLocalOnlyScope(s)) passThrough.add(s);
+      else gateHeld.add(s);
     }
+    deliver(passThrough);
+    return;
   }
+  deliver(batch);
 }
 
 /** Announce that these conversations' stores changed. Coalesced. */
@@ -143,11 +173,31 @@ export function onWireScopes(listener: WireListener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Test helper: drop any pending batch and all listeners. */
+/**
+ * Hold or release the "occluded under the SyncGate overlay" doorbell hold,
+ * driven by `syncGateState` as the overlay mounts/leaves. While held, re-read
+ * doorbells are accumulated (in-hand-work scopes still flow); releasing
+ * delivers everything accumulated as ONE coalesced batch — the single catch-up
+ * re-read that replaces the per-burst churn the warm-up would otherwise drive
+ * through every occluded subscriber. Idempotent.
+ */
+export function setWireGateHold(active: boolean): void {
+  if (gateHold === active) return;
+  gateHold = active;
+  if (!active && gateHeld.size > 0) {
+    const held = gateHeld;
+    gateHeld = new Set();
+    deliver(held);
+  }
+}
+
+/** Test helper: drop any pending batch, gate hold, and all listeners. */
 export function resetWireBus(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
   pending = new Set();
   localPending = new Set();
+  gateHold = false;
+  gateHeld = new Set();
   listeners.clear();
 }

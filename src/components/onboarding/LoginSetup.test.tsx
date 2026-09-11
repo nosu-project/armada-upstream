@@ -37,7 +37,7 @@ vi.mock("@/components/RelayBootstrapForm", () => ({
   RelayBootstrapForm: () => <div>relay form</div>,
 }));
 
-vi.mock("@/components/SyncGate", () => ({ useSyncGateActive: () => false }));
+vi.mock("@/components/syncGateState", () => ({ useSyncGateActive: () => false }));
 vi.mock("@/hooks/useOnboarding", () => ({ useOnboardingActive: () => false }));
 vi.mock("@/hooks/useAppContext", () => ({ useAppContext: () => ({ config: h.config }) }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: h.user }) }));
