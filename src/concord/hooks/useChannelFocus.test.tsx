@@ -68,6 +68,7 @@ vi.mock("@/concord/lib/rumorStore", () => ({
   clearChannelExhausted: async () => undefined,
   peekPendingWraps: async () => [],
   queryChannelFirstSeen: async () => new Map(),
+  queryChannelFirstSeenCached: async () => new Map(),
   queryChannelRumors: () =>
     new Promise((resolve) => {
       h.releaseWindow = () => resolve(h.window);

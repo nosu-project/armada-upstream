@@ -21,7 +21,7 @@ import { backfillStore, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/co
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import {
   clearChannelExhausted,
-  queryChannelFirstSeen,
+  queryChannelFirstSeenCached,
   queryChannelRumors,
   queryChannelRumorsByIds,
   readChannelCursor,
@@ -542,7 +542,7 @@ export function useChannelTimeline(
     ...STORE_READ,
     queryKey: ["concord-channel-first-seen", community?.idHex ?? null, channelIdHex],
     queryFn: ({ signal }) =>
-      queryChannelFirstSeen(community!.idHex, channelIdHex!, {
+      queryChannelFirstSeenCached(community!.idHex, channelIdHex!, {
         sinceMs: Date.now() - FLOOD_HISTORY_WINDOW_MS,
         limit: FLOOD_HISTORY_MAX_ROWS,
         signal,

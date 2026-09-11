@@ -11,12 +11,14 @@ import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSe
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { Channel } from "@/concord/lib/types";
 import { onWireScopes } from "@/wire/bus";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 import {
   ackPendingWraps,
   openedToStored,
   parkPendingWraps,
   peekPendingWraps,
   queryChannelFirstSeen,
+  queryChannelFirstSeenCached,
   queryChannelRumors,
   queryChannelRumorsByIds,
   queryMentionRumors,
@@ -594,6 +596,60 @@ describe("concord rumor store", () => {
     );
     expect(map.get(speaker.pubkey)).toBe(2_000_000);
     expect(map.has(reactor.pubkey)).toBe(false);
+  });
+
+  it("keeps the presence map in a persisted snapshot and folds later writes into it", async () => {
+    const { channel, idHex } = makeChannel();
+    const a = signer();
+    const b = signer();
+    writeRumors(
+      CID,
+      await openChatBatch([await wrapChat(chatRumor(idHex, a, KIND_MESSAGE, "hi", 2_000_000), channel, a)], channel),
+    );
+    const first = await eventually(
+      () => queryChannelFirstSeenCached(CID, idHex, { sinceMs: 0, limit: 100 }),
+      (m) => m.size > 0,
+    );
+    expect(first.get(a.pubkey)).toBe(2_000_000);
+
+    const snap = await eventually(
+      () => getArmadaDB().kv.get<{ v: number; scannedToMs: number; entries: [string, number][] }>(`c2fs:${CID}:${idHex}`),
+      (s) => s !== undefined,
+    );
+    expect(snap?.v).toBe(1);
+    expect(snap?.entries).toEqual([[a.pubkey, 2_000_000]]);
+    expect(snap?.scannedToMs).toBeGreaterThan(0);
+
+    // Rows dated below the watermark, written after the snapshot: an incremental
+    // scan misses both, so the write path must carry them to the next read.
+    writeRumors(
+      CID,
+      await openChatBatch(
+        [
+          await wrapChat(chatRumor(idHex, a, KIND_MESSAGE, "earlier", 1_000_000), channel, a),
+          await wrapChat(chatRumor(idHex, b, KIND_MESSAGE, "yo", 3_000_000), channel, b),
+        ],
+        channel,
+      ),
+    );
+    const second = await eventually(
+      () => queryChannelFirstSeenCached(CID, idHex, { sinceMs: 0, limit: 100 }),
+      (m) => m.size === 2 && m.get(a.pubkey) === 1_000_000,
+    );
+    expect(second.get(a.pubkey)).toBe(1_000_000);
+    expect(second.get(b.pubkey)).toBe(3_000_000);
+
+    const reactor = signer();
+    writeRumors(
+      CID,
+      await openChatBatch(
+        [await wrapChat(chatRumor(idHex, reactor, KIND_REACTION, "+", 4_000_000, [["e", "ab".repeat(32)]]), channel, reactor)],
+        channel,
+      ),
+    );
+    const third = await queryChannelFirstSeenCached(CID, idHex, { sinceMs: 0, limit: 100 });
+    expect(third.has(reactor.pubkey)).toBe(false);
+    expect(third.size).toBe(2);
   });
 
   it("refuses a control edition that did not arrive under a plaintext seal", async () => {

@@ -411,6 +411,91 @@ export async function queryChannelFirstSeen(
   return firstSeen;
 }
 
+// ── First-seen snapshot ──────────────────────────────────────────────────────
+
+const firstSeenKey = (communityIdHex: string, channelIdHex: string) => `c2fs:${communityIdHex}:${channelIdHex}`;
+/** Re-read this much below the watermark, for rows written late with an older created_at. */
+const FIRST_SEEN_OVERLAP_MS = 10 * 60_000;
+const FIRST_SEEN_MAX_AUTHORS = 4000;
+interface FirstSeenSnapshot {
+  v: 1;
+  /** Upper bound (ms) of what `entries` has been scanned up to. */
+  scannedToMs: number;
+  entries: Array<[author: string, firstMs: number]>;
+}
+/**
+ * Speech rows written since a channel's snapshot was last merged (author →
+ * earliest ms), so history written below the watermark — a backfill — still
+ * reaches the map without a full rescan. Session-scoped.
+ */
+const firstSeenPending = new Map<string, Map<string, number>>();
+
+/**
+ * {@link queryChannelFirstSeen} behind a persisted, merge-only snapshot: the
+ * first read scans the full window, later reads scan only past the stored
+ * watermark and fold in `firstSeenPending`. Authors never leave the map
+ * (except by the size cap); an author's first-seen only ever moves earlier.
+ */
+export async function queryChannelFirstSeenCached(
+  communityIdHex: string,
+  channelIdHex: string,
+  opts: { sinceMs: number; limit: number; signal?: AbortSignal },
+): Promise<Map<string, number>> {
+  const key = firstSeenKey(communityIdHex, channelIdHex);
+  const kv = getArmadaDB().kv;
+  let snap: FirstSeenSnapshot | undefined;
+  try {
+    const raw = await kv.get<FirstSeenSnapshot>(key);
+    if (raw && raw.v === 1 && Array.isArray(raw.entries) && typeof raw.scannedToMs === "number") snap = raw;
+  } catch {
+    // unreadable snapshot: full scan
+  }
+  const merged = new Map<string, number>(snap?.entries ?? []);
+  const sinceMs = snap ? Math.max(opts.sinceMs, snap.scannedToMs - FIRST_SEEN_OVERLAP_MS) : opts.sinceMs;
+  const scannedToMs = Date.now();
+  const fresh = await queryChannelFirstSeen(communityIdHex, channelIdHex, { sinceMs, limit: opts.limit, signal: opts.signal });
+
+  let changed = snap === undefined;
+  const fold = (author: string, ms: number) => {
+    const seen = merged.get(author);
+    if (seen === undefined || ms < seen) {
+      merged.set(author, ms);
+      changed = true;
+    }
+  };
+  for (const [author, ms] of fresh) fold(author, ms);
+  const pending = firstSeenPending.get(key);
+  if (pending) {
+    firstSeenPending.delete(key);
+    for (const [author, ms] of pending) fold(author, ms);
+  }
+
+  // Also persist an unchanged map once the watermark has moved past the overlap.
+  if (changed || (snap && scannedToMs - snap.scannedToMs > FIRST_SEEN_OVERLAP_MS)) {
+    let entries = [...merged];
+    if (entries.length > FIRST_SEEN_MAX_AUTHORS) {
+      entries.sort((a, b) => a[1] - b[1]);
+      entries = entries.slice(0, FIRST_SEEN_MAX_AUTHORS);
+    }
+    kv.set<FirstSeenSnapshot>(key, { v: 1, scannedToMs, entries }).catch(() => undefined);
+  }
+  return merged;
+}
+
+function notePresence(communityIdHex: string, rows: OpenedChat[]): void {
+  for (const o of rows) {
+    if (!SPEECH_KINDS.includes(o.kind) || !o.channelIdHex) continue;
+    const key = firstSeenKey(communityIdHex, o.channelIdHex);
+    let pending = firstSeenPending.get(key);
+    if (!pending) {
+      pending = new Map();
+      firstSeenPending.set(key, pending);
+    }
+    const seen = pending.get(o.author);
+    if (seen === undefined || o.ms < seen) pending.set(o.author, o.ms);
+  }
+}
+
 /**
  * Read cached rumors by id, whatever plane or channel they arrived on.
  *
@@ -906,6 +991,7 @@ export function writeRumors(communityIdHex: string, opened: OpenedChat[]): Promi
   const chat = opened.filter((o) => !PLANE_KINDS.has(o.kind) && !isExpired(o.tags, now));
   if (chat.length === 0) return Promise.resolve(true);
   const channels = new Set(chat.map((o) => o.channelIdHex).filter(Boolean));
+  notePresence(communityIdHex, chat);
   return writeStored(communityIdHex, chat).then((stored) => {
     if (stored && channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
     return stored;
