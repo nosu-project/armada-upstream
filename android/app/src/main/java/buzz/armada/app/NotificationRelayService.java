@@ -40,6 +40,13 @@ import androidx.core.graphics.drawable.IconCompat;
 
 import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
+import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
+import buzz.armada.app.relayfleet.RelayFleetPolicy;
+import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
+import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetDecision;
+import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetEdge;
+import buzz.armada.app.relayfleet.RelayFleetPolicy.Outcome;
+import buzz.armada.app.relayfleet.RelayFleetPolicy.RelayInfo;
 
 import com.bitchat.android.nostr.Bech32;
 
@@ -63,6 +70,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.net.ConnectException;
+import java.net.UnknownHostException;
+import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLPeerUnverifiedException;
 
 import okhttp3.Cache;
 import okhttp3.Call;
@@ -239,14 +250,23 @@ public class NotificationRelayService extends Service {
     private String ringingCallId;
     private String ringingPeer;
 
+    // Backoff for relay-initiated CLOSED resubscribes (see subRetryBackoffMs).
+    // SOCKET reconnects are no longer timed here: they are decided by
+    // fleetPolicy, a pure and separately-benchmarked decision layer
+    // (relayfleet/), which is what lets the fleet reach a quiet state instead
+    // of retrying a dead relay every five minutes forever.
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
-    // A connection must survive this long before a subsequent failure resets
-    // the backoff. Resetting in onOpen instead (the old behavior) meant a
-    // relay that accepts the handshake but drops the socket right after
-    // (auth-walled, overloaded, misbehaving proxy) reconnected every 1s
-    // forever — a battery-melting hot loop while the phone sleeps.
-    private static final long STABLE_CONNECTION_MS = 60_000;
+
+    /**
+     * Decides, per relay, whether to hold a background socket at all, when to
+     * reconnect after a failure, and when to stop trying (quarantine) until a
+     * network/config/foreground change. Transport-free so it is unit-tested and
+     * benchmarked in isolation — see {@code RelayFleetPolicyBenchmarkTest}.
+     * {@code RelayConnection} is the adapter: it classifies real socket events
+     * into the policy's outcomes and executes its decisions.
+     */
+    private final RelayFleetPolicy fleetPolicy = new CircuitBreakerPolicy();
 
     private OkHttpClient httpClient;
 
@@ -395,6 +415,10 @@ public class NotificationRelayService extends Service {
     private volatile String healthSignerStatus = "missing";
     private volatile String healthAuthStatus = "idle";
     private volatile int healthRelayWatchCount;
+    // Relays the fleet policy has quarantined (no retry until an edge), and
+    // relays curated out at build (read-pool only: no standing subscription).
+    private volatile int healthRelayQuarantinedCount;
+    private volatile int healthRelayCuratedOutCount;
     private volatile int healthGroupWatchCount;
     private volatile int healthDmPeerWatchCount;
     private volatile int healthConcordStreamWatchCount;
@@ -724,6 +748,8 @@ public class NotificationRelayService extends Service {
                 out.put("lastConfigAt", svc.healthLastConfigAtMs);
                 out.put("loadedConfigRevision", svc.healthLoadedConfigRevision);
                 out.put("relayWatchCount", svc.healthRelayWatchCount);
+                out.put("relayQuarantinedCount", svc.healthRelayQuarantinedCount);
+                out.put("relayCuratedOutCount", svc.healthRelayCuratedOutCount);
                 out.put("groupWatchCount", svc.healthGroupWatchCount);
                 out.put("dmPeerWatchCount", svc.healthDmPeerWatchCount);
                 out.put("concordStreamWatchCount", svc.healthConcordStreamWatchCount);
@@ -742,6 +768,8 @@ public class NotificationRelayService extends Service {
                 out.put("lastConfigAt", revision);
                 out.put("loadedConfigRevision", 0L);
                 out.put("relayWatchCount", counts.relays);
+                out.put("relayQuarantinedCount", 0);
+                out.put("relayCuratedOutCount", 0);
                 out.put("groupWatchCount", counts.groups);
                 out.put("dmPeerWatchCount", counts.dmPeers);
                 out.put("concordStreamWatchCount", counts.concordStreams);
@@ -824,11 +852,71 @@ public class NotificationRelayService extends Service {
     /** Recompute socket totals on the handler thread after any state change. */
     private void updateSocketHealth() {
         int open = 0;
+        int quarantined = 0;
         for (RelayConnection connection : connections) {
             if (connection.socketOpen) open++;
+            if (connection.quarantined) quarantined++;
         }
         healthSocketOpenCount = open;
         healthSocketTotalCount = connections.size();
+        healthRelayQuarantinedCount = quarantined;
+    }
+
+    /**
+     * Map a socket failure to the fleet policy's outcome. Deliberately
+     * conservative: only a host that does not resolve, and a connection that
+     * is refused or fails TLS, are permanent. Everything else — timeouts,
+     * protocol errors, a mid-session drop — stays TRANSIENT, so an unfamiliar
+     * failure is retried on the bounded backoff rather than quarantined.
+     */
+    static Outcome classifyFailure(Throwable t) {
+        int hops = 0;
+        for (Throwable c = t; c != null && hops < 8; c = c.getCause(), hops++) {
+            if (c instanceof UnknownHostException) return Outcome.DNS_FAILURE;
+            if (c instanceof ConnectException
+                    || c instanceof SSLHandshakeException
+                    || c instanceof SSLPeerUnverifiedException) {
+                return Outcome.CONNECT_REFUSED;
+            }
+        }
+        return Outcome.TRANSIENT_DROP;
+    }
+
+    /**
+     * A finished session delivered nothing and every standing subscription it
+     * sent was still closed auth-required at the end — the whole-session
+     * definition of {@link Outcome#AUTH_UNSATISFIABLE}. A relay with even one
+     * accepted subscription, or one delivered event, is not this, and the
+     * policy may never quarantine it on auth grounds.
+     */
+    static boolean sessionAuthUnsatisfiable(Set<String> standingSubs, Set<String> walledSubs,
+                                            boolean deliveredAnything) {
+        return !standingSubs.isEmpty() && !deliveredAnything && walledSubs.containsAll(standingSubs);
+    }
+
+    /**
+     * Whether the fleet would send {@code relayUrl} at least one standing
+     * subscription — the fleet-curation gate. Mirrors the gates in
+     * {@code RelayConnection.sendReqs} and must be kept in step with them. A
+     * relay that fails this is in the general read pool only, and the
+     * background fleet holds no socket to it (replies still reach it through
+     * publishOneShot).
+     */
+    static boolean relayDeliverable(String relayUrl,
+                                    Map<String, Set<String>> relayToGroupIds,
+                                    Set<String> dmRelays, boolean dmWatchable,
+                                    Map<String, Set<String>> relayToPks2,
+                                    Map<String, Set<String>> gitRepositoriesByRelay,
+                                    Set<String> selfRelays, String userPubkey) {
+        Set<String> groups = relayToGroupIds.get(relayUrl);
+        if (groups != null && !groups.isEmpty()) return true;
+        if (dmRelays.contains(relayUrl) && dmWatchable) return true;
+        Set<String> pks = relayToPks2.get(relayUrl);
+        if (pks != null && !pks.isEmpty()) return true;
+        Set<String> repos = gitRepositoriesByRelay.get(relayUrl);
+        if (repos != null && !repos.isEmpty()) return true;
+        return userPubkey != null && !userPubkey.isEmpty()
+                && shouldSyncSelfStateFromRelay(relayUrl, selfRelays);
     }
 
     /**
@@ -855,9 +943,23 @@ public class NotificationRelayService extends Service {
         // visibility of puts across threads even with a volatile reference.
         Set<String> concurrent = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
         concurrent.addAll(next);
+        boolean cameForward = freshActiveRoomKeys().isEmpty() && !concurrent.isEmpty();
         activeRoomKeys = concurrent;
         activeRoomsUpdatedAtElapsedMs = android.os.SystemClock.elapsedRealtime();
         if (BuildConfig.DEBUG) Log.d(TAG, "setActiveRooms: " + concurrent);
+        // Empty → non-empty is the WebView arriving on a chat screen: the app
+        // came forward. That is an edge for the fleet (a signer may be awake
+        // now, a quarantined relay is worth one fresh look), fired on the
+        // TRANSITION only — re-arming on every room switch would defeat
+        // quarantine for as long as the app is open.
+        if (cameForward) {
+            NotificationRelayService svc = instance;
+            if (svc != null) {
+                svc.handler.post(() -> {
+                    for (RelayConnection rc : svc.connections) rc.onFleetEdge(FleetEdge.APP_FOREGROUNDED);
+                });
+            }
+        }
     }
 
     static boolean isActiveRoomStateFresh(long updatedAtMs, long nowMs) {
@@ -1374,8 +1476,12 @@ public class NotificationRelayService extends Service {
             return;
         }
 
-        // Rebuild all connections with the current filters.
+        // Rebuild all connections with the current filters. Every connection
+        // starts with fresh fleet-policy state, so a config change is itself
+        // the re-arm for anything the policy had quarantined.
         closeAllConnections();
+        int curatedOut = 0;
+        boolean dmWatchable = !dmFollows.isEmpty() || shouldWatchDm();
         for (String url : allRelays) {
             // A malformed config entry (blank, "null", schemeless) must never
             // reach okhttp: url() throws and an uncaught throw here kills the
@@ -1385,10 +1491,21 @@ public class NotificationRelayService extends Service {
                 Log.w(TAG, "Skipping invalid relay url in config");
                 continue;
             }
-            RelayConnection rc = new RelayConnection(url);
+            // Fleet curation: a relay with no standing subscription to send —
+            // in the general read pool and nothing else — would be a 24/7
+            // socket that can never deliver a notification. It gets no
+            // connection at all (rather than an idle one the policy refuses),
+            // so it never appears in health totals or catches a queued reply.
+            if (!relayDeliverable(url, relayToGroupIds, dmRelays, dmWatchable,
+                    relayToPks2, gitRepositoriesByRelay, selfRelays, userPubkey)) {
+                curatedOut++;
+                continue;
+            }
+            RelayConnection rc = new RelayConnection(url, true);
             connections.add(rc);
             rc.connect();
         }
+        healthRelayCuratedOutCount = curatedOut;
         updateSocketHealth();
 
         // Warm the user's own profile for the quick-reply self person, now
@@ -1664,14 +1781,33 @@ public class NotificationRelayService extends Service {
         volatile long sinceSec;
         volatile boolean cursorHasEvent;
         WebSocket ws;
-        long backoffMs = INITIAL_BACKOFF_MS;
         boolean closed = false;
         boolean socketOpen = false;
+        // Set when fleetPolicy said Quarantine: no reconnect is scheduled until
+        // an edge (network/config/foreground) re-arms it. Mirrored here for
+        // health reporting; the policy's own state is authoritative.
+        boolean quarantined = false;
 
-        // When the current connection attempt started (handler thread only).
-        // Used by scheduleReconnect to distinguish "stable connection finally
-        // died" (reset backoff) from "relay drops us right away" (keep growing).
+        // The fleet policy's per-relay state, and the relay as the policy sees
+        // it. Deliverability is decided once at fleet build (a relay that is
+        // not deliverable never becomes a RelayConnection at all).
+        final RelayInfo fleetInfo;
+        final Object fleetState = fleetPolicy.newRelayState();
+
+        // When the current connection attempt started (handler thread only);
+        // the session's uptime is what the policy uses to tell "a stable
+        // connection finally died" from "the relay drops us right away".
         long connectAttemptAt = 0;
+
+        // Per-SESSION facts that classify how the session ended (reset in
+        // connect()). A session whose every standing subscription was closed
+        // auth-required, with nothing delivered, ended AUTH_UNSATISFIABLE —
+        // the one outcome the policy may quarantine that a live-but-flaky
+        // relay can never produce. Concurrent because sendReqs runs on the
+        // socket thread from onOpen while the rest is handler-confined.
+        final Set<String> standingSubs = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        final Set<String> walledSubs = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        volatile boolean deliveredAnything = false;
 
         // Single pending reconnect, cancellable — prevents a queued reconnect
         // and the network callback from racing to open duplicate sockets.
@@ -1739,8 +1875,9 @@ public class NotificationRelayService extends Service {
             handler.postDelayed(authResendRunnable, 300);
         }
 
-        RelayConnection(String relayUrl) {
+        RelayConnection(String relayUrl, boolean deliverable) {
             this.relayUrl = relayUrl;
+            this.fleetInfo = new RelayInfo(relayUrl, deliverable);
             Long previous = relaySinceByUrl.get(relayUrl);
             this.sinceSec = previous != null
                     ? previous
@@ -1755,7 +1892,11 @@ public class NotificationRelayService extends Service {
             // already reconnected would open a second socket and orphan the
             // first — leaked sockets keep pinging and re-failing forever.
             if (closed || ws != null || !isNetworkAvailable()) return;
+            if (!fleetPolicy.shouldConnect(fleetState, fleetInfo, System.currentTimeMillis())) return;
             connectAttemptAt = System.currentTimeMillis();
+            standingSubs.clear();
+            walledSubs.clear();
+            deliveredAnything = false;
             final Request request;
             try {
                 // Belt-and-braces: allRelays is pre-filtered by isValidRelayUrl,
@@ -1797,17 +1938,23 @@ public class NotificationRelayService extends Service {
                     Log.w(TAG, "WS failure (" + relayUrl + "): " + t.getMessage());
                     handler.post(() -> {
                         recordHealthError("socket");
-                        RelayConnection.this.scheduleReconnect();
+                        endSession(classifyFailure(t));
                     });
                 }
 
                 @Override
                 public void onClosed(WebSocket webSocket, int code, String reason) {
                     handler.post(() -> {
-                        if (!closed) scheduleReconnect();
+                        if (!closed) endSession(null);
                     });
                 }
             });
+        }
+
+        /** Send a standing REQ, recording its id as part of this session. */
+        void sendReq(WebSocket webSocket, String subId, JSONObject... filters) throws JSONException {
+            standingSubs.add(subId);
+            webSocket.send(reqMessage(subId, filters));
         }
 
         void sendReqs(WebSocket webSocket) {
@@ -1825,7 +1972,7 @@ public class NotificationRelayService extends Service {
                     f.put("kinds", new JSONArray().put(9));
                     f.put("#h", h);
                     f.put("since", requestSince);
-                    webSocket.send(reqMessage(subGroups, f));
+                    sendReq(webSocket, subGroups, f);
 
                     // Reactions/replies to me, scoped to those groups so the
                     // query is a valid NIP-29 request (relays reject a #p-only
@@ -1835,7 +1982,7 @@ public class NotificationRelayService extends Service {
                     f2.put("#h", h);
                     f2.put("#p", new JSONArray().put(userPubkey));
                     f2.put("since", requestSince);
-                    webSocket.send(reqMessage(subDirect, f2));
+                    sendReq(webSocket, subDirect, f2);
                 }
                 // Direct messages (kind 4) addressed to me, on the DM/app relays
                 // (NOT the NIP-29 group relays — DMs don't live there). Scoped to
@@ -1855,7 +2002,7 @@ public class NotificationRelayService extends Service {
                         f4.put("authors", dmAuthors);
                         f4.put("#p", new JSONArray().put(userPubkey));
                         f4.put("since", requestSince);
-                        webSocket.send(reqMessage(subDm, f4));
+                        sendReq(webSocket, subDm, f4);
                     }
                 }
                 // NIP-17 gift-wrapped DMs (kind 1059) addressed to me, on the
@@ -1873,7 +2020,7 @@ public class NotificationRelayService extends Service {
                     f6.put("#p", new JSONArray().put(userPubkey));
                     f6.put("since", Math.max(0, requestSince - DM17_SINCE_REWIND_SEC));
                     f6.put("limit", 0);
-                    webSocket.send(reqMessage(subDm17, f6));
+                    sendReq(webSocket, subDm17, f6);
 
                     // Ephemeral gift wraps (kind 21059) addressed to me: the
                     // DM plane's live signals — the service acts on voice-call
@@ -1885,7 +2032,7 @@ public class NotificationRelayService extends Service {
                     f7.put("kinds", new JSONArray().put(21059));
                     f7.put("#p", new JSONArray().put(userPubkey));
                     f7.put("since", requestSince);
-                    webSocket.send(reqMessage(subDmEph, f7));
+                    sendReq(webSocket, subDmEph, f7);
                 }
                 // Concord channel wraps on this relay: kind-1059 events
                 // AUTHORED BY the derived stream keys (no routing tag at all).
@@ -1897,14 +2044,14 @@ public class NotificationRelayService extends Service {
                     for (String pk : pks) authors.put(pk);
                     f5.put("authors", authors);
                     f5.put("since", requestSince);
-                    webSocket.send(reqMessage(subConcord, f5));
+                    sendReq(webSocket, subConcord, f5);
                 }
                 Set<String> repositories = gitRepositoriesByRelay.get(relayUrl);
                 if (repositories != null && !repositories.isEmpty()) {
                     JSONObject roots = new JSONObject(); roots.put("kinds", new JSONArray().put(1618).put(1621));
                     JSONArray addresses = new JSONArray(); for (String address : repositories) addresses.put(address);
                     roots.put("#a", addresses); roots.put("since", requestSince);
-                    webSocket.send(reqMessage(subGitRoots, roots));
+                    sendReq(webSocket, subGitRoots, roots);
                     // Root children are bounded like the TS wire (100 ids/filter), with
                     // NIP-22's uppercase E and NIP-34 status's lowercase e kept separate.
                     List<String> ids = new ArrayList<>();
@@ -1913,9 +2060,9 @@ public class NotificationRelayService extends Service {
                     for (int offset = 0; offset < ids.size(); offset += GIT_ROOT_FILTER_CHUNK_SIZE) {
                         JSONArray chunk = new JSONArray(); for (String root : ids.subList(offset, Math.min(ids.size(), offset + GIT_ROOT_FILTER_CHUNK_SIZE))) chunk.put(root);
                         JSONObject comments = new JSONObject(); comments.put("kinds", new JSONArray().put(1111)); comments.put("#E", chunk); comments.put("since", requestSince);
-                        webSocket.send(reqMessage(subGitChildren + "c" + offset, comments));
+                        sendReq(webSocket, subGitChildren + "c" + offset, comments);
                         JSONObject statuses = new JSONObject(); statuses.put("kinds", new JSONArray().put(1630).put(1631).put(1632).put(1633)); statuses.put("#e", chunk); statuses.put("since", requestSince);
-                        webSocket.send(reqMessage(subGitChildren + "s" + offset, statuses));
+                        sendReq(webSocket, subGitChildren + "s" + offset, statuses);
                     }
                 }
                 // The user's OWN replaceable documents (SelfState): follow and
@@ -1965,7 +2112,7 @@ public class NotificationRelayService extends Service {
                     topicDocuments.put("authors", me);
                     topicDocuments.put("#t", topics);
 
-                    webSocket.send(reqMessage(subSelf, bare, documents, topicDocuments));
+                    sendReq(webSocket, subSelf, bare, documents, topicDocuments);
                 }
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
@@ -2113,21 +2260,42 @@ public class NotificationRelayService extends Service {
             } catch (Exception ignored) {}
         }
 
-        void scheduleReconnect() {
+        /**
+         * The socket is gone (failed to open, or opened then died). Classify
+         * the session and let the fleet policy decide: retry after a delay,
+         * or quarantine until an edge. {@code failureOutcome} is the
+         * transport's classification of an onFailure, or null for a clean
+         * onClosed. An opened session that ended with every standing
+         * subscription auth-walled and nothing delivered is
+         * AUTH_UNSATISFIABLE whatever the transport said.
+         */
+        void endSession(Outcome failureOutcome) {
             if (closed) return;
+            boolean wasOpen = socketOpen;
             socketOpen = false;
             ws = null;
-            updateSocketHealth();
-            // Only a connection that stayed up for a while earns a backoff
-            // reset; instant drops keep doubling toward the 5-minute cap.
-            if (connectAttemptAt > 0
-                    && System.currentTimeMillis() - connectAttemptAt >= STABLE_CONNECTION_MS) {
-                backoffMs = INITIAL_BACKOFF_MS;
+            long now = System.currentTimeMillis();
+            long uptime = (wasOpen && connectAttemptAt > 0) ? Math.max(0, now - connectAttemptAt) : 0;
+            Outcome outcome;
+            if (wasOpen && sessionAuthUnsatisfiable(standingSubs, walledSubs, deliveredAnything)) {
+                outcome = Outcome.AUTH_UNSATISFIABLE;
+            } else if (failureOutcome != null) {
+                outcome = failureOutcome;
+            } else {
+                outcome = Outcome.TRANSIENT_DROP;
             }
-            long delay = backoffMs;
-            backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+            FleetDecision decision = fleetPolicy.onConnectionEnded(
+                    fleetState, fleetInfo, new ConnectionResult(wasOpen, uptime, outcome), now);
             handler.removeCallbacks(reconnectRunnable);
-            handler.postDelayed(reconnectRunnable, delay);
+            if (decision instanceof FleetDecision.RetryAfter retry) {
+                handler.postDelayed(reconnectRunnable, retry.delayMs());
+            } else {
+                quarantined = true;
+                Log.w(TAG, "Quarantined " + relayUrl + " (" + outcome
+                        + "); no retry until a network/config/foreground change");
+                recordHealthError("relay_quarantined");
+            }
+            updateSocketHealth();
         }
 
         /**
@@ -2162,8 +2330,17 @@ public class NotificationRelayService extends Service {
             updateSocketHealth();
         }
 
-        void resetAndConnectNow() {
-            backoffMs = INITIAL_BACKOFF_MS;
+        /**
+         * An external change that could alter the outcome: connectivity
+         * returned, or the app came forward (which can wake a signer). The
+         * policy clears any quarantine and backoff, and an idle relay
+         * reconnects now. A config change needs no edge — it rebuilds every
+         * connection with fresh policy state.
+         */
+        void onFleetEdge(FleetEdge edge) {
+            if (closed) return;
+            fleetPolicy.onEdge(fleetState, fleetInfo, edge, System.currentTimeMillis());
+            quarantined = false;
             handler.removeCallbacks(reconnectRunnable);
             if (ws == null) connect();
         }
@@ -2300,7 +2477,12 @@ public class NotificationRelayService extends Service {
                 // the reply's own timeout resolves with the best across relays.
                 if (inboxPubkeyForSub(sub) != null) {
                     closeInboxSub(relayUrl, sub);
+                    return;
                 }
+                // A standing sub reached EOSE: the relay accepted it, so it is
+                // no longer auth-walled for this session.
+                RelayConnection accepted = connectionFor(relayUrl);
+                if (accepted != null) accepted.walledSubs.remove(sub);
                 return;
             }
             if ("CLOSED".equals(type)) {
@@ -2333,7 +2515,15 @@ public class NotificationRelayService extends Service {
                 // blind re-REQ is an unwinnable retry storm (#49). Everything
                 // else (relay restart, transient error, rate limit) earns a
                 // DELAYED resubscribe with per-connection exponential backoff.
-                if (reason.startsWith("auth-required:")) return;
+                if (reason.startsWith("auth-required:")) {
+                    // Remember the wall for this session; an EOSE or EVENT on
+                    // the same sub (after an AUTH lands) clears it. A session
+                    // that ends with every standing sub still walled is
+                    // classified AUTH_UNSATISFIABLE in endSession.
+                    RelayConnection walled = connectionFor(relayUrl);
+                    if (walled != null) walled.walledSubs.add(sub);
+                    return;
+                }
                 recordHealthError("subscription_closed");
                 for (RelayConnection rc : connections) {
                     if (rc.relayUrl.equals(relayUrl)) {
@@ -2459,6 +2649,13 @@ public class NotificationRelayService extends Service {
                     }
                 }
                 return;
+            }
+            // A standing sub delivered: this session is productive, and the
+            // sub is not auth-walled (whatever an earlier CLOSED said).
+            RelayConnection delivering = connectionFor(relayUrl);
+            if (delivering != null) {
+                delivering.walledSubs.remove(sub);
+                delivering.deliveredAnything = true;
             }
             handleEvent(event, relayUrl);
         } catch (Exception e) {
@@ -6147,7 +6344,7 @@ public class NotificationRelayService extends Service {
             @Override
             public void onAvailable(Network network) {
                 handler.post(() -> {
-                    for (RelayConnection rc : connections) rc.resetAndConnectNow();
+                    for (RelayConnection rc : connections) rc.onFleetEdge(FleetEdge.CONNECTIVITY_REGAINED);
                 });
             }
         };
