@@ -33,6 +33,9 @@ function setup() {
 const typeName = (value: string) =>
   fireEvent.change(screen.getByPlaceholderText(NAME_PLACEHOLDER), { target: { value } });
 const submit = () => fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
+// The privacy controls sit under a disclosure; its collapsed row still names
+// the current setting, so the default is read without opening it.
+const openAccess = () => fireEvent.click(screen.getByRole("button", { name: /Access/ }));
 
 describe("NewChannelDialog — the default path", () => {
   it("opens on the text channel form, with the repository path a step away", () => {
@@ -56,6 +59,8 @@ describe("NewChannelDialog — the default path", () => {
 describe("NewChannelDialog — privacy controls reach the create call", () => {
   it("creates a PRIVATE channel by default when the box is left alone", async () => {
     const { onCreateText } = setup();
+    // The default is visible on the collapsed row, never hidden behind it.
+    expect(screen.getByRole("button", { name: /Access/ })).toHaveTextContent("Private");
 
     typeName("secrets");
     submit();
@@ -71,7 +76,9 @@ describe("NewChannelDialog — privacy controls reach the create call", () => {
     const { onCreateText } = setup();
 
     typeName("general");
+    openAccess();
     fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
+    expect(screen.getByRole("button", { name: /Access/ })).toHaveTextContent("Public");
     submit();
 
     await waitFor(() => expect(onCreateText).toHaveBeenCalled());
@@ -84,6 +91,7 @@ describe("NewChannelDialog — privacy controls reach the create call", () => {
     const { onCreateText } = setup();
 
     typeName("planning");
+    openAccess();
     fireEvent.change(screen.getByLabelText("Access role name"), { target: { value: "editors" } });
     submit();
 
@@ -97,6 +105,7 @@ describe("NewChannelDialog — privacy controls reach the create call", () => {
     const { onCreateText } = setup();
 
     typeName("general");
+    openAccess();
     fireEvent.change(screen.getByLabelText("Access role name"), { target: { value: "editors" } });
     fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
     expect(screen.queryByLabelText("Access role name")).not.toBeInTheDocument();
@@ -115,6 +124,7 @@ describe("NewChannelDialog — the forum option reaches the create call", () => 
     expect(screen.getByRole("radio", { name: /Text/ })).toHaveAttribute("aria-checked", "true");
 
     typeName("general");
+    openAccess();
     fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
     submit();
 
@@ -140,6 +150,7 @@ describe("NewChannelDialog — the forum option reaches the create call", () => 
     // The subtitle follows the choice.
     expect(screen.getByText(/Titled posts with comments/)).toBeInTheDocument();
     typeName("help");
+    openAccess();
     fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
     submit();
 

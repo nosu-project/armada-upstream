@@ -1,9 +1,10 @@
-import { ArrowLeft, FolderGit2, Hash, Loader2, Lock, MessageSquareText } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderGit2, Hash, Loader2, Lock, MessageSquareText } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
@@ -72,6 +73,9 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   const [error, setError] = useState<string | null>(null);
   const [isPrivate, setIsPrivate] = useState(true);
   const [view, setView] = useState<ChannelView>("chat");
+  // Access lives under a disclosure: most channels take the default, and the
+  // collapsed row still names it so the default is never a surprise.
+  const [accessOpen, setAccessOpen] = useState(false);
   // The access role's name, display only: the binding is the role's scope
   // (CORD-04 §2). Left empty it matches the channel, the common case.
   const [roleName, setRoleName] = useState("");
@@ -86,6 +90,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     setError(null);
     setIsPrivate(true);
     setView("chat");
+    setAccessOpen(false);
     setRoleName("");
   }, [open]);
 
@@ -223,44 +228,52 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 })}
               </div>
 
-              <label
-                htmlFor="channel2-private"
-                className="flex cursor-pointer items-start gap-3 rounded-lg bg-secondary/50 p-3"
-              >
-                <Checkbox
-                  id="channel2-private"
-                  checked={isPrivate}
-                  onCheckedChange={(c) => setIsPrivate(c === true)}
-                  disabled={creating}
-                  className="mt-0.5"
-                />
-                <span className="min-w-0">
-                  <span className="flex items-center gap-1.5 text-sm font-medium">
-                    <Lock className="size-3.5" /> Private channel
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    Gets its own key, and a role that decides who can read it.
-                    Enforced in every client.
-                  </span>
-                </span>
-              </label>
-
-              {isPrivate && (
-                <div className="space-y-1">
-                  <Input
-                    value={roleName}
-                    onChange={(event) => setRoleName(event.target.value)}
-                    placeholder={name.trim() ? `Role name (default: ${name.trim()})` : "Role name (default: channel name)"}
-                    aria-label="Access role name"
+              <Collapsible open={accessOpen} onOpenChange={setAccessOpen} className="rounded-lg bg-secondary/50">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
                     disabled={creating}
-                    maxLength={64}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Members holding this role can read the channel. More roles can
-                    be added later from the channel's access settings.
-                  </p>
-                </div>
-              )}
+                    className="flex w-full items-center gap-2 px-3 py-2.5 text-sm touch:py-3"
+                  >
+                    {isPrivate ? <Lock className="size-3.5 text-muted-foreground" /> : <Hash className="size-3.5 text-muted-foreground" />}
+                    <span className="font-medium">Access</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{isPrivate ? "Private" : "Public"}</span>
+                    <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", accessOpen && "rotate-180")} />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-3 px-3 pb-3">
+                  <label htmlFor="channel2-private" className="flex cursor-pointer items-start gap-3">
+                    <Checkbox
+                      id="channel2-private"
+                      checked={isPrivate}
+                      onCheckedChange={(c) => setIsPrivate(c === true)}
+                      disabled={creating}
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">Private channel</span>
+                      <span className="block text-xs text-muted-foreground">
+                        Its own key, and a role that decides who can read it.
+                      </span>
+                    </span>
+                  </label>
+                  {isPrivate && (
+                    <div className="space-y-1">
+                      <Input
+                        value={roleName}
+                        onChange={(event) => setRoleName(event.target.value)}
+                        placeholder={name.trim() ? `Role name (default: ${name.trim()})` : "Role name (default: channel name)"}
+                        aria-label="Access role name"
+                        disabled={creating}
+                        maxLength={64}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Holders of this role can read the channel. More roles can be added later.
+                      </p>
+                    </div>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
 
               {error && <p className="text-xs text-destructive">{error}</p>}
 
