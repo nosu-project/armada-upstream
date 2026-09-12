@@ -106,3 +106,44 @@ describe("NewChannelDialog — privacy controls reach the create call", () => {
     expect(onCreateText).toHaveBeenCalledWith("general", undefined);
   });
 });
+
+describe("NewChannelDialog — the forum option reaches the create call", () => {
+  it("opens as a text channel, and chat rides as an absent view", async () => {
+    // `chat` is the default; writing it explicitly would make two clients
+    // holding the same state serialize different bytes (channelView.ts).
+    const { onCreateText } = setup();
+    expect(screen.getByRole("radio", { name: /Text/ })).toHaveAttribute("aria-checked", "true");
+
+    typeName("general");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
+    submit();
+
+    await waitFor(() => expect(onCreateText).toHaveBeenCalled());
+    expect(onCreateText).toHaveBeenCalledWith("general", undefined);
+  });
+
+  it("carries view: forum when the forum card is picked, beside the privacy options", async () => {
+    const { onCreateText } = setup();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Forum/ }));
+    typeName("proposals");
+    submit();
+
+    await waitFor(() => expect(onCreateText).toHaveBeenCalled());
+    expect(onCreateText).toHaveBeenCalledWith("proposals", { isPrivate: true, view: "forum" });
+  });
+
+  it("a public forum passes only the view", async () => {
+    const { onCreateText } = setup();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Forum/ }));
+    // The subtitle follows the choice.
+    expect(screen.getByText(/Titled posts with comments/)).toBeInTheDocument();
+    typeName("help");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
+    submit();
+
+    await waitFor(() => expect(onCreateText).toHaveBeenCalled());
+    expect(onCreateText).toHaveBeenCalledWith("help", { view: "forum" });
+  });
+});

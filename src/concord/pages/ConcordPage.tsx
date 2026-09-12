@@ -1,4 +1,4 @@
-import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, Volume2, X, type LucideIcon } from "lucide-react";
+import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, Volume2, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -102,7 +102,12 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
 import { useGitProjects } from "@/hooks/useGitProjects";
 import { useGitWorkItemActions, type GitWorkItemRepository } from "@/hooks/useGitWorkItemActions";
-import { NewChannelDialog, type WizardRepository } from "@/concord/components/NewChannelDialog";
+import { NewChannelDialog, type NewTextChannelOptions, type WizardRepository } from "@/concord/components/NewChannelDialog";
+import { ForumFeed } from "@/concord/components/ForumFeed";
+import { ForumPostPage } from "@/concord/components/ForumPostPage";
+import { NewPostPane } from "@/concord/components/NewPostPane";
+import { forumPosts, subjectOf, subjectTags, type ForumPost, type ForumSort } from "@/concord/lib/forum";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { NewIssueDialog } from "@/components/projects/NewIssueDialog";
 import { ProjectsView } from "@/components/projects/ProjectsView";
 import type { ProjectWorkItem } from "@/components/projects/projectData";
@@ -113,6 +118,7 @@ import { useSyncTasks } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
+import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
@@ -157,7 +163,7 @@ import { communityAvBrokers } from "@/concord/lib/voice";
 import { useRegisterChannelStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { completeMemberlist } from "@/concord/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions } from "@/concord/lib/roles";
-import { channelGitRepositoryAttachments, type Channel, type Community, type ImagePointer } from "@/concord/lib/types";
+import { channelGitRepositoryAttachments, type Channel, type ChannelView, type Community, type ImagePointer } from "@/concord/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { chatRoute, parseChatRoute, type ChatRoute, type Concord2Pane } from "@/lib/routes";
@@ -171,6 +177,9 @@ import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZa
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
+
+/** Shared empty feed, so a chat-presented channel keeps a stable reference. */
+const NO_POSTS: ForumPost[] = [];
 
 /**
  * What the header calls each community-wide pane that isn't a moderation one —
@@ -237,6 +246,8 @@ interface ChatMessage2Props {
   /** Channel route for "Copy message link" (see ChatMessage.permalink). */
   permalink?: ChatRoute;
   event: ChatMsg;
+  /** The post's subject when this is a titled post (CORD-03 §3), shown as a heading. */
+  title: string | undefined;
   reactions: MessageReactions;
   zaps: MessageZaps | undefined;
   onSendZap: ((target: ChatMsg, payment: ZapPayment) => Promise<void>) | undefined;
@@ -289,6 +300,7 @@ interface ChatMessage2Props {
  *  thread panel (`onOpenThread`). */
 const ConcordChatMessage = memo(function ConcordChatMessage({
   event,
+  title,
   reactions,
   zaps,
   onSendZap,
@@ -333,10 +345,20 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   // context menu offers "View event JSON" instead.
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
+  // A titled post keeps its title in the timeline too: in a chat channel that
+  // is the whole affordance, and in a forum's live-chat view it marks the
+  // rows that also appear in the feed.
+  const heading = title ? (
+    <div className="mb-0.5 flex items-start gap-1.5 text-[15px] font-semibold leading-snug">
+      <MessageSquareText className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="min-w-0 break-words">{title}</span>
+    </div>
+  ) : undefined;
   return (
     <ChatMessage
       event={event}
       rumor={rumor}
+      heading={heading}
       canWrite={canWrite}
       canModerate={canModerate}
       everyoneMention={everyoneMention}
@@ -412,6 +434,40 @@ function SidebarFooter() {
   );
 }
 
+/**
+ * A channel's glyph: a hashtag for a text channel, the forum's post mark for a
+ * forum, a speaker while a call is live. A private TEXT channel is a bare
+ * padlock (the long-standing mark); a private FORUM keeps its forum mark and
+ * wears a small padlock in the corner, so it still reads as a forum first. The
+ * badge sits on a `bg-background` disc so it reads over any row background.
+ */
+function ChannelGlyph({
+  isPrivate = false,
+  view,
+  occupied = false,
+  className,
+}: {
+  isPrivate?: boolean;
+  view?: ChannelView;
+  occupied?: boolean;
+  className?: string;
+}) {
+  if (occupied) return <Volume2 className={className} />;
+  if (view === "forum") {
+    if (!isPrivate) return <MessageSquareText className={className} />;
+    return (
+      <span className={cn("relative inline-flex shrink-0", className)}>
+        <MessageSquareText className="size-full" />
+        <span className="absolute -bottom-1 -right-1 inline-flex size-[62%] items-center justify-center rounded-full bg-background">
+          <Lock className="size-[72%]" strokeWidth={2.75} />
+        </span>
+      </span>
+    );
+  }
+  if (isPrivate) return <Lock className={className} />;
+  return <Hash className={className} />;
+}
+
 export const ChannelRow = memo(function ChannelRow({
   community,
   channel,
@@ -476,11 +532,13 @@ export const ChannelRow = memo(function ChannelRow({
 
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
-  // A call is live in this channel when anyone is present.
-  const occupied = participants.length > 0;
+  // A forum row offers no call: no CTA, no roster, no speaker glyph. A call
+  // is live in a chat channel when anyone is present.
+  const callable = channel.view !== "forum";
+  const occupied = callable && participants.length > 0;
   // While a call is live, the row wears a speaker glyph in place of its usual
-  // hashtag (or lock) — the surest signal there's voice to join here.
-  const Icon = occupied ? Volume2 : channel.isPrivate ? Lock : Hash;
+  // hashtag (or lock, or the forum's post glyph) — the surest signal there's
+  // voice to join here.
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block">
@@ -510,7 +568,12 @@ export const ChannelRow = memo(function ChannelRow({
                 active && "font-medium",
               )}
             >
-              <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
+              <ChannelGlyph
+                isPrivate={channel.isPrivate}
+                view={channel.view}
+                occupied={occupied}
+                className={cn("size-4 shrink-0", occupied && !active && "text-success")}
+              />
               <span className="truncate flex-1 min-w-0">{channel.name}</span>
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
               {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
@@ -528,7 +591,7 @@ export const ChannelRow = memo(function ChannelRow({
                 without leaving the list. Always visible while a call is live;
                 otherwise appears on hover/focus (desktop only — touch devices
                 have no hover, so it stays hidden there until a call is live). */}
-            {!inCall && (
+            {callable && !inCall && (
               <button
                 type="button"
                 onClick={(e) => {
@@ -656,11 +719,7 @@ function MentionsView({
         return (
           <div key={msg.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
-              {ch?.isPrivate ? (
-                <Lock className="size-3 shrink-0" />
-              ) : (
-                <Hash className="size-3 shrink-0" />
-              )}
+              <ChannelGlyph isPrivate={ch?.isPrivate} view={ch?.view} className="size-3 shrink-0" />
               <span className="truncate">{ch?.name ?? "unknown channel"}</span>
             </div>
             <AggregateMessage
@@ -798,11 +857,7 @@ function AllMessagesView({
             {newDay ? <DateSeparator ts={msg.created_at} /> : null}
             {newChannel ? (
               <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
-                {ch?.isPrivate ? (
-                  <Lock className="size-3 shrink-0" />
-                ) : (
-                  <Hash className="size-3 shrink-0" />
-                )}
+                <ChannelGlyph isPrivate={ch?.isPrivate} view={ch?.view} className="size-3 shrink-0" />
                 <span className="truncate">{ch?.name ?? "unknown channel"}</span>
               </div>
             ) : null}
@@ -881,11 +936,7 @@ function ThreadsView({
         return (
           <div key={t.root.id} className="pb-1">
             <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
-              {ch?.isPrivate ? (
-                <Lock className="size-3 shrink-0" />
-              ) : (
-                <Hash className="size-3 shrink-0" />
-              )}
+              <ChannelGlyph isPrivate={ch?.isPrivate} view={ch?.view} className="size-3 shrink-0" />
               <span className="truncate">{ch?.name ?? "unknown channel"}</span>
               {t.hasNew ? (
                 <span
@@ -2264,11 +2315,12 @@ export function ConcordPage() {
   // The dialog is about ONE channel's access; switching rooms closes it.
   useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
 
-  const handleCreateTextChannel = useCallback(async (name: string, opts?: { isPrivate?: boolean; accessRoleName?: string }) => {
+  const handleCreateTextChannel = useCallback(async (name: string, opts?: NewTextChannelOptions) => {
     const { channelIdHex: created } = await createChannel({
       name,
       isPrivate: opts?.isPrivate,
       accessRoleName: opts?.accessRoleName,
+      view: opts?.view,
     });
     // A newborn Private Channel is born alongside the Role that names who may
     // read it, and nobody holds that Role yet — so there is nobody to vend to.
@@ -2488,6 +2540,76 @@ export function ConcordPage() {
     if (communityPaused) return "This community is paused. A moderator must resume it before anyone can post.";
     return transportRef.current.canSend?.() ?? null;
   }, [communityPaused]);
+
+  // ── Forum presentation (CORD-03 §2 `view: "forum"`) ───────────────────────
+  //
+  // A forum channel opens to its feed of titled posts, with the plain timeline
+  // still reachable as an alternate view (CORD-03 §2) — untitled messages in a
+  // forum (from a chat-only client, or from before the flip) are valid
+  // Chat-plane rumors that count toward unread, and the chat view is where
+  // they are read. The choice is the reader's, per channel, kept locally. The
+  // feed is presentation only — the same folded timeline the chat view shows,
+  // arranged differently — so flipping either way never refetches.
+  const [forumAsChat, setForumAsChat] = useLocalStorage<string[]>("armada:concord-forum-as-chat", []);
+  const forumOpensAsChat = Boolean(channel && forumAsChat.includes(channel.idHex));
+  const presentation: "feed" | "chat" = channel?.view === "forum" && !forumOpensAsChat ? "feed" : "chat";
+  const toggleForumPresentation = useCallback(() => {
+    if (!channel) return;
+    const id = channel.idHex;
+    setForumAsChat((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, [channel, setForumAsChat]);
+  const [forumSort, setForumSort] = useLocalStorage<ForumSort>("armada:concord-forum-sort", "active");
+  const [newPostOpen, setNewPostOpen] = useState(false);
+  // The composer is about ONE channel's post; switching rooms closes it.
+  useEffect(() => setNewPostOpen(false), [channel?.idHex]);
+  // The feed: titled roots of the loaded window, pinned first, then by
+  // `forumSort`. Reads `pins.isPinned` directly rather than the transport's
+  // (which is gated to PIN_MESSAGES holders): everyone sees the pins, only
+  // some may change them.
+  const { messages: topLevelMessages, threadRepliesFor } = baseTransport;
+  const feedPosts = useMemo<ForumPost[]>(
+    () =>
+      presentation !== "feed"
+        ? NO_POSTS
+        : forumPosts(
+            topLevelMessages,
+            (id) => threadRepliesFor?.(id) ?? EMPTY_REPLIES,
+            { sort: forumSort, isPinned: pins.isPinned },
+          ),
+    [presentation, topLevelMessages, threadRepliesFor, forumSort, pins.isPinned],
+  );
+  // "New" per post is the same per-thread stamp the Threads tab keeps
+  // (`c2t:<rootId>`): a post lights up when its newest activity — the post
+  // itself, or its newest comment — is newer than the reader last opened it,
+  // and never for the reader's own words.
+  const { readState } = useReadState();
+  const isPostNew = useCallback(
+    (post: ForumPost) =>
+      post.lastActivityBy !== user?.pubkey &&
+      post.lastActivityAt > (readState[concordThreadReadKey(post.root.id)] ?? 0),
+    [readState, user?.pubkey],
+  );
+  const openPost = useCallback(
+    (post: ForumPost) => {
+      // Opening consumes the activity; the thread panel keeps the stamp
+      // advancing as comments land while it is open.
+      markThreadRead(post.root.id, post.lastActivityAt);
+      openThread(post.root);
+    },
+    [markThreadRead, openThread],
+  );
+  const handleCreatePost = useCallback(
+    async (title: string, content: string, tags: string[][]) => {
+      // One kind-9 message: the title rides as the `subject` tag beside the
+      // composer's content-derived tags (mentions, imeta, emoji), with the
+      // same drops `handleSend` applies to a top-level message.
+      const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
+      await send({ content, extraTags: [...subjectTags(title), ...extraTags] });
+      setNewPostOpen(false);
+      clearMessageFocus();
+    },
+    [send, clearMessageFocus],
+  );
   const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
     edit: (original, content) => transport.editMessage?.(original, content),
     messages: transport.messages,
@@ -3166,11 +3288,7 @@ export function ConcordPage() {
           style={{ left: (channelDrag.columnX?.left ?? 0) + 12, top: channelDrag.pointer.y }}
         >
           <span className="flex max-w-48 items-center gap-2 rotate-[-2deg] scale-105 clip-corner-lg bg-muted px-3 py-1.5 text-sm font-medium ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
-            {draggedChannel.isPrivate ? (
-              <Lock className="size-4 shrink-0" />
-            ) : (
-              <Hash className="size-4 shrink-0" />
-            )}
+            <ChannelGlyph isPrivate={draggedChannel.isPrivate} view={draggedChannel.view} className="size-4 shrink-0" />
             <span className="truncate">{draggedChannel.name}</span>
           </span>
         </div>
@@ -3254,11 +3372,11 @@ export function ConcordPage() {
                 </>
               ) : (
                 <>
-                  {channel?.isPrivate ? (
-                    <Lock className="size-5 text-muted-foreground shrink-0" />
-                  ) : (
-                    <Hash className="size-5 text-muted-foreground shrink-0" />
-                  )}
+                  <ChannelGlyph
+                    isPrivate={channel?.isPrivate}
+                    view={channel?.view}
+                    className="size-5 text-muted-foreground shrink-0"
+                  />
                   <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
                 </>
               )}
@@ -3290,11 +3408,7 @@ export function ConcordPage() {
                     </>
                   ) : (
                     <>
-                      {channel?.isPrivate ? (
-                        <Lock className="size-3 shrink-0" />
-                      ) : (
-                        <Hash className="size-3 shrink-0" />
-                      )}
+                      <ChannelGlyph isPrivate={channel?.isPrivate} view={channel?.view} className="size-3 shrink-0" />
                       {channel?.name ?? "…"}
                     </>
                   )}
@@ -3307,7 +3421,10 @@ export function ConcordPage() {
                   (mirrors the DM header's Call). Search + the members toggle
                   stay inline on desktop; Invite and Mute always live in the …
                   menu, and on mobile Search + Members join them there. */}
-              {user && view === "channel" && channel && !dissolved && (
+              {/* A forum has no call, no pins bar and no events: those are
+                  chat furniture, and a room of titled posts offers none of
+                  them. Only search, members and the … menu remain. */}
+              {user && view === "channel" && channel && channel.view !== "forum" && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -3357,7 +3474,7 @@ export function ConcordPage() {
                 <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
               </Tooltip>
 
-              {view === "channel" && channel && (pins.pins.length > 0 || pins.dark) && (
+              {view === "channel" && channel && channel.view !== "forum" && (pins.pins.length > 0 || pins.dark) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -3375,7 +3492,7 @@ export function ConcordPage() {
                 </Tooltip>
               )}
 
-              {view === "channel" && channel && (calendar.events.length > 0 || calendar.canModerate) && (
+              {view === "channel" && channel && channel.view !== "forum" && (calendar.events.length > 0 || calendar.canModerate) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -3433,6 +3550,14 @@ export function ConcordPage() {
                     <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
                       <UserPlus className="size-4" />
                       Invite people
+                    </DropdownMenuItem>
+                  )}
+                  {/* A forum's alternate view (CORD-03 §2): the same channel
+                      as a plain timeline, where its untitled chatter lives. */}
+                  {view === "channel" && channel?.view === "forum" && (
+                    <DropdownMenuItem className="px-3 py-2" onClick={toggleForumPresentation}>
+                      {forumOpensAsChat ? <MessageSquareText className="size-4" /> : <Hash className="size-4" />}
+                      {forumOpensAsChat ? "View as posts" : "View as chat"}
                     </DropdownMenuItem>
                   )}
                   {user && community && channel && (
@@ -3641,6 +3766,10 @@ export function ConcordPage() {
                 </div>
               ) : (
                 <>
+                  {/* The pinned and events bars are chat furniture: a forum
+                      lists its pins at the top of the feed and offers no
+                      events. Neither is reachable there, so neither mounts. */}
+                  {presentation !== "feed" && (
                   <PinnedBar
                     open={pinsOpen}
                     pins={pins.pins}
@@ -3672,6 +3801,8 @@ export function ConcordPage() {
                     }}
                     onClose={() => setPinsOpen(false)}
                   />
+                  )}
+                  {presentation !== "feed" && (
                   <CalendarEventsBar
                     open={eventsOpen}
                     calendar={calendar}
@@ -3679,6 +3810,66 @@ export function ConcordPage() {
                     onCreate={() => setCreateEventOpen(true)}
                     onDelete={(event) => { void calendar.remove(event); }}
                   />
+                  )}
+                  {presentation === "feed" && channel && newPostOpen ? (
+                    // Writing a post takes the feed's place: a page, not a bar.
+                    <NewPostPane
+                      className="flex-1 min-h-0"
+                      channelName={channel.name}
+                      groupId={channel.idHex}
+                      mentionPubkeys={memberPubkeys}
+                      canMentionEveryone={transport.canMentionEveryone}
+                      conversationRelays={community?.relays}
+                      canSend={composerCanSend}
+                      onSubmit={handleCreatePost}
+                      onCancel={() => setNewPostOpen(false)}
+                    />
+                  ) : presentation === "feed" && channel && threadRoot ? (
+                    // Reading a post takes the feed's place too: the post as a
+                    // page with its comments under it, never a side drawer.
+                    // The route still carries the post (`/t/<root>`), so back
+                    // returns to the feed and a deep link lands here. A root
+                    // without a subject (a plain thread reached by link) still
+                    // reads as a page, headed by nothing.
+                    <ForumPostPage
+                      className="flex-1 min-h-0"
+                      root={threadRoot}
+                      title={subjectOf(threadRoot) ?? ""}
+                      pinned={pins.isPinned(threadRoot.id)}
+                      transport={transport}
+                      groupId={channel.idHex}
+                      canWrite={canWrite}
+                      mentionPubkeys={memberPubkeys}
+                      conversationRelays={community?.relays}
+                      autoFocus={threadAutoFocus}
+                      onBack={closeThread}
+                    />
+                  ) : presentation === "feed" ? (
+                    <ForumFeed
+                      className="flex-1 min-h-0"
+                      posts={feedPosts}
+                      sort={forumSort}
+                      onSortChange={setForumSort}
+                      isLoading={Boolean(baseTransport.isLoading)}
+                      syncing={channelSyncing || gateResolving}
+                      hasMore={transport.hasMore}
+                      isLoadingOlder={transport.isLoadingOlder}
+                      onLoadOlder={transport.loadOlder}
+                      onOpen={openPost}
+                      isNew={isPostNew}
+                      onNewPost={canWrite ? () => setNewPostOpen(true) : undefined}
+                      banner={
+                        communityPause && channel ? (
+                          <CommunityPauseBanner
+                            pause={communityPause}
+                            canManage={canManageChannels}
+                            onResume={() => clearPause.mutate()}
+                            resuming={clearPause.isPending}
+                          />
+                        ) : undefined
+                      }
+                    />
+                  ) : (
                   <MessageTimeline
                     // No per-channel `key`: a channel switch updates the
                     // timeline in place (as the NIP-29 GroupChat path already
@@ -3724,6 +3915,7 @@ export function ConcordPage() {
                       <ConcordChatMessage
                         key={msg.id}
                         event={msg}
+                        title={subjectOf(msg)}
                         permalink={permalink}
                         reactions={reactionsFor(msg.id)}
                         zaps={transport.zapsFor?.(msg.id)}
@@ -3761,8 +3953,9 @@ export function ConcordPage() {
                       );
                     }}
                   />
+                  )}
 
-                  {typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
+                  {presentation !== "feed" && typingPubkeys.length > 0 && <TypingIndicator pubkeys={typingPubkeys} />}
                   {dissolved ? (
                     <div className="mx-2 mb-3 mt-1 px-3 py-3 clip-corner-lg bg-destructive/10 flex items-center gap-3">
                       <Trash2 className="size-5 shrink-0 text-destructive" />
@@ -3828,7 +4021,9 @@ export function ConcordPage() {
                       )}
                     </div>
                   ) : (
-                    channel && (
+                    // The feed carries its own pause banner and its "New
+                    // post" door; the message bar is the chat view's.
+                    channel && presentation !== "feed" && (
                       <>
                         {communityPause && (
                           <CommunityPauseBanner
@@ -3895,10 +4090,13 @@ export function ConcordPage() {
             />
             </ComposerBoundsProvider>
 
-            <ThreadPanelSlot open={Boolean(threadRoot)} expanded={threadExpanded}>
-              {lastThreadRoot && channel && (
+            {/* Chat channels read a thread in the side drawer; a forum reads
+                its post as a page in the pane above, so the drawer stays shut. */}
+            <ThreadPanelSlot open={Boolean(threadRoot) && presentation !== "feed"} expanded={threadExpanded}>
+              {lastThreadRoot && channel && presentation !== "feed" && (
                 <ThreadPanel
                   root={lastThreadRoot}
+                  rootTitle={subjectOf(lastThreadRoot)}
                   transport={transport}
                   relayUrl="dm"
                   groupId={channel.idHex}

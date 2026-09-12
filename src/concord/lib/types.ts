@@ -117,12 +117,25 @@ export interface CommunityMetadata {
   [k: string]: unknown;
 }
 
+/**
+ * How a client should OPEN a Channel (CORD-03 §2 `view`): `chat` is the flat
+ * timeline; `forum` opens thread-first, listing titled posts as a feed. A
+ * presentation hint only — the Chat Plane is identical either way.
+ */
+export type ChannelView = "chat" | "forum";
+
 /** Channel metadata — the vsk=2 Control Plane entity's content (CORD-03 §2). */
 export interface ChannelMetadata {
   name: string;
   private: boolean;
   /** Terminal: the id is never reused; clients drop the Channel from display. */
   deleted?: boolean;
+  /**
+   * The presentation the Channel opens to (CORD-03 §2). Typed loosely on
+   * purpose: an unknown value reads as `"chat"` and is round-tripped
+   * verbatim. Read through `channelView()`, never directly.
+   */
+  view?: unknown;
   custom?: Record<string, unknown>;
   [k: string]: unknown;
 }
@@ -335,6 +348,8 @@ export interface Channel {
   category?: string;
   /** Sidebar position (channelOrder.ts); undefined sorts last, by name. */
   position?: number;
+  /** The presentation the channel opens to (channelView.ts); undefined reads as `chat`. */
+  view?: ChannelView;
   /**
    * The current epoch's call coordinates — every Channel is callable
    * (CORD-07 §1). A lazy memoized getter on the objects `channelsView`

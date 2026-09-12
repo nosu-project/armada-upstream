@@ -357,6 +357,13 @@ export interface ChatMessageProps {
    * so it's passed in as a node rather than computed here.
    */
   replyContext?: ReactNode;
+  /**
+   * A heading rendered at the top of the body, above the content — a titled
+   * post's subject (Concord forum posts, CORD-03 §3). Its presence also keeps
+   * the row out of continuation collapsing: a titled post is a new topic, and
+   * needs its author line however soon it follows the same author's chatter.
+   */
+  heading?: ReactNode;
   onRetry?: () => void;
   onDiscard?: () => void;
   /** Pin or unpin this message (moderators only; hidden when absent). */
@@ -487,6 +494,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   threadParticipants,
   lastReplyAt,
   replyContext,
+  heading,
   onRetry,
   onDiscard,
   onTogglePin,
@@ -886,6 +894,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
 
   const body = (
     <>
+      {heading}
       {isEditing ? (
         <div className="mt-0.5">
           <textarea
@@ -1058,7 +1067,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           continuation={
             // Collapse into the previous message only for plain consecutive chats;
             // a reply line, edit field, pin or mention needs the full header.
-            continuation && !hasReplyContext && !isEditing && !isPinned && !mentionsMe
+            continuation && !hasReplyContext && !heading && !isEditing && !isPinned && !mentionsMe
           }
           className={cn(
             // The picked-out highlight tracks the sheet alone: the row's

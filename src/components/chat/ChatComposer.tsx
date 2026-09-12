@@ -456,6 +456,23 @@ interface ChatComposerProps {
    * edit.
    */
   onEditLast?: () => boolean;
+  /**
+   * How much room the input takes, and how it submits. `bar` is the one-line
+   * chat composer: it grows to a few lines and Enter sends. `document` is a
+   * forum-style editor: the text area sits above its toolbar, starts several
+   * lines tall and grows to half the viewport, Enter is a newline, Ctrl/Cmd+
+   * Enter sends, and the send control is a labelled button (`submitLabel`)
+   * rather than the arrow. Same pickers, uploads, mentions and drafts.
+   */
+  layout?: "bar" | "document";
+  /** The document layout's send button text (default "Post"). */
+  submitLabel?: string;
+  /**
+   * Document layout only: offers a Cancel button beside the send button (and
+   * Escape from an empty box), for an editor that was opened in place — an
+   * inline reply under a comment — and can be put away again.
+   */
+  onCancel?: () => void;
 }
 
 /**
@@ -468,7 +485,8 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
+  const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -722,12 +740,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (!el) return;
     const resize = () => {
       el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+      // A document keeps a few lines of room and grows to half the
+      // viewport; the bar grows to a few lines.
+      const max = layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160;
+      const min = layout === "document" ? 120 : 0;
+      el.style.height = `${Math.min(Math.max(el.scrollHeight, min), max)}px`;
     };
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [content]);
+  }, [content, layout]);
 
   // Focus the textarea when starting a reply.
   useEffect(() => {
@@ -1925,8 +1947,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter sends; Shift+Enter is a newline. Ignore the Enter that only confirms
     // an in-progress IME composition (CJK and other multi-keystroke input),
-    // which would otherwise fire a premature send mid-word.
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // which would otherwise fire a premature send mid-word. A document is
+    // multi-line by nature, so there Enter is a newline and only Ctrl/Cmd+Enter
+    // sends — the labelled button is the ordinary way out.
+    const sendKey = isDocument
+      ? e.key === "Enter" && (e.ctrlKey || e.metaKey)
+      : e.key === "Enter" && !e.shiftKey;
+    if (sendKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       if (mode === "poll") {
         handlePollSubmit();
@@ -1938,6 +1965,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // clicking away doesn't dismiss it (it's inline composer state, not a modal).
       e.preventDefault();
       setMode("post");
+    } else if (e.key === "Escape" && isDocument && onCancel && !hasContent && pendingUploads.length === 0) {
+      // An empty in-place editor is put away with Escape; one holding a
+      // draft is not, since that would read as losing it.
+      e.preventDefault();
+      onCancel();
     } else if (
       e.key === "ArrowUp" &&
       onEditLast &&
@@ -2193,8 +2225,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 onCancel={cancelBotCommand}
               />
             ) : (
-            /* ── Input pill: + | textarea | emoji | mic/send ──── */
-            <div className="flex items-end gap-0.5 touch:gap-1.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
+            /* ── Input pill: + | textarea | emoji | mic/send ────
+                A document wraps instead: the textarea takes the first full
+                line (`order-first basis-full`) and the same controls fall
+                onto a toolbar row beneath it, the send button pushed right. */
+            <div
+              className={cn(
+                "clip-corner-lg bg-secondary/60 px-1.5 py-1.5",
+                isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
+              )}
+            >
               {/* Plus menu: attach + poll (Discord-style) */}
               <Popover open={plusOpen} onOpenChange={setPlusOpen}>
                 <PopoverTrigger asChild>
@@ -2304,7 +2344,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </Popover>
 
               {/* Borderless, self-growing textarea */}
-              <div className="relative flex-1 min-w-0">
+              <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
                 {/* Placeholder as a truncating overlay, NOT the textarea's
                     `placeholder` attribute: a native placeholder wraps to a
                     second line when it's long (a long channel/display name on
@@ -2316,7 +2356,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   <div
                     aria-hidden
                     dir="auto"
-                    className="pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 py-2 touch:py-3 leading-5 text-base md:text-sm text-muted-foreground"
+                    className={cn(
+                      "pointer-events-none select-none absolute inset-x-0 top-0 truncate px-1.5 py-2 touch:py-3 text-muted-foreground",
+                      isDocument ? "text-[15px] leading-relaxed" : "leading-5 text-base md:text-sm",
+                    )}
                   >
                     {placeholderText}
                   </div>
@@ -2332,9 +2375,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   aria-label={placeholderText}
-                  rows={1}
+                  rows={isDocument ? 5 : 1}
                   maxLength={MAX_CHARS}
-                  className="block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 leading-5 text-base md:text-sm disabled:opacity-50 max-h-40 overflow-y-auto align-middle"
+                  className={cn(
+                    "block w-full resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 disabled:opacity-50 overflow-y-auto align-middle",
+                    isDocument
+                      ? "text-[15px] leading-relaxed"
+                      : "leading-5 text-base md:text-sm max-h-40",
+                  )}
                 />
                 {mentionsEnabled && (
                   <MentionAutocomplete
@@ -2411,8 +2459,35 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
               {/* Mic when empty, send when there's something to send (Signal-style).
                   Available in group mode AND delegated-send mode (Concord/DMs) —
-                  handleStopAndSendVoice routes through sendOverride when set. */}
-              {mode === "post" && !hasContent && !isUploading && voiceRecorder.isSupported ? (
+                  handleStopAndSendVoice routes through sendOverride when set.
+                  A document has no mic (a voice note is not a post) and sends
+                  from a labelled button at the toolbar's right edge. */}
+              {isDocument ? (
+                <>
+                  {onCancel && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={onCancel}
+                      className="ml-auto h-9 px-3 text-muted-foreground hover:text-foreground touch:h-11"
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={mode === "poll" ? handlePollSubmit : handleSend}
+                    disabled={isUploading || (mode === "poll" ? !isPollValid || isSending : !hasContent)}
+                    className={cn("clip-corner-lg h-9 px-4 font-semibold touch:h-11", !onCancel && "ml-auto")}
+                  >
+                    {isUploading || (mode === "poll" && isSending) ? <Loader2 className="size-4 animate-spin" /> : null}
+                    {mode === "poll" ? "Publish poll" : submitLabel}
+                  </Button>
+                </>
+              ) : mode === "post" && !hasContent && !isUploading && voiceRecorder.isSupported ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button

@@ -45,12 +45,14 @@ import {
   utf8Len,
   withChannelGitRepositoryAttachments,
   type ChannelMetadata,
+  type ChannelView,
   type Community,
   type ImagePointer,
   type PrivateChannelKey,
 } from "@/concord/lib/types";
 import { withChannelCategory } from "@/concord/lib/channelCategory";
 import { channelPosition, compareChannelOrder, reorderPositions, withChannelPosition } from "@/concord/lib/channelOrder";
+import { withChannelView } from "@/concord/lib/channelView";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord/lib/control";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
 
@@ -818,9 +820,9 @@ export function useCommunityManagement(community: Community | undefined) {
   const createChannel = useMutation<
     { channelIdHex: string; minted?: PrivateChannelKey },
     Error,
-    { name: string; repository?: { address: string; relayHints: string[] }; isPrivate?: boolean; accessRoleName?: string }
+    { name: string; repository?: { address: string; relayHints: string[] }; isPrivate?: boolean; accessRoleName?: string; view?: ChannelView }
   >({
-    mutationFn: async ({ name, repository, isPrivate, accessRoleName }) => {
+    mutationFn: async ({ name, repository, isPrivate, accessRoleName, view }) => {
       if (!user || !community) throw new Error("Not ready.");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
@@ -831,6 +833,9 @@ export function useCommunityManagement(community: Community | undefined) {
       // just-created channel is absent from it and the attach throws. Building
       // one edition leaves the channel born attached instead.
       let metadata: ChannelMetadata = { name: trimmed, private: Boolean(isPrivate) };
+      // The view rides the first edition for the same reason: a forum should
+      // open as one the moment it exists, not after a second publish lands.
+      if (view) metadata = withChannelView(metadata, view);
       if (repository) {
         const address = parseGitRepositoryAddress(repository.address);
         if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
@@ -1248,6 +1253,43 @@ export function useCommunityManagement(community: Community | undefined) {
     },
   });
 
+  /**
+   * Set what a channel opens to (CORD-03 §2 `view`): the forum feed or the
+   * plain timeline. In place, same `channel_id` — the Chat Plane is untouched,
+   * so every message already there stays valid either way; only the door
+   * changes. Takes the same not-yet-folded refusal `setChannelCategory` does.
+   */
+  const setChannelView = useMutation<void, Error, { channelIdHex: string; view: ChannelView }>({
+    mutationFn: async ({ channelIdHex, view }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const def = folded?.channels.get(channelIdHex);
+      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      if (def.deleted) throw new Error("This channel was deleted.");
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
+        throw new Error("Changing how a channel opens needs the Manage-channels permission.");
+      }
+      const head = folded?.heads.get(channelIdHex);
+      await publishEdition(
+        nostr,
+        community,
+        user.signer,
+        buildChannelEdition(
+          hex32(channelIdHex),
+          // Round-trips everything the view doesn't touch (CORD-02 §6).
+          withChannelView(def.metadata, view),
+          {
+            actorPubkey: user.pubkey,
+            version: head ? head.version + 1n : 1n,
+            prevHash: head?.hash,
+            authority: citationFor(community, folded, user.pubkey),
+          },
+        ),
+      );
+      invalidateControl(queryClient, community.idHex);
+    },
+  });
+
   const deleteChannel = useMutation<void, Error, { channelIdHex: string }>({
     mutationFn: async ({ channelIdHex }) => {
       if (!user || !community) throw new Error("Not ready.");
@@ -1346,6 +1388,8 @@ export function useCommunityManagement(community: Community | undefined) {
     renameChannel: renameChannel.mutateAsync,
     setChannelCategory: setChannelCategory.mutateAsync,
     isFiling: setChannelCategory.isPending,
+    setChannelView: setChannelView.mutateAsync,
+    isSettingView: setChannelView.isPending,
     moveChannel: moveChannel.mutateAsync,
     isMovingChannel: moveChannel.isPending,
     reorderChannel: reorderChannel.mutateAsync,

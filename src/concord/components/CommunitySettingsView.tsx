@@ -9,6 +9,7 @@ import {
   Info,
   Loader2,
   Lock,
+  MessageSquareText,
   MoreVertical,
   Pencil,
   Plug,
@@ -97,6 +98,7 @@ import {
 } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
 import { channelGitRepositoryAttachments } from "@/concord/lib/types";
+import type { ChannelView } from "@/concord/lib/types";
 import { fetchGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
 import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
@@ -850,7 +852,7 @@ function ChannelsSection({
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
 }) {
   const channels = useChannels(community);
-  const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel, arrangeChannels } =
+  const { renameChannel, isRenaming, setChannelCategory, isFiling, setChannelView, deleteChannel, createChannel, isAddingChannel, arrangeChannels } =
     useCommunityManagement(community);
 
   // Optimistic arrangement, laid over the fold until the editions land — the
@@ -1050,6 +1052,7 @@ function ChannelsSection({
             onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
             onMintAccessRole={onMintAccessRole ? (name) => onMintAccessRole(ch.idHex, name) : undefined}
             onSetCategory={(category) => setChannelCategory({ channelIdHex: ch.idHex, category })}
+            onSetView={canManage ? (view) => setChannelView({ channelIdHex: ch.idHex, view }) : undefined}
             onNewCategory={() => setCategoryPrompt({ channels: [ch], initial: "" })}
             onDelete={
               canManage && channels.length > 1
@@ -1231,6 +1234,7 @@ function ChannelRow({
   categories,
   onRename,
   onSetCategory,
+  onSetView,
   onNewCategory,
   onDelete,
   accessRoles,
@@ -1245,6 +1249,8 @@ function ChannelRow({
   categories: string[];
   onRename: (name: string) => Promise<void>;
   onSetCategory: (name: string | undefined) => Promise<void>;
+  /** Flip what the channel opens to — forum feed or chat (CORD-03 §2 `view`). */
+  onSetView?: (view: ChannelView) => Promise<void>;
   /** Raise the shared naming dialog to file this channel under a new category. */
   onNewCategory: () => void;
   onDelete?: () => void;
@@ -1319,7 +1325,8 @@ function ChannelRow({
     setEditing(false);
   };
 
-  const Icon = channel.isPrivate ? Lock : Hash;
+  const Icon = channel.isPrivate ? Lock : channel.view === "forum" ? MessageSquareText : Hash;
+  const isForum = channel.view === "forum";
   // Offered on every channel a manager can edit: a private one shows who may
   // read it, a public one offers the conversion that gives it a key.
   const showAccessButton = canManage && Boolean(onPrivatise || (channel.isPrivate && onRotateKey));
@@ -1388,6 +1395,27 @@ function ChannelRow({
                   <Pencil className="size-3.5" />
                   Rename
                 </DropdownMenuItem>
+                {onSetView && (
+                  // In place, same channel id: the history stays valid chat
+                  // either way, only the door changes.
+                  <DropdownMenuItem
+                    disabled={busy}
+                    onSelect={() =>
+                      void run(async () => {
+                        await onSetView(isForum ? "chat" : "forum");
+                        toast({
+                          title: isForum ? "Opens as chat now" : "Opens as a forum now",
+                          description: isForum
+                            ? `#${channel.name} shows the live timeline first.`
+                            : `#${channel.name} lists titled posts first; live chat stays a tap away.`,
+                        });
+                      }, "Couldn't change how the channel opens")
+                    }
+                  >
+                    {isForum ? <Hash className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
+                    {isForum ? "Open as chat" : "Open as forum"}
+                  </DropdownMenuItem>
+                )}
                 {showAccessButton && (
                   <DropdownMenuItem onSelect={() => setAccessOpen((v) => !v)}>
                     <Shield className="size-3.5" />

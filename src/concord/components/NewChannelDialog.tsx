@@ -1,4 +1,4 @@
-import { ArrowLeft, FolderGit2, Hash, Loader2, Lock } from "lucide-react";
+import { ArrowLeft, FolderGit2, Hash, Loader2, Lock, MessageSquareText } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
@@ -7,6 +7,28 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
+import { cn } from "@/lib/utils";
+
+import type { ChannelView } from "@/concord/lib/types";
+
+/**
+ * What a new channel opens to (CORD-03 §2 `view`): one small segmented
+ * control, icon and a word each. No blurbs — the forum's own empty state
+ * explains itself the first time it is opened, and the choice can be flipped
+ * later from the channel's settings.
+ */
+const VIEW_OPTIONS: ReadonlyArray<{ view: ChannelView; label: string; icon: typeof Hash }> = [
+  { view: "chat", label: "Text", icon: Hash },
+  { view: "forum", label: "Forum", icon: MessageSquareText },
+];
+
+/** The create-text options the page's handler takes. */
+export interface NewTextChannelOptions {
+  isPrivate?: boolean;
+  accessRoleName?: string;
+  /** The presentation the channel opens to; `chat` when omitted. */
+  view?: ChannelView;
+}
 
 /** Re-exported under its original name for the page's handler signature. */
 export type WizardRepository = PickedRepository;
@@ -40,7 +62,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connectedCoordinates: ReadonlySet<string>;
-  onCreateText: (name: string, opts?: { isPrivate?: boolean; accessRoleName?: string }) => Promise<unknown>;
+  onCreateText: (name: string, opts?: NewTextChannelOptions) => Promise<unknown>;
   onCreateRepository: (name: string, repository: PickedRepository) => Promise<unknown>;
 }) {
   const [step, setStep] = useState<Step>("text");
@@ -49,6 +71,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPrivate, setIsPrivate] = useState(true);
+  const [view, setView] = useState<ChannelView>("chat");
   // The access role's name, display only: the binding is the role's scope
   // (CORD-04 §2). Left empty it matches the channel, the common case.
   const [roleName, setRoleName] = useState("");
@@ -62,6 +85,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     setCreating(false);
     setError(null);
     setIsPrivate(true);
+    setView("chat");
     setRoleName("");
   }, [open]);
 
@@ -82,20 +106,24 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
         await onCreateRepository(channelName, selected);
         toast({ title: "Repository channel created", description: `#${channelName} · ${selected.displayName}` });
       } else {
-        await onCreateText(
-          channelName,
-          isPrivate ? { isPrivate: true, accessRoleName: roleName.trim() || undefined } : undefined,
-        );
+        // `chat` is the default and rides as an ABSENT field, so a plain
+        // public text channel still creates with no options at all.
+        const opts: NewTextChannelOptions = {
+          ...(isPrivate ? { isPrivate: true, accessRoleName: roleName.trim() || undefined } : {}),
+          ...(view === "forum" ? { view } : {}),
+        };
+        await onCreateText(channelName, Object.keys(opts).length > 0 ? opts : undefined);
         // A newborn private channel has an access role nobody holds yet, so
         // point at the door that grants it rather than leaving the creator in
         // a room that looks like it simply has no members.
+        const noun = view === "forum" ? "Forum" : "Channel";
         toast(
           isPrivate
             ? {
-                title: "Private channel created",
+                title: `Private ${noun.toLowerCase()} created`,
                 description: `Only you can read #${channelName} so far. Use Add members in the channel menu to let others in.`,
               }
-            : { title: "Channel created", description: `#${channelName}` },
+            : { title: `${noun} created`, description: `#${channelName}` },
         );
       }
       onOpenChange(false);
@@ -104,7 +132,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     } finally {
       setCreating(false);
     }
-  }, [name, creating, step, selected, isPrivate, roleName, onCreateRepository, onCreateText, onOpenChange]);
+  }, [name, creating, step, selected, isPrivate, view, roleName, onCreateRepository, onCreateText, onOpenChange]);
 
   // The repository detour is the only thing there is to come back from.
   const back = step === "repo"
@@ -143,7 +171,9 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
             </h2>
             <p className="text-sm text-muted-foreground">
               {step === "text"
-                ? "A conversation space for your community."
+                ? view === "forum"
+                  ? "Titled posts with comments. Discussions that stay findable."
+                  : "A live conversation for your community."
                 : step === "repo"
                   ? "Search the public directory, or paste an address from your git client."
                   : "Its activity appears in the channel and in Projects."}
@@ -167,6 +197,31 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 disabled={creating}
                 className="h-12 text-base"
               />
+
+              {/* Text or forum: a segmented control, nothing to read. */}
+              <div className="flex rounded-md bg-secondary/50 p-0.5" role="radiogroup" aria-label="Channel type">
+                {VIEW_OPTIONS.map((option) => {
+                  const selectedView = option.view === view;
+                  const Icon = option.icon;
+                  return (
+                    <button
+                      key={option.view}
+                      type="button"
+                      role="radio"
+                      aria-checked={selectedView}
+                      disabled={creating}
+                      onClick={() => setView(option.view)}
+                      className={cn(
+                        "flex flex-1 items-center justify-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors touch:py-2.5",
+                        selectedView ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <Icon className="size-3.5" />
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
 
               <label
                 htmlFor="channel2-private"

@@ -16,6 +16,7 @@ import {
 } from "@/concord/lib/derive";
 import { channelCategory } from "@/concord/lib/channelCategory";
 import { channelPosition, compareChannelOrder } from "@/concord/lib/channelOrder";
+import { channelView } from "@/concord/lib/channelView";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord/lib/invite";
 import type { FoldedControl } from "@/concord/lib/control";
 import { capRelays, type Channel, type Community, type VoiceKeys } from "@/concord/lib/types";
@@ -132,6 +133,7 @@ export function channelsView(community: Community, folded: FoldedControl | undef
         isPrivate: false,
         category: channelCategory(def.metadata),
         position: channelPosition(def.metadata),
+        view: channelView(def.metadata),
         get voice() {
           return (voiceMemo ??= voiceKeys(community.root, id, community.rootEpoch));
         },
@@ -151,6 +153,7 @@ export function channelsView(community: Community, folded: FoldedControl | undef
       isPrivate: true,
       category: channelCategory(def.metadata),
       position: channelPosition(def.metadata),
+      view: channelView(def.metadata),
       get voice() {
         return (voiceMemo ??= voiceKeys(held.key, id, held.epoch));
       },
@@ -189,6 +192,8 @@ export function channelsView(community: Community, folded: FoldedControl | undef
       idHex,
       name: held.name || idHex.slice(0, 8),
       isPrivate: true,
+      // No fold yet, so no metadata to read a view from (it opens as chat);
+      // the fold's wins once it lands, exactly as the name does.
       get voice() {
         return (voiceMemo ??= voiceKeys(held.key, held.id, held.epoch));
       },

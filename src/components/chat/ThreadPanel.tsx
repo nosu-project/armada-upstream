@@ -1,4 +1,4 @@
-import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Reply, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -55,7 +55,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isTombstoneRoot } from "@/concord/hooks/useConcordThreads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { shortClockTime } from "@/lib/formatTime";
+import { fullDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { reportDestination, type ReportTarget } from "@/lib/report";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
@@ -79,8 +79,19 @@ const NOOP_REACT = () => {};
 /** Distance from the bottom (px) still counted as "reading the newest". */
 const AT_BOTTOM_PX = 60;
 
-/** A single message row inside the thread panel (root or reply). */
-function ThreadMessage({
+/**
+ * How a {@link ThreadMessage} row is drawn. `chat` is the drawer's row: a
+ * chat line with a clock time, collapsible into a continuation, its actions
+ * on a floated hover strip. `comment` is a forum comment: the same row with
+ * its own padding and a relative age (the full date on hover), never
+ * collapsed, since a post page has no day dividers to carry the date.
+ * `post` is a forum post's body: a byline over the content at reading width,
+ * the actions on an always-visible row beneath it rather than floated.
+ */
+export type ThreadMessagePresentation = "chat" | "comment" | "post";
+
+/** A single message row inside a thread (root or reply). */
+export function ThreadMessage({
   event,
   reactions,
   zaps,
@@ -98,8 +109,18 @@ function ThreadMessage({
   onEdit,
   onEditSubmit,
   onEditCancel,
+  presentation = "chat",
+  onReply,
 }: {
   event: ChatMsg;
+  presentation?: ThreadMessagePresentation;
+  /**
+   * Answer this comment in place (the `comment` presentation only): a
+   * labelled action under the body, always visible — the one thing a
+   * threaded discussion must never make the reader hunt for. A post has no
+   * such action of its own; its comment box sits right beneath it.
+   */
+  onReply?: (event: ChatMsg) => void;
   /** This thread's route; rows append their own `/m/<id>` to it. */
   permalink?: ChatRoute;
   reactions?: MessageReactions;
@@ -280,6 +301,72 @@ function ThreadMessage({
   }
   // The desktop hover strip carries zap as its own button; the rest live in `⋯`.
   const overflowActions = menuActions.filter((a) => a.id !== "zap");
+  const isPost = presentation === "post";
+  const isComment = presentation === "comment";
+
+  // The body and the pieces under it are the same in every presentation;
+  // only their frame differs.
+  const body = isEditing ? (
+    <div className="mt-0.5">
+      <textarea
+        ref={editRef}
+        autoFocus
+        value={editText}
+        onChange={(e) => setEditText(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter saves; Shift+Enter is a newline. Ignore the Enter that only
+          // confirms an in-progress IME composition.
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            onEditSubmit?.(event, editText);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onEditCancel?.();
+          }
+        }}
+        rows={1}
+        className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+      <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
+        <button
+          type="button"
+          className="font-semibold text-primary hover:underline touch:py-2"
+          onClick={() => onEditSubmit?.(event, editText)}
+        >
+          Save
+        </button>
+        <button type="button" className="hover:text-foreground touch:py-2" onClick={() => onEditCancel?.()}>
+          Cancel
+        </button>
+        <span className="opacity-70">escape to cancel · enter to save</span>
+      </div>
+    </div>
+  ) : (
+    <ChatContent event={event} className={isPost ? "text-[15px] leading-relaxed" : "text-[15px]"} everyoneMention={everyoneMention} />
+  );
+  const reactionRow = ((zaps && zaps.tally.count > 0) || (reactions && reactions.tallies.length > 0)) ? (
+    <ReactionBar
+      tallies={reactions?.tallies ?? []}
+      canReact={canReact}
+      onReact={reactions?.react ?? NOOP_REACT}
+      leading={
+        zaps && zaps.tally.count > 0 ? (
+          <ZapPill
+            tally={zaps.tally}
+            canZap={canZap && !zapDisabled}
+            onZap={() => setZapOpen(true)}
+          />
+        ) : undefined
+      }
+    />
+  ) : null;
+  const toolbar = (
+    <MessageActionToolbar
+      reactions={canReact ? reactions : undefined}
+      zap={canZap ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
+      overflowActions={overflowActions}
+    />
+  );
 
   return (
     <>
@@ -290,8 +377,12 @@ function ThreadMessage({
         <div
           {...longPress}
           className={cn(
-            "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
-            continuation ? "py-0.5" : "py-1.5",
+            "group/threadmsg relative flex items-start gap-3 transition-colors hover:z-10 focus-within:z-10",
+            isPost
+              ? "px-0 py-0"
+              : isComment
+                ? "px-3 py-3 hover:bg-secondary/30"
+                : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "py-1.5"),
             sheetOpen && "bg-secondary/40",
             // Stop the platform's text selection / callout from firing
             // `pointercancel` and eating the long-press before the sheet opens
@@ -299,6 +390,39 @@ function ThreadMessage({
             isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
           )}
         >
+          {isPost ? (
+            // A post: the byline as a heading block, the body at reading width
+            // beneath it (not beside the avatar), and the actions on a row of
+            // their own — a page, not a chat line.
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-3">
+                <ProfilePreviewCard pubkey={event.pubkey}>
+                  <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
+                      <AvatarImage src={metadata?.picture} alt={displayName} />
+                      <AvatarFallback className="bg-primary/20 text-primary text-sm">
+                        {displayName[0]?.toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                  </button>
+                </ProfilePreviewCard>
+                <div className="min-w-0 flex flex-col justify-center">
+                  <ProfilePreviewCard pubkey={event.pubkey}>
+                    <button type="button" className="text-[15px] font-semibold text-primary truncate text-left hover:underline focus:outline-none">
+                      <DisplayName pubkey={event.pubkey} name={displayName} />
+                    </button>
+                  </ProfilePreviewCard>
+                  <span className="text-xs text-muted-foreground">{fullDateTime(event.created_at)}</span>
+                </div>
+              </div>
+              <div className="mt-3">{body}</div>
+              {reactionRow}
+              {!isEditing && (
+                <div className="mt-2 -mx-1 flex flex-wrap items-center gap-0.5">{toolbar}</div>
+              )}
+            </div>
+          ) : (
+          <>
           {continuation ? (
             <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
               {shortClockTime(event.created_at)}
@@ -323,64 +447,32 @@ function ThreadMessage({
                     <DisplayName pubkey={event.pubkey} name={displayName} />
                   </button>
                 </ProfilePreviewCard>
-                <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
-                  {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                </span>
+                {isComment ? (
+                  // A comment's age, with the day on hover: a post page has no
+                  // day dividers, so a bare clock time would leave it unsaid.
+                  <span className="text-xs text-muted-foreground/80 shrink-0" title={fullDateTime(event.created_at)}>
+                    {shortTimeAgo(event.created_at)}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
+                    {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                  </span>
+                )}
               </div>
             )}
-            {isEditing ? (
-              <div className="mt-0.5">
-                <textarea
-                  ref={editRef}
-                  autoFocus
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Enter saves; Shift+Enter is a newline. Ignore the Enter
-                    // that only confirms an in-progress IME composition.
-                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      onEditSubmit?.(event, editText);
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      onEditCancel?.();
-                    }
-                  }}
-                  rows={1}
-                  className="block w-full resize-none rounded-md bg-background border border-input px-2 py-1.5 text-[15px] max-h-40 overflow-y-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
-                <div className="flex items-center gap-2 touch:gap-4 mt-1 text-[11px] text-muted-foreground">
-                  <button
-                    type="button"
-                    className="font-semibold text-primary hover:underline touch:py-2"
-                    onClick={() => onEditSubmit?.(event, editText)}
-                  >
-                    Save
-                  </button>
-                  <button type="button" className="hover:text-foreground touch:py-2" onClick={() => onEditCancel?.()}>
-                    Cancel
-                  </button>
-                  <span className="opacity-70">escape to cancel · enter to save</span>
-                </div>
+            {body}
+            {reactionRow}
+            {isComment && onReply && !isEditing && (
+              <div className="-ml-2 mt-0.5">
+                <button
+                  type="button"
+                  onClick={() => onReply(event)}
+                  className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground touch:py-2"
+                >
+                  <Reply className="size-3.5" />
+                  Reply
+                </button>
               </div>
-            ) : (
-              <ChatContent event={event} className="text-[15px]" everyoneMention={everyoneMention} />
-            )}
-            {((zaps && zaps.tally.count > 0) || (reactions && reactions.tallies.length > 0)) && (
-              <ReactionBar
-                tallies={reactions?.tallies ?? []}
-                canReact={canReact}
-                onReact={reactions?.react ?? NOOP_REACT}
-                leading={
-                  zaps && zaps.tally.count > 0 ? (
-                    <ZapPill
-                      tally={zaps.tally}
-                      canZap={canZap && !zapDisabled}
-                      onZap={() => setZapOpen(true)}
-                    />
-                  ) : undefined
-                }
-              />
             )}
           </div>
           {/* Desktop hover strip — the same shared toolbar the timeline uses,
@@ -390,18 +482,18 @@ function ThreadMessage({
           {!isTouch && !isEditing ? (
             // Floated panel above the row's top-right edge — solid background,
             // border and lift so it stays legible over whatever it overlaps,
-            // matching the timeline's toolbar (MessageRow).
+            // matching the timeline's toolbar (MessageRow). A comment row has
+            // its own padding, so the strip sits inside its top edge instead
+            // of over the comment above.
             <div className={cn(
               "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
-              continuation ? "-top-3" : "-top-2.5",
+              isComment ? "top-1" : continuation ? "-top-3" : "-top-2.5",
             )}>
-              <MessageActionToolbar
-                reactions={canReact ? reactions : undefined}
-                zap={canZap ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
-                overflowActions={overflowActions}
-              />
+              {toolbar}
             </div>
           ) : null}
+          </>
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52" collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
@@ -476,6 +568,13 @@ function ThreadMessage({
 interface ThreadPanelProps {
   /** The root chat message this thread hangs off. */
   root: ChatMsg;
+  /**
+   * The root's title when it is a titled post (Concord forum posts, CORD-03
+   * §3). Rendered as a heading above the root, and the panel reads as a post
+   * with comments rather than a message with replies — the same panel, the
+   * same thread machinery, worded for what the reader opened.
+   */
+  rootTitle?: string;
   /** The room's transport — supplies the replies, reply-send, and reactions. */
   transport: ChatTransport;
   /**
@@ -527,7 +626,12 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
+export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
+  // A titled post is a post with comments; everything else is a thread with
+  // replies. Only the words change.
+  const isPost = Boolean(rootTitle);
+  const replyNoun = isPost ? "comment" : "reply";
+  const replyNounPlural = isPost ? "comments" : "replies";
   const threadRepliesFor = transport.threadRepliesFor;
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   // Replies live outside the main timeline, so `MessageTimeline`'s filter never
@@ -718,6 +822,11 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         </div>
       ) : (
         <div data-event-id={root.id} data-scroll-anchor={`root:${root.id}`}>
+        {rootTitle && (
+          <h2 className="px-3 pb-1 text-lg font-semibold leading-snug break-words">
+            {rootTitle}
+          </h2>
+        )}
         <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} everyoneMention={transport.mentionsEveryone?.(root)} onDelete={onDelete} isEditing={editingId === root.id} onEdit={startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} />
         </div>
       )}
@@ -726,8 +835,8 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         {!isLoading && (
           <span className="text-[11px] text-muted-foreground/60 shrink-0">
             {replies.length === 0
-              ? "No replies yet"
-              : `${replies.length} ${replies.length === 1 ? "reply" : "replies"}`}
+              ? `No ${replyNounPlural} yet`
+              : `${replies.length} ${replies.length === 1 ? replyNoun : replyNounPlural}`}
           </span>
         )}
         <div className="h-px flex-1 bg-border/60" />
@@ -753,7 +862,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         <div className="flex items-center gap-2 min-w-0">
           <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
-            Thread{replies.length > 0 ? ` · ${replies.length}` : ""}
+            {isPost ? "Post" : "Thread"}{replies.length > 0 ? ` · ${replies.length}` : ""}
           </h3>
         </div>
         <div className="flex items-center gap-1">
@@ -819,7 +928,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           messages={[]}
           mentionPubkeys={mentionPubkeys}
           canMentionEveryone={transport.canMentionEveryone}
-          placeholder="Reply in thread…"
+          placeholder={isPost ? "Add a comment…" : "Reply in thread…"}
           draftScope={`thread:${root.id}`}
           // No `shareRoute`: a share is addressed to a room, and this room's
           // own composer is the one that serves it. The thread panel is a

@@ -56,3 +56,15 @@ export function shortClockTime(timestamp: number): string {
   clockFormat ??= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
   return clockFormat.format(new Date(timestamp * 1000));
 }
+
+let fullFormat: Intl.DateTimeFormat | undefined;
+
+/**
+ * Format a unix-seconds timestamp as a full local date and time
+ * ("Sep 12, 2026, 3:07 PM") — for surfaces without day dividers, where a
+ * bare clock time would leave the day unsaid.
+ */
+export function fullDateTime(timestamp: number): string {
+  fullFormat ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+  return fullFormat.format(new Date(timestamp * 1000));
+}
