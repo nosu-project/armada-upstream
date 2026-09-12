@@ -143,3 +143,42 @@ describe("ForumFeed — rows on one surface", () => {
     expect(screen.queryByRole("button", { name: /Write the first post/ })).not.toBeInTheDocument();
   });
 });
+
+describe("ForumFeed — paging older history", () => {
+  function observable() {
+    // An IntersectionObserver the test can fire: the latest instance's
+    // callback, with the sentinel reported in view.
+    const callbacks: IntersectionObserverCallback[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(cb: IntersectionObserverCallback) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const intersect = () => {
+      const cb = callbacks[callbacks.length - 1];
+      cb([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    };
+    return { intersect };
+  }
+
+  it("pulls a bounded number of pages on its own, then leaves the rest to the button", async () => {
+    const { intersect } = observable();
+    const onLoadOlder = vi.fn(async () => 0);
+    renderFeed([post("p1", "Only")], { hasMore: true, onLoadOlder });
+
+    // A page that adds no post leaves the sentinel in view, so the observer
+    // keeps reporting it; the feed must not follow it through the whole history.
+    for (let i = 0; i < 20; i++) intersect();
+    expect(onLoadOlder).toHaveBeenCalledTimes(8);
+
+    // The reader asking is a different matter: the button still works, and
+    // grants the sentinel another run.
+    fireEvent.click(screen.getByRole("button", { name: /Load older posts/ }));
+    expect(onLoadOlder).toHaveBeenCalledTimes(9);
+    intersect();
+    expect(onLoadOlder).toHaveBeenCalledTimes(10);
+  });
+});

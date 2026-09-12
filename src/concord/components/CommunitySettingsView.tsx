@@ -8,7 +8,6 @@ import {
   ImagePlus,
   Info,
   Loader2,
-  Lock,
   MessageSquareText,
   MoreVertical,
   Pencil,
@@ -97,6 +96,7 @@ import {
   type ImagePointer,
 } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
+import { ChannelGlyph } from "@/concord/components/ChannelGlyph";
 import { channelGitRepositoryAttachments } from "@/concord/lib/types";
 import type { ChannelView } from "@/concord/lib/types";
 import { fetchGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
@@ -677,7 +677,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
                       taken ? "opacity-50" : "hover:bg-foreground/[0.05] disabled:opacity-50",
                     )}
                   >
-                    {channel.isPrivate ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <Hash className="size-4 shrink-0 text-muted-foreground" />}
+                    <ChannelGlyph isPrivate={channel.isPrivate} view={channel.view} className="size-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{channel.name}</span>
                       {pending
@@ -1192,11 +1192,7 @@ function ChannelsSection({
           style={{ left: (channelDrag.columnX?.left ?? 0) + 12, top: channelDrag.pointer.y }}
         >
           <span className="flex max-w-48 items-center gap-2 rotate-[-2deg] scale-105 clip-corner-lg bg-muted px-3 py-1.5 text-sm font-medium ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
-            {draggedChannel.isPrivate ? (
-              <Lock className="size-4 shrink-0" />
-            ) : (
-              <Hash className="size-4 shrink-0" />
-            )}
+            <ChannelGlyph isPrivate={draggedChannel.isPrivate} view={draggedChannel.view} className="size-4 shrink-0" />
             <span className="truncate">{draggedChannel.name}</span>
           </span>
         </div>
@@ -1325,7 +1321,6 @@ function ChannelRow({
     setEditing(false);
   };
 
-  const Icon = channel.isPrivate ? Lock : channel.view === "forum" ? MessageSquareText : Hash;
   const isForum = channel.view === "forum";
   // Offered on every channel a manager can edit: a private one shows who may
   // read it, a public one offers the conversion that gives it a key.
@@ -1341,7 +1336,7 @@ function ChannelRow({
           className="-ml-1 size-4 shrink-0 cursor-grab text-muted-foreground/50"
         />
       )}
-      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+      <ChannelGlyph isPrivate={channel.isPrivate} view={channel.view} className="size-3.5 shrink-0 text-muted-foreground" />
       {editing ? (
         <form
           className="flex flex-1 items-center gap-1"

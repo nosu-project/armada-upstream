@@ -1,4 +1,4 @@
-import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, Volume2, X, type LucideIcon } from "lucide-react";
+import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -103,10 +103,11 @@ import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
 import { useGitProjects } from "@/hooks/useGitProjects";
 import { useGitWorkItemActions, type GitWorkItemRepository } from "@/hooks/useGitWorkItemActions";
 import { NewChannelDialog, type NewTextChannelOptions, type WizardRepository } from "@/concord/components/NewChannelDialog";
+import { ChannelGlyph } from "@/concord/components/ChannelGlyph";
 import { ForumFeed } from "@/concord/components/ForumFeed";
 import { ForumPostPage } from "@/concord/components/ForumPostPage";
 import { NewPostPane } from "@/concord/components/NewPostPane";
-import { forumPosts, subjectOf, subjectTags, type ForumPost, type ForumSort } from "@/concord/lib/forum";
+import { forumPosts, isTitledPost, subjectOf, subjectTags, type ForumPost, type ForumSort } from "@/concord/lib/forum";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { NewIssueDialog } from "@/components/projects/NewIssueDialog";
 import { ProjectsView } from "@/components/projects/ProjectsView";
@@ -163,7 +164,7 @@ import { communityAvBrokers } from "@/concord/lib/voice";
 import { useRegisterChannelStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { completeMemberlist } from "@/concord/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions } from "@/concord/lib/roles";
-import { channelGitRepositoryAttachments, type Channel, type ChannelView, type Community, type ImagePointer } from "@/concord/lib/types";
+import { channelGitRepositoryAttachments, type Channel, type Community, type ImagePointer } from "@/concord/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { chatRoute, parseChatRoute, type ChatRoute, type Concord2Pane } from "@/lib/routes";
@@ -432,40 +433,6 @@ function SidebarFooter() {
       </div>
     </>
   );
-}
-
-/**
- * A channel's glyph: a hashtag for a text channel, the forum's post mark for a
- * forum, a speaker while a call is live. A private TEXT channel is a bare
- * padlock (the long-standing mark); a private FORUM keeps its forum mark and
- * wears a small padlock in the corner, so it still reads as a forum first. The
- * badge sits on a `bg-background` disc so it reads over any row background.
- */
-function ChannelGlyph({
-  isPrivate = false,
-  view,
-  occupied = false,
-  className,
-}: {
-  isPrivate?: boolean;
-  view?: ChannelView;
-  occupied?: boolean;
-  className?: string;
-}) {
-  if (occupied) return <Volume2 className={className} />;
-  if (view === "forum") {
-    if (!isPrivate) return <MessageSquareText className={className} />;
-    return (
-      <span className={cn("relative inline-flex shrink-0", className)}>
-        <MessageSquareText className="size-full" />
-        <span className="absolute -bottom-1 -right-1 inline-flex size-[62%] items-center justify-center rounded-full bg-background">
-          <Lock className="size-[72%]" strokeWidth={2.75} />
-        </span>
-      </span>
-    );
-  }
-  if (isPrivate) return <Lock className={className} />;
-  return <Hash className={className} />;
 }
 
 export const ChannelRow = memo(function ChannelRow({
@@ -2458,6 +2425,24 @@ export function ConcordPage() {
   // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
   const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
+  // ── Forum presentation (CORD-03 §2 `view: "forum"`) ───────────────────────
+  //
+  // A forum channel opens to its feed of titled posts, with the plain timeline
+  // still reachable as an alternate view (CORD-03 §2) — untitled messages in a
+  // forum (from a chat-only client, or from before the flip) are valid
+  // Chat-plane rumors that count toward unread, and the chat view is where
+  // they are read. The choice is the reader's, per channel, kept locally. The
+  // feed is presentation only — the same folded timeline the chat view shows,
+  // arranged differently — so flipping either way never refetches.
+  const [forumAsChat, setForumAsChat] = useLocalStorage<string[]>("armada:concord-forum-as-chat", []);
+  const forumOpensAsChat = Boolean(channel && forumAsChat.includes(channel.idHex));
+  const presentation: "feed" | "chat" = channel?.view === "forum" && !forumOpensAsChat ? "feed" : "chat";
+  const toggleForumPresentation = useCallback(() => {
+    if (!channel) return;
+    const id = channel.idHex;
+    setForumAsChat((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, [channel, setForumAsChat]);
+
   const {
     timelineRef,
     jumpToMessage: jumpWithinChannel,
@@ -2472,9 +2457,26 @@ export function ConcordPage() {
     hasMore: transport.hasMore,
     loadOlder: transport.loadOlder,
     // Search results replace (unmount) the timeline, so they cannot consume a
-    // focus arrival. This mirrors the NIP-29 and Buzz chat surfaces.
-    enabled: view === "channel" && !searching,
+    // focus arrival. This mirrors the NIP-29 and Buzz chat surfaces. The forum
+    // feed replaces it too: with no timeline to scroll, the hunt would only
+    // pull older pages and then strip the segment. A link to a titled post is
+    // answered below instead, by opening the post as a page.
+    enabled: view === "channel" && !searching && presentation !== "feed",
   });
+  // `/m/<id>` into a forum channel — "Copy message link" from its chat view,
+  // or a link made before the flip — names a row the feed has no timeline to
+  // scroll to. When the id is a loaded titled post, that link means the post:
+  // open it as the page it reads as here, replacing the location so Back
+  // returns to wherever the link was followed from rather than to a feed
+  // carrying a segment nothing consumes. An untitled message keeps the
+  // segment for the chat view, which is where it lives.
+  const routedMessageId = route?.threadRoot ? undefined : route?.messageId;
+  useEffect(() => {
+    if (presentation !== "feed" || !routedMessageId || !channelRoute) return;
+    const root = baseTransport.messages.find((m) => m.id === routedMessageId);
+    if (!root || !isTitledPost(root)) return;
+    navigateTo(chatRoute({ ...channelRoute, threadRoot: root.id }), { replace: true });
+  }, [presentation, routedMessageId, channelRoute, baseTransport.messages, navigateTo]);
 
   // Background catch-up. `channelSyncing` = the channel on screen is being
   // caught up: its sync TOPIC is pending (covers the whole span from the
@@ -2541,23 +2543,7 @@ export function ConcordPage() {
     return transportRef.current.canSend?.() ?? null;
   }, [communityPaused]);
 
-  // ── Forum presentation (CORD-03 §2 `view: "forum"`) ───────────────────────
-  //
-  // A forum channel opens to its feed of titled posts, with the plain timeline
-  // still reachable as an alternate view (CORD-03 §2) — untitled messages in a
-  // forum (from a chat-only client, or from before the flip) are valid
-  // Chat-plane rumors that count toward unread, and the chat view is where
-  // they are read. The choice is the reader's, per channel, kept locally. The
-  // feed is presentation only — the same folded timeline the chat view shows,
-  // arranged differently — so flipping either way never refetches.
-  const [forumAsChat, setForumAsChat] = useLocalStorage<string[]>("armada:concord-forum-as-chat", []);
-  const forumOpensAsChat = Boolean(channel && forumAsChat.includes(channel.idHex));
-  const presentation: "feed" | "chat" = channel?.view === "forum" && !forumOpensAsChat ? "feed" : "chat";
-  const toggleForumPresentation = useCallback(() => {
-    if (!channel) return;
-    const id = channel.idHex;
-    setForumAsChat((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }, [channel, setForumAsChat]);
+  // ── The forum feed itself (its presentation is decided above) ─────────────
   const [forumSort, setForumSort] = useLocalStorage<ForumSort>("armada:concord-forum-sort", "active");
   const [newPostOpen, setNewPostOpen] = useState(false);
   // The composer is about ONE channel's post; switching rooms closes it.
@@ -3846,6 +3832,9 @@ export function ConcordPage() {
                     />
                   ) : presentation === "feed" ? (
                     <ForumFeed
+                      // Per channel: a fresh scroll position and a fresh
+                      // auto-paging budget for each feed.
+                      key={channel?.idHex}
                       className="flex-1 min-h-0"
                       posts={feedPosts}
                       sort={forumSort}
@@ -4104,6 +4093,7 @@ export function ConcordPage() {
                   mentionPubkeys={memberPubkeys}
                   botCommands
                   conversationRelays={community?.relays}
+                  encryptAttachments
                   autoFocus={threadAutoFocus}
                   open={Boolean(threadRoot)}
                   onClose={closeThread}

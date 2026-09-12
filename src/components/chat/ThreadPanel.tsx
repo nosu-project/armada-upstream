@@ -587,6 +587,13 @@ interface ThreadPanelProps {
   botCommands?: boolean;
   /** Relays this conversation uses, for bot-manifest discovery (see ChatComposer). */
   conversationRelays?: string[];
+  /**
+   * Seal reply attachments before upload (see ChatComposer). A sealed room
+   * (Concord, NIP-17) must set this on its thread composer as it does on its
+   * channel composer, or a reply's image reaches Blossom in the clear while
+   * the message it hangs off was encrypted.
+   */
+  encryptAttachments?: boolean;
   groupId: string;
   /** Whether the current user can post replies. */
   canWrite: boolean;
@@ -626,7 +633,7 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
+export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
   // A titled post is a post with comments; everything else is a thread with
   // replies. Only the words change.
   const isPost = Boolean(rootTitle);
@@ -924,6 +931,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           relayUrl={relayUrl}
           botCommands={botCommands}
           conversationRelays={conversationRelays}
+          encryptAttachments={encryptAttachments}
           groupId={groupId}
           messages={[]}
           mentionPubkeys={mentionPubkeys}

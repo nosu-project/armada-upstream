@@ -15,6 +15,12 @@ import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
 
+/**
+ * Older pages the end-of-list sentinel pulls unprompted before handing over
+ * to its button — the same bound the permalink hunt uses.
+ */
+const MAX_AUTO_PAGES = 8;
+
 const SORT_TABS: readonly PillTab<ForumSort>[] = [
   { id: "active", label: "Active", icon: Flame },
   { id: "newest", label: "Newest", icon: Clock },
@@ -175,18 +181,33 @@ export function ForumFeed({
   // Page older history as the reader nears the end, the way the timeline
   // pages as they scroll up. A button stays for keyboards and for when the
   // observer can't fire (a first page that doesn't overflow).
+  //
+  // The sentinel pulls a bounded number of pages on its own. A page of
+  // history that adds no titled post leaves the sentinel where it was, still
+  // in view, so an unbounded observer would walk a chatty channel's entire
+  // history the moment it was flipped to a forum. Past the cap the button
+  // remains, and a press on it grants another run.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadOlderRef = useRef(onLoadOlder);
   loadOlderRef.current = onLoadOlder;
+  const autoPagesRef = useRef(0);
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !hasMore || isLoadingOlder || !onLoadOlder) return;
+    if (autoPagesRef.current >= MAX_AUTO_PAGES) return;
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) void loadOlderRef.current?.();
+      if (!entries.some((e) => e.isIntersecting)) return;
+      if (autoPagesRef.current >= MAX_AUTO_PAGES) return;
+      autoPagesRef.current += 1;
+      void loadOlderRef.current?.();
     }, { rootMargin: "200px" });
     observer.observe(el);
     return () => observer.disconnect();
   }, [hasMore, isLoadingOlder, onLoadOlder, posts.length]);
+  const loadOlderByHand = () => {
+    autoPagesRef.current = 0;
+    void onLoadOlder?.();
+  };
 
   const empty = !isLoading && posts.length === 0;
   const pinned = posts.filter((p) => p.pinned);
@@ -257,7 +278,7 @@ export function ForumFeed({
                     size="sm"
                     className="gap-1.5 text-muted-foreground"
                     disabled={isLoadingOlder}
-                    onClick={() => void onLoadOlder()}
+                    onClick={loadOlderByHand}
                   >
                     {isLoadingOlder ? <Loader2 className="size-4 animate-spin" /> : <ChevronDown className="size-4" />}
                     {isLoadingOlder ? "Loading older posts" : "Load older posts"}

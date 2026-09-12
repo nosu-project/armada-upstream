@@ -230,6 +230,10 @@ export function ForumPostPage({
       // always mounted and focused by the open effect instead.
       autoFocus={opts.inline}
       pollsEnabled={false}
+      // A comment's attachment is sealed like the post's (the channel
+      // composer and `NewPostPane` set the same): Blossom holds ciphertext,
+      // the key rides in the rumor's imeta.
+      encryptAttachments
       canSend={transport.canSend}
       sendOverride={async (text, tags) => {
         // The transport threads the reply off whatever it is handed: the
