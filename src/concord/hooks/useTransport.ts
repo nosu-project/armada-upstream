@@ -14,7 +14,7 @@ import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { KIND_CALENDAR_RSVP, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord/lib/kinds";
 import { markReactionDeleted, type OpenedChat } from "@/concord/lib/chat";
-import { timerNoticeSeconds } from "@/concord/lib/disappearing";
+import { expirationOf, timerNoticeSeconds } from "@/concord/lib/disappearing";
 import { sendRefusal } from "@/concord/lib/sendRateLimit";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { channelKey } from "@/concord/hooks/useChannel";
@@ -536,6 +536,12 @@ export function useTransport(
         kind: KIND_EDIT,
         target: original.id,
         targetKind: original.kind,
+        // CORD-08 §2: preserve the ORIGINAL's signed NIP-40 deadline verbatim —
+        // its exact value, or `null` for "the original carried none". Letting
+        // `send` recompute from the edit's clock and the CURRENT timer would
+        // make the edit outlive the message it edits (or, if the timer flipped,
+        // gain/lose an expiration the original never had).
+        expiration: expirationOf(original.tags) ?? null,
       });
     },
     [send],

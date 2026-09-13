@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { OpenedChat } from "@/concord/lib/chat";
 import { buildConcordCommentTags } from "@/concord/lib/chat";
-import { KIND_COMMENT, KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
+import { KIND_COMMENT, KIND_EDIT, KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import type { Channel, Community } from "@/concord/lib/types";
 
 import { useTransport } from "./useTransport";
@@ -32,6 +32,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 const h = vi.hoisted(() => ({
   folded: { messages: [] as unknown[], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [], quarantined: new Set<string>(), paused: new Set<string>() },
+  send: vi.fn(async (_args: Record<string, unknown>) => ({})),
 }));
 
 vi.mock("@/concord/hooks/useChannel", () => ({
@@ -48,7 +49,7 @@ vi.mock("@/concord/hooks/useChannel", () => ({
     hasMore: false,
     isLoadingOlder: false,
   }),
-  useSendMessage: () => ({ mutateAsync: async () => ({}) }),
+  useSendMessage: () => ({ mutateAsync: h.send }),
   useMessageActions: () => ({ retry: () => {}, discard: () => {}, deleteMessage: () => {} }),
   useSendStatus: () => ({}),
   channelKey: (id: string | null) => ["concord", "channel", id] as const,
@@ -134,5 +135,34 @@ describe("useTransport — issue #19 (orphan replies are unreachable)", () => {
     // The inline reply renders as a top-level row, not bucketed into a thread.
     expect(transport.messages.map((m) => m.id)).toContain(inline.rumorId);
     expect(transport.replyCountFor?.(parent.rumorId) ?? 0).toBe(0);
+  });
+});
+
+describe("useTransport — an edit preserves the original's NIP-40 expiration (CORD-08 §2)", () => {
+  function editFirstMessage(original: OpenedChat, newBody: string) {
+    h.send.mockClear();
+    h.folded = { messages: [original], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [], quarantined: new Set<string>(), paused: new Set<string>() };
+    const { result } = renderHook(() => useTransport(community, channel, true, false), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
+      ),
+    });
+    const msg = result.current.transport.messages.find((m) => m.id === original.rumorId)!;
+    return result.current.transport.editMessage!(msg, newBody);
+  }
+
+  it("carries the original's exact deadline, not one recomputed from the edit's clock", async () => {
+    const deadline = 1_900_000_000; // the original's signed deadline, well in the future
+    await editFirstMessage(chat("66".repeat(32), "typo", 1_000_000, [["expiration", String(deadline)]]), "fixed");
+
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ kind: KIND_EDIT, expiration: deadline }));
+  });
+
+  it("pins `null` when the original carried no expiration, so a timer turned on since can't make the edit disappear", async () => {
+    await editFirstMessage(chat("77".repeat(32), "typo", 1_000_000), "fixed");
+
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ kind: KIND_EDIT, expiration: null }));
   });
 });

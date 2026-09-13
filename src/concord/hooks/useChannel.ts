@@ -809,6 +809,7 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       targetPubkey,
       extraTags,
       ms,
+      expiration,
       bypassRateLimit,
     }: {
       content: string;
@@ -838,6 +839,16 @@ export function useSendMessage(community: Community | undefined, channel: Channe
        * Defaults to the current time.
        */
       ms?: number;
+      /**
+       * Override the NIP-40 deadline instead of computing one from the current
+       * timer. A number pins it (an edit preserves the ORIGINAL rumor's signed
+       * `expiration` so the replacement disappears with the message it edits,
+       * not on the edit's own later clock); `null` pins "no expiration" (the
+       * original carried none — the timer was off when it was sent — so the edit
+       * must not sprout one from a timer turned on since). `undefined` = compute
+       * from send time + the community timer, the ordinary case.
+       */
+      expiration?: number | null;
       /**
        * Skip the community send budget. Set by `retry`: re-sending a message a
        * relay hiccup already failed is recovery, not new content, and a burst
@@ -878,8 +889,12 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       // CORD-08 §2: while the timer is set, every durable chat rumor except
       // deletes (and timer notices) commits its NIP-40 deadline — send time
       // plus the timer — inside the signed rumor; the wrap repeats it below so
-      // relays purge the ciphertext too.
-      const expiresAt = chatExpiresAt(effectiveKind, effectiveMs, timerSecs);
+      // relays purge the ciphertext too. An explicit `expiration` override wins
+      // (an edit carries the original's deadline verbatim, `null` = none) so the
+      // replacement neither outlives the message it edits nor expires on the
+      // edit's own later clock.
+      const expiresAt =
+        expiration !== undefined ? (expiration ?? undefined) : chatExpiresAt(effectiveKind, effectiveMs, timerSecs);
       if (expiresAt !== undefined) tags.push(["expiration", String(expiresAt)]);
 
       const rumor: NostrRumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
