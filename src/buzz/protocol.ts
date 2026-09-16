@@ -58,6 +58,30 @@ export function isThreadReply(tags: string[][]): boolean {
 }
 
 /**
+ * Buzz's "Send to channel" provenance tag. Buzz never re-posts a thread reply
+ * onto the channel; a message sent from a thread is a NEW top-level message
+ * carrying `["buzz:sent-from-thread", <root id>, <root excerpt>?]`, and its
+ * client renders that as a "Sent from thread: …" line above the body.
+ */
+export const SENT_FROM_THREAD_TAG = "buzz:sent-from-thread";
+
+export interface SentFromThreadRef {
+  rootId: string;
+  /** The root's first line, as the sender saw it; absent on older events. */
+  excerpt: string | null;
+}
+
+/** The thread a top-level message was sent from, or null (mirrors Buzz). */
+export function sentFromThreadRef(tags: string[][]): SentFromThreadRef | null {
+  const tag = tags.find(
+    (t) => t[0] === SENT_FROM_THREAD_TAG && (t.length === 2 || t.length === 3),
+  );
+  const rootId = tag?.[1]?.trim();
+  if (!rootId || !HEX64_RE.test(rootId)) return null;
+  return { rootId, excerpt: tag?.[2]?.trim() || null };
+}
+
+/**
  * Build the NIP-10 marked tags for a Buzz thread reply (mirrors buzz-sdk's
  * `buildReplyTags`): `p` the parent author, `h` the channel, and marked
  * `root`/`reply` `e` tags (a direct reply to the root carries a single

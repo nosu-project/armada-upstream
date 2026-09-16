@@ -10,6 +10,7 @@ import {
   buildRelayGroups,
   KIND_GROUP_METADATA,
   KIND_PUT_USER,
+  reconcileRelayGroups,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
 
@@ -183,13 +184,27 @@ export function useRelayGroups(relayUrl: string | undefined) {
             .catch(() => [])
         : [];
 
-      // Merge with this relay's cached metadata so a sparse or empty relay read
-      // never DROPS channels we already knew about — without re-introducing the
-      // cross-relay bleed for same-key relays, since the cache being read is
-      // this relay's own tenant. The fresh network events land in that same
-      // tenant on the way through NostrBatcher.
+      // Reconcile with this relay's cached metadata. A read that ANSWERED is
+      // authoritative: cached channels it no longer lists were left, deleted or
+      // made private, and are pruned from the tenant so they can't union back
+      // in on the next "Refresh channels" (the leave hook prunes its own row;
+      // this covers removals the user didn't make from Armada). An EMPTY read
+      // keeps the cache as the floor — it is indistinguishable from a cold
+      // pool, an AUTH gate or a timeout. The cache being read is this relay's
+      // own tenant, so same-key relays still can't bleed into each other; the
+      // fresh events land in that tenant on the way through NostrBatcher.
       const cached = await readScopedCache(selfKey);
-      return buildRelayGroups([...cached, ...events, ...memberMeta], relayUrl!);
+      const { groups, stale } = reconcileRelayGroups(cached, [...events, ...memberMeta], relayUrl!);
+      if (stale.length > 0) {
+        try {
+          const store = await eventStore;
+          await store.remove([{ kinds: [KIND_GROUP_METADATA], "#d": stale }], { relay: relayUrl });
+        } catch {
+          // Best-effort: a surviving row is only a cache entry the next
+          // answered read re-decides.
+        }
+      }
+      return groups;
     },
     enabled: Boolean(relayUrl),
     // Relay-signed, rarely-changing data. Keep it fresh for the whole session

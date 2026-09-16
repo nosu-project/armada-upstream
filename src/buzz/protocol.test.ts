@@ -11,6 +11,8 @@ import {
   isBroadcastReply,
   isThreadReply,
   parseSystemMessage,
+  resolveBuzzRootId,
+  sentFromThreadRef,
   tallyForumVotes,
 } from "@/buzz/protocol";
 import { BUZZ_TIMELINE_CONTENT_KINDS } from "@/buzz/kinds";
@@ -265,5 +267,32 @@ describe("parseBuzzInviteUrl", () => {
     ).toBeUndefined();
     expect(parseBuzzInviteUrl("wss://relay.example.com")).toBeUndefined();
     expect(parseBuzzInviteUrl("not a url")).toBeUndefined();
+  });
+});
+
+describe("sentFromThreadRef", () => {
+  it("reads Buzz's send-to-channel provenance tag, excerpt optional", () => {
+    expect(sentFromThreadRef([["buzz:sent-from-thread", HEX(2), "the root, clipped"]])).toEqual({
+      rootId: HEX(2),
+      excerpt: "the root, clipped",
+    });
+    expect(sentFromThreadRef([["buzz:sent-from-thread", HEX(2)]])).toEqual({ rootId: HEX(2), excerpt: null });
+  });
+
+  it("ignores a malformed or absent tag", () => {
+    expect(sentFromThreadRef([["h", "c"]])).toBeNull();
+    expect(sentFromThreadRef([["buzz:sent-from-thread", "not-an-id"]])).toBeNull();
+    expect(sentFromThreadRef([["buzz:sent-from-thread", HEX(2), "x", "extra"]])).toBeNull();
+  });
+});
+
+describe("resolveBuzzRootId", () => {
+  it("routes a broadcast reply's thread to its root, and a root to itself", () => {
+    const root = ev({ id: HEX(2), kind: 9, tags: [["h", "c"]] });
+    const broadcast = ev({ id: HEX(3), kind: 9, tags: [["h", "c"], ["e", HEX(2), "", "reply"], ["broadcast", "1"]] });
+    const nested = ev({ id: HEX(4), kind: 9, tags: [["h", "c"], ["e", HEX(2), "", "root"], ["e", HEX(3), "", "reply"]] });
+    expect(resolveBuzzRootId(root)).toBe(HEX(2));
+    expect(resolveBuzzRootId(broadcast)).toBe(HEX(2));
+    expect(resolveBuzzRootId(nested)).toBe(HEX(2));
   });
 });

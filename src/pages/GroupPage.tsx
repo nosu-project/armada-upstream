@@ -140,7 +140,12 @@ export function GroupPage() {
   // Buzz relays (NIP-29-based, detected via NIP-11) swap the chat surface for
   // BuzzChat and drop the NIP-29-only extras their relay doesn't speak
   // (pins/calendar/polls); they gain a canvas panel + typing indicators.
-  const { isBuzz } = useIsBuzzRelay(relayUrl);
+  // `ready` gates the chat SURFACE, not the extras: until the NIP-11 doc has
+  // answered, a Buzz relay is indistinguishable from a plain NIP-29 one, and
+  // GroupChat's composer would publish the plain shapes — a root-only NIP-10
+  // reply (top-level on Buzz, threaded nowhere) and a kind-1111 thread reply
+  // (an unknown kind there, rejected). Neither is undoable once published.
+  const { isBuzz, ready: relayModeReady } = useIsBuzzRelay(relayUrl);
   // Live Buzz presence (ephemeral heartbeats; also publishes the viewer's).
   const buzzPresence = useBuzzPresence(isBuzz ? relayUrl : undefined);
   const openBuzzDm = useBuzzOpenDm(isBuzz ? relayUrl : undefined);
@@ -771,7 +776,11 @@ export function GroupPage() {
         <ChatScopeContext.Provider value={{ kind: "nip29", relayUrl, groupId }}>
         <ChannelNavContext.Provider value={channelNav}>
         <div className="relative flex flex-1 min-h-0">
-          {isBuzz ? (
+          {!relayModeReady ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-label="Connecting to server" />
+            </div>
+          ) : isBuzz ? (
             <BuzzChat
               relayUrl={relayUrl}
               channelId={groupId}

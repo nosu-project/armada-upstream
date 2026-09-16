@@ -21,7 +21,7 @@ import {
   KIND_WORKFLOW_DEFINITION,
   BUZZ_UNREAD_KINDS,
 } from "@/buzz/kinds";
-import { tallyForumVotes, collectDeletedIds } from "@/buzz/protocol";
+import { collectDeletedIds, resolveBuzzRootId, sentFromThreadRef, tallyForumVotes } from "@/buzz/protocol";
 import { buzzMessagesKey, useBuzzMessages } from "@/buzz/useBuzzMessages";
 import { useBuzzEditMessage, useBuzzTyping, useSendBuzzThreadReply } from "@/buzz/useBuzzActions";
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -97,7 +97,6 @@ interface BuzzChatMessageProps {
   onEdit: (event: ChatMsg) => void;
   onEditSubmit: (event: ChatMsg, content: string) => void;
   onEditCancel: () => void;
-  onReply: (event: ChatMsg) => void;
   /** Forum vote bar (forum channels only). */
   votes?: { up: number; down: number; mine?: "+" | "-" };
   onVote?: (event: ChatMsg, value: "+" | "-") => void;
@@ -123,7 +122,6 @@ function BuzzChatMessage({
   onEdit,
   onEditSubmit,
   onEditCancel,
-  onReply,
   votes,
   onVote,
   isAgent,
@@ -131,6 +129,11 @@ function BuzzChatMessage({
 }: BuzzChatMessageProps) {
   const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
+  // Buzz's "Send to channel": a fresh top-level message that names the thread
+  // it came from. Buzz renders that provenance as a line above the body, so a
+  // reader can tell it apart from an unprompted message and jump back.
+  const sentFrom = sentFromThreadRef(event.tags);
+  const openThread = transport.openThread;
   return (
     <div>
       <ChatMessage
@@ -158,8 +161,26 @@ function BuzzChatMessage({
         onRetry={() => transport.retry?.(event)}
         onDiscard={() => transport.discard?.(event.id)}
         onDelete={transport.deleteMessage}
-        onOpenThread={transport.openThread ? (e) => transport.openThread!(e, true) : undefined}
-        onReply={onReply}
+        onOpenThread={openThread ? (e) => openThread(e, true) : undefined}
+        // No inline `onReply`: on Buzz, replying IS threading. Buzz's own
+        // client has one reply action and it opens the thread; the inline
+        // reply Armada used to offer here published a `["broadcast","1"]`
+        // reply — a shape Buzz's client never emits — which Buzz renders
+        // twice (a bare channel row AND a thread entry) and, one level
+        // deeper, drops from the channel entirely on reload.
+        replyContext={
+          sentFrom ? (
+            <button
+              type="button"
+              className="mb-0.5 flex min-w-0 max-w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => openThread?.({ ...event, id: sentFrom.rootId }, false)}
+            >
+              <MessagesSquare className="size-3 shrink-0" aria-hidden />
+              <span className="shrink-0">Sent from thread{sentFrom.excerpt ? ":" : ""}</span>
+              {sentFrom.excerpt && <span className="truncate">{sentFrom.excerpt}</span>}
+            </button>
+          ) : undefined
+        }
         onEdit={onEdit}
         onEditSubmit={onEditSubmit}
         onEditCancel={onEditCancel}
@@ -550,7 +571,6 @@ export function BuzzChat({
   const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
     edit: async (original, content) => {
       const edit = await editMessage({ original, content });
@@ -624,12 +644,17 @@ export function BuzzChat({
   }, [clearMessageFocus]);
 
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
-    navigate(chatRoute({ kind: "nip29", relayUrl, groupId: channelId, threadRoot: event.id }), {
+    // A broadcast reply is a timeline row, but its thread is its ROOT's: the
+    // fold buckets replies by root, so a panel keyed by the reply's own id
+    // would be empty and a reply sent from it would nest a level deeper.
+    // Buzz routes such a click to the root as well (useChannelRouteTarget).
+    const rootId = resolveBuzzRootId(event);
+    navigate(chatRoute({ kind: "nip29", relayUrl, groupId: channelId, threadRoot: rootId }), {
       state: { threadAutoFocus: focusReply },
     });
     // Backfill the full thread by `#e` reference — the loaded `#h` window may
     // not span an old thread's replies.
-    void fetchThread(event.id);
+    void fetchThread(rootId);
   }, [fetchThread, navigate, relayUrl, channelId]);
   // A no-op when no thread is routed, so a stray close (the panel stays
   // mounted through its slide-out) can't stack duplicate history entries.
@@ -791,7 +816,6 @@ export function BuzzChat({
           onEdit={startEditing}
           onEditSubmit={handleEditSubmit}
           onEditCancel={cancelEditing}
-          onReply={setReplyTo}
           votes={votes ? { up: votes.up, down: votes.down, mine: votes.mine?.value } : undefined}
           onVote={forum ? handleVote : undefined}
           permalink={channelRoute}
@@ -802,7 +826,6 @@ export function BuzzChat({
       huddleLifecycle,
       forum,
       voteTallies,
-      relayUrl,
       transport,
       memberRoles,
       editingId,
@@ -874,9 +897,9 @@ export function BuzzChat({
             // Where a share routed to this channel lands — the channel's own
             // address, not the ambient location.
             shareRoute={chatRoute({ kind: "nip29", relayUrl, groupId: channelId })}
-            replyTo={replyTo}
-            replyMarker="buzz"
-            replyExtraTags={BROADCAST_TAGS}
+            // No `replyTo`: this composer only ever posts top-level messages.
+            // Replies go through the thread panel (`sendThreadReply`), which is
+            // the one reply shape Buzz's own client produces.
             messageKind={forum ? KIND_FORUM_POST : undefined}
             pollsEnabled={false}
             placeholder={channelName ? `Message ${channelName}` : undefined}
@@ -884,7 +907,6 @@ export function BuzzChat({
             // send. The publisher can't resolve NIP-29 metadata itself.
             shareLabel={channelName}
             shareIconUrl={groupDetails?.group?.picture}
-            onCancelReply={() => setReplyTo(undefined)}
             onSent={handleSent}
             onOptimisticInsert={insertOptimistic}
             onOptimisticSent={markSent}
@@ -952,5 +974,3 @@ export function BuzzChat({
   );
 }
 
-/** Stable tag array: an inline Buzz reply broadcasts onto the main timeline. */
-const BROADCAST_TAGS: string[][] = [["broadcast", "1"]];

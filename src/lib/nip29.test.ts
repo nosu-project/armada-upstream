@@ -13,6 +13,7 @@ import {
   parseGroupNaddr,
   parseGroupPins,
   parseRelayMemberRoles,
+  reconcileRelayGroups,
 } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -224,5 +225,39 @@ describe("buildGroupPinsTags", () => {
 
   it("builds a clear-the-list event from an empty ref list", () => {
     expect(buildGroupPinsTags("general", [])).toEqual([["h", "general"]]);
+  });
+});
+
+describe("reconcileRelayGroups", () => {
+  const RELAY = "wss://relay.example";
+  const meta = (id: string, created_at = 1): NostrEvent => ({
+    ...snapshot([["d", id], ["name", id]], KIND_GROUP_METADATA),
+    id: id.padEnd(64, "0"),
+    created_at,
+  });
+  const ids = (events: NostrEvent[]) => reconcileRelayGroups([], events, RELAY).groups.map((g) => g.id);
+
+  it("keeps the cache as the floor when the relay answered nothing", () => {
+    const { groups, stale } = reconcileRelayGroups([meta("a"), meta("b")], [], RELAY);
+    expect(groups.map((g) => g.id)).toEqual(["a", "b"]);
+    expect(stale).toEqual([]);
+  });
+
+  it("drops cached channels an answered read no longer lists, and reports them stale", () => {
+    // "left" was cached from an earlier read; the relay stopped listing it.
+    const { groups, stale } = reconcileRelayGroups([meta("a"), meta("left")], [meta("a"), meta("new")], RELAY);
+    expect(groups.map((g) => g.id)).toEqual(["a", "new"]);
+    expect(stale).toEqual(["left"]);
+  });
+
+  it("lets a newer cached copy of a listed channel supersede the relay's older one", () => {
+    const cachedNewer = { ...meta("a", 5), tags: [["d", "a"], ["name", "renamed"]] };
+    const { groups, stale } = reconcileRelayGroups([cachedNewer], [meta("a", 1)], RELAY);
+    expect(groups.map((g) => g.name)).toEqual(["renamed"]);
+    expect(stale).toEqual([]);
+  });
+
+  it("is a plain collapse with no cache", () => {
+    expect(ids([meta("b"), meta("a")])).toEqual(["a", "b"]);
   });
 });

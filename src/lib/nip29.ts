@@ -621,12 +621,8 @@ export function relayGroupCacheFilters(
  * newest `created_at` so a relay edit/delete supersedes an older copy. Malformed
  * events are skipped.
  *
- * Callers pass cached events FIRST and live relay events SECOND so the cache
- * acts as a floor: a sparse or empty relay read can only add to or supersede
- * the cached list, never clear it. Relays legitimately return nothing on a
- * flaky connection, before AUTH completes, or because they hide closed/private
- * groups — none of which mean the channels are gone. This mirrors how
- * ditto/flotilla treat replaceable lists.
+ * This is a pure collapse; whether a cached copy still counts is decided by
+ * `reconcileRelayGroups` below, which is what the channel list reads through.
  */
 export function buildRelayGroups(events: NostrRumor[], relay: string): Nip29Group[] {
   const groups = new Map<string, Nip29Group>();
@@ -639,6 +635,37 @@ export function buildRelayGroups(events: NostrRumor[], relay: string): Nip29Grou
     }
   }
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Reconcile the cached channel list against a live relay read.
+ *
+ * `live` is everything the relay answered this time (the open listing plus
+ * any membership-scoped recovery). When it named at least one channel, it is
+ * the authority: the result is the live set (with the cached copy of a live
+ * channel still competing on `created_at`, so a newer edit that arrived by
+ * subscription is not lost), and every cached channel it did NOT name is
+ * reported in `stale` for the caller to prune. When `live` is empty the cache
+ * stays the floor and nothing is stale — an empty read looks the same whether
+ * the relay has no channels, the pool was cold, or AUTH gated the REQ, and a
+ * sidebar that blanks on that is worse than one stale row.
+ */
+export function reconcileRelayGroups(
+  cached: NostrRumor[],
+  live: NostrRumor[],
+  relay: string,
+): { groups: Nip29Group[]; stale: string[] } {
+  if (live.length === 0) {
+    return { groups: buildRelayGroups(cached, relay), stale: [] };
+  }
+  const liveIds = new Set(buildRelayGroups(live, relay).map((g) => g.id));
+  const stale: string[] = [];
+  const kept: NostrRumor[] = [];
+  for (const group of buildRelayGroups(cached, relay)) {
+    if (liveIds.has(group.id)) kept.push(group.event);
+    else stale.push(group.id);
+  }
+  return { groups: buildRelayGroups([...kept, ...live], relay), stale };
 }
 
 /** Parse a kind 39001 group-admins event into a list of admins with roles. */

@@ -61,7 +61,6 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
-import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
 import { companionEncryption } from "@/lib/imeta";
@@ -266,14 +265,11 @@ interface ChatComposerProps {
    * - `"nip10"` (default): NIP-10 marked `e`/`p` tags (NIP-29 groups).
    * - `"nipc7"`: a NIP-C7 `q` tag citing the parent rumor id (Concord — keeps
    *   `q` for inline quotes, kind-1111 for threads, per CORD-03 §3).
-   * - `"buzz"`: Buzz's thread shape — a marked `reply` tag at the parent (and
-   *   a marked `root` when the parent is itself a reply). Buzz requires the
-   *   `reply` marker for threading (a root-only marker doesn't thread there);
-   *   pair with `replyExtraTags: [["broadcast","1"]]` to also surface the
-   *   reply on the main timeline.
+   * Buzz surfaces never set `replyTo`: there, replying is threading, and the
+   * thread panel publishes the reply (`useSendBuzzThreadReply`).
    * The referenced-message chrome (`ReplyContextLine`) reads any shape.
    */
-  replyMarker?: "nip10" | "nipc7" | "buzz";
+  replyMarker?: "nip10" | "nipc7";
   /** Called after a message is successfully sent. */
   onSent?: () => void;
   /**
@@ -431,13 +427,6 @@ interface ChatComposerProps {
    */
   pollsEnabled?: boolean;
   /**
-   * Extra tags appended when the outgoing message is an inline reply to
-   * `replyTo`. Buzz passes `[["broadcast","1"]]` so the reply threads under
-   * its root AND surfaces on the main timeline (Buzz's broadcast-reply
-   * semantics — a bare marked reply would be thread-only there).
-   */
-  replyExtraTags?: string[][];
-  /**
    * The event kind the group-publish path signs. Defaults to NIP-29 group
    * chat (kind 9). Buzz forum channels override this to publish forum posts
    * (kind 45001) instead, so the message lands in the forum's content set and
@@ -485,7 +474,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -1384,18 +1373,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (replyTo) {
       if (replyMarker === "nipc7") {
         tags.push(["q", replyTo.id, "", replyTo.pubkey]);
-      } else if (replyMarker === "buzz") {
-        // Buzz threads on the MARKED `reply` tag (a root-only marker doesn't
-        // thread there). Direct reply to a root = single `reply` tag; replying
-        // to a reply pins the thread root with a `root` marker.
-        const ref = buzzThreadRef(replyTo.tags);
-        const rootId = ref.rootId ?? replyTo.id;
-        if (rootId === replyTo.id) {
-          tags.push(["e", replyTo.id, "", "reply"]);
-        } else {
-          tags.push(["e", rootId, "", "root"]);
-          tags.push(["e", replyTo.id, "", "reply"]);
-        }
       } else {
         const rootTag = replyTo.tags.find(([name, , , marker]) => name === "e" && marker === "root");
         if (rootTag) {
@@ -1408,8 +1385,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       if (replyTo.pubkey !== user?.pubkey && !mentionedPubkeys.has(replyTo.pubkey)) {
         tags.push(["p", replyTo.pubkey]);
       }
-      // Caller-supplied reply markers (Buzz's `["broadcast","1"]`).
-      for (const t of replyExtraTags ?? []) tags.push([...t]);
     }
 
     // NIP-18 quote tags for visible nevent/naddr embeds
@@ -1480,7 +1455,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     return tags;
-  }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups, replyExtraTags]);
+  }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
   /**
    * Note this room in the Direct Share "last sent" ledger.
