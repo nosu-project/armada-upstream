@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 
+import { ProfileStepBody } from '@/components/onboarding/ProfileStep';
 import { WizardShell } from '@/components/onboarding/WizardShell';
 import {
   GenerateStepBody,
-  ProfileStepBody,
   SaveKeyStepBody,
   useSignupKey,
 } from '@/components/onboarding/signupSteps';
@@ -31,8 +31,9 @@ interface SignupDialogProps {
  * page — the "Create account" escape hatch inside {@link LoginScreen}, opened
  * by {@link JoinButton}, {@link LoginArea} and {@link GroupChat}.
  *
- * The three steps — generate the key, save it (Continue gated on a real
- * backup), then a profile step — are the shared bodies in `signupSteps.tsx`,
+ * The three steps — generate the key, save it (Continue appears only once a
+ * real backup has succeeded), then a profile step — are the shared bodies in
+ * `signupSteps.tsx` and `ProfileStep.tsx`,
  * the same ones the landing wizard ({@link SignupWizard}) renders; this file is
  * just the in-app chrome around them (an `isOpen`-driven full-screen shell that
  * resets on open, above Radix dialogs at `z-[255]`) plus the login. A brand-new
@@ -159,8 +160,11 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
   // through the in-flight login.
   if (step === 'profile' && user) {
     return (
-      <WizardShell index={2} total={3} stepKey="profile" maxWidth="max-w-xl" zClassName="z-[255]" onClose={finishOnboarding}>
-        <ProfileStepBody onFinish={finishOnboarding} />
+      <WizardShell index={2} total={3} stepKey="profile" zClassName="z-[255]" onClose={finishOnboarding}>
+        <ProfileStepBody
+          expectedPubkey={signupKey.identity?.pubkey}
+          onFinish={finishOnboarding}
+        />
       </WizardShell>
     );
   }

@@ -25,8 +25,8 @@ vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@/components/onboarding/WizardShell", () => ({
   WizardShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
-vi.mock("@/components/ProfileSettings", () => ({
-  ProfileSettings: () => <div>profile settings</div>,
+vi.mock("@/components/onboarding/ProfileStep", () => ({
+  ProfileStepBody: () => <div>set up your profile</div>,
 }));
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({ config: { appRelays: ["wss://home.example/"] } }),
@@ -54,13 +54,16 @@ vi.mock("@/lib/credentialManager", () => ({
 
 import { SignupWizard } from "@/pages/SignupWizard";
 
-/** Generate a key and satisfy the backup gate so Continue is enabled. */
-async function reachEnabledContinue() {
+/**
+ * Generate a key and satisfy the backup gate so Continue appears — it is
+ * absent rather than disabled until then, and copying is reached by revealing
+ * the key, which swaps the eye for a clipboard.
+ */
+async function reachContinue() {
   fireEvent.click(screen.getByRole("button", { name: "Generate my key" }));
-  fireEvent.click(await screen.findByRole("button", { name: /Copy key/ }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled()
-  );
+  fireEvent.click(await screen.findByRole("button", { name: "Show key" }));
+  fireEvent.click(screen.getByRole("button", { name: "Copy key" }));
+  await screen.findByRole("button", { name: "Continue" });
 }
 
 beforeEach(() => {
@@ -76,7 +79,7 @@ describe("SignupWizard key-save step", () => {
     );
 
     render(<SignupWizard onExit={vi.fn()} />);
-    await reachEnabledContinue();
+    await reachContinue();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
@@ -94,7 +97,7 @@ describe("SignupWizard key-save step", () => {
     h.nsec.mockRejectedValue(new Error("secure storage unavailable"));
 
     render(<SignupWizard onExit={vi.fn()} />);
-    await reachEnabledContinue();
+    await reachContinue();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
@@ -104,7 +107,9 @@ describe("SignupWizard key-save step", () => {
     // The user still holds the only copy of a key that no account uses yet.
     // Stranding them on a blank screen with no message is the worst outcome.
     expect(screen.getByText("save your secret key")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    // Continue is still there to try again with — the failure is the login's,
+    // not the backup's, and the backup is what puts the button on screen.
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
     expect(h.toast).toHaveBeenCalled();
   });
 });

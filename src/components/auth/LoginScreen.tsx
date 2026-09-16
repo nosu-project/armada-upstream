@@ -71,6 +71,12 @@ const connectStatusLabel = (status: NostrConnectStatus | null): string => {
  * ({@link WizardShell}: ASCII sea, close top-right, no back since there's no
  * step before this one), rather than a modal.
  *
+ * With `onSignupClick` — i.e. opened from "Join", which is every call site
+ * but "Add another account" — the form view is framed as the choice it
+ * actually is: "Create account" is the screen's one primary button, and the
+ * login methods sit under an "or log in" divider as secondary actions. Without
+ * it there is no account to create and the screen is the login form alone.
+ *
  * The login options themselves are the single-smart-input format: one field
  * that accepts an nsec or a bunker:// URI, with the secondary methods (key
  * file, remote signer via QR/deeplink) tucked into a dropdown embedded at the
@@ -385,6 +391,15 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   // between them replays the enter animation the wizard steps use.
   const view = connectError ? 'error' : showProgressView ? 'progress' : showQr ? 'qr' : 'form';
 
+  // This screen is reached two ways, and they are not the same question. From
+  // "Join" (every call site that passes `onSignupClick`) the visitor has not
+  // said they have an account, so leading with a login form answers a question
+  // nobody asked: creating one is the primary action and logging in is the
+  // alternative underneath it. From "Add another account" there is no signup
+  // to offer, so it stays the login screen it has always been. Only the form
+  // view — the QR/progress/error views belong to a handshake already underway.
+  const joinMode = !!onSignupClick && view === 'form';
+
   return (
     // No back arrow: this is where the flow starts, so there is no step behind
     // it. `total={0}` drops the progress bar — a single screen has no progress.
@@ -397,18 +412,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
 
         <div className="space-y-2.5">
           <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-            log in
+            {joinMode ? `join ${APP_NAME.toLowerCase()}` : 'log in'}
           </h1>
-          {onSignupClick && view === 'form' && (
-            <p className="text-sm text-muted-foreground">
-              New here?{' '}
-              <button
-                type="button"
-                onClick={() => { onClose(); onSignupClick(); }}
-                className="text-primary hover:underline font-medium"
-              >
-                Create account
-              </button>
+          {joinMode && (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Create a new account, or log in with a key you already have.
             </p>
           )}
         </div>
@@ -459,6 +467,30 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
             </div>
           ) : (
             <>
+              {/* The reason most people are here, above everything that asks
+                  for a key they may not have yet. Everything below it is the
+                  other case, so the divider names it rather than reading as a
+                  bare "or". */}
+              {joinMode && onSignupClick && (
+                <div className='space-y-4'>
+                  <Button
+                    type='button'
+                    size='lg'
+                    className='h-12 w-full clip-corner-lg text-base font-medium'
+                    onClick={() => { onClose(); onSignupClick(); }}
+                  >
+                    Create account
+                  </Button>
+                  <div className='flex items-center gap-3'>
+                    <div className='h-px flex-1 bg-border' />
+                    <span className='text-xs uppercase tracking-wider text-muted-foreground'>
+                      or log in
+                    </span>
+                    <div className='h-px flex-1 bg-border' />
+                  </div>
+                </div>
+              )}
+
               {/* Native Android signer apps (Amber, etc.) — only renders on
                   Capacitor Android with a signer installed. */}
               <AndroidSignerOptions onLogin={() => { onLogin(); onClose(); }} />
@@ -473,6 +505,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                     </Alert>
                   )}
                   <Button
+                    variant={joinMode ? 'secondary' : 'default'}
                     className="w-full h-12 clip-corner-lg"
                     onClick={handleExtensionLogin}
                     disabled={isLoading}
@@ -553,9 +586,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 </div>
                 {loginError && <p className='text-sm text-destructive'>{loginError}</p>}
 
+                {/* Secondary alongside Create account, so the screen has one
+                    primary action and it isn't this one. */}
                 <Button
                   type='submit'
                   size='lg'
+                  variant={joinMode ? 'secondary' : 'default'}
                   disabled={isLoading || isFileLoading || !loginInput.trim()}
                   className='w-full clip-corner-lg'
                 >

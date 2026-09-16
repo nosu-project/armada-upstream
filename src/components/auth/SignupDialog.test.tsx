@@ -31,9 +31,12 @@ const h = vi.hoisted(() => ({
 vi.mock("@/components/onboarding/WizardShell", () => ({
   WizardShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
-vi.mock("@/components/ProfileSettings", () => ({
-  ProfileSettings: ({ onSaved }: { onSaved?: () => void }) => (
-    <button onClick={() => onSaved?.()}>save profile</button>
+vi.mock("@/components/onboarding/ProfileStep", () => ({
+  ProfileStepBody: ({ onFinish }: { onFinish: () => void }) => (
+    <>
+      <div>set up your profile</div>
+      <button onClick={onFinish}>Skip for now</button>
+    </>
   ),
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
@@ -61,13 +64,17 @@ vi.mock("@/lib/credentialManager", () => ({
 
 import SignupDialog from "@/components/auth/SignupDialog";
 
-/** Walk the wizard to a state where Continue is enabled. */
-async function reachEnabledContinue() {
+/**
+ * Walk the wizard to a state where Continue exists. It is absent rather than
+ * disabled until the key has demonstrably left the screen, and the only copy
+ * affordance is the clipboard button that replaces the eye once the key is
+ * revealed — so satisfying the gate is: reveal, then copy.
+ */
+async function reachContinue() {
   fireEvent.click(screen.getByRole("button", { name: "Generate my key" }));
-  fireEvent.click(await screen.findByRole("button", { name: /Copy key/ }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled()
-  );
+  fireEvent.click(await screen.findByRole("button", { name: "Show key" }));
+  fireEvent.click(screen.getByRole("button", { name: "Copy key" }));
+  await screen.findByRole("button", { name: "Continue" });
 }
 
 beforeEach(() => {
@@ -79,6 +86,27 @@ beforeEach(() => {
 });
 
 describe("SignupDialog account creation", () => {
+  it("holds Continue back until the key has actually been backed up", async () => {
+    // The save step opens with one action. Continue is absent rather than
+    // disabled — a disabled button is a thing to try clicking and be told
+    // nothing by — and the only way to copy is to reveal the key first, which
+    // replaces the eye with a clipboard for good.
+    render(<SignupDialog isOpen onClose={vi.fn()} onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Generate my key" }));
+    await screen.findByText("save your secret key");
+
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy key" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save key" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show key" }));
+    expect(screen.queryByRole("button", { name: "Show key" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy key" }));
+    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
+  });
+
   it("advances to the profile step only after the login has been persisted", async () => {
     let settle!: () => void;
     h.nsec.mockImplementation(
@@ -88,7 +116,7 @@ describe("SignupDialog account creation", () => {
     const onComplete = vi.fn();
 
     render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
-    await reachEnabledContinue();
+    await reachContinue();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
@@ -115,7 +143,7 @@ describe("SignupDialog account creation", () => {
     const onComplete = vi.fn();
 
     render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
-    await reachEnabledContinue();
+    await reachContinue();
 
     h.user = { pubkey: "a".repeat(64) };
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -139,7 +167,7 @@ describe("SignupDialog account creation", () => {
     const onComplete = vi.fn();
 
     render(<SignupDialog isOpen onClose={onClose} onComplete={onComplete} />);
-    await reachEnabledContinue();
+    await reachContinue();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));
@@ -164,7 +192,7 @@ describe("SignupDialog account creation", () => {
     h.nsec.mockResolvedValue(undefined);
 
     render(<SignupDialog isOpen onClose={vi.fn()} onComplete={vi.fn()} />);
-    await reachEnabledContinue();
+    await reachContinue();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(h.nsec).toHaveBeenCalledTimes(1));

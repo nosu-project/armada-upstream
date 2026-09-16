@@ -19,8 +19,8 @@ import { peekPendingJoin } from "@/lib/joinLink";
  *
  *  - {@link LoginScreen} pulls qrcode, the NIP-46 handshake and the Android
  *    signer enumeration. It arrives on the Join tap.
- *  - `SignupWizard` pulls nostr-tools, the login actions and the whole
- *    `ProfileSettings` editor. It arrives on "Create account" — or immediately
+ *  - `SignupWizard` pulls nostr-tools, the login actions and the profile
+ *    step's publish/upload path. It arrives on "Create account" — or immediately
  *    when a `/join` referral link is pending, since that link's confirmation
  *    screen IS the wizard's first step.
  *

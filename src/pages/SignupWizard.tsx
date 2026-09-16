@@ -6,10 +6,10 @@ import { finalizeEvent, nip19 } from "nostr-tools";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { ArmadaIdentity } from "@/components/brand/ArmadaCrest";
+import { ProfileStepBody } from "@/components/onboarding/ProfileStep";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import {
   GenerateStepBody,
-  ProfileStepBody,
   SaveKeyStepBody,
   useSignupKey,
 } from "@/components/onboarding/signupSteps";
@@ -30,12 +30,12 @@ import { toast } from "@/hooks/useToast";
  * (full-screen takeover, top progress bar, one animated step at a time):
  *
  *   1. generate — a secret key is your identity; generate it.
- *   2. download — reveal the key and copy or back it up. Continue is gated on
- *      an explicit backup — a successful Copy, keyring save, or file export —
- *      so a new user can't skip past saving their only login; then log in.
- *   3. profile  — the same WYSIWYG {@link ProfileSettings} editor used in
- *      Settings, so a new user sets their name/avatar before entering any
- *      community. Skippable.
+ *   2. download — save the key, or reveal and copy it. Continue does not exist
+ *      until an explicit backup has actually succeeded — a Copy, keyring save,
+ *      or file export — so a new user can't skip past saving their only
+ *      login; then log in.
+ *   3. profile  — a name and one of twelve faces ({@link ProfileStepBody}), so
+ *      a new user is recognisable before entering any community. Skippable.
  *
  * The three step bodies are the shared ones in `signupSteps.tsx`, the same the
  * in-app {@link SignupDialog} renders; what this file adds is the landing-only
@@ -50,7 +50,7 @@ import { toast } from "@/hooks/useToast";
  * Nothing blocks a new user: every step past key-save is skippable.
  *
  * Split out of the landing route and loaded lazily: this pulls nostr-tools,
- * the login actions and the whole {@link ProfileSettings} editor, none of
+ * the login actions and the profile step's publish/upload path, none of
  * which a signed-out visitor reading the landing page needs. The landing is in
  * the entry chunk; this arrives on the first tap of "Create account".
  */
@@ -268,12 +268,11 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // own back leads forward again — a loop, not a step back.
   if (user && step === "profile") {
     return (
-      <SignupShell
-        step="profile"
-        maxWidth="max-w-xl"
-        onClose={onExit}
-      >
-        <ProfileStepBody onFinish={finishOnboarding} />
+      <SignupShell step="profile" onClose={onExit}>
+        <ProfileStepBody
+          expectedPubkey={signupKey.identity?.pubkey}
+          onFinish={finishOnboarding}
+        />
       </SignupShell>
     );
   }

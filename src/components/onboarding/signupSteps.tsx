@@ -1,9 +1,8 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { AlertTriangle, Check, Copy, Download, Eye, EyeOff } from "lucide-react";
+import { AlertTriangle, Check, Copy, Download, Eye } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
 import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
-import { ProfileSettings } from "@/components/ProfileSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
@@ -16,8 +15,9 @@ import { backUpNsec } from "@/lib/credentialManager";
  * carry two copies of the key-backup path between them.
  *
  * What lives here is everything the two flows do IDENTICALLY: minting the key,
- * the backup gate (the {@link useSignupKey} hook), and the three step BODIES
- * (generate, save, profile). What stays with each consumer is everything they
+ * the backup gate (the {@link useSignupKey} hook), and the two key step BODIES
+ * (generate, save; the profile step is {@link ProfileStepBody}, in its own
+ * module for the reason noted below). What stays with each consumer is everything they
  * do differently — the login itself, the fresh-account suppressions, the
  * onboarding flag, relay-list seeding, the mount model, the wizard chrome
  * (progress bar vs bare shell, z-index), and the exit (navigate to /discover
@@ -37,7 +37,8 @@ export interface SignupKey {
   saving: boolean;
   /**
    * True once the key has demonstrably left the screen — a successful Copy,
-   * keyring save, or file export. The Continue gate on the save step.
+   * keyring save, or file export. This is what makes Continue appear on the
+   * save step; until then the step has nothing to continue from.
    */
   backedUp: boolean;
   /** Mint a fresh key and reset the backup gate. */
@@ -106,9 +107,9 @@ export function useSignupKey(): SignupKey {
 
   // Back the key up to a place the user chose and watched it go to — a "Save
   // as…" dialog on web, the Credential Manager sheet on native. Doesn't
-  // advance: Continue is gated on this (or Copy) having actually succeeded, so
-  // the outcomes stay apart rather than collapsing into "the button ran". A
-  // dismissed dialog leaves the gate shut.
+  // advance: Continue appears only once this (or Copy) has actually
+  // succeeded, so the outcomes stay apart rather than collapsing into "the
+  // button ran". A dismissed dialog leaves the step where it was.
   const saveKey = async () => {
     if (saving) return;
     if (!identity) {
@@ -126,14 +127,16 @@ export function useSignupKey(): SignupKey {
       if (result.status === "cancelled") {
         toast({
           title: "Key not saved",
-          description: "Save the file — or Copy the key — before continuing. It's your only login.",
+          description:
+            "Save the file — or reveal the key and copy it — before continuing. It's your only login.",
         });
         return;
       }
       if (result.status === "failed") {
         toast({
           title: "Couldn't save your key",
-          description: "Saving failed. Copy your key and store it somewhere safe, then continue.",
+          description:
+            "Saving failed. Reveal your key, copy it, and store it somewhere safe, then continue.",
           variant: "destructive",
         });
         return;
@@ -204,9 +207,24 @@ export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
 }
 
 /**
- * Step 2 body: reveal the key and gate Continue on an actual backup. The key
- * state comes from {@link useSignupKey}; `loggingIn` and `onContinue` belong to
- * the consumer, which logs in (and advances) differently.
+ * Step 2 body: back the key up, then continue.
+ *
+ * The step asks for ONE thing at a time. It opens with a single action — Save
+ * key — because a file the user watched go somewhere is the backup worth
+ * having, and a second button of equal weight beside it ("Copy key") only
+ * turned that into a choice between two things neither of which had been
+ * explained. Copying is still there, but as what it is: an affordance ON the
+ * key, reached by looking at it. Revealing the key swaps the eye for a
+ * clipboard, since a key that has been on screen has nothing left to hide.
+ *
+ * Continue is not disabled-until-backed-up, it is ABSENT until backed up —
+ * a disabled button is a thing to try clicking and be told nothing by. It
+ * occupies its space the whole time, so nothing moves when it arrives, and it
+ * fades in rather than appearing, so the arrival is legible as a consequence
+ * of the tap that caused it.
+ *
+ * The key state comes from {@link useSignupKey}; `loggingIn` and `onContinue`
+ * belong to the consumer, which logs in (and advances) differently.
  */
 export function SaveKeyStepBody({
   signupKey,
@@ -243,6 +261,10 @@ export function SaveKeyStepBody({
         </div>
       </div>
 
+      {/* One slot at the input's edge, holding whichever affordance the key's
+          state has earned: reveal it, or — once it is already on screen —
+          copy it. There is no hide: the key has been seen, and a toggle back
+          would only take away the copy button the reveal just produced. */}
       <div className="relative w-full">
         <Input
           type={showKey ? "text" : "password"}
@@ -250,94 +272,70 @@ export function SaveKeyStepBody({
           readOnly
           className="pr-10 font-mono bg-background border-transparent"
         />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-          onClick={() => setShowKey((v) => !v)}
-        >
-          {showKey ? (
-            <EyeOff className="size-4 text-muted-foreground" />
-          ) : (
-            <Eye className="size-4 text-muted-foreground" />
-          )}
-        </Button>
-      </div>
-
-      {/* Two ways to back the key up, then the gate. Continue stays shut
-          until one of them has actually succeeded — see `backedUp`. */}
-      <div className="w-full space-y-2">
-        <div className="grid grid-cols-2 gap-2">
+        {showKey ? (
           <Button
             type="button"
-            variant="secondary"
-            className="h-11 clip-corner-lg"
-            onClick={saveKey}
-            disabled={saving}
-          >
-            <Download className="size-4" />
-            {saving ? "Saving…" : "Save key"}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            className="h-11 clip-corner-lg"
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
             onClick={copyKey}
-            disabled={saving}
+            aria-label={copied ? "Key copied" : "Copy key"}
+            title={copied ? "Copied" : "Copy key"}
           >
             {copied ? (
               <Check className="size-4 text-success" />
             ) : (
-              <Copy className="size-4" />
+              <Copy className="size-4 text-muted-foreground" />
             )}
-            {copied ? "Copied" : "Copy key"}
           </Button>
-        </div>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+            onClick={() => setShowKey(true)}
+            aria-label="Show key"
+            title="Show key"
+          >
+            <Eye className="size-4 text-muted-foreground" />
+          </Button>
+        )}
+      </div>
+
+      {/* The step's one action, then the space Continue will occupy. The slot
+          is sized and reserved from the first frame so the arrival of Continue
+          moves nothing; `backedUp` is what fills it — a copy or a save that
+          actually succeeded. */}
+      <div className="w-full space-y-2">
         <Button
+          type="button"
           size="lg"
           className="h-12 w-full clip-corner-lg text-base font-medium"
-          onClick={onContinue}
-          disabled={!backedUp || saving || loggingIn}
+          onClick={saveKey}
+          disabled={saving}
         >
-          Continue
+          <Download className="size-4" />
+          {saving ? "Saving…" : "Save key"}
         </Button>
+        <div className="h-12">
+          {backedUp && (
+            <Button
+              type="button"
+              size="lg"
+              variant="secondary"
+              className="h-12 w-full clip-corner-lg text-base font-medium animate-in fade-in slide-in-from-bottom-2 duration-300"
+              onClick={onContinue}
+            >
+              {loggingIn ? "Continuing…" : "Continue"}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-/**
- * Step 3 body: the shared {@link ProfileSettings} editor plus a skip. `onFinish`
- * runs on both save and skip — every step past key-save is skippable.
- */
-export function ProfileStepBody({ onFinish }: { onFinish: () => void }) {
-  return (
-    <>
-      <div className="space-y-1.5 text-center">
-        <ArmadaIdentity size={84} className="mx-auto mb-4" />
-        <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-          set up your profile
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          How people see you. You can change it anytime.
-        </p>
-      </div>
-
-      {/* Continue lives inside the editor, so Skip is spaced against it
-          directly rather than left to the column's wider step gap. (Not a
-          `space-y-*` wrapper: ProfileSettings' hidden file inputs are
-          siblings of its form, so the rule would land on the form too.) */}
-      <div>
-        <ProfileSettings saveLabel="Continue" centerSave showNip05={false} onSaved={onFinish} />
-        <Button
-          variant="ghost"
-          className="mx-auto mt-2 flex text-muted-foreground"
-          onClick={onFinish}
-        >
-          Skip for now
-        </Button>
-      </div>
-    </>
-  );
-}
+/* Step 3's body — the profile screen — is {@link ProfileStepBody} in
+   `./ProfileStep`. It lives apart because it is the only step that reaches
+   the publish path, the Blossom uploaders and the query cache. */
