@@ -306,11 +306,18 @@ export function SaveKeyStepBody({
       {/* The step's one action, then the space Continue will occupy. The slot
           is sized and reserved from the first frame so the arrival of Continue
           moves nothing; `backedUp` is what fills it — a copy or a save that
-          actually succeeded. */}
+          actually succeeded.
+
+          The two trade places at that moment. Until the key is backed up
+          there is one thing to do and Save key is it; once it is, the step is
+          finished and the way out is what the eye should land on, with Save
+          key demoted to the thing already done (and still there to do again,
+          in another place). */}
       <div className="w-full space-y-2">
         <Button
           type="button"
           size="lg"
+          variant={backedUp ? "secondary" : "default"}
           className="h-12 w-full clip-corner-lg text-base font-medium"
           onClick={saveKey}
           disabled={saving}
@@ -323,7 +330,6 @@ export function SaveKeyStepBody({
             <Button
               type="button"
               size="lg"
-              variant="secondary"
               className="h-12 w-full clip-corner-lg text-base font-medium animate-in fade-in slide-in-from-bottom-2 duration-300"
               onClick={onContinue}
             >

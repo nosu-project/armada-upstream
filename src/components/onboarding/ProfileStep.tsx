@@ -174,15 +174,12 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
 
   return (
     <div className="flex flex-col items-center gap-6 text-center">
-      <div className="space-y-2.5">
-        <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-          set up your profile
-        </h1>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          A name and a face, so people know who they're talking to. Both are
-          optional, and both can be changed later.
-        </p>
-      </div>
+      {/* No description. The screen is a picture, a name and a Skip — it
+          explains itself, and a paragraph saying so is a paragraph between the
+          heading and the only two things to do. */}
+      <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+        set up your profile
+      </h1>
 
       {/* The picture as it will be, at the size a profile shows one, with the
           way to replace it hung off the corner where a badge goes. */}
@@ -220,21 +217,31 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
         />
       </div>
 
+      {/* A field on `bg-background`, inside a shell that is also
+          `bg-background`, is a placeholder floating in the middle of a screen
+          — which is what this looked like. So: a filled well with a hairline
+          tracing the chamfer, brightening to the ring colour on focus. The
+          frame is a wrapper rather than a `border` on the input itself
+          because clip-path slices a rectangular border off at the two cut
+          corners (see `.clip-hairline-lg` in index.css), and an input has no
+          ::before to trace it with. */}
       <div className="w-full">
         <label htmlFor="onboarding-name" className="sr-only">
           Your name
         </label>
-        <Input
-          id="onboarding-name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Your name"
-          autoComplete="name"
-          autoCapitalize="words"
-          enterKeyHint="done"
-          maxLength={64}
-          className="h-12 clip-corner-lg border-transparent bg-background text-center text-base"
-        />
+        <div className="clip-hairline-lg [--edge:var(--border)] [--fill:var(--muted)] [--fill-hover:var(--muted)] focus-within:[--edge:var(--ring)]">
+          <Input
+            id="onboarding-name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Your name"
+            autoComplete="name"
+            autoCapitalize="words"
+            enterKeyHint="done"
+            maxLength={64}
+            className="h-12 touch:h-12 border-0 bg-transparent text-center text-base focus-visible:border-0"
+          />
+        </div>
       </div>
 
       {/* Sized by the column rather than by a column count: never smaller than
