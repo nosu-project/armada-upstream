@@ -96,12 +96,12 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
     url: `${BLOSSOM}/249ab58208fc33c559b240db3bfa601b6fd7e9f15cabd9aac15ac0b22df5a6f1.png`,
     label: "Dragon by gravestoneghost",
   },
-  // PLACEHOLDER rows, replace with artist submissions.
   {
-    id: "abstract-03",
-    url: `${BLOSSOM}/59d9e73efde780b438c2d3b76f07b7a74437782abf72b9cfc46384bff55b2872.png`,
-    label: "Orange face",
+    id: "skull-bw",
+    url: `${BLOSSOM}/efce6e73cfc8ee57eb2492c0dfefa091a643c4a0aaeb732bcdfe3d742e465d4d.png`,
+    label: "B&W Skull by collegeartist1",
   },
+  // PLACEHOLDER rows, replace with artist submissions.
   {
     id: "cat",
     url: `${BLOSSOM}/148408b075188b381df1450bb89b72d5b476c9d2422ab6197ee5d3fd93560357.png`,
