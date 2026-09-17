@@ -62,6 +62,9 @@ files:
   - linuxStatusNotifier.js
   - pushToTalk.js
   - traySupport.js
+  # Launch-at-login settings. main.js requires it at startup; unlisted, the
+  # require fails inside the asar and the shell cannot boot at all.
+  - autoLaunch.js
   - preload.js
   # Resolves which web bundle app:// serves. Unlisted, the require fails inside
   # the asar and the shell cannot boot at all.
