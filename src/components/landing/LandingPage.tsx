@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
 import { EncryptionQuiz } from "./EncryptionQuiz";
+import { SailingSea } from "./SailingSea";
 
 /**
  * The signed-out landing page: the crest, wordmark and Join button over the
@@ -198,9 +199,8 @@ export function LandingPage({
             scroll past before anything is asked of the reader; together the
             ask arrives with its reasons still on screen.
 
-            `pb` clears the gradient floor below, which paints OVER this
-            section: centered content in a screen-tall box would otherwise put
-            the Join button inside the darkest band. */}
+            Extra space below the CTA lets the deck dissolve into the playable
+            sea without putting text over its horizon. */}
         <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 pb-48 pt-16 text-center safe-area-bottom">
           <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
             Everything, on every deck
@@ -217,7 +217,7 @@ export function LandingPage({
           {/* The same mono caption strip the relay lights and "Host your own"
               use. Kept above the buttons rather than below the Join: a strip
               under the page's last CTA would be competing with it, and would
-              sit inside the gradient floor. */}
+              crowd the transition into the sea. */}
           <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs tracking-wide text-muted-foreground/70">
             <a
               href="https://soapbox.pub/armada"
@@ -276,7 +276,7 @@ export function LandingPage({
 
           {/* The sign-off returns to the hero's prompt: same cyan `$`, same
               magenta line, same blinking caret as {@link BrandMark}, so the
-              page ends at the terminal it opened on. `armada-caret` comes from
+              deck returns to the terminal it opened on. `armada-caret` comes from
               the crest's keyframes, already mounted below. */}
           <div className="mt-4 flex w-full max-w-sm flex-col items-center gap-5">
             <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
@@ -296,14 +296,7 @@ export function LandingPage({
           </div>
         </section>
 
-        {/* The floor of the page. Absolutely placed rather than appended in
-            flow, so it darkens the last stretch of sea instead of adding a
-            screenful of scroll after the CTA — reaching the bottom reads as
-            arriving somewhere, not as running out of page. */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-56 bg-gradient-to-b from-transparent via-black/45 to-black/90"
-        />
+        <SailingSea />
       </div>
 
       <ArmadaCrestKeyframes />
