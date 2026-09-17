@@ -34,6 +34,7 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=com.canonical.AppMenu.Registrar
+  - --system-talk-name=org.freedesktop.login1
   - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
 
 # This permission set is DELIBERATELY complete. Nothing here can swap the
@@ -47,6 +48,18 @@ finish-args:
 # this talk-name the sandbox silently drops every banner — the foreground
 # notifier is the desktop build's only notifier, so this is the whole of it.
 # It only lets the app post notifications; it cannot touch the /app mount.
+#
+# `org.freedesktop.login1` is on the SYSTEM bus, and it is the only source of
+# Electron's `powerMonitor` suspend/resume (logind's PrepareForSleep) and
+# lock/unlock signals on Linux — there is no session-bus fallback for `resume`.
+# The sandbox exposes no system bus at all by default, so without this the
+# renderer never learns the machine woke: main.js relays `powerMonitor.on
+# ("resume")` as `armada:resume`, which NostrProvider turns into a full relay
+# reconnect. A suspend silently kills the relay sockets' TCP without Chromium
+# firing `close` (they read OPEN while carrying no traffic), so a wake with no
+# resume signal leaves every socket dead — no new events, so no notifications
+# and no message catch-up until a restart. Talk access only lets the app call
+# login1 and receive its signals; suspend/reboot still gate on polkit.
 #
 # The Flatpak itself is never updated in place (no origin URL, no repository).
 # Its WEB BUNDLE is: the shell fetches the site's dist archive into userData

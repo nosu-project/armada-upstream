@@ -682,6 +682,33 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // Reads only refs and a stable render-body closure; provider-lifetime.
   }, []);
 
+  // Sandbox-independent backstop for the same suspend/resume socket death.
+  // `onDesktopResume` above depends on an OS resume signal the shell relays,
+  // and that signal can be unavailable — the Flatpak sandbox exposes no system
+  // bus, so Electron's `powerMonitor` never sees logind's PrepareForSleep and
+  // fires no `resume`. A wall-clock heartbeat needs nothing from the OS: while
+  // the process is frozen (suspend) this interval cannot fire, so the first
+  // tick after waking observes a gap far larger than its period. That jump is
+  // the wake, wherever it runs (web, AppImage, Flatpak, any desktop). A bounce
+  // is cheap and idempotent — a live socket is skipped, a dead one re-issues
+  // its standing subscriptions — so the threshold only needs to clear a hidden
+  // tab's throttled timers (~1/min), not to be exact.
+  useEffect(() => {
+    const PERIOD_MS = 30_000;
+    const WAKE_GAP_MS = 90_000;
+    let last = Date.now();
+    const id = setInterval(() => {
+      const now = Date.now();
+      const gap = now - last;
+      last = now;
+      if (gap > WAKE_GAP_MS) {
+        reconnectAllRelays(`wall-clock jump (${Math.round(gap / 1000)}s)`);
+      }
+    }, PERIOD_MS);
+    return () => clearInterval(id);
+    // Reads only refs and a stable render-body closure; provider-lifetime.
+  }, []);
+
   // Wrap the pool in the batching proxy (combines profile/id lookups into single REQs).
   const batcher = useRef<NostrBatcher | undefined>(undefined);
   if (!batcher.current && pool.current) {
