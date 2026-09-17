@@ -4,6 +4,13 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.60.1] - 2026-09-17
+
+Fixes the desktop app failing to start.
+
+### Fixed
+- Desktop app no longer crashes on launch
+
 ## [0.60.0] - 2026-09-17
 
 Communities can now have forum channels: titled posts with threaded comments,
