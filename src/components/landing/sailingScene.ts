@@ -71,7 +71,7 @@ function buildShip() {
 
   const flagGeometry = new THREE.PlaneGeometry(1.9, 0.7, 10, 2);
   flagGeometry.translate(0.95, 0, 0);
-  flagGeometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+  (flagGeometry.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
   const flag = mesh(flagGeometry, rose, ship, 0, 11.7, 0);
   return { ship, mainsail, flag };
 }
@@ -240,17 +240,73 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
   const stars = new THREE.Points(starGeometry, new THREE.PointsMaterial({ color: 0x977b99, size: 1.7, sizeAttenuation: false, fog: false }));
   scene.add(stars);
 
-  // A ring buffer of expanding, fading wake strokes. No allocations per frame.
+  // Soft, broken crescents spread into the water. Each keeps its own birth
+  // position and heading so a turn leaves a curved trail rather than a ladder.
   const wakeCount = 100;
-  const wakeMaterial = new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0.42, depthWrite: false });
-  const wakeGeometry = new THREE.PlaneGeometry(1, 1);
+  const wakeLifetime = 7;
+  const wakeMaterial = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      time: { value: 0 },
+      lifetime: { value: wakeLifetime },
+      foamColor: { value: new THREE.Color(CYAN).lerp(new THREE.Color(0xd2faf1), 0.35) },
+    },
+    vertexShader: `
+      attribute vec3 wakeData;
+      uniform float time;
+      varying vec2 foamUv;
+      varying vec3 foamData;
+      varying vec3 world;
+      void main() {
+        foamUv = uv;
+        foamData = wakeData;
+        vec4 p = modelMatrix * instanceMatrix * vec4(position, 1.0);
+        p.y = 0.45 + sin(p.x * 0.014 + time * 0.65) * cos(p.z * 0.012 + time * 0.4) * 0.35;
+        world = p.xyz;
+        gl_Position = projectionMatrix * viewMatrix * p;
+      }`,
+    fragmentShader: `
+      uniform vec3 foamColor;
+      uniform float lifetime;
+      varying vec2 foamUv;
+      varying vec3 foamData;
+      varying vec3 world;
+      void main() {
+        vec2 p = foamUv * 2.0 - 1.0;
+        float age = foamData.x;
+        float phase = foamData.y;
+        float fade = pow(max(0.0, 1.0 - age / lifetime), 1.6);
+        float curve = 0.3 - 0.85 * p.x * p.x
+          + 0.12 * sin(p.x * 5.0 + phase + age * 0.9);
+        float distanceToCrest = abs(p.y - curve);
+        float width = 0.075 + age * 0.012;
+        float aa = fwidth(distanceToCrest);
+        float crest = exp(-pow(distanceToCrest / (width + aa), 2.0));
+        float mist = exp(-pow(distanceToCrest / (width + 0.16), 2.0));
+        float tips = 1.0 - smoothstep(0.6, 1.0, abs(p.x));
+        float flow = 0.5 + 0.5 * sin(p.x * 10.0 + phase + age * 0.65
+          + 0.9 * sin(p.x * 5.0 - phase));
+        float breakup = 0.12 + 0.88 * flow * flow;
+        float fog = exp(-pow(length(world.xz - cameraPosition.xz) * 0.00145, 2.0));
+        float alpha = (crest * breakup * 0.42 + mist * 0.07) * tips * fade * foamData.z * fog;
+        gl_FragColor = vec4(foamColor, alpha);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  const wakeGeometry = new THREE.PlaneGeometry(1, 1, 16, 2);
   wakeGeometry.rotateX(-Math.PI / 2);
+  const wakeData = new THREE.InstancedBufferAttribute(new Float32Array(wakeCount * 3), 3);
+  wakeData.setUsage(THREE.DynamicDrawUsage);
+  wakeGeometry.setAttribute("wakeData", wakeData);
   const wake = new THREE.InstancedMesh(wakeGeometry, wakeMaterial, wakeCount);
   wake.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   wake.frustumCulled = false;
   scene.add(wake);
-  const wakes = Array.from({ length: wakeCount }, () => ({ x: 0, z: 0, heading: 0, age: 100 }));
-  let wakeIndex = 0, wakeClock = 0;
+  const wakes = Array.from({ length: wakeCount }, () => ({ x: 0, z: 0, heading: 0, age: wakeLifetime, phase: 0, strength: 0 }));
+  const wakeRandom = randomSource(593);
+  let wakeIndex = 0, wakeDistance = 0;
   const dummy = new THREE.Object3D();
 
   const sectors = new Map<string, { group: THREE.Group; islands: Island[] }>();
@@ -336,6 +392,7 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
       - (keys.has("s") || keys.has("arrowdown") ? 0.65 : 0);
     const rudder = (keys.has("d") || keys.has("arrowright") ? 1 : 0)
       - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
+    const previousX = vessel.x, previousZ = vessel.z;
     sail(vessel, pointer?.throttle ?? throttle, pointer?.rudder ?? rudder, dt, islands);
     updateLand();
     const h = vessel.heading;
@@ -375,25 +432,35 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
     halo.position.copy(moon.position);
     moon.lookAt(camera.position);
     halo.lookAt(camera.position);
-    wakeClock += dt;
-    if (Math.abs(vessel.speed) > 1 && wakeClock > 0.075) {
-      wakeClock = 0;
+    // Distance-based emission avoids piling up foam when the ship slows down
+    // or meets land. Old foam keeps expanding and fading after the boat stops.
+    wakeDistance += Math.hypot(vessel.x - previousX, vessel.z - previousZ);
+    if (wakeDistance > 2.2) {
+      wakeDistance %= 2.2;
       const stroke = wakes[wakeIndex++ % wakeCount];
-      stroke.x = vessel.x + Math.sin(h) * 4;
-      stroke.z = vessel.z + Math.cos(h) * 4;
-      stroke.heading = h;
+      stroke.heading = h + (vessel.speed < 0 ? Math.PI : 0);
+      stroke.x = vessel.x + Math.sin(stroke.heading) * 4;
+      stroke.z = vessel.z + Math.cos(stroke.heading) * 4;
       stroke.age = 0;
+      stroke.phase = wakeRandom() * Math.PI * 2;
+      stroke.strength = Math.min(1, Math.abs(vessel.speed) / 18);
     }
     wakes.forEach((stroke, i) => {
-      stroke.age += dt;
-      const life = Math.max(0, 1 - stroke.age / 5);
-      dummy.position.set(stroke.x, 0.75, stroke.z);
-      dummy.rotation.set(0, stroke.heading, 0);
-      dummy.scale.set((3 + stroke.age * 2.2) * life, 1, 0.3 * life);
+      stroke.age = Math.min(wakeLifetime, stroke.age + dt);
+      const drift = Math.sin(stroke.phase + stroke.age * 0.7) * stroke.age * 0.22;
+      dummy.position.set(stroke.x + Math.cos(stroke.heading) * drift, 0,
+        stroke.z - Math.sin(stroke.heading) * drift);
+      dummy.rotation.set(0, stroke.heading + Math.sin(stroke.phase + stroke.age) * stroke.age * 0.012, 0);
+      const visible = stroke.age < wakeLifetime ? 1 : 0;
+      dummy.scale.set((3.5 + stroke.age * 2.4) * (1 + Math.sin(stroke.phase) * 0.12) * visible,
+        1, (1.8 + stroke.age * 0.7) * visible);
       dummy.updateMatrix();
       wake.setMatrixAt(i, dummy.matrix);
+      wakeData.setXYZ(i, stroke.age, stroke.phase, stroke.strength);
     });
     wake.instanceMatrix.needsUpdate = true;
+    wakeData.needsUpdate = true;
+    wakeMaterial.uniforms.time.value = time;
     renderer.render(scene, camera);
   };
   const tick = (now: number) => {
