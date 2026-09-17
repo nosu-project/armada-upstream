@@ -1,5 +1,11 @@
 /**
- * The pictures offered to somebody who has just made an account.
+ * The dozen pictures offered to somebody who has just made an account.
+ *
+ * A dozen is the size of the thing, not a count of what happens to be in the
+ * list: a new picture DISPLACES a placeholder rather than joining it, so the
+ * grid stays the one screenful of choices it was meant to be. The length is
+ * pinned in `ProfileStep.test.tsx` so adding a thirteenth is a failing test
+ * rather than a slightly longer scroll.
  *
  * They exist because the alternative first thing a new account does is
  * nothing: a profile with no picture is the one everybody has, and a wall of
@@ -28,7 +34,9 @@
  * vector drawables in Signal-Android (`res/drawable/ic_avatar_*.xml`) onto the
  * pastel backgrounds its own `AvatarColor` table pairs them with, in the order
  * `Avatars.kt` lists them, and they are being replaced one at a time as
- * artwork comes in.
+ * artwork comes in — each submission costing whichever of them it stands in
+ * for, which is the whole of how this list gets shorter on Signal's side and
+ * no longer overall.
  *
  * LICENSING, because those are not Soapbox's: Signal-Android is GPL-3.0, which
  * AGPL-3.0-or-later may be combined with — so the web and F-Droid builds were
@@ -69,14 +77,14 @@ const BLOSSOM = "https://blossom.ditto.pub";
 
 export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   {
+    id: "banana-king",
+    url: `${BLOSSOM}/a4a82e86634d19798a4802213cb11a3b1952cd8231f4617c46eddc3ff9003b68.jpeg`,
+    label: "Banana King by Aiden J arts",
+  },
+  {
     id: "tucan",
     url: `${BLOSSOM}/e1fbf54bcf436a8a386998365f203709b903a30449aaf59e5f80a7ac203d2166.png`,
     label: "Toucan by eempo",
-  },
-  {
-    id: "dragon",
-    url: `${BLOSSOM}/249ab58208fc33c559b240db3bfa601b6fd7e9f15cabd9aac15ac0b22df5a6f1.png`,
-    label: "Dragon by gravestoneghost",
   },
   {
     id: "skull",
@@ -84,16 +92,11 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
     label: "Skull by Julian Cela",
   },
   {
-    id: "banana-king",
-    url: `${BLOSSOM}/a4a82e86634d19798a4802213cb11a3b1952cd8231f4617c46eddc3ff9003b68.jpeg`,
-    label: "Banana King by Aiden J arts",
+    id: "dragon",
+    url: `${BLOSSOM}/249ab58208fc33c559b240db3bfa601b6fd7e9f15cabd9aac15ac0b22df5a6f1.png`,
+    label: "Dragon by gravestoneghost",
   },
   // PLACEHOLDER rows, replace with artist submissions.
-  {
-    id: "abstract-02",
-    url: `${BLOSSOM}/db56be2f909e0e82a95e35609ca6d32f4786a842fda37bfae3fd6455dec9ffc6.png`,
-    label: "Blue face",
-  },
   {
     id: "abstract-03",
     url: `${BLOSSOM}/59d9e73efde780b438c2d3b76f07b7a74437782abf72b9cfc46384bff55b2872.png`,

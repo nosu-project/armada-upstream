@@ -112,11 +112,20 @@ describe("signup profile step", () => {
     const credited = DEFAULT_AVATARS.filter((avatar) => / by /.test(avatar.label));
     expect(DEFAULT_AVATARS.slice(0, credited.length)).toEqual(credited);
     expect(credited.map((avatar) => avatar.label)).toEqual([
-      "Toucan by eempo",
-      "Dragon by gravestoneghost",
-      "Skull by Julian Cela",
       "Banana King by Aiden J arts",
+      "Toucan by eempo",
+      "Skull by Julian Cela",
+      "Dragon by gravestoneghost",
     ]);
+  });
+
+  it("offers a dozen and no more", async () => {
+    // The grid is one screenful of choices, so a new picture displaces a
+    // placeholder rather than joining it. Without this the list only ever
+    // grows, a submission at a time, and nobody notices until the step
+    // scrolls.
+    expect(DEFAULT_AVATARS).toHaveLength(12);
+    expect(new Set(DEFAULT_AVATARS.map((avatar) => avatar.id)).size).toBe(12);
   });
 
   it("shows the artist's name when a preset is hovered for a moment", async () => {

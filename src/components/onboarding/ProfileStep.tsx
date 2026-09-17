@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
  * past it. Both are optional and the screen says so — but an account with
  * neither is the account nobody can tell apart from every other new one, and a
  * network of grey circles reads as an empty network even when it is full,
- * which is why there is a grid of pictures on the screen and picking one is a
+ * which is why there are twelve pictures on the screen and picking one is a
  * single tap. Everything else stays in Settings, where the person filling it
  * in has a reason to.
  *
