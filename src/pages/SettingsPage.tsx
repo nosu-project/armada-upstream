@@ -8,7 +8,8 @@ import {
   FileText,
   Image,
   KeyRound,
-  Link2,
+   Link2,
+  MessageSquare,
   MessageSquareLock,
   Mic,
   Monitor,
@@ -53,6 +54,7 @@ import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { usePullPortableSetup } from "@/hooks/usePullPortableSetup";
 import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
@@ -70,6 +72,7 @@ import {
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
+import { sendsOnEnter } from "@/lib/sendOnEnter";
 
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -93,6 +96,7 @@ type SectionId =
   | "community-relays"
   | "search-relays"
   | "dms"
+  | "chat"
   | "media"
   | "links"
   | "discover"
@@ -148,6 +152,7 @@ export function SettingsPage() {
   }, [targetSection]);
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
+  const isTouch = useIsTouch();
   const { logins } = useNostrLogin();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const servers = useNip29Servers();
@@ -378,6 +383,20 @@ export function SettingsPage() {
     updateConfig((current) => ({ ...current, stripTrackingParams: value }));
   };
 
+  /**
+   * Toggle whether Enter sends a message. When off, Enter is a newline and
+   * Ctrl/Cmd+Enter sends. Stored per device class (touch vs physical keyboard)
+   * and synced, so the choice follows every like device without a desktop
+   * preference reaching a phone — see AppConfig.sendOnEnter.
+   */
+  const setSendOnEnter = (value: boolean) => {
+    const key = isTouch ? "touch" : "desktop";
+    updateConfig((current) => ({
+      ...current,
+      sendOnEnter: { ...current.sendOnEnter, [key]: value },
+    }));
+  };
+
   // Section list, gated the same way the old flat sections were.
   const navGroups = useMemo<NavGroup[]>(() => {
     const userItems: NavItem[] = [
@@ -420,6 +439,7 @@ export function SettingsPage() {
       { id: "community-relays", title: "Community relays", icon: ShieldCheck },
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
+      { id: "chat", title: "Chat", icon: MessageSquare },
       { id: "media", title: "Media servers", icon: Image },
       { id: "links", title: "Links", icon: Link2 },
       { id: "discover", title: "Discover", icon: Compass },
@@ -852,6 +872,22 @@ export function SettingsPage() {
               </SettingsRow>
             )}
           </>
+        );
+      case "chat":
+        return (
+          <SettingsRow
+            label="Send with Enter"
+            description={
+              isTouch
+                ? "Enter sends the message. Off, Enter is a new line and you send with the button."
+                : "Enter sends; Shift+Enter for a new line. Off, Ctrl/Cmd+Enter sends."
+            }
+          >
+            <Switch
+              checked={sendsOnEnter(config.sendOnEnter, isTouch)}
+              onCheckedChange={setSendOnEnter}
+            />
+          </SettingsRow>
         );
       case "links":
         return (

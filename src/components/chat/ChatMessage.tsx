@@ -1,6 +1,6 @@
 import { AlertCircle, Ban, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { emojify } from "@/components/chat/emojify";
@@ -45,6 +45,8 @@ import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { AppContext } from "@/contexts/AppContext";
+import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { ChatImageMenuContext, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -521,6 +523,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
+  // Read through `useContext` rather than `useAppContext`, which throws without
+  // a provider: this row is deliberately mountable bare in tests.
+  const sendOnEnter = sendsOnEnter(useContext(AppContext)?.config.sendOnEnter, isTouch);
   const composerBoundsRef = useComposerBoundsRef();
   const author = useAuthor(identityOverride ? undefined : event.pubkey);
   const scopedName = useScopedDisplayName(identityOverride ? undefined : event.pubkey, author.data?.metadata);
@@ -902,7 +907,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              // Enter saves; when send-on-Enter is off, Enter is a newline and
+              // Ctrl/Cmd+Enter saves instead (matching the composer).
+              const saveKey = sendOnEnter
+                ? e.key === "Enter" && !e.shiftKey
+                : e.key === "Enter" && (e.ctrlKey || e.metaKey);
+              if (saveKey) {
                 e.preventDefault();
                 onEditSubmit?.(event, editText);
               } else if (e.key === "Escape") {

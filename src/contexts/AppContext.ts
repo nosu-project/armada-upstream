@@ -8,6 +8,7 @@ import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
+import type { SendOnEnterPref } from "@/lib/sendOnEnter";
 import type { ThemeConfig } from "@/themes";
 
 export type Theme = "light" | "dark" | "system" | "custom";
@@ -402,7 +403,22 @@ export interface AppConfig {
    * the same page — see `lib/trackingParams.ts`. Publishes nothing of its own;
    * synced across devices.
    */
-  stripTrackingParams: boolean;
+     stripTrackingParams: boolean;
+  /**
+   * Whether pressing Enter in the message composer sends the message (with
+   * Shift+Enter inserting a newline). When off, Enter inserts a newline and
+   * Ctrl/Cmd+Enter sends instead.
+   *
+   * Keyed by device CLASS, and synced. Each class UNSET (the default) means
+   * "auto" — Enter sends on a physical keyboard and inserts a newline on touch,
+   * which is where the two classes' expectations are in opposition. Storing the
+   * override per class rather than per device means a choice syncs to every like
+   * device (all your desktops, all your phones) without a desktop preference
+   * ever forcing itself onto a phone. Resolve with `sendsOnEnter()`. Does not
+   * apply to document editing, which is always multi-line (Ctrl/Cmd+Enter sends
+   * there regardless).
+   */
+  sendOnEnter?: SendOnEnterPref;
   /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
@@ -504,6 +520,7 @@ export const METADATA_CONFIG_KEYS = [
   "showRecentRailDms",
   "discoverAllContent",
   "stripTrackingParams",
+  "sendOnEnter",
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",

@@ -79,6 +79,12 @@ const ClosedDmMarkerSchema = z.object({
   createdAt: z.number(),
 });
 
+/** Send-on-Enter override, keyed by device class (see AppConfig.sendOnEnter). */
+const SendOnEnterSchema = z.object({
+  touch: z.boolean().optional(),
+  desktop: z.boolean().optional(),
+});
+
 /**
  * Validates the persisted AppConfig. Used field-by-field in AppProvider so a
  * single corrupt key never wipes the entire config.
@@ -122,6 +128,8 @@ export const AppConfigSchema = z.object({
   showRecentRailDms: z.boolean().catch(defaultConfig.showRecentRailDms),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
+  // Keyed by device class; each unset means "auto" (see AppConfig.sendOnEnter).
+  sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   defaultZapAmount: z.number().catch(defaultConfig.defaultZapAmount),
   defaultZapMethod: z.enum(["lightning", "bitcoin"]).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
@@ -189,6 +197,8 @@ export const MetadataDocSchema = z.looseObject({
   discoverAllContent: z.boolean().optional(),
   /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
   stripTrackingParams: z.boolean().optional(),
+  /** Enter-sends preference, keyed by device class (see AppConfig.sendOnEnter). */
+  sendOnEnter: SendOnEnterSchema.optional(),
   /** Preselected zap amount, in sats. */
   defaultZapAmount: z.number().optional(),
   /** Default zap payment method. */

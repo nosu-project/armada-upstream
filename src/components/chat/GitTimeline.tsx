@@ -11,9 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { ciGroupsOutcome, ciGroupsSummary, ciRunOutcome, ciWorkflowName, groupCIRunsByWorkflow, type CIRun, type CIRunJob, type CIWorkflowGroup } from "@/lib/ci";
@@ -33,6 +35,7 @@ import {
   type GitTimelineActivity,
 } from "@/lib/gitActivity";
 import { gitworkshopTicketUrl } from "@/lib/gitworkshopUrl";
+import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { cn } from "@/lib/utils";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ReactNode } from "react";
@@ -570,6 +573,8 @@ function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; st
 }
 
 function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onComment: NonNullable<TicketPanelActions["onComment"]> }) {
+  const { config } = useAppContext();
+  const isTouch = useIsTouch();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -630,7 +635,11 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
             // Enter sends; Shift+Enter is a newline. Ignore the Enter that only
             // confirms an in-progress IME composition (CJK and other
             // multi-keystroke input), which would otherwise fire a premature send.
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            // When send-on-Enter is off, Enter is a newline and Ctrl/Cmd+Enter sends.
+            const sendKey = sendsOnEnter(config.sendOnEnter, isTouch)
+              ? e.key === "Enter" && !e.shiftKey
+              : e.key === "Enter" && (e.ctrlKey || e.metaKey);
+            if (sendKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               submit();
             }

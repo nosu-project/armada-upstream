@@ -55,6 +55,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isTombstoneRoot } from "@/concord/hooks/useConcordThreads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { fullDateTime, shortClockTime, shortTimeAgo } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
 import { reportDestination, type ReportTarget } from "@/lib/report";
@@ -160,6 +161,7 @@ export function ThreadMessage({
   onEditCancel?: () => void;
 }) {
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const isTouch = useIsTouch();
   const composerBoundsRef = useComposerBoundsRef();
   const author = useAuthor(event.pubkey);
@@ -315,8 +317,12 @@ export function ThreadMessage({
         onChange={(e) => setEditText(e.target.value)}
         onKeyDown={(e) => {
           // Enter saves; Shift+Enter is a newline. Ignore the Enter that only
-          // confirms an in-progress IME composition.
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          // confirms an in-progress IME composition. When send-on-Enter is off,
+          // Enter is a newline and Ctrl/Cmd+Enter saves (matching the composer).
+          const saveKey = sendsOnEnter(config.sendOnEnter, isTouch)
+            ? e.key === "Enter" && !e.shiftKey
+            : e.key === "Enter" && (e.ctrlKey || e.metaKey);
+          if (saveKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             onEditSubmit?.(event, editText);
           } else if (e.key === "Escape") {

@@ -25,11 +25,14 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAppContext } from "@/hooks/useAppContext";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useInsertText } from "@/hooks/useInsertText";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { toast } from "@/hooks/useToast";
 import { meshIdentity, meshMentionToken, type MeshIdentity } from "@/lib/meshIdentity";
+import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { isMeshSlashCommand } from "@/lib/meshSlashCommands";
 import {
   executeSlashCommand,
@@ -59,6 +62,8 @@ type MeshView =
  */
 export function MeshPage() {
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const isTouch = useIsTouch();
   const { transport, mesh, send, sendPrivate } = useMeshTransport();
   const [view, setView] = useState<MeshView>(null);
   const [draft, setDraft] = useState("");
@@ -309,7 +314,12 @@ export function MeshPage() {
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
+                        // When send-on-Enter is off, Enter is a newline and
+                        // Ctrl/Cmd+Enter sends.
+                        const sendKey = sendsOnEnter(config.sendOnEnter, isTouch)
+                          ? e.key === "Enter" && !e.shiftKey
+                          : e.key === "Enter" && (e.ctrlKey || e.metaKey);
+                        if (sendKey) {
                           e.preventDefault();
                           void onSend();
                         }
