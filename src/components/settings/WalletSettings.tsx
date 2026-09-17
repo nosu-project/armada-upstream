@@ -184,19 +184,35 @@ export function WalletSettings() {
       </SettingsRow>
 
       <SettingsRow
-        label="Default zap amount"
-        description="Preselected amount (sats) when you open the zap dialog."
+        label="Display amounts in"
+        description="The unit every amount is shown and entered in — zaps, fees, and totals."
       >
-        <Input
-          type="number"
-          min={1}
-          value={config.defaultZapAmount}
-          onChange={(e) => {
-            const n = Math.max(1, Math.floor(Number(e.target.value) || 0));
-            updateConfig((current) => ({ ...current, defaultZapAmount: n }));
-          }}
-          className="w-28 text-right"
-        />
+        <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+          <button
+            type="button"
+            onClick={() => updateConfig((c) => ({ ...c, currencyDisplay: "usd" }))}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
+              config.currencyDisplay === "usd"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            USD
+          </button>
+          <button
+            type="button"
+            onClick={() => updateConfig((c) => ({ ...c, currencyDisplay: "sats" }))}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
+              config.currencyDisplay === "sats"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            sats
+          </button>
+        </div>
       </SettingsRow>
 
       <SettingsRow

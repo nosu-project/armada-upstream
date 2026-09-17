@@ -122,7 +122,7 @@ export const AppConfigSchema = z.object({
   showRecentRailDms: z.boolean().catch(defaultConfig.showRecentRailDms),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
-  defaultZapAmount: z.number().catch(defaultConfig.defaultZapAmount),
+  currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
   defaultZapMethod: z.enum(["lightning", "bitcoin"]).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
   accountStandingSeen: z.boolean().catch(defaultConfig.accountStandingSeen),
@@ -189,8 +189,8 @@ export const MetadataDocSchema = z.looseObject({
   discoverAllContent: z.boolean().optional(),
   /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
   stripTrackingParams: z.boolean().optional(),
-  /** Preselected zap amount, in sats. */
-  defaultZapAmount: z.number().optional(),
+  /** Unit money amounts are shown and entered in. */
+  currencyDisplay: z.enum(["usd", "sats"]).optional(),
   /** Default zap payment method. */
   defaultZapMethod: z.enum(["lightning", "bitcoin"]).optional(),
   /** Whether zap/wallet UI is shown at all. */

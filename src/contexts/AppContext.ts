@@ -19,6 +19,14 @@ export interface ClosedDmMarker {
 }
 
 /**
+ * How monetary amounts are displayed and entered (zap amounts, fees, totals).
+ * `"usd"` converts sats to USD at the current BTC price; `"sats"` shows raw
+ * satoshi amounts. Ported from Ditto, where it is what keeps the Lightning and
+ * Bitcoin panes of the zap dialog denominated in the same unit.
+ */
+export type CurrencyDisplay = "usd" | "sats";
+
+/**
  * The user's NIP-65 (kind 10002) relay list plus its sync timestamp, mirroring
  * `BlossomServerMetadata`. Each relay carries the `read`/`write` markers from
  * its `r` tag (a bare `r` tag is both). Synced FROM the user's kind-10002 event
@@ -418,14 +426,18 @@ export interface AppConfig {
    */
   meshEnabled: boolean;
   /**
-   * Preselected zap amount (sats) in the zap dialog. Synced across devices —
-   * it's a preference, not a secret (wallet connections, by contrast, stay
-   * strictly local; see WalletProvider).
+   * Unit every money amount is shown and entered in — zap amounts, network
+   * fees, totals, the success screen. Synced across devices; it's a
+   * preference, not a secret (wallet connections, by contrast, stay strictly
+   * local; see WalletProvider).
    */
-  defaultZapAmount: number;
+  currencyDisplay: CurrencyDisplay;
   /**
    * Default payment method for zaps: 'lightning' or 'bitcoin'. When both are
-   * available, the zap dialog opens to this method. Synced across devices.
+   * available, the zap dialog opens to this method. Defaults to 'bitcoin',
+   * which every pubkey can receive (the address is derived from the key)
+   * whereas Lightning needs the recipient to have configured an address.
+   * Synced across devices.
    */
   defaultZapMethod: 'lightning' | 'bitcoin';
   /**
@@ -504,7 +516,7 @@ export const METADATA_CONFIG_KEYS = [
   "showRecentRailDms",
   "discoverAllContent",
   "stripTrackingParams",
-  "defaultZapAmount",
+  "currencyDisplay",
   "defaultZapMethod",
   "zapsEnabled",
   "accountStandingSeen",
@@ -603,8 +615,8 @@ export const defaultConfig: AppConfig = {
   stripTrackingParams: true,
   meshIncognito: true,
   meshEnabled: false,
-  defaultZapAmount: 100,
-  defaultZapMethod: "lightning",
+  currencyDisplay: "usd",
+  defaultZapMethod: "bitcoin",
   zapsEnabled: true,
   accountStandingSeen: false,
 };

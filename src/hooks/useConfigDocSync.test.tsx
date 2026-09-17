@@ -123,7 +123,7 @@ describe("useConfigDocSync automatic delivery", () => {
     await act(() => vi.advanceTimersByTimeAsync(800));
     expect(h.publish).toHaveBeenCalledTimes(1);
 
-    h.config = { ...h.config, defaultZapAmount: 42 };
+    h.config = { ...h.config, currencyDisplay: "sats" };
     rerender();
     await act(async () => finishFirst());
     await act(() => vi.advanceTimersByTimeAsync(800));
@@ -131,7 +131,7 @@ describe("useConfigDocSync automatic delivery", () => {
     expect(h.publish).toHaveBeenCalledTimes(2);
     expect(h.publish.mock.calls[1]![0]).toMatchObject({
       theme: "dark",
-      defaultZapAmount: 42,
+      currencyDisplay: "sats",
     });
   });
 

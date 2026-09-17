@@ -49,10 +49,16 @@ export function useZap(opts: {
   target: ChatMsg;
   /** Zap recipient: the message author's pubkey + lightning fields. */
   recipient: { pubkey: string; metadata?: NostrMetadata };
+  /**
+   * Lightning address (lud16) or LNURL (lud06) that takes precedence over the
+   * recipient's kind-0 metadata. Carries a NIP-A3 `lightning` payment target,
+   * which the recipient declared more recently than their profile field.
+   */
+  lnAddressOverride?: string;
   /** CORD.md announcement publisher; presence selects the private flow. */
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
 }): UseZapResult {
-  const { target, recipient, sendZap } = opts;
+  const { target, recipient, lnAddressOverride, sendZap } = opts;
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { activeConnection, payWithNWC, lookupPreimage, webln } = useWallet();
@@ -80,7 +86,14 @@ export function useZap(opts: {
 
       setStatus("resolving");
       try {
-        const params = await resolveLnurlPay(recipient.metadata ?? {});
+        // A NIP-A3 lightning payment target takes precedence over the
+        // profile's own lud16/lud06: resolve from a synthetic metadata object
+        // carrying the override instead.
+        const override = lnAddressOverride?.trim();
+        const lnurlSource: NostrMetadata = override
+          ? (/^lnurl1/i.test(override) ? { lud06: override } : { lud16: override })
+          : (recipient.metadata ?? {});
+        const params = await resolveLnurlPay(lnurlSource);
         const amountMsats = amountSats * 1000;
         if (amountMsats < params.minSendable || amountMsats > params.maxSendable) {
           throw new Error(
@@ -191,7 +204,7 @@ export function useZap(opts: {
         throw e;
       }
     },
-    [user, sendZap, activeConnection, webln, payWithNWC, lookupPreimage, recipient, target, config.appRelays],
+    [user, sendZap, lnAddressOverride, activeConnection, webln, payWithNWC, lookupPreimage, recipient, target, config.appRelays],
   );
 
   return { zap, status, invoice, reset };

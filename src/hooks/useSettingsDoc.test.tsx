@@ -228,13 +228,13 @@ describe("useSettingsDoc", () => {
 
     // Another device publishes; the standing REQ (or, on Android, the
     // notification service) files it while this query still holds the old one.
-    await seedStore("metadata", { theme: "light", defaultZapAmount: 42 }, 200);
+    await seedStore("metadata", { theme: "light", currencyDisplay: "sats" }, 200);
 
     await act(async () => {
       await result.current.update({ theme: "dark" });
     });
 
-    expect(publishedDoc()).toMatchObject({ theme: "dark", defaultZapAmount: 42 });
+    expect(publishedDoc()).toMatchObject({ theme: "dark", currencyDisplay: "sats" });
   });
 
   it("publishes to NIP-65 write relays even when general user-relay routing is off", async () => {

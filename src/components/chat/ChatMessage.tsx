@@ -625,14 +625,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // room.
   const hiddenMessages = useHiddenMessages();
 
-  // Zap dialog. The button shows on others' messages when the surface supports
-  // zaps; it disables (with a hint) once the author's profile has loaded
-  // without a lightning address. While the profile is still loading the button
-  // stays enabled — the dialog re-checks and explains.
+  // Zap dialog. The button shows on others' messages whenever the surface
+  // supports zaps, and is never gated on the author's lightning address: the
+  // dialog opens on Bitcoin, whose address is derived from their pubkey, and
+  // it also offers any NIP-A3 payment targets they've declared.
   const [zapOpen, setZapOpen] = useState(false);
-  const authorMetadata = author.data?.metadata;
   const canZap = Boolean(zapEnabled && user && !isOwn && !identityOverride);
-  const zapDisabled = Boolean(author.data && !authorMetadata?.lud16 && !authorMetadata?.lud06);
   // Raw event source for the "View event JSON" menu item: the unsigned rumor
   // when present (Concord sealed chat), otherwise the signed event (NIP-29).
   const isRumor = rumor !== undefined;
@@ -720,7 +718,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       onSelect: () => onForward(event),
     });
   }
-  if (canZap && !isEditing && !zapDisabled) {
+  if (canZap && !isEditing) {
     menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
   }
   if (canEdit && !isEditing) {
@@ -854,7 +852,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const toolbar = (
     <MessageActionToolbar
       reactions={canWrite && !isEditing ? reactions : undefined}
-      zap={canZap && !isEditing ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
+      zap={canZap && !isEditing ? { onOpen: () => setZapOpen(true) } : undefined}
       overflowActions={overflowActions}
     >
       {canWrite && !isEditing && onOpenThread && (
@@ -1002,7 +1000,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // extra pill — not its own line.
   const zapPill =
     !isEditing && zaps && zaps.tally.count > 0 ? (
-      <ZapPill tally={zaps.tally} canZap={canZap && !zapDisabled} onZap={() => setZapOpen(true)} />
+      <ZapPill tally={zaps.tally} canZap={canZap} onZap={() => setZapOpen(true)} />
     ) : null;
 
   const afterBody = (

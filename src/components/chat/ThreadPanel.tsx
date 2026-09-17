@@ -187,11 +187,10 @@ export function ThreadMessage({
   useEffect(() => {
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
-  // Zap gating mirrors ChatMessage: shown on others' messages when the surface
-  // supports zaps; disabled once the author's profile loads with no lightning
-  // address.
+  // Zap gating mirrors ChatMessage: shown on others' messages whenever the
+  // surface supports zaps, never gated on a lightning address (the dialog
+  // opens on Bitcoin and offers any NIP-A3 targets the author declared).
   const canZap = Boolean(zapEnabled && user && !isOwn);
-  const zapDisabled = Boolean(author.data && !metadata?.lud16 && !metadata?.lud06);
   // Reporting, gated exactly as in ChatMessage: the ambient chat scope decides
   // where a report goes, and an absent destination (a legacy Concord epoch,
   // which has no staff-only address) offers none.
@@ -229,7 +228,7 @@ export function ThreadMessage({
   // overflow and the right-click menu, so they can't drift apart — matching
   // ChatMessage's action model instead of the panel's older bespoke menu.
   const menuActions: MessageActionItem[] = [];
-  if (canZap && !zapDisabled && !isEditing) {
+  if (canZap && !isEditing) {
     menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
   }
   if (canEdit && !isEditing) {
@@ -353,7 +352,7 @@ export function ThreadMessage({
         zaps && zaps.tally.count > 0 ? (
           <ZapPill
             tally={zaps.tally}
-            canZap={canZap && !zapDisabled}
+            canZap={canZap}
             onZap={() => setZapOpen(true)}
           />
         ) : undefined
@@ -363,7 +362,7 @@ export function ThreadMessage({
   const toolbar = (
     <MessageActionToolbar
       reactions={canReact ? reactions : undefined}
-      zap={canZap ? { disabled: zapDisabled, onOpen: () => setZapOpen(true) } : undefined}
+      zap={canZap ? { onOpen: () => setZapOpen(true) } : undefined}
       overflowActions={overflowActions}
     />
   );

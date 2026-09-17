@@ -30,7 +30,7 @@ export function MessageActionToolbar({
   /** Quick-slot count for the reaction row; pass 0 in cramped surfaces. */
   reactionQuickSlots?: number;
   /** Zap button — omit to hide (own message, or surface has no zaps). */
-  zap?: { disabled: boolean; onOpen: () => void };
+  zap?: { onOpen: () => void };
   /** Everything not worth a dedicated button, shown under `⋯`. */
   overflowActions: MessageActionItem[];
   /** Dedicated buttons between zap and overflow (e.g. thread, reply). */
@@ -45,7 +45,7 @@ export function MessageActionToolbar({
           quickSlots={reactionQuickSlots}
         />
       )}
-      {zap && <ZapButton disabled={zap.disabled} onOpen={zap.onOpen} />}
+      {zap && <ZapButton onOpen={zap.onOpen} />}
       {children}
       <MessageOverflowMenu actions={overflowActions} />
     </>

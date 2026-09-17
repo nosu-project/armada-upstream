@@ -1,7 +1,8 @@
-import { ChevronDown, Copy, ExternalLink, HelpCircle, Loader2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Copy, ExternalLink, HelpCircle, Loader2, MessageCircle, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { AmountField } from "@/components/AmountField";
 import { DisplayName } from "@/components/DisplayName";
 import { OnchainZapContent } from "@/components/OnchainZapContent";
 import { GenericPaymentContent } from "@/components/GenericPaymentContent";
@@ -20,7 +21,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { QRCodeCanvas } from "@/components/ui/qrcode";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useBitcoinSigner } from "@/hooks/useBitcoinSigner";
@@ -33,7 +33,13 @@ import { useZap } from "@/hooks/useZap";
 import { canZap } from "@/lib/canZap";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
+  amountInputToSats,
   fetchBtcPrice,
+  formatAmountInput,
+  formatMoneyAmount,
+  formatSatsAmount,
+  isLargeAmount,
+  type AmountPresetSet,
 } from "@/lib/bitcoinMoney";
 import {
   PAYMENT_METHODS,
@@ -43,9 +49,9 @@ import {
   type PaymentMethodDef,
   type PaymentTarget,
 } from "@/lib/paymentTargets";
-import { ZAP_PRESETS, formatSats } from "@/lib/zaps";
 
 import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
+import type { CurrencyDisplay } from "@/contexts/AppContext";
 
 interface ZapDialogImplProps {
   target: ChatMsg;
@@ -54,7 +60,21 @@ interface ZapDialogImplProps {
   onDone: () => void;
 }
 
-const PRESETS = ZAP_PRESETS.slice(0, 5);
+/**
+ * Amount presets for the Lightning pane. Lightning zaps are expected to be
+ * much smaller than on-chain sends (which have a fixed per-tx fee floor), so
+ * the presets stay in tip-jar territory. The sats row is hand-picked round
+ * numbers rather than a conversion of the USD row.
+ */
+const LIGHTNING_PRESETS: AmountPresetSet = {
+  usd: [0.1, 0.5, 1, 2, 5],
+  sats: [100, 500, 1_000, 2_100, 5_000],
+};
+
+/** Opening amount for a fresh dialog, in the user's display currency. */
+function defaultAmount(currency: CurrencyDisplay): number {
+  return currency === "sats" ? 500 : 0.5;
+}
 
 type DialogMethodId = string;
 
@@ -153,43 +173,67 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   });
 
   // ── Lightning state ──
-  const [amount, setAmount] = useState<number>(config.defaultZapAmount || PRESETS[1]);
+  // The amount is denominated in the user's display currency (matching the
+  // Bitcoin pane) and converted to sats just before the LNURL call.
+  const currency: CurrencyDisplay = config.currencyDisplay ?? "usd";
+  const [amount, setAmount] = useState<number | string>(() => defaultAmount(currency));
+  const [comment, setComment] = useState("");
+  const [showComment, setShowComment] = useState(false);
   const [editingAmount, setEditingAmount] = useState(false);
   const [error, setError] = useState("");
-  const amountInputRef = useRef<HTMLInputElement>(null);
+  const [confirmArmed, setConfirmArmed] = useState(false);
+
+  const amountSats = useMemo(
+    () => amountInputToSats(amount, currency, btcPrice),
+    [amount, currency, btcPrice],
+  );
+  const isLarge = isLargeAmount(amountSats, btcPrice);
+  // In USD mode `amountSats` is 0 until the BTC price lands, so fall back to
+  // echoing the raw input ("$0.10") rather than rendering an empty label.
+  const amountDisplay = amountSats > 0
+    ? formatMoneyAmount(amountSats, currency, btcPrice)
+    : formatAmountInput(amount, currency);
 
   const { zap, status, invoice } = useZap({
     target,
     recipient: { pubkey: target.pubkey, metadata },
+    lnAddressOverride: lightningTarget?.authority,
     sendZap,
   });
 
   const busy = status === "resolving" || status === "paying";
   const showingInvoice = status === "manual" && invoice;
 
+  // Re-arm (clear confirmation) whenever the amount moves — editing after
+  // arming forces another deliberate click. Mirrors OnchainZapContent.
   useEffect(() => {
-    if (editingAmount) {
-      amountInputRef.current?.focus();
-      amountInputRef.current?.select();
-    }
-  }, [editingAmount]);
-
-  const commitAmountEdit = useCallback(() => setEditingAmount(false), []);
+    setConfirmArmed(false);
+  }, [amountSats]);
 
   const handleLightningZap = async () => {
     setError("");
-    if (amount <= 0) { setError("Enter an amount."); return; }
+    // Only USD input needs a price to become sats; a sats amount is payable
+    // as-is even when the price endpoint is down.
+    if (currency === "usd" && !btcPrice) { setError("Waiting for BTC price…"); return; }
+    if (amountSats <= 0) { setError("Enter an amount."); return; }
+
+    // Two-tap safety for large amounts: first click arms, second click sends.
+    if (isLarge && !confirmArmed) {
+      setConfirmArmed(true);
+      return;
+    }
+
     try {
-      const outcome = await zap(amount, "");
+      const outcome = await zap(amountSats, comment.trim());
       if (outcome === "paid") {
-        setSuccess({ kind: "lightning", amountSats: amount });
+        setSuccess({ kind: "lightning", amountSats });
       } else if (outcome === "unproven") {
         toast({
-          title: `Sent ${formatSats(amount)} sats ⚡`,
+          title: `Sent ${formatSatsAmount(amountSats)} ⚡`,
           description:
             "The payment went through, but the wallet hasn't provided the proof a private zap tally needs. We'll keep checking for a couple of minutes and count the zap if it turns up — wallets like Alby Hub, Coinos, or lnbits provide it reliably.",
         });
-        setSuccess({ kind: "lightning", amountSats: amount });
+        setSuccess({ kind: "lightning", amountSats });
       }
       // "manual" keeps the dialog open — the QR view renders below.
     } catch (e) {
@@ -294,7 +338,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         ) : showingInvoice ? (
           <LightningInvoiceView
             invoice={invoice!}
-            amount={amount}
+            amountDisplay={amountDisplay}
             webln={!!webln}
             busy={busy}
             onPay={handleLightningZap}
@@ -305,10 +349,17 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
           <LightningZapPane
             amount={amount}
             setAmount={setAmount}
+            currency={currency}
+            amountSats={amountSats}
+            amountDisplay={amountDisplay}
+            isLarge={isLarge}
+            confirmArmed={confirmArmed}
+            comment={comment}
+            setComment={setComment}
+            showComment={showComment}
+            setShowComment={setShowComment}
             editingAmount={editingAmount}
             setEditingAmount={setEditingAmount}
-            amountInputRef={amountInputRef}
-            commitAmountEdit={commitAmountEdit}
             error={error}
             setError={setError}
             busy={busy}
@@ -336,12 +387,21 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
 // ── Lightning pane (amount + presets + send) ──────────────────────────────
 
 interface LightningZapPaneProps {
-  amount: number;
-  setAmount: (n: number) => void;
+  /** Raw amount input, denominated in `currency`. */
+  amount: number | string;
+  setAmount: (v: number | string) => void;
+  currency: CurrencyDisplay;
+  amountSats: number;
+  /** The amount rendered in the display currency, for the send button. */
+  amountDisplay: string;
+  isLarge: boolean;
+  confirmArmed: boolean;
+  comment: string;
+  setComment: (v: string) => void;
+  showComment: boolean;
+  setShowComment: (v: boolean) => void;
   editingAmount: boolean;
   setEditingAmount: (v: boolean) => void;
-  amountInputRef: React.RefObject<HTMLInputElement | null>;
-  commitAmountEdit: () => void;
   error: string;
   setError: (s: string) => void;
   busy: boolean;
@@ -354,10 +414,17 @@ interface LightningZapPaneProps {
 function LightningZapPane({
   amount,
   setAmount,
+  currency,
+  amountSats,
+  amountDisplay,
+  isLarge,
+  confirmArmed,
+  comment,
+  setComment,
+  showComment,
+  setShowComment,
   editingAmount,
   setEditingAmount,
-  amountInputRef,
-  commitAmountEdit,
   error,
   setError,
   busy,
@@ -367,57 +434,18 @@ function LightningZapPane({
 }: LightningZapPaneProps) {
   return (
     <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
-      <div className="flex flex-col items-center pt-2">
-        {editingAmount ? (
-          <div className="flex items-baseline justify-center">
-            <input
-              ref={amountInputRef}
-              type="number"
-              inputMode="numeric"
-              min={1}
-              value={amount || ""}
-              onChange={(e) => { setAmount(Number(e.target.value)); setError(""); }}
-              onBlur={commitAmountEdit}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); commitAmountEdit(); }
-              }}
-              aria-label="Amount in sats"
-              className="bg-transparent border-0 outline-none text-4xl font-semibold text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              style={{ width: `${Math.max(2, String(amount).length + 1)}ch` }}
-            />
-            <span className="text-4xl font-semibold text-muted-foreground"> sats</span>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setEditingAmount(true)}
-            aria-label="Edit amount"
-            className="flex items-baseline justify-center rounded-md px-2 -mx-2 hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-          >
-            <span className="text-4xl font-semibold tabular-nums">
-              {formatSats(amount)}
-            </span>
-            <span className="text-4xl font-semibold text-muted-foreground"> sats</span>
-          </button>
-        )}
+      {/* Amount — big number on top, editable by clicking, plus preset chips.
+          Lightning zaps lean small, so the defaults stay in tip-jar territory. */}
+      <div className="grid gap-3 pt-2">
+        <AmountField
+          value={amount}
+          onValueChange={(v) => { setAmount(v); setError(""); }}
+          currency={currency}
+          editing={editingAmount}
+          setEditing={setEditingAmount}
+          presets={LIGHTNING_PRESETS}
+        />
       </div>
-
-      <ToggleGroup
-        type="single"
-        value={PRESETS.includes(amount) ? String(amount) : ""}
-        onValueChange={(v) => { if (v) { setAmount(Number(v)); setError(""); setEditingAmount(false); } }}
-        className="grid grid-cols-5 gap-1 w-full"
-      >
-        {PRESETS.map((preset) => (
-          <ToggleGroupItem
-            key={preset}
-            value={String(preset)}
-            className="h-8 min-w-0 text-xs font-semibold px-1"
-          >
-            {formatSats(preset)}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
@@ -427,21 +455,53 @@ function LightningZapPane({
         </p>
       )}
 
-      <Button
-        type="button"
-        onClick={onZap}
-        disabled={busy || amount <= 0 || walletRequired}
-        className="w-full"
-      >
-        {busy ? (
-          <>
-            <Loader2 className="size-4 mr-1.5 animate-spin" />
-            {status === "resolving" ? "Creating invoice…" : "Paying…"}
-          </>
-        ) : (
-          `Send ${formatSats(amount)} sats`
-        )}
-      </Button>
+      {/* Optional comment — carried into the NIP-57 zap request, or sealed into
+          the private announcement. Revealed by the icon on the Send row so it
+          costs no space until wanted. */}
+      {showComment && (
+        <Input
+          type="text"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Add a comment (optional)"
+          maxLength={280}
+          aria-label="Comment"
+          autoFocus
+          className="text-sm rounded-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-200"
+        />
+      )}
+
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          onClick={onZap}
+          disabled={busy || amountSats <= 0 || walletRequired}
+          variant={isLarge && !busy ? "destructive" : "default"}
+          className="flex-1 rounded-full"
+        >
+          {busy ? (
+            <>
+              <Loader2 className="size-4 mr-1.5 animate-spin" />
+              {status === "resolving" ? "Creating invoice…" : "Paying…"}
+            </>
+          ) : isLarge && confirmArmed ? (
+            <>Tap again to send {amountDisplay}</>
+          ) : (
+            <>Send {amountDisplay}</>
+          )}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => setShowComment(!showComment)}
+          aria-label="Add a comment"
+          aria-pressed={showComment}
+          className={`rounded-full ${comment.trim() ? "text-primary" : "text-muted-foreground"}`}
+        >
+          <MessageCircle className="size-4" />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -450,7 +510,8 @@ function LightningZapPane({
 
 interface LightningInvoiceViewProps {
   invoice: string;
-  amount: number;
+  /** The amount rendered in the user's display currency. */
+  amountDisplay: string;
   webln: boolean;
   busy: boolean;
   onPay: () => void;
@@ -460,7 +521,7 @@ interface LightningInvoiceViewProps {
 
 function LightningInvoiceView({
   invoice,
-  amount,
+  amountDisplay,
   webln,
   busy,
   onPay,
@@ -471,7 +532,7 @@ function LightningInvoiceView({
     <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
       <div className="flex flex-col items-center pt-1">
         <div className="text-3xl font-semibold tabular-nums">
-          {formatSats(amount)} sats
+          {amountDisplay}
         </div>
       </div>
 
