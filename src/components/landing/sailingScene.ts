@@ -18,7 +18,7 @@ function mesh(geometry: THREE.BufferGeometry, surface: THREE.Material, parent: T
   return object;
 }
 
-/** All art is geometry, apart from the app's own crest on the stern. */
+/** The ship is built entirely from low-poly geometry. */
 function buildShip() {
   const ship = new THREE.Group();
   const wood = material(0x392336);
@@ -70,14 +70,7 @@ function buildShip() {
   mesh(jibGeometry, cream, ship);
 
   const flag = mesh(new THREE.PlaneGeometry(1.9, 0.7, 4, 1), rose, ship, 0.9, 11.7, 0);
-  mesh(new THREE.BoxGeometry(1.2, 1.4, 0.15), cream, ship, 0, 2.4, 4.15);
-  const texture = new THREE.TextureLoader().load("/logo.svg");
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const emblem = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
-  mesh(new THREE.PlaneGeometry(1.05, 1.05), emblem, ship, 0, 2.45, 4.24);
-  // A tiny warm stern lantern, entirely diegetic.
-  mesh(new THREE.IcosahedronGeometry(0.22, 0), new THREE.MeshBasicMaterial({ color: 0xffd9ab }), ship, 1.45, 2.7, 3.1);
-  return { ship, mainsail, flag, texture };
+  return { ship, mainsail, flag };
 }
 
 function buildIsland(island: Island) {
@@ -193,7 +186,7 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
   fill.position.set(100, 140, 250);
   scene.add(fill);
   const camera = new THREE.PerspectiveCamera(48, 1, 0.5, 4000);
-  const { ship, mainsail, flag, texture } = buildShip();
+  const { ship, mainsail, flag } = buildShip();
   scene.add(ship);
 
   // World-space wave pattern follows the boat without swimming with the mesh.
@@ -432,7 +425,6 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
     canvas.removeEventListener("webglcontextlost", contextLost);
     canvas.removeEventListener("webglcontextrestored", contextRestored);
     disposeObjects(scene);
-    texture.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
     canvas.remove();
