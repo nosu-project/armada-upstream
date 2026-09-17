@@ -10,6 +10,26 @@ const handlers = new Map<symbol, BeforeAccountExitHandler>();
 const DEFAULT_TIMEOUT_MS = 4_000;
 
 /**
+ * The teardown window the interactive logout/switch paths grant, deliberately
+ * far shorter than {@link DEFAULT_TIMEOUT_MS}. A healthy gateway `DELETE`
+ * completes in a fraction of this, so the race resolves early and the cap only
+ * bites a dead one — where the local kill switch (`writePushDisabledFlag`) and
+ * the endpoint's own 410 already stop the pushes. A user staring at a spinner
+ * should not wait out a broken gateway's full budget.
+ */
+export const EXIT_TEARDOWN_MS = 1_500;
+
+/**
+ * The absolute deadline after which an exit navigates NO MATTER WHAT — the
+ * backstop that turns the reload from a consequence of teardown finishing into
+ * a guarantee. It covers the one await with no timeout of its own (the native
+ * `wipe()` bridge round-trip, which a silent bridge would otherwise hang on
+ * forever) and any future one. Sized to give the teardown window plus a bounded
+ * purge room to finish normally on the happy path.
+ */
+export const EXIT_NAV_DEADLINE_MS = 3_000;
+
+/**
  * Register work that needs the OUTGOING signer/session before account storage
  * changes or a hard reload tears it down. Returns the ordinary unregister fn.
  */
