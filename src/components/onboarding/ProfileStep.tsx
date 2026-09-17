@@ -4,6 +4,12 @@ import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
@@ -245,42 +251,58 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       </div>
 
       {/* Sized by the column rather than by a column count: never smaller than
-          a thumb, and as many across as there is room for. */}
-      <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
-        {DEFAULT_AVATARS.map((avatar) => {
-          const chosen = picture.kind === "default" && picture.id === avatar.id;
-          return (
-            <button
-              key={avatar.id}
-              type="button"
-              aria-label={avatar.label}
-              aria-pressed={chosen}
-              onClick={() => {
-                impact("light");
-                setPicture({ kind: "default", id: avatar.id });
-              }}
-              disabled={busy}
-              className={cn(
-                "aspect-square overflow-hidden rounded-full outline-none transition-transform",
-                "hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                chosen && "ring-2 ring-primary ring-offset-2 ring-offset-background",
-              )}
-            >
-              {/* Eagerly, deliberately. These are twelve small files out of the
-                  app's own bundle, and lazily the last ones never loaded at
-                  all: the grid sits at the bottom of a scroll container and the
-                  observer never fired for the cells below the fold, leaving
-                  empty circles where the pictures should be. */}
-              <img
-                src={defaultAvatarUrl(avatar.id)}
-                alt=""
-                decoding="async"
-                className="size-full object-cover"
-              />
-            </button>
-          );
-        })}
-      </div>
+          a thumb, and as many across as there is room for.
+
+          Its own provider rather than App's, which is an ancestor only in the
+          running app: this screen's tests render it on its own, and a Radix
+          `Tooltip` with no provider above it throws rather than degrading. */}
+      <TooltipProvider delayDuration={600}>
+        <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
+          {DEFAULT_AVATARS.map((avatar) => {
+            const chosen = picture.kind === "default" && picture.id === avatar.id;
+            return (
+              /* The label is what the picture is and who drew it, and the grid
+                 is pictures with no room for text beside them — so hovering a
+                 cell for a moment is the one way to read the credit with eyes
+                 rather than a screen reader. Hover only, by Radix's own
+                 behaviour: a tap must choose the avatar, not explain it. */
+              <Tooltip key={avatar.id}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={avatar.label}
+                    aria-pressed={chosen}
+                    onClick={() => {
+                      impact("light");
+                      setPicture({ kind: "default", id: avatar.id });
+                    }}
+                    disabled={busy}
+                    className={cn(
+                      "aspect-square overflow-hidden rounded-full outline-none transition-transform",
+                      "hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                      chosen && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+                    )}
+                  >
+                    {/* Eagerly, deliberately. These are twelve small files out
+                        of the app's own bundle, and lazily the last ones never
+                        loaded at all: the grid sits at the bottom of a scroll
+                        container and the observer never fired for the cells
+                        below the fold, leaving empty circles where the pictures
+                        should be. */}
+                    <img
+                      src={defaultAvatarUrl(avatar.id)}
+                      alt=""
+                      decoding="async"
+                      className="size-full object-cover"
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{avatar.label}</TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+      </TooltipProvider>
 
       <div className="w-full space-y-2">
         <Button

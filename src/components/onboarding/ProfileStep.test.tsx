@@ -4,11 +4,13 @@
  * with and no way to notice it went to the wrong place. The tests here pin the
  * three things that makes load-bearing: it signs only for the key signup just
  * minted, a preset costs exactly one upload however many were tried, and
- * leaving without saying anything says nothing.
+ * leaving without saying anything says nothing. One more is about the presets
+ * themselves: an avatar somebody submitted is credited in its label, and the
+ * hover tooltip is the only place that credit is legible.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
@@ -72,12 +74,12 @@ describe("signup profile step", () => {
     // fetched and pushed for whichever one is still chosen at Continue.
     fireEvent.click(screen.getByRole("button", { name: "Cat" }));
     fireEvent.click(screen.getByRole("button", { name: "Fox" }));
-    fireEvent.click(screen.getByRole("button", { name: "Ghost" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dragon by gravestoneghost" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalledTimes(1));
     expect(h.uploadFile).toHaveBeenCalledTimes(1);
-    expect(h.uploadFile.mock.calls[0][0].name).toBe("ghost.png");
+    expect(h.uploadFile.mock.calls[0][0].name).toBe("dragon.png");
 
     const published = h.publishEvent.mock.calls[0][0];
     expect(published.kind).toBe(0);
@@ -86,6 +88,26 @@ describe("signup profile step", () => {
       picture: "https://blossom.example/abc",
     });
     expect(onFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the artist's name when a preset is hovered for a moment", async () => {
+    // The credit for a submitted avatar is carried by the label and rendered
+    // nowhere, so the tooltip is the only way to read it without a screen
+    // reader. It has to wait for the delay: appearing instantly would put a
+    // popover under the pointer every time it crossed the grid.
+    vi.useFakeTimers();
+    try {
+      renderStep({ expectedPubkey: PUBKEY, onFinish: vi.fn() });
+      const preset = screen.getByRole("button", { name: "Dragon by gravestoneghost" });
+
+      fireEvent.pointerMove(preset, { pointerType: "mouse" });
+      expect(screen.queryByRole("tooltip")).toBeNull();
+
+      act(() => void vi.advanceTimersByTime(600));
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Dragon by gravestoneghost");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses to sign when the active account is not the one signup created", async () => {

@@ -7,11 +7,12 @@
  * a face, and the pictures are ordinary enough that nobody is stuck with a
  * personality they did not choose.
  *
- * These are Signal's, rendered out of the vector drawables in Signal-Android
- * (`res/drawable/ic_avatar_*.xml`) onto the pastel backgrounds its own
- * `AvatarColor` table pairs them with, in the order `Avatars.kt` lists them —
- * all but the toucan, which is eempo's, and whose `label` credits them where
- * only a screen reader reads it (the grid shows pictures and no text).
+ * They started out as Signal's, rendered out of the vector drawables in
+ * Signal-Android (`res/drawable/ic_avatar_*.xml`) onto the pastel backgrounds
+ * its own `AvatarColor` table pairs them with, in the order `Avatars.kt` lists
+ * them. Those are being replaced one at a time with submitted artwork, and the
+ * `PLACEHOLDER` comment on a row is what says which ones are still Signal's —
+ * a replaced row carries its artist in the `label` instead.
  *
  * LICENSING, because the files are not Soapbox's: Signal-Android is GPL-3.0,
  * which AGPL-3.0-or-later may be combined with — so the web and F-Droid builds
@@ -32,23 +33,27 @@
 export interface DefaultAvatar {
   /** The file under `public/avatars`. */
   id: string;
-  /** What it is a picture of — the label read out to a screen reader. */
+  /**
+   * What it is a picture of, and who drew it where that is known — the label
+   * read out to a screen reader, and the one shown on hover. Nothing renders
+   * it as ordinary text, so it is the only place the credit appears.
+   */
   label: string;
 }
 
 export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
-  { id: "abstract-01", label: "Green face" },
-  { id: "abstract-02", label: "Blue face" },
-  { id: "abstract-03", label: "Orange face" },
-  { id: "cat", label: "Cat" },
-  { id: "dog", label: "Dog" },
-  { id: "fox", label: "Fox" },
+  { id: "abstract-01", label: "Green face" }, // PLACEHOLDER, replace with an artist submission
+  { id: "abstract-02", label: "Blue face" }, // PLACEHOLDER, replace with an artist submission
+  { id: "abstract-03", label: "Orange face" }, // PLACEHOLDER, replace with an artist submission
+  { id: "cat", label: "Cat" }, // PLACEHOLDER, replace with an artist submission
+  { id: "dog", label: "Dog" }, // PLACEHOLDER, replace with an artist submission
+  { id: "fox", label: "Fox" }, // PLACEHOLDER, replace with an artist submission
   { id: "tucan", label: "Toucan by eempo" },
-  { id: "sloth", label: "Sloth" },
-  { id: "dinosaur", label: "Dinosaur" },
-  { id: "pig", label: "Pig" },
-  { id: "incognito", label: "Incognito" },
-  { id: "ghost", label: "Ghost" },
+  { id: "sloth", label: "Sloth" }, // PLACEHOLDER, replace with an artist submission
+  { id: "dinosaur", label: "Dinosaur" }, // PLACEHOLDER, replace with an artist submission
+  { id: "pig", label: "Pig" }, // PLACEHOLDER, replace with an artist submission
+  { id: "incognito", label: "Incognito" }, // PLACEHOLDER, replace with an artist submission
+  { id: "dragon", label: "Dragon by gravestoneghost" },
 ];
 
 /**
