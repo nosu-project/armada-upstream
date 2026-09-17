@@ -1771,12 +1771,12 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
   return (
     <button
       type="button"
-      className="block my-1.5 rounded-lg overflow-hidden max-w-sm cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="block my-1.5 rounded overflow-hidden max-w-sm cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       {...menu}
     >
       <div
         className={cn(
-          "relative rounded-lg overflow-hidden",
+          "relative rounded overflow-hidden",
           box && "w-full",
           !loaded && !image.blurhash && "bg-muted",
         )}
@@ -1799,7 +1799,7 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
             // long-press and cancels it (a buzz, no menu) — off on both axes.
             draggable={false}
             className={cn(
-              "block rounded-lg hover:opacity-90 transition-opacity [-webkit-user-drag:none]",
+              "block rounded hover:opacity-90 transition-opacity [-webkit-user-drag:none]",
               // With a reserved box the image fills it (the box already carries
               // its aspect ratio, so object-cover cannot crop); without one it
               // falls back to natural size under the same max-w/max-h caps.
@@ -1857,7 +1857,7 @@ function GridImage({
   return (
     <button
       type="button"
-      className="relative aspect-square rounded-lg overflow-hidden bg-muted cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="relative aspect-square rounded overflow-hidden bg-muted cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       {...menu}
     >
       {failed ? (
