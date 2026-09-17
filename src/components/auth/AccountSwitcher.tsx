@@ -22,11 +22,8 @@ import { ProfileShareDialog } from '@/components/dialogs/ProfileShareDialog';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 import { StatusDialog } from '@/components/dialogs/StatusDialog';
 import { WalletDialog } from '@/components/dialogs/WalletDialog';
-import { clearRenderedPlaintext } from '@/hooks/dmRenderCache';
-import { purgeClientStorage } from '@/lib/purgeClientStorage';
-import { clearWalletStorage } from '@/lib/walletStorage';
-import { runBeforeAccountExit } from '@/lib/beforeAccountExit';
-import { beginCrossTabAccountExit } from '@/lib/crossTabAccountExit';
+import { beginAccountExit } from '@/components/accountExitState';
+import { finalLogout } from '@/lib/finalLogout';
 import { useAppContext } from '@/hooks/useAppContext';
 import { cn } from '@/lib/utils';
 
@@ -62,7 +59,7 @@ function AccountName({ account }: { account: Account }) {
 }
 
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
-  const { currentUser, otherUsers, isLoading, removeLogin } = useLoggedInAccounts();
+  const { currentUser, otherUsers, isLoading } = useLoggedInAccounts();
   // Both of these reload the app — see `switchAccount`. Anything that changes
   // which account is `logins[0]` has to, or the incoming account inherits the
   // outgoing one's caches.
@@ -97,27 +94,21 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     // and hard-redirect to the landing page so a fresh logout holds onto
     // nothing; otherwise we just drop this account and keep the others' caches.
     const isLastAccount = otherUsers.length === 0;
-    // Use setTimeout to ensure the dropdown closes before removing login
+    // Raise the full-screen exit overlay NOW, before the dropdown-close tick and
+    // any of the bounded teardown below — otherwise the press reads as no press
+    // until the eventual reload. Synchronous on click; the reload clears it.
+    beginAccountExit(isLastAccount ? 'logout' : 'switch', currentUser.pubkey);
+    // Use setTimeout to ensure the dropdown closes before the teardown starts.
     setTimeout(() => {
-      // The removed account's NWC wallet secrets must not outlive it (the
-      // full purge below only runs on the final logout).
-      clearWalletStorage(currentUser.pubkey);
-      clearRenderedPlaintext();
       if (isLastAccount) {
-        // The gateway records outlive every local database, and only the
-        // outgoing signer can delete them. Give notification controllers their
-        // bounded cleanup window BEFORE purge erases the durable prune ids.
-        beginCrossTabAccountExit(currentUser.pubkey, null);
-        void runBeforeAccountExit('final-logout').finally(() => {
-          removeLogin(currentUser.id);
-          void purgeClientStorage(currentUser.pubkey)
-            .finally(() => window.location.assign('/'));
-        });
+        // Wipe everything and land on the login screen, on a guaranteed,
+        // bounded deadline — see finalLogout.
+        void finalLogout(currentUser.pubkey);
       } else {
         // Another account is about to become active, which is an account
         // SWITCH — so it takes the switch path, reload included, rather than
         // inheriting this account's caches in place. `signOut` persists the
-        // remaining logins itself; `removeLogin`'s dispatch would only race it.
+        // remaining logins itself and raises the same overlay.
         signOut(currentUser.id);
       }
     }, 0);

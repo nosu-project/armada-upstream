@@ -16,6 +16,18 @@ It also adds desktop-native behavior the web build can't:
 - **System tray** — close-to-tray, a Show / Quit menu, click-to-toggle, an
   unread badge (tray tooltip + macOS dock + Windows taskbar overlay), and a
   `--hidden`/`--minimized` flag to launch minimized (for autostart).
+- **Launch at login** — a Settings → Desktop toggle registers the app to start
+  when the user logs in (`app.setLoginItemSettings`; native on Windows/macOS, a
+  `~/.config/autostart` entry on Linux), with a "start minimized" flag that
+  passes `--hidden` so it comes up in the tray. `autoLaunch.js` wraps it; the OS
+  holds the registration, the hidden flag is mirrored into userData because it
+  doesn't round-trip through every platform's login-item store. Under a Linux
+  AppImage the entry points at `$APPIMAGE`, not the transient extracted binary.
+- **Resume-from-suspend recovery** — across a sleep/resume the relay WebSockets
+  die but Chromium often fires no `close`, so they read OPEN while dead and the
+  renderer never reconnects. `powerMonitor`'s `resume`/`unlock-screen` are
+  relayed to the renderer (`armada:resume`), which force-rebuilds every pool
+  socket (see `NostrProvider`) instead of waiting for a restart.
 - **Screen and application sharing** — the in-app picker can switch the active
   screen/window without ending the share. Windows captures system audio minus
   Armada's own playback (Chromium's `loopbackWithoutChrome` process loopback,

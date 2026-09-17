@@ -20,6 +20,7 @@ import { normalizeRelayUrl } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { logRelayOpen } from "@/lib/relayConnectionLog";
 import { emitRelayReopened } from "@/lib/relayReopen";
+import { onDesktopResume } from "@/lib/desktop";
 import { logSync } from "@/lib/syncLog";
 import {
   noteAuthResult,
@@ -406,6 +407,28 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     }
   };
 
+  // Force every live pool socket to reconnect. websocket-ts treats close() as
+  // final (closedByUser) and NRelay1 only builds a replacement on its next
+  // send — which a relay carrying only standing subscriptions may never issue —
+  // so wake() immediately. The socket swap is watched (watchSocketReopen), so
+  // the reopen resets each relay's NIP-42 auth state like any other reconnect.
+  // An idle-closed socket carries no session; waking it here would open a
+  // connection nothing asked for (its next wake re-authenticates anyway).
+  const reconnectAllRelays = (reason: string) => {
+    for (const [url, entry] of openRelaysRef.current) {
+      const internals = entry.relay as unknown as { closedByUser: boolean; wake(): void };
+      if (internals.closedByUser || entry.relay.socket.closedByUser) continue;
+      logSync("auth", `${reason} — reconnecting ${url}`);
+      entry.challenge = undefined; // the old socket's nonce dies with it
+      try {
+        entry.relay.socket.close();
+        internals.wake();
+      } catch {
+        // Socket already dead — its next reconnect re-authenticates anyway.
+      }
+    }
+  };
+
 
   // The pool is constructed before the signer memo below. The `open()`
   // callback only reads the refs lazily (when a relay sends an AUTH
@@ -644,26 +667,20 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     const prev = prevPubkeyRef.current;
     prevPubkeyRef.current = pubkey;
     if (!prev || !pubkey || prev === pubkey) return;
-    for (const [url, entry] of openRelaysRef.current) {
-      const internals = entry.relay as unknown as { closedByUser: boolean; wake(): void };
-      // An idle-closed socket carries no session; waking it here would open a
-      // connection nothing asked for (its next wake re-authenticates anyway).
-      if (internals.closedByUser || entry.relay.socket.closedByUser) continue;
-      logSync("auth", `account switched — reconnecting ${url} to re-authenticate`);
-      entry.challenge = undefined; // the old socket's nonce dies with it
-      try {
-        entry.relay.socket.close();
-        // websocket-ts treats close() as final (closedByUser) and NRelay1 only
-        // builds a replacement socket on its next send — which a relay carrying
-        // only standing subscriptions may never issue. Wake it now; the socket
-        // swap is watched (watchSocketReopen), so the reopen resets the relay's
-        // auth state like any other reconnect.
-        internals.wake();
-      } catch {
-        // Socket already dead — its next reconnect re-authenticates anyway.
-      }
-    }
+    reconnectAllRelays("account switched");
   }, [currentLogin?.pubkey]);
+
+  // Across a suspend/resume the OS freezes the process and the relay sockets'
+  // TCP connections die, but Chromium typically fires no `close` for the frozen
+  // WebSocket — it reads OPEN while carrying no traffic, so the wire's re-REQ
+  // self-heal writes into a dead pipe and messages stall until a restart. The
+  // desktop shell relays an OS resume/unlock signal (there is none inside the
+  // sandboxed renderer); rebuild every socket so a fresh connection re-issues
+  // the standing subscriptions. No-op on the web and in older shells.
+  useEffect(() => {
+    return onDesktopResume(() => reconnectAllRelays("resumed from suspend"));
+    // Reads only refs and a stable render-body closure; provider-lifetime.
+  }, []);
 
   // Wrap the pool in the batching proxy (combines profile/id lookups into single REQs).
   const batcher = useRef<NostrBatcher | undefined>(undefined);

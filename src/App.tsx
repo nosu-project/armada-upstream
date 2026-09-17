@@ -9,6 +9,7 @@ import { lazy, Suspense } from "react";
 
 import { ensureAndroidBackListener } from "@/hooks/useAndroidBack";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { AccountExitGate } from "@/components/AccountExitGate";
 import { ActiveAccountSync } from "@/components/ActiveAccountSync";
 import { AppProvider } from "@/components/AppProvider";
 import { ArmadaDBProvider } from "@/components/ArmadaDBProvider";
@@ -117,6 +118,11 @@ export function App() {
           <QueryClientProvider client={queryClient}>
             <NostrLoginProvider storageKey={LOGIN_STORAGE_KEY} storage={secureStorage}>
               <ActiveAccountSync />
+              {/* The account-exit overlay lives ABOVE the signed-in gate: a
+                  logout/switch removes the login moments before it reloads, and
+                  a gate mounted below would unmount with it and flash the app
+                  back for the sliver before the reload lands. */}
+              <AccountExitGate />
               <NostrProvider>
                 <WalletProvider>
                   <TooltipProvider>

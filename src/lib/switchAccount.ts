@@ -1,7 +1,12 @@
 import { secureStorage } from "@/lib/secureStorage";
 import { getActivePubkey, setActivePubkey } from "@/lib/activeAccount";
-import { runBeforeAccountExit } from "@/lib/beforeAccountExit";
+import {
+  EXIT_NAV_DEADLINE_MS,
+  EXIT_TEARDOWN_MS,
+  runBeforeAccountExit,
+} from "@/lib/beforeAccountExit";
 import { beginCrossTabAccountExit } from "@/lib/crossTabAccountExit";
+import { beginAccountExit, exitDone, exitStep } from "@/components/accountExitState";
 
 import type { NLoginType } from "@nostrify/react/login";
 
@@ -12,6 +17,16 @@ import type { NLoginType } from "@nostrify/react/login";
  * nowhere the next boot reads.
  */
 export const LOGIN_STORAGE_KEY = "armada:login";
+
+/** Wrap a navigation so the deadline and the teardown can both call it, once. */
+function navigateOnce(destination: string): () => void {
+  let went = false;
+  return () => {
+    if (went) return;
+    went = true;
+    window.location.assign(destination);
+  };
+}
 
 /** The login list with `id` moved to the front — `logins[0]` is the active one. */
 export function reorderLogins(
@@ -52,6 +67,18 @@ async function persistAndReload(
   destination: string,
 ): Promise<void> {
   const outgoingPubkey = getActivePubkey();
+  // Raise the full-screen exit overlay before the bounded teardown below —
+  // every caller here (switch, add-and-switch, sign-out) ends in a hard reload,
+  // and until it lands the app would otherwise sit silently on the outgoing
+  // account's screen. Idempotent: a caller that already raised it (the account
+  // menu) wins, seed and all.
+  beginAccountExit("switch", outgoingPubkey ?? "");
+  // Navigate on an absolute deadline no matter what the teardown does, so a
+  // stalled handler or a silent native bridge can never trap the switch on the
+  // old screen. The teardown races it and, normally, wins.
+  const go = navigateOnce(destination);
+  const deadline = setTimeout(go, EXIT_NAV_DEADLINE_MS);
+
   // Fence every tab before the leader performs any origin-global endpoint or
   // worker-config teardown. Followers wait for the active marker and reload;
   // only this tab runs destructive before-exit handlers.
@@ -59,8 +86,10 @@ async function persistAndReload(
   // Gateway/native records are signed/configured by the OUTGOING account.
   // Give their controllers a bounded cleanup window before changing the
   // active marker or hard-reloading away the only session that can remove them.
-  await runBeforeAccountExit("account-change");
+  exitStep("teardown", "closing secure channel");
+  await runBeforeAccountExit("account-change", EXIT_TEARDOWN_MS);
 
+  exitStep("persist", "handing over identity");
   let persisted = false;
   try {
     await secureStorage.setItem(LOGIN_STORAGE_KEY, JSON.stringify(logins));
@@ -75,7 +104,9 @@ async function persistAndReload(
   // the endpoint that the pre-exit safety pass deliberately retired.
   setActivePubkey(persisted ? (logins[0]?.pubkey ?? null) : outgoingPubkey);
 
-  window.location.assign(destination);
+  exitDone("re-jacking in");
+  clearTimeout(deadline);
+  go();
 }
 
 /** Make `id` the active account and reload the app at the root. */

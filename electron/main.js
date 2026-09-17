@@ -91,6 +91,10 @@ const {
   writeLinuxVideoEncoderMode,
 } = require("./linuxVideoAcceleration");
 const {
+  getLaunchSettings,
+  setLaunchSettings,
+} = require("./autoLaunch");
+const {
   createHevcScreenShareController,
   detectCachedHevcCapability,
 } = require("./hevcScreenShare");
@@ -1707,6 +1711,23 @@ function installIpc() {
     }
   });
 
+  // Launch-at-login. The OS holds whether the app is registered; the
+  // start-minimized flag is mirrored into userData (see autoLaunch.js).
+  ipcMain.handle("armada:get-launch-settings", () =>
+    getLaunchSettings({ appImpl: app, userDataPath: app.getPath("userData") }),
+  );
+  ipcMain.handle("armada:set-launch-settings", (_event, settings) => {
+    try {
+      return setLaunchSettings(settings ?? {}, {
+        appImpl: app,
+        userDataPath: app.getPath("userData"),
+      });
+    } catch (error) {
+      console.warn("failed to save launch settings", error);
+      return getLaunchSettings({ appImpl: app, userDataPath: app.getPath("userData") });
+    }
+  });
+
   // OS-level microphone access status. On macOS/Windows this reflects the
   // system privacy setting (not our in-app permission handler); on Linux it's
   // always "granted". Values: "not-determined" | "granted" | "denied" |
@@ -1824,6 +1845,20 @@ if (!gotLock) {
     // Fail closed instead of leaving the microphone live after wake/unlock.
     powerMonitor.on("suspend", () => pushToTalk.cancelPress());
     powerMonitor.on("lock-screen", () => pushToTalk.cancelPress());
+    // Across a suspend/resume the OS freezes the process: TCP connections die
+    // but Chromium usually delivers no `close` for the frozen WebSocket, so the
+    // relay sockets read OPEN while carrying no traffic and the renderer's
+    // self-heal (which re-REQs on the same dead socket) never recovers. There
+    // is no OS-level resume signal inside the sandboxed renderer, so relay it
+    // from here; the renderer force-rebuilds every pool socket (see
+    // NostrProvider). `unlock-screen` is not resume, but a machine that slept
+    // on a lock screen surfaces the same dead sockets on unlock.
+    const notifyResume = () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send("armada:resume");
+    };
+    powerMonitor.on("resume", notifyResume);
+    powerMonitor.on("unlock-screen", notifyResume);
     // Create the window BEFORE probing the tray. On Linux that probe is a
     // chain of gdbus round trips with 1.5s timeouts each, so a session whose
     // D-Bus is slow or wedged would otherwise show no window at all for

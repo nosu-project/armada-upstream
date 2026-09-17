@@ -11,17 +11,13 @@ import { generateSecretKey, nip19 } from "nostr-tools";
 
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { useAppContext } from "@/hooks/useAppContext";
-import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { Nip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl } from "@/lib/platform";
-import { purgeClientStorage } from "@/lib/purgeClientStorage";
 import { addAndSwitchAccount, signOutAccount } from "@/lib/switchAccount";
-import { clearWalletStorage } from "@/lib/walletStorage";
-import { clearEsploraStorage } from "@/lib/esploraStorage";
+import { finalLogout } from "@/lib/finalLogout";
 import { logSync } from "@/lib/syncLog";
-import { runBeforeAccountExit } from "@/lib/beforeAccountExit";
-import { beginCrossTabAccountExit } from "@/lib/crossTabAccountExit";
+import { beginAccountExit } from "@/components/accountExitState";
 
 export type { NostrConnectParams, NostrConnectStatus };
 export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/react/login";
@@ -90,7 +86,7 @@ async function adoptBunkerRelays(signer: Nip46Signer, pairingRelays: string[]): 
 }
 
 export function useLoginActions() {
-  const { logins, addLogin, setLogin, removeLogin } = useNostrLogin();
+  const { logins, addLogin, setLogin } = useNostrLogin();
   const { config } = useAppContext();
 
   // Add a login and promote it to be the current user.
@@ -255,37 +251,20 @@ export function useLoginActions() {
     // Log out the current user
     async logout(): Promise<void> {
       const login = logins[0];
-      if (login) {
-        // The removed account's NWC wallet secrets must not outlive it —
-        // purgeClientStorage below only runs on the FINAL logout.
-        clearWalletStorage(login.pubkey);
-        clearEsploraStorage(login.pubkey);
-      }
-      // Drop the in-memory DM render memo so it can't be read after logout or
-      // by the next account. (The persistent decrypt cache is per-pubkey and is
-      // wiped by purgeClientStorage on the final logout below.)
-      clearRenderedPlaintext();
-
-      // If that was the last identity, wipe all client-side persistence (event
-      // cache, drafts, read-state, relay-info, theme, added servers, decrypted
-      // images…) and hard-redirect to the landing page so nothing is held onto
-      // and the next session boots from clean storage.
+      // If that was the last identity, wipe all client-side persistence and
+      // land on the login screen — on a guaranteed, bounded deadline, with the
+      // logged-out state made durable up front. See finalLogout; it raises the
+      // exit overlay itself, synchronously.
       if (logins.length <= 1) {
-        // Push/native registrations outlive local storage and need the outgoing
-        // signer/config to remove them. This is bounded and best-effort, so a
-        // broken gateway can never trap logout.
-        beginCrossTabAccountExit(login?.pubkey, null);
-        await runBeforeAccountExit("final-logout");
-        if (login) removeLogin(login.id);
-        await purgeClientStorage(login?.pubkey);
-        window.location.assign("/");
+        await finalLogout(login?.pubkey ?? null);
         return;
       }
       // Otherwise another account is about to become active, which is an
       // account SWITCH — so it takes the switch path, reload included, rather
       // than leaving this account's caches for the next one to read. That path
-      // persists the remaining logins itself; `removeLogin`'s dispatch would
-      // only race it.
+      // persists the remaining logins itself and raises the same overlay; the
+      // synchronous flip here is just for instant feedback before the await.
+      beginAccountExit("switch", login?.pubkey ?? "");
       if (login) await signOutAccount(logins, login.id);
     },
   };

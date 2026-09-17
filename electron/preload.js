@@ -89,6 +89,29 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   /** { platform, version } of the desktop shell. */
   getInfo: () => ipcRenderer.invoke("armada:platform"),
 
+  /**
+   * Subscribe to the shell's power-resume signal (wake from suspend, or unlock
+   * of a machine that slept locked). The relay WebSockets are typically dead
+   * across a suspend without Chromium firing a `close`, so the handler force-
+   * rebuilds the pool sockets. Returns an unsubscribe.
+   */
+  onResume: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = () => handler();
+    ipcRenderer.on("armada:resume", listener);
+    return () => ipcRenderer.removeListener("armada:resume", listener);
+  },
+
+  /**
+   * Read the "launch Armada at login" state: { supported, openAtLogin,
+   * openAsHidden }. `openAsHidden` starts the app minimized to the tray.
+   */
+  getLaunchSettings: () => ipcRenderer.invoke("armada:get-launch-settings"),
+
+  /** Enable/disable launch-at-login and the start-minimized flag. */
+  setLaunchSettings: (settings) =>
+    ipcRenderer.invoke("armada:set-launch-settings", settings),
+
   /** Linux WebRTC encoder policy. Changes take effect after an app restart. */
   getVideoEncoderMode: () => ipcRenderer.invoke("armada:video-encoder-mode"),
   setVideoEncoderMode: (mode) => ipcRenderer.invoke("armada:set-video-encoder-mode", mode),

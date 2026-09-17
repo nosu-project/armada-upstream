@@ -11,6 +11,7 @@ import {
   Link2,
   MessageSquareLock,
   Mic,
+  Monitor,
   Palette,
   ScrollText,
   Search,
@@ -37,6 +38,7 @@ import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
+import { DesktopSettings } from "@/components/settings/DesktopSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
@@ -57,6 +59,7 @@ import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import { isDesktop } from "@/lib/desktop";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
@@ -83,6 +86,7 @@ type SectionId =
   | "notifications"
   | "muted"
   | "appearance"
+  | "desktop"
   | "voice"
   | "servers"
   | "app-relays"
@@ -404,6 +408,12 @@ export function SettingsPage() {
     }
     const appItems: NavItem[] = [
       { id: "appearance", title: "Appearance", icon: Palette },
+    ];
+    // Launch-at-login and start-minimized are Electron-shell settings.
+    if (isDesktop()) {
+      appItems.push({ id: "desktop", title: "Desktop", icon: Monitor });
+    }
+    appItems.push(
       { id: "voice", title: "Voice", icon: Mic },
       { id: "servers", title: "Servers", icon: Server },
       { id: "app-relays", title: "App relays", icon: Waypoints },
@@ -413,7 +423,7 @@ export function SettingsPage() {
       { id: "media", title: "Media servers", icon: Image },
       { id: "links", title: "Links", icon: Link2 },
       { id: "discover", title: "Discover", icon: Compass },
-    ];
+    );
     if (user) {
       appItems.push({ id: "emojis", title: "Emoji packs", icon: Smile });
     }
@@ -475,6 +485,8 @@ export function SettingsPage() {
             <ThemeSelector />
           </SettingsRow>
         );
+      case "desktop":
+        return <DesktopSettings />;
       case "servers":
         return (
           <>
