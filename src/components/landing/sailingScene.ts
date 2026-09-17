@@ -69,7 +69,10 @@ function buildShip() {
   jibGeometry.computeVertexNormals();
   mesh(jibGeometry, cream, ship);
 
-  const flag = mesh(new THREE.PlaneGeometry(1.9, 0.7, 4, 1), rose, ship, 0.9, 11.7, 0);
+  const flagGeometry = new THREE.PlaneGeometry(1.9, 0.7, 10, 2);
+  flagGeometry.translate(0.95, 0, 0);
+  flagGeometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+  const flag = mesh(flagGeometry, rose, ship, 0, 11.7, 0);
   return { ship, mainsail, flag };
 }
 
@@ -326,7 +329,7 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
   const cameraTarget = new THREE.Vector3();
   const cameraPosition = new THREE.Vector3();
   const lookPosition = new THREE.Vector3();
-  let time = 0, lastTime = 0, frame = 0;
+  let time = 0, lastTime = 0, frame = 0, flagPhase = 0;
   const render = (dt: number) => {
     time += dt;
     const throttle = (keys.has("w") || keys.has("arrowup") ? 1 : 0)
@@ -339,7 +342,22 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
     ship.position.set(vessel.x, Math.sin(time * 1.3) * 0.22, vessel.z);
     ship.rotation.set(Math.sin(time * 0.9) * 0.025, h, Math.sin(time * 1.2) * 0.035 + rudder * vessel.speed * 0.002, "YXZ");
     mainsail.scale.z = 1 + Math.sin(time * 2) * 0.06;
-    flag.rotation.y = Math.sin(time * 4) * 0.2;
+    // Travelling ripples keep the hoist attached to the mast while the free
+    // edge snaps in the wind. Integrate phase so speed changes stay continuous.
+    const wind = Math.min(1, Math.abs(vessel.speed) / 20);
+    flagPhase += dt * (5 + wind * 25);
+    const flagPositions = flag.geometry.attributes.position;
+    const flagUvs = flag.geometry.attributes.uv;
+    for (let i = 0; i < flagPositions.count; i++) {
+      const u = flagUvs.getX(i), v = flagUvs.getY(i);
+      const ripple = flagPhase - u * 8;
+      flagPositions.setY(i, (v - 0.5) * 0.7 + u * (0.015 + wind * 0.16) * Math.sin(ripple));
+      flagPositions.setZ(i, u * (0.04 + wind * 0.5)
+        * (Math.sin(ripple) + 0.25 * Math.sin(ripple * 1.7 + v * 2)));
+    }
+    flagPositions.needsUpdate = true;
+    flag.geometry.computeVertexNormals();
+    flag.rotation.y = Math.sin(flagPhase * 0.6) * (0.06 + wind * 0.2);
     const distance = camera.aspect < 1 ? 42 : 34;
     cameraPosition.set(vessel.x + Math.sin(h + 0.22) * distance, 19, vessel.z + Math.cos(h + 0.22) * distance);
     const follow = dt === 0 ? 1 : 1 - Math.exp(-dt * 2);
