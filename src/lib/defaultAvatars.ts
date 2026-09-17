@@ -42,7 +42,7 @@ export interface DefaultAvatar {
 }
 
 export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
-  { id: "abstract-01", label: "Green face" }, // PLACEHOLDER, replace with an artist submission
+  { id: "skull", label: "Skull by Julian Cela" },
   { id: "abstract-02", label: "Blue face" }, // PLACEHOLDER, replace with an artist submission
   { id: "abstract-03", label: "Orange face" }, // PLACEHOLDER, replace with an artist submission
   { id: "cat", label: "Cat" }, // PLACEHOLDER, replace with an artist submission
