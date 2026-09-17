@@ -14,7 +14,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
-import { DEFAULT_AVATARS, defaultAvatarFile, defaultAvatarUrl } from "@/lib/defaultAvatars";
+import { DEFAULT_AVATARS, type DefaultAvatar } from "@/lib/defaultAvatars";
 import { impact } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
  * past it. Both are optional and the screen says so — but an account with
  * neither is the account nobody can tell apart from every other new one, and a
  * network of grey circles reads as an empty network even when it is full,
- * which is why there are twelve pictures on the screen and picking one is a
+ * which is why there is a grid of pictures on the screen and picking one is a
  * single tap. Everything else stays in Settings, where the person filling it
  * in has a reason to.
  *
@@ -46,8 +46,11 @@ import { cn } from "@/lib/utils";
 type Picture =
   /** Nothing yet. */
   | { kind: "none" }
-  /** One of the twelve. Not uploaded until the user is finished choosing. */
-  | { kind: "default"; id: string }
+  /**
+   * One of the presets, which is already a URL on a Blossom server — so
+   * trying all of them costs nothing and publishing one uploads nothing.
+   */
+  | { kind: "default"; avatar: DefaultAvatar }
   /** Their own photograph, already on a Blossom server. */
   | { kind: "uploaded"; url: string };
 
@@ -81,7 +84,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
   /** What to draw in the circle at the top, before anything is published. */
   const preview =
     picture.kind === "default"
-      ? defaultAvatarUrl(picture.id)
+      ? picture.avatar.url
       : picture.kind === "uploaded"
         ? picture.url
         : undefined;
@@ -153,10 +156,10 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       if (picture.kind === "uploaded") {
         pictureUrl = picture.url;
       } else if (picture.kind === "default") {
-        // Uploaded now rather than on the tap that chose it, so that trying
-        // all twelve costs one upload instead of twelve.
-        const [[, url]] = await uploadFile(await defaultAvatarFile(picture.id));
-        pictureUrl = url;
+        // Published as it stands. A preset is a blob on a Blossom server, and
+        // uploading a copy of one would only mean a second URL for the same
+        // picture that could come to disagree with it.
+        pictureUrl = picture.avatar.url;
       }
 
       const metadata: Record<string, string> = {};
@@ -259,7 +262,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       <TooltipProvider delayDuration={600}>
         <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
           {DEFAULT_AVATARS.map((avatar) => {
-            const chosen = picture.kind === "default" && picture.id === avatar.id;
+            const chosen = picture.kind === "default" && picture.avatar.id === avatar.id;
             return (
               /* The label is what the picture is and who drew it, and the grid
                  is pictures with no room for text beside them — so hovering a
@@ -274,7 +277,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
                     aria-pressed={chosen}
                     onClick={() => {
                       impact("light");
-                      setPicture({ kind: "default", id: avatar.id });
+                      setPicture({ kind: "default", avatar });
                     }}
                     disabled={busy}
                     className={cn(
@@ -283,14 +286,13 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
                       chosen && "ring-2 ring-primary ring-offset-2 ring-offset-background",
                     )}
                   >
-                    {/* Eagerly, deliberately. These are twelve small files out
-                        of the app's own bundle, and lazily the last ones never
+                    {/* Eagerly, deliberately. Lazily the last ones never
                         loaded at all: the grid sits at the bottom of a scroll
                         container and the observer never fired for the cells
                         below the fold, leaving empty circles where the pictures
                         should be. */}
                     <img
-                      src={defaultAvatarUrl(avatar.id)}
+                      src={avatar.url}
                       alt=""
                       decoding="async"
                       className="size-full object-cover"

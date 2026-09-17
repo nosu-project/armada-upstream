@@ -3,10 +3,12 @@
  * old, which is the one publish in the app with no previous version to merge
  * with and no way to notice it went to the wrong place. The tests here pin the
  * three things that makes load-bearing: it signs only for the key signup just
- * minted, a preset costs exactly one upload however many were tried, and
- * leaving without saying anything says nothing. One more is about the presets
- * themselves: an avatar somebody submitted is credited in its label, and the
- * hover tooltip is the only place that credit is legible.
+ * minted, a preset is published as the Blossom URL it already has rather than
+ * copied, and leaving without saying anything says nothing. Two more are about
+ * the presets themselves: every one of them is such a URL — none of this
+ * artwork is in the bundle or the repository — and the submitted ones lead the
+ * grid with their artist credited in the label, where the hover tooltip is the
+ * only place that credit is legible.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -37,6 +39,7 @@ vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
 vi.mock("@/lib/haptics", () => ({ impact: vi.fn() }));
 
 import { ProfileStepBody } from "@/components/onboarding/ProfileStep";
+import { DEFAULT_AVATARS } from "@/lib/defaultAvatars";
 
 const PUBKEY = "a".repeat(64);
 
@@ -56,38 +59,64 @@ beforeEach(() => {
   h.uploadFile.mockClear();
   h.toast.mockClear();
   h.user = { pubkey: PUBKEY };
-  // The presets are read back out of the bundle so what lands in the event is
-  // a Blossom URL, not a path on this deployment.
+  // Nothing here may reach the network: a preset is published by URL, so the
+  // step never fetches a picture and never uploads one.
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }))),
+    vi.fn(async () => {
+      throw new Error("the profile step fetched a picture");
+    }),
   );
 });
 
 describe("signup profile step", () => {
-  it("uploads a chosen preset once, however many were tried", async () => {
+  it("publishes the preset's own URL, uploading nothing however many were tried", async () => {
+    // Every preset is already a blob on a Blossom server at a content
+    // addressed URL. Copying one at signup would put a second copy of it on
+    // whatever server this account happens to be pointed at, under a URL that
+    // no longer says which picture it is — and trying three would have cost
+    // three of them.
     const onFinish = vi.fn();
     renderStep({ expectedPubkey: PUBKEY, onFinish });
 
+    const cat = DEFAULT_AVATARS.find((avatar) => avatar.id === "cat");
     fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "  Ana  " } });
-    // Trying three of them must not cost three uploads: the bytes are only
-    // fetched and pushed for whichever one is still chosen at Continue.
-    fireEvent.click(screen.getByRole("button", { name: "Cat" }));
     fireEvent.click(screen.getByRole("button", { name: "Fox" }));
     fireEvent.click(screen.getByRole("button", { name: "Dragon by gravestoneghost" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cat" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalledTimes(1));
-    expect(h.uploadFile).toHaveBeenCalledTimes(1);
-    expect(h.uploadFile.mock.calls[0][0].name).toBe("dragon.png");
+    expect(h.uploadFile).not.toHaveBeenCalled();
 
     const published = h.publishEvent.mock.calls[0][0];
     expect(published.kind).toBe(0);
-    expect(JSON.parse(published.content)).toEqual({
-      name: "Ana",
-      picture: "https://blossom.example/abc",
-    });
+    expect(JSON.parse(published.content)).toEqual({ name: "Ana", picture: cat?.url });
     expect(onFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers nothing but Blossom URLs, submitted artwork first", async () => {
+    // A preset that were a path in this build would be a `picture` that works
+    // in Armada and nowhere else — on the native builds the origin is
+    // `capacitor://localhost`, which resolves for nobody but the device that
+    // wrote it. So none of these pictures is in the bundle or the repository,
+    // and the credited rows lead, putting the work somebody submitted in front
+    // of the placeholders still waiting to be replaced.
+    renderStep({ expectedPubkey: PUBKEY, onFinish: vi.fn() });
+
+    for (const avatar of DEFAULT_AVATARS) {
+      expect(avatar.url).toMatch(/^https:\/\/[^/]+\/[0-9a-f]{64}\.\w+$/);
+      expect(screen.getByRole("button", { name: avatar.label })).toBeInTheDocument();
+    }
+
+    const credited = DEFAULT_AVATARS.filter((avatar) => / by /.test(avatar.label));
+    expect(DEFAULT_AVATARS.slice(0, credited.length)).toEqual(credited);
+    expect(credited.map((avatar) => avatar.label)).toEqual([
+      "Toucan by eempo",
+      "Dragon by gravestoneghost",
+      "Skull by Julian Cela",
+      "Banana King by Aiden J arts",
+    ]);
   });
 
   it("shows the artist's name when a preset is hovered for a moment", async () => {
