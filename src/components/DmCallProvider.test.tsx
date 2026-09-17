@@ -1,10 +1,16 @@
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DmCallProvider } from "./DmCallProvider";
-import { mintDmCall } from "@/lib/dmCall";
+import {
+  _resetDmCallBusForTests,
+  deliverDmCallRumors,
+  mintDmCall,
+} from "@/lib/dmCall";
+import { startIncomingRing } from "@/lib/callSounds";
 import { consumeNativeCallAnswer } from "@/lib/nativeNotifications";
+import { KIND_DM_CALL, type OpenedDm } from "@/lib/nip17/protocol";
 
 /**
  * The Answer deep link is a NAME, not an authorization.
@@ -45,11 +51,14 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 }));
 vi.mock("@/hooks/useAppContext", () => ({ useAppContext: () => ({ config: {} }) }));
 vi.mock("@/hooks/useDmRelayList", () => ({ useDmRelayList: () => ({ relays: [] }) }));
-// An EMPTY follow list: the ring path would refuse this offer outright, which
-// is exactly what the URL path used to skip.
-vi.mock("@/hooks/useFollowList", () => ({ useFollowList: () => ({ data: { pubkeys: [] } }) }));
+// The known-peer set the ring gate reads. Mutable so a test can make a caller
+// known or a stranger. Empty by default: the deep-link tests below need the ring
+// path to refuse the offer outright, which is exactly what the URL path skipped.
+const known = vi.hoisted(() => ({ peers: [] as string[] }));
+const toastMock = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/useKnownDmPeers", () => ({ useKnownDmPeers: () => ({ knownPeers: known.peers }) }));
 vi.mock("@/hooks/useVoiceActivity", () => ({ useVoiceActivity: () => ({ voiceRoomPubkeys: [] }) }));
-vi.mock("@/hooks/useToast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock("@/hooks/useToast", () => ({ useToast: () => ({ toast: toastMock }) }));
 vi.mock("@/lib/callSounds", () => ({
   startIncomingRing: vi.fn(),
   startRingback: vi.fn(),
@@ -57,6 +66,11 @@ vi.mock("@/lib/callSounds", () => ({
   stopRingback: vi.fn(),
 }));
 vi.mock("@/lib/nativeNotifications", () => ({ consumeNativeCallAnswer: vi.fn() }));
+// The incoming-call overlay's identity surface pulls TanStack Query / the event
+// store; stub it so a ringing test doesn't need those providers.
+vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
+vi.mock("@/components/DmAvatar", () => ({ DmAvatar: () => null }));
+vi.mock("@/components/DisplayName", () => ({ DisplayName: () => null }));
 
 const activeCall: { current: unknown } = { current: null };
 vi.mock("@/hooks/useCall", () => ({
@@ -87,6 +101,7 @@ describe("DmCallProvider Answer deep link", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     activeCall.current = null;
+    known.peers = [];
     consume.mockResolvedValue(null);
   });
 
@@ -175,5 +190,65 @@ describe("DmCallProvider Answer deep link", () => {
     renderAt(`/dm/${pathPeer}?call=${callId}`);
     await settle();
     expect(joinDmCall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The ring gate: an incoming offer rings only for a KNOWN DM peer (the
+ * `useKnownDmPeers` set), never a cold stranger, and a known caller who arrives
+ * mid-call gets a passive "Missed call" notice instead of silence.
+ */
+describe("DmCallProvider ring gate", () => {
+  const ring = vi.mocked(startIncomingRing);
+
+  function makeOffer(author: string): OpenedDm {
+    return {
+      rumorId: "e".repeat(64),
+      author,
+      kind: KIND_DM_CALL,
+      content: "offer",
+      // parseDmCall reads the peer from `peers`, not a tag; the secret is
+      // verified against the call id, so both must be the minted pair.
+      tags: [["call", callId], ["secret", secretHex], ["broker", broker]],
+      createdAt: Math.floor(Date.now() / 1000),
+      peers: [author],
+      wrapId: "f".repeat(64),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    activeCall.current = null;
+    known.peers = [];
+    // Clears the bus listeners AND the rumor-id dedup, so each test's provider
+    // subscribes fresh and the shared rumor id is deliverable again. Runs before
+    // any render below, so it never strips the mounted provider's listener.
+    _resetDmCallBusForTests();
+  });
+
+  it("rings for a known caller", () => {
+    known.peers = [realPeer];
+    renderAt(`/dm/${realPeer}`);
+    act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+    expect(ring).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a stranger's offer silently", () => {
+    known.peers = [];
+    renderAt(`/dm/${realPeer}`);
+    act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+    expect(ring).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a missed-call notice for a known caller while busy", () => {
+    known.peers = [realPeer];
+    activeCall.current = { dm: { callId: "d".repeat(64), peer: pathPeer } };
+    renderAt(`/dm/${realPeer}`);
+    act(() => deliverDmCallRumors([makeOffer(realPeer)]));
+    expect(ring).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Missed call" }),
+    );
   });
 });

@@ -76,14 +76,14 @@ describe("config key partition", () => {
   });
 
   it("only names keys that exist in AppConfig", () => {
-    // `customTheme` and `memberListVisible` are optional and so absent from
-    // `defaultConfig`; everything else must be there.
-    const known = new Set([...Object.keys(defaultConfig), "customTheme", "memberListVisible"]);
+    // `customTheme`, `memberListVisible` and `sendOnEnter` are optional and so
+    // absent from `defaultConfig`; everything else must be there.
+    const known = new Set([...Object.keys(defaultConfig), "customTheme", "memberListVisible", "sendOnEnter"]);
     for (const key of SYNCED_CONFIG_KEYS) expect(known).toContain(key);
   });
 
   it("classifies every config field as encrypted, canonical-list, or per-device", () => {
-    const known = new Set([...Object.keys(defaultConfig), "customTheme", "memberListVisible"]);
+    const known = new Set([...Object.keys(defaultConfig), "customTheme", "memberListVisible", "sendOnEnter"]);
     const classified = [
       ...SYNCED_CONFIG_KEYS,
       ...CANONICAL_LIST_CONFIG_KEYS,

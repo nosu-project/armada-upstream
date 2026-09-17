@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 
+import { load as parseYaml } from "js-yaml";
 import { afterEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const { assertPackInputs } = require("./before-pack.cjs");
+
+const SHELL_DIR = path.resolve(process.cwd(), "electron");
 
 let temporaryDirectories = [];
 
@@ -63,5 +66,35 @@ describe("desktop package staging guard", () => {
       assertPackInputs(appDirectory(), { platform: "linux", arch: "x64" }),
     ).toThrow(/generated.hevc.x64.armada-hevc-publisher/);
     expect(() => assertPackInputs(appDirectory(), { platform: "darwin" })).not.toThrow();
+  });
+});
+
+// electron-builder's `files:` is an explicit allow-list, so a shell module
+// that main.js (or anything it loads) requires by relative path has to be
+// named there too. An omission is invisible until a packaged build boots:
+// `Error: Cannot find module './autoLaunch'` inside app.asar, with the app
+// running fine from `npm start` and every unit test green. This walks the
+// require graph from the entry points and checks each edge against the list.
+describe("the packaged file list", () => {
+  it("names every shell module reachable from main.js and preload.js", () => {
+    const config = parseYaml(fs.readFileSync(path.join(SHELL_DIR, "electron-builder.yml"), "utf8"));
+    const packaged = new Set(config.files.filter((entry) => !entry.startsWith("!")));
+    const seen = new Set();
+    const queue = ["main.js", "preload.js"];
+    const missing = [];
+    while (queue.length > 0) {
+      const file = queue.shift();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (!packaged.has(file)) missing.push(file);
+      const source = fs.readFileSync(path.join(SHELL_DIR, file), "utf8");
+      for (const match of source.matchAll(/require\(\s*["']\.\/([^"']+)["']\s*\)/g)) {
+        const target = match[1];
+        queue.push(/\.c?js$/.test(target) ? target : `${target}.js`);
+      }
+    }
+    expect(missing).toEqual([]);
+    // Sanity check that the walk actually saw the graph.
+    expect(seen.size).toBeGreaterThan(10);
   });
 });

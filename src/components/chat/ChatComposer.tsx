@@ -50,7 +50,7 @@ import { useGroup } from "@/hooks/useGroup";
 import { useGlobalImagePaste } from "@/hooks/useGlobalImagePaste";
 import { useInsertText } from "@/hooks/useInsertText";
 import { useMentionInsertions } from "@/hooks/useMentionBus";
-import { useIsMobile } from "@/hooks/useIsMobile";
+import { useIsMobile, useIsTouch } from "@/hooks/useIsMobile";
 import { useMountedTransition } from "@/hooks/useMountedTransition";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
@@ -72,6 +72,7 @@ import { resizeImage } from "@/lib/resizeImage";
 import { parseChatRoute, roomPath } from "@/lib/routes";
 import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
 import { recordSent } from "@/lib/shareTargets";
+import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { stripTrackingParamsInText } from "@/lib/trackingParams";
 import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
@@ -484,6 +485,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const { toast } = useToast();
   const { config } = useAppContext();
   const isMobile = useIsMobile();
+  const isTouch = useIsTouch();
+  const enterSends = sendsOnEnter(config.sendOnEnter, isTouch);
   // The chat scope (NIP-29 group / Concord channel), provided by the page. Used
   // to launch in-chat apps from the "+" menu. Undefined in DMs (no scope).
   const appScope = useChatScope();
@@ -1924,8 +1927,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // an in-progress IME composition (CJK and other multi-keystroke input),
     // which would otherwise fire a premature send mid-word. A document is
     // multi-line by nature, so there Enter is a newline and only Ctrl/Cmd+Enter
-    // sends — the labelled button is the ordinary way out.
-    const sendKey = isDocument
+    // sends — the labelled button is the ordinary way out. The user gets that
+    // same "Ctrl/Cmd+Enter sends, plain Enter is a newline" behavior for
+    // ordinary messages when send-on-Enter is off (its default on touch).
+    const sendKey = isDocument || !enterSends
       ? e.key === "Enter" && (e.ctrlKey || e.metaKey)
       : e.key === "Enter" && !e.shiftKey;
     if (sendKey && !e.nativeEvent.isComposing) {

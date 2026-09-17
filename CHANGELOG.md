@@ -4,6 +4,36 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.60.1] - 2026-09-17
+
+Fixes the desktop app failing to start.
+
+### Fixed
+- Desktop app no longer crashes on launch
+
+## [0.60.0] - 2026-09-17
+
+Communities can now have forum channels: titled posts with threaded comments,
+alongside the usual chat. Signing up leads with creating an account and walks a
+cleaner key-save and profile flow, you can choose whether Enter sends a message
+or adds a line, and the desktop app can launch at login and reconnects your
+relays when your computer wakes. Logging out and switching accounts are now fast
+and reliable, with a full-screen overlay while it happens.
+
+### Added
+- Forum channels: create a channel for titled posts with threaded comments
+- Toggle whether pressing Enter sends a message or starts a new line, with a default suited to your device
+- Desktop app can start automatically at login, and reconnects your relays when the computer resumes from sleep
+
+### Changed
+- Signing up now leads with creating an account and has a reworked key-save and profile flow, with new preset avatars that credit their artists
+- Logging out and switching accounts are fast and guaranteed, showing a full-screen overlay until they complete
+- Editing a message keeps its original disappearing-message expiration instead of resetting it
+- Inline image embeds have slightly less rounded corners
+
+### Fixed
+- Replies on Buzz relays now post through the thread, and refreshing drops channels the relay no longer lists
+
 ## [0.59.20] - 2026-09-11
 
 Switching channels and scrolling chat are smoother, signing in reaches your

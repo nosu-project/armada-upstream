@@ -12,11 +12,12 @@ import { useCall } from "@/hooks/useCall";
 import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
-import { useFollowList } from "@/hooks/useFollowList";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { DmCallContext, type DmCallState } from "@/contexts/DmCallContext";
-import { recipientInboxRelays } from "@/concord/lib/inviteRelays";
+import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord/lib/inviteRelays";
+import { STOCK_RELAYS } from "@/concord/lib/invite";
 import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin, probeAvBroker } from "@/concord/lib/voice";
 import { consumeNativeCallAnswer } from "@/lib/nativeNotifications";
@@ -58,11 +59,16 @@ import type { NostrEvent } from "@nostrify/nostrify";
  *     broker, publishes the gift-wrapped "offer" (the ring signal), joins the
  *     room, and rings back until the peer answers — or times out after
  *     {@link DM_CALL_RING_MS} with an "end" so the peer's ring stops too.
- *   - INCOMING: a fresh offer from a FOLLOWED peer rings a full-screen
- *     overlay (Accept / Decline) with a looping ringtone. Following is the
- *     gate on purpose: the offer's author controls their name and avatar, and
- *     a stranger must not be able to make a phone ring on demand. Non-followed
- *     offers are ignored; the conversation itself still shows their messages.
+ *   - INCOMING: a fresh offer from a KNOWN DM peer (one the user follows,
+ *     has messaged/accepted, or pinned — the same `useKnownDmPeers` set the
+ *     inbox/request split uses, muted peers excluded) rings a full-screen
+ *     overlay (Accept / Decline) with a looping ringtone. The gate is on
+ *     purpose: the offer's author controls their name and avatar, so a cold
+ *     stranger must not be able to make a phone ring on demand — their offer
+ *     is dropped silently and the conversation itself still shows their
+ *     messages in the request tier. A known caller who arrives while the user
+ *     is already in another call gets a passive "Missed call" notice rather
+ *     than vanishing. Muting a peer silences their calls like everything else.
  *   - The signal fold: "answer" stops the caller's ringback (and, as an own
  *     self-copy, other devices' ringing); "decline" ends the caller's attempt;
  *     "end" is both cancel-while-ringing and hangup — while connected to that
@@ -80,7 +86,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { relays: publishedRelays } = useDmRelayList();
-  const { data: followData } = useFollowList();
+  const { knownPeers } = useKnownDmPeers();
   const { activeCall, joinDmCall, leaveCall } = useCall();
   const { voiceRoomPubkeys } = useVoiceActivity();
   const { toast } = useToast();
@@ -103,8 +109,12 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   incomingRef.current = incoming;
   const activeCallRef = useRef(activeCall);
   activeCallRef.current = activeCall;
-  const followsRef = useRef<readonly string[]>([]);
-  followsRef.current = followData?.pubkeys ?? [];
+  // Who may ring us: the same "known DM peer" set (follows ∪ messaged/accepted ∪
+  // pinned, muted excluded) that separates the inbox from the request tier, so
+  // the ring gate can't disagree with where the conversation itself lands. The
+  // Android background ringer applies the mirror of this set (`dmKnownPeers`).
+  const knownPeersRef = useRef<readonly string[]>([]);
+  knownPeersRef.current = knownPeers;
 
   // Where our copies publish and our other sessions read: the same union the
   // DM inbox sync and typing indicators use. `dmsDisabled` collapses this to
@@ -120,6 +130,22 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const myRelaysRef = useRef(myRelays);
   myRelaysRef.current = myRelays;
 
+  // The interop STOCK floor, mirrored from the CORD invite path (inviteRelays.ts):
+  // a user who has switched off the shared app DM relays AND published no
+  // kind-10050 inbox has no rendezvous a caller could resolve, so both sides
+  // fall back to the stock set — the caller sends there (via
+  // `inviteDeliveryRelays` below) and this scanner listens there, the same set
+  // derived the same way so the two always meet. Gated tightly on purpose: a
+  // user still on the app DM relays keeps a private floor and never REQs their
+  // own `#p` to the public stock relays.
+  const scanRelays = useMemo(() => {
+    if (myRelays.length === 0) return [];
+    const stockFloor = !config.useAppDmRelays && publishedRelays.length === 0 ? STOCK_RELAYS : [];
+    return [...new Set([...myRelays, ...stockFloor])];
+  }, [myRelays, config.useAppDmRelays, publishedRelays]);
+  const scanRelaysRef = useRef(scanRelays);
+  scanRelaysRef.current = scanRelays;
+
   const clearIncoming = useCallback(() => {
     if (incomingTimeoutRef.current) {
       clearTimeout(incomingTimeoutRef.current);
@@ -131,9 +157,10 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Seal + publish one call rumor in an EPHEMERAL (21059) wrap: the peer's
-   * copy to their published inbox (or NIP-65 reads) ∪ our DM relays, and a
-   * best-effort self copy so our other devices fold the same call state
-   * (answered/declined elsewhere). Relays broadcast and store nothing.
+   * copy to the relays where send and scan meet — their published inbox, or the
+   * STOCK floor when they've published none (`inviteDeliveryRelays`) ∪ our DM
+   * relays — and a best-effort self copy so our other devices fold the same call
+   * state (answered/declined elsewhere). Relays broadcast and store nothing.
    * Resolves true when at least one relay accepted the peer's copy.
    */
   const sendSignal = useCallback(
@@ -151,25 +178,44 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
         tags: dmCallTags(peer, callId, extras),
         pubkey: user.pubkey,
       });
+      // A failed inbox lookup (`null`) is NOT "no inbox": don't fan a list-having
+      // peer's offer onto the stock floor. `[]` is a confirmed-empty inbox, which
+      // `inviteDeliveryRelays` turns into the stock set the peer's own scanner
+      // also falls back to.
       const inbox = await recipientInboxRelays(nostr, peer).catch(() => null);
-      const targets = [...new Set([...(inbox ?? []), ...myRelaysRef.current])];
+      const floor = inbox === null ? [] : inviteDeliveryRelays(inbox);
+      const targets = [...new Set([...floor, ...myRelaysRef.current])];
       if (targets.length === 0) return false;
       const wrap = wrapDmSealEphemeral(await sealDmRumor(rumor, peer, signer), peer);
       const results = await Promise.allSettled(
         targets.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
       );
-      // Self copy is best-effort and never gates the send result.
+      // Self copy is best-effort and never gates the send result. It goes to our
+      // SCAN set (stock floor included) so a sibling device listening there hears
+      // it. "answer"/"decline" are the signals that STOP another device's ring,
+      // and a single ephemeral broadcast is lost if that device's socket blips —
+      // so re-send those a couple of times over the next few seconds. The wrap is
+      // re-broadcast verbatim, so a sibling that already folded it dedupes the
+      // retries by rumor id; one that missed the first send now catches up.
       void (async () => {
         try {
           const selfWrap = wrapDmSealEphemeral(
             await sealDmRumor(rumor, user.pubkey, signer),
             user.pubkey,
           );
-          await Promise.allSettled(
-            myRelaysRef.current.map((url) =>
-              nostr.relay(url).event(selfWrap, { signal: AbortSignal.timeout(8000) }),
-            ),
-          );
+          const broadcastSelf = () =>
+            Promise.allSettled(
+              scanRelaysRef.current.map((url) =>
+                nostr.relay(url).event(selfWrap, { signal: AbortSignal.timeout(8000) }),
+              ),
+            );
+          await broadcastSelf();
+          if (phase === "answer" || phase === "decline") {
+            for (const delay of [1500, 4000]) {
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              await broadcastSelf();
+            }
+          }
         } catch {
           // A missed self copy costs another device a state fold, nothing more.
         }
@@ -185,13 +231,13 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   // typing indicators but app-wide. Typing signals share the filter and are
   // discarded after decrypt (`cache: false` keeps every open off disk);
   // parsed call rumors feed the bus, which dedupes across relays.
-  const myRelaysKey = myRelays.join(",");
+  const scanRelaysKey = scanRelays.join(",");
   useEffect(() => {
     const self = user?.pubkey;
-    if (!self || !user?.signer.nip44 || myRelays.length === 0) return;
+    if (!self || !user?.signer.nip44 || scanRelays.length === 0) return;
     const controller = new AbortController();
     const signer = user.signer as unknown as Dm17Signer;
-    for (const url of myRelays) {
+    for (const url of scanRelays) {
       void (async () => {
         try {
           for await (const msg of nostr.relay(url).req(
@@ -217,7 +263,7 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
     return () => controller.abort();
     // Keyed on the pubkey (the signer is stable per login), like useDmTyping.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, myRelaysKey]);
+  }, [nostr, user?.pubkey, scanRelaysKey]);
 
   const clearOutgoing = useCallback(() => {
     if (ringTimeoutRef.current) {
@@ -334,13 +380,20 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
       switch (signal.phase) {
         case "offer": {
           if (!isDmOfferFresh(signal)) return;
-          if (activeCallRef.current) return; // busy: their ring times out
           if (incomingRef.current?.callId === signal.callId) return;
-          // Ring only for people the user follows. The author controls their
-          // own name and avatar, so a stranger must not be able to make the
-          // phone ring on demand — their messages still land in the request
-          // tier, where contact is on the user's terms.
-          if (!followsRef.current.includes(signal.author)) return;
+          // Ring only for a KNOWN DM peer (follows ∪ messaged/accepted ∪ pinned,
+          // muted excluded). The author controls their own name and avatar, so a
+          // cold stranger must not be able to make the phone ring on demand —
+          // their offer is dropped silently and their messages still land in the
+          // request tier, where contact is on the user's terms.
+          if (!knownPeersRef.current.includes(signal.author)) return;
+          if (activeCallRef.current) {
+            // A known caller reached us mid-call: we can't ring, but they
+            // shouldn't vanish. Their ring times out on their side; leave a
+            // passive notice here rather than nothing.
+            toast({ title: "Missed call", description: "You were already in a call." });
+            return;
+          }
           const pending = pendingAcceptRef.current;
           setIncoming(signal);
           startIncomingRing();
