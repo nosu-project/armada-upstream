@@ -61,6 +61,15 @@ export interface SecretsStatus {
     | string;
 }
 
+export interface DesktopLaunchSettings {
+  /** Whether launch-at-login can be configured on this OS/build. */
+  supported: boolean;
+  /** The app is registered to start when the user logs in. */
+  openAtLogin: boolean;
+  /** When starting at login, start minimized to the tray rather than shown. */
+  openAsHidden: boolean;
+}
+
 export type DesktopVideoEncoderMode = "compatibility" | "hardware";
 
 export interface DesktopVideoEncoderState {
@@ -156,6 +165,14 @@ interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
   getInfo: () => Promise<{ platform: string; version: string }>;
+  // Optional: a newer web bundle can run inside an older shell that predates
+  // these, so every call site feature-detects rather than assuming.
+  onResume?: (handler: () => void) => () => void;
+  getLaunchSettings?: () => Promise<DesktopLaunchSettings>;
+  setLaunchSettings?: (settings: {
+    openAtLogin: boolean;
+    openAsHidden: boolean;
+  }) => Promise<DesktopLaunchSettings>;
   getVideoEncoderMode?: () => Promise<DesktopVideoEncoderState>;
   setVideoEncoderMode?: (mode: DesktopVideoEncoderMode) => Promise<DesktopVideoEncoderState>;
   getHevcScreenShareCapability?: () => Promise<DesktopHevcScreenShareCapability>;
@@ -232,6 +249,45 @@ export async function setDesktopVideoEncoderMode(
     return (await desktop()?.setVideoEncoderMode?.(mode)) ?? null;
   } catch (error) {
     console.warn("failed to set the desktop video encoder mode", error);
+    return null;
+  }
+}
+
+/**
+ * Subscribe to the desktop shell's power-resume signal (wake from suspend, or
+ * unlock of a machine that slept locked). Returns an unsubscribe; a no-op on
+ * the web and in a shell older than the bridge method.
+ */
+export function onDesktopResume(handler: () => void): () => void {
+  try {
+    return desktop()?.onResume?.(handler) ?? (() => {});
+  } catch {
+    return () => {};
+  }
+}
+
+/**
+ * Read the desktop "launch at login" settings. Resolves null on the web and in
+ * an older shell; callers hide the control when it can't be read.
+ */
+export async function getDesktopLaunchSettings(): Promise<DesktopLaunchSettings | null> {
+  try {
+    return (await desktop()?.getLaunchSettings?.()) ?? null;
+  } catch (error) {
+    console.warn("failed to read the desktop launch settings", error);
+    return null;
+  }
+}
+
+/** Enable/disable launch-at-login and the start-minimized flag. */
+export async function setDesktopLaunchSettings(settings: {
+  openAtLogin: boolean;
+  openAsHidden: boolean;
+}): Promise<DesktopLaunchSettings | null> {
+  try {
+    return (await desktop()?.setLaunchSettings?.(settings)) ?? null;
+  } catch (error) {
+    console.warn("failed to set the desktop launch settings", error);
     return null;
   }
 }
