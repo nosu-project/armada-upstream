@@ -344,7 +344,7 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
     mainsail.scale.z = 1 + Math.sin(time * 2) * 0.06;
     // Travelling ripples keep the hoist attached to the mast while the free
     // edge snaps in the wind. Integrate phase so speed changes stay continuous.
-    const wind = Math.min(1, Math.abs(vessel.speed) / 20);
+    const wind = Math.min(1, Math.abs(vessel.speed) / 12);
     flagPhase += dt * (5 + wind * 25);
     const flagPositions = flag.geometry.attributes.position;
     const flagUvs = flag.geometry.attributes.uv;
@@ -357,7 +357,10 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
     }
     flagPositions.needsUpdate = true;
     flag.geometry.computeVertexNormals();
-    flag.rotation.y = Math.sin(flagPhase * 0.6) * (0.06 + wind * 0.2);
+    // Broad swings of the whole flag read from the chase camera: roughly
+    // 120 degrees side-to-side and 70 degrees vertically at sailing speed.
+    flag.rotation.y = Math.sin(flagPhase * 0.6) * (0.06 + wind);
+    flag.rotation.z = Math.sin(flagPhase * 0.5 + 0.6) * (0.02 + wind * 0.6);
     const distance = camera.aspect < 1 ? 42 : 34;
     cameraPosition.set(vessel.x + Math.sin(h + 0.22) * distance, 19, vessel.z + Math.cos(h + 0.22) * distance);
     const follow = dt === 0 ? 1 : 1 - Math.exp(-dt * 2);
