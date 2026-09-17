@@ -358,9 +358,9 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
     flagPositions.needsUpdate = true;
     flag.geometry.computeVertexNormals();
     // Broad swings of the whole flag read from the chase camera: roughly
-    // 120 degrees side-to-side and 70 degrees vertically at sailing speed.
-    flag.rotation.y = Math.sin(flagPhase * 0.6) * (0.06 + wind);
-    flag.rotation.z = Math.sin(flagPhase * 0.5 + 0.6) * (0.02 + wind * 0.6);
+    // 90 degrees side-to-side and 25 degrees vertically at sailing speed.
+    flag.rotation.y = Math.sin(flagPhase * 0.6) * (0.06 + wind * 0.72);
+    flag.rotation.z = Math.sin(flagPhase * 0.5 + 0.6) * (0.02 + wind * 0.2);
     const distance = camera.aspect < 1 ? 42 : 34;
     cameraPosition.set(vessel.x + Math.sin(h + 0.22) * distance, 19, vessel.z + Math.cos(h + 0.22) * distance);
     const follow = dt === 0 ? 1 : 1 - Math.exp(-dt * 2);
