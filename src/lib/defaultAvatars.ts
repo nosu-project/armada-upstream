@@ -9,7 +9,9 @@
  *
  * These are Signal's, rendered out of the vector drawables in Signal-Android
  * (`res/drawable/ic_avatar_*.xml`) onto the pastel backgrounds its own
- * `AvatarColor` table pairs them with, in the order `Avatars.kt` lists them.
+ * `AvatarColor` table pairs them with, in the order `Avatars.kt` lists them —
+ * all but the toucan, which is eempo's, and whose `label` credits them where
+ * only a screen reader reads it (the grid shows pictures and no text).
  *
  * LICENSING, because the files are not Soapbox's: Signal-Android is GPL-3.0,
  * which AGPL-3.0-or-later may be combined with — so the web and F-Droid builds
@@ -41,7 +43,7 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
   { id: "cat", label: "Cat" },
   { id: "dog", label: "Dog" },
   { id: "fox", label: "Fox" },
-  { id: "tucan", label: "Toucan" },
+  { id: "tucan", label: "Toucan by eempo" },
   { id: "sloth", label: "Sloth" },
   { id: "dinosaur", label: "Dinosaur" },
   { id: "pig", label: "Pig" },
