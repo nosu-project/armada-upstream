@@ -3406,6 +3406,24 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * Whether {@code peer} may ring this device: the same "known DM peer" set
+     * the inbox/request split uses (follows ∪ messaged/accepted ∪ pinned),
+     * muted peers excluded — the mirror of the WebView's {@code useKnownDmPeers}
+     * gate, so a call rings in exactly the conversations that land in the inbox
+     * rather than the request tier. A cold stranger is refused: they control the
+     * name and picture a full-screen ring would put on the lock screen. For a
+     * 1:1 the conversation key IS the peer pubkey, so a pinned/authored 1:1 is
+     * caught by {@code dmKnownConversations}; {@code dmFollows} is kept in the OR
+     * so a populated follow set still rings even before the broader set syncs.
+     */
+    private boolean dmCallAllowed(String peer) {
+        if (peer == null || dmMutedPeers.contains(peer)) return false;
+        return dmFollows.contains(peer)
+                || dmKnownPeers.contains(peer)
+                || dmKnownConversations.contains(peer);
+    }
+
+    /**
      * Fold one opened voice-call rumor (kind 23314, from the peer) into the
      * ring state. Handler thread only (callers post here).
      *
@@ -3427,7 +3445,7 @@ public class NotificationRelayService extends Service {
         final long tsMs = rumor.optLong("created_at", 0) * 1000L;
         if ("offer".equals(phase)) {
             if (!dmNotificationEnabled(peer)) return;
-            if (!dmFollows.contains(peer)) return;
+            if (!dmCallAllowed(peer)) return;
             long age = System.currentTimeMillis() - tsMs;
             if (age > CALL_RING_WINDOW_MS || age < -CALL_RING_WINDOW_MS) return;
             // The Answer action must hand the WebView everything it needs to
@@ -3539,7 +3557,7 @@ public class NotificationRelayService extends Service {
     /** A call that ended un-answered: an ordinary line in the DM's thread notification. */
     private void notifyMissedCall(String peer, String relayUrl, long tsMs) {
         if (!dmNotificationEnabled(peer)) return;
-        if (!dmFollows.contains(peer)) return;
+        if (!dmCallAllowed(peer)) return;
         if (freshActiveRoomKeys().contains("dm:" + peer)) return;
         resolveAuthor(peer, relayUrl, profile -> {
             String name = displayName(profile);
