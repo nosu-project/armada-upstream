@@ -31,6 +31,7 @@ import { useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
 import { useZap } from "@/hooks/useZap";
 import { canZap } from "@/lib/canZap";
+import { pickDefaultZapMethod } from "@/components/chat/zapDefaultMethod";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
   amountInputToSats,
@@ -145,16 +146,17 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     return list;
   }, [hasLightning, lightningTarget, genericTargets]);
 
-  // Determine the default method: user preference, unless that method is
-  // unavailable or unsupported, in which case fall back to the other.
-  const configDefault = config.defaultZapMethod;
-  const availableMethodIds = new Set(methods.map((m) => m.id));
-  const defaultMethodId: DialogMethodId =
-    availableMethodIds.has(configDefault as DialogMethodId) && !(configDefault === "bitcoin" && bitcoinUnsupported)
-      ? (configDefault as DialogMethodId)
-      : bitcoinUnsupported && (hasLightning || lightningTarget)
-        ? "lightning"
-        : "bitcoin";
+  // Determine the default method: the user's preference, unless it can't be
+  // completed here — a private zap's Lightning pane with no connected wallet is
+  // a dead end, so the dialog must open on a method that actually works or it
+  // looks like there are no payment options at all.
+  const defaultMethodId: DialogMethodId = pickDefaultZapMethod({
+    preferred: config.defaultZapMethod,
+    available: methods.map((m) => m.id),
+    lightningAvailable: hasLightning || Boolean(lightningTarget),
+    walletRequired,
+    bitcoinUnsupported,
+  });
   const [activeMethod, setActiveMethod] = useState<DialogMethodId>(defaultMethodId);
   const currentMethod = methods.find((m) => m.id === activeMethod) ?? methods[0];
 
@@ -451,7 +453,8 @@ function LightningZapPane({
 
       {walletRequired && (
         <p className="text-xs text-amber-500">
-          Private zaps need a payment proof, so connect a wallet first (Settings → Wallet).
+          Private zaps need a payment proof, so connect a wallet (Settings → Wallet) — or
+          switch to Bitcoin or another method from the menu above.
         </p>
       )}
 
