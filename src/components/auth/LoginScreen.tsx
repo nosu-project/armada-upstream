@@ -2,6 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronDown, ExternalLink, FileUp, Loader2, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -400,12 +401,20 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   // view — the QR/progress/error views belong to a handshake already underway.
   const joinMode = !!onSignupClick && view === 'form';
 
-  return (
+  return createPortal(
     // No back arrow: this is where the flow starts, so there is no step behind
     // it. `total={0}` drops the progress bar — a single screen has no progress.
     // z-[255] clears Radix dialogs (z-[250]) for the call sites that open this
     // from inside one, while staying under dropdown content (z-[260]) so the
     // form's own "more options" menu still renders above it.
+    //
+    // Portalled to <body>: every LoginArea call site (the channel-sidebar pill,
+    // Settings, DMs) sits inside a transformed/`will-change` ancestor
+    // (SwipeReveal) that would become the containing block for WizardShell's
+    // `position: fixed`, shrinking the full-screen takeover to that element's
+    // box and clipping it under the surrounding `overflow-hidden` — so "Add
+    // another account" looked like it merely made the account pill vanish. Same
+    // fix as CreateCommunityPage / DiscordImportPage.
     <WizardShell index={0} total={0} stepKey={view} zClassName="z-[255]" onClose={onClose}>
       <div className="flex flex-col items-center gap-8 text-center">
         <ArmadaKey size={110} />
@@ -602,7 +611,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
           )}
         </div>
       </div>
-    </WizardShell>
+    </WizardShell>,
+    document.body,
   );
 };
 
