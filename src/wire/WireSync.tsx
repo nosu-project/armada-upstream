@@ -26,6 +26,7 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutes } from "@/hooks/useMutes";
+import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
@@ -161,6 +162,15 @@ interface DotContext {
   pubkey: string | undefined;
   readState: Record<string, number>;
   isMuted: (protocol: "c2", communityId: string, channelIdHex: string) => boolean;
+  /**
+   * Whether a channel's resolved notification level would ever fire (`all` or
+   * `mentions`, i.e. not silenced). The unread-dot deferral only applies to
+   * communities that would notify about NOTHING — deferring one whose messages
+   * would notify silently drops the notification the deferral was never meant
+   * to touch. Cascade channel → community → global, mutes folded in as
+   * `nothing` (see useNotifLevels).
+   */
+  notifies: (communityIdHex: string, channelIdHex: string) => boolean;
 }
 
 /**
@@ -220,20 +230,29 @@ function catchUpCommunity(
  * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcordSubs, but
  * keeps the full Channel (the wire decrypts; the native service can't).
  *
- * NOT every community, though: one whose rail button already shows the unread
- * dot is DEFERRED — its channel filters leave the wire until the user
- * navigates in (or the dot clears via a read synced from another device),
- * because a binary dot can't get more lit and its history is pulled on
- * activation anyway ({@link catchUpCommunity}). This is the bandwidth rule
- * that keeps a pageload from replaying every busy-but-ignored community's
- * traffic. Control planes are deliberately NOT deferred (cheap, and they keep
- * the fold current for the moment the community comes back).
+ * NOT every community, though: a SILENCED one (its notification level would
+ * fire about nothing) whose rail button already shows the unread dot is
+ * DEFERRED — its channel filters leave the wire until the user navigates in
+ * (or the dot clears via a read synced from another device), because a binary
+ * dot can't get more lit and its history is pulled on activation anyway
+ * ({@link catchUpCommunity}). This is the bandwidth rule that keeps a pageload
+ * from replaying every busy-but-ignored community's traffic.
+ *
+ * The silenced qualifier is load-bearing: deferring a community whose messages
+ * WOULD notify (any channel at `all`, or a mention) silently drops the live
+ * notification — the wire is the only path that fires one, and the pulled
+ * history on later activation is not a notification. So a community that would
+ * notify stays on the wire however lit its dot, and only one you've muted to
+ * `nothing` trades live delivery for the bandwidth saving. Control planes are
+ * deliberately NOT deferred (cheap, and they keep the fold current for the
+ * moment the community comes back).
  */
 function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; communityIdHex: string; banned: Set<string>; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { readState } = useReadState();
   const { isConcordChannelMuted } = useMutes();
+  const { concordChannelLevel } = useNotifLevels();
   const { data } = useCommunityList();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
   const listSig = useMemo(
@@ -250,8 +269,14 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
   // dot verdict are picked up by the 2-minute refetch below — for the one
   // case that needs it (a remote read clearing a deferred community's dot),
   // minutes of extra deferral cost nothing but a slightly later catch-up.
-  const dotCtxRef = useRef<DotContext>({ pubkey: undefined, readState: {}, isMuted: () => false });
-  dotCtxRef.current = { pubkey: user?.pubkey, readState, isMuted: isConcordChannelMuted };
+  const dotCtxRef = useRef<DotContext>({ pubkey: undefined, readState: {}, isMuted: () => false, notifies: () => true });
+  dotCtxRef.current = {
+    pubkey: user?.pubkey,
+    readState,
+    isMuted: isConcordChannelMuted,
+    notifies: (communityIdHex, channelIdHex) =>
+      concordChannelLevel("c2", communityIdHex, channelIdHex) !== "nothing",
+  };
 
   // Navigating into a community must re-run the spec NOW (its filters rejoin
   // the wire and its catch-up starts), not on the next poll.
@@ -363,13 +388,22 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
         // The unread-dot deferral (see wire/activation.ts). Every path back
         // to live runs the catch-up, because the shared per-relay cursor
         // advanced past this community's traffic while it was excluded.
+        //
+        // Only a SILENCED community is eligible: if any channel would notify,
+        // the community stays on the wire regardless of its dot, because the
+        // wire is the only path that fires a live notification and dropping it
+        // is exactly the bug the deferral must not cause. `notifies` short-
+        // circuits before the dot scan, so a notifying community skips it.
+        const notifies = channels.some((c) =>
+          dotCtxRef.current.notifies(community.idHex, c.idHex),
+        );
         if (isScopeActivated(scope)) {
           // Navigated into (this session): live for good.
           if (wasDeferred) {
             clearFlag();
             catchUpCommunity(nostr, entry, community.idHex);
           }
-        } else if (await communityDotted(community.idHex, channels, dotCtxRef.current)) {
+        } else if (!notifies && await communityDotted(community.idHex, channels, dotCtxRef.current)) {
           defer();
           continue;
         } else if (wasDeferred) {
