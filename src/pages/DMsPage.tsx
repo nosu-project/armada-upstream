@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Copy, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
@@ -103,6 +103,7 @@ import { useToast } from "@/hooks/useToast";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { dmRouteParam, parseDmRouteParam } from "@/lib/dmConversation";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { writeClipboardText } from "@/lib/clipboard";
 import { forwardableTags } from "@/lib/forwardMessage";
 import { chatRoute, parseChatRoute, type ChatRoute } from "@/lib/routes";
 import { stashShare } from "@/lib/shareTarget";
@@ -218,6 +219,11 @@ function ConversationRow({
   // reads as a message FROM you rather than as the place your notes live.
   const noteToSelf = !group && peers[0] === selfPubkey;
 
+  // Per-person row options (view profile, copy npub). Only meaningful for a 1:1,
+  // where `peers[0]` is the single person the row names.
+  const openProfile = useOpenProfile();
+  const { toast } = useToast();
+
   // When searching, hide rows that match neither the contact name / handle nor
   // any locally-decrypted message. A message hit (`messageMatch`, resolved by
   // the parent across BOTH DM planes' decrypted history) keeps the row and
@@ -329,6 +335,27 @@ function ConversationRow({
                 </>
               )}
             </ContextMenuItem>
+            {/* Per-person options name the single peer of a 1:1; a group has no
+                one person to view or whose key to copy. */}
+            {!group && (
+              <>
+                <ContextMenuItem onSelect={() => openProfile(tryNpubEncode(peers[0]) ?? peers[0])}>
+                  <User className="mr-2 size-4" /> View profile
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onSelect={() => {
+                    const npub = tryNpubEncode(peers[0]);
+                    if (!npub) return;
+                    writeClipboardText(npub).then(
+                      () => toast({ title: "Copied npub" }),
+                      () => toast({ title: "Copy failed", variant: "destructive" }),
+                    );
+                  }}
+                >
+                  <Copy className="mr-2 size-4" /> Copy npub
+                </ContextMenuItem>
+              </>
+            )}
             {/* Puts an icon for this person on the community rail, where it
                 behaves like any community: drag it, fold it, reorder it.
                 Clicking it opens this thread — not the DM list — so the

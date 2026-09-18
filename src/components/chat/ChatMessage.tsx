@@ -1,4 +1,4 @@
-import { AlertCircle, Ban, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
+import { AlertCircle, Ban, Braces, Copy, EyeOff, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, User, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -44,7 +44,9 @@ import { useHiddenMessages } from "@/hooks/useHiddenMessages";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
+import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { useToast } from "@/hooks/useToast";
 import { AppContext } from "@/contexts/AppContext";
 import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -53,6 +55,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
+import { tryNpubEncode } from "@/lib/safeNip19";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { expirationOf, KIND_DM_CHAT } from "@/lib/nip17/protocol";
 import { parseProxyTag } from "@/lib/nip48";
@@ -625,6 +628,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // Nostr pubkey the mute list can name.
   const mute = useMuteToggle(identityOverride ? undefined : event.pubkey);
 
+  // Per-author options (view profile, copy npub). Suppressed for a mesh/proxied
+  // row, whose `event.pubkey` is a peer id rather than a Nostr key.
+  const openProfile = useOpenProfile();
+  const { toast } = useToast();
+
   // Hiding is viewer-local removal — instant, unpublished, undoable from its
   // toast — so like blocking it needs no destination and is offered in every
   // room.
@@ -774,6 +782,30 @@ const ChatMessageInner = memo(function ChatMessageInner({
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
+  // Per-author options, in their own group above moderation. Suppressed for a
+  // mesh/proxied identity, whose id is not a Nostr key to view or copy.
+  if (!identityOverride) {
+    menuActions.push({
+      id: "view-profile",
+      label: "View profile",
+      icon: User,
+      groupStart: true,
+      onSelect: () => openProfile(tryNpubEncode(event.pubkey) ?? event.pubkey),
+    });
+    menuActions.push({
+      id: "copy-npub",
+      label: "Copy npub",
+      icon: Copy,
+      onSelect: () => {
+        const npub = tryNpubEncode(event.pubkey);
+        if (!npub) return;
+        writeClipboardText(npub).then(
+          () => toast({ title: "Copied npub" }),
+          () => toast({ title: "Copy failed", variant: "destructive" }),
+        );
+      },
+    });
+  }
   // Hide, block, report and delete share the trailing moderation group, so only
   // the first of them opens it — two adjacent separators would read as three
   // groups. Hide leads: it is the mildest tool (this one message, this device,

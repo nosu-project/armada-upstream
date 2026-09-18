@@ -48,6 +48,7 @@ vi.mock("@/hooks/useMuteList", () => ({
   useMuteToggle: () => ({ muted: false, canMute: false, pending: false, label: "Mute", toggle: async () => {} }),
 }));
 vi.mock("@/hooks/useToast", () => ({ useToast: () => ({ toast: () => {} }) }));
+vi.mock("@/hooks/useOpenProfile", () => ({ useOpenProfile: () => () => {} }));
 vi.mock("@/hooks/useSharedCommunities", () => ({ useSharedCommunities: () => new Map() }));
 vi.mock("@/hooks/useDmMessageSearch", () => ({ useDmMessageSearch: () => new Map() }));
 // Composes the row's title from every participant's profile, which means a
