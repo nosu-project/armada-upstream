@@ -7,6 +7,7 @@ import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
+import type { PaymentTargetType } from "@/lib/paymentTargets";
 import type { RailLayoutNode } from "@/lib/railLayout";
 import type { SendOnEnterPref } from "@/lib/sendOnEnter";
 import type { ThemeConfig } from "@/themes";
@@ -449,13 +450,14 @@ export interface AppConfig {
    */
   currencyDisplay: CurrencyDisplay;
   /**
-   * Default payment method for zaps: 'lightning' or 'bitcoin'. When both are
-   * available, the zap dialog opens to this method. Defaults to 'bitcoin',
-   * which every pubkey can receive (the address is derived from the key)
-   * whereas Lightning needs the recipient to have configured an address.
-   * Synced across devices.
+   * Default payment method for zaps — any recognized method type ('lightning',
+   * 'bitcoin', 'monero', …). The zap dialog opens on this method whenever the
+   * recipient accepts it; otherwise it falls back to a usable one (see
+   * pickDefaultZapMethod). Defaults to 'bitcoin', which every pubkey can
+   * receive (the address is derived from the key) whereas the others need the
+   * recipient to have declared an address/target. Synced across devices.
    */
-  defaultZapMethod: 'lightning' | 'bitcoin';
+  defaultZapMethod: PaymentTargetType;
   /**
    * Whether zap/wallet/financial features are enabled in the UI. When off,
    * all zap buttons, the wallet dialog, and the wallet settings section are

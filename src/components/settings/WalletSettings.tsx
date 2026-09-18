@@ -8,7 +8,16 @@ import { DEFAULT_ESPLORA_APIS, readEsploraApis, writeEsploraApis } from "@/lib/e
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { PaymentMethodIcon } from "@/components/PaymentMethodIcon";
 import { SettingsRow } from "@/components/settings/SettingsSection";
+import { PAYMENT_METHOD_LIST, type PaymentTargetType } from "@/lib/paymentTargets";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useToast } from "@/hooks/useToast";
@@ -217,34 +226,28 @@ export function WalletSettings() {
 
       <SettingsRow
         label="Default payment method"
-        description="Which payment method to show first in the zap dialog when both are available."
+        description="Which method the zap dialog opens on first, whenever the recipient accepts it. Otherwise it falls back to a method that works."
       >
-        <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
-          <button
-            type="button"
-            onClick={() => updateConfig((c) => ({ ...c, defaultZapMethod: "lightning" }))}
-            className={cn(
-              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
-              config.defaultZapMethod === "lightning"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Lightning
-          </button>
-          <button
-            type="button"
-            onClick={() => updateConfig((c) => ({ ...c, defaultZapMethod: "bitcoin" }))}
-            className={cn(
-              "px-3 py-1.5 text-xs font-medium rounded-md transition-colors touch:px-4 touch:py-2",
-              config.defaultZapMethod === "bitcoin"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            Bitcoin
-          </button>
-        </div>
+        <Select
+          value={config.defaultZapMethod}
+          onValueChange={(v) =>
+            updateConfig((c) => ({ ...c, defaultZapMethod: v as PaymentTargetType }))
+          }
+        >
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PAYMENT_METHOD_LIST.map((m) => (
+              <SelectItem key={m.type} value={m.type}>
+                <span className="flex items-center gap-2">
+                  <PaymentMethodIcon method={m} />
+                  {m.label}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </SettingsRow>
 
       <SettingsRow>

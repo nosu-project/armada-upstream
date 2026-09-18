@@ -93,4 +93,40 @@ describe("pickDefaultZapMethod", () => {
       }),
     ).toBe("bitcoin");
   });
+
+  it("opens on a generic method (Monero) when preferred and the recipient offers it", () => {
+    expect(
+      pickDefaultZapMethod({
+        preferred: "monero",
+        available: ["bitcoin", "monero"],
+        lightningAvailable: false,
+        walletRequired: false,
+        bitcoinUnsupported: false,
+      }),
+    ).toBe("monero");
+
+    // Even alongside Lightning, the explicit Monero preference wins.
+    expect(
+      pickDefaultZapMethod({
+        preferred: "monero",
+        available: ["bitcoin", "lightning", "monero"],
+        lightningAvailable: true,
+        walletRequired: false,
+        bitcoinUnsupported: false,
+      }),
+    ).toBe("monero");
+  });
+
+  it("falls back when the preferred generic method isn't offered by the recipient", () => {
+    // Prefer Monero, but this recipient only takes Bitcoin.
+    expect(
+      pickDefaultZapMethod({
+        preferred: "monero",
+        available: ["bitcoin"],
+        lightningAvailable: false,
+        walletRequired: false,
+        bitcoinUnsupported: false,
+      }),
+    ).toBe("bitcoin");
+  });
 });

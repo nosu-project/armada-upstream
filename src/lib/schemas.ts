@@ -1,8 +1,19 @@
 import { z } from "zod";
 
 import { defaultConfig } from "@/contexts/AppContext";
+import { PAYMENT_METHOD_LIST, type PaymentTargetType } from "@/lib/paymentTargets";
 
 import type { RailLayoutNode } from "@/lib/railLayout";
+
+/**
+ * Recognized zap payment-method types, derived from the payment-target
+ * registry so the config enum never drifts from it. A stored value outside
+ * this set falls back to the default (`.catch`).
+ */
+const PAYMENT_METHOD_TYPES = PAYMENT_METHOD_LIST.map((m) => m.type) as [
+  PaymentTargetType,
+  ...PaymentTargetType[],
+];
 
 /** An HSL string like "228 20% 10%". */
 const HslStringSchema = z
@@ -131,7 +142,7 @@ export const AppConfigSchema = z.object({
   // Keyed by device class; each unset means "auto" (see AppConfig.sendOnEnter).
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
-  defaultZapMethod: z.enum(["lightning", "bitcoin"]).catch(defaultConfig.defaultZapMethod),
+  defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
   accountStandingSeen: z.boolean().catch(defaultConfig.accountStandingSeen),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
@@ -202,7 +213,7 @@ export const MetadataDocSchema = z.looseObject({
   /** Unit money amounts are shown and entered in. */
   currencyDisplay: z.enum(["usd", "sats"]).optional(),
   /** Default zap payment method. */
-  defaultZapMethod: z.enum(["lightning", "bitcoin"]).optional(),
+  defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).optional(),
   /** Whether zap/wallet UI is shown at all. */
   zapsEnabled: z.boolean().optional(),
   /** Whether Account Standing has been opened, retiring its nag (see AppConfig). */
