@@ -158,7 +158,7 @@ function MemberRow({ pubkey }: { pubkey: string }) {
  * the detail pane instead of inside the popover.
  */
 function useInviteMembers(community: Community | undefined) {
-  const { coalesced, isLoading } = useGuestbook(community);
+  const { coalesced, swept } = useGuestbook(community);
   const members = useMemo(
     () =>
       [...coalesced.values()]
@@ -167,7 +167,11 @@ function useInviteMembers(community: Community | undefined) {
         .map((m) => m.pubkey),
     [coalesced],
   );
-  return { members, isLoading };
+  // `swept`, NOT the query's `isLoading`: the query answers from the local
+  // store, which for a community the viewer hasn't joined is empty and settles
+  // in a tick. Gating on it declared "0 members" final for the whole length of
+  // the sweep that was still fetching them.
+  return { members, swept };
 }
 
 /** The members menu's body: everyone the guestbook says is currently in. */
@@ -533,7 +537,7 @@ export function InviteDetail({
     }
   }, [bundle]);
 
-  const { members, isLoading: membersLoading } = useInviteMembers(previewCommunity);
+  const { members, swept: membersSwept } = useInviteMembers(previewCommunity);
 
   // Whether the sender is someone the viewer already follows. The strongest
   // signal on this whole screen: a name and picture are anyone's to choose,
@@ -546,13 +550,15 @@ export function InviteDetail({
     return members.filter((pubkey) => following.has(pubkey));
   }, [followList, members]);
 
-  // The count is only meaningful once the guestbook sweep has landed: a
-  // community mid-read would otherwise read "0 members", which is a different
-  // claim from "not known yet".
-  const membersPending = membersLoading && members.length === 0;
-  const memberLabel = membersPending
-    ? "Members"
-    : `${members.length} member${members.length === 1 ? "" : "s"}`;
+  // A NUMBER here is a claim about the room, so it is made only when there is
+  // one to make. A community mid-read reads "not known yet" (the label with a
+  // spinner), and — because a sweep that reached no relay is indistinguishable
+  // from one that found an empty guestbook — a settled sweep with nobody in it
+  // keeps the bare label rather than asserting zero. The only state that shows
+  // a count is one where someone was actually found.
+  const membersPending = !membersSwept && members.length === 0;
+  const memberLabel =
+    members.length > 0 ? `${members.length} member${members.length === 1 ? "" : "s"}` : "Members";
 
   // The stats line as a list of facts joined by middots, so a link (which
   // carries no "Sent" time) doesn't strand a separator with nothing after it.
@@ -696,7 +702,7 @@ export function InviteDetail({
                 <MembersList
                   community={previewCommunity}
                   members={members}
-                  isLoading={membersLoading}
+                  isLoading={!membersSwept}
                 />
               </StatPopover>
               <FriendStack pubkeys={followedMembers} />

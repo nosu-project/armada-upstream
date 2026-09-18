@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -100,6 +100,50 @@ function releaseGuestbookWake(registry: Map<string, GuestbookWakeEntry>, key: st
   }
 }
 
+/**
+ * Which (community, epoch) guestbooks have had a network sweep come back this
+ * session — the answer to "have we LOOKED yet?", which nothing on the query
+ * itself can give.
+ *
+ * The query below answers from the STORE and resolves in a tick, with the sweep
+ * running un-awaited behind it (see the `queryFn`), so `isLoading` and
+ * `isFetching` clear long before the guestbook has been read over the network.
+ * For a community the viewer is already in that is invisible — the store holds
+ * the membership. For one they are NOT in (an invite preview) the store is
+ * empty, so the query settles instantly on nobody, and a caller that renders
+ * that as a count states something false about the room until the sweep lands.
+ *
+ * Module-level and keyed by scope rather than hook state, because the `queryFn`
+ * is the one place the sweep is started and it runs once for every mount that
+ * shares the key: a component arriving on a warm cache never runs it, and would
+ * wait forever on a sweep that had already landed. Sticky for the session for
+ * the same reason the sweep's own cursors are — a later poll is a delta on top
+ * of a read that already happened, not a fresh look from nothing.
+ */
+const sweptGuestbooks = new Set<string>();
+const sweptListeners = new Set<() => void>();
+
+const guestbookSweepKey = (community: Community) => `${community.idHex}@${community.rootEpoch}`;
+
+/**
+ * SETTLED, not succeeded. A sweep whose relays all failed has still had its
+ * turn, and re-arming the flag would only spin forever; what it leaves behind
+ * is a possibly-empty set, and not presenting an empty set as a number is the
+ * caller's half of this (see `InviteDetail`).
+ */
+function markGuestbookSwept(key: string): void {
+  if (sweptGuestbooks.has(key)) return;
+  sweptGuestbooks.add(key);
+  for (const notify of [...sweptListeners]) notify();
+}
+
+function subscribeGuestbookSwept(onChange: () => void): () => void {
+  sweptListeners.add(onChange);
+  return () => {
+    sweptListeners.delete(onChange);
+  };
+}
+
 export function useGuestbook(community: Community | undefined) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
@@ -129,14 +173,20 @@ export function useGuestbook(community: Community | undefined) {
       // freshness a blocking one had.
       const stored = await queryPlane(community!.idHex, "guestbook");
       const merged = mergeOpened(queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [], stored);
+      const sweepKey = guestbookSweepKey(community!);
       void sweepGuestbook(nostr, community!, {
         onFresh: (fresh) => {
           if (fresh.length === 0) return;
           queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], fresh));
         },
-      }).catch(() => {
-        // Best-effort: the live sub and the 5-minute background sweep cover a miss.
-      });
+      })
+        .catch(() => {
+          // Best-effort: the live sub and the 5-minute background sweep cover a miss.
+        })
+        // `onFresh` has already merged by now, so a caller waiting on `swept`
+        // sees the events and the flag in one pass rather than a count of zero
+        // declared final for a frame.
+        .finally(() => markGuestbookSwept(sweepKey));
       return merged;
     },
   });
@@ -151,6 +201,13 @@ export function useGuestbook(community: Community | undefined) {
     if (!idHex) return;
     return acquireGuestbookWake(queryClient, idHex, queryKey);
   }, [idHex, queryKey, queryClient]);
+
+  // Whether this guestbook has been read over the network at all — see
+  // `sweptGuestbooks`. Distinct from `isLoading`, which covers the store read
+  // the sweep runs behind.
+  const swept = useSyncExternalStore(subscribeGuestbookSwept, () =>
+    community ? sweptGuestbooks.has(guestbookSweepKey(community)) : false,
+  );
 
   const coalesced = useMemo(() => {
     if (!community || !query.data) return new Map<string, CoalescedMember>();
@@ -183,7 +240,7 @@ export function useGuestbook(community: Community | undefined) {
     });
   }, [community, query.data, folded, dissolvedAtMs]);
 
-  return { ...query, coalesced };
+  return { ...query, coalesced, swept };
 }
 
 /**
