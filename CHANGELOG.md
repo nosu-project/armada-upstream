@@ -4,6 +4,29 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.60.2] - 2026-09-18
+
+The zap dialog is reworked: amounts show in your display currency, Bitcoin is the
+default, and more payment methods are supported. You can add donation and payment
+addresses to your profile, and view a profile or copy someone's public key
+straight from the direct-message menus. The logged-out homepage gains a playable
+sailing sea.
+
+### Added
+- Playable sailing sea on the logged-out homepage
+- Add donation and payment addresses to your profile so others can pay or zap you across more methods
+- View a profile or copy someone's public key directly from the direct-message conversation and message menus
+
+### Changed
+- Reworked zap dialog: amounts in your display currency, a Bitcoin default, support for more payment methods, and a loading skeleton while payment options resolve
+- Refreshed the default avatar placeholder and onboarding preset avatars
+
+### Fixed
+- Login screen now displays correctly instead of being confined within the page
+- Desktop app reconnects your relays when the computer wakes, even when the sandbox blocks the resume signal
+- Communities that are notifying you stay connected so their notifications keep arriving
+- Invite previews no longer show a member count that could be inaccurate
+
 ## [0.60.1] - 2026-09-17
 
 Fixes the desktop app failing to start.
