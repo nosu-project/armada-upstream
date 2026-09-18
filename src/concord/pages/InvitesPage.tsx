@@ -6,7 +6,6 @@ import {
   Radio,
   ShieldCheck,
   UserRoundCheck,
-  Users,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -126,97 +125,33 @@ function CommunityAvatar({
   );
 }
 
-/** One person in the members menu. */
-function MemberRow({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  const metadata = author.data?.metadata;
-  const name = getDisplayName(metadata, pubkey);
-
-  return (
-    <div className="flex items-center gap-3 px-3.5 py-2">
-      <Avatar shape={getAvatarShape(metadata)} className="size-9 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-xs font-semibold text-primary">
-          {name[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
-      <span className="min-w-0 truncate text-sm">
-        <DisplayName pubkey={pubkey} name={name} />
-      </span>
-    </div>
-  );
-}
-
 /**
  * Who's already in there, read from the Guestbook Plane (CORD-02 §5) with the
  * keys the invite carries.
  *
  * Runs for the SELECTED invite only — sweeping the guestbook connects to the
  * community's own relays, so it is scoped to the one community the user opened
- * rather than every invite sitting in the inbox. The count has to be known
- * before the menu is opened (it's on the button), which is what puts this in
- * the detail pane instead of inside the popover.
+ * rather than every invite sitting in the inbox.
+ *
+ * Feeds the friend stack and NOTHING ELSE. There is deliberately no member
+ * COUNT on this screen: the sweep is a cold network read of a community the
+ * viewer isn't in yet, seconds long, and the store it is layered over answers
+ * empty in a tick — so a count either states a number that is wrong until the
+ * sweep lands, or sits behind a spinner that makes the whole consent surface
+ * read as still loading, on a page whose entire job is a yes/no the user can
+ * already make. The friend stack has neither problem: it renders nothing at
+ * all until it has someone to name, so a slow or failed sweep costs a line
+ * that was never promised.
  */
 function useInviteMembers(community: Community | undefined) {
-  const { coalesced, swept } = useGuestbook(community);
-  const members = useMemo(
+  const { coalesced } = useGuestbook(community);
+  return useMemo(
     () =>
       [...coalesced.values()]
         .filter((m) => m.state === "join")
         .sort((a, b) => a.ms - b.ms)
         .map((m) => m.pubkey),
     [coalesced],
-  );
-  // `swept`, NOT the query's `isLoading`: the query answers from the local
-  // store, which for a community the viewer hasn't joined is empty and settles
-  // in a tick. Gating on it declared "0 members" final for the whole length of
-  // the sweep that was still fetching them.
-  return { members, swept };
-}
-
-/** The members menu's body: everyone the guestbook says is currently in. */
-function MembersList({
-  community,
-  members,
-  isLoading,
-}: {
-  community: Community | undefined;
-  members: string[];
-  isLoading: boolean;
-}) {
-  if (!community) {
-    return (
-      <p className="px-3.5 py-3 text-sm text-muted-foreground">
-        This invite can&rsquo;t show who&rsquo;s in here.
-      </p>
-    );
-  }
-  if (members.length === 0) {
-    return (
-      <p className="flex items-center gap-2 px-3.5 py-3 text-sm text-muted-foreground">
-        {isLoading ? (
-          <>
-            <Loader2 className="size-4 shrink-0 animate-spin" />
-            Looking up members…
-          </>
-        ) : (
-          "No one to show yet."
-        )}
-      </p>
-    );
-  }
-
-  return (
-    <>
-      <p className="px-3.5 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {members.length} member{members.length === 1 ? "" : "s"}
-      </p>
-      <div className="max-h-96 overflow-y-auto pb-2">
-        {members.map((pubkey) => (
-          <MemberRow key={pubkey} pubkey={pubkey} />
-        ))}
-      </div>
-    </>
   );
 }
 
@@ -257,17 +192,14 @@ function StatPopover({
   label,
   hint,
   width,
-  loading,
   className,
   children,
 }: {
   icon: LucideIcon;
   label: string;
   hint?: string;
-  /** Panel width — member names and relay URLs want different room. */
+  /** Panel width. */
   width: string;
-  /** Swaps the icon for a spinner while the number behind the label lands. */
-  loading?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -305,11 +237,7 @@ function StatPopover({
             className,
           )}
         >
-          {loading ? (
-            <Loader2 className="size-3.5 shrink-0 animate-spin" />
-          ) : (
-            <Icon className="size-3.5 shrink-0" />
-          )}
+          <Icon className="size-3.5 shrink-0" />
           {label}
         </button>
       </PopoverTrigger>
@@ -357,11 +285,15 @@ function FriendName({ pubkey }: { pubkey: string }) {
 
 /**
  * The people you already follow who are in there: their faces, then their
- * names in a sentence. Sits beside the member count, which says how big the
- * room is; this says whether it's a room you know anyone in, which is usually
- * the part that actually decides an invite — and a row of anonymous circles
+ * names in a sentence. Whether it's a room you know anyone in is usually the
+ * part that actually decides an invite — and a row of anonymous circles
  * doesn't answer that, so the names are spelled out beside them. Narrow
  * screens collapse the sentence to a count; the faces stay either way.
+ *
+ * Renders NOTHING while there is no one to name, which is what lets it sit on
+ * a screen the guestbook sweep is far too slow to hold up (see
+ * {@link useInviteMembers}): it is a line that appears if it has something to
+ * say, never a placeholder the reader is waiting on.
  */
 function FriendStack({ pubkeys }: { pubkeys: string[] }) {
   if (pubkeys.length === 0) return null;
@@ -377,10 +309,10 @@ function FriendStack({ pubkeys }: { pubkeys: string[] }) {
           <FriendFace key={pubkey} pubkey={pubkey} className={i > 0 ? "-ml-2" : undefined} />
         ))}
       </span>
-      {/* Narrow screens get the count instead of the names. Beside the member
-          count there is only so much room left on a phone, and the sentence
-          truncates mid-name there — a half-spelled name reads worse than no
-          name at all, while the number still answers the same question. */}
+      {/* Narrow screens get the count instead of the names: the sentence
+          truncates mid-name on a phone, and a half-spelled name reads worse
+          than no name at all, while the number still answers the same
+          question. */}
       <span className="shrink-0 sm:hidden">
         {pubkeys.length} friend{pubkeys.length === 1 ? " is" : "s are"} here
       </span>
@@ -476,8 +408,14 @@ function InviteRow({
  * — for a Direct Invite only — the sender's resolved profile beside the pubkey
  * that signed the seal. A shared link is sealed by no one, so it names no
  * sender (a `creator_npub` in the bundle is an unverified claim and stays off
- * this screen). The one thing that costs a relay read — who's already inside —
- * is behind the Members menu.
+ * this screen).
+ *
+ * Nothing on it waits on the network except the artwork. Everything stated here
+ * comes out of the bundle the caller already resolved, so the screen is
+ * complete the moment it paints and the decision is never gated on a spinner.
+ * The one fact that would have cost a relay read — the size of the room — was
+ * removed for exactly that reason; the friend stack is the sole guestbook-fed
+ * thing left, and it adds itself silently or not at all.
  */
 export function InviteDetail({
   bundle,
@@ -527,8 +465,8 @@ export function InviteDetail({
   const senderName = getDisplayName(senderMeta, sender);
 
   // The community the bundle describes, assembled without joining it — the
-  // same conversion the accept paths run, so the Members menu reads the plane
-  // the keys actually open.
+  // same conversion the accept paths run, so the guestbook read behind the
+  // friend stack opens the plane the keys actually grant.
   const previewCommunity = useMemo(() => {
     try {
       return rehydrateCommunity(bundleToEntry(bundle));
@@ -537,28 +475,18 @@ export function InviteDetail({
     }
   }, [bundle]);
 
-  const { members, swept: membersSwept } = useInviteMembers(previewCommunity);
+  const members = useInviteMembers(previewCommunity);
 
   // Whether the sender is someone the viewer already follows. The strongest
   // signal on this whole screen: a name and picture are anyone's to choose,
   // but a pubkey on your own follow list is a person you decided to trust.
   const { data: followList } = useFollowList();
   const followsSender = Boolean(sender && followList?.pubkeys.includes(sender));
-  // The subset of the room you already follow, for the stack beside the count.
+  // The subset of the room you already follow — the friend stack's whole input.
   const followedMembers = useMemo(() => {
     const following = new Set(followList?.pubkeys ?? []);
     return members.filter((pubkey) => following.has(pubkey));
   }, [followList, members]);
-
-  // A NUMBER here is a claim about the room, so it is made only when there is
-  // one to make. A community mid-read reads "not known yet" (the label with a
-  // spinner), and — because a sweep that reached no relay is indistinguishable
-  // from one that found an empty guestbook — a settled sweep with nobody in it
-  // keeps the bare label rather than asserting zero. The only state that shows
-  // a count is one where someone was actually found.
-  const membersPending = !membersSwept && members.length === 0;
-  const memberLabel =
-    members.length > 0 ? `${members.length} member${members.length === 1 ? "" : "s"}` : "Members";
 
   // The stats line as a list of facts joined by middots, so a link (which
   // carries no "Sent" time) doesn't strand a separator with nothing after it.
@@ -686,25 +614,12 @@ export function InviteDetail({
             </p>
           )}
 
-          {/* Who's inside, with the people you already follow named beside the
-              count — the count sizes the room, the faces say whether it's one
-              you know anyone in. */}
-          {previewCommunity && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-              <StatPopover
-                icon={Users}
-                label={memberLabel}
-                loading={membersPending}
-                hint="Who has announced themselves in this community."
-                width="w-72"
-                className="shrink-0 gap-2 clip-corner-lg bg-secondary/60 px-3 py-1.5 text-sm font-medium text-foreground hover:bg-secondary"
-              >
-                <MembersList
-                  community={previewCommunity}
-                  members={members}
-                  isLoading={!membersSwept}
-                />
-              </StatPopover>
+          {/* The people you already follow who are in there — whether it's a
+              room you know anyone in. Self-effacing: the whole row is absent
+              until the guestbook has produced someone, so a cold or failed
+              sweep leaves no gap and nothing to wait for. */}
+          {followedMembers.length > 0 && (
+            <div className="mt-3">
               <FriendStack pubkeys={followedMembers} />
             </div>
           )}
