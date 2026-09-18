@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { QRCodeCanvas } from "@/components/ui/qrcode";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useBitcoinSigner } from "@/hooks/useBitcoinSigner";
@@ -110,7 +111,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
 
   // NIP-A3 payment targets. Only fetch once the dialog is open (the parent
   // already gates the mount on `open`).
-  const { targets: paymentTargets } = usePaymentTargets(target.pubkey);
+  const { targets: paymentTargets, isLoading: targetsLoading } = usePaymentTargets(target.pubkey);
   const lightningTarget = useMemo(() => findLightningTarget(paymentTargets), [paymentTargets]);
   const bitcoinTarget = useMemo(() => findBitcoinTarget(paymentTargets), [paymentTargets]);
   const bitcoinOverride = useMemo(
@@ -157,7 +158,12 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     walletRequired,
     bitcoinUnsupported,
   });
-  const [activeMethod, setActiveMethod] = useState<DialogMethodId>(defaultMethodId);
+  // `null` means "follow the computed default". The recipient's NIP-A3 payment
+  // targets load ASYNC, so the default is Bitcoin until they arrive and only
+  // then becomes e.g. the user's preferred Monero — the dialog must move to it
+  // unless the user has already picked a method from the switcher.
+  const [userMethod, setUserMethod] = useState<DialogMethodId | null>(null);
+  const activeMethod = userMethod ?? defaultMethodId;
   const currentMethod = methods.find((m) => m.id === activeMethod) ?? methods[0];
 
   // Success state — replaces the method UI when set.
@@ -266,6 +272,8 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
             "Success"
           ) : showingInvoice ? (
             "Lightning Payment"
+          ) : targetsLoading ? (
+            <Skeleton className="h-5 w-28" />
           ) : methods.length > 1 ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -283,7 +291,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
                 {methods.map((m) => (
                   <DropdownMenuItem
                     key={m.id}
-                    onSelect={() => setActiveMethod(m.id)}
+                    onSelect={() => setUserMethod(m.id)}
                     className="gap-2"
                   >
                     <PaymentMethodIcon method={m.def} />
@@ -305,7 +313,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
               )}
             </span>
           )}
-          {isPrivate && !showingInvoice && !success && (
+          {isPrivate && !showingInvoice && !success && !targetsLoading && (
             <Popover>
               <PopoverTrigger asChild>
                 <button
@@ -341,6 +349,12 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
             txid={success.kind === "onchain" ? success.txid : undefined}
             onClose={onDone}
           />
+        ) : targetsLoading ? (
+          // The recipient's NIP-A3 targets decide which methods exist and which
+          // is the default, and they load from relays. Show a skeleton until
+          // they resolve rather than painting Bitcoin and flipping to e.g. the
+          // user's preferred Monero once the target arrives.
+          <ZapMethodSkeleton />
         ) : showingInvoice ? (
           <LightningInvoiceView
             invoice={invoice!}
@@ -387,6 +401,26 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         )}
       </div>
     </>
+  );
+}
+
+// ── Loading skeleton (while the recipient's payment targets resolve) ───────
+
+/** Placeholder shown while NIP-A3 targets load, mirroring a payment pane's shape. */
+function ZapMethodSkeleton() {
+  return (
+    <div className="grid gap-3 px-4 py-4 w-full overflow-hidden" aria-hidden>
+      <div className="flex flex-col items-center gap-2 pt-2">
+        <Skeleton className="h-9 w-32" />
+        <Skeleton className="h-4 w-20" />
+      </div>
+      <div className="grid grid-cols-5 gap-1">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-8 rounded-full" />
+        ))}
+      </div>
+      <Skeleton className="h-10 w-full rounded-full" />
+    </div>
   );
 }
 
