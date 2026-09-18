@@ -12,6 +12,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { ProfileCard } from '@/components/ProfileCard';
 import { ImageCropDialog } from '@/components/ImageCropDialog';
+import { PaymentTargetsEditor, type PaymentTargetsEditorHandle } from '@/components/PaymentTargetsEditor';
 import { useCurrentUserProfile } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useUploadFile } from '@/hooks/useUploadFile';
@@ -455,6 +456,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   const [cropState, setCropState] = useState<CropState | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [uploadingFieldIndex, setUploadingFieldIndex] = useState<number>(-1);
+  const paymentTargetsRef = useRef<PaymentTargetsEditorHandle>(null);
 
   // Parse existing custom fields from raw event
   const parseFields = (): Array<{ label: string; value: string; type: 'text' | 'wallet' | 'media'; accept?: string }> => {
@@ -673,6 +675,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       queryClient.invalidateQueries({ queryKey: ['logins'] });
       queryClient.invalidateQueries({ queryKey: ['author', user.pubkey] });
 
+      // Persist payment targets (kind 10133) alongside the profile. If it fails
+      // or doesn't validate, the editor surfaces its own error toast; skip the
+      // success confirmation so the user knows something was off.
+      const targetsSaved = (await paymentTargetsRef.current?.save()) ?? true;
+      if (!targetsSaved) return;
+
       toast({ title: 'Profile saved' });
       onSaved?.();
     } catch {
@@ -874,6 +882,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                     </FormItem>
                   )}
                 />
+
+                {/* Accept Donations — NIP-A3 payment targets (kind 10133).
+                    Self-authored donation endpoints (Monero, Ethereum, Cash
+                    App, …); persisted through its imperative handle when the
+                    profile form submits. */}
+                <PaymentTargetsEditor ref={paymentTargetsRef} />
               </div>
             </CollapsibleContent>
           </Collapsible>

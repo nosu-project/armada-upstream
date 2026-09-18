@@ -1,9 +1,13 @@
 import { useNostr } from '@nostrify/react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { fetchFreshEvent } from '@/lib/fetchFreshEvent';
 import {
   PAYMENT_TARGETS_KIND,
   parsePaymentTargets,
+  paymentTargetsToTags,
   type PaymentTarget,
 } from '@/lib/paymentTargets';
 
@@ -38,4 +42,60 @@ export function usePaymentTargets(pubkey: string | undefined) {
     targets: query.data ?? [],
     isLoading: query.isLoading,
   };
+}
+
+/**
+ * Mutation hook for replacing the current user's payment targets (kind 10133).
+ *
+ * Kind 10133 is a replaceable event, so this is a full overwrite — the caller
+ * supplies the complete desired set and the hook serializes it to `payto`
+ * tags. We still read-modify-write via {@link fetchFreshEvent} to preserve any
+ * unrelated `content` the event may carry, and so a rapid re-save never rebuilds
+ * from a stale cache. Payment targets are public, self-authored donation
+ * endpoints published only on an explicit user save, so the AGENTS.md
+ * list-preservation rule is satisfied structurally: an empty set is a
+ * deliberate "clear my donations", not a failed read to defend against.
+ */
+export function useUpdatePaymentTargets() {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
+  const { mutateAsync: publishEvent } = useNostrPublish();
+
+  return useMutation({
+    mutationFn: async (targets: PaymentTarget[]) => {
+      if (!user) throw new Error('You must be logged in.');
+
+      const prev = await fetchFreshEvent(nostr, {
+        kinds: [PAYMENT_TARGETS_KIND],
+        authors: [user.pubkey],
+      });
+
+      const tags: string[][] = [
+        ...paymentTargetsToTags(targets),
+        ['alt', 'Payment targets'],
+      ];
+
+      await publishEvent({
+        kind: PAYMENT_TARGETS_KIND,
+        content: prev?.content ?? '',
+        tags,
+        prev: prev ?? undefined,
+      });
+    },
+    // Optimistically apply the new target set so the settings UI updates
+    // immediately. Snapshot for rollback on error.
+    onMutate: (targets: PaymentTarget[]) => {
+      const key = ['payment-targets', user?.pubkey];
+      const snapshot = queryClient.getQueryData<PaymentTarget[]>(key);
+      queryClient.setQueryData<PaymentTarget[]>(key, targets);
+      return { snapshot, key };
+    },
+    onError: (_err, _targets, ctx) => {
+      if (ctx) queryClient.setQueryData(ctx.key, ctx.snapshot);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payment-targets', user?.pubkey] });
+    },
+  });
 }
