@@ -101,17 +101,17 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
     url: `${BLOSSOM}/efce6e73cfc8ee57eb2492c0dfefa091a643c4a0aaeb732bcdfe3d742e465d4d.png`,
     label: "B&W Skull by collegeartist1",
   },
+  {
+    id: "gamer-kitty",
+    url: `${BLOSSOM}/fe80167b2ff4f1344bad29b2d429ceee3e448d087be053dabe0eae81e68ccd33.png`,
+    label: "Gamer Kitty by dudsflausino",
+  },
+  {
+    id: "rose",
+    url: `${BLOSSOM}/836dd87cc9d92ba2411ee1574f60825e23733aca2406ed20c735e19486e49222.png`,
+    label: "Rose by Milo",
+  },
   // PLACEHOLDER rows, replace with artist submissions.
-  {
-    id: "cat",
-    url: `${BLOSSOM}/148408b075188b381df1450bb89b72d5b476c9d2422ab6197ee5d3fd93560357.png`,
-    label: "Cat",
-  },
-  {
-    id: "dog",
-    url: `${BLOSSOM}/a50dc355d552183b8a7792bcd455b3d1c6e6e8e9b482d3187595b9eb353e8faa.png`,
-    label: "Dog",
-  },
   {
     id: "fox",
     url: `${BLOSSOM}/0d5495d30a971d7703cf2492e548d7c9639aa605b3b49a6c24ada8e50ad15118.png`,

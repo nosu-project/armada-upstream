@@ -79,11 +79,11 @@ describe("signup profile step", () => {
     const onFinish = vi.fn();
     renderStep({ expectedPubkey: PUBKEY, onFinish });
 
-    const cat = DEFAULT_AVATARS.find((avatar) => avatar.id === "cat");
+    const sloth = DEFAULT_AVATARS.find((avatar) => avatar.id === "sloth");
     fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "  Ana  " } });
     fireEvent.click(screen.getByRole("button", { name: "Fox" }));
     fireEvent.click(screen.getByRole("button", { name: "Dragon by gravestoneghost" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sloth" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalledTimes(1));
@@ -91,7 +91,7 @@ describe("signup profile step", () => {
 
     const published = h.publishEvent.mock.calls[0][0];
     expect(published.kind).toBe(0);
-    expect(JSON.parse(published.content)).toEqual({ name: "Ana", picture: cat?.url });
+    expect(JSON.parse(published.content)).toEqual({ name: "Ana", picture: sloth?.url });
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
@@ -117,6 +117,8 @@ describe("signup profile step", () => {
       "Skull by Julian Cela",
       "Dragon by gravestoneghost",
       "B&W Skull by collegeartist1",
+      "Gamer Kitty by dudsflausino",
+      "Rose by Milo",
     ]);
   });
 
