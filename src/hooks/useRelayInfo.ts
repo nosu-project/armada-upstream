@@ -17,6 +17,13 @@ export interface RelayInfoDocument {
   supported_nips?: number[];
   /** Buzz relays: custom protocol extensions (e.g. "nip-er", "nip-pl"). */
   supported_extensions?: string[];
+  /**
+   * NIP-AB device-pairing rendezvous URL. newlay serves this only under its
+   * `[buzz]` compatibility mode (the drop-in for Buzz's `buzz-pair-relay`), so
+   * on a `software: "newlay"` relay its presence marks Buzz mode — see
+   * `isBuzzRelayInfo`.
+   */
+  pairing_relay_url?: string;
   auth_required?: boolean;
   payment_required?: boolean;
   limitation?: {
