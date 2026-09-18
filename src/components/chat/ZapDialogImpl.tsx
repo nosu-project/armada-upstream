@@ -295,7 +295,11 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
           ) : (
             <span className="truncate">
               {isPrivate ? (
-                "Private Zap"
+                // Single-method private zap (only Bitcoin is available — no
+                // Lightning method to switch to). Name the actual method rather
+                // than the generic "Private Zap"; the privacy is conveyed by
+                // the help popover beside the title.
+                methodTitle(currentMethod)
               ) : (
                 <>Zap <DisplayName pubkey={target.pubkey} name={displayName} /></>
               )}
