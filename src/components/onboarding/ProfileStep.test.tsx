@@ -118,7 +118,7 @@ describe("signup profile step", () => {
       "Dragon by gravestoneghost",
       "B&W Skull by collegeartist1",
       "Gamer Kitty by dudsflausino",
-      "Rose by Milo",
+      "Agent Flower by Milo",
     ]);
   });
 

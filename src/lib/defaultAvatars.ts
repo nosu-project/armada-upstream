@@ -107,9 +107,9 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
     label: "Gamer Kitty by dudsflausino",
   },
   {
-    id: "rose",
+    id: "agent-flower",
     url: `${BLOSSOM}/836dd87cc9d92ba2411ee1574f60825e23733aca2406ed20c735e19486e49222.png`,
-    label: "Rose by Milo",
+    label: "Agent Flower by Milo",
   },
   // PLACEHOLDER rows, replace with artist submissions.
   {
