@@ -48,7 +48,7 @@ const SOURCE_KEY = "X-Armada-AppImage";
 // if these drift apart.
 const ENTRY_FIELDS = {
   Name: "Armada",
-  Comment: "Sovereign NIP-29 chat, channels, and voice",
+  Comment: "Sovereign encrypted communities and chat",
   Categories: "Network;Chat;InstantMessaging;",
 };
 

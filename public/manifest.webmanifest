@@ -1,7 +1,7 @@
 {
   "name": "Armada",
   "short_name": "Armada",
-  "description": "A sovereign harbor on the open relays — NIP-29 servers, channels, and voice. Your keys, your fleet.",
+  "description": "The open-source, encrypted Discord alternative. Unbannable communities with channels, voice, and DMs — no host required. Your keys, your fleet.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
