@@ -9,8 +9,8 @@ description: |
   keys are your identity and no one has to run anything.
 
   Spin up a Concord: a serverless, end-to-end encrypted community. Nothing to
-  set up, nobody in the middle, and only members can read it. Text channels,
-  live voice rooms, and invites, all without a host.
+  set up, and only members can read it — not the relays that carry it. Text
+  channels, live voice rooms, and invites, all without a host.
 
   Prefer full control? Self-host an Armada server on your own infrastructure
   and own the whole stack: membership, moderation, and data.

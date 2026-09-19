@@ -12,9 +12,9 @@ data, or shut your community down.
 Communities are serverless by default, built on
 [**Concord**](https://github.com/concord-protocol/concord): a serverless,
 end-to-end encrypted community protocol. Spin up a community with nothing to set
-up and nobody in the middle — text channels, live voice rooms, and invites, all
-without running a server. Communities ride as gift-wrapped Nostr events over
-ordinary relays; only members can read them.
+up — text channels, live voice rooms, and invites, all without running a server.
+Communities ride as gift-wrapped Nostr events over ordinary relays; only members
+can read them.
 
 Armada also supports [NIP-29 relay-based
 groups](https://github.com/nostr-protocol/nips/blob/master/29.md) for operators
