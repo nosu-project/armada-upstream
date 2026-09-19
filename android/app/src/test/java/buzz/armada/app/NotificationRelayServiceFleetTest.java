@@ -10,6 +10,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.net.ConnectException;
+import java.net.ProtocolException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.HashMap;
@@ -70,6 +71,81 @@ public class NotificationRelayServiceFleetTest {
         IOException b = new IOException("b", a);
         a.initCause(b);
         assertEquals(Outcome.TRANSIENT_DROP, NotificationRelayService.classifyFailure(a));
+    }
+
+    // ── classifyFailure with the failed-upgrade HTTP status ─────────────────
+    // okhttp reports a failed WebSocket upgrade — the relay answered the
+    // handshake with an HTTP status instead of 101 — through onFailure's
+    // Response argument, throwing a ProtocolException whose message carries the
+    // code. A relay whose proxy is up in front of a dead backend returns a
+    // persistent 5xx; with only the throwable it is indistinguishable from a
+    // transient blip and is retried on the bounded backoff forever — the
+    // battery drain in report b49c2110be73, where wss://relay.armada.buzz
+    // returned '502 Bad Gateway' on every attempt and was never quarantined.
+    // These pin the code-aware classification the breaker needs.
+
+    @Test
+    public void a502UpgradeResponseIsConnectRefused() {
+        assertEquals(Outcome.CONNECT_REFUSED, NotificationRelayService.classifyFailure(
+                new ProtocolException("Expected HTTP 101 response but was '502 Bad Gateway'"), 502));
+    }
+
+    @Test
+    public void everyServerErrorUpgradeIsPermanent() {
+        for (int code : new int[] {500, 502, 503, 504}) {
+            assertEquals("HTTP " + code + " should be permanent", Outcome.CONNECT_REFUSED,
+                    NotificationRelayService.classifyFailure(
+                            new ProtocolException("Expected HTTP 101 response but was '" + code + "'"), code));
+        }
+    }
+
+    @Test
+    public void aClientErrorMisconfigurationUpgradeIsPermanent() {
+        // 400/404 on the upgrade is a relay that will not speak WebSocket at
+        // this URL; retrying fast changes nothing.
+        assertEquals(Outcome.CONNECT_REFUSED, NotificationRelayService.classifyFailure(
+                new ProtocolException("Expected HTTP 101 response but was '400 Bad Request'"), 400));
+        assertEquals(Outcome.CONNECT_REFUSED, NotificationRelayService.classifyFailure(
+                new ProtocolException("Expected HTTP 101 response but was '404 Not Found'"), 404));
+    }
+
+    @Test
+    public void rateLimitedAndRequestTimeoutUpgradesStayTransient() {
+        // 429 and 408 are the HTTP codes that mean "retry later"; they must not
+        // count toward the breaker.
+        assertEquals(Outcome.TRANSIENT_DROP, NotificationRelayService.classifyFailure(
+                new ProtocolException("Expected HTTP 101 response but was '429 Too Many Requests'"), 429));
+        assertEquals(Outcome.TRANSIENT_DROP, NotificationRelayService.classifyFailure(
+                new ProtocolException("Expected HTTP 101 response but was '408 Request Timeout'"), 408));
+    }
+
+    @Test
+    public void aNon101SuccessUpgradeStaysTransient() {
+        // 2xx/3xx to a WS upgrade is bizarre but not a clear relay-down signal;
+        // stay conservative and transient.
+        assertEquals(Outcome.TRANSIENT_DROP, NotificationRelayService.classifyFailure(
+                new ProtocolException("Expected HTTP 101 response but was '200 OK'"), 200));
+    }
+
+    @Test
+    public void withoutAResponseCodeTheThrowableClassificationStands() {
+        // code 0 == no HTTP response reached us (a real socket failure): the
+        // throwable decides, exactly as the single-arg overload does.
+        assertEquals(Outcome.DNS_FAILURE, NotificationRelayService.classifyFailure(
+                new UnknownHostException("No address associated with hostname"), 0));
+        assertEquals(Outcome.CONNECT_REFUSED, NotificationRelayService.classifyFailure(
+                new ConnectException("refused"), 0));
+        assertEquals(Outcome.TRANSIENT_DROP, NotificationRelayService.classifyFailure(
+                new SocketTimeoutException("timeout"), 0));
+    }
+
+    @Test
+    public void aServerErrorCodeOutweighsATransientThrowable() {
+        // The HTTP status is the stronger signal: a 502 with a plain
+        // ProtocolException (its normal shape) is permanent even though the
+        // throwable alone would be transient.
+        assertEquals(Outcome.CONNECT_REFUSED, NotificationRelayService.classifyFailure(
+                new ProtocolException("unexpected"), 503));
     }
 
     // ── sessionAuthUnsatisfiable ────────────────────────────────────────────

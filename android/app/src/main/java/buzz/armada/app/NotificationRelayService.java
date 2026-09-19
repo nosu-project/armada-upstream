@@ -862,14 +862,36 @@ public class NotificationRelayService extends Service {
         healthRelayQuarantinedCount = quarantined;
     }
 
+    /** A socket failure with no HTTP handshake response (see the overload). */
+    static Outcome classifyFailure(Throwable t) {
+        return classifyFailure(t, 0);
+    }
+
     /**
      * Map a socket failure to the fleet policy's outcome. Deliberately
      * conservative: only a host that does not resolve, and a connection that
      * is refused or fails TLS, are permanent. Everything else — timeouts,
      * protocol errors, a mid-session drop — stays TRANSIENT, so an unfamiliar
      * failure is retried on the bounded backoff rather than quarantined.
+     *
+     * <p>{@code httpCode} is the status of a FAILED WebSocket upgrade — the
+     * relay answered the handshake with an HTTP response instead of 101, which
+     * okhttp surfaces as {@code onFailure}'s {@code Response} argument — or 0
+     * when no HTTP response reached us (a genuine socket-level failure). A
+     * relay whose proxy is up in front of a dead backend returns a persistent
+     * 5xx; with only the throwable that is a bare {@code ProtocolException},
+     * indistinguishable from a transient blip, and gets retried forever (the
+     * b49c2110be73 battery drain). So an upgrade that came back with a status —
+     * any 4xx/5xx except the two that mean "retry later", {@code 408 Request
+     * Timeout} and {@code 429 Too Many Requests} — is CONNECT_REFUSED: the
+     * relay is not serving WebSocket here now. The circuit breaker's
+     * three-consecutive-failure gate means a relay merely restarting (a brief
+     * 503) still recovers before it is quarantined.
      */
-    static Outcome classifyFailure(Throwable t) {
+    static Outcome classifyFailure(Throwable t, int httpCode) {
+        if (httpCode >= 400 && httpCode != 408 && httpCode != 429) {
+            return Outcome.CONNECT_REFUSED;
+        }
         int hops = 0;
         for (Throwable c = t; c != null && hops < 8; c = c.getCause(), hops++) {
             if (c instanceof UnknownHostException) return Outcome.DNS_FAILURE;
@@ -1935,10 +1957,16 @@ public class NotificationRelayService extends Service {
 
                 @Override
                 public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                    Log.w(TAG, "WS failure (" + relayUrl + "): " + t.getMessage());
+                    // A non-101 upgrade carries its HTTP status in `response`; a
+                    // real socket failure has none (code 0). classifyFailure
+                    // needs the status so a persistent proxy 5xx counts toward
+                    // the breaker instead of being retried as a transient blip.
+                    int httpCode = response != null ? response.code() : 0;
+                    Log.w(TAG, "WS failure (" + relayUrl + "): " + t.getMessage()
+                            + (httpCode != 0 ? " [HTTP " + httpCode + "]" : ""));
                     handler.post(() -> {
                         recordHealthError("socket");
-                        endSession(classifyFailure(t));
+                        endSession(classifyFailure(t, httpCode));
                     });
                 }
 
