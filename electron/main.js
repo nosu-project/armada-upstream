@@ -531,6 +531,11 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  // A flash requested for a notification ends the moment the user is looking
+  // (Windows keeps the taskbar entry highlighted until told otherwise).
+  mainWindow.on("focus", () => {
+    mainWindow?.flashFrame(false);
+  });
 
   // The app menu is removed (Menu.setApplicationMenu(null)), and the default
   // DevTools accelerators come from that menu — so in dev mode bind them
@@ -1681,6 +1686,13 @@ async function closeDb() {
 
 function installIpc() {
   ipcMain.on("armada:set-badge", (_event, count) => setUnreadBadge(count));
+  // The renderer presented an OS notification: draw attention to the window
+  // without raising it — the taskbar flash on Windows, urgency on Linux, a
+  // dock bounce on macOS — unless the user is already looking at it.
+  ipcMain.on("armada:request-attention", () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return;
+    mainWindow.flashFrame(true);
+  });
   ipcMain.handle("armada:platform", () => ({
     platform: process.platform,
     version: app.getVersion(),

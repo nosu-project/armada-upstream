@@ -55,6 +55,14 @@ describe("desktop database preload bridge", () => {
   });
 });
 
+describe("notification attention preload bridge", () => {
+  it("forwards a taskbar-attention request to the main process", () => {
+    const { api, ipcRenderer } = loadPreload();
+    api.requestAttention();
+    expect(ipcRenderer.send).toHaveBeenCalledWith("armada:request-attention");
+  });
+});
+
 describe("screen-share preload bridge", () => {
   it("transfers the dedicated H.265 frame port into the renderer world", () => {
     const { listeners, windowObject } = loadPreload();

@@ -214,6 +214,8 @@ interface ArmadaDesktopBridge {
   registerDeepLinkHost?: (host: string) => void;
   onDeepLink?: (handler: (path: string) => void) => () => void;
   armadaDb?: ArmadaDesktopDb;
+  // Optional: an older shell simply doesn't flash.
+  requestAttention?: () => void;
 }
 
 declare global {
@@ -850,6 +852,20 @@ export function onDesktopDeepLink(handler: (path: string) => void): () => void {
     return desktop()?.onDeepLink?.(handler) ?? (() => {});
   } catch {
     return () => {};
+  }
+}
+
+/**
+ * Ask the shell to draw the user's attention to the window without raising
+ * it: the taskbar flash on Windows, the urgency hint on Linux, a dock bounce
+ * on macOS. The shell ignores it while the window is focused and clears it on
+ * focus. No-op on the web and in a shell that predates it.
+ */
+export function requestDesktopAttention(): void {
+  try {
+    desktop()?.requestAttention?.();
+  } catch {
+    // ignore
   }
 }
 

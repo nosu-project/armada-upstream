@@ -16,7 +16,8 @@ import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettin
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
 import { isRoomActive } from "@/lib/activeRooms";
-import { isDesktop } from "@/lib/desktop";
+import { isDesktop, requestDesktopAttention } from "@/lib/desktop";
+import { desktopNotificationTag } from "@/lib/desktopNotificationTag";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { dmConvPeers } from "@/lib/nip17/protocol";
@@ -981,8 +982,10 @@ export function useForegroundNotifications(): void {
               // doubled by the browser's default notification tone.
               silent: true,
               // Tag by room so repeated messages in the same conversation
-              // collapse into one entry.
-              tag: roomKey || "armada",
+              // collapse into one entry. The desktop shell digests it: the raw
+              // key overflows Windows' toast tag limit and the toast is never
+              // shown (desktopNotificationTag.ts).
+              tag: isDesktop() ? desktopNotificationTag(roomKey) : roomKey || "armada",
               // Registration notifications are clicked in sw.js, so carry the
               // exact SPA route instead of relying on a page-only callback.
               data: { url: path || "/", lines: notificationLines },
@@ -1005,6 +1008,16 @@ export function useForegroundNotifications(): void {
                 if (path) c.navigate(path);
                 n.close();
               };
+              // The constructor resolves before the OS has drawn anything;
+              // a toast Windows refuses surfaces only here. Say so, or a
+              // whole platform's notifications can fail with no trace.
+              n.onerror = () => {
+                console.warn("[notify] OS refused the notification", { roomKey, title: n.title });
+              };
+              // A banner alone can be missed with the app behind another
+              // window; ask the shell for the taskbar's attention too (the
+              // orange flash on Windows). No-op on the web and when focused.
+              if (isDesktop()) requestDesktopAttention();
             }
           } catch {
             clearPresenting(cand.eventId, roomKey);

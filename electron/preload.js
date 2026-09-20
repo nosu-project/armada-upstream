@@ -57,6 +57,13 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   setBadge: (count) => ipcRenderer.send("armada:set-badge", count),
 
   /**
+   * Flash the taskbar entry / bounce the dock for a notification that arrived
+   * while the window is not focused. The main process drops it when the window
+   * IS focused and stops the flash on the next focus.
+   */
+  requestAttention: () => ipcRenderer.send("armada:request-attention"),
+
+  /**
    * Tell the shell the web bundle actually painted. The shell serves a
    * swappable bundle from userData, and this is how it learns the one it chose
    * comes up at all — silence past a grace period makes it look for a newer
