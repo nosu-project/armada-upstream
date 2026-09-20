@@ -1,0 +1,207 @@
+/**
+ * The grantee's side of a role-gated channel grant.
+ *
+ * An admin grants a role that carries a private channel; the key arrives as a
+ * Direct Invite for a community the member is already in (a "catch-up"). The
+ * member's Grant is in the folded Control Plane, so the key is one they are
+ * owed — and the globally-mounted notifier is the only surface that sees it
+ * arrive. This asserts that surface applies the key, rather than leaving it
+ * behind a toast the member has to notice and an Accept they have to click.
+ */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { InviteInboxItem } from "@/concord/hooks/useDirectInvites";
+import type { InviteBundle } from "@/concord/lib/invite";
+import { Permissions, type Role } from "@/concord/lib/roles";
+
+const OWNER = "aa".repeat(32);
+const ADMIN = "bb".repeat(32);
+const ME = "cc".repeat(32);
+const PEER = "dd".repeat(32);
+const CID = "ab".repeat(32);
+const ROOT = "11".repeat(32);
+const CPK = "22".repeat(32);
+const CH = "ee".repeat(32);
+
+const updateList = vi.fn(async () => undefined);
+const toast = vi.fn();
+
+let items: InviteInboxItem[] = [];
+let fold: { roster: { roles: Role[]; grants: { member: string; roleIds: string[] }[] }; ownerHex: string; banned: Set<string> } | undefined;
+
+const entry = {
+  community_id: CID,
+  current: { community_id: CID, root_epoch: 0, community_root: ROOT, control_pk: CPK, channels: [] },
+};
+const community = { idHex: CID, rootEpoch: 0n } as const;
+
+vi.mock("@/hooks/useToast", () => ({ toast: (...a: unknown[]) => toast(...a) }));
+vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: ME } }) }));
+vi.mock("@/concord/hooks/useDirectInvites", () => ({
+  useInviteInbox: () => ({ items, unreadCount: items.filter((i) => i.unread).length }),
+}));
+vi.mock("@/concord/hooks/useCommunityList", () => ({
+  useCommunityEntry: () => entry,
+  useCommunity: () => community,
+  useUpdateCommunityList: () => ({ mutateAsync: updateList }),
+}));
+vi.mock("@/concord/hooks/useControlPlane", () => ({
+  useControlFold: () => ({ data: fold }),
+}));
+vi.mock("@/concord/hooks/useCommunityActions", () => ({
+  bundleToEntry: (b: InviteBundle) => ({ community_id: b.community_id, current: b }),
+}));
+
+import { DirectInviteNotifier } from "./DirectInviteNotifier";
+
+const accessRole: Role = {
+  roleId: "access",
+  name: "Testers",
+  position: 9,
+  permissions: 0n,
+  scope: { kind: "channel", channelId: CH },
+  color: 0,
+};
+const staffRole: Role = {
+  roleId: "staff",
+  name: "Admin",
+  position: 1,
+  permissions: Permissions.MANAGE_ROLES,
+  scope: { kind: "server" },
+  color: 0,
+};
+
+function catchUpFrom(sender: string): InviteInboxItem {
+  const bundle = {
+    community_id: CID,
+    owner: OWNER,
+    owner_salt: "00".repeat(32),
+    community_root: ROOT,
+    control_pk: CPK,
+    root_epoch: 0,
+    channels: [{ id: CH, key: "1".repeat(64), epoch: 0, name: "testers" }],
+    relays: [],
+    name: "Crew",
+  } as unknown as InviteBundle;
+  return {
+    unread: true,
+    invite: { wrapId: `wrap-${sender.slice(0, 4)}`, sender, bundle, communityId: CID, name: "Crew", receivedAt: 1000, catchUp: true },
+  };
+}
+
+function entitledFold() {
+  return {
+    roster: {
+      roles: [accessRole, staffRole],
+      grants: [
+        { member: ME, roleIds: ["access"] },
+        { member: ADMIN, roleIds: ["staff"] },
+      ],
+    },
+    ownerHex: OWNER,
+    banned: new Set<string>(),
+  };
+}
+
+function mount() {
+  const qc = new QueryClient();
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={["/c/x"]}>
+        <DirectInviteNotifier />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+const flush = () => act(async () => {});
+
+beforeEach(() => {
+  updateList.mockClear();
+  toast.mockClear();
+  items = [];
+  fold = undefined;
+});
+
+describe("DirectInviteNotifier: a granted channel key", () => {
+  it("is applied to the vault when staff vend a key the member's role entitles them to", async () => {
+    fold = entitledFold();
+    items = [catchUpFrom(ADMIN)];
+    mount();
+    await flush();
+    expect(updateList).toHaveBeenCalledWith({ type: "add", entry: expect.objectContaining({ community_id: CID }) });
+    // The member is told the channel is theirs, not offered a decision.
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/added/i) }));
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "New channel keys offered" }));
+  });
+
+  it("is applied once the Control fold catches up to the Grant", async () => {
+    // The key arrives before the fold has the Grant that entitles the member.
+    items = [catchUpFrom(ADMIN)];
+    const view = mount();
+    await flush();
+    expect(updateList).not.toHaveBeenCalled();
+    // Not announced as a decision either: the verdict isn't in yet.
+    expect(toast).not.toHaveBeenCalled();
+
+    fold = entitledFold();
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/c/x"]}>
+          <DirectInviteNotifier />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await flush();
+    expect(updateList).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays a manual Accept when the sender is not staff", async () => {
+    fold = entitledFold();
+    items = [catchUpFrom(PEER)];
+    mount();
+    await flush();
+    expect(updateList).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "New channel keys offered" }));
+  });
+
+  it("stays a manual Accept when the member holds no role scoped to the channel", async () => {
+    fold = entitledFold();
+    fold.roster.grants = [{ member: ADMIN, roleIds: ["staff"] }];
+    items = [catchUpFrom(ADMIN)];
+    mount();
+    await flush();
+    expect(updateList).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "New channel keys offered" }));
+  });
+
+  it("is applied at most once per wrap across re-renders", async () => {
+    fold = entitledFold();
+    items = [catchUpFrom(ADMIN)];
+    const view = mount();
+    await flush();
+    items = [catchUpFrom(ADMIN)];
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={["/c/x"]}>
+          <DirectInviteNotifier />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await flush();
+    expect(updateList).toHaveBeenCalledTimes(1);
+  });
+
+  it("still announces a fresh community invite as before", async () => {
+    const join = catchUpFrom(ADMIN);
+    join.invite.catchUp = false;
+    items = [join];
+    mount();
+    await flush();
+    expect(updateList).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "New community invite" }));
+  });
+});

@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { concordInviteReadKey, useReadState } from "@/hooks/useReadState";
 import {
   directInviteExpired,
+  heldMembershipOf,
   isCatchUpBundle,
   parseDirectInviteRumor,
   unwrapDirectInvite,
@@ -24,7 +25,7 @@ import {
   warmInviteInbox,
   writeStoredInvites,
 } from "@/concord/lib/inviteInbox";
-import { heldChannelKeys, liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
+import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord/lib/inviteRelays";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
@@ -325,18 +326,7 @@ export function useDirectInvites() {
   const heldByCommunity = useMemo(() => {
     const m = new Map<string, HeldMembership>();
     if (list) {
-      for (const e of liveEntries(list.list)) {
-        m.set(e.community_id, {
-          rootEpoch: e.current.root_epoch,
-          communityRoot: e.current.community_root,
-          ...(e.current.control_pk ? { controlPk: e.current.control_pk } : {}),
-          // Lowercase keys: isCatchUpBundle normalizes the bundle side the same
-          // way, so one channel is one entry whatever a foreign list copy's
-          // spelling was.
-          channelEpochs: new Map(heldChannelKeys(e.current.channels).map((c) => [c.id.toLowerCase(), c.epoch])),
-          channelCuts: new Map((e.channel_cuts ?? []).map((c) => [c.id.toLowerCase(), c.epoch])),
-        });
-      }
+      for (const e of liveEntries(list.list)) m.set(e.community_id, heldMembershipOf(e));
     }
     return m;
   }, [list]);

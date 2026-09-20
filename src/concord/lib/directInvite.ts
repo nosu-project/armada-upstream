@@ -244,21 +244,68 @@ export function isCatchUpBundle(
   held: HeldMembership | undefined,
   bundle: Pick<InviteBundle, "root_epoch" | "channels" | "community_root" | "control_pk">,
 ): boolean {
-  if (held === undefined) return false;
+  return catchUpChannelIds(held, bundle).length > 0;
+}
+
+/**
+ * The private-channel ids (lowercase hex) a bundle would NEWLY contribute to an
+ * already-joined member — the vend inside a catch-up. Empty when the bundle is
+ * not a catch-up at all ({@link isCatchUpBundle} is exactly "non-empty").
+ *
+ * Split out because the adoption decision has to judge entitlement per
+ * channel: a bundle that carries one key I'm owed beside one I'm not is not
+ * adoptable as a whole, and only the channels it actually adds are the ones
+ * whose entitlement matters.
+ */
+export function catchUpChannelIds(
+  held: HeldMembership | undefined,
+  bundle: Pick<InviteBundle, "root_epoch" | "channels" | "community_root" | "control_pk">,
+): string[] {
+  if (held === undefined) return [];
   // Same base, or it is not a catch-up at any epoch. `control_pk` rides along:
   // swapping it alone eclipses the member onto an attacker's Control Plane,
   // which CORD-05 §1 accepts only as self-harm by an inviter a JOINER chose.
-  if (!hexEq(bundle.community_root, held.communityRoot)) return false;
-  if (!hexEq(bundle.control_pk, held.controlPk)) return false;
-  if (bundle.root_epoch !== held.rootEpoch) return false;
+  if (!hexEq(bundle.community_root, held.communityRoot)) return [];
+  if (!hexEq(bundle.control_pk, held.controlPk)) return [];
+  if (bundle.root_epoch !== held.rootEpoch) return [];
   // A bundle is another client's document: normalize its id spelling before
   // consulting the cut floor (CORD-01: hex is lowercase; foreign input may
   // not be, and an unmatched spelling here would re-park revoked access).
-  return bundle.channels.some((c) => {
+  const out: string[] = [];
+  for (const c of bundle.channels) {
     const id = c.id.toLowerCase();
     const cut = held.channelCuts?.get(id);
-    if (cut !== undefined && c.epoch < cut) return false; // revoked access, not a vend
+    if (cut !== undefined && c.epoch < cut) continue; // revoked access, not a vend
     const heldEpoch = held.channelEpochs.get(id);
-    return heldEpoch === undefined || c.epoch > heldEpoch;
-  });
+    if (heldEpoch === undefined || c.epoch > heldEpoch) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * What a Community List entry currently holds, in the shape the catch-up
+ * classifier reads. Structural over the entry so the lib stays free of the
+ * list module; every reader of an entry's held keys for this purpose goes
+ * through here, so the two spellings of "what I hold" cannot drift.
+ */
+export function heldMembershipOf(entry: {
+  current: {
+    root_epoch: number;
+    community_root: string;
+    control_pk?: string;
+    channels?: Array<{ id: string; epoch: number }>;
+  };
+  channel_cuts?: Array<{ id: string; epoch: number }>;
+}): HeldMembership {
+  const channels = Array.isArray(entry.current.channels) ? entry.current.channels : [];
+  return {
+    rootEpoch: entry.current.root_epoch,
+    communityRoot: entry.current.community_root,
+    ...(entry.current.control_pk ? { controlPk: entry.current.control_pk } : {}),
+    // Lowercase keys: catchUpChannelIds normalizes the bundle side the same
+    // way, so one channel is one entry whatever a foreign list copy's
+    // spelling was.
+    channelEpochs: new Map(channels.map((c) => [c.id.toLowerCase(), c.epoch])),
+    channelCuts: new Map((entry.channel_cuts ?? []).map((c) => [c.id.toLowerCase(), c.epoch])),
+  };
 }

@@ -1,16 +1,16 @@
 /**
- * Proofs that this client currently hands out Private Channel keys the
- * protocol says the recipient may not have.
+ * Guards against handing out Private Channel keys the protocol says the
+ * recipient may not have.
  *
- * Every `it` here asserts a NORMATIVE property and currently FAILS. They are
- * written against the same functions the real call paths use, so each failure
- * is the shipped behaviour, not a model of it:
- *
- *   - `InviteDialog.tsx:70` sends a Direct Invite with no channel narrowing;
- *   - `useInvites.ts:336` mints a public link the same way;
- *   - `useRekey.ts:904` re-publishes those links after a revoke rotation;
- *   - `useCommunityActions.ts:423` mints a channel's access Role at
- *     `mintablePosition`, the HIGHEST rank its signer may claim.
+ * Every `it` here asserts a NORMATIVE property. When first written they all
+ * FAILED against the shipped code — each was the shipped behaviour, not a
+ * model of it: the invite dialog sent a Direct Invite with no channel
+ * narrowing, public links were minted the same way and re-published after a
+ * revoke rotation, and a channel's access Role was minted at
+ * `mintablePosition`, the HIGHEST rank its signer may claim. They pass now and
+ * stay written against the same functions the real call paths use
+ * (`vendableChannels`, `accessRolePosition`, the channel-cut merge), so a
+ * regression in any of them fails here rather than in the field.
  *
  * The governing clause is CORD-03 §1. A Channel is defined by who may read
  * it, and there are exactly two kinds: Public, "readable by every member",
