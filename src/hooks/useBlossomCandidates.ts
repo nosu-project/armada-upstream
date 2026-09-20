@@ -1,7 +1,14 @@
-import { useCallback, useContext, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
-import { AppContext } from "@/contexts/AppContext";
-import { APP_BLOSSOM_SERVERS, getEffectiveBlossomServers, mediaCandidates } from "@/lib/blossom";
+import { mediaCandidates } from "@/lib/blossom";
+import { routeMediaCandidates } from "@/lib/mediaPolicy";
+
+import { useBlossomServers } from "./useBlossomServers";
+import { useMediaPolicy } from "./useMediaPolicy";
+
+// The server list lives in its own module (see there for why); re-exported so
+// the existing callers and tests keep their import.
+export { useBlossomServers } from "./useBlossomServers";
 
 /**
  * Cross-server media fallback, in three composable pieces.
@@ -16,32 +23,12 @@ import { APP_BLOSSOM_SERVERS, getEffectiveBlossomServers, mediaCandidates } from
  *
  * - {@link useBlossomServers}: the viewer's effective server list, memoized.
  * - {@link useBlossomCandidates}: that list applied to one URL.
+ * - {@link useRoutedCandidates}: the candidates under the viewer's media
+ *   policy — proxied when a proxy is set, loaded directly when it is not.
  * - {@link useSourceWalk}: an index over any candidate list, advanced by the
  *   element's error and reset by a manual retry.
- * - {@link useImageFallback}: the two composed, for a plain `<img>`.
+ * - {@link useImageFallback}: the lot composed, for a plain `<img>`.
  */
-
-/**
- * The viewer's effective Blossom server list, stable across renders.
- *
- * Reads the context directly rather than through `useAppContext`, which throws
- * without a provider: this sits under every avatar, so it must render wherever
- * an avatar does. With no config in reach the app defaults stand in — the same
- * list a fresh install has.
- */
-export function useBlossomServers(): string[] {
-  const config = useContext(AppContext)?.config;
-  const appBlossomServers = config?.appBlossomServers ?? APP_BLOSSOM_SERVERS;
-  const blossomServerMetadata = config?.blossomServerMetadata;
-  const useAppBlossomServers = config?.useAppBlossomServers ?? true;
-  return useMemo(
-    () =>
-      blossomServerMetadata
-        ? getEffectiveBlossomServers(appBlossomServers, blossomServerMetadata, useAppBlossomServers)
-        : [...appBlossomServers],
-    [appBlossomServers, blossomServerMetadata, useAppBlossomServers],
-  );
-}
 
 /**
  * The ordered sources for one media reference: the URL, the sender's declared
@@ -59,6 +46,27 @@ export function useBlossomCandidates(
   return useMemo(
     () => (url ? mediaCandidates(url, declaredKey ? declaredKey.split("\n") : undefined, servers) : []),
     [url, declaredKey, servers],
+  );
+}
+
+/**
+ * {@link useBlossomCandidates} under the viewer's media policy: the sources to
+ * load, each in the form it loads in — proxied when a proxy is set, direct
+ * otherwise. `bypass` skips the policy for a source the policy has no business
+ * touching — a Buzz-hosted blob, whose signed GET header a proxy would not
+ * forward and whose host is a relay the viewer joined.
+ */
+export function useRoutedCandidates(
+  url: string | undefined,
+  declaredFallbacks?: readonly string[],
+  opts: { bypass?: boolean } = {},
+): { sources: string[] } {
+  const candidates = useBlossomCandidates(url, declaredFallbacks);
+  const policy = useMediaPolicy();
+  const bypass = opts.bypass ?? false;
+  return useMemo(
+    () => (bypass ? { sources: candidates } : routeMediaCandidates(candidates, policy)),
+    [bypass, candidates, policy],
   );
 }
 
@@ -115,12 +123,16 @@ export function useSourceWalk(candidates: readonly string[]): SourceWalk {
  * `failed` once nothing is left to try. For an avatar, a badge, a banner, a
  * custom emoji — any image that is not a chat attachment (those go through
  * `useMediaWithFallback`, which also decrypts).
+ *
+ * Under the media policy: `src` is already the proxied form when a proxy is
+ * set, so a caller that renders nothing without a `src` (every avatar and
+ * emoji) keeps working unchanged.
  */
 export function useImageFallback(
   url: string | undefined,
   declaredFallbacks?: readonly string[],
 ): { src: string | undefined; onError: () => void; failed: boolean; reset: () => void } {
-  const candidates = useBlossomCandidates(url, declaredFallbacks);
-  const { src, advance, failed, reset } = useSourceWalk(candidates);
+  const { sources } = useRoutedCandidates(url, declaredFallbacks);
+  const { src, advance, failed, reset } = useSourceWalk(sources);
   return { src, onError: advance, failed, reset };
 }

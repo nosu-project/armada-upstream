@@ -51,8 +51,10 @@ import { decryptImageBytes } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { presetIndexedDBArmadaDB } from "@/lib/db/armadaDB";
+import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { mediaPolicyFromConfig, mediaSrc, type MediaPolicy } from "@/lib/mediaPolicy";
 import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
 import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
 import {
@@ -222,17 +224,32 @@ function uniqueTag(tags: string[][], name: string): string | undefined {
 
 // ── Local lookups ────────────────────────────────────────────────────────────
 
-/** A sender's display name and avatar from the local kind-0, never the network. */
-async function profileFor(pubkey: string): Promise<{ name: string; avatar?: string }> {
+/**
+ * The viewer's media policy, from the sealed config. A config sealed before
+ * the field existed gets the defaults — a stranger's avatar through the
+ * proxy — rather than a direct fetch.
+ */
+function policyOf(cfg: SwPushConfig | null): MediaPolicy {
+  return mediaPolicyFromConfig(cfg?.mediaPolicy);
+}
+
+/**
+ * A sender's display name and avatar from the local kind-0, never the network
+ * — and the avatar as the media policy would load it: the browser fetches a
+ * notification icon from this device the moment it is shown, which is the
+ * request the policy exists to route.
+ */
+async function profileFor(pubkey: string, policy: MediaPolicy): Promise<{ name: string; avatar?: string }> {
   try {
     const store = await appEventStore();
     const [ev] = await store.query([{ kinds: [0], authors: [pubkey], limit: 1 }]);
     if (ev) {
       const metadata = JSON.parse(ev.content) as NostrMetadata;
       const name = getDisplayName(metadata, pubkey);
-      const avatar = typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)
+      const picture = typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)
         ? metadata.picture
         : undefined;
+      const avatar = mediaSrc(picture, policy);
       // A profile with no name reads "Anonymous", which is a fact this worker
       // established by looking — unlike the old sealed snapshot, where a
       // missing entry only ever meant the page hadn't sealed one yet.
@@ -245,12 +262,12 @@ async function profileFor(pubkey: string): Promise<{ name: string; avatar?: stri
 }
 
 /** Resolve the names a message's NIP-27 mentions refer to, locally. */
-async function mentionNamesFor(content: string): Promise<Map<string, string>> {
+async function mentionNamesFor(content: string, policy: MediaPolicy): Promise<Map<string, string>> {
   const names = new Map<string, string>();
   const keys = mentionPubkeys(content);
   if (keys.length === 0) return names;
   await Promise.all(keys.map(async (pk) => {
-    const { name } = await profileFor(pk);
+    const { name } = await profileFor(pk, policy);
     if (name !== "Anonymous") names.set(pk, name);
   }));
   return names;
@@ -266,9 +283,9 @@ async function mentionNamesFor(content: string): Promise<Map<string, string>> {
  * Oversized icons are skipped rather than embedded: a multi-megabyte string in
  * a push handler is not worth an avatar.
  */
-async function imageDataUrl(pointer: ImagePointer): Promise<string | undefined> {
+async function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<string | undefined> {
   try {
-    const { bytes, mime } = await decryptImageBytes(pointer);
+    const { bytes, mime } = await decryptImageBytes(pointer, undefined, APP_BLOSSOM_SERVERS, policy);
     if (bytes.byteLength > 512 * 1024) return undefined;
     let binary = "";
     for (const b of bytes) binary += String.fromCharCode(b);
@@ -328,10 +345,11 @@ async function present(
   author: string,
   room: { title?: string; image?: string },
   route: { tag: string; url: string; timestamp: number; roomKey?: string; eventId?: string },
+  policy: MediaPolicy,
 ): Promise<PreparedPush> {
   const [{ name, avatar }, mentionNames] = await Promise.all([
-    profileFor(author),
-    mentionNamesFor(msg.content),
+    profileFor(author, policy),
+    mentionNamesFor(msg.content, policy),
   ]);
   const full: NotificationMessage = {
     ...msg,
@@ -453,6 +471,7 @@ async function prepareDm(
       url: `/dm/${conversation}`,
       timestamp: opened.createdAt * 1000,
     },
+    policyOf(cfg),
   );
 }
 
@@ -510,8 +529,9 @@ async function prepareConcord(
   // enforced only here, after the encrypted rumor's `p` tags are legible.
   if (stream.mentionOnly && !mention) return DROP;
 
+  const policy = policyOf(cfg);
   const room = await concordRoomIdentity(stream.communityId, stream.channelId);
-  const image = room.iconPointer ? await imageDataUrl(room.iconPointer) : undefined;
+  const image = room.iconPointer ? await imageDataUrl(room.iconPointer, policy) : undefined;
 
   const base = `/c/${stream.communityId}/${stream.channelId}`;
   return present(
@@ -535,6 +555,7 @@ async function prepareConcord(
       url: `${base}/m/${encodeURIComponent(uniqueTag(opened.tags, "e") ?? opened.rumorId)}`,
       timestamp: opened.createdAt * 1000,
     },
+    policy,
   );
 }
 
@@ -567,6 +588,7 @@ async function prepareGroup(
   const only = exact ?? (named.length === 1 ? named[0] : undefined);
 
   const mention = Boolean(cfg?.self) && ev.tags.some(([n, v]) => n === "p" && v === cfg?.self);
+  const policy = policyOf(cfg);
   return present(
     {
       plane: "nip29",
@@ -577,7 +599,8 @@ async function prepareGroup(
       threadReply: isThreadReply(ev.kind, ev.tags),
     },
     ev.pubkey,
-    { title: only?.room.title, image: only?.room.iconUrl },
+    // A kind-39000 `picture` is the relay operator's URL: policed like an avatar.
+    { title: only?.room.title, image: mediaSrc(only?.room.iconUrl, policy) },
     {
       tag: `h:${groupId}`,
       // A one-relay spec is source attribution even when this fresh install
@@ -588,6 +611,7 @@ async function prepareGroup(
       url: only ? groupUrl(only.relay, groupId, ev.id) : (relays[0] ? groupUrl(relays[0], groupId, ev.id) : "/"),
       timestamp: ev.created_at * 1000,
     },
+    policy,
   );
 }
 

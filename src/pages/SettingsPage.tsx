@@ -41,6 +41,7 @@ import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
+import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { WalletSettings } from "@/components/settings/WalletSettings";
@@ -440,7 +441,7 @@ export function SettingsPage() {
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "chat", title: "Chat", icon: MessageSquare },
-      { id: "media", title: "Media servers", icon: Image },
+      { id: "media", title: "Media", icon: Image },
       { id: "links", title: "Links", icon: Link2 },
       { id: "discover", title: "Discover", icon: Compass },
     );
@@ -834,6 +835,7 @@ export function SettingsPage() {
       case "media":
         return (
           <>
+            <MediaPrivacySettings />
             <SettingsRow
               label="Use app media servers"
               description="Upload files to the synchronized app Blossom servers in addition to your own."

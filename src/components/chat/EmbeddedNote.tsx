@@ -975,14 +975,11 @@ function TagPreviewCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) 
 
       {cover && (
         <div className="overflow-hidden rounded-xl">
-          <img
+          <FallbackImage
             src={cover}
             alt=""
             className="w-full max-h-[220px] object-cover"
             loading="lazy"
-            onError={(e) => {
-              (e.currentTarget.parentElement as HTMLElement).style.display = "none";
-            }}
           />
         </div>
       )}

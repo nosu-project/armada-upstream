@@ -8,12 +8,18 @@ import { encryptBytes } from "@/lib/encryptedMedia";
 
 import { useMediaWithFallback } from "./useMediaWithFallback";
 
-/** The server hook reads the context object itself, so the test supplies one. */
+/**
+ * The server hook reads the context object itself, so the test supplies one.
+ * No proxy, so these cases see the URLs as written: they are about the mirror
+ * walk, and routing has its own suite in `useBlossomCandidates.test.ts` and
+ * `mediaPolicy.test.ts`.
+ */
 const context = {
   config: {
     appBlossomServers: ["https://a.example/", "https://b.example/"],
     blossomServerMetadata: { servers: ["https://c.example/"], updatedAt: 0 },
     useAppBlossomServers: true,
+    mediaProxy: "",
   },
   updateConfig: vi.fn(),
 } as unknown as AppContextType;

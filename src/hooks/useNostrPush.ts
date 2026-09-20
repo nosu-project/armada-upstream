@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
 import { installCrossTabAccountExit } from "@/lib/crossTabAccountExit";
@@ -444,6 +445,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     concordPlaneReady,
     watchSetReady,
   } = usePushWatchSet(prefs);
+  const mediaPolicy = useMediaPolicyConfig();
   const notificationSettingsReadyRef = useRef(notificationSettingsReady);
   notificationSettingsReadyRef.current = notificationSettingsReady;
 
@@ -514,6 +516,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
           }))
         ),
         ...(dmSk ? { sk: dmSk } : {}),
+        mediaPolicy,
       });
       if (!written) {
         throw new Error("The service worker notification policy could not be stored");
@@ -531,6 +534,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     concord,
     concordConfigReady,
     dmSk,
+    mediaPolicy,
     queueSwConfig,
   ]);
 

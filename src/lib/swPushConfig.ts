@@ -37,6 +37,7 @@
  * hardware isolation exists only on native.
  */
 
+import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { DmRequestLevel } from "@/lib/pushPrefs";
 import { clearVault, sealConfig } from "@/lib/swSecretVault";
 
@@ -118,6 +119,13 @@ export interface SwPushConfig {
    * current one: a retired epoch is read-cutoff history and must not notify.
    */
   concord?: SwConcordStream[];
+  /**
+   * The viewer's media policy (`lib/mediaPolicy.ts`), so the worker fetches a
+   * sender's avatar and a community's icon from where the page would — a
+   * stranger's host through the proxy, or not at all. Absent in a config
+   * sealed by an older page, which the worker reads as the default policy.
+   */
+  mediaPolicy?: MediaPolicyConfig;
 }
 
 function pushConfigUrl(): string {

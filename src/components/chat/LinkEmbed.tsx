@@ -6,6 +6,7 @@ import { InstagramEmbed } from "@/components/chat/InstagramEmbed";
 import { TweetEmbed } from "@/components/chat/TweetEmbed";
 import { toast } from "@/hooks/useToast";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
   extractInstagramShortcode,
@@ -139,6 +140,11 @@ function displayDomain(url: string): string {
 /** Rich link preview card rendered from OEmbed data. */
 function LinkPreview({ url, className }: { url: string; className?: string }) {
   const { data, isLoading } = useLinkPreview(url);
+  // The thumbnail is whatever the linked page's OpenGraph named, on a host of
+  // its choosing — under the media policy like a message image (proxied for a
+  // stranger's host, absent where the policy wants a tap; a card is not the
+  // place for a placeholder).
+  const thumbnail = useMediaSrc(sanitizeImageSrc(data?.thumbnail_url));
 
   if (isLoading) {
     return (
@@ -190,10 +196,10 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
       />
 
       <div className="pointer-events-none relative">
-        {sanitizeImageSrc(data.thumbnail_url) && (
+        {thumbnail && (
           <div className="w-full overflow-hidden">
             <img
-              src={sanitizeImageSrc(data.thumbnail_url)}
+              src={thumbnail}
               alt=""
               className="w-full max-h-[180px] object-cover"
               loading="lazy"

@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import { decryptImagePointer } from "@/concord/lib/image";
 import type { ImagePointer } from "@/concord/lib/types";
 import { useBlossomServers } from "@/hooks/useBlossomCandidates";
+import { useMediaPolicy } from "@/hooks/useMediaPolicy";
+
+import type { MediaPolicy } from "@/lib/mediaPolicy";
 
 /**
  * Resolve an encrypted Concord {@link ImagePointer} (icon / banner) to a
@@ -30,16 +33,21 @@ function cacheKey(image: ImagePointer): string {
  *
  * `servers` are the Blossom hosts to try after the pointer's own (the hook
  * passes the viewer's effective list; a caller with no config in reach gets
- * the app defaults).
+ * the app defaults), and `policy` the viewer's media policy, which decides
+ * whether and through what the pointer's host is fetched at all.
  */
-export function resolveDecryptedImage(image: ImagePointer, servers?: readonly string[]): Promise<string> {
+export function resolveDecryptedImage(
+  image: ImagePointer,
+  servers?: readonly string[],
+  policy?: MediaPolicy,
+): Promise<string> {
   const ck = cacheKey(image);
   const ready = resolved.get(ck);
   if (ready) return Promise.resolve(ready);
 
   let promise = cache.get(ck);
   if (!promise) {
-    promise = decryptImagePointer(image, undefined, servers);
+    promise = decryptImagePointer(image, undefined, servers, policy);
     cache.set(ck, promise);
     promise
       .then((u) => {
@@ -66,6 +74,7 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
   const key = image?.key;
   const nonce = image?.nonce;
   const servers = useBlossomServers();
+  const policy = useMediaPolicy();
   const [src, setSrc] = useState<string | null>(() =>
     image ? resolved.get(cacheKey(image)) ?? null : null,
   );
@@ -84,7 +93,7 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
 
     let cancelled = false;
     setSrc(null);
-    resolveDecryptedImage(image, servers)
+    resolveDecryptedImage(image, servers, policy)
       .then((u) => {
         if (!cancelled) setSrc(u);
       })
@@ -94,8 +103,8 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
     return () => {
       cancelled = true;
     };
-    // The server list is read once per resolve; a later change is picked up by
-    // the next pointer, not by re-decrypting every icon on screen.
+    // The server list and policy are read once per resolve; a later change is
+    // picked up by the next pointer, not by re-decrypting every icon on screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, key, nonce]);
 

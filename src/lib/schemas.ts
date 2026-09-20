@@ -139,6 +139,7 @@ export const AppConfigSchema = z.object({
   showRecentRailDms: z.boolean().catch(defaultConfig.showRecentRailDms),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
+  mediaProxy: z.string().catch(defaultConfig.mediaProxy),
   // Keyed by device class; each unset means "auto" (see AppConfig.sendOnEnter).
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
@@ -208,6 +209,8 @@ export const MetadataDocSchema = z.looseObject({
   discoverAllContent: z.boolean().optional(),
   /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
   stripTrackingParams: z.boolean().optional(),
+  /** Media proxy URI template with `{href}`; empty = off (see AppConfig.mediaProxy). */
+  mediaProxy: z.string().optional(),
   /** Enter-sends preference, keyed by device class (see AppConfig.sendOnEnter). */
   sendOnEnter: SendOnEnterSchema.optional(),
   /** Unit money amounts are shown and entered in. */

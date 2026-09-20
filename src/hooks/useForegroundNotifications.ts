@@ -6,7 +6,9 @@ import { useNavigate } from "react-router-dom";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useBlossomServers } from "@/hooks/useBlossomCandidates";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -19,6 +21,7 @@ import { isRoomActive } from "@/lib/activeRooms";
 import { isDesktop, requestDesktopAttention } from "@/lib/desktop";
 import { desktopNotificationTag } from "@/lib/desktopNotificationTag";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { mediaSrc } from "@/lib/mediaPolicy";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { dmConvPeers } from "@/lib/nip17/protocol";
 import {
@@ -314,6 +317,11 @@ export function useForegroundNotifications(): void {
   );
   const { data: groupList } = useUserGroupList();
   const { mutedPubkeys } = useMutedPubkeys();
+  // A notification icon is fetched by the OS from this device the moment it
+  // is shown, from whatever host the sender's profile named: the same request
+  // the media policy routes for an avatar on screen, so the same policy.
+  const mediaPolicy = useMediaPolicy();
+  const blossomServers = useBlossomServers();
 
   // Its own ref rather than a field on `ctx`: the sink reads it on every
   // candidate, and it must reflect a mute made moments ago in another tab or
@@ -362,6 +370,8 @@ export function useForegroundNotifications(): void {
     queryClient,
     eventStore,
     dmRequestPolicy: config.pushPrefs.dmRequests,
+    mediaPolicy,
+    blossomServers,
   });
   ctx.current = {
     readState,
@@ -375,6 +385,8 @@ export function useForegroundNotifications(): void {
     queryClient,
     eventStore,
     dmRequestPolicy: config.pushPrefs.dmRequests,
+    mediaPolicy,
+    blossomServers,
   };
 
   // Session floor: never notify for anything older than the moment the notifier
@@ -551,10 +563,14 @@ export function useForegroundNotifications(): void {
         name: getDisplayName(metadata, pubkey),
         // https only: a notification icon is loaded by the browser outside the
         // page's control, and an http URL is a mixed-content fetch that simply
-        // fails (noisily, in the console) on every deploy this ships to.
-        avatar: typeof metadata?.picture === "string" && /^https:\/\//.test(metadata.picture)
-          ? metadata.picture
-          : undefined,
+        // fails (noisily, in the console) on every deploy this ships to. Then
+        // the media policy: a stranger's host through the proxy, or no icon.
+        avatar: mediaSrc(
+          typeof metadata?.picture === "string" && /^https:\/\//.test(metadata.picture)
+            ? metadata.picture
+            : undefined,
+          ctx.current.mediaPolicy,
+        ),
       });
 
       if (!pubkey) return { name: "Anonymous" };
@@ -596,7 +612,8 @@ export function useForegroundNotifications(): void {
         if (cand.plane === "nip29") {
           if (!relayUrl || !cand.groupId) return {};
           const room = await nip29RoomIdentity(relayUrl, cand.groupId);
-          return { title: room.title, image: room.iconUrl };
+          // A kind-39000 `picture` is the relay operator's URL: policed like an avatar.
+          return { title: room.title, image: mediaSrc(room.iconUrl, ctx.current.mediaPolicy) };
         }
         if (cand.plane === "c2") {
           if (!communityId || !cand.channelIdHex) return {};
@@ -604,7 +621,8 @@ export function useForegroundNotifications(): void {
           // The icon is an encrypted blob; decrypting it is a warm Cache
           // Storage hit whenever the community is (or has been) on screen.
           const image = room.iconPointer
-            ? await resolveDecryptedImage(room.iconPointer).catch(() => undefined)
+            ? await resolveDecryptedImage(room.iconPointer, ctx.current.blossomServers, ctx.current.mediaPolicy)
+              .catch(() => undefined)
             : undefined;
           return { title: room.title, image };
         }

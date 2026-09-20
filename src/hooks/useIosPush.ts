@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import {
   ArmadaPush,
@@ -136,6 +137,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     configReady,
     watchSetLoading,
   } = usePushWatchSet(prefs);
+  const mediaPolicy = useMediaPolicyConfig();
 
   // Keep the extension's config current: the DM policy and known set for every
   // enabled session, the decrypt key for nsec logins, and the per-channel
@@ -213,6 +215,7 @@ export function useIosPush(): UsePushNotificationsReturn {
         // a login is one or the other.
         ...(dmSk ? { sk: dmSk } : {}),
         ...(!dmSk && dmBunker ? { nip46: dmBunker } : {}),
+        mediaPolicy,
       });
       if (!cancelled) setConfigError(undefined);
     })().catch((err) => {
@@ -244,6 +247,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     dmSk,
     dmBunker,
     concord,
+    mediaPolicy,
   ]);
 
   const client = useMemo(() => {

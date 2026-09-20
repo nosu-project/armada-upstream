@@ -5,15 +5,23 @@ import { AppContext, type AppContextType } from "@/contexts/AppContext";
 
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 
-/** Two servers, so the walk has exactly one mirror to try before giving up. */
-const context = {
-  config: {
-    appBlossomServers: ["https://blossom.ditto.pub/", "https://blossom.dreamith.to/"],
-    blossomServerMetadata: { servers: [], updatedAt: 0 },
-    useAppBlossomServers: true,
-  },
-  updateConfig: vi.fn(),
-} as unknown as AppContextType;
+/**
+ * Two servers, so the walk has exactly one mirror to try before giving up.
+ * No proxy, so the walk cases see the URLs as written; the policy has its own
+ * case below.
+ */
+const contextWith = (config: Record<string, unknown>) =>
+  ({
+    config: {
+      appBlossomServers: ["https://blossom.ditto.pub/", "https://blossom.dreamith.to/"],
+      blossomServerMetadata: { servers: [], updatedAt: 0 },
+      useAppBlossomServers: true,
+      mediaProxy: "",
+      ...config,
+    },
+    updateConfig: vi.fn(),
+  }) as unknown as AppContextType;
+const context = contextWith({});
 
 const HASH = "d".repeat(64);
 
@@ -71,5 +79,34 @@ describe("AvatarImage cross-server fallback", () => {
     const other = "e".repeat(64);
     rerender(tree(`https://blossom.ditto.pub/${other}.png`));
     expect(screen.getByTestId<HTMLImageElement>("img").src).toBe(`https://blossom.ditto.pub/${other}.png`);
+  });
+});
+
+/**
+ * A kind-0 picture is set by whoever it names, so every avatar on screen is a
+ * request to a host of THEIR choosing. With a proxy set the picture loads
+ * through it; with none it loads directly.
+ */
+describe("AvatarImage under the media policy", () => {
+  const tree = (src: string, config: Record<string, unknown>) => (
+    <AppContext.Provider value={contextWith(config)}>
+      <Avatar>
+        <AvatarImage src={src} data-testid="img" />
+        <AvatarFallback data-testid="fallback">A</AvatarFallback>
+      </Avatar>
+    </AppContext.Provider>
+  );
+
+  it("proxies a picture when a proxy is set", () => {
+    const proxy = "https://proxy.example/?url={href}";
+    render(tree("https://pics.example/me.jpg", { mediaProxy: proxy }));
+    expect(screen.getByTestId<HTMLImageElement>("img").src).toBe(
+      `https://proxy.example/?url=${encodeURIComponent("https://pics.example/me.jpg")}`,
+    );
+  });
+
+  it("loads a picture directly when no proxy is set", () => {
+    render(tree("https://pics.example/me.jpg", { mediaProxy: "" }));
+    expect(screen.getByTestId<HTMLImageElement>("img").src).toBe("https://pics.example/me.jpg");
   });
 });

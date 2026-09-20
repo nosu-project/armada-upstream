@@ -15,8 +15,13 @@ interface FallbackImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "
  * `fallback` instead of a broken-image icon.
  *
  * For the images that are not chat attachments — profile banners, badge art,
- * emoji-pack icons — which used to be plain `<img onError={hide}>` elements,
- * each one blank the moment the single server named in its URL went down.
+ * emoji-pack icons, a kind's cover — which used to be plain `<img
+ * onError={hide}>` elements, each one blank the moment the single server named
+ * in its URL went down.
+ *
+ * Under the viewer's media policy like every other image: a stranger's host
+ * is loaded through the proxy, and one the policy gates renders as nothing —
+ * these decorate a card, and a card is not the place for a placeholder.
  */
 export function FallbackImage({ src, fallback = null, alt = "", ...props }: FallbackImageProps) {
   const walk = useImageFallback(src);

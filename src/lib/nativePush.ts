@@ -2,6 +2,8 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor
 
 import { isRouterPath } from "@/lib/deepLinkUrl";
 
+import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
+
 // Compatibility export: installation identity is transport-agnostic now that
 // web browsers also need per-install gateway ids.
 export { pushInstallationId } from "@/lib/pushRegistry";
@@ -156,6 +158,13 @@ export interface IosPushConfig {
      */
     muted?: boolean;
   }>;
+  /**
+   * The viewer's media policy (`lib/mediaPolicy.ts`), so the extension fetches
+   * a sender's avatar from where the app would — a stranger's host through
+   * the proxy, or not at all. Absent in a config written by an older app,
+   * which the extension reads as the default policy.
+   */
+  mediaPolicy?: MediaPolicyConfig;
 }
 
 /** Write (replace) the extension's config. No-op where the plugin is absent. */

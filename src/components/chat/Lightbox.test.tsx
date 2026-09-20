@@ -2,21 +2,24 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Lightbox } from "@/components/chat/Lightbox";
+import { AppContext, type AppContextType } from "@/contexts/AppContext";
 
 import type { LightboxItem } from "@/components/chat/Lightbox";
+import type { ReactNode } from "react";
 
-// The media hooks read Blossom mirror config off the app context; none of these
-// URLs have a mirror, so an empty config keeps the resolver on the plain URL.
-vi.mock("@/hooks/useAppContext", () => ({
-  useAppContext: () => ({
-    config: {
-      appBlossomServers: [],
-      blossomServerMetadata: { servers: [] },
-      useAppBlossomServers: false,
-    },
-    updateConfig: vi.fn(),
-  }),
-}));
+// The media hooks read the Blossom mirror config and the media policy off the
+// app context object itself; none of these URLs have a mirror, and no proxy is
+// set so the resolver stays on the plain URL (routing has its own suites).
+const context = {
+  config: {
+    appBlossomServers: [],
+    blossomServerMetadata: { servers: [] },
+    useAppBlossomServers: false,
+    mediaProxy: "",
+  },
+  updateConfig: vi.fn(),
+} as unknown as AppContextType;
+const wrap = (children: ReactNode) => <AppContext.Provider value={context}>{children}</AppContext.Provider>;
 
 const VIDEO: LightboxItem = {
   url: "https://example.com/clip.mp4",
@@ -41,13 +44,15 @@ beforeEach(() => pause.mockClear());
 function renderLightbox(media: LightboxItem[], currentIndex = 0) {
   const onClose = vi.fn();
   const view = render(
-    <Lightbox
-      media={media}
-      currentIndex={currentIndex}
-      onClose={onClose}
-      onNext={vi.fn()}
-      onPrev={vi.fn()}
-    />,
+    wrap(
+      <Lightbox
+        media={media}
+        currentIndex={currentIndex}
+        onClose={onClose}
+        onNext={vi.fn()}
+        onPrev={vi.fn()}
+      />,
+    ),
   );
   return { onClose, view };
 }
@@ -108,13 +113,15 @@ describe("Lightbox", () => {
     const media = [VIDEO, IMAGE];
     const onNext = vi.fn();
     render(
-      <Lightbox
-        media={media}
-        currentIndex={0}
-        onClose={vi.fn()}
-        onNext={onNext}
-        onPrev={vi.fn()}
-      />,
+      wrap(
+        <Lightbox
+          media={media}
+          currentIndex={0}
+          onClose={vi.fn()}
+          onNext={onNext}
+          onPrev={vi.fn()}
+        />,
+      ),
     );
 
     fireEvent.keyDown(document.querySelector("video")!, { key: "ArrowRight" });
@@ -130,13 +137,15 @@ describe("Lightbox", () => {
     pause.mockClear();
 
     view.rerender(
-      <Lightbox
-        media={[VIDEO, second]}
-        currentIndex={1}
-        onClose={vi.fn()}
-        onNext={vi.fn()}
-        onPrev={vi.fn()}
-      />,
+      wrap(
+        <Lightbox
+          media={[VIDEO, second]}
+          currentIndex={1}
+          onClose={vi.fn()}
+          onNext={vi.fn()}
+          onPrev={vi.fn()}
+        />,
+      ),
     );
 
     expect(pause).toHaveBeenCalled();

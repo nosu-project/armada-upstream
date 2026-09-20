@@ -723,6 +723,17 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
         String dmMutedPeersRaw = arrayToString(call.getArray("dmMutedPeers"));
         String dmRequestsRaw = call.getString("dmRequests");
+        // Where the service may fetch an avatar from (see MediaPolicy). Stored
+        // verbatim; the service parses it and treats a missing or unreadable
+        // one as the default policy.
+        String mediaPolicyRaw = null;
+        try {
+            if (call.getObject("mediaPolicy") != null) {
+                mediaPolicyRaw = call.getObject("mediaPolicy").toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read media policy", e);
+        }
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
         String selfDTagsRaw = arrayToString(call.getArray("selfDTags"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
@@ -853,6 +864,7 @@ public class ArmadaNotificationPlugin extends Plugin {
                 putOrRemove(editor, "dmLevels", dmLevelsRaw);
                 putOrRemove(editor, "dmRequests", dmRequestsRaw);
                 putOrRemove(editor, "prefs", prefsRaw);
+                putOrRemove(editor, "mediaPolicy", mediaPolicyRaw);
             }
             putOrRemove(editor, "selfRelays", selfRelaysRaw);
             // Absent leaves the pref absent, which the service reads as

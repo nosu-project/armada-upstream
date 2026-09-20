@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDm17Conversations } from "@/hooks/useDm17";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { mediaSrc } from "@/lib/mediaPolicy";
 import { DM_PEER_SEP } from "@/lib/nip17/protocol";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import {
@@ -66,6 +68,12 @@ export function useShareShortcuts(): void {
   const { conversations } = useDm17Conversations();
   const eventStore = useEventStore();
   const self = user?.pubkey;
+  // The shortcut icon is fetched natively (`ShareTargetPlugin.fetchIcon`) from
+  // whatever host the peer's profile names, so the URL handed down is already
+  // the one the media policy would load from — or none.
+  const mediaPolicy = useMediaPolicy();
+  const mediaPolicyRef = useRef(mediaPolicy);
+  mediaPolicyRef.current = mediaPolicy;
 
   // Read inside the publish, which runs on a timer well after this render, so
   // it always sees the current list rather than the one that scheduled it.
@@ -154,10 +162,14 @@ export function useShareShortcuts(): void {
         const name = getDisplayName(metadata);
         const label =
           name !== "Anonymous" ? name : `${nip19.npubEncode(c.peer).slice(0, 12)}…`;
-        const iconUrl = metadata?.picture;
+        const iconUrl = mediaSrc(
+          typeof metadata?.picture === "string" ? metadata.picture : undefined,
+          mediaPolicyRef.current,
+        );
         shortcuts.push({ id: c.id, label, ...(iconUrl ? { iconUrl } : {}) });
       } else if (c.label) {
-        shortcuts.push({ id: c.id, label: c.label, ...(c.iconUrl ? { iconUrl: c.iconUrl } : {}) });
+        const iconUrl = mediaSrc(c.iconUrl, mediaPolicyRef.current);
+        shortcuts.push({ id: c.id, label: c.label, ...(iconUrl ? { iconUrl } : {}) });
       }
     }
     if (shortcuts.length > 0) await ShareTarget.publishShortcuts({ shortcuts });

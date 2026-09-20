@@ -1,0 +1,151 @@
+import Foundation
+
+/// Where a sender-named image is fetched FROM, decided the same way the app
+/// decides it — the port of `src/lib/mediaPolicy.ts`, for the one fetch the
+/// extension makes unprompted: a sender's kind-0 avatar. Keep the two (and
+/// the Android `MediaPolicy.java`) in step.
+///
+/// An avatar fetch is a request from the phone's address to whatever host the
+/// sender's profile names, made while the device is locked, for every message
+/// that notifies. So the one control applies here too: a PROXY. With a proxy
+/// set, the fetch goes through it and the host sees the proxy's address; with
+/// none, the fetch is direct. A loopback/private address is never proxied (a
+/// public proxy cannot reach it) and never fetched, so it resolves to nil.
+struct MediaPolicy: Equatable {
+
+    /// Ditto's default CORS proxy — a byte-for-byte pass-through.
+    static let defaultProxy = "https://proxy.shakespeare.diy/?url={href}"
+
+    /// Normalized proxy template, or "" for none.
+    let proxy: String
+
+    init(proxy: String = MediaPolicy.defaultProxy) {
+        self.proxy = MediaPolicy.normalizeProxy(proxy)
+    }
+
+    /// The policy a fresh install has: the default proxy on.
+    static let defaults = MediaPolicy()
+
+    /// Parse the `mediaPolicy` object the app writes into the push config
+    /// (`{proxy}`). A missing or unreadable one is the default policy, never
+    /// "load directly": a config written before the field existed still
+    /// proxies a stranger's avatar.
+    static func parse(_ object: [String: Any]?) -> MediaPolicy {
+        guard let object, let proxy = object["proxy"] as? String else { return defaults }
+        return MediaPolicy(proxy: proxy)
+    }
+
+    /// The URL to fetch `url` from, or nil when the policy would not fetch it at
+    /// all (a loopback/private address). Mirrors `mediaSrc`.
+    func resolve(_ url: String?) -> String? {
+        guard let url, !url.isEmpty else { return nil }
+        guard let scheme = MediaPolicy.scheme(of: url), scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        // Never fetched and never proxied: a public proxy cannot reach it, and
+        // the attempt would tell it the address.
+        if MediaPolicy.isLocalNetworkUrl(url) { return nil }
+        return proxy.isEmpty ? url : proxyUrl(url)
+    }
+
+    /// `url` through the proxy template, or unchanged when already on it.
+    func proxyUrl(_ url: String) -> String {
+        if proxy.isEmpty { return url }
+        // The template's braces are not URL characters, so the proxy's own host
+        // is read off a filled probe rather than the template itself.
+        let probe = MediaPolicy.fillTemplate(proxy, href: "https://example.com/x")
+        if let proxyHost = MediaPolicy.host(of: probe), proxyHost == MediaPolicy.host(of: url) {
+            return url
+        }
+        return MediaPolicy.fillTemplate(proxy, href: url)
+    }
+
+    // MARK: - Pure helpers
+
+    /// The stored form of a proxy template: trimmed, http(s) once filled, and
+    /// carrying an `{href}` placeholder (appended to a bare prefix). "" for
+    /// anything unusable, which reads as "no proxy".
+    static func normalizeProxy(_ raw: String?) -> String {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        let probe = fillTemplate(trimmed, href: "https://example.com/x")
+        guard let scheme = scheme(of: probe), scheme == "https" || scheme == "http",
+              host(of: probe) != nil
+        else { return "" }
+        return trimmed.contains("{href}") || trimmed.contains("{+href}") ? trimmed : trimmed + "{href}"
+    }
+
+    /// RFC 6570 simple (`{href}`, percent-encoded like `encodeURIComponent`)
+    /// and reserved (`{+href}`, kept raw) expansion of the one variable used.
+    static func fillTemplate(_ template: String, href: String) -> String {
+        template
+            .replacingOccurrences(of: "{+href}", with: href)
+            .replacingOccurrences(of: "{href}", with: encodeComponent(href))
+    }
+
+    /// `encodeURIComponent`'s unreserved set.
+    private static let unreserved = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
+    )
+
+    static func encodeComponent(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: unreserved) ?? s
+    }
+
+    /// Lowercase scheme of a URL string, or nil.
+    static func scheme(of url: String) -> String? {
+        guard let colon = url.firstIndex(of: ":"), colon > url.startIndex else { return nil }
+        let scheme = url[url.startIndex..<colon]
+        for (i, c) in scheme.enumerated() {
+            let ok = c.isASCII && (c.isLetter || (i > 0 && (c.isNumber || c == "+" || c == "-" || c == ".")))
+            if !ok { return nil }
+        }
+        return scheme.lowercased()
+    }
+
+    /// Lowercase hostname of a URL (IPv6 brackets stripped), or nil.
+    static func host(of url: String) -> String? {
+        guard !url.isEmpty, let components = URLComponents(string: url), var host = components.host,
+              !host.isEmpty
+        else { return nil }
+        host = host.lowercased()
+        if host.hasPrefix("[") { host.removeFirst() }
+        if host.hasSuffix("]") { host.removeLast() }
+        return host
+    }
+
+    /// The port of `isLocalNetworkUrl` in `sanitizeUrl.ts`.
+    static func isLocalNetworkUrl(_ url: String) -> Bool {
+        guard var h = host(of: url) else { return false }
+        if h == "localhost" || h.hasSuffix(".localhost") || h.hasSuffix(".local") { return true }
+        if h == "::1" || h == "0.0.0.0" { return true }
+        // An IPv4-mapped address reaches the same host by another spelling.
+        if h.hasPrefix("::ffff:") {
+            let rest = String(h.dropFirst(7))
+            if isDottedQuad(rest) {
+                h = rest
+            } else {
+                let parts = rest.split(separator: ":")
+                if parts.count == 2, let a = UInt32(parts[0], radix: 16), let b = UInt32(parts[1], radix: 16) {
+                    let n = (a << 16) | b
+                    h = "\((n >> 24) & 255).\((n >> 16) & 255).\((n >> 8) & 255).\(n & 255)"
+                }
+            }
+        }
+        if isDottedQuad(h) {
+            let p = h.split(separator: ".").compactMap { Int($0) }
+            let a = p[0], b = p[1]
+            if a == 127 || a == 10 || a == 0 { return true }
+            if a == 192 && b == 168 { return true }
+            if a == 172 && b >= 16 && b <= 31 { return true }
+            if a == 169 && b == 254 { return true }
+        }
+        if h.range(of: "^f[cd][0-9a-f]*:", options: .regularExpression) != nil { return true }
+        if h.range(of: "^fe[89ab][0-9a-f]*:", options: .regularExpression) != nil { return true }
+        return false
+    }
+
+    private static func isDottedQuad(_ s: String) -> Bool {
+        s.range(of: "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$", options: .regularExpression) != nil
+    }
+}

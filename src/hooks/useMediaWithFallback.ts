@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
+import { getBuzzMediaHostsVersion, isBuzzMediaUrl, subscribeBuzzMediaHosts } from "@/buzz/media";
 import { MAX_EXPLICIT_DECRYPT_BYTES } from "@/lib/encryptedMedia";
 
-import { useBlossomCandidates, useSourceWalk } from "./useBlossomCandidates";
+import { useRoutedCandidates, useSourceWalk } from "./useBlossomCandidates";
 import { useResolvedMediaSrc } from "./useResolvedMediaSrc";
 
 import type { MediaFallbackProps } from "@/components/chat/MediaFallback";
@@ -31,13 +32,21 @@ export interface MediaWithFallback {
 }
 
 /**
- * Resolve a media reference to a displayable `src` WITH cross-server fallback.
+ * Resolve a media reference to a displayable `src` WITH cross-server fallback,
+ * under the viewer's media policy.
  *
  * Wraps {@link useResolvedMediaSrc} (which handles plain, encrypted and
  * Buzz-authed blobs) and, for a content-addressed Blossom URL, walks the same
  * `/<sha256>` blob across the user's other effective Blossom servers when a
  * load fails — the read side of the BUD-04 mirroring the uploader already does.
  * A dead or not-yet-mirrored server transparently fails over to the next copy.
+ *
+ * The policy is applied to the candidate list before anything loads
+ * (`useRoutedCandidates`): with a proxy set, the sender's host is loaded
+ * through it, so an `<img>` in a message cannot learn the viewer's address
+ * just by being scrolled past. A Buzz-hosted blob bypasses the policy: it
+ * needs a signed header no proxy forwards, and its host is a relay the viewer
+ * joined.
  *
  * WHO walks depends on who can see the failure:
  *
@@ -55,15 +64,18 @@ export interface MediaWithFallback {
  * message re-attempts from the top instead of inheriting a stale failure.
  */
 export function useMediaWithFallback(ref: EncryptedRef): MediaWithFallback {
-  const candidates = useBlossomCandidates(ref.url, ref.fallbacks);
   const encrypted = Boolean(ref.encryption?.algorithm);
+  // Re-evaluate Buzz-ness when the host registry grows (see useResolvedMediaSrc).
+  useSyncExternalStore(subscribeBuzzMediaHosts, getBuzzMediaHostsVersion);
+  const buzz = !encrypted && isBuzzMediaUrl(ref.url);
+  const { sources } = useRoutedCandidates(ref.url, ref.fallbacks, { bypass: buzz });
 
   // The encrypted path has one thing to render — the decrypted bytes — so its
   // element walk is a single step: an `onError` on the object URL (bytes that
   // are not an image at all) goes straight to `failed`.
   const elementCandidates = useMemo(
-    () => (encrypted ? [ref.url] : candidates),
-    [encrypted, ref.url, candidates],
+    () => (encrypted ? sources.slice(0, 1) : sources),
+    [encrypted, sources],
   );
   const walk = useSourceWalk(elementCandidates);
 
@@ -76,7 +88,7 @@ export function useMediaWithFallback(ref: EncryptedRef): MediaWithFallback {
     { ...ref, url: walk.src ?? ref.url },
     {
       maxBytes,
-      alternates: encrypted ? candidates.slice(1) : undefined,
+      alternates: encrypted ? sources.slice(1) : undefined,
       retryKey: walk.attempt,
     },
   );

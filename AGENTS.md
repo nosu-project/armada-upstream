@@ -755,6 +755,28 @@ to fail a run:
   ships no Play Services to receive FCM on, and its background service is
   strictly better anyway, holding the relay sockets itself with no third party
   in the delivery path.
+- **Every sender-named image loads through the media policy, in one place.**
+  An `<img src>`, a `<video poster>`, a CSS `url()`, a notification icon and a
+  `fetch` of an encrypted icon are all a request from the viewer's address to
+  whatever host the sender named, so an image in a message learns the IP of
+  everyone who scrolls past it; no referrer policy or CSP touches the TCP
+  connection. `src/lib/mediaPolicy.ts` is the ONE place the rule lives, and the
+  rule is a single PROXY: with `mediaProxy` set (Ditto's `{href}` template, ON
+  by default at the public proxy Ditto ships, user-clearable) every such load
+  goes through it, so the host sees the proxy's address; cleared, media loads
+  directly. A loopback/private address is never proxied and never loaded.
+  Apply it by going through the hooks that already do (`useMediaWithFallback`,
+  `useImageFallback`/`FallbackImage`, `useRoutedCandidates`, `useMediaSrc`,
+  `AvatarImage`), never by putting a raw event URL into an element. The three
+  background writers — `pushRuntime.ts`, `NotificationRelayService`'s
+  `MediaPolicy.java`, `ArmadaNotify`'s `MediaPolicy.swift` — carry the same
+  proxy in their configs and must stay in step with the TS
+  (`MediaPolicyTest.java`, `MediaPolicyTests.swift` mirror `mediaPolicy.test.ts`);
+  an absent proxy config there is the DEFAULT (proxy on), never "load directly".
+  Two bypasses load directly on purpose: a Buzz-hosted blob (its signed GET
+  header would not survive a proxy, and its host is a relay the viewer joined),
+  and a deliberate file download or Mini App open (`FileAttachment`, `Webxdc`),
+  which the image proxy is not for.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes

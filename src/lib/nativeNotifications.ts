@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
+import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
@@ -311,6 +312,14 @@ export interface ArmadaNotificationPlugin {
     selfDTags?: string[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
+    /**
+     * The viewer's media policy (`lib/mediaPolicy.ts`), so the service fetches
+     * a sender's avatar and a community's icon from where the WebView would —
+     * a stranger's host through the proxy, or not at all. Rides with the other
+     * policy fields (gated on `policyPlaneReady`). An older native binary
+     * ignores it; a missing one is read natively as the default policy.
+     */
+    mediaPolicy?: MediaPolicyConfig;
     /**
      * Concord (CORD-02) channel subscriptions. The service subscribes
      * `{kinds:[1059], authors:[…stream pk]}` per relay and uses the supplied

@@ -53,7 +53,10 @@ export function CustomEmojiImg({
   // e.g. http://localhost:8080/…) is never rendered: pointing an <img> at it
   // makes armada.buzz request a local address, which trips Chrome's Local
   // Network Access prompt ("… wants to access other apps and services on this
-  // device") for everyone who views the message.
+  // device") for everyone who views the message. The media policy gates these
+  // too (`src` is then undefined), and one the policy holds back is simply not
+  // shown — an emoji has no room for a placeholder, and the fallback text
+  // says what it was.
   if (failed || !src || isLocalNetworkUrl(url)) return <>{fallback}</>;
 
   return (

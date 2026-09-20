@@ -9,18 +9,27 @@ import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { useBlossomServers, useImageFallback, useSourceWalk } from "./useBlossomCandidates";
 
 /** The hook reads the context object itself (so it survives without a provider), so the test supplies one. */
-const context = {
-  config: {
-    appBlossomServers: ["https://a.example/", "https://b.example/"],
-    blossomServerMetadata: { servers: ["https://c.example/"], updatedAt: 0 },
-    useAppBlossomServers: true,
-  },
-  updateConfig: vi.fn(),
-} as unknown as AppContextType;
+function contextWith(config: Record<string, unknown>): AppContextType {
+  return {
+    config: {
+      appBlossomServers: ["https://a.example/", "https://b.example/"],
+      blossomServerMetadata: { servers: ["https://c.example/"], updatedAt: 0 },
+      useAppBlossomServers: true,
+      ...config,
+    },
+    updateConfig: vi.fn(),
+  } as unknown as AppContextType;
+}
+/** No proxy — the walk cases are about mirrors, not routing. */
+const context = contextWith({ mediaProxy: "" });
 const wrapper = ({ children }: { children: React.ReactNode }) =>
   createElement(AppContext.Provider, { value: context }, children);
+const wrapperWith = (config: Record<string, unknown>) =>
+  ({ children }: { children: React.ReactNode }) =>
+    createElement(AppContext.Provider, { value: contextWith(config) }, children);
 
 const HASH = "a".repeat(64);
+const PROXY = "https://proxy.example/?url={href}";
 
 describe("useBlossomServers", () => {
   it("reads the effective list from the app config", () => {
@@ -130,5 +139,39 @@ describe("useImageFallback", () => {
     const { result } = renderHook(() => useImageFallback(undefined), { wrapper });
     expect(result.current.src).toBeUndefined();
     expect(result.current.failed).toBe(false);
+  });
+});
+
+/**
+ * The media policy applied to the walk (`lib/mediaPolicy.ts` decides; this is
+ * the wiring): with a proxy set every candidate loads through it, with none
+ * they load directly.
+ */
+describe("useImageFallback under the media policy", () => {
+  const stranger = `https://photos.example/${HASH}.png`;
+
+  it("proxies each candidate when a proxy is set", () => {
+    const { result } = renderHook(() => useImageFallback(stranger), {
+      wrapper: wrapperWith({ mediaProxy: PROXY }),
+    });
+    expect(result.current.src).toBe(`https://proxy.example/?url=${encodeURIComponent(stranger)}`);
+    act(() => result.current.onError());
+    expect(result.current.src).toBe(
+      `https://proxy.example/?url=${encodeURIComponent(`https://a.example/${HASH}.png`)}`,
+    );
+  });
+
+  it("loads directly with no proxy", () => {
+    const { result } = renderHook(() => useImageFallback(stranger), {
+      wrapper: wrapperWith({ mediaProxy: "" }),
+    });
+    expect(result.current.src).toBe(stranger);
+  });
+
+  it("falls back to the default policy with no provider mounted", () => {
+    // The default proxies rather than loading directly.
+    const { result } = renderHook(() => useImageFallback(stranger));
+    expect(result.current.src).toContain("proxy.shakespeare.diy");
+    expect(result.current.src).toContain(encodeURIComponent(stranger));
   });
 });

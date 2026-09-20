@@ -16,6 +16,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { APP_BLOSSOM_SERVERS, mediaCandidates } from "@/lib/blossom";
 import { decryptBuffer, fetchCapped } from "@/lib/encryptedMedia";
+import { defaultMediaPolicy, routeMediaCandidates, type MediaPolicy } from "@/lib/mediaPolicy";
 
 import type { ImagePointer } from "@/concord/lib/types";
 
@@ -101,10 +102,11 @@ export async function decryptImagePointer(
   pointer: ImagePointer,
   signal?: AbortSignal,
   servers?: readonly string[],
+  policy?: MediaPolicy,
 ): Promise<string> {
   const cached = await readCached(pointer.hash);
   if (cached) return URL.createObjectURL(cached);
-  const { bytes, mime } = await decryptImageBytes(pointer, signal, servers);
+  const { bytes, mime } = await decryptImageBytes(pointer, signal, servers, policy);
   return URL.createObjectURL(new Blob([buf(bytes)], { type: mime }));
 }
 
@@ -122,11 +124,17 @@ export async function decryptImagePointer(
  * was mirrored to the uploader's other servers (BUD-04), so the fetch walks
  * `servers` — the viewer's effective list, or the app defaults where there is
  * no config to read, as in the worker — before the icon is given up on.
+ *
+ * Under the viewer's media policy like any other fetch of a sender-named URL
+ * (`lib/mediaPolicy.ts`): the pointer's host is whoever set the icon, so with
+ * a proxy set the fetch goes through it. Ciphertext survives a proxy
+ * unchanged, and the hash check below is what says so.
  */
 export async function decryptImageBytes(
   pointer: ImagePointer,
   signal?: AbortSignal,
   servers: readonly string[] = APP_BLOSSOM_SERVERS,
+  policy: MediaPolicy = defaultMediaPolicy(),
 ): Promise<{ bytes: Uint8Array; mime: string }> {
   const cached = await readCached(pointer.hash);
   if (cached) {
@@ -138,7 +146,8 @@ export async function decryptImageBytes(
   // moment a community renders — including in the push service worker, where
   // there is no user and no UI to report a stall. Cap the read rather than
   // letting a pointer choose how much memory a community costs to display.
-  const ciphertext = await fetchCapped(mediaCandidates(pointer.url, undefined, servers), {
+  const { sources } = routeMediaCandidates(mediaCandidates(pointer.url, undefined, servers), policy);
+  const ciphertext = await fetchCapped(sources, {
     signal,
     maxBytes: MAX_IMAGE_BYTES,
   });

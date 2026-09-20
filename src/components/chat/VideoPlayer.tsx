@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { MediaFallback } from "@/components/chat/MediaFallback";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
+import { useRoutedCandidates } from "@/hooks/useBlossomCandidates";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { usePlayerControls } from "@/hooks/usePlayerControls";
@@ -120,14 +121,18 @@ export function VideoPlayer({
   const mediaSrc = ready ? resolved.src : "";
 
   // An encrypted poster is ciphertext on Blossom, decrypted with the same key
-  // and nonce as its video (only the key/nonce carry over, not the `ox`).
+  // and nonce as its video (only the key/nonce carry over, not the `ox`). The
+  // poster is sender-named too, so it goes under the same media policy as the
+  // video — proxied where the video is.
   const posterEncryption = useMemo(() => companionEncryption(encryption), [encryption]);
+  const posterRoute = useRoutedCandidates(poster || undefined);
+  const posterCandidate = posterRoute.sources[0];
   const resolvedPoster = useResolvedMediaSrc({
-    url: poster ?? "",
+    url: posterCandidate ?? "",
     encryption: posterEncryption,
     mime: "image/jpeg",
   });
-  const posterSrc = poster && resolvedPoster.status === "ready" ? resolvedPoster.src : undefined;
+  const posterSrc = posterCandidate && resolvedPoster.status === "ready" ? resolvedPoster.src : undefined;
 
   // No supplied poster → generate one from the first frame (mainly for Android
   // WebView, which won't paint one on its own). Pointless before the source

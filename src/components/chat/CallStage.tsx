@@ -51,6 +51,7 @@ import {
 } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
@@ -482,8 +483,9 @@ function VolumeMenu({
  * When there's no picture we fall back to the plain black canvas.
  */
 function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
-  // kind-0, so the same check the avatar itself gets.
-  const src = sanitizeImageSrc(picture);
+  // kind-0, so the same checks the avatar itself gets — the URL sanitizer and
+  // the media policy (a stranger's host proxied, or not loaded at all).
+  const src = useMediaSrc(sanitizeImageSrc(picture));
   if (!src) return null;
   return (
     <div className="absolute inset-0 overflow-hidden" aria-hidden>

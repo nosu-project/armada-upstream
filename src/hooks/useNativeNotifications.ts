@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
@@ -406,6 +407,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     return Object.fromEntries(entries) as Record<string, "all" | "mentions" | "nothing">;
   }, [config.notifLevels]);
 
+  // Where the service may fetch a sender's avatar from — the same policy the
+  // WebView applies to the same picture on screen.
+  const mediaPolicy = useMediaPolicyConfig();
+
   // The signer credential shared with the service (Keystore-sealed natively,
   // wiped with the config on disable/logout) so it can open ANY inbox gift
   // wrap and answer NIP-42 AUTH with the app dead. Every login type carries a
@@ -597,6 +602,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
           dmLevels,
           dmRequests: prefs.dmRequests,
           gitSubs,
+          mediaPolicy,
         } : {}),
       };
     }
@@ -609,7 +615,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, groupList, gitRepositories.length, gitAnnouncements.data, health]);
+  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service

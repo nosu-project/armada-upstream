@@ -81,7 +81,9 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
   const Icon = iconFor(mime);
   const kind = typeLabel(displayName, mime);
   // The same blob on the viewer's other Blossom servers, for when the one the
-  // sender named is down (the mirrors hold identical ciphertext).
+  // sender named is down (the mirrors hold identical ciphertext). A deliberate
+  // file download fetches directly rather than through the image proxy — the
+  // proxy is for the passive display an image gets just by being scrolled past.
   const candidates = useBlossomCandidates(url, fallbacks);
 
   const download = useCallback(async () => {

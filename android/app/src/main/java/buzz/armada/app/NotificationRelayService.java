@@ -354,6 +354,10 @@ public class NotificationRelayService extends Service {
     // so the default keeps all three off the lock screen. Empty/unknown value ⇒
     // "generic". Only consulted when the `directMessages` pref is on.
     private String dmRequests = "generic";
+    // Where a sender's avatar and a community's icon may be fetched FROM — the
+    // WebView's media policy (see MediaPolicy), applied to the two fetches this
+    // service makes unprompted. Defaults, never "everything", when absent.
+    private MediaPolicy mediaPolicy = MediaPolicy.defaults();
     // Relays carrying the user's OWN replaceable documents (see SelfState) —
     // the client's general pool: app relays + the user's NIP-65 read relays.
     // Kept separate from `relayUrls`, which is derived from the kind-10009 list
@@ -1435,6 +1439,7 @@ public class NotificationRelayService extends Service {
         dmMutedPeers.clear();
         dmMutedPeers.addAll(parseStringArray(sp.getString("dmMutedPeers", null)));
         dmRequests = sp.getString("dmRequests", "generic");
+        mediaPolicy = MediaPolicy.parse(sp.getString("mediaPolicy", null));
         selfRelays.clear();
         selfRelays.addAll(parseStringArray(sp.getString("selfRelays", null)));
         List<String> configuredDTags = parseStringArray(sp.getString("selfDTags", null));
@@ -5929,6 +5934,11 @@ public class NotificationRelayService extends Service {
             cb.onBitmap(null);
             return;
         }
+        // The icon's host is whoever set it (a relay operator's `picture`, or
+        // the Blossom server a Concord admin uploaded to): the same media
+        // policy as an avatar. Ciphertext survives a proxy unchanged, and the
+        // hash check in decryptGcm is what says so.
+        final String fetchUrl = mediaPolicy.resolve(ref.imageUrl);
         avatarClient.dispatcher().executorService().execute(() -> {
             Bitmap disk = loadAvatarFromDisk(cacheKey);
             if (disk != null) {
@@ -5938,9 +5948,16 @@ public class NotificationRelayService extends Service {
                 });
                 return;
             }
+            if (fetchUrl == null) {
+                handler.post(() -> {
+                    groupImageInFlight.remove(cacheKey);
+                    cb.onBitmap(null);
+                });
+                return;
+            }
             final Request request;
             try {
-                request = new Request.Builder().url(ref.imageUrl).build();
+                request = new Request.Builder().url(fetchUrl).build();
             } catch (Exception e) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "community icon url invalid: " + e.getMessage());
                 handler.post(() -> {
@@ -6166,6 +6183,12 @@ public class NotificationRelayService extends Service {
      * Results are cached by URL for the service lifetime.
      */
     private void fetchAvatar(String url, BitmapCallback cb) {
+        // Where the policy lets this picture be fetched from: the URL itself
+        // for a trusted host, the proxied form for a stranger's, or nothing —
+        // in which case the notification simply shows without the face. The
+        // caches stay keyed by the ORIGINAL url, so a policy change misses
+        // once and nothing has to be invalidated.
+        final String fetchUrl = mediaPolicy.resolve(url);
         // Disk read + decode off the handler thread (the dispatcher is shared with
         // httpClient; a quick task here is fine). A warm disk hit skips both the
         // network AND the decode, so the "same user messages again" case resolves
@@ -6179,9 +6202,13 @@ public class NotificationRelayService extends Service {
                 });
                 return;
             }
+            if (fetchUrl == null) {
+                handler.post(() -> cb.onBitmap(null));
+                return;
+            }
             final Request request;
             try {
-                request = new Request.Builder().url(url).build();
+                request = new Request.Builder().url(fetchUrl).build();
             } catch (Exception e) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "avatar url invalid: " + e.getMessage());
                 handler.post(() -> cb.onBitmap(null));

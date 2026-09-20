@@ -137,6 +137,10 @@ struct PushConfig {
     /// The CURRENT epoch's stream for every watched channel. Only the current
     /// one: a retired epoch is read-cutoff history and must not notify.
     let concord: [ConcordStream]
+    /// Where a sender's avatar may be fetched from — the app's media policy
+    /// (`MediaPolicy`), applied to the one fetch the extension makes. A config
+    /// written before the field existed gets the defaults, never "everything".
+    let mediaPolicy: MediaPolicy
 
     init(
         policy: DmRequestLevel,
@@ -148,7 +152,8 @@ struct PushConfig {
         mutedPeers: Set<String> = [],
         secretKey: [UInt8]?,
         nip46: Nip46Config?,
-        concord: [ConcordStream]
+        concord: [ConcordStream],
+        mediaPolicy: MediaPolicy = .defaults
     ) {
         self.policy = policy
         self.directMessages = directMessages
@@ -160,6 +165,7 @@ struct PushConfig {
         self.secretKey = secretKey
         self.nip46 = nip46
         self.concord = concord
+        self.mediaPolicy = mediaPolicy
     }
 
     static func parse(json: String) -> PushConfig? {
@@ -231,7 +237,8 @@ struct PushConfig {
             mutedPeers: mutedPeers,
             secretKey: secretKey,
             nip46: nip46,
-            concord: streams
+            concord: streams,
+            mediaPolicy: MediaPolicy.parse(object["mediaPolicy"] as? [String: Any])
         )
     }
 }

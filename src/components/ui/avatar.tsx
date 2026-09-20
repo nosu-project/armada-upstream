@@ -116,6 +116,11 @@ const AvatarImage = React.forwardRef<
   // naming whichever server won the upload race, and the same bytes were
   // mirrored to the others (BUD-04). Walk those before showing the initial:
   // one server going down must not blank every avatar it happened to win.
+  //
+  // Under the viewer's media policy (`lib/mediaPolicy.ts`): a picture on a
+  // stranger's host is loaded through the proxy, and one the policy gates has
+  // no `src` and shows the initial — a kind-0 is set by whoever it names, so
+  // every avatar on screen is a request to a host of THEIR choosing.
   const { src, onError: advance, failed, reset } = useImageFallback(primary)
 
   // Reset the backoff when the picture changes (the walk resets itself).

@@ -46,6 +46,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useFollowerCount, useFollowingOf, useSharedFollowers } from "@/hooks/useFollowStats";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
@@ -168,11 +169,15 @@ function parseProfileFields(content: string | undefined): [string, string][] {
   }
 }
 
-function backgroundStyle(bg: ThemeBackground): CSSProperties {
+/**
+ * `src` is the background's URL as the media policy resolved it (proxied for
+ * a stranger's host), not `bg.url` — a CSS `url()` is a fetch like any other.
+ */
+function backgroundStyle(bg: ThemeBackground, src: string): CSSProperties {
   return bg.mode === "tile"
-    ? { backgroundImage: `url("${bg.url}")`, backgroundRepeat: "repeat", backgroundSize: "auto" }
+    ? { backgroundImage: `url("${src}")`, backgroundRepeat: "repeat", backgroundSize: "auto" }
     : {
-        backgroundImage: `url("${bg.url}")`,
+        backgroundImage: `url("${src}")`,
         backgroundSize: "cover",
         backgroundRepeat: "no-repeat",
         backgroundPosition: "center",
@@ -284,6 +289,9 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   }, [theme]);
 
   const background = theme?.background;
+  // A kind-16767 theme is whatever its author published; its background is
+  // loaded under the same media policy as their avatar.
+  const backgroundSrc = useMediaSrc(background?.url);
   // Over a background image the surfaces go translucent so it shows through.
   const card = background
     ? "bg-card/85 supports-[backdrop-filter]:bg-card/70 backdrop-blur-md"
@@ -316,8 +324,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       className="relative h-full overflow-hidden bg-background text-foreground"
       style={pageStyle}
     >
-      {background && (
-        <div aria-hidden className="absolute inset-0" style={backgroundStyle(background)} />
+      {background && backgroundSrc && (
+        <div aria-hidden className="absolute inset-0" style={backgroundStyle(background, backgroundSrc)} />
       )}
 
       {/* Closing IS the back step — outside the scroller so it stays put, and

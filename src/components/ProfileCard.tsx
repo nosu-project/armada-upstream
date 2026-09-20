@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import type { EmojiSelection } from '@/components/chat/EmojiPicker';
 import { sanitizeUrl } from '@/lib/sanitizeUrl';
+import { useMediaSrc } from '@/hooks/useMediaPolicy';
 
 /**
  * Lazy-loaded EmojiPicker — keeps emoji-mart and its ~420 KB data file out of
@@ -128,8 +129,10 @@ export function ProfileCard({
   const initial = displayName[0]?.toUpperCase() ?? '?';
   const patch = (key: keyof NostrMetadata) => (v: string) => onChange?.({ [key]: v });
 
-  // Sanitize banner URL from untrusted metadata before CSS url() interpolation
-  const bannerUrl = sanitizeUrl(metadata.banner);
+  // Sanitize banner URL from untrusted metadata before CSS url() interpolation,
+  // then load it under the media policy like any other kind-0 image (a CSS
+  // `url()` is a fetch from this device to the host the profile named).
+  const bannerUrl = useMediaSrc(sanitizeUrl(metadata.banner));
 
   // Read shape from metadata (it's a custom property passed through the loose schema)
   const rawShape = (metadata as { shape?: unknown }).shape;

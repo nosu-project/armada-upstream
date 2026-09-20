@@ -38,7 +38,9 @@ public struct PreparedPush {
         /// Hex pubkey, used only as the intent's stable identifier.
         public let id: String
         public let name: String
-        /// `https` avatar URL, or nil.
+        /// `https` avatar URL, or nil — already routed by the media policy,
+        /// so a stranger's picture is the proxied form and one the policy
+        /// would not fetch unprompted is nil (the monogram, then).
         public let avatarUrl: String?
         /// The room, for a group conversation. Absent for a DM.
         public let groupName: String?
@@ -254,7 +256,7 @@ struct PushProcessor {
             sender: PreparedPush.Sender(
                 id: opened.author,
                 name: profile?.name ?? "Anonymous",
-                avatarUrl: profile?.picture,
+                avatarUrl: config.mediaPolicy.resolve(profile?.picture),
                 groupName: nil
             )
         )
@@ -402,7 +404,7 @@ struct PushProcessor {
             sender: PreparedPush.Sender(
                 id: opened.author,
                 name: profile?.name ?? "Anonymous",
-                avatarUrl: profile?.picture,
+                avatarUrl: config.mediaPolicy.resolve(profile?.picture),
                 groupName: message.roomTitle
             )
         )
@@ -497,7 +499,7 @@ struct PushProcessor {
             sender: PreparedPush.Sender(
                 id: event.pubkey,
                 name: profile?.name ?? "Anonymous",
-                avatarUrl: profile?.picture,
+                avatarUrl: config.mediaPolicy.resolve(profile?.picture),
                 groupName: only?.title
             )
         )

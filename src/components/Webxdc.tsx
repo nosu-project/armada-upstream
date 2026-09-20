@@ -260,6 +260,9 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   const webxdcRef = useRef(webxdc);
   const xdcRef = useRef(xdc);
   const encryptionRef = useRef(encryption);
+  // Opening an app fetches its bundle directly rather than through the image
+  // proxy — the proxy is for the passive display an image gets by being
+  // scrolled past, not a deliberate open of an arbitrary file.
   const candidates = useBlossomCandidates(typeof xdc === "string" ? xdc : undefined);
   const candidatesRef = useRef(candidates);
   useEffect(() => {
