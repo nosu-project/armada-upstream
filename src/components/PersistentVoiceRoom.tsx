@@ -74,9 +74,9 @@ import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
   getPreferredCameraId,
-  getPreferredMicId,
   getScreenShareVolume,
   getUserVolume,
+  micCaptureConstraints,
   subscribeUserVolumes,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
@@ -365,23 +365,13 @@ const disconnectOnPageLeave = !Capacitor.isNativePlatform();
  */
 function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
   return useMemo<RoomOptions>(() => {
-    const micId = getPreferredMicId();
     const cameraId = getPreferredCameraId();
-    const processing = getAudioProcessing();
     return {
       adaptiveStream: true,
       dynacast: true,
       disconnectOnPageLeave,
-      audioCaptureDefaults: {
-        ...(micId ? { deviceId: micId } : {}),
-        noiseSuppression: processing.noiseSuppression,
-        echoCancellation: processing.echoCancellation,
-        autoGainControl: processing.autoGainControl,
-        // Capture mono: a stereo interface that only populates one channel
-        // otherwise publishes a track that plays back from a single side for
-        // every listener, and a mono reference is cleaner for echo cancellation.
-        channelCount: 1,
-      },
+      // Mono capture and the user's processing prefs — see micCaptureConstraints.
+      audioCaptureDefaults: micCaptureConstraints(),
       videoCaptureDefaults: {
         ...(cameraId ? { deviceId: cameraId } : {}),
         resolution: VideoPresets.h720.resolution,
@@ -790,9 +780,7 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
     console.error("voice: E2EE worker failed to start", err);
     return { room: null, worker: null, error: err };
   }
-  const micId = getPreferredMicId();
   const cameraId = getPreferredCameraId();
-  const processing = getAudioProcessing();
   const opts: RoomOptions = {
     adaptiveStream: true,
     dynacast: true,
@@ -800,16 +788,8 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
     webAudioMix: true,
     disconnectOnPageLeave,
     e2ee: { keyProvider, worker },
-    audioCaptureDefaults: {
-      ...(micId ? { deviceId: micId } : {}),
-      noiseSuppression: processing.noiseSuppression,
-      echoCancellation: processing.echoCancellation,
-      autoGainControl: processing.autoGainControl,
-      // Capture mono: a stereo interface that only populates one channel
-      // otherwise publishes a track that plays back from a single side for
-      // every listener, and a mono reference is cleaner for echo cancellation.
-      channelCount: 1,
-    },
+    // Mono capture and the user's processing prefs — see micCaptureConstraints.
+    audioCaptureDefaults: micCaptureConstraints(),
     videoCaptureDefaults: {
       ...(cameraId ? { deviceId: cameraId } : {}),
       resolution: VideoPresets.h720.resolution,

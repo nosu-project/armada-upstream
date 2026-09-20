@@ -187,6 +187,36 @@ export function getAudioProcessing(): AudioProcessingPrefs {
   }
 }
 
+/**
+ * The browser constraints every published mic track is captured under — the
+ * `audioCaptureDefaults` of each LiveKit room this client builds. One function
+ * rather than an object literal per room, so the two room constructors (the
+ * plain NIP-29 room and the E2EE Concord/DM room) cannot drift.
+ *
+ * `channelCount: 1` is load-bearing, not a preference. A stereo interface
+ * that populates only one channel (most USB mics and mixers do) otherwise
+ * publishes a track every listener hears from a single side; a mono reference
+ * is also the cleaner input for echo cancellation.
+ */
+export function micCaptureConstraints(
+  processing: AudioProcessingPrefs = getAudioProcessing(),
+  micId: string | null | undefined = getPreferredMicId(),
+): {
+  deviceId?: string;
+  noiseSuppression: boolean;
+  echoCancellation: boolean;
+  autoGainControl: boolean;
+  channelCount: 1;
+} {
+  return {
+    ...(micId ? { deviceId: micId } : {}),
+    noiseSuppression: processing.noiseSuppression,
+    echoCancellation: processing.echoCancellation,
+    autoGainControl: processing.autoGainControl,
+    channelCount: 1,
+  };
+}
+
 /** Persist the audio-processing preferences. */
 export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
   try {
