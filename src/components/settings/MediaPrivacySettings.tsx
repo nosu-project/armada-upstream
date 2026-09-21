@@ -1,28 +1,35 @@
-import { RotateCcw } from "lucide-react";
+import { Plus, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 
 import { SettingsRow } from "@/components/settings/SettingsSection";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { toast } from "@/hooks/useToast";
-import { DEFAULT_MEDIA_PROXY, normalizeMediaProxy } from "@/lib/mediaPolicy";
+import { DEFAULT_MEDIA_PROXY, fillUriTemplate, mediaHost, normalizeMediaProxy } from "@/lib/mediaPolicy";
 
 /**
  * The media-privacy rows of the Media settings section: whether images load
- * through a proxy, and which one. Every image in a message is a request from
- * the viewer's device to the host the sender named; routing it through a proxy
- * (`lib/mediaPolicy.ts`) makes the proxy's address the one that host sees. On
- * by default, and the single `mediaProxy` string is the whole switch — empty
- * turns it off and media loads directly.
+ * through a proxy, and — when on — which proxies. Every image in a message is a
+ * request from the viewer's device to the host the sender named; routing it
+ * through a proxy (`lib/mediaPolicy.ts`) makes the proxy's address the one that
+ * host sees. OFF by default; enabling it sets the public Ditto proxy, which the
+ * user can replace or extend.
+ *
+ * The proxies are managed as a list, the same shape as the Blossom server list
+ * (`AppConfig.mediaProxies`). The first is the primary the native background
+ * writers and the one-image sites read (they do not rotate); with more than one,
+ * the web client spreads each image across them and falls to the next when one
+ * fails to load.
  */
 export function MediaPrivacySettings() {
   const { config, updateConfig } = useAppContext();
-  const enabled = normalizeMediaProxy(config.mediaProxy) !== "";
+  const proxies = config.mediaProxies;
+  const enabled = proxies.length > 0;
 
-  const setEnabled = (on: boolean) =>
-    updateConfig((current) => ({ ...current, mediaProxy: on ? DEFAULT_MEDIA_PROXY : "" }));
+  const setProxies = (next: string[]) => updateConfig((current) => ({ ...current, mediaProxies: next }));
 
   return (
     <>
@@ -34,87 +41,130 @@ export function MediaPrivacySettings() {
           + "proxy that sees the site instead of you. Turn it off to load images directly."
         }
       >
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
+        <Switch checked={enabled} onCheckedChange={(on) => setProxies(on ? [DEFAULT_MEDIA_PROXY] : [])} />
       </SettingsRow>
       {enabled && (
         <SettingsRow
           stack
-          label="Proxy address"
-          description="The proxy sees every image it fetches for you. Use {href} where the target URL goes."
+          label="Proxy addresses"
+          description={
+            "Each proxy rewrites an image URL: use {href} where the target goes (percent-encoded), or "
+            + "{+href} to pass it raw as some proxies (corsfix) expect; a bare address ending in ? or / "
+            + "gets the URL appended automatically. Add more than one to spread images across them and "
+            + "retry the next when a proxy fails."
+          }
         >
-          <MediaProxyField />
+          <MediaProxyListEditor
+            proxies={proxies}
+            onChange={setProxies}
+            onReset={() => setProxies([DEFAULT_MEDIA_PROXY])}
+          />
         </SettingsRow>
       )}
     </>
   );
 }
 
-/** The proxy template input: saved on blur or Enter, with a reset to the default. */
-function MediaProxyField() {
-  const { config, updateConfig } = useAppContext();
-  const [draft, setDraft] = useState(config.mediaProxy);
-  const [editing, setEditing] = useState(false);
-  const value = editing ? draft : config.mediaProxy;
+/** Host of a proxy template, read off a filled probe (the `{href}` braces aren't URL chars). */
+function proxyHost(proxy: string): string {
+  const host = mediaHost(fillUriTemplate(proxy, { href: "https://example.com/x" }));
+  return host ?? proxy.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
 
-  const commit = () => {
-    setEditing(false);
-    const trimmed = draft.trim();
-    if (trimmed === config.mediaProxy) return;
-    const normalized = normalizeMediaProxy(trimmed);
+/**
+ * One proxy row: an avatar (letter fallback), host prominent, full template
+ * underneath — the same shape as the Blossom `ServerIdentity`.
+ */
+function ProxyIdentity({ proxy }: { proxy: string }) {
+  const host = proxyHost(proxy);
+  return (
+    <div className="flex items-center gap-2.5 min-w-0">
+      <Avatar className="size-7 rounded-md shrink-0">
+        <AvatarFallback className="rounded-md bg-secondary text-secondary-foreground text-xs">
+          {host.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <div className="min-w-0">
+        <div className="text-sm font-medium truncate leading-tight">{host}</div>
+        <div className="text-xs text-muted-foreground font-mono truncate leading-tight">{proxy}</div>
+      </div>
+    </div>
+  );
+}
+
+interface MediaProxyListEditorProps {
+  proxies: string[];
+  onChange: (proxies: string[]) => void;
+  onReset?: () => void;
+}
+
+/** The proxy list: removable rows plus an inline add form, mirroring `BlossomServerListEditor`. */
+function MediaProxyListEditor({ proxies, onChange, onReset }: MediaProxyListEditorProps) {
+  const [draft, setDraft] = useState("");
+
+  const handleAdd = () => {
+    const normalized = normalizeMediaProxy(draft);
     if (!normalized) {
       toast({
         title: "Invalid proxy address",
         description: "Enter an https:// URL, with {href} where the image URL goes.",
         variant: "destructive",
       });
-      setDraft(config.mediaProxy);
       return;
     }
-    updateConfig((current) => ({ ...current, mediaProxy: normalized }));
+    if (proxies.includes(normalized)) {
+      toast({ title: "Already in the list", description: normalized });
+      return;
+    }
+    onChange([...proxies, normalized]);
+    setDraft("");
   };
 
   return (
     <div className="space-y-1.5">
-      <Input
-        value={value}
-        onFocus={() => {
-          setDraft(config.mediaProxy);
-          setEditing(true);
-        }}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            e.currentTarget.blur();
-          }
-        }}
-        placeholder={DEFAULT_MEDIA_PROXY}
-        aria-label="Proxy address"
-        autoComplete="off"
-        spellCheck={false}
-        className="font-mono text-base md:text-sm bg-background/40 border-transparent"
-      />
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span>
-          Default: <span className="font-mono break-all">{DEFAULT_MEDIA_PROXY}</span>
-        </span>
-        {config.mediaProxy !== DEFAULT_MEDIA_PROXY && (
+      {proxies.map((proxy) => (
+        <div key={proxy} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+          <div className="flex-1 min-w-0">
+            <ProxyIdentity proxy={proxy} />
+          </div>
           <Button
-            type="button"
             variant="ghost"
-            size="sm"
-            className="h-7 -ml-2 text-muted-foreground"
-            onClick={() => {
-              setEditing(false);
-              setDraft(DEFAULT_MEDIA_PROXY);
-              updateConfig((current) => ({ ...current, mediaProxy: DEFAULT_MEDIA_PROXY }));
-            }}
+            size="icon"
+            aria-label={`Remove ${proxy}`}
+            className="size-7 text-muted-foreground hover:text-destructive shrink-0"
+            onClick={() => onChange(proxies.filter((p) => p !== proxy))}
           >
-            <RotateCcw className="size-3.5 mr-1.5" /> Reset to default
+            <X className="size-4" />
           </Button>
-        )}
-      </div>
+        </div>
+      ))}
+
+      <form
+        className="flex gap-2 pt-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleAdd();
+        }}
+      >
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={DEFAULT_MEDIA_PROXY}
+          aria-label="Add proxy"
+          autoComplete="off"
+          spellCheck={false}
+          className="font-mono text-base md:text-sm bg-background/40 border-transparent"
+        />
+        <Button type="submit" disabled={!draft.trim()} className="clip-corner-lg shrink-0">
+          <Plus className="size-4 mr-1.5" /> Add
+        </Button>
+      </form>
+
+      {onReset && (
+        <Button type="button" variant="ghost" size="sm" className="text-muted-foreground -ml-2" onClick={onReset}>
+          <RotateCcw className="size-3.5 mr-1.5" /> Reset to default
+        </Button>
+      )}
     </div>
   );
 }

@@ -16,7 +16,7 @@ const contextWith = (config: Record<string, unknown>) =>
       appBlossomServers: ["https://blossom.ditto.pub/", "https://blossom.dreamith.to/"],
       blossomServerMetadata: { servers: [], updatedAt: 0 },
       useAppBlossomServers: true,
-      mediaProxy: "",
+      mediaProxies: [],
       ...config,
     },
     updateConfig: vi.fn(),
@@ -99,14 +99,14 @@ describe("AvatarImage under the media policy", () => {
 
   it("proxies a picture when a proxy is set", () => {
     const proxy = "https://proxy.example/?url={href}";
-    render(tree("https://pics.example/me.jpg", { mediaProxy: proxy }));
+    render(tree("https://pics.example/me.jpg", { mediaProxies: [proxy] }));
     expect(screen.getByTestId<HTMLImageElement>("img").src).toBe(
       `https://proxy.example/?url=${encodeURIComponent("https://pics.example/me.jpg")}`,
     );
   });
 
   it("loads a picture directly when no proxy is set", () => {
-    render(tree("https://pics.example/me.jpg", { mediaProxy: "" }));
+    render(tree("https://pics.example/me.jpg", { mediaProxies: [] }));
     expect(screen.getByTestId<HTMLImageElement>("img").src).toBe("https://pics.example/me.jpg");
   });
 });

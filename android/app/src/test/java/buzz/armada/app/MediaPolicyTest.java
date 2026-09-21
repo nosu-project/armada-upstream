@@ -50,6 +50,8 @@ public class MediaPolicyTest {
     @Test public void proxyTemplateNormalizationMatchesTheWebView() {
         assertEquals("https://p.example/?url={href}", MediaPolicy.normalizeProxy("https://p.example/?url="));
         assertEquals("https://p.example/{+href}", MediaPolicy.normalizeProxy(" https://p.example/{+href} "));
+        assertEquals("https://proxy.corsfix.com/?{+href}", MediaPolicy.normalizeProxy("https://proxy.corsfix.com/?"));
+        assertEquals("https://cors.example/{+href}", MediaPolicy.normalizeProxy("https://cors.example/"));
         assertEquals("", MediaPolicy.normalizeProxy(""));
         assertEquals("", MediaPolicy.normalizeProxy(null));
         assertEquals("", MediaPolicy.normalizeProxy("javascript:alert(1)//{href}"));

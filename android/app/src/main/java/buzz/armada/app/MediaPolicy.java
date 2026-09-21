@@ -86,8 +86,13 @@ final class MediaPolicy {
 
     /**
      * The stored form of a proxy template: trimmed, http(s) once filled, and
-     * carrying a {@code {href}} placeholder (appended to a bare prefix). Returns
-     * "" for anything unusable, which reads as "no proxy".
+     * carrying a placeholder (appended to a bare prefix). Returns "" for
+     * anything unusable, which reads as "no proxy".
+     *
+     * <p>A bare prefix ending in {@code =} is a query parameter value
+     * ({@code ?url=}) and takes the percent-encoded {@code {href}}; anything
+     * else — a bare {@code ?} or a path — takes the URL RAW via {@code {+href}},
+     * which is what corsfix-style proxies want. Mirrors {@code normalizeMediaProxy}.
      */
     static String normalizeProxy(String raw) {
         if (raw == null) return "";
@@ -97,7 +102,8 @@ final class MediaPolicy {
         String scheme = schemeOf(probe);
         if (!"https".equals(scheme) && !"http".equals(scheme)) return "";
         if (hostOf(probe) == null) return "";
-        return trimmed.contains("{href}") || trimmed.contains("{+href}") ? trimmed : trimmed + "{href}";
+        if (trimmed.contains("{href}") || trimmed.contains("{+href}")) return trimmed;
+        return trimmed.endsWith("=") ? trimmed + "{href}" : trimmed + "{+href}";
     }
 
     /**

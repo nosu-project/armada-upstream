@@ -43,6 +43,8 @@ final class MediaPolicyTests: XCTestCase {
     func testProxyTemplateNormalizationMatchesTheApp() {
         XCTAssertEqual(MediaPolicy.normalizeProxy("https://p.example/?url="), "https://p.example/?url={href}")
         XCTAssertEqual(MediaPolicy.normalizeProxy(" https://p.example/{+href} "), "https://p.example/{+href}")
+        XCTAssertEqual(MediaPolicy.normalizeProxy("https://proxy.corsfix.com/?"), "https://proxy.corsfix.com/?{+href}")
+        XCTAssertEqual(MediaPolicy.normalizeProxy("https://cors.example/"), "https://cors.example/{+href}")
         XCTAssertEqual(MediaPolicy.normalizeProxy(""), "")
         XCTAssertEqual(MediaPolicy.normalizeProxy(nil), "")
         XCTAssertEqual(MediaPolicy.normalizeProxy("javascript:alert(1)//{href}"), "")

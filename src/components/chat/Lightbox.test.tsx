@@ -15,7 +15,7 @@ const context = {
     appBlossomServers: [],
     blossomServerMetadata: { servers: [] },
     useAppBlossomServers: false,
-    mediaProxy: "",
+    mediaProxies: [],
   },
   updateConfig: vi.fn(),
 } as unknown as AppContextType;

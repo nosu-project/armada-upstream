@@ -4,7 +4,7 @@ import { mediaCandidates } from "@/lib/blossom";
 import { routeMediaCandidates } from "@/lib/mediaPolicy";
 
 import { useBlossomServers } from "./useBlossomServers";
-import { useMediaPolicy } from "./useMediaPolicy";
+import { useMediaProxyRotation } from "./useMediaPolicy";
 
 // The server list lives in its own module (see there for why); re-exported so
 // the existing callers and tests keep their import.
@@ -62,7 +62,7 @@ export function useRoutedCandidates(
   opts: { bypass?: boolean } = {},
 ): { sources: string[] } {
   const candidates = useBlossomCandidates(url, declaredFallbacks);
-  const policy = useMediaPolicy();
+  const policy = useMediaProxyRotation();
   const bypass = opts.bypass ?? false;
   return useMemo(
     () => (bypass ? { sources: candidates } : routeMediaCandidates(candidates, policy)),

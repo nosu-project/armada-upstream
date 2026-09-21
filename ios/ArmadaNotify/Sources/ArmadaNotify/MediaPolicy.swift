@@ -63,8 +63,13 @@ struct MediaPolicy: Equatable {
     // MARK: - Pure helpers
 
     /// The stored form of a proxy template: trimmed, http(s) once filled, and
-    /// carrying an `{href}` placeholder (appended to a bare prefix). "" for
-    /// anything unusable, which reads as "no proxy".
+    /// carrying a placeholder (appended to a bare prefix). "" for anything
+    /// unusable, which reads as "no proxy".
+    ///
+    /// A bare prefix ending in `=` is a query parameter value (`?url=`) and
+    /// takes the percent-encoded `{href}`; anything else — a bare `?` or a path
+    /// — takes the URL RAW via `{+href}`, which is what corsfix-style proxies
+    /// want. Mirrors `normalizeMediaProxy`.
     static func normalizeProxy(_ raw: String?) -> String {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "" }
@@ -72,7 +77,8 @@ struct MediaPolicy: Equatable {
         guard let scheme = scheme(of: probe), scheme == "https" || scheme == "http",
               host(of: probe) != nil
         else { return "" }
-        return trimmed.contains("{href}") || trimmed.contains("{+href}") ? trimmed : trimmed + "{href}"
+        if trimmed.contains("{href}") || trimmed.contains("{+href}") { return trimmed }
+        return trimmed.hasSuffix("=") ? trimmed + "{href}" : trimmed + "{+href}"
     }
 
     /// RFC 6570 simple (`{href}`, percent-encoded like `encodeURIComponent`)

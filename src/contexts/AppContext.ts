@@ -2,7 +2,6 @@ import { createContext } from "react";
 
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
-import { DEFAULT_MEDIA_PROXY } from "@/lib/mediaPolicy";
 import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
@@ -414,22 +413,27 @@ export interface AppConfig {
    * synced across devices.
    */
      stripTrackingParams: boolean;
-  /**
-   * URI template for the media proxy that every sender-named image, video,
-   * avatar, emoji and link thumbnail is loaded through — see `lib/mediaPolicy.ts`,
-   * the one place the rule lives. Each such load is a request from the viewer's
-   * address to the host the sender named, so an image in a message learns the
-   * IP of everyone who scrolls past it; routing it through a proxy makes the
-   * proxy's address the one that host sees instead.
+   /**
+   * The media proxy templates every sender-named image, video, avatar, emoji and
+   * link thumbnail is loaded through — see `lib/mediaPolicy.ts`, the one place
+   * the rule lives. Each such load is a request from the viewer's address to the
+   * host the sender named, so an image in a message learns the IP of everyone who
+   * scrolls past it; routing it through a proxy makes the proxy's address the one
+   * that host sees instead.
    *
-   * Ditto's `corsProxy` convention: `{href}` is replaced with the
-   * percent-encoded target URL (`{+href}` keeps it raw). ON by default (the
-   * public Ditto proxy, a byte-for-byte pass-through); an empty string turns
-   * proxying off and media loads directly from the host the sender named. A
-   * proxy sees every media URL the client loads through it, which is the point.
+   * Ditto's `corsProxy` convention: `{href}` is replaced with the percent-encoded
+   * target URL (`{+href}` keeps it raw). OFF by default (empty) — media loads
+   * directly from the host the sender named; turning it on in settings sets the
+   * public Ditto proxy (a byte-for-byte pass-through), which the user can replace.
+   *
+   * A list of proxy templates, managed like the Blossom server list. The FIRST is
+   * the primary the native background writers and the one-image sites read (they
+   * do not rotate); the web client spreads each image across the whole set and
+   * falls to the next when one fails to load, so more than one buys resilience and
+   * spreads which proxy sees a given image. Empty = off (media loads directly).
    * Synced across devices.
    */
-  mediaProxy: string;
+  mediaProxies: string[];
   /**
    * Whether pressing Enter in the message composer sends the message (with
    * Shift+Enter inserting a newline). When off, Enter inserts a newline and
@@ -551,7 +555,7 @@ export const METADATA_CONFIG_KEYS = [
   "showRecentRailDms",
   "discoverAllContent",
   "stripTrackingParams",
-  "mediaProxy",
+  "mediaProxies",
   "sendOnEnter",
   "currencyDisplay",
   "defaultZapMethod",
@@ -650,7 +654,7 @@ export const defaultConfig: AppConfig = {
   showRecentRailDms: true,
   discoverAllContent: false,
   stripTrackingParams: true,
-  mediaProxy: DEFAULT_MEDIA_PROXY,
+  mediaProxies: [],
   meshIncognito: true,
   meshEnabled: false,
   currencyDisplay: "usd",

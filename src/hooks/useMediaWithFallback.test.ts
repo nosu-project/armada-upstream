@@ -19,7 +19,7 @@ const context = {
     appBlossomServers: ["https://a.example/", "https://b.example/"],
     blossomServerMetadata: { servers: ["https://c.example/"], updatedAt: 0 },
     useAppBlossomServers: true,
-    mediaProxy: "",
+    mediaProxies: [],
   },
   updateConfig: vi.fn(),
 } as unknown as AppContextType;

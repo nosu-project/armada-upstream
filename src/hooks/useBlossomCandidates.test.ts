@@ -21,7 +21,7 @@ function contextWith(config: Record<string, unknown>): AppContextType {
   } as unknown as AppContextType;
 }
 /** No proxy — the walk cases are about mirrors, not routing. */
-const context = contextWith({ mediaProxy: "" });
+const context = contextWith({ mediaProxies: [] });
 const wrapper = ({ children }: { children: React.ReactNode }) =>
   createElement(AppContext.Provider, { value: context }, children);
 const wrapperWith = (config: Record<string, unknown>) =>
@@ -152,7 +152,7 @@ describe("useImageFallback under the media policy", () => {
 
   it("proxies each candidate when a proxy is set", () => {
     const { result } = renderHook(() => useImageFallback(stranger), {
-      wrapper: wrapperWith({ mediaProxy: PROXY }),
+      wrapper: wrapperWith({ mediaProxies: [PROXY] }),
     });
     expect(result.current.src).toBe(`https://proxy.example/?url=${encodeURIComponent(stranger)}`);
     act(() => result.current.onError());
@@ -163,15 +163,15 @@ describe("useImageFallback under the media policy", () => {
 
   it("loads directly with no proxy", () => {
     const { result } = renderHook(() => useImageFallback(stranger), {
-      wrapper: wrapperWith({ mediaProxy: "" }),
+      wrapper: wrapperWith({ mediaProxies: [] }),
     });
     expect(result.current.src).toBe(stranger);
   });
 
-  it("falls back to the default policy with no provider mounted", () => {
-    // The default proxies rather than loading directly.
+  it("falls back to the app default with no provider mounted (proxying off)", () => {
+    // The app default is proxying OFF, so with no config in reach media loads
+    // directly rather than through a proxy.
     const { result } = renderHook(() => useImageFallback(stranger));
-    expect(result.current.src).toContain("proxy.shakespeare.diy");
-    expect(result.current.src).toContain(encodeURIComponent(stranger));
+    expect(result.current.src).toBe(stranger);
   });
 });
