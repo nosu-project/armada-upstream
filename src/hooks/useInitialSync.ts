@@ -233,13 +233,17 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     let cancelled = false;
     const overall = AbortSignal.timeout(SYNC_TIMEOUT_MS);
     const log: SyncLogLine[] = [];
+    /** The gate has been lifted (by completion or by the budget); idempotent. */
+    let lifted = false;
 
     /** Open a phase: push an in-progress line, return its id. */
     const begin = (phase: Exclude<SyncPhase, "done">): string => {
       const id = `${phase}`;
       logSync("gate", `phase "${phase}" started`);
       log.push({ id, text: PHASE_OPENING[phase] });
-      if (!cancelled) setState({ phase, log: [...log], done: false });
+      // Once the gate has lifted, a straggling branch opening a new phase must
+      // not flip `done` back to false and re-raise the overlay.
+      if (!cancelled && !lifted) setState({ phase, log: [...log], done: false });
       return id;
     };
 
@@ -287,6 +291,24 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       log.push({ id, text, status, tone });
       if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
     };
+
+    /**
+     * Lift the gate. Idempotent, and safe to call from either the completion
+     * path or the budget timer — whichever wins. The branches keep running in
+     * the background afterwards, exactly as the warm-up already does.
+     */
+    const lift = () => {
+      if (lifted || cancelled) return;
+      lifted = true;
+      clearTimeout(budget);
+      note("ready", "all systems nominal", "READY", "ok");
+      setState((s) => ({ ...s, phase: "done", done: true }));
+    };
+    // Armed here, beside `overall`, so the two share a start instant: the gate
+    // lifts when the sync's deadline passes, however far along the branches
+    // are. (A timer rather than `overall`'s abort event so fake timers can
+    // drive it in tests.)
+    const budget = setTimeout(lift, SYNC_TIMEOUT_MS);
 
     const stepSignal = () => AbortSignal.any([overall, AbortSignal.timeout(STEP_TIMEOUT_MS)]);
 
@@ -800,20 +822,29 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         if (cancelled) return;
       };
 
-      await Promise.all([branchSettings(), branchGroups(), branchConcord()]);
-      if (cancelled) return;
+      const branches = Promise.all([branchSettings(), branchGroups(), branchConcord()]);
 
+      // The gate lifts on whichever comes first — every branch settling, or
+      // the `budget` timer armed above. A branch still running afterwards
+      // settles in the background, and its rejection is handled by the await
+      // below however late it comes.
+      //
       // NOTE: we deliberately do NOT write the settings sync watermark here.
       // NostrSync owns applying the fetched settings (theme/relay config) into
       // AppConfig and only then records the watermark; writing it now would make
       // NostrSync's timestamp guard skip the very settings we just primed. The
       // "don't re-gate on reload" behavior is handled by useFreshLogin instead.
-      note("ready", "all systems nominal", "READY", "ok");
-      if (!cancelled) setState((s) => ({ ...s, phase: "done", done: true }));
+      try {
+        await branches;
+      } catch {
+        // Best-effort: each branch already logs its own failures.
+      }
+      lift();
     })();
 
     return () => {
       cancelled = true;
+      clearTimeout(budget);
     };
   }, [pubkey, user, nostr, queryClient, eventStore]);
 

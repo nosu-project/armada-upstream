@@ -363,6 +363,25 @@ describe("NativeArmadaDB", () => {
     ]);
   });
 
+  it("a read flushes writes queued but not yet awaited (read-your-writes)", async () => {
+    // A write whose promise is never awaited before the read. The read must
+    // still observe it: callers rely on program order, not on remembering to
+    // await every fire-and-forget write. Before the drain-before-read flush
+    // this crossed the bridge for the query BEFORE the write's microtask ran,
+    // so the read came back empty.
+    db.tenant("t").event(rumor({ id: "a" }));
+    expect((await db.tenant("t").query([{}])).map((r) => r.id)).toEqual(["a"]);
+
+    // Same for count and remove: each acts after the writes program-ordered
+    // before it.
+    db.tenant("t").event(rumor({ id: "b" }));
+    expect(await db.tenant("t").count([{}])).toEqual({ count: 2, approximate: false });
+
+    db.tenant("t").event(rumor({ id: "c" }));
+    await db.tenant("t").remove([{ ids: ["a"] }]);
+    expect((await db.tenant("t").query([{}])).map((r) => r.id).sort()).toEqual(["b", "c"]);
+  });
+
   it("coalesces a same-tick kv burst into one crossing, in arrival order", async () => {
     // A burst issued before anyone awaits — every op crosses the bridge ONCE,
     // and the list at the end observes every write queued ahead of it.
@@ -379,5 +398,285 @@ describe("NativeArmadaDB", () => {
       { key: "burst:1", value: 1 },
       { key: "burst:2", value: 2 },
     ]);
+  });
+});
+
+/** Yield a macrotask, so the next enqueue lands in a later turn of the loop. */
+const macrotask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * A bridge whose crossings can be STALLED, standing in for the loaded phone:
+ * on Android every `event`/`kvOps` call is a hop onto Capacitor's single plugin
+ * thread and a turn of one native lock, and under an ingest storm a crossing
+ * takes real wall-clock time to return. What matters here is the batch bridge's
+ * behaviour while a crossing is in flight — so the fake counts crossings, records
+ * each batch's size, and only completes them when the test opens the gate.
+ */
+function stallableBridge() {
+  const eventBatches: number[] = [];
+  const kvBatches: number[] = [];
+  /** Every crossing in the order the native side actually executed it. */
+  const log: string[] = [];
+  const rumors = new Map<string, Map<string, NostrRumor>>();
+  const kv = new Map<string, string>();
+
+  let open = false;
+  let waiters: Array<() => void> = [];
+  const gate = () => (open ? Promise.resolve() : new Promise<void>((r) => waiters.push(r)));
+
+  const bridge = {
+    async event({ tenant, rumors: json }: { tenant: string; rumors: string }) {
+      const batch = JSON.parse(json) as NostrRumor[];
+      eventBatches.push(batch.length);
+      log.push(`w:${batch.length}`);
+      await gate();
+      const t = rumors.get(tenant) ?? new Map<string, NostrRumor>();
+      for (const r of batch) t.set(r.id, r);
+      rumors.set(tenant, t);
+    },
+    async query({ tenant }: { tenant: string; filters: string }) {
+      log.push("r");
+      return { rumors: JSON.stringify([...(rumors.get(tenant)?.values() ?? [])]) };
+    },
+    async kvOps({ ops }: { ops: string }) {
+      const batch = JSON.parse(ops) as Array<{ op: string; key?: string; value?: string }>;
+      kvBatches.push(batch.length);
+      await gate();
+      const results: Array<string | null> = [];
+      for (const op of batch) {
+        if (op.op === "set") {
+          kv.set(op.key!, op.value!);
+          results.push(null);
+        } else if (op.op === "get") {
+          results.push(kv.get(op.key!) ?? null);
+        } else {
+          results.push(null);
+        }
+      }
+      return { results: JSON.stringify(results) };
+    },
+    async count() {
+      return { count: 0, approximate: false };
+    },
+    async remove() {},
+    async tenants() {
+      return { tenants: JSON.stringify([]) };
+    },
+    async kvGet() {
+      return {};
+    },
+    async kvSet() {},
+    async kvDelete() {},
+    async kvList() {
+      return { entries: JSON.stringify([]) };
+    },
+    async wipe() {},
+  };
+
+  return {
+    bridge: bridge as unknown as ConstructorParameters<typeof NativeArmadaDB>[0],
+    eventBatches,
+    kvBatches,
+    log,
+    /** Complete every stalled crossing and let future ones pass straight through. */
+    release() {
+      open = true;
+      const pending = waiters;
+      waiters = [];
+      for (const w of pending) w();
+    },
+  };
+}
+
+describe("NativeArmadaDB under a stalled bridge (the loaded device)", () => {
+  it("folds writes that arrive during an in-flight crossing into the NEXT single crossing", async () => {
+    const { bridge, eventBatches, release } = stallableBridge();
+    const db = new NativeArmadaDB(bridge);
+    const t = db.tenant("c2:x");
+
+    // First write starts the drain; its crossing stalls (the phone mid-storm).
+    const first = t.event(rumor({ id: "a" }));
+    await macrotask(); // let the flush microtask run and reach the stalled bridge
+
+    // Three more writes arrive while the first crossing is still outstanding,
+    // each in its own macrotask — exactly how relay events land, one per socket
+    // message. Before the single-in-flight drain, each spawned its OWN concurrent
+    // crossing, so this was four crossings; now they accumulate behind the one
+    // in flight.
+    const rest: Promise<void>[] = [];
+    for (const id of ["b", "c", "d"]) {
+      rest.push(t.event(rumor({ id })));
+      await macrotask();
+    }
+
+    release();
+    await Promise.all([first, ...rest]);
+
+    // One crossing for the first write, one for everything that piled up behind
+    // it — not one per write.
+    expect(eventBatches).toEqual([1, 3]);
+    expect((await t.query([{}])).map((r) => r.id).sort()).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("puts a read behind the FOLDED write crossings, not one per write", async () => {
+    // The whole case for fixing this in the fold rather than with a second
+    // SQLite connection: Capacitor runs every plugin call on ONE background
+    // thread (a single FIFO consumer), so a read's latency is however many write
+    // crossings sit ahead of it — a second connection cannot dequeue it any
+    // sooner. Fold the writes and the read is behind two crossings instead of
+    // four; the count of crossings ahead of the read is the thing the fold
+    // moves, and it is exactly what the read waits on.
+    const { bridge, log, release } = stallableBridge();
+    const db = new NativeArmadaDB(bridge);
+    const t = db.tenant("c2:x");
+
+    const writes = [t.event(rumor({ id: "a" }))];
+    await macrotask();
+    for (const id of ["b", "c", "d"]) {
+      writes.push(t.event(rumor({ id })));
+      await macrotask();
+    }
+
+    // A reader arrives while the writes are still outstanding.
+    const read = t.query([{}]);
+    await macrotask();
+
+    release();
+    const rows = await read;
+    await Promise.all(writes);
+
+    // Two write crossings precede the read, not four — and read-your-writes
+    // still holds across the fold.
+    expect(log).toEqual(["w:1", "w:3", "r"]);
+    expect(rows.map((r) => r.id).sort()).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("folds kv ops that arrive during an in-flight crossing the same way", async () => {
+    const { bridge, kvBatches, release } = stallableBridge();
+    const db = new NativeArmadaDB(bridge);
+
+    const first = db.kv.set("k:a", 1);
+    await macrotask();
+
+    const rest: Promise<void>[] = [];
+    for (const [k, v] of [["k:b", 2], ["k:c", 3], ["k:d", 4]] as const) {
+      rest.push(db.kv.set(k, v));
+      await macrotask();
+    }
+
+    release();
+    await Promise.all([first, ...rest]);
+
+    expect(kvBatches).toEqual([1, 3]);
+  });
+
+  it("lets a read cross under a steady write stream instead of waiting for the drain to idle", async () => {
+    // A relay backfill is one write per socket message for as long as it
+    // lasts, and a crossing that is slower than the arrival rate means the
+    // drain never finds `pending` empty. A read must wait only for the writes
+    // program-ordered before it — the batch in flight plus the one queued
+    // behind it — not for the stream to end.
+    const log: string[] = [];
+    const bridge = {
+      async event({ rumors: json }: { tenant: string; rumors: string }) {
+        log.push(`w:${(JSON.parse(json) as unknown[]).length}`);
+        await macrotask();
+        await macrotask();
+      },
+      async query() {
+        log.push("r");
+        return { rumors: "[]" };
+      },
+    } as unknown as ConstructorParameters<typeof NativeArmadaDB>[0];
+    const t = new NativeArmadaDB(bridge).tenant("c2:x");
+
+    void t.event(rumor({ id: "0" }));
+    await macrotask();
+    let readCrossedAt = -1;
+    const read = t.query([{}]).then(() => (readCrossedAt = log.indexOf("r")));
+
+    for (let i = 1; i <= 20; i++) {
+      void t.event(rumor({ id: String(i) }));
+      await macrotask();
+    }
+    await read;
+
+    // The read crossed while the stream was still running, behind the two
+    // batches ahead of it and no more.
+    expect(readCrossedAt).toBeGreaterThan(-1);
+    expect(readCrossedAt).toBeLessThanOrEqual(3);
+    expect(log.length).toBeGreaterThan(readCrossedAt + 1);
+  });
+
+  it("rejects an aborted read promptly while it is waiting on writes", async () => {
+    const { bridge } = stallableBridge();
+    const db = new NativeArmadaDB(bridge);
+    const t = db.tenant("c2:x");
+
+    void t.event(rumor({ id: "a" }));
+    await macrotask(); // the crossing is now in flight and stalled
+
+    const ctl = new AbortController();
+    const read = t.query([{}], { signal: ctl.signal });
+    ctl.abort(new Error("timeout"));
+
+    // The bridge is never released: the read must settle on the abort alone.
+    await expect(read).rejects.toThrow("timeout");
+  });
+
+  it("does not hold a read behind a write that arrives after it", async () => {
+    // Only the FIRST crossing ever completes; every later one stalls forever.
+    let releaseFirst: (() => void) | undefined;
+    let crossings = 0;
+    const bridge = {
+      async event() {
+        if (crossings++ === 0) await new Promise<void>((r) => (releaseFirst = r));
+        else await new Promise<never>(() => {});
+      },
+      async query() {
+        return { rumors: "[]" };
+      },
+    } as unknown as ConstructorParameters<typeof NativeArmadaDB>[0];
+    const t = new NativeArmadaDB(bridge).tenant("c2:x");
+
+    void t.event(rumor({ id: "a" }));
+    await macrotask();
+    const read = t.query([{}]);
+    await macrotask();
+    // Queued after the read: not something the read has to wait for, and its
+    // crossing will never finish.
+    void t.event(rumor({ id: "b" }));
+
+    releaseFirst!();
+    await expect(read).resolves.toEqual([]);
+  });
+
+  it("settles every kv op in a batch when one stored value no longer parses, and drains what queued behind it", async () => {
+    // A row the native side hands back as non-JSON text must cost only ITS
+    // get (a miss), not the rest of the batch — and the ops that arrived while
+    // that crossing was in flight still cross on the next lap rather than
+    // waiting for some unrelated caller to schedule a drain.
+    const kvBatches: number[] = [];
+    let release: (() => void) | undefined;
+    const bridge = {
+      async kvOps({ ops }: { ops: string }) {
+        const batch = JSON.parse(ops) as Array<{ op: string; key: string }>;
+        kvBatches.push(batch.length);
+        if (kvBatches.length === 1) await new Promise<void>((r) => (release = r));
+        const results = batch.map((op) => (op.op === "get" ? (op.key === "bad" ? "{not json" : '"ok"') : null));
+        return { results: JSON.stringify(results) };
+      },
+    } as unknown as ConstructorParameters<typeof NativeArmadaDB>[0];
+    const db = new NativeArmadaDB(bridge);
+
+    const first = Promise.all([db.kv.get("bad"), db.kv.get("good")]);
+    await macrotask(); // the first crossing is in flight and stalled
+    const later = db.kv.get("good");
+    await macrotask();
+
+    release!();
+    expect(await first).toEqual([undefined, "ok"]);
+    expect(await later).toBe("ok");
+    expect(kvBatches).toEqual([2, 1]);
   });
 });

@@ -184,7 +184,29 @@ interface PendingWrite {
 
 class NativeRumorStore implements NRumorStore {
   private pending: PendingWrite[] = [];
-  private flushScheduled = false;
+  /**
+   * A drain is in flight. Only ONE ever is: a write that arrives while a
+   * crossing is outstanding joins {@link pending} and is picked up by that
+   * drain's next lap, rather than starting a concurrent crossing of its own.
+   * That is the whole fix — on a loaded phone a crossing takes real time, and
+   * the old per-tick microtask flush spawned one crossing (one hop onto the
+   * single plugin thread, one turn of the native lock) per arriving write, so
+   * an ingest storm became thousands of serialized lock acquisitions that
+   * starved the reads login needed to make progress.
+   */
+  private draining = false;
+  /**
+   * Settles once the NEWEST batch — the one still queued in {@link pending},
+   * or failing that the one in flight — has crossed. Laps are sequential, so
+   * that batch committing implies every earlier one did too, which is exactly
+   * what a read needs: every write program-ordered before it. It is NOT "the
+   * drain went idle" — under a steady ingest stream the drain never does, and
+   * a read that waited for that would sit behind writes queued after it for as
+   * long as the stream lasts.
+   */
+  private tail: Promise<void> = Promise.resolve();
+  /** Settles {@link tail} for the batch currently queued; null when none is. */
+  private settleQueued: (() => void) | null = null;
 
   /** Profiler label — the tenant's class, see {@link tenantClass}. */
   private readonly label: string;
@@ -196,7 +218,11 @@ class NativeRumorStore implements NRumorStore {
   }
 
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
-    opts?.signal?.throwIfAborted();
+    // Read-your-writes: commit anything queued before this read was issued, so a
+    // caller that fired a write without awaiting it still sees it. The drain
+    // spans macrotasks, so unlike the old same-tick microtask flush this cannot
+    // be relied on to have already run by the time the read crosses.
+    await this.settleWrites(opts?.signal);
     // Every bridge call is a hop onto Capacitor's single plugin thread and then
     // a lock held for the whole native method, so these serialize against each
     // other AND against the notification service. The call count matters as much
@@ -227,6 +253,11 @@ class NativeRumorStore implements NRumorStore {
 
     return new Promise<void>((resolve, reject) => {
       this.pending.push({ rumor, resolve, reject });
+      // The first write into an empty queue opens a new batch; readers issued
+      // from now until it is snapshotted wait on this one.
+      if (this.settleQueued === null) {
+        this.tail = new Promise<void>((settle) => (this.settleQueued = settle));
+      }
       this.scheduleFlush();
     });
   }
@@ -235,7 +266,7 @@ class NativeRumorStore implements NRumorStore {
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
-    opts?.signal?.throwIfAborted();
+    await this.settleWrites(opts?.signal);
     const result = await perfTime(`db.count ${this.label}`, () =>
       this.bridge.count({ tenant: this.id, filters: JSON.stringify(filters) }),
     );
@@ -243,7 +274,9 @@ class NativeRumorStore implements NRumorStore {
   }
 
   async remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
-    opts?.signal?.throwIfAborted();
+    // Commit queued writes first so a remove acts after the writes program-ordered
+    // before it, not around them.
+    await this.settleWrites(opts?.signal);
     // A removed event has to be storable again, and this class cannot evaluate
     // the filter that removed it.
     this.written.forget();
@@ -253,41 +286,84 @@ class NativeRumorStore implements NRumorStore {
   }
 
   private scheduleFlush(): void {
-    if (this.flushScheduled) return;
-    this.flushScheduled = true;
+    // A drain already running will pick up whatever is in `pending` on its next
+    // lap; starting a second would be the concurrent crossing this exists to
+    // avoid.
+    if (this.draining) return;
+    this.draining = true;
+    queueMicrotask(() => void this.drain());
+  }
 
-    queueMicrotask(() => {
-      this.flushScheduled = false;
-      void this.flush();
+  /**
+   * Block until every write queued before this call has crossed — at most the
+   * crossing in flight plus the one queued behind it, never the whole stream.
+   * Honours `signal` while waiting: a read that has already been given up on
+   * must not hold its caller for however long the writes keep coming.
+   */
+  private settleWrites(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (!this.draining) return Promise.resolve();
+    if (!signal) return this.tail;
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      void this.tail.then(() => {
+        signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) reject(signal.reason);
+        else resolve();
+      });
     });
   }
 
-  /** Cross the bridge once for the whole burst; it commits as one transaction. */
-  private async flush(): Promise<void> {
-    const writes = this.pending;
-    if (writes.length === 0) return;
-    this.pending = [];
-
+  /**
+   * Drain {@link pending} to the bridge, one crossing per lap, until it is
+   * empty. A lap's crossing commits as one transaction; anything that arrives
+   * while it is outstanding is waiting in `pending` for the next lap, so a
+   * storm of writes folds into a handful of large crossings rather than one
+   * crossing each.
+   */
+  private async drain(): Promise<void> {
     try {
-      await perfTime(
-        `db.write ${this.label}`,
-        () =>
-          this.bridge.event({
-            tenant: this.id,
-            rumors: JSON.stringify(writes.map((write) => write.rumor)),
-          }),
-        () => writes.length,
-      );
-    } catch (error) {
-      for (const write of writes) write.reject(error);
-      return;
-    }
+      while (this.pending.length > 0) {
+        const writes = this.pending;
+        const settle = this.settleQueued;
+        this.pending = [];
+        this.settleQueued = null;
 
-    // Settled only after the native commit, so resolving means durable — which
-    // is also why the ids are recorded here and not at `event()`.
-    for (const write of writes) {
-      this.written.add(write.rumor.id);
-      write.resolve();
+        try {
+          await perfTime(
+            `db.write ${this.label}`,
+            () =>
+              this.bridge.event({
+                tenant: this.id,
+                rumors: JSON.stringify(writes.map((write) => write.rumor)),
+              }),
+            () => writes.length,
+          );
+        } catch (error) {
+          for (const write of writes) write.reject(error);
+          // A reader waiting on this batch is released either way: the writes
+          // it program-ordered behind have been acted on, if only to fail.
+          settle?.();
+          continue;
+        }
+
+        // Settled only after the native commit, so resolving means durable —
+        // which is also why the ids are recorded here and not at `event()`.
+        for (const write of writes) {
+          this.written.add(write.rumor.id);
+          write.resolve();
+        }
+        settle?.();
+      }
+    } finally {
+      // On the normal exit `pending` is empty with no await since the last
+      // check, so nothing is stranded between clearing the flag and the next
+      // enqueue. Should a lap ever escape the loop with a throw, whatever
+      // arrived during its crossing is still queued and would otherwise wait
+      // for an unrelated write to start the next drain.
+      this.draining = false;
+      if (this.pending.length > 0) this.scheduleFlush();
     }
   }
 
@@ -325,26 +401,55 @@ type PendingKvOp =
  * Executing the burst in arrival order inside one native transaction keeps
  * read-your-writes exactly as the web adapter defines it.
  */
+/**
+ * A stored value that no longer parses is a miss, not a thrown crossing: one
+ * corrupt row must not take the rest of its batch down unsettled.
+ */
+function parseStored(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 class NativeKV implements ArmadaKV {
   private pendingOps: PendingKvOp[] = [];
-  private flushScheduled = false;
+  /**
+   * A drain is in flight; see {@link NativeRumorStore} for the reasoning. Ops
+   * that arrive during an outstanding `kvOps` crossing wait in
+   * {@link pendingOps} for its next lap instead of each starting a concurrent
+   * crossing — the KV half of the same fix, and read-your-writes is preserved
+   * either way because gets and lists ride the same ordered queue as the sets.
+   */
+  private draining = false;
 
   constructor(private readonly bridge: ArmadaDBPlugin) {}
 
   private schedule(): void {
-    if (this.flushScheduled) return;
-    this.flushScheduled = true;
-    queueMicrotask(() => {
-      this.flushScheduled = false;
-      void this.flush();
-    });
+    if (this.draining) return;
+    this.draining = true;
+    queueMicrotask(() => void this.drain());
   }
 
-  private async flush(): Promise<void> {
-    const ops = this.pendingOps;
-    this.pendingOps = [];
-    if (ops.length === 0) return;
+  /** Drain {@link pendingOps} to the bridge, one crossing per lap, until empty. */
+  private async drain(): Promise<void> {
+    try {
+      while (this.pendingOps.length > 0) {
+        const ops = this.pendingOps;
+        this.pendingOps = [];
+        await this.crossing(ops);
+      }
+    } finally {
+      // As in `NativeRumorStore.drain`: a lap that escapes with a throw must
+      // not leave the ops that arrived during it waiting for the next caller.
+      this.draining = false;
+      if (this.pendingOps.length > 0) this.schedule();
+    }
+  }
 
+  /** One `kvOps` crossing for a burst, settling each op against its result. */
+  private async crossing(ops: PendingKvOp[]): Promise<void> {
     let results: Array<string | null | Array<{ key: string; value: string }>>;
     try {
       const wire = ops.map((op) => {
@@ -374,10 +479,10 @@ class NativeKV implements ArmadaKV {
     for (const [i, op] of ops.entries()) {
       if (op.op === "get") {
         const value = results[i];
-        op.resolve(typeof value === "string" ? (JSON.parse(value) as unknown) : undefined);
+        op.resolve(typeof value === "string" ? parseStored(value) : undefined);
       } else if (op.op === "list") {
         const entries = Array.isArray(results[i]) ? (results[i] as Array<{ key: string; value: string }>) : [];
-        op.resolve(entries.map(({ key, value }) => ({ key, value: JSON.parse(value) as unknown })));
+        op.resolve(entries.map(({ key, value }) => ({ key, value: parseStored(value) })));
       } else {
         op.resolve();
       }

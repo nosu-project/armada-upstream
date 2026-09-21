@@ -542,4 +542,42 @@ describe("useInitialSync", () => {
       }),
     );
   });
+
+  it("lifts the gate at the sync budget even if a branch never resolves", async () => {
+    // `done` must not depend on every branch settling: a branch that ignores
+    // its abort would otherwise hold the gate up indefinitely. The gate lifts
+    // on the budget regardless; the branches finish in the background.
+    vi.useFakeTimers();
+    try {
+      h.user.signer = { nip44: { decrypt: vi.fn(async () => "{}") } };
+      // The settings branch hangs forever on its first read, ignoring the abort.
+      h.queryExplicitRelays.mockReset().mockImplementation((...args: unknown[]) => {
+        const kinds = ((args[2] ?? []) as Array<{ kinds?: number[] }>).flatMap((f) => f.kinds ?? []);
+        if (kinds.some((k) => SERVICE_LIST_KINDS.includes(k))) return new Promise<never[]>(() => {});
+        return Promise.resolve([]);
+      });
+      h.queryExplicitRelaysWithStatus.mockImplementation(async (...args: unknown[]) => ({
+        events: await h.queryExplicitRelays(...args),
+        answered: [RELAY],
+        failed: [],
+      }));
+
+      const view = renderHook(() => useInitialSync(PUBKEY));
+
+      // The branches are running; the settings branch is wedged. The gate stays
+      // up until the budget — it must not lift early.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(view.result.current.done).toBe(false);
+
+      // Past the 30s budget (SYNC_TIMEOUT_MS), the gate lifts despite the wedge.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+      expect(view.result.current.done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
