@@ -109,6 +109,15 @@ const STEP_TIMEOUT_MS = 8_000;
  * absence-is-non-authoritative semantics the list reads rely on are preserved.
  */
 const STEP_GRACE_MS = 1_500;
+/**
+ * Extra time, past the overall budget, that the gate waits for the SETTINGS
+ * branch alone to settle before lifting regardless. Settings decides theme and
+ * relay config; lifting onto defaults and repainting when it arrives is the
+ * visible regression this guards. Two step timeouts covers the branch's two
+ * sequential reads; a settings branch that ignores its own abort past
+ * `SYNC_TIMEOUT_MS + this` still cannot trap the user (the hard cap lifts).
+ */
+const SETTINGS_PRIORITY_GRACE_MS = 2 * STEP_TIMEOUT_MS;
 
 /** A phase of the post-login sync. */
 export type SyncPhase =
@@ -233,8 +242,12 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     let cancelled = false;
     const overall = AbortSignal.timeout(SYNC_TIMEOUT_MS);
     const log: SyncLogLine[] = [];
-    /** The gate has been lifted (by completion or by the budget); idempotent. */
+    /** The gate has been lifted (by completion, budget, or hard cap); idempotent. */
     let lifted = false;
+    /** The settings branch has settled — the gate's priority prerequisite. */
+    let settingsSettled = false;
+    /** The overall budget has elapsed (it bounds only the non-settings work). */
+    let budgetExpired = false;
 
     /** Open a phase: push an in-progress line, return its id. */
     const begin = (phase: Exclude<SyncPhase, "done">): string => {
@@ -293,24 +306,45 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     };
 
     /**
-     * Lift the gate. Idempotent, and safe to call from either the completion
-     * path or the budget timer — whichever wins. The branches keep running in
-     * the background afterwards, exactly as the warm-up already does.
+     * Lift the gate. Idempotent, and safe to call from the completion path, the
+     * budget timer or the hard cap — whichever wins. The branches keep running
+     * in the background afterwards, exactly as the warm-up already does.
      */
     const lift = () => {
       if (lifted || cancelled) return;
       lifted = true;
       clearTimeout(budget);
+      clearTimeout(hardCap);
       note("ready", "all systems nominal", "READY", "ok");
       setState((s) => ({ ...s, phase: "done", done: true }));
     };
-    // Armed here, beside `overall`, so the two share a start instant: the gate
-    // lifts when the sync's deadline passes, however far along the branches
-    // are. (A timer rather than `overall`'s abort event so fake timers can
-    // drive it in tests.)
-    const budget = setTimeout(lift, SYNC_TIMEOUT_MS);
+    /**
+     * Lift once the budget has elapsed AND settings has settled. Settings is the
+     * priority: it decides theme and relay config, so the gate must not lift
+     * onto a pre-settings default and repaint when it arrives. The budget bounds
+     * only the slower branches (the Concord warm-up, the message catch-up),
+     * which keep running in the background after the lift.
+     */
+    const liftIfReady = () => {
+      if (budgetExpired && settingsSettled) lift();
+    };
+    // The budget bounds the non-settings work; when it elapses the gate lifts as
+    // soon as settings has settled (often already, so it lifts at once). A timer
+    // rather than `overall`'s abort event so fake timers can drive it in tests.
+    const budget = setTimeout(() => {
+      budgetExpired = true;
+      liftIfReady();
+    }, SYNC_TIMEOUT_MS);
+    // Absolute ceiling past the budget: even a settings branch that ignores its
+    // own abort cannot trap the user. Settings is priority, not unboundedly so.
+    const hardCap = setTimeout(lift, SYNC_TIMEOUT_MS + SETTINGS_PRIORITY_GRACE_MS);
 
     const stepSignal = () => AbortSignal.any([overall, AbortSignal.timeout(STEP_TIMEOUT_MS)]);
+    // Settings reads answer to their own step timeout ONLY, not the overall
+    // budget: when the budget elapses the in-flight settings read must be free
+    // to finish (yielding RESTORED, not DEFAULTS), since the gate is holding for
+    // it. Each read is still bounded, and the hard cap bounds the branch.
+    const settingsStepSignal = () => AbortSignal.timeout(STEP_TIMEOUT_MS);
 
     void (async () => {
       const shortPk = `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
@@ -430,7 +464,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         let canonicalDm: DmRelayListQuery | undefined;
         let canonicalBlossom: (BlossomServerListQuery & { event: NostrRumor }) | undefined;
         try {
-          const deadline = stepSignal();
+          const deadline = settingsStepSignal();
           const [wireEvents, stored] = await Promise.all([
             queryExplicitRelays(
               nostr,
@@ -543,7 +577,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 // discovery rather than leaking the topic query to the pool.
                 ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
               ],
-              stepSignal(),
+              settingsStepSignal(),
               { graceMs: STEP_GRACE_MS },
             );
             const events = settingsRead.events;
@@ -822,12 +856,19 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         if (cancelled) return;
       };
 
-      const branches = Promise.all([branchSettings(), branchGroups(), branchConcord()]);
+      // Settings is the priority branch: flip its flag when it settles so the
+      // budget's deferred lift can fire. It is included in the all-settled await
+      // below, so its rejection is still handled there.
+      const settingsBranch = branchSettings().finally(() => {
+        settingsSettled = true;
+        liftIfReady();
+      });
+      const branches = Promise.all([settingsBranch, branchGroups(), branchConcord()]);
 
-      // The gate lifts on whichever comes first — every branch settling, or
-      // the `budget` timer armed above. A branch still running afterwards
-      // settles in the background, and its rejection is handled by the await
-      // below however late it comes.
+      // The gate lifts on whichever comes first — every branch settling, or the
+      // budget timer once settings has settled (the hard cap is the backstop). A
+      // branch still running afterwards settles in the background, and its
+      // rejection is handled by the await below however late it comes.
       //
       // NOTE: we deliberately do NOT write the settings sync watermark here.
       // NostrSync owns applying the fetched settings (theme/relay config) into
@@ -845,6 +886,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     return () => {
       cancelled = true;
       clearTimeout(budget);
+      clearTimeout(hardCap);
     };
   }, [pubkey, user, nostr, queryClient, eventStore]);
 
