@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { MemberModerationActions } from "@/components/chat/MemberModerationActions";
 import { FollowButton } from "@/components/FollowButton";
 import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -369,6 +370,13 @@ function ProfilePreviewBody({
             </Button>
           )}
         </div>
+
+        {/* What a moderator may do to this person, last and in its own group:
+            clicking someone is the shortest path to acting on them, and the
+            destructive-last ordering matches every other menu here. Absent
+            for everyone who isn't staff over this member — which is why it
+            can be buttons rather than a third menu. */}
+        {!isSelf && <MemberModerationActions pubkey={pubkey} onAction={onAction} className="mt-3" />}
       </div>
     </>
   );

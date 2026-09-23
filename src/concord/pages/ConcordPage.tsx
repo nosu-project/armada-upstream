@@ -1,4 +1,4 @@
-import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, Users, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -87,6 +87,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
+import { MemberActionsContext, type MemberActionItem, type MemberActionsValue } from "@/contexts/MemberActionsContext";
 import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -2648,6 +2649,47 @@ export function ConcordPage() {
   const openAddMembers = useCallback(() => setAddMembersOpen(true), []);
   const closeMembers = useCallback(() => setMembersOpen(false), []);
 
+  // Moderating a person from wherever they were clicked (a message author's
+  // avatar, a mention, a roster row) rather than only from the member panel,
+  // which on a phone is an overlay you first have to open and then search.
+  // Gated the way the message menu is — the ambient permission AND authority
+  // over this particular member — so the card offers nothing it can't do.
+  const memberActionsValue = useMemo<MemberActionsValue>(
+    () => ({
+      actionsFor: (pubkey: string) => {
+        if (!user || pubkey === user.pubkey) return [];
+        const out: MemberActionItem[] = [];
+        if (canKickAny && moderation.canKick(pubkey)) {
+          out.push({
+            id: "kick",
+            label: "Kick",
+            icon: UserMinus,
+            // The dialog, not the member panel's act-on-select kick: a button
+            // sitting under the avatar is far easier to hit by accident.
+            onSelect: () => setKickTarget(pubkey),
+          });
+        }
+        if (moderation.banned.has(pubkey)) {
+          // Reachable because a banned member's old messages outlive their
+          // roster row — until now, unbanning meant finding the Banned pane.
+          if (canBanAny) {
+            out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
+          }
+        } else if (canBanAny && moderation.canBan(pubkey)) {
+          out.push({
+            id: "ban",
+            label: memberBanLabel(pubkey),
+            icon: Ban,
+            destructive: true,
+            onSelect: () => setBanTarget(pubkey),
+          });
+        }
+        return out;
+      },
+    }),
+    [user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel],
+  );
+
   // Stable identities for the memoized ChannelRow's callbacks; these close
   // over only render-stable values, so no ref indirection is needed.
   const suppressChannelClick = channelDrag.shouldSuppressClick;
@@ -3312,6 +3354,7 @@ export function ConcordPage() {
           the pool's general routing never asks. */}
       <ProfileRelayHints relays={community?.relays} />
       <MemberRolesContext.Provider value={memberRolesValue}>
+      <MemberActionsContext.Provider value={memberActionsValue}>
       <ChatShell
         scope={appScope}
         reveal={{
@@ -4200,6 +4243,7 @@ export function ConcordPage() {
         onOpenChange={(next) => !next && setCategoryPrompt(null)}
         onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
       />
+    </MemberActionsContext.Provider>
     </MemberRolesContext.Provider>
     </ChannelNavContext.Provider>
   );
