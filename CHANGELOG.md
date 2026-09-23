@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.61.0] - 2026-09-22
+
+A new media privacy setting can load every image someone else sent through a
+proxy, so the server hosting it never learns your address; it is off by default
+and takes your own list of proxies. Community staff can kick, ban and unban
+straight from a member's profile card, and a private-channel key granted with a
+role now applies by itself instead of waiting behind an invite. Signing in is
+quicker and no longer shows a default theme before your settings arrive.
+
+### Added
+- Media privacy setting: load images other people sent through a proxy so the host never sees your address, with your own proxy list to rotate through (off by default)
+- Kick, ban and unban a member from their profile card, wherever you tap their name or avatar
+- A private channel key that staff send with a role grant now applies automatically, so the channel just appears
+
+### Changed
+- Two signup avatars replaced with submitted artwork: Gamer Kitty by dudsflausino and Rose by Milo, and Milo's other avatar is now titled Agent Flower
+- The app's description on the web page, the web app manifest and the Linux desktop entry now describes encrypted communities
+
+### Fixed
+- Signing in is faster and waits for your settings, so the app no longer opens on a default theme or relay set before yours load
+- Desktop notifications on Windows now appear reliably and flash the taskbar
+- Both voice surfaces now apply the same microphone settings
+- A background relay whose server keeps returning an error is set aside instead of being retried indefinitely
+
 ## [0.60.2] - 2026-09-18
 
 The zap dialog is reworked: amounts show in your display currency, Bitcoin is the
