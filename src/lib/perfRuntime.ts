@@ -598,20 +598,14 @@ export function fiberName(f: Pick<Fiber, "tag" | "type">): string | undefined {
 }
 
 /**
- * Attribute one commit to the components that rendered in it. A subtree React
- * bailed out of keeps its PREVIOUS child pointer (`child === alternate.child`),
- * so it is skipped whole — the walk costs what the commit re-rendered, not the
- * size of the tree.
- */
-/**
  * Why a component that was already mounted rendered again: the props whose
- * identity changed since its last commit, or `(state/context)` when none did —
- * a hook of its own, a context it reads, or an ancestor that isn't memoized.
- * Names a memo'd row whose parent hands it a fresh callback every render.
+ * identity changed since its last commit. Names a memo'd row whose parent
+ * hands it a fresh callback every render. Empty when no prop changed — see
+ * {@link renderCause} for what it falls back to.
  */
 export function changedProps(prev: unknown, next: unknown): string[] {
   if (prev === next || !prev || !next || typeof prev !== "object" || typeof next !== "object") {
-    return prev === next ? ["(state/context)"] : ["(props)"];
+    return prev === next ? [] : ["(props)"];
   }
   const a = prev as Record<string, unknown>;
   const b = next as Record<string, unknown>;
@@ -620,9 +614,92 @@ export function changedProps(prev: unknown, next: unknown): string[] {
     if (key !== "children" && !Object.is(a[key], b[key])) changed.push(key);
   }
   if (changed.length === 0 && !Object.is(a.children, b.children)) changed.push("children");
-  return changed.length > 0 ? changed : ["(state/context)"];
+  return changed;
 }
 
+/** A function component's hook list node (React internals; stable since 16.8). */
+interface HookNode {
+  memoizedState: unknown;
+  queue: unknown;
+  next: HookNode | null;
+}
+
+/** One context a fiber read during its last render. */
+interface ContextDependency {
+  context: { displayName?: string };
+  memoizedValue: unknown;
+  next: ContextDependency | null;
+}
+
+type HookedFiber = Pick<Fiber, "tag" | "memoizedProps"> & {
+  memoizedState?: unknown;
+  dependencies?: { firstContext: ContextDependency | null } | null;
+};
+
+/**
+ * The hooks and contexts whose values changed between two renders of a
+ * function component, by position: `ctx:<displayName>` for a context,
+ * `query#n` for a stateful hook holding a React Query result (useQuery's
+ * external store), `state#n` for any other useState/useReducer/store hook —
+ * `n` counting stateful hooks only, in call order. Effects and memos are
+ * skipped: their slots are rebuilt on every render and say nothing about why.
+ */
+export function changedHooks(prev: HookedFiber, next: HookedFiber): string[] {
+  const out: string[] = [];
+  let a = prev.dependencies?.firstContext ?? null;
+  let b = next.dependencies?.firstContext ?? null;
+  while (a && b) {
+    if (a.context === b.context && !Object.is(a.memoizedValue, b.memoizedValue)) {
+      out.push(`ctx:${b.context.displayName ?? shapeOf(b.memoizedValue)}`);
+    }
+    a = a.next;
+    b = b.next;
+  }
+  if (next.tag === CLASS_COMPONENT) return out;
+  let h = prev.memoizedState as HookNode | null | undefined;
+  let k = next.memoizedState as HookNode | null | undefined;
+  let n = 0;
+  while (h && k && typeof h === "object" && typeof k === "object" && "next" in k) {
+    if (k.queue !== null && k.queue !== undefined) {
+      if (!Object.is(h.memoizedState, k.memoizedState)) {
+        const v = k.memoizedState;
+        out.push(v && typeof v === "object" && "fetchStatus" in v ? `query#${n}` : `state#${n}`);
+      }
+      n += 1;
+    }
+    h = h.next;
+    k = k.next;
+  }
+  return out;
+}
+
+/** An unnamed context, by the first keys of its value: `{config,updateConfig,…}`. */
+function shapeOf(value: unknown): string {
+  if (!value || typeof value !== "object") return typeof value;
+  const keys = Object.keys(value);
+  return `{${keys.slice(0, 3).join(",")}${keys.length > 3 ? ",…" : ""}}`;
+}
+
+/**
+ * Everything {@link walkCommit} can say about why a mounted component rendered:
+ * changed props, else changed hooks/contexts, else `(parent)` — a new props
+ * object with nothing in it changed, i.e. an unmemoized child of a component
+ * that rendered — or `(unknown)`.
+ */
+export function renderCause(prev: HookedFiber, next: HookedFiber): string[] {
+  const props = changedProps(prev.memoizedProps, next.memoizedProps);
+  if (props.length > 0) return props;
+  const hooks = changedHooks(prev, next);
+  if (hooks.length > 0) return hooks;
+  return [prev.memoizedProps === next.memoizedProps ? "(unknown)" : "(parent)"];
+}
+
+/**
+ * Attribute one commit to the components that rendered in it. A subtree React
+ * bailed out of keeps its PREVIOUS child pointer (`child === alternate.child`),
+ * so it is skipped whole — the walk costs what the commit re-rendered, not the
+ * size of the tree.
+ */
 export function walkCommit(
   rootFiber: Fiber | null,
   record: (name: string, mount: boolean, selfMs: number, why?: string[]) => void,
@@ -640,7 +717,7 @@ export function walkCommit(
           name,
           mount,
           typeof f.selfBaseDuration === "number" ? f.selfBaseDuration : 0,
-          mount ? undefined : changedProps(f.alternate!.memoizedProps, f.memoizedProps),
+          mount ? undefined : renderCause(f.alternate! as HookedFiber, f as HookedFiber),
         );
       }
     }
@@ -797,7 +874,7 @@ export interface RuntimeReport {
     /** Only in a profiling build (`npm run build:profile`). */
     commitMs?: number;
     renderTracking: boolean;
-    /** `why`: the props that changed on a re-render, most frequent first (see {@link changedProps}). */
+    /** `why`: what changed on a re-render, most frequent first (see {@link renderCause}). */
     components: { name: string; renders: number; mounts: number; selfMs: number; why: string }[];
   };
   timers: {

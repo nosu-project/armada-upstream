@@ -28,7 +28,7 @@
  * playwright.config.ts for why some sandboxes need it), and on this machine's
  * cores — compare runs against each other, not against a phone.
  *
- * Output: `dist-perf/reports/<scenario>.json` (full reports) and a summary on
+ * Output: `perf-reports/<scenario>.json` (full reports) and a summary on
  * stdout.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -54,7 +54,8 @@ const ONLY = opt("only", "")
   .filter(Boolean);
 const PORT = 8282;
 const ORIGIN = `http://localhost:${PORT}`;
-const OUT = resolve(root, "dist-perf/reports");
+// Outside `dist-perf/`, which every build empties.
+const OUT = resolve(root, "perf-reports");
 
 const wants = (name) => ONLY.length === 0 || ONLY.includes(name);
 

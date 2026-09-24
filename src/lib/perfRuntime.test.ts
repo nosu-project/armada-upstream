@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { callSite, changedProps, fiberName, filterShape, frameHead, frameKind, socketKey, walkCommit } from "./perfRuntime";
+import { callSite, changedProps, fiberName, renderCause, filterShape, frameHead, frameKind, socketKey, walkCommit } from "./perfRuntime";
 
 describe("frameHead", () => {
   it("reads the verb and subscription id of a relay frame", () => {
@@ -117,14 +117,38 @@ describe("changedProps", () => {
     expect(changedProps({ a: 1, onClick }, { a: 1, onClick: () => {} })).toEqual(["onClick"]);
   });
 
-  it("blames state or context when no prop changed", () => {
+  it("is empty when no prop changed", () => {
     const props = { a: 1 };
-    expect(changedProps(props, props)).toEqual(["(state/context)"]);
-    expect(changedProps({ a: 1 }, { a: 1 })).toEqual(["(state/context)"]);
+    expect(changedProps(props, props)).toEqual([]);
+    expect(changedProps({ a: 1 }, { a: 1 })).toEqual([]);
   });
 
   it("reports children only when nothing else explains the render", () => {
     expect(changedProps({ children: [1] }, { children: [1] })).toEqual(["children"]);
     expect(changedProps({ x: 1, children: [1] }, { x: 2, children: [1] })).toEqual(["x"]);
+  });
+});
+
+describe("renderCause", () => {
+  const hook = (memoizedState: unknown, queue: unknown, next: unknown = null) => ({ memoizedState, queue, next });
+  const ctx = { displayName: "AppContext" };
+
+  it("names a changed context by its displayName", () => {
+    const props = {};
+    const prev = { tag: 0, memoizedProps: props, dependencies: { firstContext: { context: ctx, memoizedValue: 1, next: null } } };
+    const next = { tag: 0, memoizedProps: props, dependencies: { firstContext: { context: ctx, memoizedValue: 2, next: null } } };
+    expect(renderCause(prev, next)).toEqual(["ctx:AppContext"]);
+  });
+
+  it("numbers stateful hooks only, and tells a React Query result from plain state", () => {
+    const props = {};
+    // [useMemo, useState, useSyncExternalStore(query)]
+    const prev = { tag: 0, memoizedProps: props, memoizedState: hook([1], null, hook("a", {}, hook({ fetchStatus: "idle" }, {}))) };
+    const next = { tag: 0, memoizedProps: props, memoizedState: hook([2], null, hook("a", {}, hook({ fetchStatus: "idle" }, {}))) };
+    expect(renderCause(prev, next)).toEqual(["query#1"]);
+  });
+
+  it("blames the parent for a new-but-identical props object", () => {
+    expect(renderCause({ tag: 0, memoizedProps: { a: 1 } }, { tag: 0, memoizedProps: { a: 1 } })).toEqual(["(parent)"]);
   });
 });

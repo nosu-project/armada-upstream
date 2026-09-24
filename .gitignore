@@ -2,6 +2,7 @@ node_modules/
 dist/
 # scripts/perf-profile.mjs: the profiling build and its reports.
 dist-perf/
+perf-reports/
 .DS_Store
 .eslintcache
 *.local
