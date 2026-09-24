@@ -14,6 +14,7 @@ import {
   onColdShareResolved,
 } from "@/lib/shareTarget";
 import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
+import { LocationRefProvider } from "@/components/LocationRefProvider";
 import { VersionCheck } from "@/components/VersionCheck";
 import { Toaster } from "@/components/ui/toaster";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -553,7 +554,9 @@ export function AppRouter() {
           once per release, since VersionCheck stamps the version before
           toasting. */}
       <Toaster />
-      <AppRoutes />
+      <LocationRefProvider>
+        <AppRoutes />
+      </LocationRefProvider>
     </BrowserRouter>
   );
 }

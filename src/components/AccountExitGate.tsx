@@ -50,7 +50,7 @@ export function AccountExitGate() {
       aria-live="polite"
     >
       <div className="flex flex-col items-center gap-6">
-        <ArmadaCrest size={96} />
+        <ArmadaCrest size={96} loop />
         <BrandMark
           tagline={
             // A CSS typewriter, the mirror of the gate's "jacking in": the

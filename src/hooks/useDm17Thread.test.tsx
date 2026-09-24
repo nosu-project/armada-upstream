@@ -202,7 +202,9 @@ describe("useDm17Thread history window", () => {
     expect(added).toBe(100);
     await waitFor(() => expect(result.current.messages).toHaveLength(400));
     expect(result.current.messages[0]?.rumorId).toBe("rumor-0");
-    expect(h.queryLimits.at(-1)).toBe(400);
+    // The probe reaches a full window past what is shown (300 + max(100
+    // scanned, 300)); the floor it leaves behind is what came back (400).
+    expect(h.queryLimits.at(-1)).toBe(600);
 
     // A poll/wire invalidation runs the ordinary queryFn again. Its limit must
     // retain and grow the floor instead of reverting to THREAD_WINDOW (300) or
@@ -214,6 +216,42 @@ describe("useDm17Thread history window", () => {
     expect(h.queryLimits.slice(-2)).toEqual([400, 401]);
     await waitFor(() => expect(result.current.messages).toHaveLength(401));
     expect(result.current.messages[0]?.rumorId).toBe("rumor-0");
+  });
+
+  it("reaches older rows already on disk when the relays have nothing to page back", async () => {
+    // Decrypted history outlives its wraps: relays expire them, the store
+    // keeps the plaintext. Scroll-back must still reach it.
+    h.rows = Array.from({ length: 700 }, (_, index) => row(index, 1_700_000_000 + index));
+    h.relayEvents = [];
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+    });
+    const { result } = renderHook(() => useDm17Thread(h.peer), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(300));
+
+    let added = 0;
+    await act(async () => {
+      added = await result.current.loadOlder();
+    });
+    expect(added).toBe(300);
+    await waitFor(() => expect(result.current.messages).toHaveLength(600));
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      added = await result.current.loadOlder();
+    });
+    expect(added).toBe(100);
+    await waitFor(() => expect(result.current.messages[0]?.rumorId).toBe("rumor-0"));
+
+    // Relays exhausted and nothing older on disk: now it is the end.
+    await act(async () => {
+      added = await result.current.loadOlder();
+    });
+    expect(added).toBe(0);
+    expect(result.current.hasMore).toBe(false);
   });
 
   it("grows the floor by this conversation's rows, not the whole inbox page", async () => {

@@ -128,6 +128,33 @@ function useDecodingTitle(active: boolean): string {
   return text;
 }
 
+/**
+ * Whether `ref`'s element is in the viewport of a visible page. The ciphertext
+ * churn re-renders both answer blocks ~9 times a second, which is a steady
+ * main-thread cost for decoration nobody can see once the quiz has scrolled
+ * away or the tab is in the background — so it only runs while this is true.
+ */
+function useOnScreen(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [intersecting, setIntersecting] = useState(false);
+  const [pageVisible, setPageVisible] = useState(() => !document.hidden);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => setIntersecting(entry.isIntersecting));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  useEffect(() => {
+    const onChange = () => setPageVisible(!document.hidden);
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+
+  return intersecting && pageVisible;
+}
+
 /** A block of hex that reshuffles on an interval while `live`. */
 function useHexBlock(live: boolean): string[] {
   const [rows, setRows] = useState(() => Array.from({ length: BLOCK_ROWS }, () => hex(BLOCK_COLS)));
@@ -189,6 +216,7 @@ export function EncryptionQuiz() {
   const [revealed, setRevealed] = useState(false);
   const [picked, setPicked] = useState(false);
   const title = useDecodingTitle(revealed);
+  const onScreen = useOnScreen(sectionRef);
 
   // The decode is the section's entrance, so it waits for the section to be
   // looked at rather than for the page to mount — and runs once, not on every
@@ -239,14 +267,14 @@ export function EncryptionQuiz() {
             <AnswerButton
               label="First answer (encrypted)"
               seed={100}
-              live={!picked}
+              live={!picked && onScreen}
               dust={picked}
               onPick={() => setPicked(true)}
             />
             <AnswerButton
               label="Second answer (encrypted)"
               seed={500}
-              live={!picked}
+              live={!picked && onScreen}
               dust={picked}
               onPick={() => setPicked(true)}
             />

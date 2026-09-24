@@ -69,6 +69,22 @@ export class LegacyFallbackRequired extends Error {
   }
 }
 
+/** Two tally lists that would render identically. */
+function sameTallies(a: readonly ReactionTally[], b: readonly ReactionTally[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((t, i) => {
+    const u = b[i];
+    return t.key === u.key
+      && t.url === u.url
+      && t.count === u.count
+      && t.mine === u.mine
+      && t.mineEventId === u.mineEventId
+      && t.pubkeys.length === u.pubkeys.length
+      && t.pubkeys.every((pk, k) => pk === u.pubkeys[k]);
+  });
+}
+
 /**
  * Build a {@link ChatTransport} for a DM thread, so DMs render through the
  * same `MessageTimeline` / `ChatMessage` path as NIP-29 groups and Concord
@@ -252,6 +268,12 @@ export function useDmTransport(
   }, [dm17.messages]);
 
   const dm17Ids = useMemo(() => new Set(dm17Messages.map((m) => m.id)), [dm17Messages]);
+  // Read through a ref by the per-message actions below. `dm17Ids` is rebuilt
+  // with every page of history, and an action that depended on it changed
+  // identity with it — handing every own row a new `onDelete` (and the rest)
+  // on each scroll-back page, which re-rendered the whole loaded thread.
+  const dm17IdsRef = useRef(dm17Ids);
+  dm17IdsRef.current = dm17Ids;
   /** Rumor kind by id, for reaction/delete targets (`k` tags). */
   const dm17KindById = useMemo(() => {
     const out = new Map<string, number>();
@@ -320,17 +342,17 @@ export function useDmTransport(
 
   const retryById = useCallback(
     (event: ChatMsg) => {
-      if (dm17Ids.has(event.id)) dm17.retry(event.id);
+      if (dm17IdsRef.current.has(event.id)) dm17.retry(event.id);
       else retryKind4(event.id);
     },
-    [dm17Ids, dm17.retry, retryKind4], // eslint-disable-line react-hooks/exhaustive-deps
+    [dm17.retry, retryKind4], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const discard = useCallback(
     (id: string) => {
-      if (dm17Ids.has(id)) dm17.discard(id);
+      if (dm17IdsRef.current.has(id)) dm17.discard(id);
     },
-    [dm17Ids, dm17.discard], // eslint-disable-line react-hooks/exhaustive-deps
+    [dm17.discard], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // ── Reactions (NIP-17 plane only) ─────────────────────────────────────────
@@ -371,47 +393,57 @@ export function useDmTransport(
 
   const dm17React = dm17.react;
   const dm17RemoveReaction = dm17.removeReaction;
+  // Both caches outlive a recompute of `talliesById`, which rebuilds EVERY
+  // tally array whenever any reaction in the thread changes (and whenever a
+  // page of history lands). Rebuilding the per-row objects with it handed every
+  // memoized message row a new `reactions` prop, so one reaction — or one
+  // scroll-back page — re-rendered the whole thread.
+  const reactDeps = useRef({ dm17React, dm17RemoveReaction, dm17KindById });
+  reactDeps.current = { dm17React, dm17RemoveReaction, dm17KindById };
+  const reactCache = useRef(new Map<string, (input: ReactInput) => void>());
+  const reactionCache = useRef(new Map<string, MessageReactions>());
   const reactionsFor = useMemo(() => {
-    const reactCache = new Map<string, (input: ReactInput) => void>();
+    // The react fn reads its collaborators through a ref, so it is stable per
+    // message id for the life of the transport.
     const reactFor = (id: string) => {
-      let fn = reactCache.get(id);
+      let fn = reactCache.current.get(id);
       if (!fn) {
         fn = (input: ReactInput) => {
-          if (input.mineEventId) dm17RemoveReaction(input.mineEventId);
-          else dm17React(id, dm17KindById.get(id) ?? KIND_DM_CHAT, input.content, input.emojiUrl);
+          const deps = reactDeps.current;
+          if (input.mineEventId) deps.dm17RemoveReaction(input.mineEventId);
+          else deps.dm17React(id, deps.dm17KindById.get(id) ?? KIND_DM_CHAT, input.content, input.emojiUrl);
         };
-        reactCache.set(id, fn);
+        reactCache.current.set(id, fn);
       }
       return fn;
     };
-    const objCache = new Map<string, { tallies: ReactionTally[]; value: MessageReactions }>();
     return (id: string): MessageReactions => {
       const tallies = talliesById.get(id) ?? EMPTY_TALLIES;
-      const hit = objCache.get(id);
-      if (hit && hit.tallies === tallies) return hit.value;
+      const hit = reactionCache.current.get(id);
+      if (hit && sameTallies(hit.tallies, tallies)) return hit;
       const value: MessageReactions = { tallies, react: reactFor(id) };
-      objCache.set(id, { tallies, value });
+      reactionCache.current.set(id, value);
       return value;
     };
-  }, [talliesById, dm17React, dm17RemoveReaction, dm17KindById]);
+  }, [talliesById]);
 
   const dm17DeleteMessage = dm17.deleteMessage;
   const deleteMessage = useCallback(
     (event: ChatMsg) => {
-      if (dm17Ids.has(event.id)) dm17DeleteMessage(event.id, event.kind);
+      if (dm17IdsRef.current.has(event.id)) dm17DeleteMessage(event.id, event.kind);
     },
-    [dm17Ids, dm17DeleteMessage],
+    [dm17DeleteMessage],
   );
 
   const dm17EditMessage = dm17.editMessage;
   const editMessage = useCallback(
     async (original: ChatMsg, content: string) => {
-      if (!dm17Ids.has(original.id) || original.kind !== KIND_DM_CHAT) {
+      if (!dm17IdsRef.current.has(original.id) || original.kind !== KIND_DM_CHAT) {
         throw new Error("Only NIP-17 chat messages can be edited");
       }
       await dm17EditMessage(original.id, content);
     },
-    [dm17Ids, dm17EditMessage],
+    [dm17EditMessage],
   );
 
   // ── Backfill: both planes page independently; sum what they prepend. ──────

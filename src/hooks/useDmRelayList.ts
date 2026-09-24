@@ -345,7 +345,14 @@ export function useDmRelaysForAll(peers: readonly string[]): Map<string, string[
     queryKey: ["dm-relay-list", "peers", targets.join(","), relayKey, knownKey],
     enabled: targets.length > 0,
     staleTime: 5 * 60 * 1000,
-    queryFn: async ({ signal }) => {
+    // Deliberately NOT React Query's `signal`. Reading it opts the query into
+    // cancellation when its last observer unmounts, and a cancelled query
+    // keeps no result — so opening and leaving a conversation before both
+    // discovery rounds finished threw the answer away, and every later visit
+    // asked every discovery relay again. Each round is already bounded by
+    // DISCOVERY_ROUND_MS, so letting it finish costs little and fills the cache.
+    queryFn: async () => {
+      const signal = new AbortController().signal;
       const settled = await Promise.all(
         targets.map(async (peer) => {
           const relays = await discoverDmRelaysFor(nostr, peer, discoveryRelays, signal, {

@@ -98,7 +98,7 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
       aria-live="polite"
     >
       <div className="flex flex-col items-center gap-6">
-        <ArmadaCrest size={96} />
+        <ArmadaCrest size={96} loop />
         <BrandMark
           tagline={done ? "jacked in" : (
             // A CSS typewriter: width in ch stepped one glyph at a time (the

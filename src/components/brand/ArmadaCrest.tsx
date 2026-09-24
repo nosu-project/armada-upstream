@@ -117,8 +117,8 @@ function DrawnPath({
 
 /**
  * The three cyan wave lines. Each sweeps open horizontally on a staggered
- * beat, then scans slowly in and out on its own loop — a wake that keeps the
- * mark alive without competing with it.
+ * beat, then — with `loop` — scans slowly in and out on its own loop, a wake
+ * that keeps the mark alive without competing with it.
  *
  * Both motions are `scaleX` about x=64, the mark's centerline, which is also
  * every line's own midpoint (so the lines grow and shrink symmetrically).
@@ -131,13 +131,17 @@ function DrawnPath({
  * `scaleX(1)` so it picks up exactly where the sweep left off — starting it at
  * the narrow end would snap the moment its delay elapsed.
  */
-function Waves() {
+function Waves({ loop }: { loop: boolean }) {
   return (
     <g fill="hsl(var(--accent2, 180 90% 55%))">
       {WAVES.map((d, i) => (
         <g
           key={i}
-          className="animate-[armada-wake_6s_ease-in-out_infinite]"
+          // Only when asked: a transform on an SVG child is not composited, so
+          // the wake restyles the page on every frame for as long as the crest
+          // is on screen — which, in a dialog or on the landing page, is
+          // indefinitely.
+          className={loop ? "animate-[armada-wake_6s_ease-in-out_infinite]" : undefined}
           // No fill mode: before the delay elapses this contributes nothing, so
           // the sweep below owns the transform for the whole entrance. The
           // per-line offset keeps the three from scanning in unison.
@@ -160,7 +164,16 @@ function Waves() {
  * scanning slowly. Pair with {@link ArmadaCrestKeyframes} once per screen to
  * register the scoped keyframes it animates with.
  */
-export function ArmadaCrest({ size = 132, className = "" }: { size?: number; className?: string }) {
+export function ArmadaCrest({
+  size = 132,
+  className = "",
+  loop = false,
+}: {
+  size?: number;
+  className?: string;
+  /** Keep the waves scanning after the entrance. For boot/sync waits only. */
+  loop?: boolean;
+}) {
   return (
     <svg
       width={size}
@@ -171,7 +184,7 @@ export function ArmadaCrest({ size = 132, className = "" }: { size?: number; cla
       aria-label={`${APP_NAME} logo`}
       className={`relative drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
     >
-      <Waves />
+      <Waves loop={loop} />
       <DrawnPath d={SAIL} />
       <path
         d={CARET}
@@ -204,7 +217,7 @@ export function ArmadaKey({ size = 132, className = "" }: { size?: number; class
       aria-label="Secret key"
       className={`relative drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
     >
-      <Waves />
+      <Waves loop={false} />
       {/* The key turns in its lock once the draw has settled. */}
       <g
         className="animate-[armada-key-turn_1.1s_ease-in-out_1.3s_both]"
@@ -235,7 +248,7 @@ export function ArmadaIdentity({ size = 132, className = "" }: { size?: number; 
       aria-label="Profile identity"
       className={`relative drop-shadow-[0_8px_24px_hsl(var(--primary)/0.25)] ${className}`}
     >
-      <Waves />
+      <Waves loop={false} />
       <DrawnPath d={head} />
       <DrawnPath d={shoulders} delay={0.22} />
     </svg>

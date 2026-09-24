@@ -105,7 +105,7 @@ export function DBMigrationGate() {
       aria-live="polite"
     >
       <div className="flex flex-col items-center gap-6">
-        <ArmadaCrest size={96} />
+        <ArmadaCrest size={96} loop />
         <BrandMark />
       </div>
 

@@ -240,6 +240,12 @@ export function GroupPage() {
     [relayGroups, relayUrl, navigate],
   );
   const channelNav = useChannelNavValue(navChannels);
+  // One object per room: every message row reads this context, and an inline
+  // value re-rendered all of them on every render of this page.
+  const chatScope = useMemo(
+    () => (relayUrl && groupId ? { kind: "nip29" as const, relayUrl, groupId } : undefined),
+    [relayUrl, groupId],
+  );
 
   const { pinnedRefs, unpin } = usePinnedMessages(relayUrl, groupId);
   const hasPins = pinnedRefs.length > 0;
@@ -773,7 +779,7 @@ export function GroupPage() {
         {/* Chat + members. The member panel mirrors the thread panel: in-flow
             animated-width on desktop, full-screen floating card overlay on
             mobile (no drawer/backdrop). */}
-        <ChatScopeContext.Provider value={{ kind: "nip29", relayUrl, groupId }}>
+        <ChatScopeContext.Provider value={chatScope}>
         <ChannelNavContext.Provider value={channelNav}>
         <div className="relative flex flex-1 min-h-0">
           {!relayModeReady ? (

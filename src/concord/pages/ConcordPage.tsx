@@ -388,8 +388,10 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       canBan={canBan}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
-      onRetry={onRetry ? () => onRetry(event) : undefined}
-      onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
+      // Only a failed row renders Retry/Discard; any other row gets no
+      // per-render closure to defeat ChatMessage's memo with.
+      onRetry={sendStatus === "failed" && onRetry ? () => onRetry(event) : undefined}
+      onDiscard={sendStatus === "failed" && onDiscard ? () => onDiscard(event.id) : undefined}
       isEditing={isEditing}
       onEdit={onEdit}
       onEditSubmit={onEditSubmit}

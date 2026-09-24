@@ -1,6 +1,6 @@
 import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Copy, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
@@ -99,6 +99,7 @@ import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { usePrefetchProfile } from "@/hooks/usePrefetchProfile";
 import { useStartedDms } from "@/hooks/useStartedDms";
 import { useSharedCommunities } from "@/hooks/useSharedCommunities";
+import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { useToast } from "@/hooks/useToast";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { dmRouteParam, parseDmRouteParam } from "@/lib/dmConversation";
@@ -495,6 +496,12 @@ function DmLegacyBadge() {
 }
 
 /**
+ * One element for every legacy row: a fresh `<DmLegacyBadge />` per render is a
+ * new `nameBadge` prop, which defeats the row's memo on every timeline render.
+ */
+const LEGACY_BADGE = <DmLegacyBadge />;
+
+/**
  * Shown in place of the composer when the peer can't receive private (NIP-17)
  * DMs. Sending would fall back to legacy NIP-04 (kind 4), which leaks metadata
  * (who's talking, and when), so we make the downgrade an explicit, informed
@@ -629,7 +636,12 @@ function DmRequestNotice({
   );
 }
 
-function Conversation({
+/**
+ * Memoized, with stable props from the page, so a change to the conversation
+ * LIST (a new message elsewhere, an unread marker) doesn't re-render the open
+ * thread and everything under it.
+ */
+const Conversation = memo(function Conversation({
   conversation,
   peers,
   isRequest,
@@ -646,7 +658,6 @@ function Conversation({
 }) {
   const { user } = useCurrentUser();
   const location = useLocation();
-  const navigate = useNavigate();
   const openProfile = useOpenProfile();
   const prefetchProfile = usePrefetchProfile();
   const group = peers.length > 1;
@@ -741,12 +752,19 @@ function Conversation({
   // mounted there, and sent as an ordinary new message by this user. Landing
   // in the composer rather than sending on pick is deliberate — it's the one
   // chance to add a word or drop something before it goes.
+  // Stable across conversations (the current one is read through a ref): it
+  // is a prop of every row, and a new identity re-rendered all of them.
+  // (`useNavigate`'s function changes with every location, i.e. on every
+  // conversation switch — while the old thread is still mounted.)
+  const conversationRef = useRef(conversation);
+  conversationRef.current = conversation;
+  const stableNavigate = useStableNavigate();
   const handleForward = useCallback((event: ChatMsg) => {
     stashShare({ text: event.content, files: [], tags: forwardableTags(event) }, null);
-    navigate("/share", {
-      state: { forwardFrom: chatRoute({ kind: "dm", peer: dmRouteParam(conversation) }) },
+    stableNavigate("/share", {
+      state: { forwardFrom: chatRoute({ kind: "dm", peer: dmRouteParam(conversationRef.current) }) },
     });
-  }, [navigate, conversation]);
+  }, [stableNavigate]);
 
   // Legacy-encryption opt-in. When the peer can't receive private (NIP-17)
   // DMs, we DON'T silently downgrade to kind-4 (which leaks who's talking and
@@ -787,6 +805,24 @@ function Conversation({
     for (const m of messages) map.set(m.id, m);
     return map;
   }, [messages]);
+
+  // A row's reply-context line, reused while its quoted parent (and the jump
+  // handler) is the same object. Built inline, it was a new element per row on
+  // every timeline render, so every reply re-rendered with the whole thread.
+  const replyNodes = useRef(
+    new Map<string, { parent: NostrRumor | undefined; onJump: typeof jumpToMessage; node: ReactNode }>(),
+  );
+  useEffect(() => replyNodes.current.clear(), [conversation]);
+  const replyContextFor = (msg: ChatMsg): ReactNode => {
+    const replyId = dmReplyToId(msg);
+    if (!replyId) return undefined;
+    const parent = messagesById.get(replyId);
+    const hit = replyNodes.current.get(msg.id);
+    if (hit && hit.parent === parent && hit.onJump === jumpToMessage) return hit.node;
+    const node = <ReplyContext parent={parent} onJump={jumpToMessage} />;
+    replyNodes.current.set(msg.id, { parent, onJump: jumpToMessage, node });
+    return node;
+  };
 
   // Inline message search: toggled from the header, filters the loaded thread
   // client-side (no extra relay queries). The mute confirm dialog is opened
@@ -1288,7 +1324,7 @@ function Conversation({
                   highlight={searchQuery}
                   sendStatus={transport.sendStatusFor?.(msg.id)}
                   mentionHighlight={false}
-                  nameBadge={!dm17Ids.has(msg.id) ? <DmLegacyBadge /> : undefined}
+                  nameBadge={!dm17Ids.has(msg.id) ? LEGACY_BADGE : undefined}
                   continuation={false}
                 />
               ))}
@@ -1338,8 +1374,10 @@ function Conversation({
               </div>
             )
           }
-          renderMessage={(msg, continuation) =>
-            encryptedIds.has(msg.id) ? (
+          renderMessage={(msg, continuation) => {
+            const sendStatus = transport.sendStatusFor?.(msg.id);
+            const failed = sendStatus === "failed";
+            return encryptedIds.has(msg.id) ? (
               <DmPlaceholderRow
                 key={msg.id}
                 id={msg.id}
@@ -1357,10 +1395,13 @@ function Conversation({
                 permalink={dmPermalink}
                 canWrite={transport.canWrite}
                 canModerate={transport.canModerate}
-                sendStatus={transport.sendStatusFor?.(msg.id)}
-                onRetry={transport.retry ? () => transport.retry!(msg) : undefined}
+                sendStatus={sendStatus}
+                // Retry/Discard only render on a failed send, so only a failed
+                // row gets the (necessarily per-row) closures — handing them to
+                // every row gave each a new prop per render and defeated its memo.
+                onRetry={failed && transport.retry ? () => transport.retry!(msg) : undefined}
                 onDiscard={
-                  dm17Ids.has(msg.id) && transport.discard
+                  failed && dm17Ids.has(msg.id) && transport.discard
                     ? () => transport.discard!(msg.id)
                     : undefined
                 }
@@ -1368,7 +1409,7 @@ function Conversation({
                 // mention. Don't paint the whole thread as highlights.
                 mentionHighlight={false}
                 // Mark messages that arrived over legacy NIP-04 encryption.
-                nameBadge={!dm17Ids.has(msg.id) ? <DmLegacyBadge /> : undefined}
+                nameBadge={!dm17Ids.has(msg.id) ? LEGACY_BADGE : undefined}
                 // Quote-replies (NIP-17 sends only): the toolbar/context-menu
                 // "Quote" primes the composer; the quoted parent renders above
                 // the body and clicking it jumps the timeline.
@@ -1382,12 +1423,7 @@ function Conversation({
                 }
                 onEditSubmit={handleEditSubmit}
                 onEditCancel={cancelEditing}
-                replyContext={(() => {
-                  const replyId = dmReplyToId(msg);
-                  return replyId ? (
-                    <ReplyContext parent={messagesById.get(replyId)} onJump={jumpToMessage} />
-                  ) : undefined;
-                })()}
+                replyContext={replyContextFor(msg)}
                 // Reactions ride the NIP-17 plane (kind-7 rumors sealed into
                 // the conversation); available whenever the transport is.
                 reactions={transport.reactionsFor?.(msg.id)}
@@ -1407,8 +1443,8 @@ function Conversation({
                 active={activeId === msg.id}
                 onToggleActive={toggleActive}
               />
-            )
-          }
+            );
+          }}
         />
       )}
 
@@ -1503,7 +1539,7 @@ function Conversation({
     </div>
     </ComposerBoundsProvider>
   );
-}
+});
 
 /** A single recipient suggestion row inside the new-DM pane. */
 function RecipientSuggestion({
@@ -2449,6 +2485,7 @@ export function ConversationList({
  */
 export function DMsPage() {
   const navigate = useNavigate();
+  const stableNavigate = useStableNavigate();
   const { peer: rawPeer } = useParams<{ peer: string }>();
   const { user } = useCurrentUser();
   const self = user?.pubkey;
@@ -2892,17 +2929,24 @@ export function DMsPage() {
     }
   }, [user, conversations, dm17Conversations, isKnown, markRead]);
 
+  // Reveal the conversation list (slide the thread/compose pane away) by
+  // clearing the active peer and cancelling compose; return to the still-mounted
+  // thread by re-selecting it. Stable, like the other `Conversation` props below.
+  const revealList = useCallback(() => {
+    setComposing(false);
+    stableNavigate("/dm");
+  }, [stableNavigate]);
+  const renderedPeers = useMemo(
+    () => (renderedPeer ? dmConvPeers(renderedPeer) : []),
+    [renderedPeer],
+  );
+  const acceptRendered = useCallback(() => {
+    if (renderedPeer) acceptConversation(renderedPeer);
+  }, [acceptConversation, renderedPeer]);
+
   if (!user) {
     return <Navigate to="/" replace />;
   }
-
-  // Reveal the conversation list (slide the thread/compose pane away) by
-  // clearing the active peer and cancelling compose; return to the still-mounted
-  // thread by re-selecting it.
-  const revealList = () => {
-    setComposing(false);
-    navigate("/dm");
-  };
   const returnToThread = () => {
     if (renderedPeer) navigate(chatRoute({ kind: "dm", peer: dmRouteParam(renderedPeer) }));
   };
@@ -2963,9 +3007,9 @@ export function DMsPage() {
             <Conversation
               key={renderedPeer}
               conversation={renderedPeer}
-              peers={dmConvPeers(renderedPeer)}
+              peers={renderedPeers}
               isRequest={requestRows.some((c) => c.conversation === renderedPeer)}
-              onAccept={() => acceptConversation(renderedPeer)}
+              onAccept={acceptRendered}
               onBack={revealList}
             />
         ) : composing ? (

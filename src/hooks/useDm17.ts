@@ -1687,7 +1687,6 @@ export function useDm17Thread(
         (before.length > 0 ? before[0].createdAt : Math.floor(Date.now() / 1000));
       const { oldest, exhausted, scanned } = await pageOlderDmWraps(ctx, until, true);
       if (oldest !== undefined) oldestRef.current = oldest;
-      if (exhausted) setHasMore(false);
 
       // One wrap yields at most one stored rumor, so a limit of "everything
       // visible plus everything scanned" is guaranteed deep enough to hold
@@ -1699,11 +1698,21 @@ export function useDm17Thread(
       // this conversation actually returned. Capture `window` before
       // the await so a late result from the previous conversation cannot grow
       // the next one's window.
-      const probe = Math.max(window.limit, before.length) + scanned;
+      //
+      // The probe also always reaches one more THREAD_WINDOW into the STORE.
+      // The relays are not the only source of older rows: decrypted history
+      // outlives the wraps it came in (relays expire and drop them), so a
+      // conversation can hold far more on disk than any relay will page back.
+      // Growing the window only by what the relays scanned left everything
+      // past the first window unreachable whenever they had nothing to add.
+      const probe = Math.max(window.limit, before.length) + Math.max(scanned, THREAD_WINDOW);
       const after = await queryDm17Thread(self, peers, { limit: probe });
       window.limit = Math.max(window.limit, after.length);
       const beforeIds = new Set(before.map((row) => row.rumorId));
       const added = after.reduce((count, row) => count + (beforeIds.has(row.rumorId) ? 0 : 1), 0);
+      // Out of history only when the relays are exhausted AND the store had
+      // nothing older either.
+      if (exhausted && added === 0) setHasMore(false);
       queryClient.setQueryData<OpenedDm[]>(queryKey, after.sort(
         (a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1),
       ));
