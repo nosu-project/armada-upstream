@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
 import { readLivePause } from "@/concord/hooks/useControlPlane";
-import { canonicalJson, rehydrateCommunity, liveEntries } from "@/concord/lib/communityList";
+import { canonicalJson, rehydrateCommunity, liveEntries, removedCommunityIds } from "@/concord/lib/communityList";
 import { buildConcordSubs, type ConcordSub } from "@/concord/lib/concordNotifications";
 import { readControlFold } from "@/concord/lib/control";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
@@ -45,6 +45,13 @@ export interface ConcordSubsState {
    * is down; only `ready` may authorize gateway pruning.
    */
   configReady: boolean;
+  /**
+   * Communities the list says the member left (tombstoned, not re-added).
+   * Valid whenever the list is readable, `ready` or not: a controller that
+   * only MERGES while unready must still drop these, or a left community keeps
+   * notifying for as long as the list stays unconfirmed.
+   */
+  left: string[];
   /** The read which prevented this snapshot becoming authoritative, if any. */
   error?: unknown;
 }
@@ -64,6 +71,12 @@ export function useConcordSubsState(): ConcordSubsState {
   // Key the query on membership identity + epoch (what changes the derived
   // streams), not the whole list object, so unrelated list churn is free.
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+  // Keyed on the ids, not `data`, so a list refetch that leaves nobody new
+  // doesn't hand the native controller a fresh array to reconfigure over.
+  const leftSig = data && !data.decryptFailed
+    ? removedCommunityIds(data.list).sort().join(",")
+    : "";
+  const left = useMemo(() => (leftSig ? leftSig.split(",") : []), [leftSig]);
 
   // A pause (or its lift) is a control edition delivered on the GLOBAL c2ctl
   // sub for every community, not only the open one. Recompute the sub set when
@@ -164,6 +177,7 @@ export function useConcordSubsState(): ConcordSubsState {
     subs: query.data?.subs ?? [],
     ready,
     configReady,
+    left,
     ...(error ? { error } : {}),
   };
 }

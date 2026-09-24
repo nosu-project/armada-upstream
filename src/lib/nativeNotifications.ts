@@ -230,6 +230,12 @@ export interface ArmadaNotificationPlugin {
     gitPlaneReady?: boolean;
     /** The account's synced or proven local-last-good notification settings. */
     policyPlaneReady?: boolean;
+    /**
+     * Concord communities the member has left. Dropped from the persisted
+     * Concord and Git watches even when `concordPlaneReady` is false, since an
+     * unready plane otherwise MERGES and would keep the left community forever.
+     */
+    concordLeftCommunities?: string[];
     /** Relay websocket URLs to hold open. */
     relayUrls?: string[];
     /** Joined group ids (the `h` tag values) for the kind-9 filter. */

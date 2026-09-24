@@ -235,6 +235,36 @@ public class NotificationLevelTest {
         assertEquals("added", values.getJSONObject(1).getString("channelId"));
     }
 
+    @Test public void incompleteConcordMergeStillDropsLeftCommunities() throws Exception {
+        java.util.Set<String> left = ArmadaNotificationPlugin.lowerCaseSet("[\"ABC\"]");
+        String merged = ArmadaNotificationPlugin.withoutCommunities(
+                ArmadaNotificationPlugin.mergeConcordSubscriptions(
+                        "[{\"communityId\":\"abc\",\"channelId\":\"room\",\"relays\":[],\"streams\":[]},"
+                                + "{\"communityId\":\"kept\",\"channelId\":\"room\",\"relays\":[],\"streams\":[]}]",
+                        null),
+                left);
+        org.json.JSONArray values = new org.json.JSONArray(merged);
+        assertEquals(1, values.length());
+        assertEquals("kept", values.getJSONObject(0).getString("communityId"));
+    }
+
+    @Test public void leftCommunityGitAttachmentsAreDropped() throws Exception {
+        java.util.Set<String> left = ArmadaNotificationPlugin.lowerCaseSet("[\"gone\"]");
+        String filtered = ArmadaNotificationPlugin.withoutGitCommunities(
+                "[{\"address\":\"30617:owner:shared\",\"attachments\":["
+                        + "{\"communityId\":\"gone\",\"channelId\":\"a\",\"attachedAt\":1},"
+                        + "{\"communityId\":\"kept\",\"channelId\":\"b\",\"attachedAt\":1}]},"
+                        + "{\"address\":\"30617:owner:only\",\"attachments\":["
+                        + "{\"communityId\":\"gone\",\"channelId\":\"a\",\"attachedAt\":1}]}]",
+                left);
+        org.json.JSONArray values = new org.json.JSONArray(filtered);
+        assertEquals(1, values.length());
+        JSONObject repo = values.getJSONObject(0);
+        assertEquals("30617:owner:shared", repo.getString("address"));
+        assertEquals(1, repo.getJSONArray("attachments").length());
+        assertEquals("kept", repo.getJSONArray("attachments").getJSONObject(0).getString("communityId"));
+    }
+
     @Test public void incompleteGitCoordinateKeepsTrustAndUpdatesKnownAttachment() throws Exception {
         String merged = ArmadaNotificationPlugin.mergeGitSubscriptions(
                 "[{\"address\":\"30617:owner:repo\",\"relays\":[\"wss://old\"],"

@@ -14,6 +14,7 @@ import {
   refreshRelays,
   rehydrateCommunity,
   removeFromList,
+  removedCommunityIds,
   toJoinMaterial,
   type CommunityListEntry,
   type JoinMaterial,
@@ -86,11 +87,13 @@ describe("community list merge (CORD-02 §8)", () => {
     expect(list.tombstones.length).toBe(1);
     expect(isLive(list, jm.community_id)).toBe(false);
     expect(liveEntries(list).length).toBe(0);
+    expect(removedCommunityIds(list)).toEqual([jm.community_id]);
 
     // A re-join (newer add) resurrects; the tombstone stays.
     list = addToList(list, entryOf(jm, 3000));
     expect(isLive(list, jm.community_id)).toBe(true);
     expect(list.tombstones.length).toBe(1);
+    expect(removedCommunityIds(list)).toEqual([]);
 
     // A backfill merging the OLD pre-leave state can't bury the re-join.
     const stale = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm, 1000));
