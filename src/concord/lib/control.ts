@@ -71,7 +71,7 @@ import {
   type Role,
 } from "@/concord/lib/roles";
 import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type StreamSigner } from "@/concord/lib/stream";
-import { readFolded } from "@/lib/foldedCache";
+import { readFoldedShared } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { perfCount } from "@/lib/perf";
 import {
@@ -465,7 +465,8 @@ export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
  * build can't read. Every reader of the persisted fold goes through here.
  */
 export async function readControlFold(idHex: string): Promise<FoldedControl | undefined> {
-  const folded = await readFolded<FoldedControl>(controlFoldKey(idHex));
+  // Shared: a fold is never mutated after it's built (see readFoldedShared).
+  const folded = await readFoldedShared<FoldedControl>(controlFoldKey(idHex));
   return isCurrentFoldedControl(folded) ? folded : undefined;
 }
 

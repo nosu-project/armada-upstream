@@ -7,6 +7,14 @@ const config: CapacitorConfig = {
   appId: 'buzz.armada.app',
   appName: 'Armada',
   webDir: 'dist',
+  // No Capacitor bridge logging, in debug builds too (the default logs there).
+  // It writes every plugin call AND its full result to logcat and routes every
+  // console message through the native bridge — and ArmadaDB results are
+  // whole pages of rumors as JSON text, so a debug build spent its time
+  // stringifying payloads into logcat (~290 KB a minute measured on a Pixel)
+  // and froze on every sync burst. Web console output is still on
+  // chrome://inspect; release builds never logged.
+  loggingBehavior: 'none',
   server: {
     androidScheme: 'https',
   },

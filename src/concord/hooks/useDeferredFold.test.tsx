@@ -31,6 +31,7 @@ import { useDeferredFold } from "./useDeferredFold";
 vi.mock("@/lib/foldedCache", () => ({
   encode: (value: unknown) => JSON.stringify(value),
   readFolded: vi.fn(async () => undefined),
+  readFoldedShared: vi.fn(async () => undefined),
   writeFolded: vi.fn(async () => undefined),
 }));
 

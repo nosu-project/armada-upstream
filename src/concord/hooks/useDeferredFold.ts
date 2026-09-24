@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
+import { encode, readFoldedShared, writeFolded } from "@/lib/foldedCache";
 
 /**
  * Process-lifetime memory of the last live fold per key. Seeds `restored`
@@ -116,7 +116,9 @@ export function useDeferredFold<T>(
       return;
     }
     let cancelled = false;
-    void readFolded<T>(key).then((v) => {
+    // Shared: every instance of a key restores the SAME object, like memCache
+    // below — one bridge crossing and one decode per key per session.
+    void readFoldedShared<T>(key).then((v) => {
       if (cancelled || v === undefined) return;
       // A snapshot this build can't read is a miss, not something to render.
       if (acceptRef.current && !acceptRef.current(v)) return;
@@ -188,7 +190,7 @@ export function useDeferredFold<T>(
       const serialized = encode(live);
       if (serialized === lastWritten.current) return;
       lastWritten.current = serialized;
-      void writeFolded(key, live);
+      void writeFolded(key, live, serialized);
     };
     // Encoding a fold is not cheap; do it on the next task, not in the commit.
     // A timer, not an idle callback, so it never takes the fold's idle slot.
