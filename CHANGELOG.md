@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.61.1] - 2026-09-24
+
+A performance release: chats scroll more smoothly because messages no longer
+re-render as you move through them, and direct-message conversations reappear
+faster when you revisit them. Older direct-message history now loads when you
+scroll back, and relays that require signing in to read now connect and load
+their content properly.
+
+### Changed
+- Chats scroll more smoothly — messages no longer re-render as you move through a channel
+- Direct-message conversations open faster on return, and signing in and syncing are quicker
+
+### Fixed
+- Older direct-message history now loads as you scroll back, instead of stopping at the most recent window
+- Relays that require signing in to read now connect and reload their content once authenticated
+
 ## [0.61.0] - 2026-09-22
 
 A new media privacy setting can load every image someone else sent through a
