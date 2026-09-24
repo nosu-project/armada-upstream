@@ -751,17 +751,30 @@ public class ArmadaNotificationPlugin extends Plugin {
         // NativeSigner). Secret-bearing, so it is sealed with an Android
         // Keystore key before touching SharedPreferences and wiped with the
         // rest of the config on disable/logout.
+        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String signerSealed = null;
+        String signerDigest = null;
         try {
             if (call.getObject("signer") != null) {
-                signerSealed = SealedStore.seal(call.getObject("signer").toString());
-                if (signerSealed == null) Log.w(TAG, "Failed to seal signer credential");
+                String signerRaw = call.getObject("signer").toString();
+                signerDigest = sha256Hex(signerRaw);
+                // The SAME credential as last time keeps its sealed copy. Sealing
+                // uses a fresh IV, so re-sealing an unchanged signer produced a
+                // new ciphertext every configure — which the service could only
+                // read as "the signer changed", rebuilding it (and redialing a
+                // NIP-46 bunker) and reconnecting every relay each time.
+                String previousSealed = prefs.getString("signerSealed", null);
+                if (previousSealed != null && signerDigest.equals(prefs.getString("signerDigest", null))) {
+                    signerSealed = previousSealed;
+                } else {
+                    signerSealed = SealedStore.seal(signerRaw);
+                    if (signerSealed == null) Log.w(TAG, "Failed to seal signer credential");
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to read signer", e);
         }
 
-        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         boolean sameAccountConfig = prefs.getBoolean("enabled", false)
                 && userPubkey != null
                 && userPubkey.equals(prefs.getString("userPubkey", null));
@@ -882,8 +895,13 @@ public class ArmadaNotificationPlugin extends Plugin {
                 putOrRemove(editor, "concord2Subs", mergeConcordSubscriptions(
                         prefs.getString("concord2Subs", null), concordSubsRaw));
             }
-            if (signerSealed != null) editor.putString("signerSealed", signerSealed);
-            else if (!sameAccountConfig) editor.remove("signerSealed");
+            if (signerSealed != null) {
+                editor.putString("signerSealed", signerSealed);
+                editor.putString("signerDigest", signerDigest);
+            } else if (!sameAccountConfig) {
+                editor.remove("signerSealed");
+                editor.remove("signerDigest");
+            }
             // Missing login material and a transient sealing failure both keep
             // the same account's last-good signer. Logout/account replacement
             // clears first, so another identity can never inherit it.
@@ -1182,4 +1200,14 @@ public class ArmadaNotificationPlugin extends Plugin {
             return nextRepos.toString();
         } catch (Exception ignored) { return nextJson; }
     }
+
+    /** Lowercase hex SHA-256 of a string's UTF-8 bytes. */
+    static String sha256Hex(String text) throws java.security.NoSuchAlgorithmException {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StringBuilder out = new StringBuilder(digest.length * 2);
+        for (byte b : digest) out.append(String.format("%02x", b));
+        return out.toString();
+    }
+
 }

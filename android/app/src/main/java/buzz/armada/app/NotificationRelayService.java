@@ -387,6 +387,8 @@ public class NotificationRelayService extends Service {
     // relays — the sender is hidden, so it can't be authors-scoped) and signs
     // NIP-42 AUTH natively; null when the WebView shipped no credential.
     private volatile NativeSigner nativeSigner;
+    /** The sealed signer credential the current {@link #nativeSigner} was built from. */
+    private String loadedSealedSigner;
     // Public Git activity is subscribed on announcement activity relays only.
     // The repository -> C2 route mapping never enters a relay filter.
     private final Map<String, GitRepository> gitRepositories = new HashMap<>();
@@ -402,10 +404,31 @@ public class NotificationRelayService extends Service {
     // durable history belongs to ArmadaDB/WebView sync, not notification replay.
     private final Map<String, Long> relaySinceByUrl = new HashMap<>();
     private final Set<String> relayCursorsWithEvents = new HashSet<>();
+    // Per-relay self-state cursor: when THIS process last saw the self-state
+    // subscription reach EOSE on a relay (minus SELF_SINCE_SLACK_SEC). Absent
+    // until the first full read, so a cold service start still takes the whole
+    // catch-up; every reconnect and re-REQ after that asks only for what
+    // changed. In-memory for the same reason as relaySinceByUrl.
+    private final Map<String, Long> selfSinceByUrl = new HashMap<>();
+    // Self-state event ids already verified and filed, so the same document
+    // arriving from every self relay (and on every re-REQ) is dropped before
+    // the Schnorr verify and the store write instead of after.
+    private final LinkedHashSet<String> selfSeenIds = new LinkedHashSet<>();
+    // Newest created_at filed per self-state coordinate (kind:d). Every self
+    // relay holds its OWN version of each replaceable document, so a full read
+    // delivers several copies of every coordinate, most of them superseded;
+    // one not newer than what was already filed is dropped before the verify
+    // and the write (the store would discard it anyway, after both).
+    private final Map<String, Long> selfNewestByCoordinate = new HashMap<>();
     // Small reconnect overlap tolerates cross-thread/same-second ordering and
     // mildly skewed publishers. It applies only after this service has actually
     // observed an event, so a cold start still asks from now with no backlog.
     static final long RELAY_SINCE_OVERLAP_SEC = 30L;
+    // Self-state documents are written by OTHER devices, whose clocks we don't
+    // control; a new version stamped up to this far behind our last EOSE is
+    // still asked for.
+    static final long SELF_SINCE_SLACK_SEC = 600L;
+    static final int MAX_SELF_SEEN_IDS = 4_096;
 
     // Non-secret health counters exposed through ArmadaNotification.getHealth.
     // Fields are volatile because Capacitor may read the snapshot off the
@@ -1408,6 +1431,13 @@ public class NotificationRelayService extends Service {
 
     private void loadConfigAndReconnect() {
         if (ServiceProfiler.ON) ServiceProfiler.count("config.reload");
+        // Each relay's Concord stream keys BEFORE this reload: a live session
+        // AUTHed exactly those, so a relay whose set changed needs a fresh
+        // session (and challenge) rather than a re-sent REQ it would wall.
+        Map<String, Set<String>> previousStreams = new HashMap<>();
+        for (Map.Entry<String, Set<String>> e : relayToPks2.entrySet()) {
+            previousStreams.put(e.getKey(), new HashSet<>(e.getValue()));
+        }
         SharedPreferences sp = getSharedPreferences(ArmadaNotificationPlugin.PREFS_NAME, Context.MODE_PRIVATE);
         healthLastConfigAtMs = System.currentTimeMillis();
         healthLoadedConfigRevision = sp.getLong("rev", 0L);
@@ -1418,11 +1448,15 @@ public class NotificationRelayService extends Service {
             return;
         }
         String nextUserPubkey = sp.getString("userPubkey", null);
-        if (userPubkey == null ? nextUserPubkey != null : !userPubkey.equals(nextUserPubkey)) {
+        boolean accountChanged = userPubkey == null ? nextUserPubkey != null : !userPubkey.equals(nextUserPubkey);
+        if (accountChanged) {
             // Cursor continuity is account-scoped just like the config itself.
             // A hot account replacement must not inherit the outgoing user's
             // relay position (or any other native last-good state).
             relaySinceByUrl.clear();
+            selfSinceByUrl.clear();
+            selfSeenIds.clear();
+            selfNewestByCoordinate.clear();
             relayCursorsWithEvents.clear();
         }
         userPubkey = nextUserPubkey;
@@ -1464,24 +1498,36 @@ public class NotificationRelayService extends Service {
         // lets the service open ANY gift wrap addressed to the user and answer
         // NIP-42 AUTH itself — see NativeSigner. Absent/undecryptable ⇒ null,
         // and DM wraps degrade to the generic notification.
-        NativeSigner oldSigner = nativeSigner;
-        nativeSigner = null;
-        if (oldSigner != null) oldSigner.close();
         String sealedSigner = sp.getString("signerSealed", null);
-        if (sealedSigner != null) {
-            String signerJson = SealedStore.open(sealedSigner);
-            if (signerJson != null) {
-                try {
-                    nativeSigner = NativeSigner.from(this, httpClient, userPubkey, new JSONObject(signerJson));
-                } catch (JSONException e) {
-                    Log.w(TAG, "signer config unreadable");
-                    recordHealthError("signer_config");
+        // Rebuilt only when the sealed credential itself changed: every
+        // configure used to unseal it from the Keystore again and, for a
+        // NIP-46 login, tear down and redial the bunker's sockets.
+        // (…or the last attempt came up empty, e.g. the Keystore wasn't ready.)
+        boolean signerChanged = accountChanged
+                || !java.util.Objects.equals(sealedSigner, loadedSealedSigner)
+                || (sealedSigner != null && nativeSigner == null);
+        if (signerChanged) {
+            loadedSealedSigner = sealedSigner;
+            NativeSigner oldSigner = nativeSigner;
+            nativeSigner = null;
+            if (oldSigner != null) oldSigner.close();
+            if (sealedSigner != null) {
+                String signerJson = SealedStore.open(sealedSigner);
+                if (signerJson != null) {
+                    try {
+                        nativeSigner = NativeSigner.from(this, httpClient, userPubkey, new JSONObject(signerJson));
+                    } catch (JSONException e) {
+                        Log.w(TAG, "signer config unreadable");
+                        recordHealthError("signer_config");
+                    }
+                }
+                if (nativeSigner == null) {
+                    Log.w(TAG, "shared signer credential unavailable");
+                    recordHealthError("signer_unavailable");
                 }
             }
-            if (nativeSigner == null) {
-                Log.w(TAG, "shared signer credential unavailable");
-                recordHealthError("signer_unavailable");
-            }
+        } else if (ServiceProfiler.ON) {
+            ServiceProfiler.count("config.reload signer kept");
         }
         healthSignerStatus = nativeSigner != null
                 ? "ready" : (sealedSigner != null ? "unavailable" : "missing");
@@ -1508,10 +1554,27 @@ public class NotificationRelayService extends Service {
             return;
         }
 
-        // Rebuild all connections with the current filters. Every connection
-        // starts with fresh fleet-policy state, so a config change is itself
-        // the re-arm for anything the policy had quarantined.
-        closeAllConnections();
+        // Reconcile the connections with the new config. A changed account or
+        // signer rebuilds everything (AUTH state is bound to both). Otherwise a
+        // relay that is still wanted and CONNECTED keeps its socket and only
+        // re-sends the subscriptions whose filters changed (reconfigure); one
+        // that is wanted but not connected is replaced by a fresh connection —
+        // with fresh fleet-policy state, so a config change still re-arms
+        // anything the policy had quarantined. Tearing down every socket on
+        // every configure (the app sends several per launch as its planes come
+        // ready) cost a TLS handshake, a NIP-42 round of ~200 stream AUTHs and a
+        // full re-subscription per relay, each time.
+        Map<String, RelayConnection> keep = new HashMap<>();
+        if (accountChanged || signerChanged) {
+            if (ServiceProfiler.ON) ServiceProfiler.count(accountChanged ? "config.reload full (account)" : "config.reload full (signer)");
+            closeAllConnections();
+        } else {
+            for (RelayConnection rc : connections) {
+                if (rc.ws != null && rc.socketOpen && !rc.closed) keep.put(rc.relayUrl, rc);
+                else rc.close();
+            }
+            connections.clear();
+        }
         int curatedOut = 0;
         boolean dmWatchable = !dmFollows.isEmpty() || shouldWatchDm();
         for (String url : allRelays) {
@@ -1533,10 +1596,24 @@ public class NotificationRelayService extends Service {
                 curatedOut++;
                 continue;
             }
+            RelayConnection kept = keep.remove(url);
+            if (kept != null && !java.util.Objects.equals(previousStreams.get(url), relayToPks2.get(url))) {
+                if (ServiceProfiler.ON) ServiceProfiler.count("config.reload socket renewed (stream keys)");
+                kept.close();
+                kept = null;
+            }
+            if (kept != null) {
+                connections.add(kept);
+                if (ServiceProfiler.ON) ServiceProfiler.count("config.reload socket kept");
+                kept.reconfigure();
+                continue;
+            }
             RelayConnection rc = new RelayConnection(url, true);
             connections.add(rc);
             rc.connect();
         }
+        // Relays the new config no longer wants.
+        for (RelayConnection gone : keep.values()) gone.close();
         healthRelayCuratedOutCount = curatedOut;
         updateSocketHealth();
 
@@ -1881,6 +1958,13 @@ public class NotificationRelayService extends Service {
         // stream key), so this is a set; a relay's OK for some other event
         // can't trigger a REQ re-send.
         final Set<String> pendingAuthIds = new HashSet<>();
+        // `pubkey|challenge` pairs this SESSION has already answered, and the
+        // challenges already handed to the WebView to sign. A relay repeats
+        // the same challenge whenever it walls a REQ; answering it again with
+        // the same keys cannot change the outcome, and each round was a
+        // Schnorr sign per Concord stream key here plus the same again in JS.
+        final Set<String> answeredAuth = new HashSet<>();
+        final Set<String> bridgedChallenges = new HashSet<>();
         // Backoff for relay-initiated CLOSED resubscribes (#49): a relay that
         // drops a standing sub (restart, transient error, rate limit) earns a
         // DELAYED re-REQ with a growing gap, never an instant retry loop.
@@ -1895,9 +1979,58 @@ public class NotificationRelayService extends Service {
         // bursts per challenge. One re-send shortly after the burst settles
         // covers them all.
         boolean authResendPending = false;
+        // Set while an AUTH-driven re-send is building its REQs: only the subs
+        // the relay actually walled go out again. Re-sending EVERY standing sub
+        // after each accepted AUTH replaced subscriptions that were still
+        // streaming — the self-state read never reached EOSE (so its `since`
+        // cursor was never set) and restarted from scratch each time: ~65
+        // re-sends and 8 MB of the user's own documents a minute, measured.
+        boolean walledOnly = false;
+        // Each standing sub's filters as last sent (minus `since`, which moves
+        // on its own), and — during reconfigure() — the subs this pass sent.
+        // Concurrent: sendReqs also runs on the socket thread from onOpen.
+        final Map<String, String> sentFilters = new java.util.concurrent.ConcurrentHashMap<>();
+        Set<String> reconfigurePass = null;
+
+        /**
+         * Apply a new config to a LIVE socket: re-send only the standing subs
+         * whose filters changed, and CLOSE the ones the config no longer
+         * builds. Handler thread.
+         */
+        void reconfigure() {
+            if (closed || ws == null) return;
+            reconfigurePass = new HashSet<>();
+            try {
+                sendReqs(ws);
+                for (String sub : new ArrayList<>(sentFilters.keySet())) {
+                    if (reconfigurePass.contains(sub)) continue;
+                    sentFilters.remove(sub);
+                    standingSubs.remove(sub);
+                    walledSubs.remove(sub);
+                    try {
+                        ws.send(new JSONArray().put("CLOSE").put(sub).toString());
+                    } catch (Exception ignored) {
+                        // A failed CLOSE is a stale sub; the next session drops it.
+                    }
+                    if (ServiceProfiler.ON) ServiceProfiler.count("config.reload sub closed");
+                }
+            } finally {
+                reconfigurePass = null;
+            }
+        }
         final Runnable authResendRunnable = () -> {
             authResendPending = false;
-            if (!closed && ws != null) sendReqs(ws);
+            if (closed || ws == null) return;
+            if (walledSubs.isEmpty()) {
+                if (ServiceProfiler.ON) ServiceProfiler.count("auth.resend skipped (nothing walled)");
+                return;
+            }
+            walledOnly = true;
+            try {
+                sendReqs(ws);
+            } finally {
+                walledOnly = false;
+            }
         };
 
         /** Re-send REQs shortly, collapsing a burst of AUTH OKs into one round. */
@@ -1932,6 +2065,9 @@ public class NotificationRelayService extends Service {
             }
             standingSubs.clear();
             walledSubs.clear();
+            sentFilters.clear();
+            answeredAuth.clear();
+            bridgedChallenges.clear();
             deliveredAnything = false;
             final Request request;
             try {
@@ -2016,6 +2152,17 @@ public class NotificationRelayService extends Service {
 
         /** Send a standing REQ, recording its id as part of this session. */
         void sendReq(WebSocket webSocket, String subId, JSONObject... filters) throws JSONException {
+            if (walledOnly && !walledSubs.contains(subId)) return;
+            String signature = filtersWithoutSince(filters);
+            Set<String> pass = reconfigurePass;
+            if (pass != null) {
+                pass.add(subId);
+                if (signature.equals(sentFilters.get(subId))) {
+                    if (ServiceProfiler.ON) ServiceProfiler.count("config.reload sub unchanged");
+                    return;
+                }
+            }
+            sentFilters.put(subId, signature);
             standingSubs.add(subId);
             if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())));
             webSocket.send(reqMessage(subId, filters));
@@ -2140,13 +2287,15 @@ public class NotificationRelayService extends Service {
                 // shards leaks feature usage and can hydrate stale copies from
                 // a destination current writers do not maintain.
                 //
-                // Deliberately NO `since`, unlike every other filter here. All
-                // of these are replaceable, so a relay stores exactly one
-                // version and an unbounded filter returns a handful of events;
-                // a `since` would only mean that a change made while this
-                // device was off is never seen at all, which is the whole
-                // failure this subscription exists to fix. It also makes every
-                // reconnect a full catch-up for free.
+                // No `since` on a relay's FIRST read in this process: a change
+                // made while this device was off must still be seen, which is
+                // the whole failure this subscription exists to fix. After that
+                // read completes (EOSE), every reconnect and re-REQ asks only
+                // from shortly before it (selfSinceByUrl). Unbounded every time
+                // was not "a handful of events": the installation-sharded topic
+                // documents accumulate per install, and a full replay per
+                // re-REQ measured ~110 documents a relay, each Schnorr-verified
+                // and written, on every AUTH round and reconnect.
                 if (userPubkey != null && !userPubkey.isEmpty()
                         && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
                     JSONArray me = new JSONArray().put(userPubkey);
@@ -2176,6 +2325,12 @@ public class NotificationRelayService extends Service {
                     topicDocuments.put("authors", me);
                     topicDocuments.put("#t", topics);
 
+                    Long selfSince = selfSinceByUrl.get(relayUrl);
+                    if (selfSince != null) {
+                        bare.put("since", selfSince);
+                        documents.put("since", selfSince);
+                        topicDocuments.put("since", selfSince);
+                    }
                     sendReq(webSocket, subSelf, bare, documents, topicDocuments);
                 }
             } catch (JSONException e) {
@@ -2213,6 +2368,13 @@ public class NotificationRelayService extends Service {
             if (ws == null) return;
             try {
                 JSONObject event = new JSONObject(eventJson);
+                // Native and WebView both sign for the same challenge; the
+                // first answer per key wins and the rest are dropped here.
+                String pair = authPairOf(event);
+                if (pair != null && !answeredAuth.add(pair)) {
+                    if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip answered");
+                    return;
+                }
                 String eid = event.optString("id", null);
                 if (eid != null && !eid.isEmpty()) pendingAuthIds.add(eid);
                 JSONArray auth = new JSONArray();
@@ -2472,9 +2634,22 @@ public class NotificationRelayService extends Service {
                 healthLastAuthAtMs = System.currentTimeMillis();
                 healthAuthStatus = "challenged";
                 if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
-                boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
+                RelayConnection session = connectionFor(relayUrl);
+                // The WebView signs the stream auths too; hand it each
+                // challenge once per session, not on every repeat.
+                boolean bridged;
+                if (session != null && session.bridgedChallenges.contains(challenge)) {
+                    bridged = true;
+                    if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip bridge repeat");
+                } else {
+                    bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
+                    if (bridged && session != null) session.bridgedChallenges.add(challenge);
+                }
                 NativeSigner signer = nativeSigner;
-                if (signer != null) {
+                if (signer != null && userPubkey != null && session != null
+                        && session.answeredAuth.contains(userPubkey + "|" + challenge)) {
+                    if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip user repeat");
+                } else if (signer != null) {
                     JSONArray authTags = new JSONArray()
                             .put(new JSONArray().put("relay").put(relayUrl))
                             .put(new JSONArray().put("challenge").put(challenge));
@@ -2506,6 +2681,10 @@ public class NotificationRelayService extends Service {
                             ServiceStore.streamSecrets(this, new ArrayList<>(streamPks));
                     long nowSecs = System.currentTimeMillis() / 1000;
                     for (Map.Entry<String, String> entry : secrets.entrySet()) {
+                        if (session != null && session.answeredAuth.contains(entry.getKey() + "|" + challenge)) {
+                            if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip stream repeat");
+                            continue;
+                        }
                         byte[] sk = ConcordCrypto.hexToBytes(entry.getValue());
                         if (sk == null || sk.length != 32) continue;
                         try {
@@ -2556,7 +2735,14 @@ public class NotificationRelayService extends Service {
                 // A standing sub reached EOSE: the relay accepted it, so it is
                 // no longer auth-walled for this session.
                 RelayConnection accepted = connectionFor(relayUrl);
-                if (accepted != null) accepted.walledSubs.remove(sub);
+                if (accepted != null) {
+                    accepted.walledSubs.remove(sub);
+                    // The self-state read is complete on this relay: later
+                    // REQs ask only for what changed since (see selfSinceByUrl).
+                    if (sub.equals(accepted.subSelf)) {
+                        selfSinceByUrl.put(relayUrl, System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC);
+                    }
+                }
                 return;
             }
             if ("CLOSED".equals(type)) {
@@ -2589,7 +2775,7 @@ public class NotificationRelayService extends Service {
                 // blind re-REQ is an unwinnable retry storm (#49). Everything
                 // else (relay restart, transient error, rate limit) earns a
                 // DELAYED resubscribe with per-connection exponential backoff.
-                if (reason.startsWith("auth-required:")) {
+                if (isAuthRequired(reason)) {
                     // Remember the wall for this session; an EOSE or EVENT on
                     // the same sub (after an AUTH lands) clears it. A session
                     // that ends with every standing sub still walled is
@@ -2629,7 +2815,7 @@ public class NotificationRelayService extends Service {
                     // completes in the gap); anything else resolves the waiter.
                     PendingPublish p = rc.pendingPublishes.get(okId);
                     if (p == null) continue;
-                    if (!ok && msg.optString(3, "").startsWith("auth-required:") && !p.authRetried) {
+                    if (!ok && isAuthRequired(msg.optString(3, "")) && !p.authRetried) {
                         p.authRetried = true;
                         handler.postDelayed(() -> {
                             if (rc.ws != null && rc.pendingPublishes.containsKey(okId)) {
@@ -3039,6 +3225,75 @@ public class NotificationRelayService extends Service {
     }
 
     /** Pure bounded insertion-order set update for JVM regression coverage. */
+    /**
+     * A REQ's filters as a comparable string, with `since` left out — it moves
+     * with every event received, and a changed cursor alone is no reason to
+     * re-send a live subscription.
+     */
+    static String filtersWithoutSince(JSONObject... filters) {
+        StringBuilder out = new StringBuilder();
+        for (JSONObject f : filters) {
+            JSONObject copy = new JSONObject();
+            java.util.Iterator<String> keys = f.keys();
+            List<String> sorted = new ArrayList<>();
+            while (keys.hasNext()) sorted.add(keys.next());
+            java.util.Collections.sort(sorted);
+            for (String k : sorted) {
+                if (k.equals("since")) continue;
+                try {
+                    copy.put(k, f.get(k));
+                } catch (JSONException ignored) {
+                    // Keys came from the object itself.
+                }
+            }
+            out.append(copy).append('\u0000');
+        }
+        return out.toString();
+    }
+
+    /**
+     * Whether a CLOSED / OK message is NIP-42's `auth-required:`. Relays put
+     * the machine-readable prefix first, but some wrap it (strfry-family and
+     * damus send `ERROR: auth-required: …`); missing the wrapped form turned an
+     * auth wall into an "ordinary" close, retried on a backoff forever, each
+     * retry drawing the same challenge and a full round of signed AUTHs.
+     */
+    static boolean isAuthRequired(String reason) {
+        if (reason == null) return false;
+        String r = reason.trim();
+        if (r.regionMatches(true, 0, "error:", 0, 6)) r = r.substring(6).trim();
+        return r.startsWith("auth-required:");
+    }
+
+    /**
+     * The replaceable coordinate of one of the user's own documents: the kind,
+     * plus the `d` tag for an addressable kind. The author is always the user
+     * (SelfState.storable refuses anything else), so it is left out.
+     */
+    static String selfCoordinateOf(JSONObject event, int kind) {
+        if (kind < 30000 || kind >= 40000) return Integer.toString(kind);
+        JSONArray tags = event.optJSONArray("tags");
+        if (tags != null) {
+            for (int i = 0; i < tags.length(); i++) {
+                JSONArray t = tags.optJSONArray(i);
+                if (t != null && "d".equals(t.optString(0))) return kind + ":" + t.optString(1);
+            }
+        }
+        return kind + ":";
+    }
+
+    /** `pubkey|challenge` of a kind-22242, or null when it has neither. */
+    static String authPairOf(JSONObject event) {
+        String pubkey = event.optString("pubkey", "");
+        JSONArray tags = event.optJSONArray("tags");
+        if (pubkey.isEmpty() || tags == null) return null;
+        for (int i = 0; i < tags.length(); i++) {
+            JSONArray t = tags.optJSONArray(i);
+            if (t != null && "challenge".equals(t.optString(0))) return pubkey + "|" + t.optString(1);
+        }
+        return null;
+    }
+
     static void rememberBoundedId(
             LinkedHashSet<String> ids, String id, int maximum) {
         if (ids == null || id == null || id.isEmpty() || maximum <= 0) return;
@@ -3939,6 +4194,22 @@ public class NotificationRelayService extends Service {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop filter");
             return;
         }
+        // A self-state document already verified and filed (another self
+        // relay, or a re-REQ) is a no-op for the store; skip the verify too.
+        if (SelfState.isSelfKind(kind) && selfSeenIds.contains(id)) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state seen");
+            return;
+        }
+        String selfCoordinate = SelfState.isSelfKind(kind) ? selfCoordinateOf(event, kind) : null;
+        if (selfCoordinate != null) {
+            Long newest = selfNewestByCoordinate.get(selfCoordinate);
+            // Strictly older only: an equal timestamp is settled by id (NIP-01), which
+            // the store decides.
+            if (newest != null && event.optLong("created_at") < newest) {
+                if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state superseded");
+                return;
+            }
+        }
         if (kind != 1059 && kind != 21059 && !NostrCrypto.verifyEvent(event)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop signature");
             if (BuildConfig.DEBUG) Log.d(TAG, "DROP bad signature kind=" + kind + " id=" + id);
@@ -3969,7 +4240,16 @@ public class NotificationRelayService extends Service {
             // The SAME set the REQ above was built from: subscribing to one and
             // authorizing against another either stores documents we never
             // asked for or discards ones we did.
-            if (userPubkey != null) ServiceStore.cacheSelfState(this, event, userPubkey, selfDTags);
+            boolean filed = userPubkey != null
+                    && ServiceStore.cacheSelfState(this, event, userPubkey, selfDTags);
+            rememberBoundedId(selfSeenIds, id, MAX_SELF_SEEN_IDS);
+            // Only a version the store actually took raises the floor: one it
+            // refused (not ours, not a synced kind) must not shadow a later one.
+            if (filed && selfCoordinate != null) {
+                Long prev = selfNewestByCoordinate.get(selfCoordinate);
+                long at = event.optLong("created_at");
+                if (prev == null || at > prev) selfNewestByCoordinate.put(selfCoordinate, at);
+            }
             // The one self-document the service acts on rather than merely
             // filing: a read advanced on another device dismisses the matching
             // tray notification while the app is dead — the background half of

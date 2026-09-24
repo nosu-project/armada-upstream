@@ -25,8 +25,9 @@ import org.json.JSONObject
  * cheaper to hand over as one string the WebView parses itself than as a few
  * thousand marshalled objects.
  *
- * Plugin calls run on Capacitor's background task thread, so the store's blocking
- * lock is held off the UI thread.
+ * Plugin calls hop to a dedicated `ArmadaDb` thread (see [dbThread]), so the
+ * store's blocking lock is held off the UI thread AND off the task thread the
+ * other plugins share.
  */
 @CapacitorPlugin(name = "ArmadaDB")
 class ArmadaDbPlugin : Plugin() {
@@ -34,9 +35,65 @@ class ArmadaDbPlugin : Plugin() {
     private val db: SqliteArmadaDb
         get() = ArmadaDb.get(context)
 
+    /**
+     * ArmadaDB's OWN thread, instead of the one Capacitor task thread every
+     * plugin shares. On that shared thread a large KV burst or a deep query held
+     * up the notification plugin, the signer and every other bridge call behind
+     * it — which the WebView experiences as the whole app freezing. One thread,
+     * so calls still execute in the order the WebView made them (the ordering
+     * the batching in NativeArmadaDB.ts relies on); a PluginCall resolves from
+     * any thread.
+     */
+    private val dbThread = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ArmadaDb").apply { isDaemon = true }
+    }
+
+    private fun onDbThread(block: () -> Unit) {
+        dbThread.execute(block)
+    }
+
+    /**
+     * Profiling builds: time a plugin call under `db.<method> <family>` (a
+     * tenant's or key's family — ids elided) and record the result size, so
+     * `dumpsys` shows what the WebView keeps this thread busy with.
+     */
+    private inline fun profiled(call: PluginCall, method: String, block: () -> Unit) {
+        if (!buzz.armada.app.ServiceProfiler.ON) return block()
+        val subject = call.getString("tenant") ?: call.getString("key") ?: call.getString("prefix") ?: ""
+        val label = "plugin.$method ${family(subject)}" +
+            (call.getString("filters")?.let { " " + filterShape(it) } ?: "")
+        val started = buzz.armada.app.ServiceProfiler.begin(label)
+        try {
+            block()
+        } finally {
+            buzz.armada.app.ServiceProfiler.end(label, started)
+            buzz.armada.app.ServiceProfiler.units("plugin.in bytes $method", (call.data?.toString()?.length ?: 0).toLong())
+        }
+    }
+
+    /** A filter list's shape for a profile label: kinds, and which keys it names. */
+    private fun filterShape(raw: String): String = try {
+        val array = JSONArray(raw)
+        (0 until array.length()).joinToString("|") { i ->
+            val f = array.optJSONObject(i) ?: return@joinToString "?"
+            val kinds = f.optJSONArray("kinds")?.let { k -> (0 until k.length()).joinToString(",") { k.opt(it).toString() } }
+            val keys = f.keys().asSequence().filter { it != "kinds" }.sorted().joinToString("+") { key ->
+                if (key == "search") "search=" + f.optString(key).substringBefore(':') else key
+            }
+            "k[${kinds ?: "*"}]" + (if (keys.isEmpty()) "" else "+$keys")
+        }.take(120)
+    } catch (_: Exception) {
+        "?"
+    }
+
+    private fun family(subject: String): String =
+        subject.replace(Regex("[0-9a-f]{16,}"), "…").replace(Regex("wss?://[^/]+"), "<relay>").take(40)
+
     /** Rumors matching any of the filters, newest-first, as a JSON array. */
     @PluginMethod
-    fun query(call: PluginCall) {
+    fun query(call: PluginCall) = onDbThread { profiled(call, "query") { queryNow(call) } }
+
+    private fun queryNow(call: PluginCall) {
         val tenant = call.getString("tenant") ?: return call.reject("tenant is required")
         val filters = parseFilters(call) ?: return
 
@@ -72,7 +129,9 @@ class ArmadaDbPlugin : Plugin() {
      * burst and commits as one.
      */
     @PluginMethod
-    fun event(call: PluginCall) {
+    fun event(call: PluginCall) = onDbThread { profiled(call, "event") { eventNow(call) } }
+
+    private fun eventNow(call: PluginCall) {
         val tenant = call.getString("tenant") ?: return call.reject("tenant is required")
         val raw = call.getString("rumors") ?: return call.reject("rumors is required")
 
@@ -92,7 +151,9 @@ class ArmadaDbPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun count(call: PluginCall) {
+    fun count(call: PluginCall) = onDbThread { profiled(call, "count") { countNow(call) } }
+
+    private fun countNow(call: PluginCall) {
         val tenant = call.getString("tenant") ?: return call.reject("tenant is required")
         val filters = parseFilters(call) ?: return
 
@@ -109,7 +170,9 @@ class ArmadaDbPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun remove(call: PluginCall) {
+    fun remove(call: PluginCall) = onDbThread { profiled(call, "remove") { removeNow(call) } }
+
+    private fun removeNow(call: PluginCall) {
         val tenant = call.getString("tenant") ?: return call.reject("tenant is required")
         val filters = parseFilters(call) ?: return
 
@@ -123,7 +186,9 @@ class ArmadaDbPlugin : Plugin() {
 
     /** Every tenant that has ever been written to (the logout purge reads this). */
     @PluginMethod
-    fun tenants(call: PluginCall) {
+    fun tenants(call: PluginCall) = onDbThread { profiled(call, "tenants") { tenantsNow(call) } }
+
+    private fun tenantsNow(call: PluginCall) {
         try {
             call.resolve(JSObject().put("tenants", JSONArray(db.tenantIds()).toString()))
         } catch (error: Exception) {
@@ -139,7 +204,9 @@ class ArmadaDbPlugin : Plugin() {
     // exactly the way the ArmadaKV contract already says they are.
 
     @PluginMethod
-    fun kvGet(call: PluginCall) {
+    fun kvGet(call: PluginCall) = onDbThread { profiled(call, "kvGet") { kvGetNow(call) } }
+
+    private fun kvGetNow(call: PluginCall) {
         val key = call.getString("key") ?: return call.reject("key is required")
 
         try {
@@ -153,7 +220,9 @@ class ArmadaDbPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun kvSet(call: PluginCall) {
+    fun kvSet(call: PluginCall) = onDbThread { profiled(call, "kvSet") { kvSetNow(call) } }
+
+    private fun kvSetNow(call: PluginCall) {
         val key = call.getString("key") ?: return call.reject("key is required")
         val value = call.getString("value") ?: return call.reject("value is required")
 
@@ -166,7 +235,9 @@ class ArmadaDbPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun kvDelete(call: PluginCall) {
+    fun kvDelete(call: PluginCall) = onDbThread { profiled(call, "kvDelete") { kvDeleteNow(call) } }
+
+    private fun kvDeleteNow(call: PluginCall) {
         val key = call.getString("key") ?: return call.reject("key is required")
 
         try {
@@ -183,7 +254,9 @@ class ArmadaDbPlugin : Plugin() {
      * risk respelling a number, and the WebView is the only side that parses.
      */
     @PluginMethod
-    fun kvList(call: PluginCall) {
+    fun kvList(call: PluginCall) = onDbThread { profiled(call, "kvList") { kvListNow(call) } }
+
+    private fun kvListNow(call: PluginCall) {
         try {
             val entries = db.kvList(
                 prefix = call.getString("prefix"),
@@ -217,7 +290,9 @@ class ArmadaDbPlugin : Plugin() {
      * `{ key, value }` for a list.
      */
     @PluginMethod
-    fun kvOps(call: PluginCall) {
+    fun kvOps(call: PluginCall) = onDbThread { profiled(call, "kvOps") { kvOpsNow(call) } }
+
+    private fun kvOpsNow(call: PluginCall) {
         val raw = call.getString("ops") ?: return call.reject("ops is required")
 
         val ops: List<SqliteArmadaDb.KvOp>
@@ -244,7 +319,20 @@ class ArmadaDbPlugin : Plugin() {
         }
 
         try {
-            val results = db.kvOps(ops)
+            if (buzz.armada.app.ServiceProfiler.ON) {
+                for (op in ops) buzz.armada.app.ServiceProfiler.count(
+                    "plugin.kvOps op " + op.javaClass.simpleName + " " +
+                        family(when (op) {
+                            is SqliteArmadaDb.KvOp.Get -> op.key
+                            is SqliteArmadaDb.KvOp.Set -> op.key
+                            is SqliteArmadaDb.KvOp.Delete -> op.key
+                            is SqliteArmadaDb.KvOp.Scan -> op.prefix ?: "*"
+                        }).substringBeforeLast(':'),
+                )
+            }
+            val dbStarted = buzz.armada.app.ServiceProfiler.begin("plugin.kvOps store")
+            val results = try { db.kvOps(ops) } finally { buzz.armada.app.ServiceProfiler.end("plugin.kvOps store", dbStarted) }
+            val encodeStarted = buzz.armada.app.ServiceProfiler.begin("plugin.kvOps encode+resolve")
             val out = StringBuilder()
             out.append('[')
             for ((i, result) in results.withIndex()) {
@@ -264,7 +352,9 @@ class ArmadaDbPlugin : Plugin() {
                 }
             }
             out.append(']')
+            buzz.armada.app.ServiceProfiler.units("plugin.out bytes kvOps", out.length.toLong())
             call.resolve(JSObject().put("results", out.toString()))
+            buzz.armada.app.ServiceProfiler.end("plugin.kvOps encode+resolve", encodeStarted)
         } catch (error: Exception) {
             call.reject(error.message, error)
         }
@@ -272,7 +362,9 @@ class ArmadaDbPlugin : Plugin() {
 
     /** Empty every table (logout purge). The file and its schema survive. */
     @PluginMethod
-    fun wipe(call: PluginCall) {
+    fun wipe(call: PluginCall) = onDbThread { profiled(call, "wipe") { wipeNow(call) } }
+
+    private fun wipeNow(call: PluginCall) {
         try {
             db.wipe()
             call.resolve()
