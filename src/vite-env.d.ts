@@ -33,7 +33,7 @@ interface ImportMetaEnv {
   readonly VITE_PLAUSIBLE_DOMAIN?: string;
   /** Plausible API endpoint (self-hosted instance or proxy). Empty/unset = Plausible Cloud default. */
   readonly VITE_PLAUSIBLE_ENDPOINT?: string;
-  /** "1" in a `npm run build:profile` build: React profiling build, names kept, source maps. */
+  /** "1" in a `npm run build:profile` build: names kept, source maps, render attribution on. */
   readonly VITE_PROFILE?: string;
   /** Semver version from package.json (e.g., "0.25.4"). */
   readonly VERSION: string;

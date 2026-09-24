@@ -26,6 +26,7 @@ import { initGroupKeyPersistence } from "@/concord/lib/groupKeyPersist";
 import { secureStorage } from "@/lib/secureStorage";
 import { APP_CONFIG_STORAGE_KEY } from "@/lib/activeAccount";
 import { likelySignedIn } from "@/lib/likelySignedIn";
+import { instrumentQueryCache } from "@/lib/perfRuntime";
 import { LOGIN_STORAGE_KEY } from "@/lib/switchAccount";
 
 import AppRouter from "./AppRouter";
@@ -90,6 +91,11 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Which query families fetch and replace their data, for the runtime profiler
+// (`__armadaPerf.runtime()`). A subscription, so it costs a Map update per
+// cache event.
+instrumentQueryCache(queryClient.getQueryCache());
 
 // Hydrate the Concord groupKey memo from KV at module load — before the
 // community list resolves and channelsView derives every stream key. A warm

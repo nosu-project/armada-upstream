@@ -175,20 +175,25 @@ const SHARED_TEST_CONFIG = {
 const RUN_PERF = !!process.env.ARMADA_TEST_PERF;
 
 /**
- * `npm run build:profile`: a production build that can be profiled. Three
+ * `npm run build:profile`: a production build that can be profiled. Two
  * differences, each of which a profile of the normal build is missing:
  *
- *  - react-dom's PROFILING build, so every fiber carries its render time and
- *    `__armadaPerf.runtime()` can report self time per component rather than
- *    only render counts (and the DevTools Profiler tab works);
- *  - function and class names kept through minification, so those components,
- *    and every frame of a CPU profile, read as names instead of `Xe`;
+ *  - function and class names kept through minification, so components, and
+ *    every frame of a CPU profile, read as names instead of `Xe`;
  *  - source maps, so a Performance-panel flame graph maps back to `src/`.
  *
  * Also stamps `VITE_PROFILE=1`, which switches component render attribution
  * on from boot. Never a release build — it is larger and a little slower.
+ *
+ * `VITE_PROFILE_REACT=1` on top swaps in react-dom's PROFILING build, so every
+ * fiber carries its render time and the report gives self time per component
+ * (and the DevTools Profiler tab works). Opt-in, because React 19.2's
+ * profiling build also logs every component render to the Performance
+ * timeline: in a render-heavy flow that logging was most of the CPU a profile
+ * measured, which makes it the wrong build for asking how much CPU a flow costs.
  */
 const PROFILE_BUILD = process.env.VITE_PROFILE === "1";
+const PROFILE_REACT = PROFILE_BUILD && process.env.VITE_PROFILE_REACT === "1";
 
 /**
  * Build outputs a local flatpak build drops under `electron/`, which the
@@ -316,7 +321,7 @@ export default defineConfig({
     alias: [
       { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
       // react-dom/profiling is react-dom/client plus fiber timings.
-      ...(PROFILE_BUILD ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : []),
+      ...(PROFILE_REACT ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : []),
     ],
     dedupe: ["react", "react-dom", "react/jsx-runtime"],
   },

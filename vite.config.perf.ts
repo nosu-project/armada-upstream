@@ -6,7 +6,8 @@ import base from "./vite.config";
 
 /**
  * The build `scripts/perf-profile.mjs` drives: the app plus the e2e seed
- * harness (`e2e/screenshotSeed.html`) as a second entry, into `dist-perf/`.
+ * harnesses (`e2e/screenshotSeed.html`, `e2e/concordSeed.html`) as extra
+ * entries, into `dist-perf/`.
  *
  * The seed page has to be served from the SAME origin as the app, because it
  * seeds the app's own IndexedDB — and profiling has to happen against a
@@ -23,6 +24,7 @@ export default mergeConfig(base, {
       input: {
         index: path.resolve(import.meta.dirname, "index.html"),
         seed: path.resolve(import.meta.dirname, "e2e/screenshotSeed.html"),
+        concordSeed: path.resolve(import.meta.dirname, "e2e/concordSeed.html"),
       },
     },
   },

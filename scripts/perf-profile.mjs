@@ -8,6 +8,8 @@
  *   npm run perf:profile                 # build + run every scenario
  *   node scripts/perf-profile.mjs --skip-build --idle 60
  *   node scripts/perf-profile.mjs --only idle-thread,switch
+ *   node scripts/perf-profile.mjs --only concord-switch --cpu-profile   # + hot functions
+ *   node scripts/perf-profile.mjs --react-timings   # per-component self ms (inflates CPU)
  *
  * Scenarios (each a fresh page on the same seeded origin):
  *   landing      logged-out root, idle
@@ -16,11 +18,16 @@
  *   scroll       paging the big thread's history back to the top
  *   switch       hopping between conversations, with heap after forced GC
  *                between rounds (a leak is a rising floor, not a rising peak)
+ *   concord-boot    cold load into a seeded community's 3000-message #general
+ *   concord-idle    #general open, nobody touching anything
+ *   concord-scroll  paging #general's history back
+ *   concord-switch  hopping between the community's channels, heap per round
  *   discover     /discover idle — the one scenario with real relay traffic
  *
- * Offline except `discover`: the seed goes straight into the app's own
- * ArmadaDB through the production writers (`e2e/screenshotSeed.ts`), and the
- * throwaway account has no relays. Nothing is ever published — the account is
+ * Offline except `discover`: the seeds go straight into the app's own
+ * ArmadaDB through the production writers (`e2e/screenshotSeed.ts`,
+ * `e2e/concordSeed.ts`), and the throwaway account has no relays. The seeded
+ * community names `wss://relay.invalid`, which the harness answers itself. Nothing is ever published — the account is
  * minted here and never signs anything a relay keeps.
  *
  * Numbers are "CPU" in the sense Chromium's TaskDuration means it: main-thread
@@ -56,17 +63,21 @@ const PORT = 8282;
 const ORIGIN = `http://localhost:${PORT}`;
 // Outside `dist-perf/`, which every build empties.
 const OUT = resolve(root, "perf-reports");
+/** Messages in the seeded community's #general. */
+const CONCORD_BIG = 3000;
 
 const wants = (name) => ONLY.length === 0 || ONLY.includes(name);
 
 // ─── Build + serve ──────────────────────────────────────────────────────────
 
 if (!flag("skip-build")) {
-  console.log("building (VITE_PROFILE=1, vite.config.perf.ts)…");
+  console.log(`building (VITE_PROFILE=1${flag("react-timings") ? ", VITE_PROFILE_REACT=1" : ""}, vite.config.perf.ts)…`);
   const r = spawnSync("npx", ["vite", "build", "-l", "error", "-c", "vite.config.perf.ts"], {
     cwd: root,
     stdio: "inherit",
-    env: { ...process.env, VITE_PROFILE: "1" },
+    // `--react-timings`: React's profiling build, for per-component self time.
+    // Off by default — its render logging inflates CPU (see vite.config.ts).
+    env: { ...process.env, VITE_PROFILE: "1", ...(flag("react-timings") ? { VITE_PROFILE_REACT: "1" } : {}) },
   });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
@@ -192,8 +203,20 @@ await cdp.send("Performance.enable");
  */
 const swallowed = {};
 await page.routeWebSocket(/^wss?:\/\//, (ws) => {
-  const server = ws.connectToServer();
+  // The seeded community names `wss://relay.invalid`: answer it here as an
+  // empty relay (EOSE for every REQ) rather than dialing nothing and leaving
+  // its reads to time out.
+  const fake = /\.invalid(?:[:/]|$)/.test(new URL(ws.url()).hostname + "/");
+  const server = fake ? null : ws.connectToServer();
   ws.onMessage((msg) => {
+    if (fake && typeof msg === "string" && msg.startsWith('["REQ"')) {
+      try {
+        ws.send(JSON.stringify(["EOSE", JSON.parse(msg)[1]]));
+      } catch {
+        // malformed REQ: nothing to answer
+      }
+      return;
+    }
     if (typeof msg === "string" && msg.startsWith('["EVENT"')) {
       try {
         const event = JSON.parse(msg)[1];
@@ -206,9 +229,9 @@ await page.routeWebSocket(/^wss?:\/\//, (ws) => {
         return;
       }
     }
-    server.send(msg);
+    server?.send(msg);
   });
-  server.onMessage((msg) => ws.send(msg));
+  server?.onMessage((msg) => ws.send(msg));
 });
 
 /** Errors raised since `mark` (an index into `errors`). */
@@ -337,8 +360,95 @@ function digest(r) {
       (x) => `${x.url} open=${x.open}/${x.opened} subs=${x.liveSubs} (peak ${x.peakSubs}) reqs=${x.reqs} ev=${x.events} in=${Math.round(x.bytesIn / 1024)}KB`,
     ),
     reqShapes: rt.reqShapes.slice(0, 6).map((s) => `${s.reqs} REQ, ${s.events} ev: ${s.shape}`),
+    queries: (rt.queries ?? []).slice(0, 8).map((q) => `${q.fetches} fetch / ${q.updates} update / ${q.observers} obs: ${q.family}`),
     topStorage: r.boot.aggregates.slice(0, 6).map((a) => `${Math.round(a.total)}ms ×${a.count} ${a.label}`),
   };
+}
+
+/**
+ * Sampling CPU profile of `fn`, reduced to the top self-time functions
+ * (name + file:line, names kept by the profile build). `--cpu-profile` only:
+ * the sampler's own overhead would skew every other number in the run.
+ */
+async function cpuProfile(fn) {
+  if (!flag("cpu-profile")) return { result: await fn(), hot: undefined };
+  await cdp.send("Profiler.enable");
+  await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+  await cdp.send("Profiler.start");
+  const result = await fn();
+  const { profile } = await cdp.send("Profiler.stop");
+  const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+  const dt = new Map();
+  profile.samples.forEach((id, i) => dt.set(id, (dt.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0)));
+  const self = new Map();
+  for (const [id, us] of dt) {
+    const { functionName, url, lineNumber } = byId.get(id).callFrame;
+    const file = url.replace(/^.*\/assets\//, "").replace(/-[\w-]{8}\.js$/, ".js");
+    const key = `${functionName || "(anonymous)"} ${file}:${lineNumber + 1}`;
+    self.set(key, (self.get(key) ?? 0) + us);
+  }
+  const hot = [...self.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 40)
+    .map(([fn, us]) => `${Math.round(us / 1000)}ms ${fn}`);
+  return { result, hot };
+}
+
+/**
+ * Where the page's event listeners are: per event type, and per element (tag
+ * + first class) for the heaviest holders. Uses the DevTools command-line
+ * `getEventListeners`, so it walks every element — harness-only, and run
+ * after a scenario's measurement, never inside one.
+ */
+async function listenerCensus() {
+  const { result } = await cdp.send("Runtime.evaluate", {
+    includeCommandLineAPI: true,
+    returnByValue: true,
+    expression: `(() => {
+      const byType = {}, byElement = {};
+      let total = 0;
+      const targets = [window, document, ...document.querySelectorAll("*")];
+      for (const el of targets) {
+        const ls = getEventListeners(el);
+        let n = 0;
+        for (const [type, list] of Object.entries(ls)) { byType[type] = (byType[type] || 0) + list.length; n += list.length; }
+        if (!n) continue;
+        total += n;
+        const name = el === window ? "window" : el === document ? "document" : el.tagName.toLowerCase() + (el.classList[0] ? "." + el.classList[0] : "");
+        byElement[name] = (byElement[name] || 0) + n;
+      }
+      const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 12);
+      return { total, byType: top(byType), byElement: top(byElement) };
+    })()`,
+  });
+  // JSEventListeners also counts non-DOM targets (AbortSignals, IDB requests,
+  // media queries) that no census can enumerate; after a full GC, what remains
+  // is held, not garbage.
+  await heapFloorMB(cdp);
+  return { ...result.value, jsListenersAfterGc: (await metrics(cdp)).JSEventListeners };
+}
+
+/**
+ * Scroll the open timeline to its top 40 times, 750ms apart — each one asks it
+ * for older history. Returns the rendered row count after each step.
+ */
+async function scrollBack() {
+  const steps = [];
+  for (let i = 0; i < 40; i++) {
+    const rows = await page.evaluate(() => {
+      const row = document.querySelector("[data-scroll-anchor]");
+      let el = row?.parentElement ?? null;
+      while (el && !(el.scrollHeight > el.clientHeight + 10 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) {
+        el = el.parentElement;
+      }
+      if (!el) return null;
+      el.scrollTop = 0;
+      return document.querySelectorAll("[data-scroll-anchor]").length;
+    });
+    steps.push(rows);
+    await page.waitForTimeout(750);
+  }
+  return steps;
 }
 
 // ─── Scenarios ──────────────────────────────────────────────────────────────
@@ -393,21 +503,7 @@ try {
       await resetCounters(page);
       const a = await metrics(cdp);
       const t = Date.now();
-      const steps = [];
-      for (let i = 0; i < 40; i++) {
-        const s = await page.evaluate(() => {
-          const row = document.querySelector("[data-scroll-anchor]");
-          let el = row?.parentElement ?? null;
-          while (el && !(el.scrollHeight > el.clientHeight + 10 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) {
-            el = el.parentElement;
-          }
-          if (!el) return null;
-          el.scrollTop = 0;
-          return document.querySelectorAll("[data-scroll-anchor]").length;
-        });
-        steps.push(s);
-        await page.waitForTimeout(750);
-      }
+      const steps = await scrollBack();
       const b = await metrics(cdp);
       const reachedFirst = await page.getByText("(#0)", { exact: false }).count();
       save("scroll", {
@@ -447,6 +543,104 @@ try {
       errors: errorsSince(mark),
       report: await report(page),
     });
+  }
+
+  const concordScenarios = ["concord-boot", "concord-idle", "concord-scroll", "concord-switch"];
+  if (concordScenarios.some(wants)) {
+    // Seed a community: a 3000-message #general and seven small channels.
+    await page.goto("/e2e/concordSeed.html");
+    await page.waitForFunction(() => Boolean(window.__armadaSeedConcord), null, { timeout: 60_000 });
+    const seedAt = Date.now();
+    const concord = await page.evaluate(
+      (p) => window.__armadaSeedConcord(p),
+      {
+        sk: Buffer.from(world.me.sk).toString("hex"),
+        others: world.peers.slice(0, 8).map((p) => p.pubkey),
+        channelSizes: [CONCORD_BIG, 60, 60, 60, 60, 60, 60, 60],
+        lines: LINES,
+      },
+    );
+    console.log(`\nseeded community ${concord.communityId.slice(0, 8)}… (${CONCORD_BIG} + 7×60 messages) in ${Date.now() - seedAt}ms`);
+    const channelPath = (i) => `/c/${concord.communityId}/${concord.channelIds[i]}`;
+    const lastGeneral = `${LINES[(CONCORD_BIG - 1) % LINES.length]} (#${CONCORD_BIG - 1})`;
+    const generalVisible = () => page.getByText(lastGeneral, { exact: false }).last().isVisible();
+
+    console.log("\n▶ concord-boot (cold load into #general)");
+    let mark = errors.length;
+    const t0 = Date.now();
+    await page.goto(channelPath(0));
+    const painted = await until(page, generalVisible, 90_000);
+    const bootMs = Date.now() - t0;
+    await perfReady(page);
+    // Sanity-check a lazily built control still works: the first avatar's
+    // profile card must open on its first click.
+    const profileCardOpens = await (async () => {
+      const avatar = page.locator('[data-scroll-anchor] button[aria-haspopup="dialog"]').last();
+      if (!(await avatar.count())) return false;
+      await avatar.click({ timeout: 5000 }).catch(() => undefined);
+      const opened = await page.locator('[role="dialog"]').first().isVisible({ timeout: 3000 }).catch(() => false);
+      await page.keyboard.press("Escape");
+      return opened;
+    })();
+    save("concord-boot", { bootMs, painted, profileCardOpens, errors: errorsSince(mark), report: await report(page) });
+
+    if (wants("concord-idle")) {
+      console.log(`▶ concord-idle (${IDLE_SEC}s)`);
+      mark = errors.length;
+      await page.waitForTimeout(5000);
+      const idle = await measureIdle(page, cdp, IDLE_SEC);
+      save("concord-idle", { idle, errors: errorsSince(mark), report: await report(page) });
+    }
+
+    if (wants("concord-scroll")) {
+      console.log("▶ concord-scroll (page #general back)");
+      mark = errors.length;
+      await resetCounters(page);
+      const a = await metrics(cdp);
+      const t = Date.now();
+      const steps = await scrollBack();
+      const b = await metrics(cdp);
+      const reachedFirst = await page.getByText("(#0)", { exact: false }).count();
+      save("concord-scroll", {
+        scroll: cost(a, b, (Date.now() - t) / 1000),
+        renderedRowsPerStep: steps,
+        reachedFirstMessage: reachedFirst > 0,
+        listeners: await listenerCensus(),
+        errors: errorsSince(mark),
+        report: await report(page),
+      });
+    }
+
+    if (wants("concord-switch")) {
+      console.log("▶ concord-switch (channel hopping, heap floor per round)");
+      mark = errors.length;
+      await page.goto(channelPath(1));
+      await until(page, () => page.getByText("(#59)", { exact: false }).first().isVisible(), 90_000);
+      await page.waitForTimeout(3000);
+      const floors = [await heapFloorMB(cdp)];
+      await resetCounters(page);
+      const a = await metrics(cdp);
+      const t = Date.now();
+      const rounds = 4;
+      const { hot } = await cpuProfile(async () => {
+        for (let round = 0; round < rounds; round++) {
+          for (let i = 1; i < concord.channelIds.length; i++) {
+            await softNavigate(page, channelPath(i));
+            await page.waitForTimeout(600);
+          }
+          floors.push(await heapFloorMB(cdp));
+        }
+      });
+      const b = await metrics(cdp);
+      save("concord-switch", {
+        hot,
+        switches: (concord.channelIds.length - 1) * rounds,
+        cost: cost(a, b, (Date.now() - t) / 1000),
+        heapFloorMBPerRound: floors,
+        errors: errorsSince(mark),
+        report: await report(page),
+      });
+    }
   }
 
   if (wants("discover")) {

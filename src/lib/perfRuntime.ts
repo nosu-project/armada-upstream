@@ -102,6 +102,7 @@ const state = {
   intervalSites: new Map<string, number>(),
 
   eventsByKind: new Map<number, { count: number; bytes: number }>(),
+  queries: new Map<string, { fetches: number; updates: number; observers: number }>(),
   shapes: new Map<string, { reqs: number; events: number; bytes: number; eose: number }>(),
 };
 
@@ -121,6 +122,7 @@ function resetWindow(): void {
   state.intervalSites.clear();
   state.eventsByKind.clear();
   state.shapes.clear();
+  state.queries.clear();
   for (const s of relays.values()) {
     const keep = { open: s.open, liveSubs: s.liveSubs, peakSubs: s.liveSubs };
     Object.assign(s, emptyRelayStats(), keep);
@@ -552,6 +554,60 @@ function installTimerProbe(): void {
   }
 }
 
+// ─── React Query ────────────────────────────────────────────────────────────
+
+/**
+ * A query key reduced to its FAMILY: ids (anything hex-like or long) become
+ * `…`, so a channel's timeline and another channel's timeline count together
+ * and no id lands in a pasted report.
+ */
+export function queryFamily(key: readonly unknown[]): string {
+  return key
+    .slice(0, 4)
+    .map((part) => {
+      if (typeof part === "string") return /^[0-9a-f]{16,}$/i.test(part) || part.length > 24 ? "…" : part;
+      if (part === null || part === undefined || typeof part === "number" || typeof part === "boolean") return String(part);
+      return "{…}";
+    })
+    .join("/");
+}
+
+/** The slice of a TanStack QueryCache this reads. */
+interface QueryCacheLike {
+  subscribe(listener: (event: {
+    type: string;
+    query: { queryKey: readonly unknown[] };
+    action?: { type: string };
+  }) => void): () => void;
+}
+
+/**
+ * Count, per query family, how often it FETCHES and how often its data is
+ * replaced (`success` actions — each one notifies every observer, which is a
+ * render of every component reading it). A family that fetches on every
+ * render, or whose data is replaced far more often than anything changes, is
+ * the "idle CPU with nothing on the wire" signature.
+ */
+export function instrumentQueryCache(cache: QueryCacheLike): () => void {
+  return cache.subscribe((event) => {
+    if (event.type === "observerAdded") {
+      entry(queryFamily(event.query.queryKey)).observers += 1;
+      return;
+    }
+    if (event.type !== "updated" || !event.action) return;
+    if (event.action.type === "fetch") entry(queryFamily(event.query.queryKey)).fetches += 1;
+    else if (event.action.type === "success") entry(queryFamily(event.query.queryKey)).updates += 1;
+  });
+  function entry(family: string) {
+    let e = state.queries.get(family);
+    if (!e) {
+      e = { fetches: 0, updates: 0, observers: 0 };
+      state.queries.set(family, e);
+    }
+    return e;
+  }
+}
+
 // ─── React ──────────────────────────────────────────────────────────────────
 
 /** The slice of a React Fiber this reads. Internal, but stable since 16. */
@@ -887,6 +943,8 @@ export interface RuntimeReport {
   };
   relays: ({ url: string } & RelayStats)[];
   eventsByKind: { kind: number; count: number; bytes: number }[];
+  /** Per query family: fetches, data replacements, observers added (see {@link instrumentQueryCache}). */
+  queries: { family: string; fetches: number; updates: number; observers: number }[];
   reqShapes: { shape: string; reqs: number; events: number; bytes: number; eose: number }[];
   animations: { name: string; target: string; count: number }[];
   samples: Sample[];
@@ -980,6 +1038,11 @@ export function runtimeReport(): RuntimeReport {
       (k) => k.count,
       40,
     ),
+    queries: top(
+      [...state.queries.entries()].map(([family, q]) => ({ family, ...q })),
+      (q) => q.fetches + q.updates,
+      40,
+    ),
     reqShapes: top(
       [...state.shapes.entries()].map(([shape, a]) => ({ shape, ...a })),
       (a) => a.reqs * 1000 + a.events,
@@ -1042,6 +1105,8 @@ function printRuntime(reset = false): RuntimeReport {
   if (r.timers.rafSites.length) console.table(r.timers.rafSites);
   h("relays");
   console.table(r.relays);
+  h("react-query families (fetches / data replacements / observers added)");
+  console.table(r.queries);
   h("inbound events by kind");
   console.table(r.eventsByKind);
   h("REQs by filter shape");
