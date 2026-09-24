@@ -197,8 +197,17 @@ export class AppSigner implements NostrSigner {
 
   /** The cached plaintext for a derived id, or `undefined` on a miss. */
   async #get(id: string): Promise<string | undefined> {
+    const remembered = recentDecrypts.get(id);
+    if (remembered !== undefined) {
+      // Refresh recency (Map iteration order is insertion order).
+      recentDecrypts.delete(id);
+      recentDecrypts.set(id, remembered);
+      return remembered;
+    }
     try {
-      return await getArmadaDB().kv.get<string>(decryptCacheKey(id));
+      const stored = await getArmadaDB().kv.get<string>(decryptCacheKey(id));
+      if (typeof stored === "string") rememberDecrypt(id, stored);
+      return stored;
     } catch {
       return undefined;
     }
@@ -207,11 +216,32 @@ export class AppSigner implements NostrSigner {
   /** Persist a decrypt result. Best-effort: failures are swallowed since the
    *  cache is never on the critical path. */
   async #put(id: string, plaintext: string): Promise<void> {
+    rememberDecrypt(id, plaintext);
     try {
       await getArmadaDB().kv.set(decryptCacheKey(id), plaintext);
     } catch {
       // best-effort
     }
+  }
+}
+
+/**
+ * The most recent decrypts, in memory, in front of the persistent cache. The
+ * same ciphertexts are decrypted over and over (a community's private channel
+ * names and settings on every switch, each re-read of a document), and on
+ * Android every persistent-cache read is a round trip into the native store —
+ * ~24 per community switch, measured. A ciphertext has exactly one plaintext,
+ * so an entry never goes stale; the bound is only about memory.
+ */
+const recentDecrypts = new Map<string, string>();
+const MAX_RECENT_DECRYPTS = 2_048;
+
+function rememberDecrypt(id: string, plaintext: string): void {
+  recentDecrypts.delete(id);
+  recentDecrypts.set(id, plaintext);
+  if (recentDecrypts.size > MAX_RECENT_DECRYPTS) {
+    const oldest = recentDecrypts.keys().next().value;
+    if (oldest !== undefined) recentDecrypts.delete(oldest);
   }
 }
 

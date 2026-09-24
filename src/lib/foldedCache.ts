@@ -194,6 +194,10 @@ const sharedDecoded = new Map<string, { json: string; value: unknown }>();
 export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
   const hit = sharedDecoded.get(key);
   if (hit && knownEncoding.get(key) === hit.json) return hit.value as T;
+  // A key found EMPTY stays empty until something writes it (writeFolded
+  // clears this): a channel with no sync cursor yet was otherwise re-read on
+  // every open, by every reader.
+  if (sharedMissing.has(key)) return undefined;
   // Readers that arrive while the first read is in flight share it: a boot
   // mounts dozens of fold hooks at once, and each missing the cache on its own
   // was a bridge crossing apiece.
@@ -202,6 +206,7 @@ export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
     pending = readFolded<unknown>(key).then((value) => {
       const json = knownEncoding.get(key);
       if (value !== undefined && json !== undefined) sharedDecoded.set(key, { json, value });
+      else if (value === undefined && json === undefined) sharedMissing.add(key);
       return value;
     });
     sharedInFlight.set(key, pending);
@@ -213,6 +218,8 @@ export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
 }
 
 const sharedInFlight = new Map<string, Promise<unknown>>();
+/** Keys a shared read found empty, until the next write of the key. */
+const sharedMissing = new Set<string>();
 
 type FoldedWriteListener = (key: string) => void;
 const foldedWriteListeners = new Set<FoldedWriteListener>();
@@ -247,6 +254,7 @@ export async function writeFolded(key: string, value: unknown, encoded?: string)
     // Recorded before the await, so concurrent writers of the same content
     // (every instance persisting one fold at once) collapse to one.
     knownEncoding.set(key, json);
+    sharedMissing.delete(key);
     // The written object IS the decoded value of `json`; shared readers get it
     // without a round trip.
     if (value !== undefined) sharedDecoded.set(key, { json, value });
@@ -348,4 +356,5 @@ export function __resetFoldedForTests(): void {
   knownEncoding.clear();
   sharedDecoded.clear();
   sharedInFlight.clear();
+  sharedMissing.clear();
 }

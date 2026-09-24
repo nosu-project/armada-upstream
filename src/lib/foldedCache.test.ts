@@ -112,6 +112,13 @@ describe("readFoldedShared", () => {
     await expect(readFoldedShared("concord2-fold:x")).resolves.toBe(next);
   });
 
+  it("remembers a missing key until it is written", async () => {
+    await expect(readFoldedShared("concord2-cursor:none")).resolves.toBeUndefined();
+    await expect(readFoldedShared("concord2-cursor:none")).resolves.toBeUndefined();
+    await writeFolded("concord2-cursor:none", { newest: 5 });
+    await expect(readFoldedShared("concord2-cursor:none")).resolves.toEqual({ newest: 5 });
+  });
+
   it("plain reads still decode a fresh object each time", async () => {
     await writeFolded("k2", { v: [1] });
     const a = await readFolded("k2");
