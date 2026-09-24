@@ -93,9 +93,8 @@ const queryClient = new QueryClient({
 });
 
 // Which query families fetch and replace their data, for the runtime profiler
-// (`__armadaPerf.runtime()`). A subscription, so it costs a Map update per
-// cache event.
-instrumentQueryCache(queryClient.getQueryCache());
+// (`__armadaPerf.runtime()`). Profiling builds only, like the rest of it.
+if (import.meta.env.VITE_PROFILE === "1") instrumentQueryCache(queryClient.getQueryCache());
 
 // Hydrate the Concord groupKey memo from KV at module load — before the
 // community list resolves and channelsView derives every stream key. A warm

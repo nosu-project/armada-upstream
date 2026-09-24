@@ -461,7 +461,10 @@ export function SettingsPage() {
     if (canInstall || needsManualInstall) {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
     }
-    appItems.push({ id: "diagnostics", title: "Diagnostics", icon: Activity });
+    // The profiler it reports on exists only in profiling builds.
+    if (import.meta.env.VITE_PROFILE === "1") {
+      appItems.push({ id: "diagnostics", title: "Diagnostics", icon: Activity });
+    }
     const groups: NavGroup[] = [
       { heading: "User settings", items: userItems },
       { heading: "App settings", items: appItems },
@@ -996,7 +999,7 @@ export function SettingsPage() {
           </SettingsRow>
         );
       case "diagnostics":
-        return <DiagnosticsSettings />;
+        return import.meta.env.VITE_PROFILE === "1" ? <DiagnosticsSettings /> : null;
       case "danger":
         return (
           <SettingsRow

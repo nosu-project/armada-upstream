@@ -30,10 +30,16 @@
  *    `--enable-precise-memory-info`: without the flag a flat line is not
  *    evidence of no leak. The Memory panel's heap snapshots are the real test.
  *
+ * PROFILING BUILDS ONLY: `npm run build:profile` and the perf harness
+ * (`scripts/perf-profile.mjs`). Unlike perf.ts's counters, these probes patch
+ * page globals, so a normal build never installs them — the `VITE_PROFILE`
+ * checks fold to false and the bundler drops this module.
+ *
  * Installed by `main.tsx` through `perfRuntimeInstall.ts`, a side-effect
- * import placed right after the polyfills, so the WebSocket and timer wrappers are in place before any app
- * module can create a socket or schedule anything, and the React hook exists
- * before react-dom evaluates and looks for it.
+ * import placed right after the polyfills, so the WebSocket and timer wrappers
+ * are in place before any app module can create a socket or schedule
+ * anything, and the React hook exists before react-dom evaluates and looks
+ * for it.
  *
  * Read it in the console:
  *
@@ -43,7 +49,7 @@
  *   __armadaPerf.json()           // everything, as one pasteable JSON string
  *   __armadaPerf.reset()          // start a fresh window without printing
  *
- * On a phone, Settings → Diagnostics copies the same JSON.
+ * On a phone (a profiling build), Settings → Diagnostics copies the same JSON.
  *
  * The report names relay URLs (query strings stripped — LiveKit puts its token
  * there) and filter SHAPES (kinds and which keys are present, never the
