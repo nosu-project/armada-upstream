@@ -1,8 +1,10 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
+import { clearRecentDecrypts } from "@/lib/AppSigner";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
 import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
+import { clearFoldedMemory } from "@/lib/foldedCache";
 import {
   PUSH_CLEANUP_KEY,
   PUSH_INSTALLATION_KEY,
@@ -122,6 +124,10 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   // ids under a hash-only tombstone so the same signer can retry after login.
   const preservePushCleanup = stagePushCleanupForPurge(outgoingPubkey);
   clearRenderedPlaintext();
+  // Decrypted plaintext and decoded community state held in memory in front
+  // of the stores purged below.
+  clearRecentDecrypts();
+  clearFoldedMemory();
   resetDecryptConsent();
   // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
   // their own copy in memory. Deleting the database underneath them would
@@ -145,6 +151,9 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   await writePushDisabledFlag();
   // Again, afterwards. A cache warm already in flight when the first reset ran
   // resolves against the OLD database and refills the map behind us; the reset
-  // is idempotent and costs nothing, and this is the last word.
+  // is idempotent and costs nothing, and this is the last word. The same goes
+  // for a decrypt or fold read that was in flight during the purge.
   resetKvCaches();
+  clearRecentDecrypts();
+  clearFoldedMemory();
 }

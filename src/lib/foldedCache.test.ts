@@ -16,6 +16,7 @@ import { __resetLegacyMigrationsMemoForTests } from "@/lib/db/legacyDatabases";
 
 import {
   __resetFoldedForTests,
+  clearFoldedMemory,
   LEGACY_FOLDED_DB_NAME,
   onFoldedWrite,
   readFolded,
@@ -110,6 +111,21 @@ describe("readFoldedShared", () => {
     const next = { roster: new Map([["b", 2]]) };
     await writeFolded("concord2-fold:x", next);
     await expect(readFoldedShared("concord2-fold:x")).resolves.toBe(next);
+  });
+
+  it("clearFoldedMemory drops shared values, so a purged store reads as empty", async () => {
+    await writeFolded("concord2-list:me", { entries: [1] });
+    await expect(readFoldedShared("concord2-list:me")).resolves.toEqual({ entries: [1] });
+    await purgeArmadaDB();
+    clearFoldedMemory();
+    await expect(readFoldedShared("concord2-list:me")).resolves.toBeUndefined();
+    // …and the next account's identical write is a real write, not skipped.
+    const seen: string[] = [];
+    const unsubscribe = onFoldedWrite((key) => seen.push(key));
+    await writeFolded("concord2-list:me", { entries: [1] });
+    expect(seen).toEqual(["concord2-list:me"]);
+    await expect(readFolded("concord2-list:me")).resolves.toEqual({ entries: [1] });
+    unsubscribe();
   });
 
   it("remembers a missing key until it is written", async () => {

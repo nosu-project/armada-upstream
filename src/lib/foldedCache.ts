@@ -221,6 +221,19 @@ const sharedInFlight = new Map<string, Promise<unknown>>();
 /** Keys a shared read found empty, until the next write of the key. */
 const sharedMissing = new Set<string>();
 
+/**
+ * Forget every value this module holds in memory. On logout: the shared
+ * decodes are decrypted community state (lists, control folds), and the
+ * encoding memo would otherwise make the next account's first write of an
+ * identical value a silent no-op against the purged store.
+ */
+export function clearFoldedMemory(): void {
+  knownEncoding.clear();
+  sharedDecoded.clear();
+  sharedInFlight.clear();
+  sharedMissing.clear();
+}
+
 type FoldedWriteListener = (key: string) => void;
 const foldedWriteListeners = new Set<FoldedWriteListener>();
 

@@ -236,6 +236,11 @@ export class AppSigner implements NostrSigner {
 const recentDecrypts = new Map<string, string>();
 const MAX_RECENT_DECRYPTS = 2_048;
 
+/** Drop every in-memory decrypt (logout: see purgeClientStorage). */
+export function clearRecentDecrypts(): void {
+  recentDecrypts.clear();
+}
+
 function rememberDecrypt(id: string, plaintext: string): void {
   recentDecrypts.delete(id);
   recentDecrypts.set(id, plaintext);
