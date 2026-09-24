@@ -168,8 +168,8 @@ function flush(): void {
 export function emitWireScopes(scopes: Iterable<WireScope>): void {
   for (const s of scopes) {
     // Rings per scope family, for the runtime profile: every ring is a store
-    // re-read in each subscriber.
-    perfCount(`bus ${s.split(":")[0]}`, 0);
+    // re-read in each subscriber. Profiling builds only; folds away otherwise.
+    if (import.meta.env.VITE_PROFILE === "1") perfCount(`bus ${s.split(":")[0]}`, 0);
     pending.add(s);
     localPending.add(s);
   }
