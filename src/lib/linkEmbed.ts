@@ -167,3 +167,20 @@ export function extractInstagramShortcode(url: string): string | null {
     return null;
   }
 }
+
+/**
+ * The post text of a `rich` oEmbed whose `html` is a blockquote of paragraphs
+ * (Bluesky, and the fx-style mirrors that copy its shape). oEmbed has no
+ * description field, so this is the only place the post body travels. Parsed
+ * with DOMParser, which neither runs the embed's `<script>` nor fetches
+ * anything, and only the TEXT leaves it — the html itself is never rendered.
+ */
+export function oembedDescription(html: string | undefined): string | undefined {
+  if (!html || typeof DOMParser === "undefined") return undefined;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const text = Array.from(doc.querySelectorAll("blockquote p"))
+    .map((p) => p.textContent?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+  return text || undefined;
+}

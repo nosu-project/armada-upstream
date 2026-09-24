@@ -1,11 +1,12 @@
 import { Check, Copy, ExternalLink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { InstagramEmbed } from "@/components/chat/InstagramEmbed";
+import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
 import { TweetEmbed } from "@/components/chat/TweetEmbed";
 import { toast } from "@/hooks/useToast";
-import { useLinkPreview } from "@/hooks/useLinkPreview";
+import { useLinkPreview, useRichEmbed } from "@/hooks/useLinkPreview";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
@@ -15,6 +16,9 @@ import {
   extractTweetId,
   extractYouTubeId,
 } from "@/lib/linkEmbed";
+import { faviconUrl } from "@/lib/faviconUrl";
+import { fullDateTime } from "@/lib/formatTime";
+import type { RichEmbedImage } from "@/lib/richEmbed";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import {
   hasNativeYouTubePlayer,
@@ -137,19 +141,42 @@ function displayDomain(url: string): string {
   }
 }
 
-/** Rich link preview card rendered from OEmbed data. */
+/** Caps a preview image is fitted into, without upscaling. */
+const PREVIEW_MAX_W = 400;
+const PREVIEW_MAX_H = 320;
+/** An image this small on both axes is a logo/avatar, shown as a side thumbnail. */
+const SMALL_IMAGE_MAX = 200;
+/** Images shown in a multi-image grid; the rest are behind `+N` and the lightbox. */
+const GRID_MAX = 4;
+
+/** Rich link preview card, Discord-style: text, fields, media, footer. */
 function LinkPreview({ url, className }: { url: string; className?: string }) {
-  const { data, isLoading } = useLinkPreview(url);
-  // The thumbnail is whatever the linked page's OpenGraph named, on a host of
-  // its choosing — under the media policy like a message image (proxied for a
-  // stranger's host, absent where the policy wants a tap; a card is not the
-  // place for a placeholder).
-  const thumbnail = useMediaSrc(sanitizeImageSrc(data?.thumbnail_url));
+  const { data: embed, isLoading } = useRichEmbed(url);
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // The lightbox resolves the un-proxied URL through the media policy itself,
+  // as it does for a message image; it gets the full-size original where the
+  // source names one.
+  const lightboxMedia = useMemo<LightboxItem[]>(
+    () =>
+      (embed?.images ?? []).flatMap((img): LightboxItem[] => {
+        const src = sanitizeImageSrc(img.full) ?? sanitizeImageSrc(img.thumb);
+        if (!src) return [];
+        return [{ url: src, dim: img.width && img.height ? `${img.width}x${img.height}` : undefined }];
+      }),
+    [embed?.images],
+  );
+  const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+  const nextImage = useCallback(
+    () => setLightboxIndex((i) => (i === null ? i : Math.min(lightboxMedia.length - 1, i + 1))),
+    [lightboxMedia.length],
+  );
+  const prevImage = useCallback(() => setLightboxIndex((i) => (i === null ? i : Math.max(0, i - 1))), []);
 
   if (isLoading) {
     return (
-      <div className={cn("max-w-md rounded-xl border border-border overflow-hidden", className)}>
-        <div className="px-3.5 py-2.5 space-y-1.5">
+      <div className={cn("max-w-md rounded-md border-l-4 border-primary bg-secondary/40 overflow-hidden", className)}>
+        <div className="px-3 py-2.5 space-y-1.5">
           <Skeleton className="h-3 w-24" />
           <Skeleton className="h-4 w-3/4" />
         </div>
@@ -158,7 +185,7 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
   }
 
   // No preview data — fall back to a plain inline link.
-  if (!data?.title && !data?.thumbnail_url) {
+  if (!embed) {
     return (
       <a
         href={url}
@@ -172,17 +199,24 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
     );
   }
 
+  const images = embed.images;
+  const single = images.length === 1 ? images[0] : undefined;
+  const singleW = single?.width ?? naturalSize?.w;
+  const singleH = single?.height ?? naturalSize?.h;
+  const small = !!singleW && !!singleH && singleW <= SMALL_IMAGE_MAX && singleH <= SMALL_IMAGE_MAX;
+  // A footer that names the source stands in for the provider line.
+  const provider = embed.provider ?? (embed.footer ? undefined : displayDomain(url));
+
   return (
     // A `<button>` can't nest in an `<a>`, so instead of wrapping the card in a
     // link we lay a full-card link OVERLAY under inert content: clicks fall
     // through the `pointer-events-none` content to the anchor, and the copy
-    // button re-enables pointer events to sit in the footer flow as the one
-    // exception. That keeps the button in normal layout (no overlay gutter /
-    // empty gap) while the whole card still behaves as a link.
+    // button and the images re-enable pointer events as the exceptions. That
+    // keeps the rest of the card behaving as a link.
     <div
       className={cn(
-        "group relative block max-w-md rounded-xl border border-border overflow-hidden",
-        "hover:bg-secondary/40 transition-colors",
+        "group relative block w-fit max-w-md rounded-md border-l-4 border-primary bg-secondary/40 overflow-hidden",
+        "hover:bg-secondary/60 transition-colors",
         className,
       )}
     >
@@ -190,44 +224,227 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        aria-label={data.title || data.provider_name || displayDomain(url)}
+        aria-label={embed.title || embed.author?.name || provider || displayDomain(url)}
         className="absolute inset-0 z-0"
         onClick={(e) => e.stopPropagation()}
       />
 
-      <div className="pointer-events-none relative">
-        {thumbnail && (
-          <div className="w-full overflow-hidden">
-            <img
-              src={thumbnail}
-              alt=""
-              className="w-full max-h-[180px] object-cover"
-              loading="lazy"
-              onError={(e) => {
-                (e.currentTarget.parentElement as HTMLElement).style.display = "none";
-              }}
+      <div className="pointer-events-none relative px-3 py-2.5">
+        <div className="flex gap-3">
+          {/* Right padding clears the copy button in the top-right corner. */}
+          <div className="min-w-0 flex-1 space-y-1.5 pr-6 touch:pr-8">
+            {provider && (
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+                {/* One favicon per card, on the footer when there is one. */}
+                {!embed.footer && <SiteIcon url={url} />}
+                <span className="truncate">{provider}</span>
+              </p>
+            )}
+            {embed.author && <EmbedAuthor name={embed.author.name} icon={embed.author.icon} />}
+            {embed.title && (
+              <p className="text-sm font-semibold leading-snug text-primary line-clamp-2">{embed.title}</p>
+            )}
+            {embed.description && (
+              <p className="text-sm leading-snug whitespace-pre-line break-words line-clamp-6">
+                {embed.description}
+              </p>
+            )}
+            {embed.fields && (
+              <dl className="grid grid-cols-3 gap-x-6 gap-y-1 pt-0.5">
+                {embed.fields.map((field) => (
+                  <div key={field.name} className="min-w-0">
+                    <dt className="text-xs font-semibold">{field.name}</dt>
+                    <dd className="text-sm truncate">{field.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </div>
+          {single && small && (
+            <div className="mt-6 touch:mt-8">
+              <EmbedImage image={single} variant="small" onOpen={() => setLightboxIndex(0)} />
+            </div>
+          )}
+        </div>
+
+        {single && !small && (
+          <div className="mt-2.5 w-fit max-w-full">
+            <EmbedImage
+              image={single}
+              variant="single"
+              onOpen={() => setLightboxIndex(0)}
+              onSize={setNaturalSize}
             />
           </div>
         )}
 
-        <div className="px-3.5 py-2.5 space-y-0.5">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="truncate">{data.provider_name || displayDomain(url)}</span>
+        {images.length > 1 && (
+          <div className="mt-2.5 grid w-[min(100%,25rem)] grid-cols-2 gap-1">
+            {images.slice(0, GRID_MAX).map((image, i) => (
+              <div key={`${i}:${image.thumb}`} className="relative">
+                <EmbedImage image={image} variant="tile" onOpen={() => setLightboxIndex(i)} />
+                {i === GRID_MAX - 1 && images.length > GRID_MAX && (
+                  <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-black/60 text-lg font-semibold text-white">
+                    +{images.length - GRID_MAX}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
-          {data.title && <p className="text-sm font-semibold leading-snug line-clamp-2">{data.title}</p>}
-          {data.author_name && (
-            <p className="text-xs text-muted-foreground leading-relaxed line-clamp-1">{data.author_name}</p>
-          )}
-        </div>
+        )}
+
+        {embed.footer && (
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+            <SiteIcon url={url} />
+            <span className="truncate">
+              {embed.footer.text}
+              {embed.footer.timestamp !== undefined && <> • {fullDateTime(embed.footer.timestamp)}</>}
+            </span>
+          </p>
+        )}
       </div>
 
       <CopyLinkButton url={url} />
+
+      {lightboxIndex !== null && lightboxMedia.length > 0 && (
+        <Lightbox
+          media={lightboxMedia}
+          currentIndex={Math.min(lightboxIndex, lightboxMedia.length - 1)}
+          onClose={closeLightbox}
+          onNext={nextImage}
+          onPrev={prevImage}
+        />
+      )}
     </div>
   );
 }
 
 /**
- * Copy-link affordance in the lower-right corner of a link preview card. It
+ * The linked site's favicon, beside whichever line names the source. It comes
+ * from the favicon service rather than the site itself, like every other
+ * favicon in the app, so the site does not see who scrolled past its link.
+ */
+function SiteIcon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = faviconUrl(url);
+  if (!src || failed) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      className="size-4 shrink-0 rounded-sm object-contain"
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+/** Author line with an optional avatar, loaded under the media policy. */
+function EmbedAuthor({ name, icon }: { name: string; icon?: string }) {
+  const src = useMediaSrc(sanitizeImageSrc(icon));
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      {src && !failed && (
+        <img
+          src={src}
+          alt=""
+          className="size-6 shrink-0 rounded-full object-cover"
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+        />
+      )}
+      <p className="text-sm font-semibold leading-snug truncate">{name}</p>
+    </div>
+  );
+}
+
+/**
+ * One preview image. The thumbnail is whatever the linked page named, on a
+ * host of its choosing — under the media policy like a message image (proxied
+ * for a stranger's host). It opens the lightbox rather than the link: the
+ * button re-enables pointer events in front of the card-wide link overlay.
+ *
+ * A `single` image is shown whole, at its own aspect ratio — a page's image is
+ * usually the content (an artwork, a post's picture), and a cover crop cuts it
+ * to a strip. Known dimensions reserve the box before load; otherwise the
+ * loaded image settles into the same caps.
+ */
+function EmbedImage({
+  image,
+  variant,
+  onOpen,
+  onSize,
+}: {
+  image: RichEmbedImage;
+  variant: "single" | "small" | "tile";
+  onOpen: () => void;
+  onSize?: (size: { w: number; h: number }) => void;
+}) {
+  const src = useMediaSrc(sanitizeImageSrc(image.thumb));
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) return null;
+
+  const w = image.width ?? natural?.w;
+  const h = image.height ?? natural?.h;
+  const box = variant === "single" && w && h ? fitPreviewBox(w, h) : undefined;
+
+  return (
+    <button
+      type="button"
+      aria-label="View image"
+      className={cn(
+        "pointer-events-auto relative z-10 block max-w-full cursor-zoom-in rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        variant === "tile" && "w-full",
+      )}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      <img
+        src={src}
+        alt=""
+        className={cn(
+          "block rounded-md",
+          variant === "small" && "size-20 shrink-0 object-cover",
+          variant === "tile" && "aspect-square w-full object-cover",
+          variant === "single" &&
+            (box ? "max-w-full h-auto object-cover" : "max-w-[min(100%,25rem)] max-h-80 w-auto h-auto"),
+        )}
+        style={box ? { aspectRatio: box.aspectRatio, width: box.maxWidth } : undefined}
+        loading="lazy"
+        decoding="async"
+        onLoad={(e) => {
+          const { naturalWidth, naturalHeight } = e.currentTarget;
+          if (naturalWidth > 0 && naturalHeight > 0) {
+            const size = { w: naturalWidth, h: naturalHeight };
+            setNatural(size);
+            onSize?.(size);
+          }
+        }}
+        onError={() => setFailed(true)}
+      />
+    </button>
+  );
+}
+
+/**
+ * Fits an image into the preview caps without upscaling, as a persistent
+ * aspect ratio plus the capped width — the same scheme as a message image, so
+ * a portrait image is pre-narrowed rather than clamped by height after load.
+ */
+function fitPreviewBox(w: number, h: number): { aspectRatio: string; maxWidth: number } {
+  const scale = Math.min(1, PREVIEW_MAX_W / w, PREVIEW_MAX_H / h);
+  return { aspectRatio: `${w} / ${h}`, maxWidth: Math.round(w * scale) };
+}
+
+/**
+ * Copy-link affordance in the top-right corner of a link preview card. It
  * copies the URL rather than following it, and re-enables pointer events (its
  * container is inert) so it's the one interactive element in front of the
  * card-wide link overlay. Always visible.
@@ -255,7 +472,7 @@ function CopyLinkButton({ url }: { url: string }) {
       title="Copy link"
       aria-label="Copy link"
       className={cn(
-        "absolute bottom-1.5 right-1.5 z-10 grid place-items-center size-7 touch:size-9 rounded-md",
+        "absolute top-1 right-1 z-10 grid place-items-center size-7 touch:size-9 rounded-md",
         "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors",
       )}
     >
