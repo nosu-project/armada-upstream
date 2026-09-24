@@ -108,6 +108,16 @@ final class NostrCrypto {
      * relay is untrusted.
      */
     static boolean verifyEvent(JSONObject event) {
+        if (!ServiceProfiler.ON) return verifyEventInner(event);
+        long t = ServiceProfiler.begin("crypto.verify");
+        try {
+            return verifyEventInner(event);
+        } finally {
+            ServiceProfiler.end("crypto.verify", t);
+        }
+    }
+
+    private static boolean verifyEventInner(JSONObject event) {
         try {
             if (event == null) return false;
             String id = event.optString("id", "");

@@ -8,6 +8,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import {
   fullPerfReport,
   isRenderTracking,
+  nativeServiceProfile,
   resetRuntimeProfile,
   setRenderTracking,
 } from "@/lib/perfRuntime";
@@ -22,7 +23,9 @@ export function DiagnosticsSettings() {
   const [renders, setRenders] = useState(isRenderTracking);
 
   const copy = () => {
-    void writeClipboardText(JSON.stringify(fullPerfReport(), null, 2))
+    const report = fullPerfReport();
+    void nativeServiceProfile()
+      .then((native) => writeClipboardText(JSON.stringify(native ? { ...report, native } : report, null, 2)))
       .then(() => toast({ title: "Performance report copied" }))
       .catch(() => toast({ title: "Couldn't copy the report", variant: "destructive" }));
   };

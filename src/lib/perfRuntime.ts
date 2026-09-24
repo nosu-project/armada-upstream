@@ -48,6 +48,7 @@
  *   __armadaPerf.renders(true)    // attribute commits to components
  *   __armadaPerf.json()           // everything, as one pasteable JSON string
  *   __armadaPerf.reset()          // start a fresh window without printing
+ *   await __armadaPerf.native()   // Android: the notification service's profile
  *
  * On a phone (a profiling build), Settings → Diagnostics copies the same JSON.
  *
@@ -59,6 +60,8 @@
 import { Capacitor } from "@capacitor/core";
 
 import { isDesktop } from "@/lib/desktop";
+import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { hasNativeNotificationService } from "@/lib/platform";
 import { perfReport, perfReset, type PerfReport } from "@/lib/perf";
 
 function now(): number {
@@ -1087,6 +1090,20 @@ export function fullPerfReport(): FullPerfReport {
   };
 }
 
+/**
+ * The Android notification service's own profile (a separate component with
+ * its own counters: ServiceProfiler.java), when this is a native build whose
+ * APK was also built for profiling. Undefined anywhere else.
+ */
+export async function nativeServiceProfile(): Promise<Record<string, unknown> | undefined> {
+  if (!hasNativeNotificationService()) return undefined;
+  try {
+    return (await ArmadaNotification.getHealth()).profile;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Start a fresh measurement window (both the runtime counters and perf.ts's aggregates). */
 export function resetRuntimeProfile(): void {
   resetWindow();
@@ -1176,5 +1193,6 @@ export function installRuntimeProfiler(): void {
     };
     reader.json = () => JSON.stringify(fullPerfReport(), null, 2);
     reader.reset = resetRuntimeProfile;
+    reader.native = nativeServiceProfile;
   }
 }

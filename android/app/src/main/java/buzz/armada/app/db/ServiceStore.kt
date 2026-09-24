@@ -2,6 +2,7 @@ package buzz.armada.app.db
 
 import android.content.Context
 import android.util.Log
+import buzz.armada.app.ServiceProfiler
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -63,7 +64,7 @@ object ServiceStore {
     fun ingest(context: Context, event: JSONObject, relayUrl: String? = null): Boolean {
         val rumor = Rumor.parse(event) ?: return false
         val tenant = RelayScope.tenantFor(rumor, relayUrl) ?: return false
-        return try {
+        return profiled("db.ingest") { try {
             val db = ArmadaDb.get(context)
             val stored = db.count(tenant, listOf(idFilter(rumor.id))).count > 0
             db.write(
@@ -77,7 +78,7 @@ object ServiceStore {
         } catch (error: Throwable) {
             Log.w(TAG, "ingest write failed", error)
             false
-        }
+        } }
     }
 
     /**
@@ -129,11 +130,11 @@ object ServiceStore {
     fun cache(context: Context, event: JSONObject, relayUrl: String? = null) {
         val rumor = Rumor.parse(event) ?: return
         val tenant = RelayScope.tenantFor(rumor, relayUrl) ?: return
-        try {
+        profiled("db.cache") { try {
             ArmadaDb.get(context).event(tenant, rumor)
         } catch (error: Throwable) {
             Log.w(TAG, "cache write failed", error)
-        }
+        } }
     }
 
     /**
@@ -160,13 +161,13 @@ object ServiceStore {
     ): Boolean {
         val rumor = Rumor.parse(event) ?: return false
         if (!SelfState.storable(self, rumor, dTags)) return false
-        return try {
+        return profiled("db.cacheSelfState") { try {
             ArmadaDb.get(context).event(ArmadaDb.TENANT_MAIN, rumor)
             true
         } catch (error: Throwable) {
             Log.w(TAG, "self-state write failed", error)
             false
-        }
+        } }
     }
 
     /**
@@ -351,11 +352,11 @@ object ServiceStore {
             return
         }
 
-        try {
+        profiled("db.storeConcordRumor") { try {
             ArmadaDb.get(context).event(Concord.tenant(communityIdHex), opened)
         } catch (error: Throwable) {
             Log.w(TAG, "concord rumor write failed", error)
-        }
+        } }
     }
 
     /**
@@ -377,11 +378,11 @@ object ServiceStore {
         val opened = Rumor.parse(rumor) ?: return
         if (!Dm17.storable(self, opened, System.currentTimeMillis() / 1000)) return
 
-        try {
+        profiled("db.storeDm17Rumor") { try {
             ArmadaDb.get(context).event(Dm17.tenant(self), opened)
         } catch (error: Throwable) {
             Log.w(TAG, "dm rumor write failed", error)
-        }
+        } }
     }
 
     /**
@@ -466,4 +467,18 @@ object ServiceStore {
 
     private fun idFilter(id: String): JSONObject =
         JSONObject().put("ids", JSONArray().put(id))
+
+    /**
+     * Time [block] under [label] in profiling builds (see ServiceProfiler);
+     * a plain call otherwise — `ON` is a compile-time constant.
+     */
+    private inline fun <T> profiled(label: String, block: () -> T): T {
+        if (!ServiceProfiler.ON) return block()
+        val started = ServiceProfiler.begin(label)
+        try {
+            return block()
+        } finally {
+            ServiceProfiler.end(label, started)
+        }
+    }
 }

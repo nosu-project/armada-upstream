@@ -308,6 +308,9 @@ public class NotificationRelayService extends Service {
 
     // Active connections, one per relay URL.
     private final List<RelayConnection> connections = new ArrayList<>();
+    /** Relay frames posted to the handler and not yet run (profiling builds). */
+    private final java.util.concurrent.atomic.AtomicInteger pendingFrames =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     // Current config snapshot.
     private String userPubkey;
@@ -788,6 +791,7 @@ public class NotificationRelayService extends Service {
                 out.put("lastErrorAt", processLastErrorAtMs);
                 if (processLastError != null) out.put("lastError", processLastError);
             }
+            if (ServiceProfiler.ON) out.put("profile", profileSnapshot());
         } catch (JSONException ignored) {
             // Every value above is a primitive/string; this is defensive only.
         }
@@ -1144,7 +1148,7 @@ public class NotificationRelayService extends Service {
                 // conversations/summaries (all carry our group prefix) and the
                 // account-scoped incoming-call ring.
                 for (android.service.notification.StatusBarNotification sbn
-                        : manager.getActiveNotifications()) {
+                        : activeNotifications(manager)) {
                     String group = sbn.getNotification().getGroup();
                     if (isAccountNotification(sbn.getId(), group)) {
                         manager.cancel(sbn.getTag(), sbn.getId());
@@ -1403,6 +1407,7 @@ public class NotificationRelayService extends Service {
     // ── Config ────────────────────────────────────────────────────────────────
 
     private void loadConfigAndReconnect() {
+        if (ServiceProfiler.ON) ServiceProfiler.count("config.reload");
         SharedPreferences sp = getSharedPreferences(ArmadaNotificationPlugin.PREFS_NAME, Context.MODE_PRIVATE);
         healthLastConfigAtMs = System.currentTimeMillis();
         healthLoadedConfigRevision = sp.getLong("rev", 0L);
@@ -1921,6 +1926,10 @@ public class NotificationRelayService extends Service {
             if (closed || ws != null || !isNetworkAvailable()) return;
             if (!fleetPolicy.shouldConnect(fleetState, fleetInfo, System.currentTimeMillis())) return;
             connectAttemptAt = System.currentTimeMillis();
+            if (ServiceProfiler.ON) {
+                ServiceProfiler.count("socket.connect");
+                ServiceProfiler.count("socket.connect " + ServiceProfiler.host(relayUrl));
+            }
             standingSubs.clear();
             walledSubs.clear();
             deliveredAnything = false;
@@ -1941,6 +1950,7 @@ public class NotificationRelayService extends Service {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
                     if (BuildConfig.DEBUG) Log.d(TAG, "WS open: " + relayUrl);
+                    if (ServiceProfiler.ON) ServiceProfiler.count("socket.open");
                     // A fresh socket session: CLOSED-resubscribe backoff starts
                     // over, and a pending auth re-send belongs to the old session.
                     handler.post(() -> {
@@ -1957,6 +1967,24 @@ public class NotificationRelayService extends Service {
 
                 @Override
                 public void onMessage(WebSocket webSocket, String text) {
+                    if (ServiceProfiler.ON) {
+                        // Frames by subscription family, bytes, and how deep the
+                        // handler queue gets behind them (every frame is a post).
+                        String family = ServiceProfiler.frameFamily(text);
+                        ServiceProfiler.units("frame.in " + family, text.length());
+                        ServiceProfiler.units("frame.in bytes", text.length());
+                        ServiceProfiler.peak("handler.queue", pendingFrames.incrementAndGet());
+                        handler.post(() -> {
+                            pendingFrames.decrementAndGet();
+                            long t = ServiceProfiler.begin("frame.handle");
+                            try {
+                                onRelayMessage(text, relayUrl);
+                            } finally {
+                                ServiceProfiler.end("frame.handle", t);
+                            }
+                        });
+                        return;
+                    }
                     handler.post(() -> onRelayMessage(text, relayUrl));
                 }
 
@@ -1967,6 +1995,7 @@ public class NotificationRelayService extends Service {
                     // needs the status so a persistent proxy 5xx counts toward
                     // the breaker instead of being retried as a transient blip.
                     int httpCode = response != null ? response.code() : 0;
+                    if (ServiceProfiler.ON) ServiceProfiler.count("socket.failure");
                     Log.w(TAG, "WS failure (" + relayUrl + "): " + t.getMessage()
                             + (httpCode != 0 ? " [HTTP " + httpCode + "]" : ""));
                     handler.post(() -> {
@@ -1977,6 +2006,7 @@ public class NotificationRelayService extends Service {
 
                 @Override
                 public void onClosed(WebSocket webSocket, int code, String reason) {
+                    if (ServiceProfiler.ON) ServiceProfiler.count("socket.closed");
                     handler.post(() -> {
                         if (!closed) endSession(null);
                     });
@@ -1987,6 +2017,7 @@ public class NotificationRelayService extends Service {
         /** Send a standing REQ, recording its id as part of this session. */
         void sendReq(WebSocket webSocket, String subId, JSONObject... filters) throws JSONException {
             standingSubs.add(subId);
+            if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())));
             webSocket.send(reqMessage(subId, filters));
         }
 
@@ -2187,6 +2218,7 @@ public class NotificationRelayService extends Service {
                 JSONArray auth = new JSONArray();
                 auth.put("AUTH");
                 auth.put(event);
+                if (ServiceProfiler.ON) ServiceProfiler.count("frame.out AUTH");
                 ws.send(auth.toString());
                 healthLastSignAtMs = System.currentTimeMillis();
                 healthAuthStatus = "signed";
@@ -2210,6 +2242,7 @@ public class NotificationRelayService extends Service {
                 f.put("kinds", new JSONArray().put(0));
                 f.put("authors", new JSONArray().put(pubkey));
                 f.put("limit", 1);
+                if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ lookup kind0");
                 ws.send(reqMessage(profileSubId(pubkey), f));
             } catch (JSONException e) {
                 if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build profile REQ", e);
@@ -2228,6 +2261,7 @@ public class NotificationRelayService extends Service {
                 f.put("kinds", new JSONArray().put(39000));
                 f.put("#d", new JSONArray().put(groupId));
                 f.put("limit", 1);
+                if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ lookup kind39000");
                 ws.send(reqMessage(groupSubId(groupId), f));
             } catch (JSONException e) {
                 if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build group-name REQ", e);
@@ -2269,6 +2303,7 @@ public class NotificationRelayService extends Service {
                 f.put("kinds", new JSONArray().put(10050));
                 f.put("authors", new JSONArray().put(pubkey));
                 f.put("limit", 1);
+                if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ lookup kind10050");
                 ws.send(reqMessage(inboxSubId(pubkey), f));
             } catch (JSONException e) {
                 if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build inbox REQ", e);
@@ -2433,6 +2468,7 @@ public class NotificationRelayService extends Service {
                 // survive with the app killed. A duplicate user AUTH from the
                 // bridge is harmless; a relay just re-authenticates.
                 String challenge = msg.optString(1);
+                if (ServiceProfiler.ON) ServiceProfiler.count("auth.challenge");
                 healthLastAuthAtMs = System.currentTimeMillis();
                 healthAuthStatus = "challenged";
                 if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
@@ -2477,8 +2513,13 @@ public class NotificationRelayService extends Service {
                             JSONArray streamTags = new JSONArray()
                                     .put(new JSONArray().put("relay").put(relayUrl))
                                     .put(new JSONArray().put("challenge").put(challenge));
-                            deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
-                                    22242, "", streamTags, nowSecs, sk).toString());
+                            long t = ServiceProfiler.begin("auth.stream.sign");
+                            try {
+                                deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
+                                        22242, "", streamTags, nowSecs, sk).toString());
+                            } finally {
+                                ServiceProfiler.end("auth.stream.sign", t);
+                            }
                         } catch (Exception ignored) {
                             // A stream that can't sign simply isn't authed.
                         }
@@ -3860,8 +3901,23 @@ public class NotificationRelayService extends Service {
     }
 
     private void handleEvent(JSONObject event, String relayUrl) {
+        if (!ServiceProfiler.ON) {
+            handleEventInner(event, relayUrl);
+            return;
+        }
+        String label = "event k" + event.optInt("kind");
+        long t = ServiceProfiler.begin(label);
+        try {
+            handleEventInner(event, relayUrl);
+        } finally {
+            ServiceProfiler.end(label, t);
+        }
+    }
+
+    private void handleEventInner(JSONObject event, String relayUrl) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop duplicate");
             return;
         }
 
@@ -3880,9 +3936,11 @@ public class NotificationRelayService extends Service {
         // chat/reactions/replies and kind-4 DMs — must be verified before it
         // is stored, fed to the WebView, or turned into a notification.
         if (!passesFilter(event, kind, relayUrl)) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop filter");
             return;
         }
         if (kind != 1059 && kind != 21059 && !NostrCrypto.verifyEvent(event)) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop signature");
             if (BuildConfig.DEBUG) Log.d(TAG, "DROP bad signature kind=" + kind + " id=" + id);
             return;
         }
@@ -4753,6 +4811,19 @@ public class NotificationRelayService extends Service {
             CommunityRef community, String roomKey, String roomTitle, String url,
             String senderPubkey, String senderName, Bitmap avatar,
             String text, long timestampMs, boolean avatarRefresh, boolean alert) {
+        long t = ServiceProfiler.begin("notify.post");
+        try {
+            postRoomMessageInner(community, roomKey, roomTitle, url, senderPubkey, senderName,
+                    avatar, text, timestampMs, avatarRefresh, alert);
+        } finally {
+            ServiceProfiler.end("notify.post", t);
+        }
+    }
+
+    private void postRoomMessageInner(
+            CommunityRef community, String roomKey, String roomTitle, String url,
+            String senderPubkey, String senderName, Bitmap avatar,
+            String text, long timestampMs, boolean avatarRefresh, boolean alert) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
 
@@ -4864,7 +4935,7 @@ public class NotificationRelayService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
         try {
             Set<Integer> active = new HashSet<>();
-            for (android.service.notification.StatusBarNotification sbn : manager.getActiveNotifications()) {
+            for (android.service.notification.StatusBarNotification sbn : activeNotifications(manager)) {
                 active.add(sbn.getId());
             }
             java.util.Iterator<Map.Entry<String, RoomNotif>> it = roomNotifs.entrySet().iterator();
@@ -4910,7 +4981,7 @@ public class NotificationRelayService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
         try {
             List<android.service.notification.StatusBarNotification> rooms = new ArrayList<>();
-            for (android.service.notification.StatusBarNotification sbn : manager.getActiveNotifications()) {
+            for (android.service.notification.StatusBarNotification sbn : activeNotifications(manager)) {
                 int id = sbn.getId();
                 if (id != keepNotifId
                         && isRoomNotification(sbn.getNotification().getGroup())) {
@@ -4951,7 +5022,7 @@ public class NotificationRelayService extends Service {
     private boolean isNotifActive(NotificationManager manager, int notifId) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
         try {
-            for (android.service.notification.StatusBarNotification sbn : manager.getActiveNotifications()) {
+            for (android.service.notification.StatusBarNotification sbn : activeNotifications(manager)) {
                 if (sbn.getId() == notifId) return true;
             }
             return false;
@@ -5903,7 +5974,7 @@ public class NotificationRelayService extends Service {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
         try {
-            for (android.service.notification.StatusBarNotification sbn : manager.getActiveNotifications()) {
+            for (android.service.notification.StatusBarNotification sbn : activeNotifications(manager)) {
                 int id = sbn.getId();
                 if (id >= SUMMARY_ID_BASE && id < SUMMARY_ID_BASE + SUMMARY_ID_MODULUS) {
                     manager.cancel(id);
@@ -6195,6 +6266,7 @@ public class NotificationRelayService extends Service {
         // instantly — the whole point of persisting across restarts.
         avatarClient.dispatcher().executorService().execute(() -> {
             Bitmap disk = loadAvatarFromDisk(url);
+            if (ServiceProfiler.ON) ServiceProfiler.count(disk != null ? "avatar.disk hit" : "avatar.disk miss");
             if (disk != null) {
                 handler.post(() -> {
                     avatarCache.put(url, disk);
@@ -6214,6 +6286,7 @@ public class NotificationRelayService extends Service {
                 handler.post(() -> cb.onBitmap(null));
                 return;
             }
+            if (ServiceProfiler.ON) ServiceProfiler.count("avatar.fetch");
             avatarClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
@@ -6486,7 +6559,64 @@ public class NotificationRelayService extends Service {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /**
+     * {@code getActiveNotifications()} — a binder round trip into the system
+     * server, taken several times per posted notification. One seam so
+     * profiling builds can count it.
+     */
+    static android.service.notification.StatusBarNotification[] activeNotifications(NotificationManager manager) {
+        if (ServiceProfiler.ON) ServiceProfiler.count("binder.getActiveNotifications");
+        return manager.getActiveNotifications();
+    }
+
+    /** Profiling builds: sizes worth watching over a long run (read unlocked; approximate). */
+    private Map<String, Long> profileGauges() {
+        Map<String, Long> g = new java.util.LinkedHashMap<>();
+        int open = 0;
+        for (RelayConnection rc : new ArrayList<>(connections)) if (rc.socketOpen) open++;
+        g.put("connections", (long) connections.size());
+        g.put("socketsOpen", (long) open);
+        g.put("notifiedIds", (long) notifiedIds.size());
+        g.put("avatarCache", (long) avatarCache.size());
+        g.put("groupImageCache", (long) groupImageCache.size());
+        g.put("roomNotifs", (long) roomNotifs.size());
+        g.put("handlerQueue", (long) pendingFrames.get());
+        NativeSigner signer = nativeSigner;
+        g.put("signerCachedKeys", signer != null ? (long) signer.cachedKeys() : 0L);
+        return g;
+    }
+
+    /** Profiling builds: the ServiceProfiler window, with this instance's gauges. */
+    static JSONObject profileSnapshot() throws JSONException {
+        NotificationRelayService svc = instance;
+        return ServiceProfiler.snapshot(svc != null ? svc.profileGauges() : null);
+    }
+
+    /**
+     * Profiling builds answer {@code adb shell dumpsys activity service
+     * buzz.armada.app/.NotificationRelayService [reset]} with the profile —
+     * readable with the app UI dead, which is the state being measured.
+     */
+    @Override
+    protected void dump(java.io.FileDescriptor fd, java.io.PrintWriter writer, String[] args) {
+        if (!ServiceProfiler.ON) {
+            super.dump(fd, writer, args);
+            return;
+        }
+        if (args != null && java.util.Arrays.asList(args).contains("reset")) {
+            ServiceProfiler.reset();
+            writer.println("{\"reset\":true}");
+            return;
+        }
+        try {
+            writer.println(profileSnapshot().toString(2));
+        } catch (JSONException e) {
+            writer.println("{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
     private void closeAllConnections() {
+        if (ServiceProfiler.ON) ServiceProfiler.units("socket.closeAll", connections.size());
         for (RelayConnection rc : connections) rc.close();
         connections.clear();
         updateSocketHealth();

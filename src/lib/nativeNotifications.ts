@@ -59,6 +59,12 @@ export interface NativeNotificationHealth {
   lastErrorAt: number;
   /** Stable error category only; never relay URLs, event bodies, or credentials. */
   lastError?: string;
+  /**
+   * PROFILING BUILDS ONLY (`-ParmadaProfile=true`): the service's
+   * ServiceProfiler window — process CPU, per-operation counts and timings,
+   * cache gauges. Absent from a normal build. Relay HOSTS appear in labels.
+   */
+  profile?: Record<string, unknown>;
 }
 
 export interface ArmadaNotificationPlugin {
