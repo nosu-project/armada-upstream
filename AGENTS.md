@@ -111,6 +111,35 @@ client headless over seeded DM and Concord data; `scripts/android-profile.sh`
 measures the service on a connected device. The profiling APK installs as
 `buzz.armada.app.profile`, beside the real app, never over it.
 
+### Performance rules that have regressed before
+
+Measure before and after with `npm run perf:profile` (web) or
+`scripts/android-profile.sh` (device); the numbers these rules came from are in
+those reports.
+
+- **Props handed to a memoized row must keep their identity.** No inline
+  closures, objects or JSX elements per row (`onRetry={() => …}`, a fresh
+  `<Badge />`, `{ kind, id }`). A callback that needs per-render data reads it
+  through a ref and has `[]` deps. Context values are memoized the same way.
+  One unstable prop re-renders the whole loaded timeline.
+- **`useNavigate`/`useLocation` change on every navigation.** Anything handed
+  to rows or memoized panes uses `useStableNavigate`, and hooks every row calls
+  read the location at call time through `LocationRefContext`
+  (see `useOpenProfile`).
+- **On Android every ArmadaDB/KV call crosses the Capacitor bridge**, and its
+  result is re-serialized per byte. Don't read KV in a path that runs per
+  render, per switch or per event: memoize in memory (including "absent"), share
+  immutable decoded values (`readFoldedShared`), and don't rewrite a value that
+  hasn't changed. Keep Capacitor's `loggingBehavior: 'none'`.
+- **A session memo holding decrypted data is cleared in `purgeClientStorage`**
+  (before and after the purge). Otherwise logout leaves plaintext in memory and
+  the next account can read it.
+- **The notification service must not reconnect on a configure.** A config
+  reload keeps live sockets and the signer and re-sends only changed
+  subscriptions. After AUTH it re-sends only the walled subscriptions. NIP-42
+  reasons may be prefixed (`ERROR: auth-required:`); use `isAuthRequired`. The
+  self-state subscription reads with a `since` after its first EOSE.
+
 ### The one Rust dependency
 
 Mini App multiplayer (`joinRealtimeChannel`) rides iroh-gossip, which lives in
