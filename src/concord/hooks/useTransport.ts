@@ -585,8 +585,13 @@ export function useTransport(
     () => (community ? sendRefusal(community.idHex) : null),
     [community],
   );
-  const retryEvent = useCallback((event: ChatMsg) => retry(event.id), [retry]);
-  const deleteEvent = useCallback((event: ChatMsg) => deleteMessage(event.id), [deleteMessage]);
+  // Through a ref: `retry`/`deleteMessage` are rebuilt per channel, and a
+  // channel switch re-rendered every row of the channel being LEFT (they are
+  // still mounted for that render) just to hand them the new identities.
+  const actionsRef = useRef({ retry, deleteMessage });
+  actionsRef.current = { retry, deleteMessage };
+  const retryEvent = useCallback((event: ChatMsg) => actionsRef.current.retry(event.id), []);
+  const deleteEvent = useCallback((event: ChatMsg) => actionsRef.current.deleteMessage(event.id), []);
   const mentionsEveryone = useCallback(
     (event: ChatMsg) => Boolean(
       channel

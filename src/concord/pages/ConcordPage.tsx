@@ -1,6 +1,6 @@
 import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, Users, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -28,6 +28,7 @@ import { DateSeparator, isSameDay, MessageTimeline } from "@/components/chat/Mes
 import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import { useThreadPanel } from "@/hooks/useThreadPanel";
 import { useTimelineFocus } from "@/hooks/useTimelineFocus";
+import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { PinnedBar } from "@/concord/components/PinnedBar";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
@@ -1035,7 +1036,11 @@ export function ConcordPage() {
   const routeChannelId = route?.channelId;
   const routePane = route?.pane;
   const { user } = useCurrentUser();
-  const navigateTo = useNavigate();
+  // Stable across navigations: every callback built on it (channel selection,
+  // thread opening, the #channel resolver in ChannelNavContext) is handed to
+  // each message row, and `useNavigate`'s per-location identity re-rendered
+  // every row — and their content — on every switch.
+  const navigateTo = useStableNavigate();
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();

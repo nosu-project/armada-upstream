@@ -599,6 +599,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const [confirmDelete, setConfirmDelete] = useState(false);
   // The touch long-press menu.
   const [sheetOpen, setSheetOpen] = useState(false);
+  // The action sheet (a vaul Drawer root) is built on the first long-press, not
+  // with the row: one per mounted message was the heaviest thing a touch
+  // timeline mounted and re-rendered, for a sheet almost none are ever opened
+  // into. Latched, so closing still animates.
+  const [sheetBuilt, setSheetBuilt] = useState(false);
+  if (sheetOpen && !sheetBuilt) setSheetBuilt(true);
   // Image actions contributed by the image under a long-press / right-click,
   // prepended to this row's own actions in whichever surface opens. Null for a
   // press on text or away from any image. Cleared as each surface closes.
@@ -1160,7 +1166,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </ContextMenuContent>
       </ContextMenu>
     )}
-    {isTouch && (
+    {isTouch && (sheetOpen || sheetBuilt) && (
       <MessageActionSheet
         open={sheetOpen}
         onOpenChange={handleSheetOpenChange}

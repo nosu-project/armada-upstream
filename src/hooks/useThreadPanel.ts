@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { chatRoute, parseChatRoute, roomPath } from "@/lib/routes";
@@ -108,15 +108,19 @@ export function useThreadPanel(opts: {
     (location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus,
   );
 
-  const openThread = useCallback(
-    (event: ChatMsg, focusReply = false) => {
-      if (!room) return;
-      navigate(chatRoute({ ...room, threadRoot: event.id }), {
-        state: { threadAutoFocus: focusReply },
-      });
-    },
-    [room, navigate],
-  );
+  // Stable: `onOpenThread` below is a prop of every message row, and taking
+  // the room and `navigate` (which changes per location) as dependencies
+  // re-rendered every row of the room being left on each switch. The room is
+  // read at call time, which is when it matters.
+  const openRef = useRef({ room, navigate });
+  openRef.current = { room, navigate };
+  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
+    const { room: current, navigate: go } = openRef.current;
+    if (!current) return;
+    go(chatRoute({ ...current, threadRoot: event.id }), {
+      state: { threadAutoFocus: focusReply },
+    });
+  }, []);
 
   // Closing when no thread is routed is a no-op rather than a second push, so a
   // stray close (the panel is still mounted through its slide-out) can't stack
