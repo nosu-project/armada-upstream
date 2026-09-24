@@ -175,6 +175,22 @@ const SHARED_TEST_CONFIG = {
 const RUN_PERF = !!process.env.ARMADA_TEST_PERF;
 
 /**
+ * `npm run build:profile`: a production build that can be profiled. Three
+ * differences, each of which a profile of the normal build is missing:
+ *
+ *  - react-dom's PROFILING build, so every fiber carries its render time and
+ *    `__armadaPerf.runtime()` can report self time per component rather than
+ *    only render counts (and the DevTools Profiler tab works);
+ *  - function and class names kept through minification, so those components,
+ *    and every frame of a CPU profile, read as names instead of `Xe`;
+ *  - source maps, so a Performance-panel flame graph maps back to `src/`.
+ *
+ * Also stamps `VITE_PROFILE=1`, which switches component render attribution
+ * on from boot. Never a release build — it is larger and a little slower.
+ */
+const PROFILE_BUILD = process.env.VITE_PROFILE === "1";
+
+/**
  * Build outputs a local flatpak build drops under `electron/`, which the
  * `electron/**` test globs must never traverse. `.flatpak-builder` holds
  * host-absolute symlinks (electron-builder.yml refuses to package it for the
@@ -288,16 +304,20 @@ export default defineConfig({
   },
   build: {
     target: "esnext",
+    sourcemap: PROFILE_BUILD,
     rollupOptions: {
       output: {
         manualChunks,
+        ...(PROFILE_BUILD ? { keepNames: true } : {}),
       },
     },
   },
   resolve: {
-    alias: {
-      "@": path.resolve(import.meta.dirname, "./src"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
+      // react-dom/profiling is react-dom/client plus fiber timings.
+      ...(PROFILE_BUILD ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : []),
+    ],
     dedupe: ["react", "react-dom", "react/jsx-runtime"],
   },
 });
