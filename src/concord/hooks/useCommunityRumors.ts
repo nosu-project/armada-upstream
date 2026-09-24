@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { queryRumorsByChannel } from "@/concord/lib/rumorStore";
 import { STORE_READ } from "@/lib/storeQuery";
@@ -94,25 +94,67 @@ export function useCommunityRumors(
       if (s.startsWith("c2:") && idSet.has(s.slice(3))) changed.push(s.slice(3));
     }
     if (changed.length === 0 || !communityIdHex) return;
-    void queryRumorsByChannel(communityIdHex, changed, { perChannel: PER_CHANNEL })
-      .then((delta) => {
-        queryClient.setQueryData<Map<string, OpenedChat[]>>(queryKey, (old) => {
-          // Until the initial full scan lands there is nothing to patch — and
-          // that scan will include this delta's rows anyway.
-          if (!old) return undefined;
-          const next = new Map(old);
-          for (const id of changed) {
-            const rows = delta.get(id);
-            if (rows) next.set(id, rows);
-            else next.delete(id);
-          }
-          return next;
-        });
-      })
-      .catch(() => undefined);
+    scheduleDelta(queryClient, queryKey, communityIdHex, changed);
   });
 
   return { byChannel: data ?? EMPTY, isLoading };
 }
 
 const EMPTY: Map<string, OpenedChat[]> = new Map();
+
+/**
+ * Delta reads waiting for this microtask, per query key. Every consumer of a
+ * community's rumors (unread badges, threads, the members view, time
+ * travelers) mounts its own copy of this hook, and the bus rings them all in
+ * one flush — so without coalescing, ONE ring ran one store read and one cache
+ * replacement PER CONSUMER, each replacement a render of everything reading
+ * the key. Collected here, they run once.
+ */
+const pendingDeltas = new Map<string, Set<string>>();
+
+function scheduleDelta(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  communityIdHex: string,
+  changed: string[],
+): void {
+  const key = hashKey(queryKey);
+  const pending = pendingDeltas.get(key);
+  if (pending) {
+    for (const id of changed) pending.add(id);
+    return;
+  }
+  const channels = new Set(changed);
+  pendingDeltas.set(key, channels);
+  queueMicrotask(() => {
+    pendingDeltas.delete(key);
+    const ids = [...channels];
+    void queryRumorsByChannel(communityIdHex, ids, { perChannel: PER_CHANNEL })
+      .then((delta) => {
+        queryClient.setQueryData<Map<string, OpenedChat[]>>(queryKey, (old) => {
+          // Until the initial full scan lands there is nothing to patch — and
+          // that scan will include this delta's rows anyway.
+          if (!old) return undefined;
+          let next: Map<string, OpenedChat[]> | undefined;
+          for (const id of ids) {
+            const rows = delta.get(id);
+            const prev = old.get(id);
+            // A ring that changed nothing this channel shows (a sync round
+            // that found no news rings anyway) keeps the old arrays — and,
+            // when no channel changed, the old Map, so nothing re-renders.
+            if (rows ? prev !== undefined && sameRows(prev, rows) : prev === undefined) continue;
+            next ??= new Map(old);
+            if (rows) next.set(id, rows);
+            else next.delete(id);
+          }
+          return next ?? old;
+        });
+      })
+      .catch(() => undefined);
+  });
+}
+
+/** Same rumors, same order — rumors are immutable, so the id says it all. */
+function sameRows(a: OpenedChat[], b: OpenedChat[]): boolean {
+  return a.length === b.length && a.every((row, i) => row.rumorId === b[i].rumorId);
+}

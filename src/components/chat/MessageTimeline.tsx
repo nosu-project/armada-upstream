@@ -88,15 +88,21 @@ function formatDayLabel(ts: number): string {
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
   if (isSameDay(ts, Math.floor(yesterday.getTime() / 1000))) return "Yesterday";
-  return date.toLocaleDateString(undefined, {
-    month: "long",
-    day: "numeric",
-    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
-  });
+  return (date.getFullYear() === now.getFullYear() ? DAY_FORMAT : DAY_YEAR_FORMAT).format(date);
 }
 
-/** Discord-style day boundary: a hairline with the date pinned in the middle. */
-export function DateSeparator({ ts }: { ts: number }) {
+// Built once: `toLocaleDateString` with options constructs a fresh
+// Intl.DateTimeFormat on every call, and a long timeline formats one per day.
+const DAY_FORMAT = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" });
+const DAY_YEAR_FORMAT = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" });
+
+/**
+ * Discord-style day boundary: a hairline with the date pinned in the middle.
+ * Memoized: one sits between every day of history, and the timeline re-renders
+ * its whole list whenever the page hands it a new render callback — which the
+ * chat pages do on most of their own renders.
+ */
+export const DateSeparator = memo(function DateSeparator({ ts }: { ts: number }) {
   return (
     <div className="flex items-center gap-3 px-2 pt-3 pb-1 select-none" aria-hidden>
       <div className="h-px flex-1 bg-border/60" />
@@ -106,7 +112,7 @@ export function DateSeparator({ ts }: { ts: number }) {
       <div className="h-px flex-1 bg-border/60" />
     </div>
   );
-}
+});
 
 /** Discord-style unread marker: a red hairline with a "NEW" tag. */
 function NewMessagesDivider() {

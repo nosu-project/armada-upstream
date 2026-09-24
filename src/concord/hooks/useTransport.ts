@@ -24,7 +24,7 @@ import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
 import type { Channel, Community } from "@/concord/lib/types";
 
-import { stableZapsFor, toChatMsg } from "@/components/chat/transport";
+import { sameReactionTallies, stableZapsFor, toChatMsg } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
 
 /** Shared empty tally array, so messages with no reactions keep a stable prop. */
@@ -226,12 +226,23 @@ export function useTransport(
     return out;
   }, [messages]);
 
+  // Both caches outlive a recompute of `talliesById`, which rebuilds EVERY
+  // tally array on each fold (any reaction, any page of history). Rebuilding
+  // the per-row objects with it handed every memoized row a new `reactions`
+  // prop, so a scroll-back page re-rendered the whole loaded channel. The
+  // react fn reads its collaborators through a ref, so it keeps one identity
+  // per message.
+  const reactDeps = useRef({ send, queryClient, channelIdHex, authorById });
+  reactDeps.current = { send, queryClient, channelIdHex, authorById };
+  const reactCacheRef = useRef(new Map<string, (input: ReactInput) => void>());
+  const reactionCacheRef = useRef(new Map<string, MessageReactions>());
   const reactionsFor = useMemo(() => {
-    const reactCache = new Map<string, (input: ReactInput) => void>();
+    const reactCache = reactCacheRef.current;
     const reactFor = (id: string) => {
       let fn = reactCache.get(id);
       if (!fn) {
         fn = (input: ReactInput) => {
+          const { send, queryClient, channelIdHex, authorById } = reactDeps.current;
           if (input.mineEventId) {
             // Removing: mark the reaction as deleted IMMEDIATELY so the fold
             // skips it on the next render (before the kind-5 delete rumor is
@@ -263,16 +274,16 @@ export function useTransport(
       }
       return fn;
     };
-    const objCache = new Map<string, { tallies: ReactionTally[]; value: MessageReactions }>();
+    const objCache = reactionCacheRef.current;
     return (id: string): MessageReactions => {
       const tallies = talliesById.get(id) ?? EMPTY_TALLIES;
       const hit = objCache.get(id);
-      if (hit && hit.tallies === tallies) return hit.value;
+      if (hit && sameReactionTallies(hit.tallies, tallies)) return hit;
       const value: MessageReactions = { tallies, react: reactFor(id) };
-      objCache.set(id, { tallies, value });
+      objCache.set(id, value);
       return value;
     };
-  }, [talliesById, send, queryClient, channelIdHex, authorById]);
+  }, [talliesById]);
 
   // CORD.md zap tallies from the fold (only VERIFIED zaps ever reach it).
   const zapTalliesById = useMemo(() => {

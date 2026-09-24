@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from "react";
 
-import { toChatMsg } from "@/components/chat/transport";
+import { sameReactionTallies, toChatMsg } from "@/components/chat/transport";
 import { KIND_DM, useDirectMessages } from "@/hooks/useDirectMessages";
 import { useDm17Thread } from "@/hooks/useDm17";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
@@ -69,21 +69,6 @@ export class LegacyFallbackRequired extends Error {
   }
 }
 
-/** Two tally lists that would render identically. */
-function sameTallies(a: readonly ReactionTally[], b: readonly ReactionTally[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  return a.every((t, i) => {
-    const u = b[i];
-    return t.key === u.key
-      && t.url === u.url
-      && t.count === u.count
-      && t.mine === u.mine
-      && t.mineEventId === u.mineEventId
-      && t.pubkeys.length === u.pubkeys.length
-      && t.pubkeys.every((pk, k) => pk === u.pubkeys[k]);
-  });
-}
 
 /**
  * Build a {@link ChatTransport} for a DM thread, so DMs render through the
@@ -420,7 +405,7 @@ export function useDmTransport(
     return (id: string): MessageReactions => {
       const tallies = talliesById.get(id) ?? EMPTY_TALLIES;
       const hit = reactionCache.current.get(id);
-      if (hit && sameTallies(hit.tallies, tallies)) return hit;
+      if (hit && sameReactionTallies(hit.tallies, tallies)) return hit;
       const value: MessageReactions = { tallies, react: reactFor(id) };
       reactionCache.current.set(id, value);
       return value;

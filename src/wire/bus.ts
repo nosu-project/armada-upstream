@@ -21,6 +21,10 @@
  *     invite gift wrap (kind-1059 `#k`=3313) it can't decrypt; useDirectInvites
  *     drains the in-hand wrap, decrypts it (consent-gated) and re-reads
  *   - `c2:<channelIdHex>`    — a Concord channel's rumor store changed
+ *   - `c2cur:<channelIdHex>` — a Concord channel's sync CURSOR changed and its
+ *     rumors did not (a catch-up round that found nothing new); only that
+ *     channel's timeline, which derives its scroll-up affordance from the
+ *     cursor, needs to re-read
  *   - `c2park:<streamPk>`    — a Concord wrap for this stream address was PARKED
  *     (the wire held no key for it); a hook holding that stream's key should
  *     drain the pending store
@@ -42,6 +46,8 @@
  * those would make every tab force-sync the same wrap. On the single-context
  * platforms the channel simply has no other subscriber.
  */
+
+import { perfCount } from "@/lib/perf";
 
 export type WireScope = string;
 
@@ -161,6 +167,9 @@ function flush(): void {
 /** Announce that these conversations' stores changed. Coalesced. */
 export function emitWireScopes(scopes: Iterable<WireScope>): void {
   for (const s of scopes) {
+    // Rings per scope family, for the runtime profile: every ring is a store
+    // re-read in each subscriber.
+    perfCount(`bus ${s.split(":")[0]}`, 0);
     pending.add(s);
     localPending.add(s);
   }

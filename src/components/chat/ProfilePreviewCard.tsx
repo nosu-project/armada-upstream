@@ -1,5 +1,6 @@
 import { AtSign, Check, Copy, Flag, Globe, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
-import { useState } from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
@@ -390,12 +391,37 @@ function ProfilePreviewBody({
  */
 export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps) {
   const [open, setOpen] = useState(false);
+  // The Popover isn't built until the card is first asked for. Every message
+  // row carries two of these (avatar and name), and a Radix popover root is a
+  // popper, an anchor that re-renders to register itself, and presence
+  // tracking — per trigger, for the whole loaded timeline, almost none of
+  // which is ever opened. Until then the trigger is the bare child, which
+  // opens the card on click. Latched: once built, it stays.
+  const [armed, setArmed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const prefetchTheme = usePrefetchProfileTheme();
   // Where a report from this card goes is the surrounding room's business, not
   // the card's; in a DM or on a bare profile there is no room, and it's public.
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
+
+  if (!armed) {
+    return (
+      <Slot
+        aria-haspopup="dialog"
+        aria-expanded={false}
+        onPointerEnter={() => prefetchTheme(pubkey)}
+        onFocus={() => prefetchTheme(pubkey)}
+        onClick={(e: MouseEvent) => {
+          if (e.defaultPrevented) return;
+          setArmed(true);
+          setOpen(true);
+        }}
+      >
+        {children}
+      </Slot>
+    );
+  }
 
   return (
     <>
