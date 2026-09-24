@@ -25,7 +25,10 @@
  *    tree is real work on a tree this size.
  *  - **Samples** every 10s: JS heap (Chromium), DOM node count, running
  *    infinite animations, open sockets and live REQs — the series a leak
- *    shows up in as a slope.
+ *    shows up in as a slope. The heap figure is `performance.memory`, which
+ *    Chromium buckets and caches unless launched with
+ *    `--enable-precise-memory-info`: without the flag a flat line is not
+ *    evidence of no leak. The Memory panel's heap snapshots are the real test.
  *
  * Installed by `main.tsx` through `perfRuntimeInstall.ts`, a side-effect
  * import placed right after the polyfills, so the WebSocket and timer wrappers are in place before any app
@@ -38,6 +41,7 @@
  *   __armadaPerf.runtime(true)    // same, then start a fresh window
  *   __armadaPerf.renders(true)    // attribute commits to components
  *   __armadaPerf.json()           // everything, as one pasteable JSON string
+ *   __armadaPerf.reset()          // start a fresh window without printing
  *
  * On a phone, Settings → Diagnostics copies the same JSON.
  *
@@ -89,7 +93,7 @@ const state = {
 
   commits: 0,
   commitMs: 0,
-  renders: new Map<string, { renders: number; mounts: number; selfMs: number }>(),
+  renders: new Map<string, { renders: number; mounts: number; selfMs: number; why: Map<string, number> }>(),
 
   timeoutCalls: 0,
   rafCalls: 0,
@@ -560,6 +564,7 @@ interface Fiber {
   alternate: Fiber | null;
   actualDuration?: number;
   selfBaseDuration?: number;
+  memoizedProps?: unknown;
 }
 
 const FUNCTION_COMPONENT = 0;
@@ -598,9 +603,29 @@ export function fiberName(f: Pick<Fiber, "tag" | "type">): string | undefined {
  * so it is skipped whole — the walk costs what the commit re-rendered, not the
  * size of the tree.
  */
+/**
+ * Why a component that was already mounted rendered again: the props whose
+ * identity changed since its last commit, or `(state/context)` when none did —
+ * a hook of its own, a context it reads, or an ancestor that isn't memoized.
+ * Names a memo'd row whose parent hands it a fresh callback every render.
+ */
+export function changedProps(prev: unknown, next: unknown): string[] {
+  if (prev === next || !prev || !next || typeof prev !== "object" || typeof next !== "object") {
+    return prev === next ? ["(state/context)"] : ["(props)"];
+  }
+  const a = prev as Record<string, unknown>;
+  const b = next as Record<string, unknown>;
+  const changed: string[] = [];
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (key !== "children" && !Object.is(a[key], b[key])) changed.push(key);
+  }
+  if (changed.length === 0 && !Object.is(a.children, b.children)) changed.push("children");
+  return changed.length > 0 ? changed : ["(state/context)"];
+}
+
 export function walkCommit(
   rootFiber: Fiber | null,
-  record: (name: string, mount: boolean, selfMs: number) => void,
+  record: (name: string, mount: boolean, selfMs: number, why?: string[]) => void,
 ): void {
   const stack: Fiber[] = [];
   if (rootFiber) stack.push(rootFiber);
@@ -610,7 +635,14 @@ export function walkCommit(
     const mount = f.alternate === null;
     if (mount || (f.flags & PERFORMED_WORK) !== 0) {
       const name = fiberName(f);
-      if (name) record(name, mount, typeof f.selfBaseDuration === "number" ? f.selfBaseDuration : 0);
+      if (name) {
+        record(
+          name,
+          mount,
+          typeof f.selfBaseDuration === "number" ? f.selfBaseDuration : 0,
+          mount ? undefined : changedProps(f.alternate!.memoizedProps, f.memoizedProps),
+        );
+      }
     }
     if (f.child && (mount || f.child !== f.alternate!.child)) stack.push(f.child);
   }
@@ -643,15 +675,16 @@ function installReactHook(): void {
       const d = root.current.actualDuration;
       if (typeof d === "number") state.commitMs += d;
       if (renderTracking) {
-        walkCommit(root.current.child, (name, mount, selfMs) => {
+        walkCommit(root.current.child, (name, mount, selfMs, why) => {
           let r = state.renders.get(name);
           if (!r) {
-            r = { renders: 0, mounts: 0, selfMs: 0 };
+            r = { renders: 0, mounts: 0, selfMs: 0, why: new Map() };
             state.renders.set(name, r);
           }
           if (mount) r.mounts += 1;
           else r.renders += 1;
           r.selfMs += selfMs;
+          for (const key of why ?? []) r.why.set(key, (r.why.get(key) ?? 0) + 1);
         });
       }
     } catch {
@@ -764,7 +797,8 @@ export interface RuntimeReport {
     /** Only in a profiling build (`npm run build:profile`). */
     commitMs?: number;
     renderTracking: boolean;
-    components: { name: string; renders: number; mounts: number; selfMs: number }[];
+    /** `why`: the props that changed on a re-render, most frequent first (see {@link changedProps}). */
+    components: { name: string; renders: number; mounts: number; selfMs: number; why: string }[];
   };
   timers: {
     setTimeoutPerSec: number;
@@ -824,7 +858,17 @@ export function runtimeReport(): RuntimeReport {
       ...(state.commitMs > 0 ? { commitMs: Math.round(state.commitMs) } : {}),
       renderTracking,
       components: top(
-        [...state.renders.entries()].map(([name, r]) => ({ name, ...r, selfMs: r1(r.selfMs) })),
+        [...state.renders.entries()].map(([name, r]) => ({
+          name,
+          renders: r.renders,
+          mounts: r.mounts,
+          selfMs: r1(r.selfMs),
+          why: [...r.why.entries()]
+            .sort((x, y) => y[1] - x[1])
+            .slice(0, 4)
+            .map(([k, n]) => `${k}×${n}`)
+            .join(" "),
+        })),
         (c) => (c.selfMs > 0 ? c.selfMs : c.renders + c.mounts),
         60,
       ),
@@ -983,5 +1027,6 @@ export function installRuntimeProfiler(): void {
       return on;
     };
     reader.json = () => JSON.stringify(fullPerfReport(), null, 2);
+    reader.reset = resetRuntimeProfile;
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { callSite, fiberName, filterShape, frameHead, frameKind, socketKey, walkCommit } from "./perfRuntime";
+import { callSite, changedProps, fiberName, filterShape, frameHead, frameKind, socketKey, walkCommit } from "./perfRuntime";
 
 describe("frameHead", () => {
   it("reads the verb and subscription id of a relay frame", () => {
@@ -108,5 +108,23 @@ describe("walkCommit", () => {
     expect(fiberName({ tag: 11, type: { render: function Inner() {} } })).toBe("Inner");
     expect(fiberName({ tag: 15, type: function Memoed() {} })).toBe("Memoed");
     expect(fiberName({ tag: 5, type: "div" })).toBeUndefined();
+  });
+});
+
+describe("changedProps", () => {
+  it("names the props whose identity changed", () => {
+    const onClick = () => {};
+    expect(changedProps({ a: 1, onClick }, { a: 1, onClick: () => {} })).toEqual(["onClick"]);
+  });
+
+  it("blames state or context when no prop changed", () => {
+    const props = { a: 1 };
+    expect(changedProps(props, props)).toEqual(["(state/context)"]);
+    expect(changedProps({ a: 1 }, { a: 1 })).toEqual(["(state/context)"]);
+  });
+
+  it("reports children only when nothing else explains the render", () => {
+    expect(changedProps({ children: [1] }, { children: [1] })).toEqual(["children"]);
+    expect(changedProps({ x: 1, children: [1] }, { x: 2, children: [1] })).toEqual(["x"]);
   });
 });

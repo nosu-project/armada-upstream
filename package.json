@@ -9,6 +9,7 @@
     "gen:icons": "node scripts/gen-icons.mjs",
     "build": "vite build -l error && npm run build:sw-runtime && cp dist/index.html dist/404.html",
     "build:profile": "VITE_PROFILE=1 npm run build",
+    "perf:profile": "node scripts/perf-profile.mjs",
     "build:electron-db": "vite build -l error -c vite.config.electron.ts",
     "build:electron-update": "vite build -l error -c vite.config.electron-update.ts",
     "build:electron": "npm run build:electron-db && npm run build:electron-update",
