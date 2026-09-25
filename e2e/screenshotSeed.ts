@@ -1,10 +1,9 @@
 // Browser-side seed harness for the Flathub/store screenshots.
 //
 // It exists to boot the REAL routed app into a populated DM view with no relay
-// and no network — the one view whose data can be faithfully seeded locally,
-// because a DM thread is just decrypted NIP-17 rumors in ArmadaDB plus kind-0
-// profiles in the `main` tenant (the Concord channel view would need the whole
-// CORD-01/02/05 derivation stack, and the call view a live LiveKit room).
+// and no network: a DM thread is just decrypted NIP-17 rumors in ArmadaDB plus
+// kind-0 profiles in the `main` tenant. (Communities are `concordSeed.ts`; the
+// landing shots use this harness for their cast's profiles alone.)
 //
 // The spec loads /e2e/screenshotSeed.html (dev-server only, never in a build),
 // calls `window.__armadaSeed(payload)` to write the app's OWN ArmadaDB through

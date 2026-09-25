@@ -109,11 +109,19 @@ export function AsciiSea({
         // with it so the sea recedes into the background at the top of the
         // viewport, where the crest and wordmark sit.
         const near = y / Math.max(rowCount - 1, 1);
+        // Every row holds its line's height even while empty. `paint` skips
+        // the rows above the waterline, and an empty div has no height, so
+        // without this the painted band collapsed up to the top of the grid
+        // — under the mask — and the teaser surf only appeared once scrolling
+        // had painted enough rows to push it back down. `1em` is the line box,
+        // since the host sets `leading-none`.
         const swell = document.createElement("div");
+        swell.style.height = "1em";
         swell.style.color = `hsl(var(--accent2) / ${(0.07 + 0.3 * near).toFixed(3)})`;
         swellLayer.appendChild(swell);
         swellRows.push(swell);
         const crest = document.createElement("div");
+        crest.style.height = "1em";
         crest.style.color = `hsl(var(--primary) / ${(0.05 + 0.4 * near).toFixed(3)})`;
         crestLayer.appendChild(crest);
         crestRows.push(crest);
