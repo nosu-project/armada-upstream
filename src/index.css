@@ -467,6 +467,10 @@
     position: absolute;
     inset: 1px;
     z-index: -1;
+    /* The frame's radius less the 1px edge, so the fill follows the two
+       rounded corners too. Square, it painted straight over the edge along
+       each curve and the hairline vanished there. */
+    border-radius: calc(0.55rem - 1px);
     clip-path: polygon(
       var(--cut) 0,
       100% 0,

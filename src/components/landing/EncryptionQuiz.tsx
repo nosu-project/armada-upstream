@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
+
+import { ConcordGrid, ConcordMark, ConcordReveal } from "./ConcordReveal";
 
 /**
  * The landing page's closing beat: a quiz you cannot read.
@@ -18,7 +20,10 @@ const TITLE = "What are you talking about?";
  * the claim and its consequence get a line each, rather than whatever split the
  * container width happens to produce.
  */
-const PUNCHLINE = ["Messages on Armada are encrypted.", "Not even we know what you're talking about."];
+const PUNCHLINE = [
+  "Messages on Armada are encrypted.",
+  "Not even we know what you're talking about.",
+];
 
 /** Rows and columns of hex in each answer button. */
 const BLOCK_ROWS = 5;
@@ -75,7 +80,15 @@ function scatter(i: number) {
  * span per character costs nothing while it sits still, but there is no reason
  * to pay for hundreds of them on every churn tick.
  */
-function DustText({ text, dust, seed = 0 }: { text: string; dust: boolean; seed?: number }) {
+function DustText({
+  text,
+  dust,
+  seed = 0,
+}: {
+  text: string;
+  dust: boolean;
+  seed?: number;
+}) {
   if (!dust) return <>{text}</>;
   return (
     <>
@@ -85,7 +98,13 @@ function DustText({ text, dust, seed = 0 }: { text: string; dust: boolean; seed?
           <span
             key={i}
             className="inline-block animate-[armada-dust_900ms_ease-in_forwards] motion-reduce:animate-none"
-            style={{ "--dust-dx": dx, "--dust-dy": dy, "--dust-rot": rot } as React.CSSProperties}
+            style={
+              {
+                "--dust-dx": dx,
+                "--dust-dy": dy,
+                "--dust-rot": rot,
+              } as React.CSSProperties
+            }
           >
             {ch === " " ? "\u00a0" : ch}
           </span>
@@ -96,16 +115,23 @@ function DustText({ text, dust, seed = 0 }: { text: string; dust: boolean; seed?
 }
 
 /**
- * The heading's text for the current frame: hex until `active`, then noise, then
- * a left-to-right decode. Reduced motion skips straight to the answer.
+ * Decode the heading in place: noise until `active`, then a left-to-right
+ * decode. Reduced motion skips straight to the answer.
+ *
+ * Written straight into `ref`'s text rather than through state: at a 45ms tick
+ * a state-driven decode re-rendered the quiz ~50 times for one entrance. React
+ * renders the element's initial noise once and never touches its text again,
+ * so the two never disagree about what is in the node.
  */
-function useDecodingTitle(active: boolean): string {
-  const [text, setText] = useState(() => hex(TITLE.length));
-
+function useDecodingTitle(
+  ref: React.RefObject<HTMLElement | null>,
+  active: boolean,
+) {
   useEffect(() => {
-    if (!active) return;
+    const el = ref.current;
+    if (!active || !el) return;
     if (prefersReducedMotion()) {
-      setText(TITLE);
+      el.textContent = TITLE;
       return;
     }
     const start = performance.now();
@@ -116,21 +142,19 @@ function useDecodingTitle(active: boolean): string {
           ? 0
           : Math.round(((elapsed - GARBLE_MS) / DECODE_MS) * TITLE.length);
       if (decoded >= TITLE.length) {
-        setText(TITLE);
+        el.textContent = TITLE;
         clearInterval(id);
         return;
       }
-      setText(TITLE.slice(0, decoded) + hex(TITLE.length - decoded));
+      el.textContent = TITLE.slice(0, decoded) + hex(TITLE.length - decoded);
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [active]);
-
-  return text;
+  }, [ref, active]);
 }
 
 /**
  * Whether `ref`'s element is in the viewport of a visible page. The ciphertext
- * churn re-renders both answer blocks ~9 times a second, which is a steady
+ * churn rewrites both answer blocks ~9 times a second, which is a steady
  * main-thread cost for decoration nobody can see once the quiz has scrolled
  * away or the tab is in the background — so it only runs while this is true.
  */
@@ -141,7 +165,9 @@ function useOnScreen(ref: React.RefObject<HTMLElement | null>): boolean {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const observer = new IntersectionObserver(([entry]) => setIntersecting(entry.isIntersecting));
+    const observer = new IntersectionObserver(([entry]) =>
+      setIntersecting(entry.isIntersecting),
+    );
     observer.observe(el);
     return () => observer.disconnect();
   }, [ref]);
@@ -155,25 +181,29 @@ function useOnScreen(ref: React.RefObject<HTMLElement | null>): boolean {
   return intersecting && pageVisible;
 }
 
-/** A block of hex that reshuffles on an interval while `live`. */
-function useHexBlock(live: boolean): string[] {
-  const [rows, setRows] = useState(() => Array.from({ length: BLOCK_ROWS }, () => hex(BLOCK_COLS)));
+/** An answer card's pose; `--r` is the turn, set per card and eased on hover. */
+const answerPose = (z: number) => `perspective(1100px) rotateY(var(--r)) translateZ(${-z}px)`;
+const ANSWER_FACE = { transform: answerPose(0) } as React.CSSProperties;
+/** The body: flat layers stepping back behind the face, lighter toward the front. */
+const ANSWER_BODY = Array.from({ length: 10 }, (_, j) => {
+  const t = j / 9;
+  return { transform: answerPose(22 * (1 - t) + 1), background: `hsl(262 10% ${5 + t * 9}%)` } as React.CSSProperties;
+});
+const ANSWER_SCANLINES = {
+  backgroundImage: "repeating-linear-gradient(to bottom, rgba(0,0,0,0.32) 0 1px, transparent 1px 3px)",
+} as React.CSSProperties;
 
-  useEffect(() => {
-    if (!live || prefersReducedMotion()) return;
-    const id = setInterval(
-      () => setRows(Array.from({ length: BLOCK_ROWS }, () => hex(BLOCK_COLS))),
-      CHURN_MS,
-    );
-    return () => clearInterval(id);
-  }, [live]);
-
-  return rows;
-}
-
-/** One unreadable answer. */
-function AnswerButton({
+/**
+ * One unreadable answer. The hex reshuffles by writing each row's text node
+ * directly while `live`, not through state, so the churn costs no renders at
+ * all. React only renders the block again when it turns to dust, and then
+ * swaps the rows for keyed dust spans rather than editing text it no longer
+ * owns. The dust is the mount-time block: it is random noise either way, and
+ * at a 110ms churn nobody can tell which random block it was.
+ */
+const AnswerButton = memo(function AnswerButton({
   label,
+  letter,
   seed,
   live,
   dust,
@@ -181,42 +211,140 @@ function AnswerButton({
 }: {
   /** What a screen reader gets, since the face of the button is noise. */
   label: string;
+  /** The answer's tag, the one part of it that isn't encrypted. */
+  letter: string;
   seed: number;
   live: boolean;
   dust: boolean;
   onPick: () => void;
 }) {
-  const rows = useHexBlock(live);
+  const [rows] = useState(() =>
+    Array.from({ length: BLOCK_ROWS }, () => hex(BLOCK_COLS)),
+  );
+  const rowEls = useRef<(HTMLSpanElement | null)[]>([]);
+
+  useEffect(() => {
+    if (!live || prefersReducedMotion()) return;
+    const id = setInterval(() => {
+      for (const el of rowEls.current) if (el) el.textContent = hex(BLOCK_COLS);
+    }, CHURN_MS);
+    return () => clearInterval(id);
+  }, [live]);
+
+  // Posed like the pitch's screens: two faces of one shape angled away from
+  // each other, each a flat panel under its own perspective with a stack of
+  // layers behind it for a body. A flat panel rather than preserve-3d keeps
+  // the text sharp, and a real border rather than the chamfer's clip-path
+  // keeps the turned edge anti-aliased. Hover swings the card toward you.
+  const outward = letter === "a" ? -1 : 1;
+  // Each card floats on its own clock, so the pair never bobs in step.
+  const pose = {
+    "--ry": `${outward * 18}deg`,
+    "--ry-hover": `${outward * 6}deg`,
+    animationDelay: outward < 0 ? "0s" : "-3.2s",
+  } as React.CSSProperties;
 
   return (
-    <button
-      type="button"
-      onClick={onPick}
-      disabled={dust}
-      aria-label={label}
+    <div
       className={cn(
-        "clip-corner-lg w-full border border-border/60 bg-background/40 px-4 py-6 font-mono text-[0.65rem] leading-relaxed text-muted-foreground/60 transition-colors hover:border-border hover:bg-background/70 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default sm:text-xs",
-        // The box goes first, and it goes fast — but as border and background
-        // rather than opacity, which would multiply down onto the characters
-        // and fade the dust out before it had blown anywhere.
-        dust && "border-transparent bg-transparent duration-300 ease-out hover:border-transparent hover:bg-transparent",
+        "group/ans relative animate-[armada-ans-float_6.5s_ease-in-out_infinite] [--r:var(--ry)] hover:[--r:var(--ry-hover)] has-[:focus-visible]:[--r:var(--ry-hover)] motion-reduce:animate-none",
+        (!live || dust) && "[animation-play-state:paused]",
       )}
+      style={pose}
     >
-      {rows.map((row, i) => (
-        <span key={i} className="block break-all">
-          <DustText text={row} dust={dust} seed={seed + i * BLOCK_COLS} />
-        </span>
+      {ANSWER_BODY.map((shade, j) => (
+        <div
+          key={j}
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute inset-0 rounded-[18px] transition-[transform,opacity] duration-700 ease-out",
+            dust && "opacity-0 duration-300",
+          )}
+          style={shade}
+        />
       ))}
-    </button>
+      <button
+        type="button"
+        onClick={onPick}
+        disabled={dust}
+        aria-label={label}
+        style={ANSWER_FACE}
+        className={cn(
+          "relative block w-full rounded-[18px] bg-[#0c0a10] p-2 text-left font-mono text-[0.62rem] leading-relaxed text-muted-foreground/80 ring-1 ring-white/[0.07] transition-[transform,color,box-shadow,background-color] duration-700 ease-out hover:text-foreground/90 hover:ring-[hsl(var(--primary)/0.5)] focus-visible:outline-none focus-visible:ring-ring disabled:cursor-default sm:p-3 sm:text-xs",
+          // The set goes first, and fast, so the dust has nothing behind it.
+          dust && "bg-transparent ring-transparent duration-300 hover:ring-transparent",
+        )}
+      >
+        <span
+          className={cn(
+            "relative block overflow-hidden rounded-[10px] bg-black px-3 pb-6 pt-11 transition-colors duration-300 sm:px-5",
+            dust && "bg-transparent",
+          )}
+        >
+          {!dust && <span aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-60" style={ANSWER_SCANLINES} />}
+          {/* The one plaintext on the card: which answer it is. */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute left-3 top-3 grid size-6 place-items-center rounded-sm border border-[hsl(var(--accent2)/0.5)] text-xs font-bold uppercase text-[hsl(var(--accent2,180_90%_55%))] transition-opacity duration-300 sm:left-5 sm:text-sm",
+              dust && "opacity-0",
+            )}
+          >
+            {letter}
+          </span>
+          <span
+            aria-hidden="true"
+            className={cn(
+              "absolute right-3 top-4 text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground/50 transition-opacity duration-300 sm:right-5",
+              dust && "opacity-0",
+            )}
+          >
+            sealed
+          </span>
+          {/* A read head passing over the ciphertext and getting nothing. */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 top-0 h-10 animate-[armada-read-head_4.5s_ease-in-out_infinite] bg-gradient-to-b from-transparent via-[hsl(var(--accent2)/0.12)] to-transparent motion-reduce:hidden",
+              !live && "[animation-play-state:paused]",
+              dust && "opacity-0",
+            )}
+            style={{ animationDelay: `${-seed / 200}s` }}
+          />
+        {rows.map((row, i) =>
+          dust ? (
+            <span key={`dust-${i}`} className="block break-all">
+              <DustText text={row} dust seed={seed + i * BLOCK_COLS} />
+            </span>
+          ) : (
+            <span
+              key={`live-${i}`}
+              ref={(el) => {
+                rowEls.current[i] = el;
+              }}
+              className="block break-all"
+            >
+              {row}
+            </span>
+          ),
+        )}
+        </span>
+      </button>
+    </div>
   );
-}
+});
 
 export function EncryptionQuiz() {
   const sectionRef = useRef<HTMLElement>(null);
   const [revealed, setRevealed] = useState(false);
   const [picked, setPicked] = useState(false);
-  const title = useDecodingTitle(revealed);
+  const titleRef = useRef<HTMLSpanElement>(null);
+  // Initial noise only; the decode writes the rest straight into the node.
+  const [titleNoise] = useState(() => hex(TITLE.length));
+  useDecodingTitle(titleRef, revealed && !picked);
   const onScreen = useOnScreen(sectionRef);
+  // Stable, so the memoized answers don't re-render with their parent.
+  const pick = useCallback(() => setPicked(true), []);
 
   // The decode is the section's entrance, so it waits for the section to be
   // looked at rather than for the page to mount — and runs once, not on every
@@ -240,43 +368,85 @@ export function EncryptionQuiz() {
     <>
       <section
         ref={sectionRef}
-        className="mx-auto grid min-h-[100svh] max-w-3xl place-items-center px-6 py-16"
+        className="relative grid min-h-[100svh] w-full place-items-center overflow-hidden px-6 py-16"
       >
         {/* Both children share one grid cell: the punchline sits behind the
             quiz all along, so uncovering it costs no layout shift. */}
-        <p
-          className={`[grid-area:1/1] max-w-xl text-pretty text-center font-mono text-base font-bold leading-relaxed tracking-tight text-foreground transition-opacity duration-1000 sm:text-xl ${
-            picked ? "opacity-100 delay-500" : "opacity-0"
-          }`}
+        <ConcordGrid shown={picked} />
+
+        {/* The claim, then the protocol that makes it true, each arriving a
+            beat after the last. `inert` until the pick, so the link can't be
+            tabbed to through the quiz. */}
+        <div
+          inert={!picked}
+          className="[grid-area:1/1] relative flex max-w-4xl flex-col items-center gap-8 text-center font-mono"
         >
-          {PUNCHLINE[0]}
-          <br />
-          {PUNCHLINE[1]}
-        </p>
+          <ConcordMark shown={picked} />
+          {/* The claim in the foreground colour, its consequence in the
+              primary accent: the second line is the one the quiz was for. */}
+          <p
+            className={cn(
+              "text-balance text-xl font-bold leading-snug tracking-tight transition-opacity duration-1000 sm:text-2xl lg:text-3xl",
+              picked ? "opacity-100 delay-500" : "opacity-0",
+            )}
+          >
+            <span className="text-foreground">{PUNCHLINE[0]}</span>
+            <br />
+            <span className="text-[hsl(var(--primary))]">{PUNCHLINE[1]}</span>
+          </p>
+
+          <ConcordReveal shown={picked} />
+        </div>
 
         <div
-          className={`[grid-area:1/1] flex w-full flex-col items-center gap-8 ${picked ? "pointer-events-none" : ""}`}
+          className={`[grid-area:1/1] flex w-full max-w-3xl flex-col items-center gap-8 ${picked ? "pointer-events-none" : ""}`}
         >
           {/* `nowrap` so the noise and the decoded question occupy exactly the
               same line — the heading resolves in place instead of reflowing. */}
-          <h2 className="whitespace-nowrap font-mono text-lg font-bold tracking-tight text-foreground sm:text-3xl">
-            <DustText text={title} dust={picked} />
+          <h2 className="whitespace-nowrap font-mono text-xl font-bold tracking-tight text-foreground sm:text-4xl lg:text-5xl">
+            {/* Keyed swap rather than a text change: the live span's text is
+                written outside React, so React must remove the element, not
+                edit a text node it no longer tracks. A pick mid-decode blows
+                away the answer, which is all but decoded by then anyway. */}
+            {picked ? (
+              <span key="dust">
+                <DustText text={TITLE} dust />
+              </span>
+            ) : (
+              <span key="live" ref={titleRef}>
+                {titleNoise}
+              </span>
+            )}
           </h2>
 
-          <div className="grid w-full grid-cols-2 gap-3 sm:gap-5">
+          {/* The one line of the quiz you can read, so it reads as a question
+              with answers rather than two boxes of noise. Mono caption register,
+              the same as the landing's other labels. */}
+          <p
+            className={cn(
+              "-mt-4 font-mono text-xs tracking-wide text-muted-foreground/70 transition-opacity duration-300",
+              picked && "opacity-0",
+            )}
+          >
+            // pick one
+          </p>
+
+          <div className="grid w-full grid-cols-2 gap-4 sm:gap-10">
             <AnswerButton
               label="First answer (encrypted)"
+              letter="a"
               seed={100}
               live={!picked && onScreen}
               dust={picked}
-              onPick={() => setPicked(true)}
+              onPick={pick}
             />
             <AnswerButton
               label="Second answer (encrypted)"
+              letter="b"
               seed={500}
               live={!picked && onScreen}
               dust={picked}
-              onPick={() => setPicked(true)}
+              onPick={pick}
             />
           </div>
         </div>
@@ -293,6 +463,14 @@ function EncryptionQuizKeyframes() {
     <style>{`
       /* A character caught by the gust: carried up and away, spinning out of
          focus as it goes. Transform, filter and opacity only — no layout. */
+      @keyframes armada-ans-float {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-10px); }
+      }
+      @keyframes armada-read-head {
+        0%   { transform: translateY(-100%); }
+        60%, 100% { transform: translateY(1400%); }
+      }
       @keyframes armada-dust {
         from {
           opacity: 1;

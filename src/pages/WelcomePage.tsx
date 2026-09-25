@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { LandingPage } from "@/components/landing/LandingPage";
 import { lazyWithReload } from "@/lib/chunkReload";
@@ -54,10 +54,11 @@ export function WelcomePage() {
   // to show first.
   const [wizardActive, setWizardActive] = useState(() => !!peekPendingJoin());
 
-  const openLogin = () => {
+  // Stable, so the memoized landing doesn't re-render when the dialog opens.
+  const openLogin = useCallback(() => {
     setLoginMounted(true);
     setJoinOpen(true);
-  };
+  }, []);
 
   // Warm both branches off the critical path, once the landing has painted.
   // Same bargain as `useWarmRouteChunks`: small first frame AND an instant tap.

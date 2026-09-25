@@ -1,5 +1,5 @@
-import { Download, HardDriveDownload } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { HardDriveDownload } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
@@ -13,6 +13,8 @@ import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
 import { EncryptionQuiz } from "./EncryptionQuiz";
+import { PitchToy } from "./PitchToy";
+import { ProductShots } from "./ProductShots";
 import { SailingSea } from "./SailingSea";
 
 /**
@@ -29,12 +31,21 @@ import { SailingSea } from "./SailingSea";
  */
 const LANDING_RELAYS: string[] = [3, 1, 4, 2].map((i) => RELAY_DICTIONARY[i]);
 
+/** The closer's devices hold one community rather than cycling like the pitch's. */
+const CLOSER_SHOT = ["raid-crew"];
+const CLOSER_LABEL = "a gaming community's #general, with reactions, an inline reply and a thread";
+
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-export function LandingPage({
+/**
+ * Memoized: its parent re-renders whenever the login dialog opens or closes,
+ * and nothing on this page depends on that. Without it every Join tap
+ * re-rendered the whole deck, quiz and relay lights included.
+ */
+export const LandingPage = memo(function LandingPage({
   onJoin,
   scrollRef,
 }: {
@@ -190,95 +201,44 @@ export function LandingPage({
           </Collapsible>
         </section>
 
+        {/* ── The pitch ──────────────────────────────────────────────────── */}
+        <section
+          className="flex min-h-[100svh] w-full flex-col items-center justify-center overflow-x-clip px-6 py-16"
+        >
+          <PitchToy />
+        </section>
+
         {/* ── The quiz ─────────────────────────────────────────────────── */}
         <EncryptionQuiz />
 
         {/* ── The closer ───────────────────────────────────────────────────
-            What else it does, where it runs, and the way in — one screen
-            rather than three. Split up they read as three more things to
-            scroll past before anything is asked of the reader; together the
-            ask arrives with its reasons still on screen.
+            What it looks like, what it has, and the way in, in that order and
+            in one section: the ask arrives with its reasons still on screen.
+            One line of copy, the devices, the points, then Join. The stores
+            and the outbound links come after the ask, quieter than it, so
+            nothing on the screen competes with the one full-weight button.
 
-            Extra space below the CTA lets the deck dissolve into the playable
-            sea without putting text over its horizon. */}
-        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 pb-48 pt-16 text-center safe-area-bottom">
-          <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
+            Extra space below lets the deck dissolve into the playable sea
+            without putting text over its horizon. */}
+        <section className="mx-auto flex min-h-[100svh] max-w-6xl flex-col items-center justify-center px-6 pb-56 pt-16 text-center">
+          <h2 className="text-balance font-mono text-2xl font-bold tracking-tight text-foreground sm:text-4xl">
             Everything, on every deck
           </h2>
-          {/* The platform list is prose rather than the mono strip it used to
-              be: it has to share the screen with the store buttons now, and a
-              sentence carries the same six names in one block instead of two. */}
-          <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-base">
-            Text, voice and video — on Linux, Windows, macOS, Android, iPhone
-            and right here in your browser. Your key is your account, so every
-            one of them is the same place.
+          <p className="mt-3 text-pretty text-sm text-muted-foreground sm:text-base">
+            Desktop, phone or browser. Your key is your account on all of them.
           </p>
 
-          {/* The same mono caption strip the relay lights and "Host your own"
-              use. Kept above the buttons rather than below the Join: a strip
-              under the page's last CTA would be competing with it, and would
-              crowd the transition into the sea. */}
-          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs tracking-wide text-muted-foreground/70">
-            <a
-              href="https://soapbox.pub/armada"
-              target="_blank"
-              rel="noreferrer"
-              className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
-            >
-              All the features
-            </a>
-            <a
-              href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada/issues"
-              target="_blank"
-              rel="noreferrer"
-              className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
-            >
-              Request a feature
-            </a>
-            <a
-              href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada"
-              target="_blank"
-              rel="noreferrer"
-              className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
-            >
-              Hack it
-            </a>
+          <div className="mt-10 w-full">
+            <ProductShots slugs={CLOSER_SHOT} index={0} label={CLOSER_LABEL} />
           </div>
 
-          {/* Translucent rather than solid, like the cards on /downloads, so
-              the swell stays faintly visible under them and the solid Join
-              button below keeps the only full-weight fill on the screen. The
-              stores are Android-only, so the third button is what everyone
-              else presses — it is a peer, not a footnote. */}
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            {ANDROID_STORES.map((store) => (
-              <a
-                key={store.url}
-                href={store.url}
-                target="_blank"
-                rel="noreferrer"
-                className="clip-hairline-lg inline-flex h-11 touch:h-12 items-center gap-2 px-5 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                {/* An <img> of the store's own mark: it is the thing being
-                    scanned for, and neither logo is ours to redraw. */}
-                <img src={store.icon} alt="" className="size-5 shrink-0" />
-                {store.label}
-              </a>
-            ))}
-            <Link
-              to="/downloads"
-              className="clip-hairline-lg inline-flex h-11 touch:h-12 items-center gap-2 px-5 text-sm font-medium text-foreground/90 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <Download className="size-4 shrink-0" />
-              All downloads
-            </Link>
-          </div>
+          <FeaturePoints />
 
           {/* The sign-off returns to the hero's prompt: same cyan `$`, same
               magenta line, same blinking caret as {@link BrandMark}, so the
               deck returns to the terminal it opened on. `armada-caret` comes from
               the crest's keyframes, already mounted below. */}
-          <div className="mt-4 flex w-full max-w-sm flex-col items-center gap-5">
+          <div className="mt-16 flex w-full max-w-sm flex-col items-center gap-5">
             <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
               <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
               sail the seas
@@ -294,6 +254,65 @@ export function LandingPage({
               Join
             </Button>
           </div>
+
+          {/* The Android stores, as one quiet row under the ask: a visitor
+              scans for their store's mark and needs no frame to find it. */}
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm text-muted-foreground">
+            {ANDROID_STORES.map((store) => (
+              <a
+                key={store.url}
+                href={store.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-10 items-center gap-2 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring touch:h-11"
+              >
+                {/* An <img> of the store's own mark: it is the thing being
+                    scanned for, and neither logo is ours to redraw. */}
+                <img src={store.icon} alt="" className="size-4 shrink-0" />
+                {store.label}
+              </a>
+            ))}
+          </div>
+
+          {/* The stores above are Android's; this says where else it runs,
+              since a visitor on a desktop otherwise has no idea there is an
+              app for them. The prompt echoes the sign-off above. */}
+          <p className="mt-2 text-balance font-mono text-xs tracking-wide text-muted-foreground sm:text-sm">
+            <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
+            also on macOS, Linux &amp; Windows{" "}
+            <span className="whitespace-nowrap">
+            <span aria-hidden="true" className="text-muted-foreground/50">
+              ·
+            </span>{" "}
+            <Link
+              to="/downloads"
+              className="text-foreground/90 underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
+            >
+              all downloads
+            </Link>
+            </span>
+          </p>
+
+          {/* Everything outbound, in the caption register the relay strip
+              uses: last, and smallest. */}
+          <div className="mt-6 flex items-center justify-center gap-6 font-mono text-xs tracking-wide text-muted-foreground/60">
+            <a
+              href="https://soapbox.pub/armada"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground"
+            >
+              more about armada
+            </a>
+            <a
+              href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground"
+            >
+              source code
+            </a>
+          </div>
         </section>
 
         <SailingSea />
@@ -303,7 +322,7 @@ export function LandingPage({
       <LandingKeyframes />
     </>
   );
-}
+});
 
 /**
  * One default relay with a liveness light: green when a HEAD to its NIP-11
@@ -370,6 +389,30 @@ function RelayLight({ url, index }: { url: string; index: number }) {
         {alive === undefined ? "(checking)" : alive ? "(online)" : "(offline)"}
       </span>
     </li>
+  );
+}
+
+/**
+ * What Armada has, at a glance: four points, one row, in the caption register.
+ * The devices above already show the chat; these are the things a screenshot
+ * can't, with games first because nothing else in the category has them.
+ */
+const FEATURES = ["Multiplayer games & mini apps", "Voice & video calls", "Discord import", "No phone or email"];
+
+/**
+ * The points, each behind a small gilt diamond (a rotated square rather than a
+ * glyph, so no font can render it as tofu).
+ */
+function FeaturePoints() {
+  return (
+    <ul className="mt-6 flex flex-wrap items-center justify-center gap-x-8 gap-y-2 font-mono text-xs tracking-wide text-muted-foreground sm:text-sm">
+      {FEATURES.map((feature) => (
+        <li key={feature} className="flex items-center gap-2.5">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rotate-45 bg-amber-300/90" />
+          {feature}
+        </li>
+      ))}
+    </ul>
   );
 }
 

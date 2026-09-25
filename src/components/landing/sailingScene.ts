@@ -160,12 +160,13 @@ function disposeObjects(object: THREE.Object3D) {
   materials.forEach((surface) => surface.dispose());
 }
 
-export function mountSailingScene(host: HTMLDivElement): () => void {
+/** Mounts the scene into `host` and returns its teardown, or null when WebGL can't start. */
+export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
   let renderer: THREE.WebGLRenderer;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: "low-power" });
   } catch {
-    return () => {};
+    return null;
   }
   // A deliberately restrained render resolution gives distant silhouettes and
   // facets their console-era character, without an expensive postprocess pass.
@@ -176,7 +177,7 @@ export function mountSailingScene(host: HTMLDivElement): () => void {
   canvas.tabIndex = 0;
   canvas.setAttribute("role", "application");
   canvas.setAttribute("aria-label", "Sail the Armada ship");
-  canvas.style.cssText = "display:block;width:100%;height:100%;touch-action:pan-y;outline:none;mask-image:linear-gradient(to bottom,transparent,black 18%,black 94%,transparent);";
+  canvas.style.cssText = "display:block;width:100%;height:100%;touch-action:pan-y;outline:none;mask-image:linear-gradient(to bottom,transparent,transparent 6%,black 30%,black 94%,transparent);";
   host.appendChild(canvas);
 
   const scene = new THREE.Scene();
