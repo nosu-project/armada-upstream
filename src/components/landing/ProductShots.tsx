@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 
+import { FallbackImage } from "@/components/ui/FallbackImage";
+
+import { captureMirrors, captureUrl } from "./captures";
+
 /**
  * The app itself, under the landing's pitch: a display and a phone floating in
  * the sea's space, showing whichever community the pitch has dealt. Every
@@ -127,9 +131,10 @@ function Screen({
         const offset = (i - index + n) % n;
         if (offset !== 0 && offset !== 1 && offset !== n - 1) return null;
         return (
-          <img
+          <FallbackImage
             key={slug}
-            src={`/landing/community-${slug}-${size}.webp`}
+            src={captureUrl(slug, size)}
+            fallbacks={captureMirrors(slug, size)}
             loading="lazy"
             decoding="async"
             alt={offset === 0 ? alt : ""}
@@ -149,7 +154,7 @@ export function ProductShots({
   index,
   label,
 }: {
-  /** Capture stems in `public/landing/`, `community-<slug>-<size>.webp`. */
+  /** Capture slugs, as keyed in `captures.ts`. */
   slugs: readonly string[];
   /** Which capture is on screen. */
   index: number;

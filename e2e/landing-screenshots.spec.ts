@@ -21,11 +21,13 @@ import type { ScriptedCommunity, ScriptedMessage } from "./concordSeed";
 // ArmadaDB through the production writers; the communities name an unroutable
 // relay and nothing is ever published.
 //
-// Output is WebP (via ImageMagick's `magick`), since these ship in the static
-// build and a PNG of the same frame is several times the size.
+// Output is WebP (via ImageMagick's `magick`), since a PNG of the same frame is
+// several times the size. The landing loads them from Blossom, not the static
+// build: upload the files written to `test-results/landing/` to the app's
+// servers and replace the hashes in `src/components/landing/captures.ts`.
 
 const dir = dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = resolve(dir, "../public/landing");
+const OUT_DIR = resolve(dir, "../test-results/landing");
 
 /** Screenshot, then re-encode as WebP beside it and drop the PNG. */
 async function shoot(page: Page, name: string) {

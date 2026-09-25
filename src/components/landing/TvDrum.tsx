@@ -1,6 +1,9 @@
 import { memo, useEffect, useRef, useState } from "react";
 
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import { cn } from "@/lib/utils";
+
+import { captureMirrors, captureUrl, useCaptureSize, type CaptureSize } from "./captures";
 
 /**
  * The pitch's screens: the faces of a slowly turning prism, one CRT per face,
@@ -104,23 +107,21 @@ function powerOn(screen: Element | null) {
 }
 
 /**
- * The capture, as `<picture>` so a phone gets the phone-sized one. Memoized:
- * each face draws it four times (picture, two colour guns, the tear), and the
- * prism re-renders every time a face comes round.
+ * The capture at `size`, walking its Blossom mirrors on error. Memoized: each
+ * face draws it four times (picture, two colour guns, the tear), and the prism
+ * re-renders every time a face comes round.
  */
-const Capture = memo(function Capture({ slug, alt }: { slug: string; alt: string }) {
+const Capture = memo(function Capture({ slug, size, alt }: { slug: string; size: CaptureSize; alt: string }) {
   return (
-    <picture>
-      <source media="(max-width: 639px)" srcSet={`/landing/community-${slug}-mobile.webp`} />
-      <img
-        src={`/landing/community-${slug}-desktop.webp`}
-        loading="lazy"
-        decoding="async"
-        draggable={false}
-        alt={alt}
-        className="block size-full"
-      />
-    </picture>
+    <FallbackImage
+      src={captureUrl(slug, size)}
+      fallbacks={captureMirrors(slug, size)}
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      alt={alt}
+      className="block size-full"
+    />
   );
 });
 
@@ -159,6 +160,7 @@ export const TvDrum = memo(function TvDrum({
 
   const n = channels.length;
   const [current, setCurrent] = useState(0);
+  const size = useCaptureSize();
 
   useEffect(() => {
     const root = rootRef.current;
@@ -384,25 +386,25 @@ export const TvDrum = memo(function TvDrum({
                 )}
               >
                 <div data-picture="" className="absolute inset-0 origin-center">
-                  <Capture slug={channel.slug} alt={front ? `Armada: ${channel.label}` : ""} />
+                  <Capture slug={channel.slug} size={size} alt={front ? `Armada: ${channel.label}` : ""} />
                 </div>
 
                 {/* The colour guns, split apart while the tube warms up. */}
                 <div data-gun="red" aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-0 mix-blend-screen">
                   <div className="absolute inset-0 isolate">
-                    <Capture slug={channel.slug} alt="" />
+                    <Capture slug={channel.slug} size={size} alt="" />
                     <div className="absolute inset-0 bg-[#ff2bd6] mix-blend-multiply" />
                   </div>
                 </div>
                 <div data-gun="cyan" aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-0 mix-blend-screen">
                   <div className="absolute inset-0 isolate">
-                    <Capture slug={channel.slug} alt="" />
+                    <Capture slug={channel.slug} size={size} alt="" />
                     <div className="absolute inset-0 bg-[#2bf5ff] mix-blend-multiply" />
                   </div>
                 </div>
                 {/* A scan band torn loose and shoved sideways. */}
                 <div data-tear="" aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-0">
-                  <Capture slug={channel.slug} alt="" />
+                  <Capture slug={channel.slug} size={size} alt="" />
                 </div>
 
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-70" style={SCANLINES} />
