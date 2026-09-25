@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.61.2] - 2026-09-25
+
+Links you share now expand into rich preview cards with the full image, post
+text, counts and a tap-to-zoom view, and unresolved embeds offer ways to open,
+copy or retry them. The channel list and server rail fling when you flick them,
+conversations reopen faster on return, and the landing page has been redesigned
+with a rotating showcase of the real app.
+
+### Added
+- Links expand into rich preview cards showing the uncropped image, post text, reaction counts, favicons and a tap-to-zoom lightbox
+
+### Changed
+- Redesigned landing page with a slowly turning showcase of real app screenshots, an interactive quiz, and desktop and phone captures
+- The channel list and server rail now fling when you flick them, and a touch catches the motion
+- Conversations reopen faster when you revisit them
+
+### Fixed
+- Embed and mention lookups now search deeper, and an unresolved embed offers open-in-Ditto, copy-id and retry actions
+- Notifications no longer keep watching Concord communities you have left
+- Decrypted content is now cleared from memory when you log out
+
 ## [0.61.1] - 2026-09-24
 
 A performance release: chats scroll more smoothly because messages no longer
