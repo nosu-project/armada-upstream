@@ -17,12 +17,20 @@ jobs:
     if: github.repository == 'nosu-project/armada-upstream'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Install Nostr Git remote helper
-        run: cargo install ngit --version 2.6.3 --locked
+        run: |
+          archive="$RUNNER_TEMP/ngit.tar.gz"
+          bin_dir="$RUNNER_TEMP/ngit-bin"
+          curl -fsSL \
+            https://github.com/DanConwayDev/ngit-cli/releases/download/v2.6.3/ngit-v2.6.3-x86_64-unknown-linux-gnu.2.17.tar.gz \
+            -o "$archive"
+          mkdir -p "$bin_dir"
+          tar -xzf "$archive" -C "$bin_dir"
+          echo "$bin_dir" >> "$GITHUB_PATH"
 
       - name: Fetch canonical Armada
         run: |
