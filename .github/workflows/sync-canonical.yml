@@ -1,0 +1,51 @@
+name: Sync canonical Armada
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-canonical-armada
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'nosu-project/armada-upstream'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nostr Git remote helper
+        run: cargo install ngit --version 2.6.3 --locked
+
+      - name: Fetch canonical Armada
+        run: |
+          git remote add canonical nostr://soapbox.pub/relay.ngit.dev/armada
+          git fetch canonical +refs/heads/main:refs/remotes/canonical/main --tags
+
+      - name: Verify and publish mirror
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          previous=$(git ls-remote --heads origin canonical | awk '{print $1}')
+          if [ -n "$previous" ] && ! git merge-base --is-ancestor "$previous" canonical/main; then
+            echo "::error::Canonical Armada rewrote or diverged from the previously mirrored history"
+            exit 1
+          fi
+
+          git push origin canonical/main:refs/heads/canonical
+
+          if git merge-base --is-ancestor canonical/main HEAD; then
+            echo "Mirror is already current"
+            exit 0
+          fi
+
+          git merge --no-edit canonical/main
+          git push origin HEAD:main --follow-tags
