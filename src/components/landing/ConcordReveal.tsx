@@ -12,9 +12,13 @@ import { cn } from "@/lib/utils";
 
 const MINT = "#24e8a3";
 
-/** Grid lines under a radial glow, masked to the lines, as on concordprotocol.org. */
+/**
+ * Grid lines under a radial glow, masked to the lines, as on concordprotocol.org.
+ * The glow's radii are `--glow`, set per breakpoint: a fraction of a tall, narrow
+ * phone section is a slim ellipse that fades out before the screen's edges.
+ */
 const GRID = {
-  backgroundImage: `radial-gradient(60% 50% at 50% 50%, ${MINT}40, ${MINT}10 55%, transparent 80%)`,
+  backgroundImage: `radial-gradient(var(--glow) at 50% 50%, ${MINT}40, ${MINT}10 55%, transparent 80%)`,
   maskImage: "linear-gradient(90deg, #000 1px, transparent 1px), linear-gradient(#000 1px, transparent 1px)",
   maskSize: "56px 56px",
   WebkitMaskImage: "linear-gradient(90deg, #000 1px, transparent 1px), linear-gradient(#000 1px, transparent 1px)",
@@ -27,7 +31,7 @@ export function ConcordGrid({ shown }: { shown: boolean }) {
     <div
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute inset-0 transition-opacity [transition-duration:2000ms]",
+        "pointer-events-none absolute inset-0 transition-opacity [transition-duration:2000ms] [--glow:100%_62%] sm:[--glow:60%_50%]",
         shown ? "opacity-100 delay-700" : "opacity-0",
       )}
       style={GRID}
