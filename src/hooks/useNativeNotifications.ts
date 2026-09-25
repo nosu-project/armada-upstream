@@ -469,6 +469,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const {
     subs: allConcordSubs,
     ready: concordSubsReady,
+    left: concordLeftCommunities,
   } = useConcordSubsState();
   const concordSubs = useMemo(
     () =>
@@ -584,6 +585,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         concordPlaneReady,
         gitPlaneReady: gitReady,
         policyPlaneReady: notificationSettingsReady,
+        concordLeftCommunities,
         dmRelays,
         dmFollows,
         dmKnownPeers,
@@ -615,7 +617,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
+  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service

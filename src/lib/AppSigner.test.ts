@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AppSigner } from "@/lib/AppSigner";
+import { AppSigner, clearRecentDecrypts } from "@/lib/AppSigner";
+import { purgeArmadaDB } from "@/lib/db/armadaDB";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 
@@ -129,5 +130,19 @@ describe("AppSigner", () => {
     const signer = new AppSigner(upstream, freshUser());
     expect(signer.nip04).toBeUndefined();
     expect(signer.nip44).toBeUndefined();
+  });
+
+  it("forgets in-memory plaintext on clear, so a purged store is really empty", async () => {
+    const user = freshUser();
+    const first = makeUpstream(user);
+    await new AppSigner(first.upstream, user).nip44!.decrypt(PEER, "CIPHER");
+
+    // Logout: the store is purged AND the memory cache cleared.
+    await purgeArmadaDB();
+    clearRecentDecrypts();
+
+    const second = makeUpstream(user);
+    await new AppSigner(second.upstream, user).nip44!.decrypt(PEER, "CIPHER");
+    expect(second.nip44Decrypt).toHaveBeenCalledTimes(1);
   });
 });

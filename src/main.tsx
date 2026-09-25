@@ -2,6 +2,10 @@
 // (Android System WebView before Chromium 116). Must precede every other
 // import so the statics exist before any module that reads them evaluates.
 import "./polyfills";
+// SECOND: the steady-state profiler's probes wrap WebSocket and the timers, and
+// stand in for the React DevTools hook — all of which must exist before
+// react-dom and the first socket-opening module evaluate.
+import "@/lib/perfRuntimeInstall";
 
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";

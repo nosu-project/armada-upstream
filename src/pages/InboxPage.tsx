@@ -131,6 +131,9 @@ function InboxThreadDetail({
     [root, replyIdsSig],
   );
   const { reactionsFor } = useGroupReactions(relayUrl, groupId, tallyIds);
+  // One object per room: every message row reads this context, and an inline
+  // value re-rendered all of them on every render of this page.
+  const chatScope = useMemo(() => ({ kind: "nip29" as const, relayUrl, groupId }), [relayUrl, groupId]);
   const sendThreadReply = useSendThreadReply(relayUrl, groupId);
 
   const { data: membership } = useGroupMembership(relayUrl, groupId);
@@ -152,7 +155,7 @@ function InboxThreadDetail({
   );
 
   return (
-    <ChatScopeContext.Provider value={{ kind: "nip29", relayUrl, groupId }}>
+    <ChatScopeContext.Provider value={chatScope}>
       {root ? (
         <ThreadPanel
           root={root}

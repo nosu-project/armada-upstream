@@ -1,4 +1,5 @@
 import {
+  Activity,
   AlertTriangle,
   ArrowLeft,
   Bell,
@@ -40,6 +41,7 @@ import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
+import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
@@ -104,6 +106,7 @@ type SectionId =
   | "emojis"
   | "wallet"
   | "install"
+  | "diagnostics"
   | "danger";
 
 interface NavItem {
@@ -457,6 +460,10 @@ export function SettingsPage() {
     }
     if (canInstall || needsManualInstall) {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
+    }
+    // The profiler it reports on exists only in profiling builds.
+    if (import.meta.env.VITE_PROFILE === "1") {
+      appItems.push({ id: "diagnostics", title: "Diagnostics", icon: Activity });
     }
     const groups: NavGroup[] = [
       { heading: "User settings", items: userItems },
@@ -991,6 +998,8 @@ export function SettingsPage() {
             <Download className="size-4 text-muted-foreground" />
           </SettingsRow>
         );
+      case "diagnostics":
+        return import.meta.env.VITE_PROFILE === "1" ? <DiagnosticsSettings /> : null;
       case "danger":
         return (
           <SettingsRow

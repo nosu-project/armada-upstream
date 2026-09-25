@@ -37,6 +37,24 @@ export const KIND_DM = 4;
  */
 const PULL_MIN_INTERVAL_MS = 30_000;
 
+/**
+ * When each thread's relay pull last started, per query client (so the
+ * throttle lives exactly as long as the cache it fills). Keyed by thread, NOT
+ * held in the hook: a per-mount ref re-pulled every time a conversation was
+ * re-opened, so hopping between threads re-sent the same two REQs to every DM
+ * relay on each visit. A pull that is aborted before it lands clears its entry,
+ * so leaving a thread quickly never leaves it un-pulled.
+ */
+const threadPullAt = new WeakMap<object, Map<string, number>>();
+function threadPulls(client: object): Map<string, number> {
+  let map = threadPullAt.get(client);
+  if (!map) {
+    map = new Map();
+    threadPullAt.set(client, map);
+  }
+  return map;
+}
+
 /** How many kind-4 events to request per direction, per relay, per page. */
 export const DM_PAGE_SIZE = 500;
 
@@ -943,14 +961,12 @@ export function useDirectMessages(peer: string | undefined) {
   // rows (plaintext at rest — same trust level as the signer's persistent
   // decrypt cache; see timelineSnapshot.ts).
   const threadSnapshotScope = self && peer ? dmThreadSnapshotScope(self, peer) : undefined;
-  const threadPullRef = useRef(0);
   // An empty first store read is not authoritative until the initial relay
   // pull settles. Track that pull itself instead of a sticky "done" bit: a
   // cached empty React Query result can be fresh on remount, in which case no
   // queryFn runs and a reset done-bit would leave the skeleton up forever.
   const [waitingForInitialPull, setWaitingForInitialPull] = useState(false);
   useEffect(() => {
-    threadPullRef.current = 0;
     setWaitingForInitialPull(false);
   }, [self, peer, relayKey]);
 
@@ -997,13 +1013,19 @@ export function useDirectMessages(peer: string | undefined) {
       //    within the pull window so wire-bus invalidations stay local-only.
       //    The waiting flag is raised only for a cold empty read with a pull
       //    actually in flight; a throttle-skipped/cached empty read is settled.
-      const pullDue = Date.now() - threadPullRef.current >= PULL_MIN_INTERVAL_MS;
-      if (pullDue) threadPullRef.current = Date.now();
+      const pulls = threadPulls(queryClient);
+      const pullKey = `${self}|${peer}|${relayKey}`;
+      const pullDue = Date.now() - (pulls.get(pullKey) ?? 0) >= PULL_MIN_INTERVAL_MS;
+      if (pullDue) pulls.set(pullKey, Date.now());
       if (pullDue && localPlaceholders.length === 0 && !signal.aborted) {
         setWaitingForInitialPull(true);
       }
       void (async () => {
-        if (!pullDue || signal.aborted) return;
+        if (!pullDue) return;
+        if (signal.aborted) {
+          pulls.delete(pullKey);
+          return;
+        }
         try {
           // Recipient-scoped both ways (relays only serve the viewer's own
           // kind-4 set): sent = `authors:[self] #p:[peer]`, received =
@@ -1018,8 +1040,13 @@ export function useDirectMessages(peer: string | undefined) {
             ],
             AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
+          // Cut short by a navigation away: the pull didn't happen.
+          if (signal.aborted) {
+            pulls.delete(pullKey);
+            return;
+          }
           const inThread = events.filter((e) => dmCounterparty(e, self!) === peer);
-          if (signal.aborted || inThread.length === 0) return;
+          if (inThread.length === 0) return;
           queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
             mergeDmThread(old, buildThreadPlaceholders(inThread)),
           );
@@ -1034,7 +1061,9 @@ export function useDirectMessages(peer: string | undefined) {
             () => { if (signerNeedsApproval(user!.method)) setDecryptConsent("declined"); },
           );
         } catch {
-          // Best-effort background refresh; the local-first result already rendered.
+          // Best-effort background refresh; the local-first result already
+          // rendered. Let the next visit try again.
+          pulls.delete(pullKey);
         } finally {
           setWaitingForInitialPull(false);
         }

@@ -147,6 +147,100 @@ describe("usePressDrag", () => {
     expect(container.scrollTop).toBe(120);
   });
 
+  describe("the hand-panned scroll's fling", () => {
+    /** A container jsdom will let scroll: scrollTop clamps to [0, 1000]. */
+    function scrollable() {
+      const el = document.createElement("div");
+      let top = 0;
+      Object.defineProperty(el, "scrollTop", {
+        get: () => top,
+        set: (v: number) => void (top = Math.max(0, Math.min(1000, v))),
+      });
+      document.body.append(el);
+      return el;
+    }
+
+    /** Swipes up from y=400 to y=200 in 10ms steps, then lifts. */
+    function swipeUp(begin: (e: PointerEvent) => void) {
+      begin(pointer("pointerdown", { pointerType: "touch", clientY: 400 }));
+      for (let y = 380; y >= 200; y -= 20) {
+        vi.advanceTimersByTime(10);
+        window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: y }));
+      }
+      window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 200 }));
+    }
+
+    it("coasts on after a quick release, then stops", () => {
+      const container = scrollable();
+      const { result } = setup(container);
+      act(() => swipeUp(result.current.begin("row-a")));
+      const released = container.scrollTop;
+      expect(released).toBe(180);
+
+      act(() => void vi.advanceTimersByTime(100));
+      expect(container.scrollTop).toBeGreaterThan(released);
+      act(() => void vi.advanceTimersByTime(5000));
+      const settled = container.scrollTop;
+      act(() => void vi.advanceTimersByTime(500));
+      expect(container.scrollTop).toBe(settled);
+      container.remove();
+    });
+
+    it("does not coast when the finger rested before lifting", () => {
+      const container = scrollable();
+      const { result } = setup(container);
+      act(() => {
+        const begin = result.current.begin("row-a");
+        begin(pointer("pointerdown", { pointerType: "touch", clientY: 400 }));
+        window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: 380 }));
+        vi.advanceTimersByTime(10);
+        window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: 300 }));
+        vi.advanceTimersByTime(200);
+        window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 300 }));
+      });
+      const released = container.scrollTop;
+      act(() => void vi.advanceTimersByTime(1000));
+      expect(container.scrollTop).toBe(released);
+      container.remove();
+    });
+
+    it("is caught by a touch, whose tap does not click", () => {
+      const container = scrollable();
+      const { result, calls } = setup(container);
+      act(() => swipeUp(result.current.begin("row-a")));
+      act(() => void vi.advanceTimersByTime(50));
+
+      act(() => {
+        const down = pointer("pointerdown", { pointerType: "touch", clientY: 300 });
+        container.dispatchEvent(down);
+        result.current.begin("row-b")(down);
+      });
+      const caught = container.scrollTop;
+      act(() => void vi.advanceTimersByTime(100));
+      expect(container.scrollTop).toBe(caught);
+
+      act(() => void window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 300 })));
+      expect(result.current.shouldSuppressClick()).toBe(true);
+      expect(calls.onDrop).not.toHaveBeenCalled();
+      act(() => void vi.advanceTimersByTime(300));
+      expect(result.current.shouldSuppressClick()).toBe(false);
+      container.remove();
+    });
+
+    it("an ordinary tap at rest still clicks", () => {
+      const container = scrollable();
+      const { result } = setup(container);
+      act(() => {
+        const down = pointer("pointerdown", { pointerType: "touch", clientY: 300 });
+        container.dispatchEvent(down);
+        result.current.begin("row-a")(down);
+        window.dispatchEvent(pointer("pointerup", { pointerType: "touch", clientY: 300 }));
+      });
+      expect(result.current.shouldSuppressClick()).toBe(false);
+      container.remove();
+    });
+  });
+
   describe("the touchmove canceller", () => {
     it("is attached to the container as it mounts, before any gesture", () => {
       const container = document.createElement("div");

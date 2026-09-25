@@ -409,7 +409,13 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // after the last rumor was announced) would otherwise leave an
     // already-rendered timeline showing a stale scroll-up affordance until
     // some unrelated event rang the scope.
-    emitWireScopes([`c2:${idHex}`]);
+    //
+    // On `c2cur:`, not `c2:`. Only the channel's own timeline reads the
+    // cursor; the rumor store did not change here (writeRumors rang `c2:` for
+    // anything that did). Ringing `c2:` re-ran every community-wide reader —
+    // mentions, unread badges, threads, the members view — after every round,
+    // i.e. on every channel open, for nothing.
+    emitWireScopes([`c2cur:${idHex}`]);
 
     // A round that failed outright with nothing decrypted must not stamp the
     // topic fresh: the relays were likely wedged (a REQ swallowed by a

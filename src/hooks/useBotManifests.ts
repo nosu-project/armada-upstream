@@ -35,6 +35,11 @@ export interface BotManifestsResult {
 }
 
 const EMPTY: string[] = [];
+// Stable empties: a fresh `[]`/`{}` per render would change every consumer's
+// memo inputs (DMsPage derives a `knownCommands` Set from `entries` and hands it
+// to every message row) while nothing has changed.
+const EMPTY_ENTRIES: BotCommandEntry[] = [];
+const EMPTY_PROFILES: Record<string, BotRosterProfile> = {};
 
 /** Query `kinds` for `authors` in author-sized chunks, over an explicit relay set. */
 async function queryChunked(
@@ -202,9 +207,9 @@ export function useBotManifests(
   });
 
   return {
-    entries: manifestsQuery.data ?? [],
+    entries: manifestsQuery.data ?? EMPTY_ENTRIES,
     bots,
-    profiles: botsQuery.data?.profiles ?? {},
+    profiles: botsQuery.data?.profiles ?? EMPTY_PROFILES,
     isLoading:
       (botsQuery.isLoading && botsQuery.fetchStatus !== "idle") ||
       (manifestsQuery.isLoading && manifestsQuery.fetchStatus !== "idle"),

@@ -14,7 +14,7 @@ export function BootSplash() {
       role="status"
       aria-label="Loading"
     >
-      <ArmadaCrest size={96} />
+      <ArmadaCrest size={96} loop />
       <ArmadaCrestKeyframes />
     </div>
   );

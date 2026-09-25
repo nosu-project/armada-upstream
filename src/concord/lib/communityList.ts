@@ -388,6 +388,19 @@ export function liveEntries(list: CommunityList): CommunityListEntry[] {
 }
 
 /**
+ * The communities this list says the member LEFT: tombstoned and not re-added
+ * since. Unlike absence from {@link liveEntries}, which a partial or cold list
+ * shares with every community it simply hasn't read yet, a tombstone is a
+ * positive statement — so a background watch may drop these without waiting
+ * for the list to become authoritative.
+ */
+export function removedCommunityIds(list: CommunityList): string[] {
+  return list.tombstones
+    .filter((t) => !isLive(list, t.community_id))
+    .map((t) => t.community_id);
+}
+
+/**
  * Whether the member has been EXCLUDED at their current epoch — a kick/ban
  * Refounding they got no key for. The community stays live and on the rail
  * (only Leave/Dissolve remove an icon), but it renders read-only: the member

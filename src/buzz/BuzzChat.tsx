@@ -134,6 +134,7 @@ function BuzzChatMessage({
   // reader can tell it apart from an unprompted message and jump back.
   const sentFrom = sentFromThreadRef(event.tags);
   const openThread = transport.openThread;
+  const sendStatus = transport.sendStatusFor?.(event.id);
   return (
     <div>
       <ChatMessage
@@ -144,7 +145,7 @@ function BuzzChatMessage({
         reactions={transport.reactionsFor?.(event.id)}
         zapEnabled={config.zapsEnabled && Boolean(transport.zapsFor)}
         zaps={transport.zapsFor?.(event.id)}
-        sendStatus={transport.sendStatusFor?.(event.id)}
+        sendStatus={sendStatus}
         highlight={highlight}
         isEditing={isEditing}
         replyCount={transport.replyCountFor?.(event.id) ?? 0}
@@ -158,8 +159,10 @@ function BuzzChatMessage({
             </span>
           ) : undefined
         }
-        onRetry={() => transport.retry?.(event)}
-        onDiscard={() => transport.discard?.(event.id)}
+        // Only a failed row renders Retry/Discard; any other row gets no
+        // per-render closure to defeat ChatMessage's memo with.
+        onRetry={sendStatus === "failed" ? () => transport.retry?.(event) : undefined}
+        onDiscard={sendStatus === "failed" ? () => transport.discard?.(event.id) : undefined}
         onDelete={transport.deleteMessage}
         onOpenThread={openThread ? (e) => openThread(e, true) : undefined}
         // No inline `onReply`: on Buzz, replying IS threading. Buzz's own

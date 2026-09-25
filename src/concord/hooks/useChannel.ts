@@ -306,6 +306,7 @@ export function useChannelTimeline(
     if (!channelIdHex) return;
     const mine =
       scopes.has(`c2:${channelIdHex}`) ||
+      scopes.has(`c2cur:${channelIdHex}`) ||
       (channel?.streams.some((s) => scopes.has(`c2park:${s.group.pk}`)) ?? false);
     if (mine) {
       void queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });

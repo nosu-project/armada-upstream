@@ -392,17 +392,13 @@ export function useIosPush(): UsePushNotificationsReturn {
     // (registration replaces); deleting from one is not, and the user's only
     // symptom is that some rooms quietly stop notifying.
     const currentIds = new Set(scopedSpecs.map((s) => s.id));
-    // Concord's channels are not covered by the flags above: they come from
-    // per-community control folds that are read after everything else, so a
-    // sync can legitimately see zero of them for several seconds while the
-    // follow and group lists are already settled. If the gateway holds `c2`
-    // records and this pass produced none, the set is still filling in — not
-    // a user who left every community at once — and pruning here is what
-    // silently unsubscribes them from every community they are in.
+    // Concord's folds load after everything else, but `watchSetLoading` already
+    // waits for them: it holds until the membership list is confirmed and every
+    // live community's fold is on disk. An empty Concord set past that point is
+    // real — the user left their last community — and must prune, or its
+    // records keep waking the device for a community it no longer reads.
     const registeredIds = [...trackedIds];
-    const concordStillCold = concord.length === 0
-      && registeredIds.some((id) => id.startsWith("armada-c2-"));
-    if (watchSetLoading || concordStillCold) {
+    if (watchSetLoading) {
       await recordPushStatus(
         `ok ${registered} subs on ${domain} (partial — prune deferred)`
           + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
@@ -425,7 +421,7 @@ export function useIosPush(): UsePushNotificationsReturn {
       `ok ${registered} subs on ${domain} dmRelays=[${dmRelays.join(" ")}]`
         + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
     );
-  }, [client, user, specs, concord, watchSetLoading]);
+  }, [client, user, specs, watchSetLoading]);
 
   // Auto-(re)sync whenever the watch set changes, exactly as the web
   // controller does: as long as the user intends push and the OS has granted

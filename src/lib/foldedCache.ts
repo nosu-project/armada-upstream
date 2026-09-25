@@ -18,7 +18,7 @@ import { openDB } from "idb";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { legacyMigrationsComplete, skipLegacyDrain } from "@/lib/db/legacyDatabases";
-import { perfTime } from "@/lib/perf";
+import { perfCount, perfTime } from "@/lib/perf";
 
 /** Legacy standalone database, drained by {@link migrateLegacyFolded}. */
 export const LEGACY_FOLDED_DB_NAME = "armada-concord-cache";
@@ -134,11 +134,31 @@ export function decode<T>(json: string): T | undefined {
 
 // ── store ──────────────────────────────────────────────────────────────────────
 
+/**
+ * The serialized value last read from or written to each key this session.
+ *
+ * A write whose encoding matches is skipped outright — no KV write, no
+ * listeners. Folds are recomputed far more often than they change, and every
+ * `useControlFold` instance (a community's page, its rail button, its mention
+ * probe…) persists the same fold independently; on Android each of those
+ * writes was a ~180 KB string through the single Capacitor plugin thread, and
+ * each re-woke every `onFoldedWrite` listener into re-reading every fold.
+ * Measured on a Pixel: 38 identical writes (6.9 MB) in 15 s, with every other
+ * bridge call — the UI's reads included — queued ~8 s behind them.
+ */
+const knownEncoding = new Map<string, string>();
+
 /** Read a cached folded value by key, or undefined on miss / error. */
 export async function readFolded<T>(key: string): Promise<T | undefined> {
   try {
     await migrateLegacyFolded();
+    if (import.meta.env.VITE_PROFILE === "1") {
+      // Profiling builds: who reads each fold family, by call site.
+      const site = new Error().stack?.split("\n").slice(2, 4).join(" < ").replace(/https?:\/\/[^/]+/g, "") ?? "?";
+      perfCount(`readFolded ${key.split(":")[0]} @ ${site}`, 0);
+    }
     const json = await getArmadaDB().kv.get<string>(foldedKey(key));
+    if (typeof json === "string") knownEncoding.set(key, json);
     // A non-string is a value written as `undefined` (KV normalizes that to
     // null), which reads back as a miss — the pre-KV behavior.
     // Counted apart from the KV read: the reviver rebuilds Map/Set/Uint8Array
@@ -149,6 +169,69 @@ export async function readFolded<T>(key: string): Promise<T | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Decoded values handed out by {@link readFoldedShared}, with the encoding
+ * they were decoded from. Replaced on every write of the key.
+ */
+const sharedDecoded = new Map<string, { json: string; value: unknown }>();
+
+/**
+ * {@link readFolded}, but ONE decoded object per key for the session: repeat
+ * reads cost neither a KV round trip nor a decode. For values every reader
+ * treats as immutable — the control folds, which `useDeferredFold` already
+ * shares between instances in memory.
+ *
+ * The plain read is per-call on purpose (a reader may mutate what it gets);
+ * this one exists because the control folds are read constantly — the wire
+ * spec, stream auth, the switcher and every fold hook mounting, ~5 reads a
+ * second on a 25-community account — and on Android each read of a ~200 KB
+ * fold crossed the Capacitor bridge as a JavaScript string (measured: 16.8 MB
+ * in a minute, 43 s of the database thread's time) and was then decoded again
+ * on the UI thread, ~100 ms apiece.
+ */
+export async function readFoldedShared<T>(key: string): Promise<T | undefined> {
+  const hit = sharedDecoded.get(key);
+  if (hit && knownEncoding.get(key) === hit.json) return hit.value as T;
+  // A key found EMPTY stays empty until something writes it (writeFolded
+  // clears this): a channel with no sync cursor yet was otherwise re-read on
+  // every open, by every reader.
+  if (sharedMissing.has(key)) return undefined;
+  // Readers that arrive while the first read is in flight share it: a boot
+  // mounts dozens of fold hooks at once, and each missing the cache on its own
+  // was a bridge crossing apiece.
+  let pending = sharedInFlight.get(key);
+  if (!pending) {
+    pending = readFolded<unknown>(key).then((value) => {
+      const json = knownEncoding.get(key);
+      if (value !== undefined && json !== undefined) sharedDecoded.set(key, { json, value });
+      else if (value === undefined && json === undefined) sharedMissing.add(key);
+      return value;
+    });
+    sharedInFlight.set(key, pending);
+    void pending.finally(() => {
+      if (sharedInFlight.get(key) === pending) sharedInFlight.delete(key);
+    });
+  }
+  return (await pending) as T | undefined;
+}
+
+const sharedInFlight = new Map<string, Promise<unknown>>();
+/** Keys a shared read found empty, until the next write of the key. */
+const sharedMissing = new Set<string>();
+
+/**
+ * Forget every value this module holds in memory. On logout: the shared
+ * decodes are decrypted community state (lists, control folds), and the
+ * encoding memo would otherwise make the next account's first write of an
+ * identical value a silent no-op against the purged store.
+ */
+export function clearFoldedMemory(): void {
+  knownEncoding.clear();
+  sharedDecoded.clear();
+  sharedInFlight.clear();
+  sharedMissing.clear();
 }
 
 type FoldedWriteListener = (key: string) => void;
@@ -168,13 +251,34 @@ export function onFoldedWrite(listener: FoldedWriteListener): () => void {
   };
 }
 
-/** Persist a folded value by key (best-effort; failures are swallowed). */
-export async function writeFolded(key: string, value: unknown): Promise<void> {
+/**
+ * Persist a folded value by key (best-effort; failures are swallowed). A value
+ * whose encoding matches what the key already holds is not written again (see
+ * {@link knownEncoding}). `encoded` is the caller's own {@link encode} of
+ * `value`, when it already has one — encoding a large fold is not free.
+ */
+export async function writeFolded(key: string, value: unknown, encoded?: string): Promise<void> {
   try {
+    const json = encoded ?? encode(value);
+    if (knownEncoding.get(key) === json) return;
     // Before the write, not just before reads: a write that landed first would
     // be clobbered by the drain copying the stale legacy value over it.
     await migrateLegacyFolded();
-    await getArmadaDB().kv.set(foldedKey(key), encode(value));
+    // Recorded before the await, so concurrent writers of the same content
+    // (every instance persisting one fold at once) collapse to one.
+    knownEncoding.set(key, json);
+    sharedMissing.delete(key);
+    // The written object IS the decoded value of `json`; shared readers get it
+    // without a round trip.
+    if (value !== undefined) sharedDecoded.set(key, { json, value });
+    else sharedDecoded.delete(key);
+    try {
+      await getArmadaDB().kv.set(foldedKey(key), json);
+    } catch (error) {
+      // Not on disk after all: let the next write try again.
+      if (knownEncoding.get(key) === json) knownEncoding.delete(key);
+      throw error;
+    }
     for (const listener of foldedWriteListeners) {
       try {
         // Listeners match on the caller's key, so the prefix stays internal.
@@ -262,4 +366,8 @@ async function drainLegacyFolded(): Promise<void> {
 /** Test seam: forget the memoised drain so the next access runs it again. */
 export function __resetFoldedForTests(): void {
   drain = undefined;
+  knownEncoding.clear();
+  sharedDecoded.clear();
+  sharedInFlight.clear();
+  sharedMissing.clear();
 }

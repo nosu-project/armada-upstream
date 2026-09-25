@@ -54,7 +54,7 @@
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { readFoldedShared, writeFolded } from "@/lib/foldedCache";
 import {
   KIND_COMMENT,
   KIND_EDIT,
@@ -805,6 +805,18 @@ export async function queryRekeyRounds(
 /** Rumor kinds a Pin can prove, whose seals must therefore survive the store. */
 const PIN_PROVABLE_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_COMMENT, KIND_EDIT]);
 
+/** Seal keys written this session (bounded; oldest forgotten first). */
+const sealsWritten = new Set<string>();
+const MAX_SEALS_REMEMBERED = 20_000;
+
+function rememberSealWritten(key: string): void {
+  sealsWritten.add(key);
+  if (sealsWritten.size > MAX_SEALS_REMEMBERED) {
+    const oldest = sealsWritten.values().next().value;
+    if (oldest !== undefined) sealsWritten.delete(oldest);
+  }
+}
+
 /** KV key holding the signed seal a stored rumor arrived in. */
 function sealKey(communityIdHex: string, rumorId: string): string {
   return `c2seal:${communityIdHex}:${rumorId}`;
@@ -883,7 +895,15 @@ function writeStored(
       // rumor that committed fine as uncommitted — the sweep would not memoise
       // its wrap, and the write would never be acked. A storage-pressure
       // problem must not become a sync problem.
-      writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal).catch(() => undefined));
+      // Once per rumor per session: a seal never changes, and every channel
+      // sync round re-fetches its newest page, which re-saved ~30 seals on
+      // every channel open (measured on Android, one bridge op apiece).
+      const key = sealKey(communityIdHex, o.rumorId);
+      if (sealsWritten.has(key)) continue;
+      rememberSealWritten(key);
+      writes.push(db.kv.set(key, o.seal).catch(() => {
+        sealsWritten.delete(key);
+      }));
     }
   }
   if (plane === "control" && snapshot) {
@@ -1245,9 +1265,16 @@ export interface StreamCursor {
 
 const cursorKey = (scope: string) => `concord2-cursor:${scope}`;
 
-/** Read a scope's sync cursor, or undefined if none has been saved yet. */
+/**
+ * Read a scope's sync cursor, or undefined if none has been saved yet.
+ *
+ * Shared ({@link readFoldedShared}): every write builds a new cursor object,
+ * nothing mutates one, and the timeline, the sync round and the plane sweeps
+ * each read it on every channel open — ~17 store round trips a community
+ * switch on Android before this.
+ */
 export function readStreamCursor(scope: string): Promise<StreamCursor | undefined> {
-  return readFolded<StreamCursor>(cursorKey(scope));
+  return readFoldedShared<StreamCursor>(cursorKey(scope));
 }
 
 /**

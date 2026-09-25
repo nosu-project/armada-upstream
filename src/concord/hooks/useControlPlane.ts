@@ -456,6 +456,8 @@ const dissolvedKey = (idHex: string) => `concord2-dissolved:${idHex}`;
  * reads as alive while IndexedDB is consulted.
  */
 const dissolvedMemo = new Map<string, number>();
+/** Communities {@link dissolvedAt} found no tombstone for, this session. */
+const aliveMemo = new Set<string>();
 
 /**
  * Record a community as dissolved, permanently. Dissolution is terminal and
@@ -470,6 +472,7 @@ async function rememberDissolved(idHex: string, atMs: number): Promise<void> {
 /** Test seam: forget the session memo, leaving only the persisted verdict. */
 export function _forgetDissolvedMemoForTests(): void {
   dissolvedMemo.clear();
+  aliveMemo.clear();
 }
 
 /**
@@ -553,11 +556,18 @@ async function flushDissolvedProbes(nostr: ProbeNostr, url: string): Promise<voi
 export async function dissolvedAt(idHex: string): Promise<number | undefined> {
   const memo = dissolvedMemo.get(idHex);
   if (memo !== undefined) return memo;
+  // "Alive" is remembered too. Nearly every community is alive, and the wire,
+  // the rail and every mounted fold hook ask on each switch — a store round
+  // trip apiece (~37 per community switch, measured on Android). The only
+  // writer is the tombstone path above, which sets the memo itself, so a
+  // remembered miss can't go stale in this session.
+  if (aliveMemo.has(idHex)) return undefined;
   const stored = await readFolded<number>(dissolvedKey(idHex));
   if (typeof stored === "number") {
     dissolvedMemo.set(idHex, stored);
     return stored;
   }
+  aliveMemo.add(idHex);
   return undefined;
 }
 

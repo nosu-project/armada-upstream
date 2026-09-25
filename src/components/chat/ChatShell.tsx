@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode } from "react";
+import { useRef, type ComponentProps, type ReactNode } from "react";
 
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
@@ -21,11 +21,39 @@ export function ChatShell({
   scope: AppScope | undefined;
   children: ReactNode;
 }) {
+  // Callers build `scope` inline, and a context value that changes identity
+  // re-renders every consumer — every message row reads it — so hold one
+  // object per distinct scope.
+  const held = useRef(scope);
+  if (!sameScope(held.current, scope)) held.current = scope;
+  const stableScope = held.current;
   return (
     <SwipeReveal {...reveal}>
       <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
-        <ChatScopeContext.Provider value={scope}>{children}</ChatScopeContext.Provider>
+        <ChatScopeContext.Provider value={stableScope}>{children}</ChatScopeContext.Provider>
       </main>
     </SwipeReveal>
   );
+}
+
+/**
+ * Two scopes naming the same room. A Concord scope compares its community and
+ * channel by IDENTITY rather than id, so a changed community (new metadata, a
+ * rekey) still reaches the consumers.
+ */
+function sameScope(a: AppScope | undefined, b: AppScope | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.kind !== b.kind) return false;
+  switch (b.kind) {
+    case "nip29": {
+      const x = a as typeof b;
+      return x.relayUrl === b.relayUrl && x.groupId === b.groupId;
+    }
+    case "concord": {
+      const x = a as typeof b;
+      return x.community === b.community && x.channel === b.channel;
+    }
+    case "dm":
+      return (a as typeof b).conversation === b.conversation;
+  }
 }

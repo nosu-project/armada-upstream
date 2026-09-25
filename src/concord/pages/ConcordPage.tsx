@@ -1,6 +1,6 @@
 import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, Users, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -28,6 +28,7 @@ import { DateSeparator, isSameDay, MessageTimeline } from "@/components/chat/Mes
 import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import { useThreadPanel } from "@/hooks/useThreadPanel";
 import { useTimelineFocus } from "@/hooks/useTimelineFocus";
+import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { PinnedBar } from "@/concord/components/PinnedBar";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
@@ -178,6 +179,9 @@ import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
+/** How long a channel must stay open before it becomes the remembered one. */
+const LAST_CHANNEL_SETTLE_MS = 1500;
+
 const EMPTY_REPLIES: ChatMsg[] = [];
 
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
@@ -337,10 +341,14 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   onEditCancel,
   permalink,
 }: ChatMessage2Props) {
-  const threadInfo = threadSummary(replies);
-  const replyContext = replyToId ? (
-    <ReplyContext parent={replyParent} onJump={onJumpToReply} />
-  ) : undefined;
+  // Memoized: each is a prop of the (memoized) ChatMessage below, and building
+  // them fresh on every render of this row re-rendered its whole subtree even
+  // when nothing it shows had changed.
+  const threadInfo = useMemo(() => threadSummary(replies), [replies]);
+  const replyContext = useMemo(
+    () => (replyToId ? <ReplyContext parent={replyParent} onJump={onJumpToReply} /> : undefined),
+    [replyToId, replyParent, onJumpToReply],
+  );
   // Concord messages are unsigned rumors sealed at the channel's stream
   // address — there's no relay-addressable event id, so the "Copy message ID" /
   // "View on Ditto" off-ramps are nonsensical. Pass the rumor through so the
@@ -350,12 +358,16 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   // A titled post keeps its title in the timeline too: in a chat channel that
   // is the whole affordance, and in a forum's live-chat view it marks the
   // rows that also appear in the feed.
-  const heading = title ? (
-    <div className="mb-0.5 flex items-start gap-1.5 text-[15px] font-semibold leading-snug">
-      <MessageSquareText className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="min-w-0 break-words">{title}</span>
-    </div>
-  ) : undefined;
+  const heading = useMemo(
+    () =>
+      title ? (
+        <div className="mb-0.5 flex items-start gap-1.5 text-[15px] font-semibold leading-snug">
+          <MessageSquareText className="mt-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="min-w-0 break-words">{title}</span>
+        </div>
+      ) : undefined,
+    [title],
+  );
   return (
     <ChatMessage
       event={event}
@@ -388,8 +400,10 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       canBan={canBan}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
-      onRetry={onRetry ? () => onRetry(event) : undefined}
-      onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
+      // Only a failed row renders Retry/Discard; any other row gets no
+      // per-render closure to defeat ChatMessage's memo with.
+      onRetry={sendStatus === "failed" && onRetry ? () => onRetry(event) : undefined}
+      onDiscard={sendStatus === "failed" && onDiscard ? () => onDiscard(event.id) : undefined}
       isEditing={isEditing}
       onEdit={onEdit}
       onEditSubmit={onEditSubmit}
@@ -1022,7 +1036,11 @@ export function ConcordPage() {
   const routeChannelId = route?.channelId;
   const routePane = route?.pane;
   const { user } = useCurrentUser();
-  const navigateTo = useNavigate();
+  // Stable across navigations: every callback built on it (channel selection,
+  // thread opening, the #channel resolver in ChannelNavContext) is handed to
+  // each message row, and `useNavigate`'s per-location identity re-rendered
+  // every row — and their content — on every switch.
+  const navigateTo = useStableNavigate();
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
@@ -1445,14 +1463,32 @@ export function ConcordPage() {
   );
   const communityMuted = Boolean(community && isCommunityMuted(`c2:${community.idHex}`));
 
+  // Remember the channel once the reader has settled on it, not on every hop:
+  // a config write re-renders every component that reads the app config —
+  // which, mid channel-switch, is most of the app. A channel left within the
+  // delay is never recorded; leaving the community flushes the pending write,
+  // so the last channel viewed is still the one remembered.
+  const channelIdToRemember = channel?.idHex;
+  const pendingLastChannel = useRef<((() => void) & { key?: string }) | undefined>(undefined);
   useEffect(() => {
-    if (!lastChannelKey || !channel) return;
-    updateConfig((c) =>
-      c.lastChannelByServer[lastChannelKey] === channel.idHex
-        ? c
-        : { ...c, lastChannelByServer: { ...c.lastChannelByServer, [lastChannelKey]: channel.idHex } },
-    );
-  }, [channel, lastChannelKey, updateConfig]);
+    if (!lastChannelKey || !channelIdToRemember) return;
+    // Moving to another community: the one being left keeps its channel.
+    if (pendingLastChannel.current && pendingLastChannel.current.key !== lastChannelKey) {
+      pendingLastChannel.current();
+    }
+    const write = () => {
+      pendingLastChannel.current = undefined;
+      updateConfig((c) =>
+        c.lastChannelByServer[lastChannelKey] === channelIdToRemember
+          ? c
+          : { ...c, lastChannelByServer: { ...c.lastChannelByServer, [lastChannelKey]: channelIdToRemember } },
+      );
+    };
+    pendingLastChannel.current = Object.assign(write, { key: lastChannelKey });
+    const timer = setTimeout(write, LAST_CHANNEL_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [channelIdToRemember, lastChannelKey, updateConfig]);
+  useEffect(() => () => pendingLastChannel.current?.(), []);
 
   // Canonicalize the community root: `/c/<id>` resolves a default channel to
   // render, so name it in the URL once it is known. Without this the address
@@ -1572,8 +1608,14 @@ export function ConcordPage() {
   // rendered message, so the toggle reaches back into the opened-rumor cache
   // by rumor id — the decrypted row alone can prove nothing.
   const pins = usePins(community, channel, openedById);
+  // Read through a ref: `pins` is a fresh object per render and `openedById`
+  // changes with every page of messages, and this toggle is a prop of every
+  // row — a new identity per render re-rendered the whole loaded timeline.
+  const pinDeps = useRef({ pins, openedById });
+  pinDeps.current = { pins, openedById };
   const togglePin = useCallback(
     (event: ChatMsg) => {
+      const { pins, openedById } = pinDeps.current;
       const run = async () => {
         try {
           if (pins.isPinned(event.id)) {
@@ -1591,7 +1633,7 @@ export function ConcordPage() {
       };
       void run();
     },
-    [pins, openedById],
+    [],
   );
   // Git activity remains its own event domain. The store-first channel hook
   // supplies attached repository activity; this page only merges its display

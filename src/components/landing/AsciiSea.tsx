@@ -140,9 +140,19 @@ export function AsciiSea({
       return t * t * (3 - 2 * t);
     };
 
-    /** Render the character grid at a given wave phase. */
-    const paint = (phase: number) => {
-      for (let y = 0; y < rowCount; y++) {
+    /**
+     * The first row the mask lets show. Everything above the waterline is
+     * fully transparent, and at rest that is most of the grid — redrawing it
+     * was most of what the idle landing page spent — so paint skips it. Rows
+     * uncovered by scrolling are drawn on the next tick (a few rows of margin
+     * keep the feathered edge from showing a blank row in between).
+     */
+    const firstVisibleRow = (reveal: number) =>
+      Math.max(0, Math.floor(((TEASER_STOP * (1 - reveal)) / 100) * rowCount) - 3);
+
+    /** Render the character grid at a given wave phase, from row `from` down. */
+    const paint = (phase: number, from = 0) => {
+      for (let y = Math.min(from, rowCount); y < rowCount; y++) {
         const near = y / Math.max(rowCount - 1, 1);
         const amp = 0.32 + 0.68 * near;
         // Wavelength grows toward the viewer: the horizon is fine chop, the
@@ -240,38 +250,77 @@ export function AsciiSea({
       };
     }
 
+    // Driven by a timer at the paint cadence, not a free-running rAF loop: a
+    // loop at the display rate for a 14 fps effect woke the renderer 60 times
+    // a second and rewrote the mask on every one of them, which on an idle
+    // landing page was most of the app's CPU. Each tick still paints inside a
+    // frame (rAF), and scrolling gets its own frame-aligned veil updates.
     const frame = 1000 / FPS;
     const start = performance.now();
-    let last = 0;
+    let lastTick = start;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let raf = 0;
+    let veilRaf = 0;
+    let lastReveal = -1;
     // The phase's own, lagging idea of how far down the page we are.
     let phaseDepth = depthNow();
 
-    const tick = (now: number) => {
-      raf = requestAnimationFrame(tick);
-      const depth = depthNow();
-
-      // The waterline tracks scroll EVERY frame. It's a single style write,
-      // and stepping it at the paint cadence made the horizon visibly
-      // stair-step down the viewport while scrolling.
-      applyVeil(revealAt(depth));
-
-      // The wave phase, by contrast, follows scroll only loosely. Feeding it
-      // `scrollTop` directly means a flick of the wheel jumps the phase by
-      // more than a wavelength between two redraws, which reads as the sea
-      // tearing rather than travelling. Easing it keeps the "sea moves as you
-      // do" cue while capping how far it can shift per frame.
-      phaseDepth += (depth - phaseDepth) * 0.06;
-
-      if (now - last < frame) return;
-      last = now;
-      paint((now - start) / 1000 + phaseDepth * PHASE_TRAVEL);
+    const veil = () => {
+      const reveal = revealAt(depthNow());
+      if (reveal === lastReveal) return;
+      lastReveal = reveal;
+      applyVeil(reveal);
     };
+
+    const tick = (now: number) => {
+      raf = 0;
+      // The wave phase follows scroll only loosely. Feeding it `scrollTop`
+      // directly means a flick of the wheel jumps the phase by more than a
+      // wavelength between two redraws, which reads as the sea tearing rather
+      // than travelling. Easing it (6% of the gap per 60 Hz frame's worth of
+      // time) keeps the "sea moves as you do" cue while capping the shift.
+      const depth = depthNow();
+      phaseDepth += (depth - phaseDepth) * (1 - Math.pow(0.94, (now - lastTick) / (1000 / 60)));
+      lastTick = now;
+      veil();
+      paint((now - start) / 1000 + phaseDepth * PHASE_TRAVEL, firstVisibleRow(revealAt(depth)));
+      schedule();
+    };
+
+    const schedule = () => {
+      if (released || timer !== undefined || raf) return;
+      // A hidden page gets no frames anyway; don't keep a timer spinning for it.
+      if (document.hidden) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        raf = requestAnimationFrame(tick);
+      }, frame);
+    };
+
+    // The waterline tracks scroll every frame while scrolling — stepping it at
+    // the paint cadence made the horizon visibly stair-step down the viewport.
+    const scroller = scrollRef?.current;
+    const onScroll = () => {
+      if (veilRaf) return;
+      veilRaf = requestAnimationFrame(() => {
+        veilRaf = 0;
+        veil();
+      });
+    };
+    scroller?.addEventListener("scroll", onScroll, { passive: true });
+    const onVisibility = () => schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    veil();
     raf = requestAnimationFrame(tick);
 
     return () => {
       released = true;
+      if (timer !== undefined) clearTimeout(timer);
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(veilRaf);
+      scroller?.removeEventListener("scroll", onScroll);
+      document.removeEventListener("visibilitychange", onVisibility);
       observer.disconnect();
       host.replaceChildren();
     };

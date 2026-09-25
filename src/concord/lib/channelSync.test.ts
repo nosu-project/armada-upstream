@@ -151,7 +151,7 @@ describe("channelSync — the c2: topic handler", () => {
     release();
   });
 
-  it("rings the channel's bus scope even when the round decrypts nothing", { timeout: 30_000 }, async () => {
+  it("rings the channel's cursor scope even when the round decrypts nothing", { timeout: 30_000 }, async () => {
     // `writeRumors` rings only for a non-empty batch, and it runs BEFORE the
     // cursor write — so without the handler's own ring, a round whose only
     // result is a cursor verdict (`exhausted`, a moved `newest`) never
@@ -171,7 +171,10 @@ describe("channelSync — the c2: topic handler", () => {
     const off = bus.onWireScopes((scopes) => rings.push(...scopes));
     const release = m.want(topic);
     try {
-      await vi.waitFor(() => expect(rings).toContain(topic), { timeout: 15_000 });
+      await vi.waitFor(() => expect(rings).toContain(`c2cur:${channel.idHex}`), { timeout: 15_000 });
+      // The rumor store didn't change, so the community-wide `c2:` readers
+      // (mentions, unread, threads) must not be woken for it.
+      expect(rings).not.toContain(topic);
     } finally {
       off();
       release();

@@ -1,7 +1,8 @@
 import { useCallback, useContext } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { UNSAFE_NavigationContext, type Location } from "react-router-dom";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { LocationRefContext } from "@/lib/locationRef";
 import { ProfileOverlayContext } from "@/lib/profileOverlay";
 
 import type { ProfileBackgroundState } from "@/lib/profileOverlay";
@@ -18,15 +19,26 @@ import type { ProfileBackgroundState } from "@/lib/profileOverlay";
  * destination in its own right: drawing it over the page someone was reading
  * would be a modal asking them to make an account, on top of the thing they
  * came to look at.
+ *
+ * The returned function keeps ONE identity across navigations: it reads the
+ * location at call time (see `lib/locationRef.ts`) rather than subscribing to
+ * it, because every chat message row calls this hook.
  */
 export function useOpenProfile() {
-  const navigate = useNavigate();
-  const location = useLocation();
+  const router = useContext(LocationRefContext);
+  // Only the no-provider fallback uses this; the context is stable, and unlike
+  // `useNavigate` it does not subscribe to the location.
+  const { navigator } = useContext(UNSAFE_NavigationContext);
   const { user } = useCurrentUser();
   const { begin } = useContext(ProfileOverlayContext);
 
   return useCallback(
     (id: string) => {
+      const navigate = (to: string, state?: unknown) => {
+        const routerNavigate = router?.navigate.current;
+        if (routerNavigate) routerNavigate(to, { state });
+        else navigator.push(to, state);
+      };
       if (!user) {
         navigate(`/${id}`);
         return;
@@ -40,9 +52,16 @@ export function useOpenProfile() {
       // Thread the ORIGINAL background through a profile opened from inside a
       // profile, so the page underneath stays the chat rather than becoming
       // the profile we're leaving.
+      const location = router?.location.current ?? windowLocation();
       const current = (location.state as ProfileBackgroundState | null)?.backgroundLocation;
-      navigate(`/${id}`, { state: { backgroundLocation: current ?? location } });
+      navigate(`/${id}`, { backgroundLocation: current ?? location });
     },
-    [navigate, location, user, begin],
+    [router, navigator, user, begin],
   );
+}
+
+/** Outside a `LocationRefProvider`: the address bar, with no router state. */
+function windowLocation(): Location {
+  const { pathname, search, hash } = window.location;
+  return { pathname, search, hash, state: null, key: "default" };
 }

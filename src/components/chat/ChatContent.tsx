@@ -121,7 +121,12 @@ const NOSTR_IN_URL_REGEX = new RegExp(
 /** A NIP-19 entity found inside a plain URL (njump-style link). */
 type NostrInUrl =
   | { kind: "event"; eventId: string; relays?: string[]; author?: string }
-  | { kind: "addr"; addr: AddrCoords };
+  | { kind: "addr"; addr: AddrCoords; relays?: string[] };
+
+/** An naddr's coordinates, and apart from them its relay hints. */
+function splitAddr({ kind, pubkey, identifier, relays }: nip19.AddressPointer): { addr: AddrCoords; relays?: string[] } {
+  return { addr: { kind, pubkey, identifier }, relays };
+}
 
 /**
  * Try to extract a nostr entity from a URL whose path encodes one (e.g.
@@ -136,7 +141,7 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
     const decoded = nip19.decode(match[1]);
     switch (decoded.type) {
       case "naddr":
-        return { kind: "addr", addr: decoded.data as AddrCoords };
+        return { kind: "addr", ...splitAddr(decoded.data) };
       case "note":
         return { kind: "event", eventId: decoded.data as string };
       case "nevent":
@@ -175,7 +180,7 @@ type ContentToken =
   | { type: "text-mention"; pubkey: string; raw: string }
   | { type: "everyone-mention"; raw: string }
   | { type: "nevent-embed"; eventId: string; relays?: string[]; author?: string; sourceUrl?: string }
-  | { type: "naddr-embed"; addr: AddrCoords; url?: string }
+  | { type: "naddr-embed"; addr: AddrCoords; relays?: string[]; url?: string }
   | { type: "nostr-link"; id: string; raw: string }
   | { type: "hashtag"; tag: string; raw: string }
   | { type: "relay-link"; url: string }
@@ -740,7 +745,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           } else if (isBuzzInviteUrl(url)) {
             out.push({ type: "inline-link", url });
           } else if (nostrFromUrl?.kind === "addr") {
-            out.push({ type: "naddr-embed", addr: nostrFromUrl.addr, url });
+            out.push({ type: "naddr-embed", addr: nostrFromUrl.addr, relays: nostrFromUrl.relays, url });
           } else if (nostrFromUrl?.kind === "event") {
             out.push({
               type: "nevent-embed",
@@ -775,7 +780,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
                 author: decoded.data.author,
               });
             } else if (decoded.type === "naddr") {
-              out.push({ type: "naddr-embed", addr: decoded.data as AddrCoords });
+              out.push({ type: "naddr-embed", ...splitAddr(decoded.data) });
             } else {
               out.push({ type: "nostr-link", id: nostrId, raw: fullMatch });
             }
@@ -1365,6 +1370,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             relays={token.relays}
             authorHint={token.author}
             sourceUrl={token.sourceUrl}
+            fallbackAuthor={event.pubkey}
           />
         );
       }
@@ -1388,7 +1394,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
                 {token.url}
               </a>
             )}
-            <EmbeddedNaddr addr={token.addr} />
+            <EmbeddedNaddr addr={token.addr} relays={token.relays} />
           </span>
         );
       }

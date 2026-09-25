@@ -16,9 +16,11 @@ import { __resetLegacyMigrationsMemoForTests } from "@/lib/db/legacyDatabases";
 
 import {
   __resetFoldedForTests,
+  clearFoldedMemory,
   LEGACY_FOLDED_DB_NAME,
   onFoldedWrite,
   readFolded,
+  readFoldedShared,
   writeFolded,
 } from "./foldedCache";
 
@@ -65,6 +67,80 @@ describe("onFoldedWrite", () => {
 
     unsubThrower();
     unsubGood();
+  });
+});
+
+describe("identical writes", () => {
+  it("skips a write whose content the key already holds: no KV write, no notification", async () => {
+    const seen: string[] = [];
+    const unsubscribe = onFoldedWrite((key) => seen.push(key));
+    await writeFolded("concord2-fold:abc", { channels: [1] });
+    await writeFolded("concord2-fold:abc", { channels: [1] });
+    await Promise.all([
+      writeFolded("concord2-fold:abc", { channels: [1] }),
+      writeFolded("concord2-fold:abc", { channels: [1] }),
+    ]);
+    expect(seen).toEqual(["concord2-fold:abc"]);
+    unsubscribe();
+  });
+
+  it("still writes a changed value, and treats what a read returned as already held", async () => {
+    const seen: string[] = [];
+    const unsubscribe = onFoldedWrite((key) => seen.push(key));
+    await writeFolded("k", { v: 1 });
+    await writeFolded("k", { v: 2 });
+    await expect(readFolded("k")).resolves.toEqual({ v: 2 });
+    __resetFoldedForTests();
+    // A fresh session that READ the value doesn't write it back.
+    await readFolded("k");
+    await writeFolded("k", { v: 2 });
+    expect(seen).toEqual(["k", "k"]);
+    unsubscribe();
+  });
+});
+
+describe("readFoldedShared", () => {
+  it("hands every reader one decoded object until the key is written", async () => {
+    await writeFolded("concord2-fold:x", { roster: new Map([["a", 1]]) });
+    __resetFoldedForTests(); // a fresh session: nothing cached yet
+    const first = await readFoldedShared<{ roster: Map<string, number> }>("concord2-fold:x");
+    const second = await readFoldedShared<{ roster: Map<string, number> }>("concord2-fold:x");
+    expect(first).toBe(second);
+    expect(first?.roster.get("a")).toBe(1);
+
+    const next = { roster: new Map([["b", 2]]) };
+    await writeFolded("concord2-fold:x", next);
+    await expect(readFoldedShared("concord2-fold:x")).resolves.toBe(next);
+  });
+
+  it("clearFoldedMemory drops shared values, so a purged store reads as empty", async () => {
+    await writeFolded("concord2-list:me", { entries: [1] });
+    await expect(readFoldedShared("concord2-list:me")).resolves.toEqual({ entries: [1] });
+    await purgeArmadaDB();
+    clearFoldedMemory();
+    await expect(readFoldedShared("concord2-list:me")).resolves.toBeUndefined();
+    // …and the next account's identical write is a real write, not skipped.
+    const seen: string[] = [];
+    const unsubscribe = onFoldedWrite((key) => seen.push(key));
+    await writeFolded("concord2-list:me", { entries: [1] });
+    expect(seen).toEqual(["concord2-list:me"]);
+    await expect(readFolded("concord2-list:me")).resolves.toEqual({ entries: [1] });
+    unsubscribe();
+  });
+
+  it("remembers a missing key until it is written", async () => {
+    await expect(readFoldedShared("concord2-cursor:none")).resolves.toBeUndefined();
+    await expect(readFoldedShared("concord2-cursor:none")).resolves.toBeUndefined();
+    await writeFolded("concord2-cursor:none", { newest: 5 });
+    await expect(readFoldedShared("concord2-cursor:none")).resolves.toEqual({ newest: 5 });
+  });
+
+  it("plain reads still decode a fresh object each time", async () => {
+    await writeFolded("k2", { v: [1] });
+    const a = await readFolded("k2");
+    const b = await readFolded("k2");
+    expect(a).toEqual(b);
+    expect(a).not.toBe(b);
   });
 });
 

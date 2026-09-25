@@ -163,6 +163,27 @@ export function stableZapsFor(
 }
 
 /**
+ * Two reaction-tally lists that would render identically. The transports
+ * rebuild every tally array whenever ANY reaction in view changes (or a page of
+ * history lands); comparing by content lets them hand an unchanged row the
+ * SAME `reactions` object, so its memo holds.
+ */
+export function sameReactionTallies(a: readonly ReactionTally[], b: readonly ReactionTally[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((t, i) => {
+    const u = b[i];
+    return t.key === u.key
+      && t.url === u.url
+      && t.count === u.count
+      && t.mine === u.mine
+      && t.mineEventId === u.mineEventId
+      && t.pubkeys.length === u.pubkeys.length
+      && t.pubkeys.every((pk, k) => pk === u.pubkeys[k]);
+  });
+}
+
+/**
  * A settled lightning payment, handed by the shared zap dialog to a transport
  * whose zap announcement is its own event (Concord's sealed CORD.md rumor).
  * NIP-29 has no publish step — the LNURL provider's public receipt is the

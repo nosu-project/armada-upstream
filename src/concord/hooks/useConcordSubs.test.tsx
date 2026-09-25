@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   listResult: { data: undefined as unknown, error: null as unknown },
   entries: [] as Array<Record<string, unknown>>,
+  left: [] as string[],
   readControlFold: vi.fn<() => Promise<unknown>>(),
 }));
 
@@ -27,6 +28,7 @@ vi.mock("@/concord/hooks/useCommunityList", () => ({
 vi.mock("@/concord/lib/communityList", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/concord/lib/communityList")>()),
   liveEntries: () => h.entries,
+  removedCommunityIds: () => [...h.left],
   rehydrateCommunity: (entry: Record<string, unknown>) => ({
     idHex: entry.community_id,
     relays: ["wss://c"],
@@ -62,6 +64,7 @@ function wrapper() {
 afterEach(() => {
   h.listResult = { data: undefined, error: null };
   h.entries = [];
+  h.left = [];
   h.readControlFold.mockReset();
 });
 
@@ -79,6 +82,18 @@ describe("useConcordSubsState", () => {
     h.listResult = { data: { list: {}, repairPending: false }, error: null };
     const empty = renderHook(() => useConcordSubsState(), { wrapper: wrapper() });
     expect(empty.result.current).toMatchObject({ subs: [], ready: true, configReady: true });
+  });
+
+  it("reports left communities before the list is authoritative", () => {
+    h.left = ["gone"];
+    h.listResult = { data: { list: {} }, error: null };
+    const view = renderHook(() => useConcordSubsState(), { wrapper: wrapper() });
+    expect(view.result.current).toMatchObject({ ready: false, left: ["gone"] });
+    view.unmount();
+
+    h.listResult = { data: { list: {}, decryptFailed: true }, error: null };
+    const unreadable = renderHook(() => useConcordSubsState(), { wrapper: wrapper() });
+    expect(unreadable.result.current.left).toEqual([]);
   });
 
   it("returns private additive subs but stays unready on a control-fold cache miss", async () => {

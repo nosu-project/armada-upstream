@@ -49,6 +49,11 @@ abstract class NativeSigner {
 
     private static final String TAG = "ArmadaNativeSigner";
 
+    /** Conversation keys held in memory (profiling builds read this as a gauge). */
+    int cachedKeys() {
+        return 0;
+    }
+
     interface DecryptCallback {
         /**
          * @param plaintext   the decrypted string, or null.
@@ -143,6 +148,11 @@ abstract class NativeSigner {
             this.sk = sk;
         }
 
+        @Override
+        int cachedKeys() {
+            return convCache.size();
+        }
+
         private byte[] conv(String peerPk) {
             byte[] key = convCache.get(peerPk);
             if (key == null) {
@@ -155,8 +165,15 @@ abstract class NativeSigner {
         @Override
         void decrypt44(String peerPk, String ciphertext, DecryptCallback cb) {
             executor.execute(() -> {
-                byte[] key = conv(peerPk);
-                cb.done(key != null ? ConcordCrypto.decrypt(key, ciphertext) : null, false);
+                long t = ServiceProfiler.begin("signer.decrypt44 nsec");
+                String plain;
+                try {
+                    byte[] key = conv(peerPk);
+                    plain = key != null ? ConcordCrypto.decrypt(key, ciphertext) : null;
+                } finally {
+                    ServiceProfiler.end("signer.decrypt44 nsec", t);
+                }
+                cb.done(plain, false);
             });
         }
 
@@ -332,6 +349,7 @@ abstract class NativeSigner {
 
         private void connect(String url) {
             if (closed) return;
+            if (ServiceProfiler.ON) ServiceProfiler.count("nip46.connect");
             Request req = new Request.Builder().url(url).build();
             http.newWebSocket(req, new WebSocketListener() {
                 @Override
@@ -352,6 +370,7 @@ abstract class NativeSigner {
 
                 @Override
                 public void onMessage(WebSocket ws, String text) {
+                    if (ServiceProfiler.ON) ServiceProfiler.units("nip46.frame.in", text.length());
                     handleMessage(text);
                 }
 
@@ -396,7 +415,13 @@ abstract class NativeSigner {
             }
         }
 
-        private void rpc(String method, JSONArray params, RpcCallback cb) {
+        private void rpc(String method, JSONArray params, RpcCallback outer) {
+            // Profiling builds: every bunker round trip, by method, end to end.
+            final long started = android.os.SystemClock.elapsedRealtimeNanos();
+            final RpcCallback cb = !ServiceProfiler.ON ? outer : (result, error, unavailable) -> {
+                ServiceProfiler.elapsed("nip46.rpc " + method + (unavailable ? " (unavailable)" : ""), started);
+                outer.done(result, error, unavailable);
+            };
             executor.execute(() -> {
                 try {
                     String id = NostrCrypto.bytesToHex(randomBytes(16));

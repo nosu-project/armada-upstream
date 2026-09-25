@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Armada Concord seed harness</title>
+  </head>
+  <body>
+    <!-- Loaded by scripts/perf-profile.mjs through vite.config.perf.ts. Not an
+         app entry: no production build lists it. Exposes
+         window.__armadaSeedConcord, which writes a populated community into
+         the app's OWN ArmadaDB so the real app on the same origin reads it. -->
+    <script type="module" src="./concordSeed.ts"></script>
+  </body>
+</html>

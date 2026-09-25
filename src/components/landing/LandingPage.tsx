@@ -351,9 +351,9 @@ function RelayLight({ url, index }: { url: string; index: number }) {
           "size-1.5 shrink-0 rounded-full ring-2",
           alive === undefined && "animate-pulse bg-muted-foreground/40 ring-transparent motion-reduce:animate-none",
           alive === true &&
-            "animate-[armada-led-busy_1.15s_steps(1,end)_infinite] bg-emerald-400 text-emerald-400/60 ring-emerald-400/20 motion-reduce:animate-none",
+            "animate-[armada-led-busy_1.15s_steps(1,end)_infinite] bg-emerald-400 text-emerald-400/60 ring-emerald-400/20 shadow-[0_0_5px_1px_currentColor] motion-reduce:animate-none",
           alive === false &&
-            "animate-[armada-led-fault_1.9s_steps(1,end)_infinite] bg-red-400 text-red-400/50 ring-red-400/15 motion-reduce:animate-none",
+            "animate-[armada-led-fault_1.9s_steps(1,end)_infinite] bg-red-400 text-red-400/50 ring-red-400/15 shadow-[0_0_4px_0_currentColor] motion-reduce:animate-none",
         )}
       />
       {/* The relay's own https origin — the same host the light just probed,
@@ -395,31 +395,34 @@ function LandingKeyframes() {
       /* A live relay's activity light: fast, uneven, mostly lit — traffic,
          not a heartbeat. Driven with steps(1,end) so every change is a hard
          switch; interpolating between stops would make it breathe instead of
-         blink. Opacity + box-shadow only, so it never lays out. */
+         blink. OPACITY ONLY — the glow is a static shadow on the element that
+         dims with it. Animating box-shadow ran on the main thread, and four
+         of these restyled the landing page on every frame, forever. */
       @keyframes armada-led-busy {
-        0%   { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        7%   { opacity: 0.2; box-shadow: none; }
-        11%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        15%  { opacity: 0.2; box-shadow: none; }
-        23%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        34%  { opacity: 0.2; box-shadow: none; }
-        38%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        45%  { opacity: 0.2; box-shadow: none; }
-        49%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        61%  { opacity: 0.2; box-shadow: none; }
-        66%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        72%  { opacity: 0.2; box-shadow: none; }
-        76%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
-        88%  { opacity: 0.2; box-shadow: none; }
-        93%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        0%   { opacity: 1; }
+        7%   { opacity: 0.2; }
+        11%  { opacity: 1; }
+        15%  { opacity: 0.2; }
+        23%  { opacity: 1; }
+        34%  { opacity: 0.2; }
+        38%  { opacity: 1; }
+        45%  { opacity: 0.2; }
+        49%  { opacity: 1; }
+        61%  { opacity: 0.2; }
+        66%  { opacity: 1; }
+        72%  { opacity: 0.2; }
+        76%  { opacity: 1; }
+        88%  { opacity: 0.2; }
+        93%  { opacity: 1; }
       }
 
       /* A dead relay's fault light: one short pulse per cycle, same beat every
-         time — the point is that it is NOT doing any work. */
+         time — the point is that it is NOT doing any work. Opacity only, like
+         the busy light. */
       @keyframes armada-led-fault {
-        0%   { opacity: 1;    box-shadow: 0 0 4px 0 currentColor; }
-        22%  { opacity: 0.15; box-shadow: none; }
-        100% { opacity: 0.15; box-shadow: none; }
+        0%   { opacity: 1; }
+        22%  { opacity: 0.15; }
+        100% { opacity: 0.15; }
       }
 
       /* The scroll cue riding the swell. Transform only. */

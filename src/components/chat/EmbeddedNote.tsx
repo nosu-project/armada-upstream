@@ -1,10 +1,9 @@
 import {
   Award, Brain, CalendarDays, Check, Eye, EyeOff, ExternalLink, FileDigit,
   FileQuestion, FileText, Film, Gem, Image as ImageIcon, Layers, List, MapPin,
-  Mic, Mountain, Music, Package, Palette, Server, Shield, Sparkles, Swords,
+  Mic, Mountain, Music, Package, Palette, RotateCw, Server, Shield, Sparkles, Swords,
   Tag, User, Users, Zap,
 } from "lucide-react";
-import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { ComponentType, ReactNode } from "react";
@@ -33,7 +32,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { parseCalendarEvent, type RsvpTally } from "@/lib/calendar";
 import { writeClipboardText } from "@/lib/clipboard";
 import { getCustomEmojiUrl, isCustomEmoji, isRenderableReactionKey } from "@/lib/customEmoji";
-import { dittoEventUrl, dittoHashtagUrl } from "@/lib/dittoUrl";
+import { dittoEventUrl, dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -59,6 +58,9 @@ interface EmbeddedNoteProps {
    *  `njump.me/nevent1…` URL), the original URL — surfaced as a favicon+host
    *  chip that opens the source. */
   sourceUrl?: string;
+  /** Author of the message quoting this one — whose outbox is searched when
+   *  the identifier names no author. */
+  fallbackAuthor?: string;
   className?: string;
 }
 
@@ -130,36 +132,61 @@ function eventNostrUri(event: NostrRumor): string | undefined {
 }
 
 /** Inline embedded note card – like a link preview but for Nostr events. */
-export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, className }: EmbeddedNoteProps) {
-  const { data: event, isLoading } = useEvent(eventId, relays, authorHint);
+export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, fallbackAuthor, className }: EmbeddedNoteProps) {
+  const { data: event, isLoading, isFetching, refetch } = useEvent(eventId, relays, authorHint, {
+    fallbackAuthor,
+    discover: true,
+  });
+  const nevent = useMemo(
+    () => tryNeventEncode({
+      id: eventId,
+      ...(authorHint ? { author: authorHint } : {}),
+      ...(relays?.length ? { relays } : {}),
+    }),
+    [eventId, authorHint, relays],
+  );
 
   if (isLoading) {
     return <EmbeddedNoteSkeleton className={className} />;
   }
 
   if (!event) {
-    return <EmbeddedNoteTombstone eventId={eventId} className={className} />;
+    return (
+      <EmbeddedNoteTombstone
+        label={eventId}
+        nip19Id={nevent}
+        retrying={isFetching}
+        onRetry={refetch}
+        className={className}
+      />
+    );
   }
 
   return <EmbeddedEventCard event={event} sourceUrl={sourceUrl} className={className} />;
 }
 
 /** Inline embedded card for an addressable event (naddr). */
-export function EmbeddedNaddr({ addr, className }: { addr: AddrCoords; className?: string }) {
-  const { data: event, isLoading } = useAddrEvent(addr);
+export function EmbeddedNaddr({ addr, relays, className }: { addr: AddrCoords; relays?: string[]; className?: string }) {
+  const { data: event, isLoading, isFetching, refetch } = useAddrEvent(addr, relays);
+  const naddr = useMemo(
+    () => tryNaddrEncode({ ...addr, ...(relays?.length ? { relays } : {}) }),
+    [addr, relays],
+  );
 
   if (isLoading) {
     return <EmbeddedNoteSkeleton className={className} />;
   }
 
   if (!event) {
-    let naddr: string | undefined;
-    try {
-      naddr = nip19.naddrEncode(addr);
-    } catch {
-      naddr = undefined;
-    }
-    return <EmbeddedNoteTombstone eventId={naddr ?? addr.identifier} className={className} />;
+    return (
+      <EmbeddedNoteTombstone
+        label={naddr ?? addr.identifier}
+        nip19Id={naddr}
+        retrying={isFetching}
+        onRetry={refetch}
+        className={className}
+      />
+    );
   }
 
   return <EmbeddedEventCard event={event} className={className} />;
@@ -1198,16 +1225,53 @@ function EmbeddedNoteSkeleton({ className }: { className?: string }) {
   );
 }
 
-function EmbeddedNoteTombstone({ eventId, className }: { eventId: string; className?: string }) {
+/**
+ * An embed whose event no lookup found. It may exist somewhere we didn't ask,
+ * so it keeps the card's off-ramps — Ditto (which searches its own relays) and
+ * copy id — plus a retry that reruns the full lookup.
+ */
+function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }: {
+  label: string;
+  /** The nevent/naddr, hints included; undefined when the id is malformed. */
+  nip19Id?: string;
+  retrying: boolean;
+  onRetry: () => void;
+  className?: string;
+}) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 max-w-md rounded-2xl border border-dashed border-border px-3.5 py-4 my-1.5 text-muted-foreground",
+        "max-w-md w-full rounded-2xl border border-dashed border-border px-3 py-2 my-1.5 space-y-1 text-muted-foreground",
         className,
       )}
+      onClick={(e) => e.stopPropagation()}
     >
-      <FileQuestion className="size-4 shrink-0" />
-      <span className="text-sm truncate">Couldn't load event {eventId.slice(0, 12)}…</span>
+      <div className="flex items-center gap-2 min-w-0 py-1">
+        <FileQuestion className="size-4 shrink-0" />
+        <span className="text-sm truncate">Couldn't load event {label.slice(0, 12)}…</span>
+      </div>
+      <div className="flex items-center gap-2 min-w-0">
+        {nip19Id && <DittoLink href={dittoNip19Url(nip19Id)} />}
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry();
+            }}
+            disabled={retrying}
+            title="Retry"
+            aria-label="Retry"
+            className={cn(
+              "shrink-0 grid place-items-center size-6 touch:size-8 rounded-md",
+              "text-muted-foreground hover:text-primary hover:bg-secondary transition-colors disabled:opacity-60",
+            )}
+          >
+            <RotateCw className={cn("size-3.5 shrink-0", retrying && "animate-spin")} />
+          </button>
+          {nip19Id && <CopyIdButton uri={`nostr:${nip19Id}`} />}
+        </div>
+      </div>
     </div>
   );
 }

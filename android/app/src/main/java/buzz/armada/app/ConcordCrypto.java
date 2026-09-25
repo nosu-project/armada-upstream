@@ -41,6 +41,16 @@ final class ConcordCrypto {
      * mismatch / decode failure (best-effort; never throws).
      */
     static String decrypt(byte[] conversationKey, String payloadB64) {
+        if (!ServiceProfiler.ON) return decryptInner(conversationKey, payloadB64);
+        long t = ServiceProfiler.begin("crypto.nip44.decrypt");
+        try {
+            return decryptInner(conversationKey, payloadB64);
+        } finally {
+            ServiceProfiler.end("crypto.nip44.decrypt", t);
+        }
+    }
+
+    private static String decryptInner(byte[] conversationKey, String payloadB64) {
         try {
             if (conversationKey == null || conversationKey.length != 32) return null;
             if (payloadB64 == null || payloadB64.isEmpty() || payloadB64.charAt(0) == '#') return null;

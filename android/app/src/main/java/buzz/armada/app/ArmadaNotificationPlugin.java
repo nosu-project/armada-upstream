@@ -738,6 +738,8 @@ public class ArmadaNotificationPlugin extends Plugin {
         String selfDTagsRaw = arrayToString(call.getArray("selfDTags"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
+        java.util.Set<String> concordLeft =
+                lowerCaseSet(arrayToString(call.getArray("concordLeftCommunities")));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
         try {
@@ -751,17 +753,30 @@ public class ArmadaNotificationPlugin extends Plugin {
         // NativeSigner). Secret-bearing, so it is sealed with an Android
         // Keystore key before touching SharedPreferences and wiped with the
         // rest of the config on disable/logout.
+        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String signerSealed = null;
+        String signerDigest = null;
         try {
             if (call.getObject("signer") != null) {
-                signerSealed = SealedStore.seal(call.getObject("signer").toString());
-                if (signerSealed == null) Log.w(TAG, "Failed to seal signer credential");
+                String signerRaw = call.getObject("signer").toString();
+                signerDigest = sha256Hex(signerRaw);
+                // The SAME credential as last time keeps its sealed copy. Sealing
+                // uses a fresh IV, so re-sealing an unchanged signer produced a
+                // new ciphertext every configure — which the service could only
+                // read as "the signer changed", rebuilding it (and redialing a
+                // NIP-46 bunker) and reconnecting every relay each time.
+                String previousSealed = prefs.getString("signerSealed", null);
+                if (previousSealed != null && signerDigest.equals(prefs.getString("signerDigest", null))) {
+                    signerSealed = previousSealed;
+                } else {
+                    signerSealed = SealedStore.seal(signerRaw);
+                    if (signerSealed == null) Log.w(TAG, "Failed to seal signer credential");
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to read signer", e);
         }
 
-        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         boolean sameAccountConfig = prefs.getBoolean("enabled", false)
                 && userPubkey != null
                 && userPubkey.equals(prefs.getString("userPubkey", null));
@@ -879,11 +894,19 @@ public class ArmadaNotificationPlugin extends Plugin {
             if (replaceConcord) {
                 putOrRemove(editor, "concord2Subs", concordSubsRaw);
             } else {
-                putOrRemove(editor, "concord2Subs", mergeConcordSubscriptions(
-                        prefs.getString("concord2Subs", null), concordSubsRaw));
+                // A merge keeps whatever the unready snapshot didn't mention,
+                // which for a community the member LEFT is every channel of it.
+                // The tombstone is positive knowledge, so drop those here.
+                putOrRemove(editor, "concord2Subs", withoutCommunities(mergeConcordSubscriptions(
+                        prefs.getString("concord2Subs", null), concordSubsRaw), concordLeft));
             }
-            if (signerSealed != null) editor.putString("signerSealed", signerSealed);
-            else if (!sameAccountConfig) editor.remove("signerSealed");
+            if (signerSealed != null) {
+                editor.putString("signerSealed", signerSealed);
+                editor.putString("signerDigest", signerDigest);
+            } else if (!sameAccountConfig) {
+                editor.remove("signerSealed");
+                editor.remove("signerDigest");
+            }
             // Missing login material and a transient sealing failure both keep
             // the same account's last-good signer. Logout/account replacement
             // clears first, so another identity can never inherit it.
@@ -895,9 +918,12 @@ public class ArmadaNotificationPlugin extends Plugin {
                 } else {
                     editor.remove("gitSubs");
                 }
-            } else if (gitSubsRaw != null) {
-                putOrRemove(editor, "gitSubs", mergeGitSubscriptions(
-                        prefs.getString("gitSubs", null), gitSubsRaw));
+            } else {
+                putOrRemove(editor, "gitSubs", withoutGitCommunities(
+                        gitSubsRaw != null
+                                ? mergeGitSubscriptions(prefs.getString("gitSubs", null), gitSubsRaw)
+                                : prefs.getString("gitSubs", null),
+                        concordLeft));
             }
             // Versioned only for the additive Git plane. Existing installations
             // without this key retain their message/DM configuration unchanged.
@@ -1043,6 +1069,72 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
     }
 
+    /** Lower-cased members of a JSON string array; empty for null/invalid input. */
+    static java.util.Set<String> lowerCaseSet(String json) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (json == null) return out;
+        try {
+            JSONArray values = new JSONArray(json);
+            for (int i = 0; i < values.length(); i++) {
+                String value = values.optString(i, "");
+                if (!value.isEmpty()) out.add(value.toLowerCase(java.util.Locale.ROOT));
+            }
+        } catch (Exception ignored) {
+            // No removals rather than a guess.
+        }
+        return out;
+    }
+
+    /** Concord subscriptions minus every channel of the named communities. */
+    static String withoutCommunities(String json, java.util.Set<String> communityIds) {
+        if (json == null || communityIds.isEmpty()) return json;
+        try {
+            JSONArray input = new JSONArray(json);
+            JSONArray kept = new JSONArray();
+            for (int i = 0; i < input.length(); i++) {
+                JSONObject value = input.optJSONObject(i);
+                if (value == null) continue;
+                String community = value.optString("communityId", "").toLowerCase(java.util.Locale.ROOT);
+                if (!communityIds.contains(community)) kept.put(value);
+            }
+            return kept.toString();
+        } catch (Exception ignored) {
+            return json;
+        }
+    }
+
+    /**
+     * Git subscriptions minus attachments to the named communities; a repository
+     * left with no attachment is dropped, as the service would skip it anyway.
+     */
+    static String withoutGitCommunities(String json, java.util.Set<String> communityIds) {
+        if (json == null || communityIds.isEmpty()) return json;
+        try {
+            JSONArray input = new JSONArray(json);
+            JSONArray kept = new JSONArray();
+            for (int i = 0; i < input.length(); i++) {
+                JSONObject repository = input.optJSONObject(i);
+                if (repository == null) continue;
+                JSONArray attachments = repository.optJSONArray("attachments");
+                JSONArray keptAttachments = new JSONArray();
+                if (attachments != null) for (int j = 0; j < attachments.length(); j++) {
+                    JSONObject attachment = attachments.optJSONObject(j);
+                    if (attachment == null) continue;
+                    String community = attachment.optString("communityId", "")
+                            .toLowerCase(java.util.Locale.ROOT);
+                    if (!communityIds.contains(community)) keptAttachments.put(attachment);
+                }
+                if (keptAttachments.length() == 0) continue;
+                JSONObject next = new JSONObject(repository.toString());
+                next.put("attachments", keptAttachments);
+                kept.put(next);
+            }
+            return kept.toString();
+        } catch (Exception ignored) {
+            return json;
+        }
+    }
+
     /** Additive same-account Git merge; ready replacement still prunes. */
     static String mergeGitSubscriptions(String oldJson, String nextJson) {
         if (nextJson == null) return oldJson;
@@ -1182,4 +1274,14 @@ public class ArmadaNotificationPlugin extends Plugin {
             return nextRepos.toString();
         } catch (Exception ignored) { return nextJson; }
     }
+
+    /** Lowercase hex SHA-256 of a string's UTF-8 bytes. */
+    static String sha256Hex(String text) throws java.security.NoSuchAlgorithmException {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        StringBuilder out = new StringBuilder(digest.length * 2);
+        for (byte b : digest) out.append(String.format("%02x", b));
+        return out.toString();
+    }
+
 }
