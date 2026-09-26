@@ -25,7 +25,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
+import { publicRelayHints, useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
@@ -135,7 +135,8 @@ function eventNostrUri(event: NostrRumor): string | undefined {
 
 /** Inline embedded note card – like a link preview but for Nostr events. */
 export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, fallbackAuthor, className }: EmbeddedNoteProps) {
-  const { data: event, isLoading, isFetching, refetch } = useEvent(eventId, relays, authorHint, {
+  const hints = useMemo(() => publicRelayHints(relays), [relays]);
+  const { data: event, isLoading, isFetching, refetch } = useEvent(eventId, hints, authorHint, {
     fallbackAuthor,
     discover: true,
   });
@@ -169,7 +170,8 @@ export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, fallbackA
 
 /** Inline embedded card for an addressable event (naddr). */
 export function EmbeddedNaddr({ addr, relays, className }: { addr: AddrCoords; relays?: string[]; className?: string }) {
-  const { data: event, isLoading, isFetching, refetch } = useAddrEvent(addr, relays);
+  const hints = useMemo(() => publicRelayHints(relays), [relays]);
+  const { data: event, isLoading, isFetching, refetch } = useAddrEvent(addr, hints);
   const naddr = useMemo(
     () => tryNaddrEncode({ ...addr, ...(relays?.length ? { relays } : {}) }),
     [addr, relays],

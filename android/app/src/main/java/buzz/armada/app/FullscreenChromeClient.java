@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
@@ -61,6 +62,11 @@ public class FullscreenChromeClient extends BridgeWebChromeClient {
         bars.setSystemBarsBehavior(WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         bars.hide(WindowInsetsCompat.Type.systemBars());
         exitOnBack.setEnabled(true);
+        // The WebView shows no exit hint of its own, and a Mini App (sender-
+        // written code) can go fullscreen too: without one it can pass off a
+        // fake of the app or the system as the real thing. A toast is its own
+        // window, so nothing the fullscreen view draws can cover it.
+        Toast.makeText(activity, "Press Back to exit full screen", Toast.LENGTH_SHORT).show();
     }
 
     @Override

@@ -132,22 +132,35 @@ public class MediaGalleryPlugin extends Plugin {
         });
     }
 
-    /** A cached JPEG thumbnail for one item: `{ path }`. */
+    /**
+     * A cached JPEG thumbnail for one item: `{ path }`.
+     *
+     * <p>The item's URI is rebuilt here from its MediaStore id rather than taken
+     * from the caller, so this reads only gallery items — never whatever other
+     * content:// URI the app itself can open — and only under the same grant
+     * {@link #list} requires. The cache key names the collection as well as the
+     * id, so one item's thumbnail can never be stored under another's name.
+     */
     @PluginMethod
     public void thumbnail(PluginCall call) {
-        String uriString = call.getString("uri");
         Long id = longArg(call, "id");
         boolean video = Boolean.TRUE.equals(call.getBoolean("video", false));
         Long modifiedArg = longArg(call, "modified");
         long modified = modifiedArg != null ? modifiedArg : 0L;
-        if (uriString == null || id == null) {
-            call.reject("uri and id are required");
+        if (id == null || id < 0) {
+            call.reject("id is required");
             return;
         }
+        if (!"full".equals(access()) && !"limited".equals(access())) {
+            call.reject("Media access not granted", "denied");
+            return;
+        }
+        Uri uri = ContentUris.withAppendedId(
+            video ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI : MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
         io.execute(() -> {
             try {
-                File out = new File(thumbDir(), id + "-" + modified + ".jpg");
-                if (!out.exists()) writeThumbnail(Uri.parse(uriString), id, video, out);
+                File out = new File(thumbDir(), (video ? "v" : "i") + id + "-" + modified + ".jpg");
+                if (!out.exists()) writeThumbnail(uri, id, video, out);
                 JSObject result = new JSObject();
                 result.put("path", out.getAbsolutePath());
                 answer(() -> call.resolve(result));

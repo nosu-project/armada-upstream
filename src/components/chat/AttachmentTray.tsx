@@ -3,11 +3,12 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { companionEncryption } from "@/lib/imeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
@@ -339,9 +340,14 @@ function CardPreview({ item }: { item: TrayAttachment }) {
   }
   if (item.isWebxdc) {
     const icon = sanitizeImageSrc(item.icon);
+    const placeholder = <Blocks className="size-8 text-primary" />;
     return (
       <span className="flex size-full items-center justify-center">
-        {icon ? <img src={icon} alt="" className="size-10 rounded-lg object-cover" /> : <Blocks className="size-8 text-primary" />}
+        {icon ? (
+          <FallbackImage src={icon} className="size-10 rounded-lg object-cover" fallback={placeholder} />
+        ) : (
+          placeholder
+        )}
       </span>
     );
   }
@@ -354,10 +360,11 @@ function CardPreview({ item }: { item: TrayAttachment }) {
 }
 
 /**
- * Composer attachment thumbnail. Plain uploads point an <img> at the URL;
- * encrypted (Concord) uploads are ciphertext on Blossom, so this resolves them
- * through {@link useResolvedMediaSrc} (fetch + AES-GCM decrypt to an object URL)
- * exactly like the message render path, so the local preview isn't a broken img.
+ * Composer attachment thumbnail, resolved exactly like the message render path
+ * ({@link useMediaWithFallback}): encrypted (Concord) uploads are fetched and
+ * decrypted to an object URL, and a plain URL loads under the media policy. A
+ * forwarded message's chips name the ORIGINAL sender's host, so loading them
+ * directly would hand that host the forwarder's address.
  */
 function AttachmentPreviewImage({
   url,
@@ -370,11 +377,11 @@ function AttachmentPreviewImage({
   encryption?: ImetaEncryption;
   alt?: string;
 }) {
-  const resolved = useResolvedMediaSrc(encryption ? { url, encryption, mime } : url);
-  if (resolved.status !== "ready") {
+  const { resolved, onError, failed } = useMediaWithFallback({ url, encryption, mime });
+  if (resolved.status !== "ready" || failed) {
     return (
       <span className="flex size-full items-center justify-center bg-secondary/40">
-        {resolved.status === "loading" ? (
+        {resolved.status === "loading" && !failed ? (
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         ) : (
           <Paperclip className="size-5 text-muted-foreground" />
@@ -382,7 +389,7 @@ function AttachmentPreviewImage({
       </span>
     );
   }
-  return <img src={resolved.src} alt={alt ?? "attachment"} className="size-full object-cover" />;
+  return <img src={resolved.src} alt={alt ?? "attachment"} onError={onError} className="size-full object-cover" />;
 }
 
 /**

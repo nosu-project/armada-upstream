@@ -9,7 +9,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useAddrEvent, useEvent } from "./useEvent";
+import { publicRelayHints, useAddrEvent, useEvent } from "./useEvent";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -112,6 +112,20 @@ describe("useEvent", () => {
     expect(result.current.data?.id).toBe(TARGET_ID);
   });
 
+  it("does not dial a reference's loopback or LAN relay hint", async () => {
+    const reply = ev({
+      id: "3".repeat(64),
+      pubkey: REPLIER,
+      kind: 1,
+      tags: [["e", TARGET_ID, "ws://192.168.1.1"], ["e", TARGET_ID, "wss://localhost:7777"]],
+    });
+    h.relays.set(POOL, [reply]);
+    const { result } = renderHook(() => useEvent(TARGET_ID, undefined, undefined, { discover: true }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+    expect(h.groupCalls.flat()).toEqual([]);
+  });
+
   it("does not ask about references unless discovery is opted into", async () => {
     const reply = ev({ id: "3".repeat(64), pubkey: REPLIER, kind: 1, tags: [["e", TARGET_ID, HINTED]] });
     h.relays.set(POOL, [reply]);
@@ -144,5 +158,20 @@ describe("useAddrEvent", () => {
     );
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.id).toBe(article.id);
+  });
+});
+
+describe("publicRelayHints", () => {
+  it("keeps public wss hints and drops plaintext, private and junk ones", () => {
+    expect(publicRelayHints([
+      "wss://relay.example",
+      "ws://relay.example",
+      "wss://127.0.0.1",
+      "wss://[::1]:8080",
+      "wss://10.0.0.2",
+      "wss://printer.local",
+      "",
+      "/",
+    ])).toEqual(["wss://relay.example"]);
   });
 });

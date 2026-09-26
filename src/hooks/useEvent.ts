@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEventStore } from "@/hooks/useEventStore";
 import { isNostrId } from "@/lib/nostrId";
 import { normalizeRelayUrl } from "@/lib/platform";
+import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -18,6 +19,20 @@ function sanitizeRelayHints(relays: string[] | undefined): string[] {
   return (relays ?? [])
     .map(normalizeRelayUrl)
     .filter((url): url is string => !!url);
+}
+
+/**
+ * Relay hints a SENDER named (an nevent/naddr TLV, an `e`/`q` tag, a shared
+ * link), narrowed to what the client will dial on their say-so: `wss:` on a
+ * public host. A hint is a socket opened from the viewer's address to wherever
+ * the sender chose, so a loopback/LAN one is a blind probe of the viewer's
+ * network. Not for relays the USER configured (a joined NIP-29 relay may well
+ * be `ws://localhost` on a dev box) — those pass through `sanitizeRelayHints`.
+ */
+export function publicRelayHints(relays: string[] | undefined): string[] {
+  return sanitizeRelayHints(relays).filter(
+    (url) => url.startsWith("wss://") && !isLocalNetworkUrl(url),
+  );
 }
 
 /**
@@ -144,7 +159,7 @@ async function discoverViaReferences(
 
     const attempts: Promise<NostrEvent | null>[] = [];
     if (relayHints.size > 0) {
-      attempts.push(queryRelayGroup(nostr, [...relayHints], filter, AbortSignal.any([signal, AbortSignal.timeout(6000)])));
+      attempts.push(queryRelayGroup(nostr, publicRelayHints([...relayHints]), filter, AbortSignal.any([signal, AbortSignal.timeout(6000)])));
     }
     for (const pk of pubkeys.slice(0, 3)) {
       attempts.push(queryAuthorRelays(nostr, pk, filter, AbortSignal.any([signal, AbortSignal.timeout(8000)])));

@@ -30,7 +30,8 @@ interface MediaGalleryPlugin {
   requestAccess(): Promise<{ access: MediaAccess }>;
   openSettings(): Promise<void>;
   list(opts: { limit: number; offset: number }): Promise<{ items: GalleryItem[]; more: boolean }>;
-  thumbnail(opts: { id: number; uri: string; video: boolean; modified: number }): Promise<{ path: string }>;
+  /** The item is named by its MediaStore id; the plugin rebuilds its URI. */
+  thumbnail(opts: { id: number; video: boolean; modified: number }): Promise<{ path: string }>;
 }
 
 const MediaGallery = registerPlugin<MediaGalleryPlugin>("MediaGallery");
@@ -64,10 +65,10 @@ export function listRecentMedia(offset: number, limit = 60): Promise<{ items: Ga
 const thumbs = new Map<string, Promise<string>>();
 
 export function galleryThumbnailSrc(item: GalleryItem): Promise<string> {
-  const key = `${item.id}-${item.modified}`;
+  const key = `${item.video ? "v" : "i"}${item.id}-${item.modified}`;
   let src = thumbs.get(key);
   if (!src) {
-    src = MediaGallery.thumbnail({ id: item.id, uri: item.uri, video: item.video, modified: item.modified })
+    src = MediaGallery.thumbnail({ id: item.id, video: item.video, modified: item.modified })
       .then(({ path }) => Capacitor.convertFileSrc(path));
     // A failure is not remembered: the next render may ask again.
     src.catch(() => thumbs.delete(key));

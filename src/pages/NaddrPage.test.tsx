@@ -13,7 +13,8 @@ const h = vi.hoisted(() => ({
   addrEvent: vi.fn<(addr: unknown, relays?: string[]) => { data: unknown; isLoading: boolean }>(),
 }));
 
-vi.mock("@/hooks/useEvent", () => ({
+vi.mock("@/hooks/useEvent", async (importOriginal) => ({
+  publicRelayHints: (await importOriginal<typeof import("@/hooks/useEvent")>()).publicRelayHints,
   useAddrEvent: (addr: unknown, relays?: string[]) => h.addrEvent(addr, relays),
 }));
 vi.mock("@/hooks/useDiscover", () => ({ useDiscoverRelays: () => ["wss://discover.example"] }));
@@ -74,15 +75,16 @@ describe("NaddrPage", () => {
       ]),
       isLoading: false,
     });
-    renderAt(naddr(36767, "dusk", ["wss://hint.example"]));
+    renderAt(naddr(36767, "dusk", ["wss://hint.example", "ws://192.168.1.1", "wss://localhost"]));
 
     expect(screen.getByRole("heading", { name: "Dusk" })).toBeInTheDocument();
     expect(screen.getByLabelText("Preview of Dusk")).toBeInTheDocument();
     expect(screen.getByText("theme card")).toBeInTheDocument();
-    // The naddr's own relay hints are asked first, then the Discover relays.
+    // Our own Discover relays first, then the naddr's public relay hints; a
+    // LAN or loopback hint is never dialed.
     expect(h.addrEvent).toHaveBeenCalledWith(
       { kind: 36767, pubkey: PUBKEY, identifier: "dusk" },
-      ["wss://hint.example", "wss://discover.example"],
+      ["wss://discover.example", "wss://hint.example"],
     );
   });
 

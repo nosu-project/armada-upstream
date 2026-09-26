@@ -204,6 +204,8 @@ export function VideoPlayer({
   // the message row's context menu, which shows them above the message's. On
   // touch our long-press sheet is the menu, so suppress the platform callout.
   const handleContextMenu = (e: React.MouseEvent) => {
+    // A spoiler's cover is the only way to the video; no Save/Share around it.
+    if (spoilerCover) return;
     longPress.onContextMenu(e);
     if (mediaActions.length === 0) return;
     if (chatMenu?.isTouch) e.preventDefault();
@@ -346,7 +348,7 @@ export function VideoPlayer({
             playsInline
             disablePictureInPicture
             preload="metadata"
-            aria-label={alt}
+            aria-label={spoilerCover ? undefined : alt}
             className="w-full h-full object-contain"
             onError={onError}
           />
@@ -400,7 +402,7 @@ export function VideoPlayer({
         // An empty string would resolve against the document URL and make the
         // element try to load the page itself.
         src={mediaSrc || undefined}
-        aria-label={alt}
+        aria-label={spoilerCover ? undefined : alt}
         // A transparent poster keeps the WebView from painting its own gray
         // placeholder behind our overlays.
         poster={BLANK_POSTER}
@@ -471,7 +473,7 @@ export function VideoPlayer({
 
       {/* Download / Share (⋯) menu — reachable before playback too, so a video
           can be saved without playing it. Hidden where a host offers its own. */}
-      {ready && !hideActionsMenu && (
+      {ready && !hideActionsMenu && !spoilerCover && (
         <div
           className={cn(
             "absolute top-2 right-2 z-10 transition-opacity duration-200",

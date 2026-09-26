@@ -71,7 +71,8 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
   const img = (
     <img
       src={src}
-      alt={entry.name ?? "Pinned image"}
+      alt={cover ? "" : (entry.name ?? "Pinned image")}
+      aria-hidden={cover ? true : undefined}
       loading="lazy"
       className={PREVIEW_CLASS}
       onError={onError}
@@ -82,13 +83,25 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
   // goes to the remote URL, never the resolved blob: a blob carries the mime
   // the SENDER chose and opens same-origin, so navigating to one hands them a
   // document in our own origin.
+  // While covered, the cover is the only way in: no click or tab stop on the
+  // gallery button, and no href on the link (one without is not focusable).
   return onOpen ? (
-    <button type="button" onClick={onOpen} className="relative block cursor-zoom-in overflow-hidden rounded">
+    <button
+      type="button"
+      onClick={cover ? undefined : onOpen}
+      tabIndex={cover ? -1 : undefined}
+      className="relative block cursor-zoom-in overflow-hidden rounded"
+    >
       {img}
       {cover}
     </button>
   ) : (
-    <a href={entry.url} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded">
+    <a
+      href={cover ? undefined : entry.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="relative block overflow-hidden rounded"
+    >
       {img}
       {cover}
     </a>

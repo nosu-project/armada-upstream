@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDiscoverRelays } from "@/hooks/useDiscover";
 import { KIND_EMOJI_SET, emojiPackName } from "@/hooks/useEmojiPacks";
-import { useAddrEvent } from "@/hooks/useEvent";
+import { publicRelayHints, useAddrEvent } from "@/hooks/useEvent";
 import { parseNaddr } from "@/lib/naddrLink";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { NotFound } from "@/pages/NotFound";
@@ -34,8 +34,11 @@ export function NaddrPage() {
   const { user: segment } = useParams<{ user: string }>();
   const address = useMemo(() => parseNaddr(segment), [segment]);
   const discoverRelays = useDiscoverRelays();
+  // Our own relays first, so a link's hints can't crowd them out of the
+  // fallback's five slots; the hints are the link author's choice of where the
+  // viewer connects, so only public `wss:` ones survive.
   const relays = useMemo(
-    () => [...new Set([...(address?.relays ?? []), ...discoverRelays])],
+    () => [...new Set([...discoverRelays, ...publicRelayHints(address?.relays)])],
     [address, discoverRelays],
   );
   const { data: event, isLoading } = useAddrEvent(address?.addr, relays);

@@ -249,6 +249,8 @@ public class NotificationRelayService extends Service {
     // roomNotifs). Null when none.
     private String ringingCallId;
     private String ringingPeer;
+    // One "ringing" receipt per call id and per peer per interval, as on the web.
+    private final CallReceiptGate callReceiptGate = new CallReceiptGate();
 
     // Backoff for relay-initiated CLOSED resubscribes (see subRetryBackoffMs).
     // SOCKET reconnects are no longer timed here: they are decided by
@@ -3854,7 +3856,7 @@ public class NotificationRelayService extends Service {
     private void handleDmCallRumor(String peer, JSONObject rumor, String relayUrl) {
         final String phase = rumor.optString("content", "");
         final String callId = tagValue(rumor, "call");
-        if (callId == null || callId.length() != 64) return;
+        if (!validHex(callId)) return;
         final long tsMs = rumor.optLong("created_at", 0) * 1000L;
         if ("offer".equals(phase)) {
             if (!dmNotificationEnabled(peer)) return;
@@ -3951,7 +3953,8 @@ public class NotificationRelayService extends Service {
                     // timeout into "No answer" rather than "Couldn't reach".
                     // Only reached for a peer dmCallAllowed admitted, and
                     // only sent when it can be signed without a prompt.
-                    if (maySendCallReceipt(nativeSigner)) {
+                    if (maySendCallReceipt(nativeSigner)
+                            && callReceiptGate.admit(peer, callId, System.currentTimeMillis())) {
                         publishCallSignal(peer, callId, "ringing", /*selfCopy=*/false);
                     }
                 }

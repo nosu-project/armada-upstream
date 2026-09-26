@@ -1764,12 +1764,21 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
   };
 }
 
+/**
+ * The image button's props while a spoiler covers it: none of the image menu's
+ * handlers, so the lightbox (which shows the item it opened on uncovered) and
+ * the Copy/Save/Share actions are reachable only through the cover's reveal —
+ * and out of the tab order, where the cover takes its place.
+ */
+const COVERED_IMAGE_PROPS = { tabIndex: -1 } as const;
+
 /** Inline image thumbnail that opens the shared lightbox on click. */
 function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
   const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
+  const covered = image.spoiler && !revealed;
 
   // Once every mirror is exhausted, degrade to a link + manual retry. Block-level
   // (via MediaFallback) because the tokenizer stripped the surrounding newlines
@@ -1789,7 +1798,7 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
     <button
       type="button"
       className="block my-1.5 rounded overflow-hidden max-w-sm cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      {...menu}
+      {...(covered ? COVERED_IMAGE_PROPS : menu)}
     >
       <div
         className={cn(
@@ -1808,12 +1817,14 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
         {!loaded && image.blurhash && (
           <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
         )}
-        {image.spoiler && !revealed && <MediaSpoilerCover onReveal={() => setRevealed(true)} />}
+        {covered && <MediaSpoilerCover onReveal={() => setRevealed(true)} />}
         {resolved.status === "ready" && (
           <img
             src={resolved.src}
-            alt={image.alt ?? ""}
-            title={image.alt}
+            // The sender's description says what the spoiler hides.
+            alt={covered ? "" : (image.alt ?? "")}
+            title={covered ? undefined : image.alt}
+            aria-hidden={covered || undefined}
             // Native image drag/callout starts on the same hold as our
             // long-press and cancels it (a buzz, no menu) — off on both axes.
             draggable={false}
@@ -1873,12 +1884,13 @@ function GridImage({
   const [revealed, setRevealed] = useState(false);
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
   const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
+  const covered = image.spoiler && !revealed;
 
   return (
     <button
       type="button"
       className="relative aspect-square rounded overflow-hidden bg-muted cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      {...menu}
+      {...(covered ? COVERED_IMAGE_PROPS : menu)}
     >
       {failed ? (
         // Once every mirror is exhausted, fill the cell with a retry control
@@ -1893,8 +1905,9 @@ function GridImage({
           {resolved.status === "ready" && (
             <img
               src={resolved.src}
-              alt={image.alt ?? ""}
-              title={image.alt}
+              alt={covered ? "" : (image.alt ?? "")}
+              title={covered ? undefined : image.alt}
+              aria-hidden={covered || undefined}
               // See InlineImage: native drag/callout would eat the long-press.
               draggable={false}
               loading="lazy"
@@ -1906,7 +1919,7 @@ function GridImage({
           )}
         </>
       )}
-      {image.spoiler && !revealed && <MediaSpoilerCover compact onReveal={() => setRevealed(true)} />}
+      {covered && <MediaSpoilerCover compact onReveal={() => setRevealed(true)} />}
       {overflow !== undefined && (
         <span className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-lg font-semibold">
           +{overflow}

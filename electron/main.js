@@ -538,6 +538,25 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
     mainWindow?.flashFrame(false);
   });
 
+  // Esc always leaves HTML fullscreen. An embed that went fullscreen (a Mini
+  // App is sender-written code) has keyboard focus, and a key the page
+  // consumes may never reach Electron's own Esc handling, so take it before
+  // the page sees it. The renderer shows the matching hint (fullscreenHint.ts).
+  let htmlFullscreen = false;
+  mainWindow.on("enter-html-full-screen", () => {
+    htmlFullscreen = true;
+  });
+  mainWindow.on("leave-html-full-screen", () => {
+    htmlFullscreen = false;
+  });
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (!htmlFullscreen || input.type !== "keyDown" || input.key !== "Escape") return;
+    event.preventDefault();
+    mainWindow.webContents
+      .executeJavaScript("document.exitFullscreen().catch(() => {})")
+      .catch(() => {});
+  });
+
   // The app menu is removed (Menu.setApplicationMenu(null)), and the default
   // DevTools accelerators come from that menu — so in dev mode bind them
   // directly, or there is no way into the inspector at all.
