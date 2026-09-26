@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { MutedPubkeysContext, type MutedPubkeysResult } from "@/contexts/MutedPubkeysContext";
-import { selfStateRelays } from "@/contexts/AppContext";
+import { selfStateRelays, type AppConfig } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -490,6 +490,29 @@ async function editMuteList(
 }
 
 /**
+ * The mute-list query's relay key. Memoized on the config: every message row
+ * mounts both mutation hooks (through {@link useMuteToggle}), and deriving it
+ * normalizes every relay URL.
+ */
+function useMuteRelayKey(config: AppConfig, pubkey: string | undefined): string {
+  return useMemo(() => muteRelayKey(config, pubkey), [config, pubkey]);
+}
+
+/** Shared across instances too, so mounting a page of rows derives it once. */
+const muteRelayKeys = new WeakMap<AppConfig, Map<string, string>>();
+
+function muteRelayKey(config: AppConfig, pubkey: string | undefined): string {
+  let byPubkey = muteRelayKeys.get(config);
+  if (!byPubkey) muteRelayKeys.set(config, (byPubkey = new Map()));
+  let key = byPubkey.get(pubkey ?? "");
+  if (key === undefined) {
+    key = uniqueRelayUrls(selfStateRelays(config, pubkey)).sort().join(",");
+    byPubkey.set(pubkey ?? "", key);
+  }
+  return key;
+}
+
+/**
  * Mute a pubkey by appending it to the user's NIP-51 mute list (kind 10000).
  *
  * The new entry is written to the *private* (NIP-44-encrypted) portion of the
@@ -503,8 +526,7 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
-  const sourceRelays = uniqueRelayUrls(selfStateRelays(config, user?.pubkey)).sort();
-  const relayKey = sourceRelays.join(",");
+  const relayKey = useMuteRelayKey(config, user?.pubkey);
   const queryKey = ["mute-list", user?.pubkey, relayKey] as const;
 
   return useMutation({
@@ -584,8 +606,7 @@ export function useUnmuteUser(): UseMutationResult<void, Error, string> {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
-  const sourceRelays = uniqueRelayUrls(selfStateRelays(config, user?.pubkey)).sort();
-  const relayKey = sourceRelays.join(",");
+  const relayKey = useMuteRelayKey(config, user?.pubkey);
   const queryKey = ["mute-list", user?.pubkey, relayKey] as const;
 
   return useMutation({

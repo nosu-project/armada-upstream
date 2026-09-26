@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 
 import { useBuzzEmojiPalette } from "@/buzz/useBuzzEmojiPalette";
 import { accountDataRelays } from "@/contexts/AppContext";
@@ -101,7 +101,39 @@ function paletteFrom(listEvent: NostrRumor, packEvents: NostrRumor[]): CustomEmo
  * genuinely empty). Anything short — no list, or packs that didn't come back —
  * keeps the last durable palette instead of blanking the picker.
  */
-export function useCustomEmojis() {
+export function useCustomEmojis(): CustomEmojisResult {
+  const shared = useContext(CustomEmojisContext);
+  // Whether a provider sits above a component is fixed for its lifetime (adding
+  // or removing one remounts everything beneath it), so this branch never
+  // changes the hook order of a mounted component.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return shared ?? useCustomEmojisSource();
+}
+
+export interface CustomEmojisResult {
+  emojis: CustomEmoji[];
+  isLoading: boolean;
+}
+
+/**
+ * One palette read for a whole chat surface. Without it every message row's
+ * content and reaction bar subscribed its own palette query, Buzz palette
+ * query and relay-info query — three observers per row, re-run on every row
+ * render — for a value that is the same for the whole surface.
+ */
+const CustomEmojisContext = createContext<CustomEmojisResult | null>(null);
+
+/** Provide {@link useCustomEmojis} to everything below, read once. Place it inside the chat scope. */
+export function CustomEmojisProvider({ children }: { children: ReactNode }) {
+  const source = useCustomEmojisSource();
+  const value = useMemo(
+    () => ({ emojis: source.emojis, isLoading: source.isLoading }),
+    [source.emojis, source.isLoading],
+  );
+  return createElement(CustomEmojisContext.Provider, { value }, children);
+}
+
+function useCustomEmojisSource(): CustomEmojisResult {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();

@@ -27,14 +27,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -476,12 +471,7 @@ export interface ChatMessageProps {
  * Capabilities are presence-gated: a control renders only when its callback is
  * supplied (e.g. no `onTogglePin` ⇒ no pin button), so a transport that can't
  * do a thing shows no dead control for it.
- */
-export function ChatMessage(props: ChatMessageProps) {
-  return <ChatMessageInner {...props} />;
-}
-
-/**
+ *
  * Memoized to avoid re-rendering every message row when the timeline re-renders
  * (e.g. a new message or reaction arrives, or the channel polls). The transport
  * supplies stable `event`/`reactions`/callback identities for unchanged rows, so
@@ -540,9 +530,9 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // a provider: this row is deliberately mountable bare in tests.
   const sendOnEnter = sendsOnEnter(useContext(AppContext)?.config.sendOnEnter, isTouch);
   const composerBoundsRef = useComposerBoundsRef();
-  const author = useAuthor(identityOverride ? undefined : event.pubkey);
-  const scopedName = useScopedDisplayName(identityOverride ? undefined : event.pubkey, author.data?.metadata);
-  const displayName = identityOverride?.name ?? scopedName;
+  // The author's name is resolved by MessageRow (the byline) and, on the rare
+  // action-line rows, by DisplayName itself — not here too: a profile and a
+  // server-profile lookup per row, per render, for a name most rows never use.
   // A command reads as an action ("JSKitty ran /greet with Concordia"), not as a
   // wall of raw arguments. The content still carries them for the bot.
   const invocation = useMemo(
@@ -630,8 +620,15 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // moderators in principle but no way to reach them privately (a legacy
   // Concord epoch), and offers no report at all.
   const [reportOpen, setReportOpen] = useState(false);
-  // The menu's collision padding forces a layout flush; compute it only while open.
-  const [menuOpen, setMenuOpen] = useState(false);
+  // The desktop right-click menu, built on the first right-click (see
+  // useLazyContextMenu). Its collision padding forces a layout flush, so it is
+  // computed only while open.
+  const clearImageActions = useCallback(() => setImageActions(null), []);
+  const contextMenu = useLazyContextMenu(
+    useCallback((open: boolean) => {
+      if (!open) setImageActions(null);
+    }, []),
+  );
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   // A mesh/proxied identity isn't a Nostr pubkey a report could name, and a
@@ -1013,7 +1010,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         // the bot's reply is what actually says how it went.
         <div className="text-[15px] italic text-muted-foreground">
           <span className="font-semibold not-italic text-primary">
-            <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={displayName} />
+            <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={identityOverride?.name} />
           </span>{" "}
           ran{" "}
           <button
@@ -1037,7 +1034,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       ) : isMeAction(event) ? (
         <div className="text-[15px] italic text-muted-foreground">
           <span className="font-semibold not-italic text-primary">
-            <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={displayName} />
+            <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={identityOverride?.name} />
           </span>{" "}
           <ChatContent
             event={event}
@@ -1151,30 +1148,38 @@ const ChatMessageInner = memo(function ChatMessageInner({
         Discord-style right-click ContextMenu isn't mounted at all — one fewer
         Radix root per row on the platform whose per-row render budget is
         tightest. Desktop keeps the right-click menu, built from the same
-        action list as the touch sheet and the `⋯` overflow. */}
+        action list as the touch sheet and the `⋯` overflow — and built on
+        the first right-click, as a sibling of the row (useLazyContextMenu). */}
     {isTouch ? (
       row
     ) : (
       // Clearing image actions on close, and again in the trigger's capture
       // phase (which runs before an image's own contextmenu handler restages
       // them), keeps a right-click on text from inheriting the last image's.
-      <ContextMenu onOpenChange={(open) => { setMenuOpen(open); if (!open) setImageActions(null); }}>
-        <ContextMenuTrigger className="block" onContextMenuCapture={() => setImageActions(null)}>{row}</ContextMenuTrigger>
-        <ContextMenuContent className="w-52" onCloseAutoFocus={keepActionFocus} collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
-          {withImageActions(imageActions, menuActions).map((action) => (
-            <div key={action.id}>
-              {action.groupStart && <ContextMenuSeparator />}
-              <ContextMenuItem
-                className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
-                onSelect={action.onSelect}
-              >
-                <action.icon className="mr-2 size-4" />
-                {action.label}
-              </ContextMenuItem>
-            </div>
-          ))}
-        </ContextMenuContent>
-      </ContextMenu>
+      <span className="block" onContextMenuCapture={clearImageActions} onContextMenu={contextMenu.onContextMenu}>
+        {row}
+      </span>
+    )}
+    {!isTouch && contextMenu.point && (
+      <LazyContextMenuContent
+        menu={contextMenu}
+        className="w-52"
+        onCloseAutoFocus={keepActionFocus}
+        collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
+      >
+        {withImageActions(imageActions, menuActions).map((action) => (
+          <div key={action.id}>
+            {action.groupStart && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
+              onSelect={action.onSelect}
+            >
+              <action.icon className="mr-2 size-4" />
+              {action.label}
+            </DropdownMenuItem>
+          </div>
+        ))}
+      </LazyContextMenuContent>
     )}
     {isTouch && (sheetOpen || sheetBuilt) && (
       <MessageActionSheet
@@ -1234,3 +1239,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
     </ChatImageMenuContext.Provider>
   );
 });
+
+/**
+ * Exported as the memoized component itself, not a wrapper around it: a
+ * wrapper re-ran for every mounted row on every timeline render, only to
+ * bail out one level down.
+ */
+export const ChatMessage = ChatMessageInner;

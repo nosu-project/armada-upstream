@@ -128,6 +128,16 @@ function readBotRecents(key: string): string[] {
 // into that margin.
 const MAX_CHARS = 5000;
 
+/** Tailwind's `md` step, where the composer's font shrinks (text-base → text-sm). */
+const MD_BREAKPOINT_PX = 768;
+
+/**
+ * The height an EMPTY composer settles at, per layout / font step / viewport
+ * height — see the auto-resize effect. Shared across instances: every composer
+ * of a layout is styled alike.
+ */
+const emptyHeights = new Map<string, number>();
+
 /** Replace or append a file extension. */
 function replaceExtension(filename: string, ext: string): string {
   const dot = filename.lastIndexOf(".");
@@ -805,20 +815,49 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // (text-base -> text-sm), so a portrait height would otherwise stay stale
   // (too tall, placeholder floating above the buttons) after rotating to
   // landscape, and vice-versa.
+  //
+  // The `height: auto` probe is not free: the timeline is this bar's flex
+  // sibling, so collapsing the textarea to measure it re-lays-out the whole
+  // pane — on every keystroke, and on every conversation switch, where it
+  // landed right after the timeline's own layout. Two cases never need it: an
+  // empty field (its height depends only on the layout and the font step, so
+  // it is measured once and remembered), and text that was only APPENDED to,
+  // which can only need more room — reading `scrollHeight` against the height
+  // already set answers that without collapsing anything first.
+  const measuredContentRef = useRef<string | null>(null);
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    const resize = () => {
+    const previous = measuredContentRef.current;
+    measuredContentRef.current = content;
+    // A document keeps a few lines of room and grows to half the
+    // viewport; the bar grows to a few lines.
+    const bounds = () => ({
+      max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
+      min: layout === "document" ? 120 : 0,
+    });
+    const measure = () => {
+      const { max, min } = bounds();
       el.style.height = "auto";
-      // A document keeps a few lines of room and grows to half the
-      // viewport; the bar grows to a few lines.
-      const max = layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160;
-      const min = layout === "document" ? 120 : 0;
-      el.style.height = `${Math.min(Math.max(el.scrollHeight, min), max)}px`;
+      const height = Math.min(Math.max(el.scrollHeight, min), max);
+      el.style.height = `${height}px`;
+      return height;
     };
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    const emptyKey = `${layout}:${window.innerWidth >= MD_BREAKPOINT_PX}:${window.innerHeight}`;
+    const set = parseFloat(el.style.height);
+    if (content === "") {
+      const known = emptyHeights.get(emptyKey);
+      if (known !== undefined) el.style.height = `${known}px`;
+      else emptyHeights.set(emptyKey, measure());
+    } else if (previous !== null && content.startsWith(previous) && Number.isFinite(set)) {
+      const { max, min } = bounds();
+      const needed = Math.min(Math.max(el.scrollHeight, min), max);
+      if (needed > set) el.style.height = `${needed}px`;
+    } else {
+      measure();
+    }
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
   }, [content, layout]);
 
   // Focus the textarea when starting a reply. Deferred a frame: Reply picked

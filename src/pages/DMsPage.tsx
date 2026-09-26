@@ -62,6 +62,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { MountWhenOpened } from "@/components/MountWhenOpened";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -167,7 +168,22 @@ function Highlight({
   );
 }
 
-function ConversationRow({
+/**
+ * What a conversation row can do, keyed by the conversation it is asked from.
+ * One stable object for the whole list, so a memoized row re-renders only when
+ * its own data changes — not whenever the list does (every switch, every
+ * message anywhere).
+ */
+interface ConversationRowActions {
+  open: (conversation: string) => void;
+  togglePin: (conversation: string) => void;
+  toggleRail: (conversation: string) => void;
+  close: (conversation: string) => void;
+  block: (peer: string) => void;
+}
+
+const ConversationRow = memo(function ConversationRow({
+  conversation,
   peers,
   preview,
   previewText,
@@ -181,12 +197,11 @@ function ConversationRow({
   onRail,
   request,
   sharedCommunity,
-  onClick,
-  onTogglePin,
-  onToggleRail,
-  onClose,
-  onBlock,
+  closable,
+  actions,
 }: {
+  /** The conversation key the actions are asked for. */
+  conversation: string;
   /** The conversation's participants: one for a 1:1, several for a group. */
   peers: string[];
   preview: NostrRumor | undefined;
@@ -208,11 +223,9 @@ function ConversationRow({
   request?: boolean;
   /** A community both parties are in, when one is known — see useSharedCommunities. */
   sharedCommunity?: string;
-  onClick: () => void;
-  onTogglePin: () => void;
-  onToggleRail: () => void;
-  onClose?: () => void;
-  onBlock?: () => void;
+  /** Offer "Close DM" (everything but Note to Self). */
+  closable: boolean;
+  actions: ConversationRowActions;
 }) {
   const group = peers.length > 1;
   // A group's title is composed from every participant, so it needs their
@@ -246,7 +259,7 @@ function ConversationRow({
       <ContextMenuTrigger asChild>
         <button
           type="button"
-          onClick={onClick}
+          onClick={() => actions.open(conversation)}
           className={cn(
             // Scaled up relative to a channel row: this is a contact list, so
             // the avatar carries recognition and the preview line has to be
@@ -322,13 +335,17 @@ function ConversationRow({
           // and the notice above the composer says so.
           <ContextMenuItem
             className="text-destructive focus:text-destructive"
-            onSelect={() => onBlock?.()}
+            onSelect={() => {
+              // Blocking a group request would have to name one of several
+              // senders, so it is offered on 1:1 requests only.
+              if (!group) actions.block(peers[0]);
+            }}
           >
             <UserX className="mr-2 size-4" /> Block
           </ContextMenuItem>
         ) : (
           <>
-            <ContextMenuItem onSelect={onTogglePin}>
+            <ContextMenuItem onSelect={() => actions.togglePin(conversation)}>
               {pinned ? (
                 <>
                   <PinOff className="mr-2 size-4" /> Unpin
@@ -369,7 +386,7 @@ function ConversationRow({
                 arrangement holds bare pubkeys (`dmRailKey`), so a group has
                 nothing to put there without changing what that layout means. */}
             {!group && (
-            <ContextMenuItem onSelect={onToggleRail}>
+            <ContextMenuItem onSelect={() => actions.toggleRail(conversation)}>
               {onRail ? (
                 <>
                   <PanelLeftDashed className="mr-2 size-4" /> Remove from rail
@@ -384,8 +401,8 @@ function ConversationRow({
             {/* Note to Self is a fixture of the list, not a conversation the
                 user is in — there is nobody to stop hearing from, so it has no
                 close (the row would be back on the next render anyway). */}
-            {onClose && (
-              <ContextMenuItem onSelect={onClose}>
+            {closable && (
+              <ContextMenuItem onSelect={() => actions.close(conversation)}>
                 <X className="mr-2 size-4" /> Close DM
               </ContextMenuItem>
             )}
@@ -394,7 +411,7 @@ function ConversationRow({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
 
 /**
  * A stable, varied body width for an undecrypted row. A screenful of
@@ -1536,94 +1553,99 @@ const Conversation = memo(function Conversation({
         />
       )}
 
-      <Dialog open={callWarnOpen} onOpenChange={setCallWarnOpen}>
-        <ChromeDialogContent
-          title="Message them before you call"
-          className="sm:max-w-sm focus:outline-none"
-          onOpenAutoFocus={(e) => {
-            // Focus the surface, not a button: a programmatic focus paints a
-            // keyboard ring around the cut-corner button on open.
-            e.preventDefault();
-            (e.currentTarget as HTMLElement | null)?.focus();
-          }}
-          onCloseAutoFocus={(e) => {
-            // "Send a message" hands focus to this thread's composer instead of
-            // back to the call button that opened the dialog.
-            if (!callWarnToComposer.current) return;
-            callWarnToComposer.current = false;
-            const input = composerBoundsRef.current?.querySelector("textarea");
-            if (!input) return;
-            e.preventDefault();
-            input.focus();
-          }}
-        >
-          <div className="flex flex-col items-center gap-2 text-center">
-            <div className="flex size-12 items-center justify-center clip-corner-lg bg-amber-500/15 text-amber-500">
-              <PhoneOff className="size-6" />
+      {/* Built on first open: closed, it still ran on every render of the thread. */}
+      <MountWhenOpened open={callWarnOpen}>
+        <Dialog open={callWarnOpen} onOpenChange={setCallWarnOpen}>
+          <ChromeDialogContent
+            title="Message them before you call"
+            className="sm:max-w-sm focus:outline-none"
+            onOpenAutoFocus={(e) => {
+              // Focus the surface, not a button: a programmatic focus paints a
+              // keyboard ring around the cut-corner button on open.
+              e.preventDefault();
+              (e.currentTarget as HTMLElement | null)?.focus();
+            }}
+            onCloseAutoFocus={(e) => {
+              // "Send a message" hands focus to this thread's composer instead of
+              // back to the call button that opened the dialog.
+              if (!callWarnToComposer.current) return;
+              callWarnToComposer.current = false;
+              const input = composerBoundsRef.current?.querySelector("textarea");
+              if (!input) return;
+              e.preventDefault();
+              input.focus();
+            }}
+          >
+            <div className="flex flex-col items-center gap-2 text-center">
+              <div className="flex size-12 items-center justify-center clip-corner-lg bg-amber-500/15 text-amber-500">
+                <PhoneOff className="size-6" />
+              </div>
+              <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+                message them before you call
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                <DisplayName pubkey={peer} name={name} /> probably won't get your call yet. Calls only
+                ring for people who follow you or have messaged you. Send them a message, and once they
+                reply, you can call.
+              </p>
             </div>
-            <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-              message them before you call
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              <DisplayName pubkey={peer} name={name} /> probably won't get your call yet. Calls only
-              ring for people who follow you or have messaged you. Send them a message, and once they
-              reply, you can call.
-            </p>
-          </div>
-          <div className="mt-6 flex items-center gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              className="flex-1 clip-corner-lg"
-              onClick={() => {
-                setCallWarnOpen(false);
-                void startCall(peer);
-              }}
-            >
-              <Phone className="size-4" />
-              Call anyway
-            </Button>
-            <Button
-              type="button"
-              className="flex-1 clip-corner-lg"
-              onClick={() => {
-                callWarnToComposer.current = true;
-                setCallWarnOpen(false);
-              }}
-            >
-              <MessageSquare className="size-4" />
-              Send a message
-            </Button>
-          </div>
-        </ChromeDialogContent>
-      </Dialog>
+            <div className="mt-6 flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                className="flex-1 clip-corner-lg"
+                onClick={() => {
+                  setCallWarnOpen(false);
+                  void startCall(peer);
+                }}
+              >
+                <Phone className="size-4" />
+                Call anyway
+              </Button>
+              <Button
+                type="button"
+                className="flex-1 clip-corner-lg"
+                onClick={() => {
+                  callWarnToComposer.current = true;
+                  setCallWarnOpen(false);
+                }}
+              >
+                <MessageSquare className="size-4" />
+                Send a message
+              </Button>
+            </div>
+          </ChromeDialogContent>
+        </Dialog>
+      </MountWhenOpened>
 
-      <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Block <DisplayName pubkey={peer} name={name} />?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This conversation will be hidden and you won't see new messages from{" "}
-              <DisplayName pubkey={peer} name={name} />.
-              You can unblock them later from Settings.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                void handleMute();
-              }}
-              disabled={muteUser.isPending}
-            >
-              {muteUser.isPending ? "Blocking…" : "Block"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <MountWhenOpened open={muteConfirmOpen}>
+        <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Block <DisplayName pubkey={peer} name={name} />?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                This conversation will be hidden and you won't see new messages from{" "}
+                <DisplayName pubkey={peer} name={name} />.
+                You can unblock them later from Settings.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(e) => {
+                  e.preventDefault();
+                  void handleMute();
+                }}
+                disabled={muteUser.isPending}
+              >
+                {muteUser.isPending ? "Blocking…" : "Block"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </MountWhenOpened>
 
       {reportOpen && (
         <ReportDialog
@@ -2284,6 +2306,23 @@ export function ConversationList({
   // profiles and previews can therefore fill in without hiding the roster.
   const hasSyncedRoster = rows.some((row) => row.indexedLatest !== undefined);
 
+  // The row actions read the current handlers and rows at call time, so the
+  // object handed to every memoized row never changes identity.
+  const rowActionsRef = useRef({ openPeer, togglePin, toggleRail, closePeer, blockPeer, rows, requestRows });
+  rowActionsRef.current = { openPeer, togglePin, toggleRail, closePeer, blockPeer, rows, requestRows };
+  const rowActions = useMemo<ConversationRowActions>(() => ({
+    open: (conversation) => rowActionsRef.current.openPeer(conversation),
+    togglePin: (conversation) => rowActionsRef.current.togglePin(conversation),
+    toggleRail: (conversation) => rowActionsRef.current.toggleRail(conversation),
+    close: (conversation) => {
+      const { closePeer: close, rows: all, requestRows: requests } = rowActionsRef.current;
+      const row = all.find((r) => r.conversation === conversation)
+        ?? requests.find((r) => r.conversation === conversation);
+      close(conversation, row ? dmListRowLatestMarker(row) : undefined);
+    },
+    block: (peer) => void rowActionsRef.current.blockPeer(peer),
+  }), []);
+
   const renderRow = (c: DmListRow, index: number, request = false) => (
     <DeferredRow key={c.conversation} active={gateRows && index >= EAGER_ROWS} minHeight={ROW_MIN_H}>
     <ConversationRow
@@ -2305,17 +2344,11 @@ export function ConversationList({
       sharedCommunity={request ? sharedCommunities.get(c.conversation) : undefined}
       inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.conversation}
       selfPubkey={user?.pubkey}
-      onClick={() => openPeer(c.conversation)}
-      onTogglePin={() => togglePin(c.conversation)}
-      onToggleRail={() => toggleRail(c.conversation)}
+      conversation={c.conversation}
       // Note to Self is always in the list (see withNoteToSelf), so there is
       // nothing a close could achieve — the row is re-added on the next render.
-      onClose={c.conversation === user?.pubkey
-        ? undefined
-        : () => closePeer(c.conversation, dmListRowLatestMarker(c))}
-      // Blocking a group request would have to name one of several senders, so
-      // it is offered on 1:1 requests only (ConversationRow hides the item).
-      onBlock={c.peers.length === 1 ? () => void blockPeer(c.peers[0]) : undefined}
+      closable={c.conversation !== user?.pubkey}
+      actions={rowActions}
     />
     </DeferredRow>
   );

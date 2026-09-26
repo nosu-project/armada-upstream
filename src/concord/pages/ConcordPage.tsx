@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
+import { MountWhenOpened } from "@/components/MountWhenOpened";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
@@ -4202,18 +4203,22 @@ export function ConcordPage() {
             </div>
 
             <TicketSidePanel ticket={openTicket} members={memberSet} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
-            <NewChannelDialog
-              open={creatingChannel}
-              onOpenChange={setCreatingChannel}
-              connectedCoordinates={connectedCoordinates}
-              onCreateText={handleCreateTextChannel}
-              onCreateRepository={handleCreateRepositoryChannel}
-            />
-            <CreateEventDialog
-              calendar={calendar}
-              open={createEventOpen}
-              onOpenChange={setCreateEventOpen}
-            />
+            <MountWhenOpened open={creatingChannel}>
+              <NewChannelDialog
+                open={creatingChannel}
+                onOpenChange={setCreatingChannel}
+                connectedCoordinates={connectedCoordinates}
+                onCreateText={handleCreateTextChannel}
+                onCreateRepository={handleCreateRepositoryChannel}
+              />
+            </MountWhenOpened>
+            <MountWhenOpened open={createEventOpen}>
+              <CreateEventDialog
+                calendar={calendar}
+                open={createEventOpen}
+                onOpenChange={setCreateEventOpen}
+              />
+            </MountWhenOpened>
             </ComposerBoundsProvider>
 
             {/* Chat channels read a thread in the side drawer; a forum reads
@@ -4292,51 +4297,67 @@ export function ConcordPage() {
           </div>
       </ChatShell>
 
-      <InviteDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
+      {/* The dialogs below are built on first open (MountWhenOpened): closed,
+          each still ran on every render of this page. */}
+      <MountWhenOpened open={inviteOpen}>
+        <InviteDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
+      </MountWhenOpened>
       {channel?.isPrivate && (
-        <AddChannelMembersDialog
-          open={addMembersOpen}
-          onOpenChange={setAddMembersOpen}
-          channelName={channel.name}
-          candidates={addMemberCandidates}
-          roles={addableChannelRoles}
-          onAdd={(pk, roleId) => handleToggleRole(pk, roleId, true)}
-          isAdding={roleIntent.isPending}
-          hasRole={(pk, roleId) => roleIntent.rolesFor(pk).includes(roleId)}
-          holdsKey={privateChannelsHere.some((c) => c.idHex === channel.idHex && c.heldByMe)}
-        />
+        <MountWhenOpened open={addMembersOpen}>
+          <AddChannelMembersDialog
+            open={addMembersOpen}
+            onOpenChange={setAddMembersOpen}
+            channelName={channel.name}
+            candidates={addMemberCandidates}
+            roles={addableChannelRoles}
+            onAdd={(pk, roleId) => handleToggleRole(pk, roleId, true)}
+            isAdding={roleIntent.isPending}
+            hasRole={(pk, roleId) => roleIntent.rolesFor(pk).includes(roleId)}
+            holdsKey={privateChannelsHere.some((c) => c.idHex === channel.idHex && c.heldByMe)}
+          />
+        </MountWhenOpened>
       )}
-      <ShareToDiscoverDialog
-        open={shareDiscoverOpen}
-        onOpenChange={setShareDiscoverOpen}
-        communityId={community?.idHex}
-      />
-      <BanMemberDialog
-        targets={banTargets}
-        willRotate={banWillRotate}
-        onClose={() => setBanTarget(null)}
-        onConfirm={runBan}
-      />
-      <KickMembersDialog
-        targets={kickTargets}
-        onClose={() => setKickTarget(null)}
-        onConfirm={runKick}
-      />
-      <RotateKeysDialog
-        open={rotateKeysOpen}
-        memberCount={memberPubkeys.length}
-        privateChannelCount={community?.privateChannels.length ?? 0}
-        strandsForeignLinks={rotateStrandsForeignLinks}
-        onClose={() => setRotateKeysOpen(false)}
-        onConfirm={runRotateKeys}
-      />
-      <CategoryNameDialog
-        open={Boolean(categoryPrompt)}
-        initial={categoryPrompt?.initial ?? ""}
-        count={categoryPrompt?.channels.length ?? 0}
-        onOpenChange={(next) => !next && setCategoryPrompt(null)}
-        onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
-      />
+      <MountWhenOpened open={shareDiscoverOpen}>
+        <ShareToDiscoverDialog
+          open={shareDiscoverOpen}
+          onOpenChange={setShareDiscoverOpen}
+          communityId={community?.idHex}
+        />
+      </MountWhenOpened>
+      <MountWhenOpened open={banTargets !== null}>
+        <BanMemberDialog
+          targets={banTargets}
+          willRotate={banWillRotate}
+          onClose={() => setBanTarget(null)}
+          onConfirm={runBan}
+        />
+      </MountWhenOpened>
+      <MountWhenOpened open={kickTargets !== null}>
+        <KickMembersDialog
+          targets={kickTargets}
+          onClose={() => setKickTarget(null)}
+          onConfirm={runKick}
+        />
+      </MountWhenOpened>
+      <MountWhenOpened open={rotateKeysOpen}>
+        <RotateKeysDialog
+          open={rotateKeysOpen}
+          memberCount={memberPubkeys.length}
+          privateChannelCount={community?.privateChannels.length ?? 0}
+          strandsForeignLinks={rotateStrandsForeignLinks}
+          onClose={() => setRotateKeysOpen(false)}
+          onConfirm={runRotateKeys}
+        />
+      </MountWhenOpened>
+      <MountWhenOpened open={Boolean(categoryPrompt)}>
+        <CategoryNameDialog
+          open={Boolean(categoryPrompt)}
+          initial={categoryPrompt?.initial ?? ""}
+          count={categoryPrompt?.channels.length ?? 0}
+          onOpenChange={(next) => !next && setCategoryPrompt(null)}
+          onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
+        />
+      </MountWhenOpened>
     </MemberActionsContext.Provider>
     </MemberRolesContext.Provider>
     </ChannelNavContext.Provider>

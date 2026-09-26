@@ -25,12 +25,20 @@ interface BotPillProps {
  * can be dropped in next to any name unconditionally.
  */
 export function BotPill({ pubkey, metadata, className }: BotPillProps) {
-  // Only look the profile up when metadata wasn't handed to us; useAuthor
-  // dedupes on ['author', pubkey], so passing a pubkey a sibling already
-  // fetched costs nothing, and useAuthor(undefined) is inert.
-  const author = useAuthor(metadata ? undefined : pubkey);
-  const resolved = metadata ?? author.data?.metadata;
-  if (resolved?.bot !== true) return null;
+  // Only look the profile up when metadata wasn't handed to us and there is a
+  // pubkey to look up. Even an inert `useAuthor(undefined)` is a query
+  // observer, and a timeline renders a pill beside every byline.
+  if (metadata || !pubkey) return <BotPillView metadata={metadata} className={className} />;
+  return <ResolvedBotPill pubkey={pubkey} className={className} />;
+}
+
+function ResolvedBotPill({ pubkey, className }: { pubkey: string; className?: string }) {
+  const author = useAuthor(pubkey);
+  return <BotPillView metadata={author.data?.metadata} className={className} />;
+}
+
+function BotPillView({ metadata, className }: { metadata?: NostrMetadata; className?: string }) {
+  if (metadata?.bot !== true) return null;
 
   return (
     <span

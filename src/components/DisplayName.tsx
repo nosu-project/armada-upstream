@@ -12,6 +12,13 @@ interface DisplayNameProps {
   name?: string;
   /** CSS class for the inline custom emoji images. */
   imgClassName?: string;
+  /**
+   * The pubkey's kind-0 tags, when the caller already holds the profile. With
+   * `name` also given there is nothing left to look up, so neither the profile
+   * nor the server-profile query is subscribed — which matters on a timeline,
+   * where every row's byline renders one of these.
+   */
+  tags?: string[][];
 }
 
 /**
@@ -25,7 +32,20 @@ interface DisplayNameProps {
  * keep using {@link useScopedDisplayName} — a shortcode that resolves to an
  * image here still reads as `:shortcode:` there.
  */
-export function DisplayName({ pubkey, name, imgClassName }: DisplayNameProps) {
+export function DisplayName(props: DisplayNameProps) {
+  if (props.name !== undefined && (props.tags !== undefined || props.pubkey === undefined)) {
+    return (
+      <EmojifiedText tags={props.tags ?? NO_TAGS} imgClassName={props.imgClassName}>
+        {props.name}
+      </EmojifiedText>
+    );
+  }
+  return <ResolvedDisplayName {...props} />;
+}
+
+const NO_TAGS: string[][] = [];
+
+function ResolvedDisplayName({ pubkey, name, imgClassName }: DisplayNameProps) {
   const author = useAuthor(pubkey);
   const scoped = useScopedIdentity(pubkey, author.data?.metadata);
 

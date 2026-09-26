@@ -12,11 +12,14 @@ import {
 } from "@/concord/lib/quarantineMemory";
 import { KIND_DELETE, KIND_MESSAGE } from "@/concord/lib/kinds";
 import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
+import type { OpenedChat } from "@/concord/lib/chat";
 import type { Channel, Community } from "@/concord/lib/types";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
+
+const NO_GIT: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map();
 
 /** Per-channel unread summary (mirrors NIP-29's `GroupUnread`). */
 export interface ConcordUnread {
@@ -44,7 +47,9 @@ export interface ConcordUnread {
 export function useConcordUnread(
   community: Community | undefined,
   channels: Channel[],
-  gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map(),
+  // A shared empty default: a fresh `new Map()` per render would invalidate
+  // the memo below on every render of a caller that passes none.
+  gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = NO_GIT,
   active = false,
 ): {
   byChannel: Record<string, ConcordUnread>;
@@ -109,96 +114,52 @@ export function useConcordUnread(
   let readSig = "";
   for (const idHex of rumorsByChannel.keys()) readSig += `${readState[concordReadKey(idHex)] ?? 0},`;
 
+  // The per-channel scan is the expensive half (every rumor of every channel,
+  // #general's thousands included) and depends on nothing about read state, so
+  // it is cached per channel on the inputs it does read: a markRead — every
+  // channel switch — then costs a comparison per channel instead of a rescan
+  // of the community. A scan that skipped a future-dated message is redone
+  // once that message's time comes.
+  const scanDeps = useMemo(
+    () => ({ pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev }),
+    [pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev],
+  );
+  const scanCacheRef = useRef(new Map<string, ChannelScan>());
+
+  // Entries (and the record itself) keep their identity while unchanged, so a
+  // channel row handed `byChannel[id]` re-renders only when its own badge does.
+  const previousRef = useRef<Record<string, ConcordUnread>>({});
+
   const byChannel = useMemo<Record<string, ConcordUnread>>(() => {
-    void memoryRev;
     void readSig;
+    const cache = scanCacheRef.current;
+    const now = Date.now();
     const next: Record<string, ConcordUnread> = {};
     for (const [idHex, rumors] of rumorsByChannel) {
+      const git = gitByChannel.get(idHex);
+      let scan = cache.get(idHex);
+      if (
+        !scan || scan.rumors !== rumors || scan.git !== git || scan.deps !== scanDeps
+        || now + FUTURE_HOLD_MS >= scan.heldUntilMs
+      ) {
+        scan = scanChannel(idHex, rumors, git, scanDeps);
+        cache.set(idHex, scan);
+      }
       const lastRead = readStateRef.current[concordReadKey(idHex)] ?? 0;
-      // A visual flood renders as ONE collapsed row, so counting its members
-      // here would badge a channel — and on a big enough wave, every channel in
-      // the community — for something the reader will see as a single line they
-      // did not ask for. The fold is the render-layer answer to a flood; a
-      // badge that still fires is the same interruption by another route.
-      //
-      // A community PAUSE (CORD-04 §8) is deliberately NOT mirrored here, even
-      // though it collapses rows the same way. Two reasons, and the second is
-      // the deciding one. The population is negligible: the pause drops the
-      // chat subscription outright, so the only messages that can reach this
-      // scan at/after the pause are the ones already in flight when it landed.
-      // And this path has no roster — it never resolves who is staff — so a
-      // suppression here could not honor the staff exemption the fold applies,
-      // and would silence exactly the moderator coordination a paused room
-      // exists to make room for. Under-badging staff is worse than
-      // over-badging a handful of stragglers.
-      // Memoized on the batch's identity, so a readState recompute of this
-      // memo (every markRead, every mounted instance) never re-runs the fold.
-      const quarantined = quarantinedIn(rumors, pubkey);
-      const remembered = communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
-      // A kind-5 self-delete removes its target from the render (foldTimeline,
-      // chat.ts) — but the store's NIP-09 pass only fires within one write
-      // batch, so a delete a relay delivered in a LATER batch than its target
-      // leaves that target physically in the store (chat.ts:302-308). This scan
-      // reads the raw store, so a self-deleted NEWEST message would otherwise
-      // pin `latest` above every rendered entry: a badge no open can clear,
-      // because clear-on-open stamps the newest RENDERED (undeleted) row. Fold
-      // deletes here so the count matches what the reader sees, exactly as the
-      // muted-author skip below does. Self-deletes only (delete author ==
-      // target author), which is all the store's own NIP-09 honors without a
-      // roster and cannot be abused to suppress a stranger's still-shown message.
-      const authorById = new Map<string, string>();
-      for (const r of rumors) authorById.set(r.rumorId, r.author);
-      const selfDeleted = new Set<string>();
-      for (const r of rumors) {
-        if (r.kind !== KIND_DELETE) continue;
-        for (const [n, v] of r.tags) {
-          if (n === "e" && v && authorById.get(v) === r.author) selfDeleted.add(v);
-        }
-      }
-      let latest = 0;
-      let latestMention = 0;
-      // One clock for the whole scan, so a message crossing the hold boundary
-      // mid-loop can't split it.
-      const holdCeilingMs = Date.now() + FUTURE_HOLD_MS;
-      for (const r of rumors) {
-        if (r.kind !== KIND_MESSAGE) continue;
-        if (r.author === pubkey) continue; // never unread from self
-        // ...nor a message dated ahead of the local clock: the timeline HOLDS
-        // it (foldTimeline / FUTURE_HOLD_MS) until its time comes, and a badge
-        // counting it would mark the channel unread for a message the reader
-        // can't yet see — cleared only once its timestamp catches up.
-        if (r.ms > holdCeilingMs) continue;
-        // ...nor from someone muted: the timeline won't render their message,
-        // so a badge counting it would be one the channel can never clear.
-        if (mutedPubkeys.has(r.author)) continue;
-        // ...nor from a banned one: the fold drops their events entirely.
-        if (banned.has(r.author)) continue;
-        // ...nor a message its author has since deleted (same reasoning).
-        if (selfDeleted.has(r.rumorId)) continue;
-        if (quarantined.has(r.rumorId)) continue;
-        if (remembered?.has(r.rumorId)) continue;
-        if (r.createdAt > latest) latest = r.createdAt;
-        const mentionsViewer = r.tags.some(([n, v]) => n === "p" && v === pubkey)
-          || (hasEveryoneMention(r.content) && Boolean(canMentionEveryone?.(r.author, idHex)));
-        if (r.createdAt > latestMention && mentionsViewer) {
-          latestMention = r.createdAt;
-        }
-      }
-      for (const activity of gitByChannel.get(idHex) ?? []) {
-        const author = activity.type === "ticket-opened"
-          ? activity.ticket.author
-          : activity.type === "comment"
-            ? activity.comment.author
-            : activity.type === "ci-run"
-              ? activity.run.author
-              : activity.status.author;
-        if (author === pubkey || mutedPubkeys.has(author)) continue;
-        if (activity.createdAt > latest) latest = activity.createdAt;
-      }
-      if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
+      if (scan.latest > lastRead) next[idHex] = { latest: scan.latest, mention: scan.latestMention > lastRead };
     }
-    return next;
-  }, [rumorsByChannel, readSig, pubkey, gitByChannel, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev]);
+    for (const idHex of cache.keys()) if (!rumorsByChannel.has(idHex)) cache.delete(idHex);
+    const previous = previousRef.current;
+    let same = Object.keys(previous).length === Object.keys(next).length;
+    for (const [idHex, entry] of Object.entries(next)) {
+      const old = previous[idHex];
+      if (old && old.latest === entry.latest && old.mention === entry.mention) next[idHex] = old;
+      else same = false;
+    }
+    const result = same ? previous : next;
+    previousRef.current = result;
+    return result;
+  }, [rumorsByChannel, readSig, gitByChannel, scanDeps]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {
@@ -214,4 +175,120 @@ export function useConcordUnread(
   );
 
   return useMemo(() => ({ byChannel, markRead, getLastRead }), [byChannel, markRead, getLastRead]);
+}
+
+interface ScanDeps {
+  pubkey: string | undefined;
+  mutedPubkeys: ReadonlySet<string>;
+  banned: ReadonlySet<string>;
+  canMentionEveryone: ((author: string, channelIdHex: string) => boolean) | undefined;
+  communityIdHex: string | undefined;
+  memoryRev: number;
+}
+
+/** One channel's unread inputs, before read state is applied. */
+interface ChannelScan {
+  rumors: OpenedChat[];
+  git: readonly GitTimelineActivity[] | undefined;
+  deps: ScanDeps;
+  /** Newest countable message (or git activity), unix seconds. */
+  latest: number;
+  /** Newest countable message that mentions the viewer, unix seconds. */
+  latestMention: number;
+  /** The earliest `ms` of a message held back as future-dated, or Infinity. */
+  heldUntilMs: number;
+}
+
+function scanChannel(
+  idHex: string,
+  rumors: OpenedChat[],
+  git: readonly GitTimelineActivity[] | undefined,
+  deps: ScanDeps,
+): ChannelScan {
+  const { pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex } = deps;
+  // A visual flood renders as ONE collapsed row, so counting its members
+  // here would badge a channel — and on a big enough wave, every channel in
+  // the community — for something the reader will see as a single line they
+  // did not ask for. The fold is the render-layer answer to a flood; a
+  // badge that still fires is the same interruption by another route.
+  //
+  // A community PAUSE (CORD-04 §8) is deliberately NOT mirrored here, even
+  // though it collapses rows the same way. Two reasons, and the second is
+  // the deciding one. The population is negligible: the pause drops the
+  // chat subscription outright, so the only messages that can reach this
+  // scan at/after the pause are the ones already in flight when it landed.
+  // And this path has no roster — it never resolves who is staff — so a
+  // suppression here could not honor the staff exemption the fold applies,
+  // and would silence exactly the moderator coordination a paused room
+  // exists to make room for. Under-badging staff is worse than
+  // over-badging a handful of stragglers.
+  // Memoized on the batch's identity, so a readState recompute of this
+  // memo (every markRead, every mounted instance) never re-runs the fold.
+  const quarantined = quarantinedIn(rumors, pubkey);
+  const remembered = communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
+  // A kind-5 self-delete removes its target from the render (foldTimeline,
+  // chat.ts) — but the store's NIP-09 pass only fires within one write
+  // batch, so a delete a relay delivered in a LATER batch than its target
+  // leaves that target physically in the store (chat.ts:302-308). This scan
+  // reads the raw store, so a self-deleted NEWEST message would otherwise
+  // pin `latest` above every rendered entry: a badge no open can clear,
+  // because clear-on-open stamps the newest RENDERED (undeleted) row. Fold
+  // deletes here so the count matches what the reader sees, exactly as the
+  // muted-author skip below does. Self-deletes only (delete author ==
+  // target author), which is all the store's own NIP-09 honors without a
+  // roster and cannot be abused to suppress a stranger's still-shown message.
+  const authorById = new Map<string, string>();
+  for (const r of rumors) authorById.set(r.rumorId, r.author);
+  const selfDeleted = new Set<string>();
+  for (const r of rumors) {
+    if (r.kind !== KIND_DELETE) continue;
+    for (const [n, v] of r.tags) {
+      if (n === "e" && v && authorById.get(v) === r.author) selfDeleted.add(v);
+    }
+  }
+  let latest = 0;
+  let latestMention = 0;
+  // One clock for the whole scan, so a message crossing the hold boundary
+  // mid-loop can't split it.
+  const holdCeilingMs = Date.now() + FUTURE_HOLD_MS;
+  let heldUntilMs = Infinity;
+  for (const r of rumors) {
+    if (r.kind !== KIND_MESSAGE) continue;
+    if (r.author === pubkey) continue; // never unread from self
+    // ...nor a message dated ahead of the local clock: the timeline HOLDS
+    // it (foldTimeline / FUTURE_HOLD_MS) until its time comes, and a badge
+    // counting it would mark the channel unread for a message the reader
+    // can't yet see — cleared only once its timestamp catches up.
+    if (r.ms > holdCeilingMs) {
+      heldUntilMs = Math.min(heldUntilMs, r.ms);
+      continue;
+    }
+    // ...nor from someone muted: the timeline won't render their message,
+    // so a badge counting it would be one the channel can never clear.
+    if (mutedPubkeys.has(r.author)) continue;
+    // ...nor from a banned one: the fold drops their events entirely.
+    if (banned.has(r.author)) continue;
+    // ...nor a message its author has since deleted (same reasoning).
+    if (selfDeleted.has(r.rumorId)) continue;
+    if (quarantined.has(r.rumorId)) continue;
+    if (remembered?.has(r.rumorId)) continue;
+    if (r.createdAt > latest) latest = r.createdAt;
+    const mentionsViewer = r.tags.some(([n, v]) => n === "p" && v === pubkey)
+      || (hasEveryoneMention(r.content) && Boolean(canMentionEveryone?.(r.author, idHex)));
+    if (r.createdAt > latestMention && mentionsViewer) {
+      latestMention = r.createdAt;
+    }
+  }
+  for (const activity of git ?? []) {
+    const author = activity.type === "ticket-opened"
+      ? activity.ticket.author
+      : activity.type === "comment"
+        ? activity.comment.author
+        : activity.type === "ci-run"
+          ? activity.run.author
+          : activity.status.author;
+    if (author === pubkey || mutedPubkeys.has(author)) continue;
+    if (activity.createdAt > latest) latest = activity.createdAt;
+  }
+  return { rumors, git, deps, latest, latestMention, heldUntilMs };
 }

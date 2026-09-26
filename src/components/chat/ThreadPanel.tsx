@@ -32,13 +32,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { LazyContextMenuContent, useLazyContextMenu } from "@/components/chat/LazyContextMenu";
 import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -198,7 +193,8 @@ export function ThreadMessage({
   // which has no staff-only address) offers none.
   const [reportOpen, setReportOpen] = useState(false);
   // The menu's collision padding forces a layout flush; compute it only while open.
-  const [menuOpen, setMenuOpen] = useState(false);
+  // Built on the first right-click, beside the row (see useLazyContextMenu).
+  const contextMenu = useLazyContextMenu();
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
@@ -375,67 +371,37 @@ export function ThreadMessage({
 
   return (
     <>
-    <ContextMenu onOpenChange={setMenuOpen}>
-      {/* On touch the long-press gesture belongs to the action sheet; Radix's
-          own long-press would otherwise open this menu at the same time. */}
-      <ContextMenuTrigger asChild disabled={isTouch}>
-        <div
-          {...longPress}
-          className={cn(
-            "group/threadmsg relative flex items-start gap-3 transition-colors hover:z-10 focus-within:z-10",
-            isPost
-              ? "px-0 py-0"
-              : isComment
-                ? "px-3 py-3 hover:bg-secondary/30"
-                : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "py-1.5"),
-            sheetOpen && "bg-secondary/40",
-            // Stop the platform's text selection / callout from firing
-            // `pointercancel` and eating the long-press before the sheet opens
-            // (see MessageRow); "Copy text" covers manual selection.
-            isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
-          )}
-        >
-          {isPost ? (
-            // A post: the byline as a heading block, the body at reading width
-            // beneath it (not beside the avatar), and the actions on a row of
-            // their own — a page, not a chat line.
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-3">
-                <ProfilePreviewCard pubkey={event.pubkey}>
-                  <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
-                      <AvatarImage src={metadata?.picture} alt={displayName} />
-                      <AvatarFallback className="bg-primary/20 text-primary text-sm">
-                        {displayName[0]?.toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                  </button>
-                </ProfilePreviewCard>
-                <div className="min-w-0 flex flex-col justify-center">
-                  <ProfilePreviewCard pubkey={event.pubkey}>
-                    <button type="button" className="text-[15px] font-semibold text-primary truncate text-left hover:underline focus:outline-none">
-                      <DisplayName pubkey={event.pubkey} name={displayName} />
-                    </button>
-                  </ProfilePreviewCard>
-                  <span className="text-xs text-muted-foreground">{fullDateTime(event.created_at)}</span>
-                </div>
-              </div>
-              <div className="mt-3">{body}</div>
-              {reactionRow}
-              {!isEditing && (
-                <div className="mt-2 -mx-1 flex flex-wrap items-center gap-0.5">{toolbar}</div>
-              )}
-            </div>
-          ) : (
-          <>
-          {continuation ? (
-            <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
-              {shortClockTime(event.created_at)}
-            </span>
-          ) : (
+    {/* On touch the long-press gesture belongs to the action sheet, so
+        the right-click menu is not offered there at all. */}
+    <div
+      {...longPress}
+      onContextMenu={(e) => {
+        longPress.onContextMenu(e);
+        if (!isTouch) contextMenu.onContextMenu(e);
+      }}
+      className={cn(
+        "group/threadmsg relative flex items-start gap-3 transition-colors hover:z-10 focus-within:z-10",
+        isPost
+          ? "px-0 py-0"
+          : isComment
+            ? "px-3 py-3 hover:bg-secondary/30"
+            : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "py-1.5"),
+        sheetOpen && "bg-secondary/40",
+        // Stop the platform's text selection / callout from firing
+        // `pointercancel` and eating the long-press before the sheet opens
+        // (see MessageRow); "Copy text" covers manual selection.
+        isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
+      )}
+    >
+      {isPost ? (
+        // A post: the byline as a heading block, the body at reading width
+        // beneath it (not beside the avatar), and the actions on a row of
+        // their own — a page, not a chat line.
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-3">
             <ProfilePreviewCard pubkey={event.pubkey}>
-              <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <Avatar shape={getAvatarShape(metadata)} className="size-9 cursor-pointer transition-opacity hover:opacity-90">
+              <button type="button" className="shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
                   <AvatarImage src={metadata?.picture} alt={displayName} />
                   <AvatarFallback className="bg-primary/20 text-primary text-sm">
                     {displayName[0]?.toUpperCase()}
@@ -443,79 +409,115 @@ export function ThreadMessage({
                 </Avatar>
               </button>
             </ProfilePreviewCard>
-          )}
-          <div className="flex-1 min-w-0">
-            {!continuation && (
-              <div className="flex items-baseline gap-2">
-                <ProfilePreviewCard pubkey={event.pubkey}>
-                  <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
-                    <DisplayName pubkey={event.pubkey} name={displayName} />
-                  </button>
-                </ProfilePreviewCard>
-                {isComment ? (
-                  // A comment's age, with the day on hover: a post page has no
-                  // day dividers, so a bare clock time would leave it unsaid.
-                  <span className="text-xs text-muted-foreground/80 shrink-0" title={fullDateTime(event.created_at)}>
-                    {shortTimeAgo(event.created_at)}
-                  </span>
-                ) : (
-                  <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
-                    {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                  </span>
-                )}
-              </div>
-            )}
-            {body}
-            {reactionRow}
-            {isComment && onReply && !isEditing && (
-              <div className="-ml-2 mt-0.5">
-                <button
-                  type="button"
-                  onClick={() => onReply(event)}
-                  className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground touch:py-2"
-                >
-                  <Reply className="size-3.5" />
-                  Reply
+            <div className="min-w-0 flex flex-col justify-center">
+              <ProfilePreviewCard pubkey={event.pubkey}>
+                <button type="button" className="text-[15px] font-semibold text-primary truncate text-left hover:underline focus:outline-none">
+                  <DisplayName pubkey={event.pubkey} name={displayName} />
                 </button>
-              </div>
-            )}
-          </div>
-          {/* Desktop hover strip — the same shared toolbar the timeline uses,
-              including its frequent-emoji quick-reaction row (it floats over
-              the row's right edge, so the narrow panel width doesn't bound it).
-              On touch the long-press sheet replaces it. */}
-          {!isTouch && !isEditing ? (
-            // Floated panel above the row's top-right edge — solid background,
-            // border and lift so it stays legible over whatever it overlaps,
-            // matching the timeline's toolbar (MessageRow). A comment row has
-            // its own padding, so the strip sits inside its top edge instead
-            // of over the comment above.
-            <div className={cn(
-              "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
-              isComment ? "top-1" : continuation ? "-top-3" : "-top-2.5",
-            )}>
-              {toolbar}
+              </ProfilePreviewCard>
+              <span className="text-xs text-muted-foreground">{fullDateTime(event.created_at)}</span>
             </div>
-          ) : null}
-          </>
+          </div>
+          <div className="mt-3">{body}</div>
+          {reactionRow}
+          {!isEditing && (
+            <div className="mt-2 -mx-1 flex flex-wrap items-center gap-0.5">{toolbar}</div>
           )}
         </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-52" collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
+      ) : (
+      <>
+      {continuation ? (
+        <span className="shrink-0 w-9 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover/threadmsg:opacity-100 transition-opacity tabular-nums select-none">
+          {shortClockTime(event.created_at)}
+        </span>
+      ) : (
+        <ProfilePreviewCard pubkey={event.pubkey}>
+          <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Avatar shape={getAvatarShape(metadata)} className="size-9 cursor-pointer transition-opacity hover:opacity-90">
+              <AvatarImage src={metadata?.picture} alt={displayName} />
+              <AvatarFallback className="bg-primary/20 text-primary text-sm">
+                {displayName[0]?.toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+          </button>
+        </ProfilePreviewCard>
+      )}
+      <div className="flex-1 min-w-0">
+        {!continuation && (
+          <div className="flex items-baseline gap-2">
+            <ProfilePreviewCard pubkey={event.pubkey}>
+              <button type="button" className="text-[15px] font-semibold text-primary truncate hover:underline focus:outline-none">
+                <DisplayName pubkey={event.pubkey} name={displayName} />
+              </button>
+            </ProfilePreviewCard>
+            {isComment ? (
+              // A comment's age, with the day on hover: a post page has no
+              // day dividers, so a bare clock time would leave it unsaid.
+              <span className="text-xs text-muted-foreground/80 shrink-0" title={fullDateTime(event.created_at)}>
+                {shortTimeAgo(event.created_at)}
+              </span>
+            ) : (
+              <span className="text-[11px] text-muted-foreground/70 shrink-0" title={when.toLocaleString()}>
+                {when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+        )}
+        {body}
+        {reactionRow}
+        {isComment && onReply && !isEditing && (
+          <div className="-ml-2 mt-0.5">
+            <button
+              type="button"
+              onClick={() => onReply(event)}
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground touch:py-2"
+            >
+              <Reply className="size-3.5" />
+              Reply
+            </button>
+          </div>
+        )}
+      </div>
+      {/* Desktop hover strip — the same shared toolbar the timeline uses,
+          including its frequent-emoji quick-reaction row (it floats over
+          the row's right edge, so the narrow panel width doesn't bound it).
+          On touch the long-press sheet replaces it. */}
+      {!isTouch && !isEditing ? (
+        // Floated panel above the row's top-right edge — solid background,
+        // border and lift so it stays legible over whatever it overlaps,
+        // matching the timeline's toolbar (MessageRow). A comment row has
+        // its own padding, so the strip sits inside its top edge instead
+        // of over the comment above.
+        <div className={cn(
+          "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
+          isComment ? "top-1" : continuation ? "-top-3" : "-top-2.5",
+        )}>
+          {toolbar}
+        </div>
+      ) : null}
+      </>
+      )}
+    </div>
+    {!isTouch && contextMenu.point && (
+      <LazyContextMenuContent
+        menu={contextMenu}
+        className="w-52"
+        collisionPadding={contextMenu.open ? getComposerCollisionPadding(composerBoundsRef) : undefined}
+      >
         {menuActions.map((action) => (
           <div key={action.id}>
-            {action.groupStart && <ContextMenuSeparator />}
-            <ContextMenuItem
+            {action.groupStart && <DropdownMenuSeparator />}
+            <DropdownMenuItem
               className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
               onSelect={action.onSelect}
             >
               <action.icon className="mr-2 size-4" />
               {action.label}
-            </ContextMenuItem>
+            </DropdownMenuItem>
           </div>
         ))}
-      </ContextMenuContent>
-    </ContextMenu>
+      </LazyContextMenuContent>
+    )}
     {isTouch && (
       <MessageActionSheet
         open={sheetOpen}
