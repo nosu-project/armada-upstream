@@ -1,5 +1,6 @@
-import { BookmarkPlus, Check, Loader2, Palette } from "lucide-react";
+import { BookmarkPlus, Check, Link2, Loader2, Palette } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -8,11 +9,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useNaddrLink } from "@/hooks/useNaddrLink";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { naddrPath } from "@/lib/naddrLink";
 import { buildThemeDefinitionEvent, parseDittoTheme } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import { coreToTokens } from "@/themes";
@@ -26,10 +29,12 @@ interface ThemeDiscoverCardProps {
 }
 
 /**
- * A shareable theme (kind 36767) rendered as a discover card: a live preview of
- * its 3 core colors, the author, and two actions — Apply (set it as the app's
- * custom theme; local, publishes nothing) and Save (copy it into your own theme
- * library without changing the current look).
+ * A shareable theme (kind 36767) as a card — in the Discover grid, on its own
+ * `/<naddr>` page, and wherever it's shared in chat: a live preview of its
+ * core colors, the author, and three actions — Apply (set it as the app's
+ * custom theme; local, publishes nothing), Save (copy it into your own theme
+ * library without changing the current look) and Copy link (its `/<naddr>`
+ * page, to hand to someone else). The title opens that same page.
  */
 export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) {
   const theme = useMemo(() => parseDittoTheme(event), [event]);
@@ -42,6 +47,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
   const displayName = getDisplayName(metadata, event.pubkey);
   const [justApplied, setJustApplied] = useState(false);
   const [saved, setSaved] = useState(false);
+  const { naddr, copied, copy } = useNaddrLink(event);
 
   const tokens = useMemo(() => (theme ? coreToTokens(theme.colors) : null), [theme]);
 
@@ -80,6 +86,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
         "flex flex-col w-full rounded-xl border border-border/60 bg-card overflow-hidden",
         className,
       )}
+      onClick={(e) => e.stopPropagation()}
     >
       {/* Live color preview */}
       <div
@@ -100,8 +107,31 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         <div className="flex items-center gap-2 min-w-0">
           <Palette className="size-4 shrink-0 text-primary" />
-          <p className="font-semibold truncate leading-tight flex-1">{theme.title}</p>
+          {naddr ? (
+            <Link
+              to={naddrPath(naddr)}
+              className="font-semibold truncate leading-tight flex-1 hover:underline"
+            >
+              {theme.title}
+            </Link>
+          ) : (
+            <p className="font-semibold truncate leading-tight flex-1">{theme.title}</p>
+          )}
+          {/* What this card is at a glance — in chat it sits among link and
+              event cards, as the emoji pack card's pill does. */}
+          <span
+            className={cn(
+              "text-[10px] px-1.5 py-px rounded-full shrink-0",
+              applied ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground",
+            )}
+          >
+            {applied ? "Applied" : "Theme"}
+          </span>
         </div>
+
+        {theme.description && (
+          <p className="text-xs text-muted-foreground line-clamp-2 -mt-1">{theme.description}</p>
+        )}
 
         <ProfilePreviewCard pubkey={event.pubkey}>
           <button
@@ -148,6 +178,17 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
               ) : (
                 <BookmarkPlus className="size-4" />
               )}
+            </Button>
+          )}
+          {naddr && (
+            <Button
+              variant="secondary"
+              className="shrink-0 clip-corner-lg"
+              onClick={copy}
+              aria-label="Copy theme link"
+              title="Copy theme link"
+            >
+              {copied ? <Check className="size-4" /> : <Link2 className="size-4" />}
             </Button>
           )}
         </div>

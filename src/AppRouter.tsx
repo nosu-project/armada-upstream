@@ -15,6 +15,7 @@ import {
 } from "@/lib/shareTarget";
 import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
 import { LocationRefProvider } from "@/components/LocationRefProvider";
+import { Nip19Route } from "@/components/Nip19Route";
 import { VersionCheck } from "@/components/VersionCheck";
 import { Toaster } from "@/components/ui/toaster";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -92,7 +93,6 @@ const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((
 const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
 const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
-const UserPage = lazy(lazyWithReload(() => import("@/pages/UserPage").then((m) => ({ default: m.UserPage }))));
 
 /**
  * Dispatch `/invite/<segment>` to the right landing page. A Concord invite's
@@ -548,13 +548,14 @@ function AppRoutes() {
             <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
             {/* A person: `/<npub>`, `/<nprofile>`, `/<name@domain>` or
                 `/<domain>` — their profile signed in, their chat link signed
-                out. The bare NIP-19 path is the ecosystem's convention, so it
+                out — or a shared addressable event at `/<naddr>` (see
+                Nip19Route). The bare NIP-19 path is the ecosystem's convention, so it
                 gets no prefix segment of its own. Declared last for
                 readability only — React Router ranks every static segment
                 above a dynamic one regardless of order — but it DOES outrank
                 the `*` route below, so UserPage renders the 404 itself for a
                 segment that names nobody. */}
-            <Route path="/:user" element={<UserPage />} />
+            <Route path="/:user" element={<Nip19Route />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -1,13 +1,14 @@
-import { Loader2, MessageSquare } from "lucide-react";
+import { Loader2, MessageSquare, UserRound } from "lucide-react";
 import { useMemo } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { JoinButton } from "@/components/auth/JoinButton";
-import { ServerRail } from "@/components/layout/ServerRail";
+import { DetailPage } from "@/components/layout/DetailPage";
 import { ProfileDialog } from "@/components/profile/ProfileDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNip05Resolve } from "@/hooks/useNip05Resolve";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -38,7 +39,10 @@ import { NotFound } from "@/pages/NotFound";
 export function UserPage() {
   const { user: identifier = "" } = useParams<{ user: string }>();
   const { user } = useCurrentUser();
-  const navigate = useNavigate();
+  // Closing the profile is a step back, not a destination — the dialog is
+  // always opened from somewhere. A cold load has nowhere in the app to go
+  // back TO, so that one lands home.
+  const closeProfile = useBackOrHome();
 
   const direct = useMemo(() => resolvePubkey(identifier), [identifier]);
   // Only reached for a segment that didn't decode, so a valid npub never costs
@@ -65,60 +69,66 @@ export function UserPage() {
     return <NotFound />;
   }
 
-  // Closing the profile is a step back, not a destination — the dialog is
-  // always opened from somewhere. A cold load has nowhere to go back TO, so
-  // that one lands home.
-  const closeProfile = () =>
-    window.history.length > 1 ? navigate(-1) : navigate("/");
+  const icon = <UserRound className="size-4 shrink-0 text-primary" />;
 
-  return (
-    <>
-      <ServerRail />
-      {/* `relative` is what scopes the profile overlay to this pane: it fills
-          main and stops at the rail, which stays lit and clickable beside it. */}
-      <main className="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
-        {!pubkey && nip05.isPending ? (
-          <>
+  if (!pubkey) {
+    return (
+      <DetailPage title={address?.display ?? "Profile"} icon={icon}>
+        {nip05.isPending ? (
+          <div className="flex flex-col items-center gap-3 pt-12 text-center">
             <Loader2 className="size-6 animate-spin text-muted-foreground" />
-            <p className="text-muted-foreground">Looking up {address?.display}…</p>
-          </>
-        ) : !pubkey ? (
-          <>
-            <MessageSquare className="size-12 text-muted-foreground" />
-            <h1 className="text-2xl font-bold">No such person</h1>
-            <p className="max-w-md text-muted-foreground">
+            <p className="text-sm text-muted-foreground">Looking up {address?.display}…</p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-4 pt-12 text-center">
+            <MessageSquare className="size-10 text-muted-foreground/50" />
+            <h2 className="text-xl font-semibold">No such person</h2>
+            <p className="max-w-sm text-sm text-muted-foreground">
               {nip05.isError
                 ? <>Couldn’t reach {address?.domain} to look up {address?.display}.</>
                 : <>{address?.display} isn’t a Nostr account we could find.</>}
             </p>
-            <Button asChild>
+            <Button asChild variant="secondary">
               <Link to="/">Back to base</Link>
             </Button>
-          </>
-        ) : user ? (
-          // The profile below covers this. Nothing to say behind it.
-          null
-        ) : (
-          <>
-            <Avatar shape={getAvatarShape(metadata)} className="size-24 border-[3px] border-background">
-              <AvatarImage src={metadata?.picture} alt={displayName} />
-              <AvatarFallback className="bg-primary/20 text-primary text-3xl">
-                {displayName[0]?.toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <h1 className="text-2xl font-bold">
-              Chat with <span className="break-words">{displayName}</span> on Armada
-            </h1>
-            <p className="max-w-md text-muted-foreground">
-              Armada is end-to-end encrypted messaging on Nostr. Create an account or sign
-              in and this conversation is waiting for you.
-            </p>
-            <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
-          </>
+          </div>
         )}
-        {user && pubkey && <ProfileDialog pubkey={pubkey} onClose={closeProfile} />}
-      </main>
-    </>
+      </DetailPage>
+    );
+  }
+
+  return (
+    <DetailPage
+      title={displayName}
+      icon={icon}
+      // Signed in, the profile covers the pane (and stops at the rail, which
+      // stays lit and clickable beside it); there is nothing to say behind it.
+      overlay={user ? <ProfileDialog pubkey={pubkey} onClose={closeProfile} /> : undefined}
+    >
+      {!user && (
+        <div className="flex flex-col items-center gap-4 rounded-xl border border-border/60 bg-card px-6 py-8 text-center">
+          <Avatar shape={getAvatarShape(metadata)} className="size-24 border-[3px] border-background">
+            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarFallback className="bg-primary/20 text-primary text-3xl">
+              {displayName[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          <h2 className="text-2xl font-bold">
+            Chat with <span className="break-words">{displayName}</span> on Armada
+          </h2>
+          {metadata?.about && (
+            <p className="max-w-md text-sm text-muted-foreground line-clamp-3 whitespace-pre-wrap break-words">
+              {metadata.about}
+            </p>
+          )}
+          <p className="max-w-md text-muted-foreground">
+            Armada is end-to-end encrypted messaging on Nostr. Create an account or sign
+            in and this conversation is waiting for you.
+          </p>
+          <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
+        </div>
+      )}
+    </DetailPage>
   );
 }
 

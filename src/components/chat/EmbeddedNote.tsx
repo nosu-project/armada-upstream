@@ -20,6 +20,7 @@ import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
 import { PollView } from "@/components/chat/PollView";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
+import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +42,7 @@ import { scryfallImageUrl, type CardRef } from "@/lib/scryfall";
 import { tryNaddrEncode, tryNeventEncode } from "@/lib/safeNip19";
 import { displayHost, externalUrl, sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { openUrl } from "@/lib/share";
+import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import { formatSats, receiptAmountSats, receiptZapRequest } from "@/lib/zaps";
 
@@ -205,6 +207,12 @@ export function EmbeddedEventCard({ event, sourceUrl, className }: { event: Nost
   // generic event body (whose content is empty — the emojis live in tags).
   if (event.kind === 30030) {
     return <EmojiPackCard event={event} className={className} />;
+  }
+  // Ditto theme definitions get the same treatment: a color preview + "Apply".
+  // One that doesn't parse (no usable colors) keeps the generic body rather
+  // than rendering nothing.
+  if (event.kind === THEME_DEFINITION_KIND && parseDittoTheme(event)) {
+    return <ThemeDiscoverCard event={event} className={cn("max-w-sm my-1.5", className)} />;
   }
   return <GenericEventCard event={event} sourceUrl={sourceUrl} className={className} />;
 }
