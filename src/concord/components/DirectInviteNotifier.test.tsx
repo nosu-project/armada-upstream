@@ -51,9 +51,18 @@ vi.mock("@/concord/hooks/useCommunityList", () => ({
 vi.mock("@/concord/hooks/useControlPlane", () => ({
   useControlFold: () => ({ data: fold }),
 }));
-vi.mock("@/concord/hooks/useCommunityActions", () => ({
-  bundleToEntry: (b: InviteBundle) => ({ community_id: b.community_id, current: b }),
-}));
+const dissolved = vi.hoisted(() => ({ value: false }));
+vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
+vi.mock("@/concord/hooks/useCommunityActions", () => {
+  class DissolvedCommunityError extends Error {}
+  return {
+    bundleToEntry: (b: InviteBundle) => ({ community_id: b.community_id, current: b }),
+    DissolvedCommunityError,
+    assertNotDissolved: async () => {
+      if (dissolved.value) throw new DissolvedCommunityError("dissolved");
+    },
+  };
+});
 
 import { DirectInviteNotifier } from "./DirectInviteNotifier";
 
@@ -124,6 +133,7 @@ beforeEach(() => {
   toast.mockClear();
   items = [];
   fold = undefined;
+  dissolved.value = false;
 });
 
 describe("DirectInviteNotifier: a granted channel key", () => {
@@ -193,6 +203,18 @@ describe("DirectInviteNotifier: a granted channel key", () => {
     );
     await flush();
     expect(updateList).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not applied to a dissolved community", async () => {
+    // Same refusal as the inbox's Accept and a link join: a dead community
+    // takes no new keys, and the vault is not written.
+    dissolved.value = true;
+    fold = entitledFold();
+    items = [catchUpFrom(ADMIN)];
+    mount();
+    await flush();
+    expect(updateList).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/added/i) }));
   });
 
   it("still announces a fresh community invite as before", async () => {

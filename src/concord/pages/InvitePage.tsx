@@ -7,6 +7,7 @@ import { JoinButton } from "@/components/auth/JoinButton";
 import { Button } from "@/components/ui/button";
 import {
   BannedFromCommunityError,
+  DissolvedCommunityError,
   useCommunityActions,
   type InvitePreview,
 } from "@/concord/hooks/useCommunityActions";
@@ -37,6 +38,7 @@ export function InvitePage() {
   const { preview, join, isJoining } = useCommunityActions();
   const [error, setError] = useState<string | null>(null);
   const [banned, setBanned] = useState(false);
+  const [dissolved, setDissolved] = useState(false);
   const [resolved, setResolved] = useState<InvitePreview | null>(null);
 
   const fragment = (location.hash || window.location.hash).replace(/^#/, "").trim();
@@ -60,7 +62,9 @@ export function InvitePage() {
         if (!cancelled) setResolved(p);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Couldn't load that invite link.");
+        if (cancelled) return;
+        setDissolved(e instanceof DissolvedCommunityError);
+        setError(e instanceof Error ? e.message : "Couldn't load that invite link.");
       });
     return () => {
       cancelled = true;
@@ -79,6 +83,7 @@ export function InvitePage() {
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
       setBanned(e instanceof BannedFromCommunityError);
+      setDissolved(e instanceof DissolvedCommunityError);
       setError(e instanceof Error ? e.message : "Couldn't join with that invite link.");
     }
   };
@@ -93,7 +98,9 @@ export function InvitePage() {
           ) : (
             <ShieldCheck className="size-12 text-muted-foreground" />
           )}
-          <h1 className="text-2xl font-bold">{banned ? "You’re banned" : "Invite link didn’t work"}</h1>
+          <h1 className="text-2xl font-bold">
+            {banned ? "You’re banned" : dissolved ? "Community dissolved" : "Invite link didn’t work"}
+          </h1>
           <p className="max-w-md text-muted-foreground">{error}</p>
           <Button asChild>
             <Link to="/">Back to base</Link>

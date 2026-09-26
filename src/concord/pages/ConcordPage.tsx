@@ -55,7 +55,8 @@ import { isEveryoneMention } from "@/concord/lib/everyoneMention";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
 import { SuspiciousActivityView } from "@/concord/components/SuspiciousActivityView";
 import { useSelfRemove } from "@/concord/hooks/useSelfRemove";
-import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
+import { useLinkAuthorityWatch, useLinkFreshnessWatch, useRetireCommunityLinks, type RetirementOutcome } from "@/concord/hooks/useInvites";
+import { dissolveMissToast } from "@/concord/components/dissolveMissToast";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
@@ -1818,6 +1819,22 @@ export function ConcordPage() {
 
   const { leave, isLeaving, dissolve, createChannel, privatiseChannel, mintAccessRole, setChannelCategory, arrangeChannels } =
     useCommunityManagement(community);
+  const retireLinks = useRetireCommunityLinks(community);
+  /**
+   * The dissolve toast's Retry. The community is gone by now, so this runs
+   * the retirement's own `retry`, which holds exactly what missed — and a
+   * miss again re-raises the same toast with the next `retry`.
+   */
+  const showRetirementMiss = (outcome: RetirementOutcome) => {
+    const retry = outcome.retry;
+    if (!retry) return;
+    toast(dissolveMissToast(outcome, () => {
+      void retry().then(
+        (next) => (next.retry ? showRetirementMiss(next) : toast({ title: "Invite links and listings taken down" })),
+        () => showRetirementMiss(outcome),
+      );
+    }));
+  };
 
   /**
    * File one channel, from the sidebar's own context menu — the same edition
@@ -2815,14 +2832,29 @@ export function ConcordPage() {
   };
 
   const handleDissolve = async () => {
-    if (!confirm("Permanently dissolve this community for everyone? This cannot be undone.")) return;
+    if (
+      !confirm(
+        "Permanently dissolve this community for everyone? This cannot be undone. Your invite links will be revoked and your Discover listings removed.",
+      )
+    ) return;
+    let missed: RetirementOutcome | undefined;
     try {
-      await dissolve();
+      await dissolve({
+        retire: async () => {
+          missed = await retireLinks();
+        },
+      });
       // Internal navigation home — NOT a reload. `dissolve` drops the vault
       // entry (so the community leaves the rail) but first marks it dissolved,
       // which keeps any active call alive across the transition (see
       // useCallSync). The persistent voice room rides through the SPA navigate.
-      toast({ title: "Community dissolved" });
+      // One toast either way: only one shows at a time, so a separate
+      // "dissolved" toast would replace the miss before it could be read.
+      if (missed?.retry) {
+        showRetirementMiss(missed);
+      } else {
+        toast({ title: "Community dissolved" });
+      }
       navigateTo("/");
     } catch (e) {
       toast({ title: "Couldn't dissolve", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
@@ -3778,6 +3810,7 @@ export function ConcordPage() {
                       onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
                       onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
                       onMintAccessRole={canManageRoles ? handleMintAccessRole : undefined}
+                      onOpenInvites={() => selectPane("invites")}
                     />
                   )}
                 </div>

@@ -22,10 +22,13 @@ import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useCommunity, useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useInviteActions, useInviteList } from "@/concord/hooks/useInvites";
+import { useUnlistAnnouncements } from "@/concord/hooks/useDiscoverListings";
 import {
   KIND_COMMUNITY_ANNOUNCEMENT,
+  announcementFromEvent,
   buildCommunityAnnouncement,
   extractInviteUrls,
+  type DiscoveredInvite,
 } from "@/concord/lib/inviteDiscovery";
 import { parseInviteLink } from "@/concord/lib/invite";
 import { badgeOf } from "@/concord/lib/roles";
@@ -258,6 +261,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const { community, folded, eligible, isLoading } = useCanShare(idHex);
   const { createLink, myLinks, isPublic, refreshMyLinks, linksLoading } = useInviteActions(community);
   const { mutateAsync: publishEvent } = useNostrPublish();
+  const { unlist } = useUnlistAnnouncements();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -289,14 +293,9 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     setBusy(true);
     try {
       // NIP-09: ask relays to drop MY announcement events. The Discover feed
-      // also honors these client-side for relays that keep them.
-      await publishEvent({
-        kind: 5,
-        content: "",
-        tags: [...targets.map((e) => ["e", e.id]), ["k", String(KIND_COMMUNITY_ANNOUNCEMENT)]],
-      });
-      queryClient.invalidateQueries({ queryKey: ["discover", "community-announcements"] });
-      queryClient.invalidateQueries({ queryKey: ["discover", "my-announcements"] });
+      // also honors these client-side for relays that keep them, and the
+      // cached directory drops them at once.
+      await unlist(targets.map(announcementFromEvent).filter((a): a is DiscoveredInvite => !!a));
       toast({
         title: "Unpublished from Discover",
         description: `${name} is no longer listed by you.`,
@@ -338,6 +337,9 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       // Drop cached listing previews so the sharer's own Discover tab picks
       // up the just-refreshed bundle instead of a stale decrypt.
       queryClient.invalidateQueries({ queryKey: ["discover", "invite-bundle"] });
+      queryClient.invalidateQueries({ queryKey: ["discover", "directory-infinite"] });
+      queryClient.invalidateQueries({ queryKey: ["discover", "my-announcements"] });
+      queryClient.invalidateQueries({ queryKey: ["discover", "link-announcements"] });
       toast({
         title: "Shared to Discover",
         description: `${name} is now publicly listed.`,

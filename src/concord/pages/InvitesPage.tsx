@@ -21,7 +21,7 @@ import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { BannedFromCommunityError, bundleToEntry } from "@/concord/hooks/useCommunityActions";
+import { BannedFromCommunityError, DissolvedCommunityError, bundleToEntry } from "@/concord/hooks/useCommunityActions";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import {
   useAcceptDirectInvite,
@@ -794,6 +794,15 @@ function InboxInviteDetail({
         toast({
           title: "You're banned",
           description: "You can't join this community.",
+          variant: "destructive",
+        });
+        await handleDecline();
+        return;
+      }
+      if (e instanceof DissolvedCommunityError) {
+        toast({
+          title: `${invite.name} was dissolved`,
+          description: e.message,
           variant: "destructive",
         });
         await handleDecline();

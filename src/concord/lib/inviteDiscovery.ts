@@ -102,6 +102,49 @@ export function buildCommunityAnnouncement(input: { inviteUrl: string }): EventT
 }
 
 /**
+ * The NIP-09 un-listing of announcements. Always `k`-tagged: Discover reads
+ * deletions by kind (`#k: ["3314"]`) in the same round trip as the listings,
+ * so an untagged delete would never be seen by it.
+ */
+export function buildAnnouncementDeletion(announcementIds: string[]): EventTemplate {
+  return {
+    kind: 5,
+    content: "",
+    tags: [...announcementIds.map((id) => ["e", id]), ["k", String(KIND_COMMUNITY_ANNOUNCEMENT)]],
+  };
+}
+
+/**
+ * Every announcement in `events` still standing — not deleted by a kind 5 from
+ * its OWN author (anyone else's delete is noise) — whose link is one of
+ * `linkSigners`, as {@link DiscoveredInvite}s, newest first. Unlike the
+ * directory fold this keeps EVERY copy of a link rather than the newest per
+ * signer: un-listing has to delete all of them, or deleting the newest just
+ * promotes an older copy of the same link back onto Discover.
+ */
+export function announcementsForLinks(
+  events: NostrRumor[],
+  linkSigners: ReadonlySet<string>,
+): DiscoveredInvite[] {
+  const byId = new Map<string, NostrRumor>();
+  for (const e of events) if (e.kind === KIND_COMMUNITY_ANNOUNCEMENT) byId.set(e.id, e);
+  const deleted = new Set<string>();
+  for (const e of events) {
+    if (e.kind !== 5) continue;
+    for (const [n, id] of e.tags) {
+      if (n === "e" && byId.get(id)?.pubkey === e.pubkey) deleted.add(id);
+    }
+  }
+  const out: DiscoveredInvite[] = [];
+  for (const e of byId.values()) {
+    if (deleted.has(e.id)) continue;
+    const invite = announcementFromEvent(e);
+    if (invite && linkSigners.has(invite.linkSigner)) out.push(invite);
+  }
+  return out.sort((a, b) => b.source.created_at - a.source.created_at);
+}
+
+/**
  * Convert a shareable invite URL into a local router path (`/invite/<naddr>#…`)
  * so "Join" navigates in-app rather than doing a full navigation to the hosted
  * origin baked into a native-built link. Falls back to the raw input.

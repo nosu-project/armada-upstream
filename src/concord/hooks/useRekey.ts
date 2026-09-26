@@ -459,9 +459,13 @@ export function useLinkRefreshWatch(community: Community | undefined): void {
   // naturally. Relays are in the key because the bundle VENDS them: a link
   // fetched after a relay move must hand joiners the new set.
   const refreshed = useRef(new Set<string>());
+  const { data: dissolved } = useDissolved(community);
 
   useEffect(() => {
     if (!community || !user?.signer.nip44 || !folded) return;
+    // A dissolved community's links must stay dead: re-posting them would put
+    // it back on Discover. Wait for a known-alive answer, not a pending one.
+    if (dissolved !== null) return;
     // Only an authorized creator may re-post bundles: a stripped creator's
     // refresh would resurrect a link the authority watcher is retiring (the
     // registry already ignores them, but the bundle coordinate is theirs
@@ -500,7 +504,7 @@ export function useLinkRefreshWatch(community: Community | undefined): void {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [community?.idHex, community?.rootEpoch, community?.relays.join(","), user?.pubkey, folded]);
+  }, [community?.idHex, community?.rootEpoch, community?.relays.join(","), user?.pubkey, folded, dissolved]);
 }
 
 /**

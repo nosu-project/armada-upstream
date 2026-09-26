@@ -1,9 +1,10 @@
+import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { ToastAction } from "@/components/ui/toast";
-import { bundleToEntry } from "@/concord/hooks/useCommunityActions";
+import { assertNotDissolved, bundleToEntry, DissolvedCommunityError } from "@/concord/hooks/useCommunityActions";
 import { useCommunity, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useInviteInbox, type ParkedInvite } from "@/concord/hooks/useDirectInvites";
@@ -125,6 +126,7 @@ function CatchUpAdopter({
   onAdopted: (wrapId: string) => void;
 }) {
   const { user } = useCurrentUser();
+  const { nostr } = useNostr();
   const entry = useCommunityEntry(invite.communityId);
   const community = useCommunity(invite.communityId);
   const { data: folded } = useControlFold(community);
@@ -154,11 +156,17 @@ function CatchUpAdopter({
     const names = invite.bundle.channels.filter((c) => vended.has(c.id.toLowerCase())).map((c) => c.name);
     void (async () => {
       try {
+        // The inbox's Accept refuses a dissolved community, and so does this:
+        // a dead community takes no new keys. Not retried and not toasted —
+        // the community already reads dissolved wherever it is shown, and the
+        // invite stays in the inbox, whose Accept says why it can't be used.
+        await assertNotDissolved(nostr, invite.bundle);
         // Same write the inbox's Accept makes: the merge is pinned to the base
         // already held (isCatchUpBundle), so the only thing it can contribute
         // for a known community is channel keys.
         await updateList({ type: "add", entry: bundleToEntry(invite.bundle) });
-      } catch {
+      } catch (e) {
+        if (e instanceof DissolvedCommunityError) return;
         // The vault write never landed; a later render (or the inbox's own
         // Accept) retries.
         applied.current = false;
@@ -172,7 +180,7 @@ function CatchUpAdopter({
       queryClient.invalidateQueries({ queryKey: ["concord", "direct-invites"] });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
     })();
-  }, [verdict, held, invite, updateList, onAdopted, queryClient]);
+  }, [verdict, held, invite, nostr, updateList, onAdopted, queryClient]);
 
   return null;
 }

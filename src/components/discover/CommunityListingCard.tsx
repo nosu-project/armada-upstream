@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check, Copy, ShieldCheck } from "lucide-react";
+import { ArrowRight, Check, Copy, Loader2, MoreHorizontal, ShieldCheck, Skull, Trash2 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -8,10 +8,17 @@ import { DisplayName } from "@/components/DisplayName";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { readCachedBundle, resolveBundle } from "@/concord/hooks/useCommunityActions";
 import { useCommunity, useCommunityEntry } from "@/concord/hooks/useCommunityList";
-import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { probeCommunityDissolved, useControlFold } from "@/concord/hooks/useControlPlane";
+import { useUnlistAnnouncements } from "@/concord/hooks/useDiscoverListings";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import {
   discoverStreamAuthors,
@@ -28,6 +35,7 @@ import {
 } from "@/concord/lib/inviteDiscovery";
 import { parseInviteLink } from "@/concord/lib/invite";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -176,6 +184,35 @@ export function CommunityListingCard({
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, attributedPubkey);
 
+  // A dissolved community is not a listing. Its links keep resolving — the
+  // grave touches no link coordinate — so the bundle alone would list it
+  // forever. The dissolved address derives from the community_id, so a
+  // non-member can check it too; the probes batch per relay across the grid.
+  const { data: dissolvedAtMs, isPending: dissolvedPending } = useQuery({
+    queryKey: ["discover", "dissolved", bundle?.community_id],
+    enabled: !!bundle?.community_id && !!bundle.owner,
+    staleTime: 10 * 60_000,
+    retry: false,
+    queryFn: async () =>
+      (await probeCommunityDissolved(nostr, {
+        communityId: bundle!.community_id,
+        owner: bundle!.owner,
+        relays: Array.isArray(bundle!.relays) ? bundle!.relays : [],
+      })) ?? null,
+  });
+  const dissolved = dissolvedAtMs != null;
+  // Held as a skeleton until the check answers, so a dissolved community's
+  // card never paints and then vanishes. The probe answers within a short
+  // budget (and at once for a grave already known), so this is bounded.
+  const dissolvedChecking = !!bundle?.community_id && !!bundle.owner && dissolvedPending;
+
+  // The listing's own author may take it down. Only theirs: a NIP-09 delete
+  // counts from an event's author alone, so nobody else is offered one.
+  const { user } = useCurrentUser();
+  const isAuthor = !!user && user.pubkey === invite.source.pubkey;
+  const { unlistLinks } = useUnlistAnnouncements();
+  const [removing, setRemoving] = useState(false);
+
   const memberEntry = useCommunityEntry(bundle?.community_id);
   const isMember = !!memberEntry;
 
@@ -276,6 +313,17 @@ export function CommunityListingCard({
     && !bundleError
     && !!parsed
     && !!bundle
+    && !dissolvedChecking
+    && !dissolved
+    && (!needle || name.toLowerCase().includes(needle));
+  // A dissolved community stays visible to the one person who can clean the
+  // listing up — its author — as a husk with nothing but the remove action.
+  const husk =
+    dissolved
+    && isAuthor
+    && !bundleLoading
+    && !bundleError
+    && !!bundle
     && (!needle || name.toLowerCase().includes(needle));
 
   // Probe target for the tab-level batched last-active REQ. Public chat
@@ -298,6 +346,23 @@ export function CommunityListingCard({
 
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
   const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);
+  const onRemove = async () => {
+    setRemoving(true);
+    try {
+      // Every copy of this link the viewer announced, not just this one:
+      // Discover keeps the newest per link, so an older copy would take its place.
+      await unlistLinks([invite.linkSigner], [invite]);
+      toast({ title: "Removed from Discover", description: `${name} is no longer listed by you.` });
+    } catch (e) {
+      toast({
+        title: "Couldn't remove the listing",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setRemoving(false);
+    }
+  };
   const onCopy = async () => {
     try {
       await writeClipboardText(invite.inviteUrl);
@@ -310,13 +375,13 @@ export function CommunityListingCard({
 
   // No real name to show until the bundle settles — hold the card's shape
   // instead of flashing the "Encrypted community" fallback.
-  if (bundleLoading) return <CommunityListingCardSkeleton className={className} />;
+  if (bundleLoading || dissolvedChecking) return <CommunityListingCardSkeleton className={className} />;
 
   // A link that doesn't resolve (revoked, expired, dead relays) is not a
   // joinable community — hide it rather than list a junk placeholder card.
   // This is also what makes revoking a shared link an effective un-listing.
   // `listed` folds in the search miss; `bundle` is re-tested for the narrowing.
-  if (!listed || !bundle) return null;
+  if ((!listed && !husk) || !bundle) return null;
 
   return (
     <div
@@ -435,7 +500,12 @@ export function CommunityListingCard({
         </ProfilePreviewCard>
 
         <div className="mt-auto flex gap-2">
-          {isMember ? (
+          {husk ? (
+            <Button variant="secondary" className="min-w-0 flex-1 clip-corner-lg" disabled>
+              <Skull className="size-4" />
+              Dissolved
+            </Button>
+          ) : isMember ? (
             <Button variant="secondary" className="min-w-0 flex-1 clip-corner-lg" onClick={onOpen}>
               <Check className="size-4" />
               Joined — Open
@@ -446,15 +516,42 @@ export function CommunityListingCard({
               <ArrowRight className="size-4" />
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0 clip-corner-lg"
-            aria-label="Copy invite link"
-            onClick={onCopy}
-          >
-            {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
-          </Button>
+          {/* A dissolved community's link leads nowhere worth sharing. */}
+          {!husk && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0 clip-corner-lg"
+              aria-label="Copy invite link"
+              onClick={onCopy}
+            >
+              {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+            </Button>
+          )}
+          {isAuthor && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0 clip-corner-lg"
+                  aria-label="Listing options"
+                  disabled={removing}
+                >
+                  {removing ? <Loader2 className="size-4 animate-spin" /> : <MoreHorizontal className="size-4" />}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={() => void onRemove()}
+                >
+                  <Trash2 className="mr-2 size-4" />
+                  Remove from Discover
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
     </div>

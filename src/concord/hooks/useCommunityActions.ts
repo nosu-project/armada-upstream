@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
-import { useControlFold, citationFor, invalidateControl, markDissolvedLocally, publishEdition } from "@/concord/hooks/useControlPlane";
+import { useControlFold, citationFor, invalidateControl, markDissolvedLocally, probeCommunityDissolved, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord/lib/guestbook";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -74,6 +74,36 @@ export class BannedFromCommunityError extends Error {
     super("You're banned from this community and can't rejoin.");
     this.name = "BannedFromCommunityError";
   }
+}
+
+/** Thrown when an invite leads to a community its owner has dissolved. */
+export class DissolvedCommunityError extends Error {
+  constructor() {
+    super("This community was dissolved by its owner and can no longer be joined.");
+    this.name = "DissolvedCommunityError";
+  }
+}
+
+/**
+ * Refuse an invite whose community has been dissolved (CORD-02 §9). A bundle
+ * keeps resolving after dissolution — nothing about the grave touches link
+ * coordinates — so without this, joining a dead community's still-live link
+ * quietly re-adds it to the rail as a read-only husk. Direct invites are held
+ * to the same check (a bundle is a bundle, however it arrived).
+ *
+ * The probe answers within a short budget and reuses a recent "not found", so
+ * a preview followed by its join pays one probe between them.
+ */
+export async function assertNotDissolved(
+  nostr: Parameters<typeof probeCommunityDissolved>[0],
+  bundle: Pick<InviteBundle, "community_id" | "owner" | "relays">,
+): Promise<void> {
+  const grave = await probeCommunityDissolved(nostr, {
+    communityId: bundle.community_id,
+    owner: bundle.owner,
+    relays: Array.isArray(bundle.relays) ? bundle.relays : [],
+  });
+  if (grave !== undefined) throw new DissolvedCommunityError();
 }
 
 /** Thrown when the control plane can't be read to verify access (retryable). */
@@ -611,6 +641,7 @@ export function useCommunityActions() {
       // where mixed content silently blocks every connection.
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
+      await assertNotDissolved(nostr, bundle);
       return {
         communityId: bundle.community_id,
         name: bundle.name,
@@ -630,6 +661,10 @@ export function useCommunityActions() {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
+      // Neither may anyone join a dissolved community — checked here too, not
+      // only in the preview, since the optimistic path joins from a preview's
+      // bundle that may predate the grave.
+      await assertNotDissolved(nostr, bundle);
       const entry = bundleToEntry(bundle, { inviteRef: inviteRefOf(invite) });
       // A banned npub must not join (CORD-04 §4): check BEFORE recording the
       // entry or publishing anything.
@@ -682,7 +717,12 @@ export function useCommunityActions() {
         .catch((e) => {
           removePendingJoin(communityId);
           toast({
-            title: e instanceof BannedFromCommunityError ? "You're banned" : `Couldn't join ${name}`,
+            title:
+              e instanceof BannedFromCommunityError
+                ? "You're banned"
+                : e instanceof DissolvedCommunityError
+                  ? `${name} was dissolved`
+                  : `Couldn't join ${name}`,
             description: e instanceof Error ? e.message : "The invite didn't work.",
             variant: "destructive",
           });
@@ -720,8 +760,8 @@ export function useCommunityManagement(community: Community | undefined) {
     },
   });
 
-  const dissolve = useMutation<void, Error, void>({
-    mutationFn: async () => {
+  const dissolve = useMutation<void, Error, { retire?: () => Promise<void> } | void>({
+    mutationFn: async (opts) => {
       if (!user || !community) throw new Error("Not ready.");
       if (user.pubkey !== community.owner) throw new Error("Only the owner can dissolve the community.");
       const wrap = await sealDissolved(community.id, user.pubkey, user.signer);
@@ -740,6 +780,17 @@ export function useCommunityManagement(community: Community | undefined) {
       // the entry vanishes means the call watcher sees `dissolved` on the same
       // render the community goes undefined, and the call rides through.
       await markDissolvedLocally(queryClient, community.idHex, Date.now());
+      // Take down what still advertises the community — the owner's invite
+      // links and Discover listings — only NOW: after the grave is accepted,
+      // so a dissolution that fails leaves a live community's links alone.
+      // The retirement publishes revocation tombstones and NIP-09 deletions
+      // only, never a registry edition (the tombstones are what kill the
+      // links, and nothing may follow the grave on the control plane — the
+      // local mark above also makes publishEdition refuse one). Best-effort:
+      // the community is dissolved either way, the Discover card and the join
+      // path both check for the grave themselves, and whatever did not land is
+      // offered back to the owner as a Retry.
+      await opts?.retire?.().catch(() => undefined);
       await updateList({ type: "remove", communityId: community.idHex });
     },
   });

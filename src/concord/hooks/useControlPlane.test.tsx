@@ -30,7 +30,16 @@ import { buildRumor, sealRumor, wrapSeal } from "@/concord/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { Community } from "@/concord/lib/types";
 
-import { _forgetDissolvedMemoForTests, dissolvedAt, useControlEvents, useControlFold, useDissolved } from "./useControlPlane";
+import {
+  _forgetDissolvedMemoForTests,
+  dissolvedAt,
+  markDissolvedLocally,
+  probeCommunityDissolved,
+  publishEdition,
+  useControlEvents,
+  useControlFold,
+  useDissolved,
+} from "./useControlPlane";
 
 import {
   _configureAuthWaitForTests,
@@ -343,5 +352,162 @@ describe("useDissolved — death is one-way (CORD-02 §9)", () => {
     await waitFor(() => expect(result.current.data).toBeTruthy());
 
     expect(await dissolvedAt(community.idHex), "local, sticky, no network").toBeTypeOf("number");
+  });
+});
+
+describe("probeCommunityDissolved — a non-member's check, from the public identity alone", () => {
+  it("finds the owner's grave and remembers it", async () => {
+    const owner = signer();
+    const community = communityOf(80, owner.pubkey);
+    const relay = new FakeRelay();
+    relay.events = [await sealDissolved(community.id, owner.pubkey, owner)];
+    const pool = { relay: () => relay };
+
+    const at = await probeCommunityDissolved(pool, {
+      communityId: community.idHex,
+      owner: owner.pubkey,
+      relays: [RELAY_A],
+    });
+    expect(at).toBeTypeOf("number");
+    expect(await dissolvedAt(community.idHex), "sticky like every other path to the grave").toBe(at);
+  });
+
+  it("ignores a grave someone other than the owner signed", async () => {
+    // The dissolved address derives from the public community_id, so anyone
+    // can publish there — only the owner's seal makes it a grave.
+    const owner = signer();
+    const impostor = signer();
+    const community = communityOf(82, owner.pubkey);
+    const relay = new FakeRelay();
+    relay.events = [await sealDissolved(community.id, impostor.pubkey, impostor)];
+    const pool = { relay: () => relay };
+
+    const at = await probeCommunityDissolved(pool, {
+      communityId: community.idHex,
+      owner: owner.pubkey,
+      relays: [RELAY_A],
+    });
+    expect(at).toBeUndefined();
+  });
+});
+
+describe("probeCommunityDissolved — answering fast", () => {
+  it("case-folds the community id before touching the marker", async () => {
+    const owner = signer();
+    const community = communityOf(84, owner.pubkey);
+    const relay = new FakeRelay();
+    relay.events = [await sealDissolved(community.id, owner.pubkey, owner)];
+
+    const at = await probeCommunityDissolved({ relay: () => relay }, {
+      communityId: community.idHex.toUpperCase(),
+      owner: owner.pubkey.toUpperCase(),
+      relays: [RELAY_A],
+    });
+    expect(at).toBeTypeOf("number");
+    expect(await dissolvedAt(community.idHex), "remembered under the lowercase id every reader uses").toBe(at);
+  });
+
+  it("answers from the first relay with a grave, not the slowest relay", async () => {
+    const owner = signer();
+    const community = communityOf(86, owner.pubkey);
+    const fast = new FakeRelay();
+    fast.events = [await sealDissolved(community.id, owner.pubkey, owner)];
+    const hung = { query: () => new Promise<NostrEvent[]>(() => undefined) };
+    const pool = { relay: (url: string) => (url === RELAY_A ? fast : hung) };
+
+    const started = Date.now();
+    const at = await probeCommunityDissolved(pool as never, {
+      communityId: community.idHex,
+      owner: owner.pubkey,
+      relays: [RELAY_A, RELAY_B],
+    });
+    expect(at).toBeTypeOf("number");
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("gives up within its budget when no relay answers, and does not reuse that as a verdict", async () => {
+    const owner = signer();
+    const community = communityOf(88, owner.pubkey);
+    let asked = 0;
+    const hung = {
+      query: () => {
+        asked += 1;
+        return new Promise<NostrEvent[]>(() => undefined);
+      },
+    };
+    const target = { communityId: community.idHex, owner: owner.pubkey, relays: [RELAY_A] };
+
+    const started = Date.now();
+    expect(await probeCommunityDissolved({ relay: () => hung } as never, target, { budgetMs: 100 })).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(2000);
+    // No relay answered, so "not found" is no verdict: the join asks again.
+    expect(await probeCommunityDissolved({ relay: () => hung } as never, target, { budgetMs: 100 })).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(asked).toBe(2);
+  });
+
+  it("reuses a not-found that a relay answered, for the same owner and relays only", async () => {
+    const owner = signer();
+    const community = communityOf(90, owner.pubkey);
+    let asked = 0;
+    const empty = {
+      query: async () => {
+        asked += 1;
+        return [] as NostrEvent[];
+      },
+    };
+    const pool = { relay: () => empty } as never;
+    const target = { communityId: community.idHex, owner: owner.pubkey, relays: [RELAY_A, RELAY_B] };
+
+    expect(await probeCommunityDissolved(pool, target)).toBeUndefined();
+    const askedFirst = asked;
+    // Same identity, relays in another order: one probe between them.
+    expect(await probeCommunityDissolved(pool, { ...target, relays: [RELAY_B, RELAY_A] })).toBeUndefined();
+    expect(asked).toBe(askedFirst);
+
+    // A different owner or relay set is a different question.
+    await probeCommunityDissolved(pool, { ...target, owner: signer().pubkey });
+    expect(asked).toBeGreaterThan(askedFirst);
+    const afterOwner = asked;
+    await probeCommunityDissolved(pool, { ...target, relays: [RELAY_A] });
+    expect(asked).toBeGreaterThan(afterOwner);
+  });
+
+  it("does not let a dead-relay probe hide the grave from a probe that reaches it", async () => {
+    const owner = signer();
+    const community = communityOf(92, owner.pubkey);
+    const live = new FakeRelay();
+    live.events = [await sealDissolved(community.id, owner.pubkey, owner)];
+    const dead = { query: async () => { throw new Error("offline"); } };
+    const target = { communityId: community.idHex, owner: owner.pubkey, relays: [RELAY_A] };
+
+    expect(await probeCommunityDissolved({ relay: () => dead } as never, target)).toBeUndefined();
+    expect(await probeCommunityDissolved({ relay: () => live } as never, target)).toBeTypeOf("number");
+  });
+});
+
+describe("publishEdition — nothing follows the grave", () => {
+  it("refuses once the owner's own client has marked the community dissolved", async () => {
+    // The dissolving owner never sweeps their own tombstone into the stored
+    // control plane before retiring links — the local marker is the only
+    // record of the grave they have, and it must be enough.
+    const owner = signer();
+    const community = communityOf(90, owner.pubkey);
+    const sent: NostrEvent[] = [];
+    const pool = {
+      relay: () => ({
+        event: async (e: NostrEvent) => {
+          sent.push(e);
+        },
+      }),
+    };
+    const { queryClient } = makeWrapper();
+    await markDissolvedLocally(queryClient, community.idHex, Date.now());
+
+    const rumor = buildRumor({ kind: 3308, content: "{}", tags: [["vsk", "8"]], pubkey: owner.pubkey, ms: null });
+    await expect(
+      publishEdition(pool as never, community, owner as never, rumor),
+    ).rejects.toThrow(/dissolved/);
+    expect(sent, "no wrap reaches any relay").toHaveLength(0);
   });
 });
