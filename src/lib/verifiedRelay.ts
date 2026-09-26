@@ -32,8 +32,14 @@
 import { NRelay1, type NRelay1Opts } from "@nostrify/nostrify";
 import type { NostrEvent, NostrRelayMsg } from "@nostrify/types";
 
+import { relayMsgSchema } from "./relayMsgParse";
 import { type EcVerifyBatch, verifyEventsOnce } from "./verifyCache";
 import { ecVerifyBatch } from "./verifyPool";
+
+// Every NRelay1 parses each frame through `NRelay1.msgSchema`, a static read at
+// message time: swap in the hand-written parser (same verdicts, same output —
+// see relayMsgParse.ts) for the zod one, for every relay in the app.
+(NRelay1 as unknown as { msgSchema: typeof relayMsgSchema }).msgSchema = relayMsgSchema;
 
 export interface RelayInboxOpts {
   /**

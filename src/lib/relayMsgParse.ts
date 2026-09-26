@@ -1,0 +1,93 @@
+/**
+ * A hand-written parser for relay → client messages, standing in for the zod
+ * schema `NRelay1` validates every frame with.
+ *
+ * `NRelay1` runs `NSchema.json().pipe(NSchema.relayMsg())` on each incoming
+ * WebSocket message: a union of seven tuple schemas, tried in turn, with a
+ * regex per hex field of every event. On a phone that was ~0.1ms a frame — the
+ * largest single library cost in a profiled history download, ahead of the
+ * NIP-44 decrypts, for a check whose outcome is almost always "yes".
+ *
+ * The contract is the zod schema's, exactly, including what it returns: a
+ * message it would reject is rejected here, and an accepted event carries ONLY
+ * the seven NIP-01 fields (zod's object parse strips the rest), as does a COUNT
+ * payload. `relayMsgParse.test.ts` holds this against `NSchema` directly, so a
+ * nostrify upgrade that changes the schema fails there rather than in the field.
+ */
+import type { NostrEvent, NostrRelayMsg } from "@nostrify/types";
+
+type Result = { success: true; data: NostrRelayMsg } | { success: false; error: Error };
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+const isNonNegInt = (v: unknown): v is number =>
+  typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+function parseEvent(v: unknown): NostrEvent | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const e = v as Record<string, unknown>;
+  const { id, kind, pubkey, tags, content, created_at, sig } = e;
+  if (typeof id !== "string" || !HEX64.test(id)) return undefined;
+  if (!isNonNegInt(kind) || kind > 65535) return undefined;
+  if (typeof pubkey !== "string" || !HEX64.test(pubkey)) return undefined;
+  if (!Array.isArray(tags)) return undefined;
+  for (const tag of tags) {
+    if (!Array.isArray(tag)) return undefined;
+    for (const item of tag) if (typeof item !== "string") return undefined;
+  }
+  if (typeof content !== "string") return undefined;
+  if (!isNonNegInt(created_at)) return undefined;
+  if (typeof sig !== "string") return undefined;
+  return { id, kind, pubkey, tags: tags as string[][], content, created_at, sig };
+}
+
+function parseMsg(m: unknown): NostrRelayMsg | undefined {
+  if (!Array.isArray(m) || m.length === 0) return undefined;
+  switch (m[0]) {
+    case "EVENT": {
+      if (m.length !== 3 || typeof m[1] !== "string") return undefined;
+      const event = parseEvent(m[2]);
+      return event && ["EVENT", m[1], event];
+    }
+    case "OK":
+      if (m.length !== 4 || typeof m[1] !== "string" || !HEX64.test(m[1])) return undefined;
+      if (typeof m[2] !== "boolean" || typeof m[3] !== "string") return undefined;
+      return ["OK", m[1], m[2], m[3]];
+    case "EOSE":
+      return m.length === 2 && typeof m[1] === "string" ? ["EOSE", m[1]] : undefined;
+    case "NOTICE":
+      return m.length === 2 && typeof m[1] === "string" ? ["NOTICE", m[1]] : undefined;
+    case "CLOSED":
+      return m.length === 3 && typeof m[1] === "string" && typeof m[2] === "string"
+        ? ["CLOSED", m[1], m[2]]
+        : undefined;
+    case "AUTH":
+      return m.length === 2 && typeof m[1] === "string" ? ["AUTH", m[1]] : undefined;
+    case "COUNT": {
+      if (m.length !== 3 || typeof m[1] !== "string") return undefined;
+      const body = m[2];
+      if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+      const { count, approximate } = body as Record<string, unknown>;
+      if (!isNonNegInt(count)) return undefined;
+      if (approximate !== undefined && typeof approximate !== "boolean") return undefined;
+      return ["COUNT", m[1], approximate === undefined ? { count } : { count, approximate }];
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** `NRelay1.msgSchema`'s surface: `safeParse` over the raw frame text. */
+export const relayMsgSchema = {
+  safeParse(data: unknown): Result {
+    if (typeof data !== "string") return { success: false, error: new Error("not a string") };
+    let json: unknown;
+    try {
+      json = JSON.parse(data);
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error : new Error(String(error)) };
+    }
+    const msg = parseMsg(json);
+    return msg ? { success: true, data: msg } : { success: false, error: new Error("not a relay message") };
+  },
+};

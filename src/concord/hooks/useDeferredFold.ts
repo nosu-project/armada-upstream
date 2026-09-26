@@ -24,6 +24,9 @@ const memCache = new Map<string, unknown>();
  */
 const FOLD_DEADLINE_MS = 250;
 
+/** Floor between two encodes of one fold for its persisted snapshot. */
+const PERSIST_MS = 2_000;
+
 /**
  * Compute a heavy synchronous Concord fold (roster / metadata / banlist) WITHOUT
  * blocking the render-critical path, and persist/restore it across reloads.
@@ -181,22 +184,47 @@ export function useDeferredFold<T>(
   }, [key, ...deps]);
 
   // Persist the live fold whenever its CONTENT changes (best-effort).
+  //
+  // Trailing and throttled: the snapshot only has to be close for the next
+  // cold start, and every recompute is a fresh object that has to be ENCODED
+  // before it can be compared with what was written — the whole fold, often
+  // hundreds of KB, per recompute. A sync burst recomputes the fold many times
+  // a second; this encodes the last of them once per PERSIST_MS, and once more
+  // on the way out so the final state is still what reaches disk.
+  const pendingPersist = useRef<{ key: string; value: T } | undefined>(undefined);
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const flushPersist = useRef(() => {
+    persistTimer.current = undefined;
+    const pending = pendingPersist.current;
+    pendingPersist.current = undefined;
+    if (!pending) return;
+    const serialized = encode(pending.value);
+    if (serialized === lastWritten.current) return;
+    lastWritten.current = serialized;
+    void writeFolded(pending.key, pending.value, serialized);
+  });
   useEffect(() => {
     if (!key || live === undefined) return;
     // Keep the in-memory cache hot so cycling back to this key repaints
     // synchronously (see the key-change seed above).
     memCache.set(key, live);
-    const persist = () => {
-      const serialized = encode(live);
-      if (serialized === lastWritten.current) return;
-      lastWritten.current = serialized;
-      void writeFolded(key, live, serialized);
-    };
-    // Encoding a fold is not cheap; do it on the next task, not in the commit.
+    // A key change flushes the previous key's pending value first, so it is
+    // never persisted under — or dropped for — the new key.
+    if (pendingPersist.current && pendingPersist.current.key !== key) {
+      if (persistTimer.current !== undefined) clearTimeout(persistTimer.current);
+      flushPersist.current();
+    }
+    pendingPersist.current = { key, value: live };
     // A timer, not an idle callback, so it never takes the fold's idle slot.
-    const handle = setTimeout(persist, 0);
-    return () => clearTimeout(handle);
+    persistTimer.current ??= setTimeout(() => flushPersist.current(), PERSIST_MS);
   }, [key, live]);
+  useEffect(
+    () => () => {
+      if (persistTimer.current !== undefined) clearTimeout(persistTimer.current);
+      flushPersist.current();
+    },
+    [],
+  );
 
   return live ?? restored;
 }

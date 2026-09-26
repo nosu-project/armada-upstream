@@ -455,11 +455,33 @@ function installWebSocketProbe(): void {
   if (typeof WebSocket === "undefined") return;
   const Native = WebSocket;
   const nativeSend = Native.prototype.send;
+  // A measurement account must be able to join a real community without the
+  // community seeing it: with `armada:perf-swallow-publish` set, every EVENT
+  // this page publishes is answered with the OK a relay would send and never
+  // leaves the device (reads, AUTH and CLOSE pass through). The same thing
+  // the desktop harness does at its WebSocket route, for a device driven over
+  // DevTools, where no route can be installed.
+  let swallow = false;
+  try {
+    swallow = localStorage.getItem("armada:perf-swallow-publish") === "1";
+  } catch {
+    // no storage: publish normally
+  }
   Native.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
     try {
       onOutbound(this, data);
     } catch {
       // the instrument must never break a send
+    }
+    if (swallow && typeof data === "string" && data.startsWith('["EVENT"')) {
+      try {
+        const id = (JSON.parse(data) as [string, { id: string }])[1].id;
+        setTimeout(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(["OK", id, true, ""]) })), 0);
+        return;
+      } catch {
+        // malformed: drop it rather than publish
+        return;
+      }
     }
     return nativeSend.call(this, data);
   };

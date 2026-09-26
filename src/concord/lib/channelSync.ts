@@ -23,7 +23,7 @@
  */
 import { openChatBatch } from "@/concord/lib/chat";
 import { KIND_WRAP } from "@/concord/lib/kinds";
-import { whenAuthSettled } from "@/concord/lib/planeSync";
+import { notePlaneWrapsSeen, unseenPlaneWraps, whenAuthSettled } from "@/concord/lib/planeSync";
 import {
   clearChannelExhausted,
   readChannelCursor,
@@ -376,11 +376,21 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     let writeFailed = false;
     const writePage = async (events: NostrEvent[], ring?: ThrottledRing) => {
       if (signal.aborted) return;
-      const opened = await openChatBatch(events, channel, { signal });
+      // Skip wraps whose rumors are already stored — the same persisted memo
+      // the wire's live ingest keeps. Every round re-fetches the newest page,
+      // and every page arrives from each relay, so without it a channel open
+      // re-decrypted (and re-verified) what was on disk.
+      const fresh = await unseenPlaneWraps(events);
+      if (fresh.length === 0 || signal.aborted) return;
+      const opened = await openChatBatch(fresh, channel, { signal });
       if (opened.length === 0) return;
       const stored = await writeRumors(community.idHex, opened, { ring: !ring });
-      if (stored) ring?.ring();
-      else writeFailed = true;
+      if (stored) {
+        ring?.ring();
+        // Only the wraps that OPENED: one that failed is usually an epoch key
+        // not held YET, and a later key must still be able to read it.
+        notePlaneWrapsSeen(opened.flatMap((o) => o.wrapId ?? []));
+      } else writeFailed = true;
       synced += opened.length;
       tick();
     };
