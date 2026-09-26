@@ -99,6 +99,14 @@ public class MainActivity extends BridgeActivity {
         EdgeToEdge.enable(this);
         super.onCreate(savedInstanceState);
 
+        // Replace Capacitor's chrome client with one that honours HTML
+        // fullscreen (embedded video players). Must happen in onCreate: the
+        // client registers activity-result launchers, which may not be
+        // registered once the activity has started.
+        if (this.bridge != null && this.bridge.getWebView() != null) {
+            this.bridge.getWebView().setWebChromeClient(new FullscreenChromeClient(this.bridge));
+        }
+
         // Poll the web-painted flag; lift the splash once it's set AND the crest
         // animation has had its SPLASH_MIN_MS to play out, with a safety timeout
         // (SPLASH_MAX_MS) that overrides both so it can never hang.

@@ -9,6 +9,7 @@ import { toast } from "@/hooks/useToast";
 import { useLinkPreview, useRichEmbed } from "@/hooks/useLinkPreview";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { writeClipboardText } from "@/lib/clipboard";
+import { useEmbedPauseEpoch } from "@/lib/embedPause";
 import {
   extractInstagramShortcode,
   extractSpotifyEmbed,
@@ -43,6 +44,8 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const tweetId = extractTweetId(url);
   const instagramShortcode = extractInstagramShortcode(url);
   const streamableId = extractStreamableId(url);
+  // Remounting the provider iframe is the only way to stop its playback.
+  const pauseEpoch = useEmbedPauseEpoch();
 
   if (youtubeId) {
     return (
@@ -65,6 +68,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
     return (
       <div className={cn("max-w-md", className)} onClick={(e) => e.stopPropagation()}>
         <iframe
+          key={pauseEpoch}
           src={`https://open.spotify.com/embed/${spotify.type}/${spotify.id}`}
           title="Spotify"
           width="100%"
@@ -89,6 +93,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
           style={{ paddingBottom: "56.25%" }}
         >
           <iframe
+            key={pauseEpoch}
             src={`https://streamable.com/e/${streamableId}`}
             title="Streamable video"
             // `allow="fullscreen"` supersedes the `allowFullScreen` attribute
@@ -530,14 +535,18 @@ function findThumbnail(videoId: string): Promise<string | null> {
  * are made to YouTube until the user explicitly clicks play.
  */
 export function YouTubeEmbed({ videoId, className }: { videoId: string; className?: string }) {
-  const [activated, setActivated] = useState(false);
+  // The pause epoch the player was started in: pausing media bumps the epoch,
+  // which returns the embed to its facade and tears the player down.
+  const pauseEpoch = useEmbedPauseEpoch();
+  const [activatedAt, setActivatedAt] = useState<number | null>(null);
+  const activated = activatedAt === pauseEpoch;
   const [resolvedThumb, setResolvedThumb] = useState<string | null>(null);
   const [nativeOpenFailed, setNativeOpenFailed] = useState(false);
   const nativeIos = needsNativeYouTubePlayer();
 
   const play = () => {
     if (!nativeIos) {
-      setActivated(true);
+      setActivatedAt(pauseEpoch);
       return;
     }
     if (nativeOpenFailed) {

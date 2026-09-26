@@ -57,6 +57,8 @@ files:
   - linuxVideoAcceleration.js
   - displayMediaPolicy.js
   - youtubeEmbedIdentity.js
+  # Required by main.js at startup; unlisted, the shell cannot boot.
+  - permissionPolicy.js
   - hevcScreenShare.js
   - linuxGlobalShortcuts.js
   - linuxStatusNotifier.js

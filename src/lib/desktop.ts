@@ -168,6 +168,7 @@ interface ArmadaDesktopBridge {
   // Optional: a newer web bundle can run inside an older shell that predates
   // these, so every call site feature-detects rather than assuming.
   onResume?: (handler: () => void) => () => void;
+  onWindowHidden?: (handler: () => void) => () => void;
   getLaunchSettings?: () => Promise<DesktopLaunchSettings>;
   setLaunchSettings?: (settings: {
     openAtLogin: boolean;
@@ -263,6 +264,18 @@ export async function setDesktopVideoEncoderMode(
 export function onDesktopResume(handler: () => void): () => void {
   try {
     return desktop()?.onResume?.(handler) ?? (() => {});
+  } catch {
+    return () => {};
+  }
+}
+
+/**
+ * Subscribe to the desktop window being closed to the tray. Returns an
+ * unsubscribe; a no-op on the web and in a shell older than the bridge method.
+ */
+export function onDesktopWindowHidden(handler: () => void): () => void {
+  try {
+    return desktop()?.onWindowHidden?.(handler) ?? (() => {});
   } catch {
     return () => {};
   }

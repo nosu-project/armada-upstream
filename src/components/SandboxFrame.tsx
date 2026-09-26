@@ -161,7 +161,9 @@ async function handleFetchRequest(
  * blocked from most capability APIs unless the parent explicitly delegates them
  * via `allow="…"`. We grant the directives a general-purpose web app (or a
  * watchalong video) might legitimately use; capabilities with charge-the-user
- * or phishing risk (payment, WebAuthn, OTP, FedCM) are deliberately omitted.
+ * or phishing risk (payment, WebAuthn, OTP, FedCM) are deliberately omitted,
+ * as is `clipboard-write`: the frame runs sender-supplied code, which must not
+ * be able to overwrite what the viewer copied.
  */
 const SANDBOX_ALLOW = [
   "accelerometer",
@@ -169,7 +171,6 @@ const SANDBOX_ALLOW = [
   "autoplay",
   "battery",
   "camera",
-  "clipboard-write",
   "compute-pressure",
   "display-capture",
   "encrypted-media",
