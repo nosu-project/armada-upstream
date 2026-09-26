@@ -370,21 +370,25 @@ function digest(r) {
  * (name + file:line, names kept by the profile build). `--cpu-profile` only:
  * the sampler's own overhead would skew every other number in the run.
  */
-async function cpuProfile(fn) {
+async function cpuProfile(name, fn) {
   if (!flag("cpu-profile")) return { result: await fn(), hot: undefined };
   await cdp.send("Profiler.enable");
   await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
   await cdp.send("Profiler.start");
   const result = await fn();
   const { profile } = await cdp.send("Profiler.stop");
+  // The raw profile too, for call trees (DevTools → Performance → load).
+  writeFileSync(resolve(OUT, `${name}.cpuprofile`), JSON.stringify(profile));
   const byId = new Map(profile.nodes.map((n) => [n.id, n]));
   const dt = new Map();
   profile.samples.forEach((id, i) => dt.set(id, (dt.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0)));
   const self = new Map();
   for (const [id, us] of dt) {
-    const { functionName, url, lineNumber } = byId.get(id).callFrame;
-    const file = url.replace(/^.*\/assets\//, "").replace(/-[\w-]{8}\.js$/, ".js");
-    const key = `${functionName || "(anonymous)"} ${file}:${lineNumber + 1}`;
+    const { functionName, url, lineNumber, columnNumber } = byId.get(id).callFrame;
+    // The hashed name and column are kept so a site resolves through the
+    // build's sourcemaps (`dist-perf/assets/*.map`): a minified chunk is line 1.
+    const file = url.replace(/^.*\/assets\//, "");
+    const key = `${functionName || "(anonymous)"} ${file}:${lineNumber + 1}:${columnNumber + 1}`;
     self.set(key, (self.get(key) ?? 0) + us);
   }
   const hot = [...self.entries()]
@@ -503,10 +507,11 @@ try {
       await resetCounters(page);
       const a = await metrics(cdp);
       const t = Date.now();
-      const steps = await scrollBack();
+      const { result: steps, hot } = await cpuProfile("scroll", scrollBack);
       const b = await metrics(cdp);
       const reachedFirst = await page.getByText("(#0)", { exact: false }).count();
       save("scroll", {
+        hot,
         scroll: cost(a, b, (Date.now() - t) / 1000),
         renderedRowsPerStep: steps,
         reachedFirstMessage: reachedFirst > 0,
@@ -528,15 +533,18 @@ try {
     const a = await metrics(cdp);
     const t = Date.now();
     const targets = world.peers.slice(0, 15);
-    for (let round = 0; round < 4; round++) {
-      for (const p of targets) {
-        await softNavigate(page, `/dm/${p.npub}`);
-        await page.waitForTimeout(600);
+    const { hot } = await cpuProfile("switch", async () => {
+      for (let round = 0; round < 4; round++) {
+        for (const p of targets) {
+          await softNavigate(page, `/dm/${p.npub}`);
+          await page.waitForTimeout(600);
+        }
+        floors.push(await heapFloorMB(cdp));
       }
-      floors.push(await heapFloorMB(cdp));
-    }
+    });
     const b = await metrics(cdp);
     save("switch", {
+      hot,
       switches: targets.length * 4,
       cost: cost(a, b, (Date.now() - t) / 1000),
       heapFloorMBPerRound: floors,
@@ -598,10 +606,11 @@ try {
       await resetCounters(page);
       const a = await metrics(cdp);
       const t = Date.now();
-      const steps = await scrollBack();
+      const { result: steps, hot } = await cpuProfile("concord-scroll", scrollBack);
       const b = await metrics(cdp);
       const reachedFirst = await page.getByText("(#0)", { exact: false }).count();
       save("concord-scroll", {
+        hot,
         scroll: cost(a, b, (Date.now() - t) / 1000),
         renderedRowsPerStep: steps,
         reachedFirstMessage: reachedFirst > 0,
@@ -622,7 +631,7 @@ try {
       const a = await metrics(cdp);
       const t = Date.now();
       const rounds = 4;
-      const { hot } = await cpuProfile(async () => {
+      const { hot } = await cpuProfile("concord-switch", async () => {
         for (let round = 0; round < rounds; round++) {
           for (let i = 1; i < concord.channelIds.length; i++) {
             await softNavigate(page, channelPath(i));
