@@ -4,6 +4,44 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.62.0] - 2026-09-26
+
+Attaching media has been reworked around a new attach sheet with a grid of your
+recent photos, a tray of pending attachments, and per-attachment spoilers and
+alt text. Direct-message calls placed by both people at once now meet in one
+call, and you are warned before calling someone who likely won't ring. Settings
+opens as an overlay over the page you were on, dissolved communities disappear
+from Discover, and chats, menus and history load faster.
+
+### Added
+- Attach sheet with a recent-media grid, long-press preview and an expandable view, plus a tray of pending attachments
+- Mark individual attachments as spoilers and give them alt text; spoilered media stays covered in the lightbox and in pins
+- Shared themes and emoji packs have their own short links, with a copy-link button on their cards, and shared themes show as cards in chat
+- Discover listings for a community are shown in its settings
+- A "Use Armada's default relays" option when setting up relays
+- Embedded video players can go fullscreen on Android and desktop, with a hint showing how to exit
+
+### Changed
+- Settings opens as an overlay on top of the page you were on, and the rail's Settings button closes it again
+- Calling each other at the same moment now joins both of you in one call, and you are warned before calling someone whose settings will likely refuse the ring, with options to call anyway or send a message
+- Dissolving a community retires its invite links and Discover listings, and dissolved communities no longer appear in Discover or accept joins
+- Refreshed profile view: fills the screen on phones with a full-width banner and a cleaner layout
+- On desktop the channel composer is focused automatically and typing anywhere goes into it; Reply focuses the composer and Escape cancels a reply
+- The unread dot on tabs is now red and sits in the top-right corner
+- Upload size limits are now left to your media server, which is checked before uploading
+- Existing relay lists are looked up before the app publishes or copies its relays
+- Discover searches each relay separately, so one slow relay no longer holds back the listings
+- Chats, message menus, dialogs, the member list and the direct-message list respond faster, and older channel history resumes where it left off
+- Signing in and returning to the app are quicker, with fewer repeated signature checks and decryptions
+
+### Fixed
+- A settings document with one invalid field no longer loses the rest of your settings
+- Links and embeds only connect to public secure relays they mention
+- Emoji pack icons and forwarded previews now respect the media privacy setting
+
+### Removed
+- Legacy theme colors in an older, unvalidated format are no longer applied
+
 ## [0.61.2] - 2026-09-25
 
 Links you share now expand into rich preview cards with the full image, post

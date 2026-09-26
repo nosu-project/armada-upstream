@@ -2,6 +2,7 @@ import { useRef, type ComponentProps, type ReactNode } from "react";
 
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
+import { CustomEmojisProvider } from "@/hooks/useCustomEmojis";
 import type { AppScope } from "@/contexts/AppsContext";
 
 /**
@@ -30,7 +31,9 @@ export function ChatShell({
   return (
     <SwipeReveal {...reveal}>
       <main className="flex flex-col flex-1 min-w-0 safe-area-top bg-background h-full">
-        <ChatScopeContext.Provider value={stableScope}>{children}</ChatScopeContext.Provider>
+        <ChatScopeContext.Provider value={stableScope}>
+          <CustomEmojisProvider>{children}</CustomEmojisProvider>
+        </ChatScopeContext.Provider>
       </main>
     </SwipeReveal>
   );

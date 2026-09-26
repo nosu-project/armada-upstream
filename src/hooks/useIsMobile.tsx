@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 
 /** Matches the `md` breakpoint in tailwind.config.ts (768px). Hardcoded to avoid pulling the entire Tailwind config + plugins into the client bundle. */
 const MOBILE_BREAKPOINT = 768;
@@ -27,18 +27,25 @@ export function useIsMobile(): boolean {
  */
 const TOUCH_QUERY = "(hover: none) and (pointer: coarse)";
 
+// One query list and one listener for the whole app: every message row asks,
+// and a `matchMedia` per row per mount (plus a listener each) showed up in
+// timeline profiles.
+// Keyed on `window.matchMedia` itself so a replaced implementation (a test's
+// stub) is asked afresh rather than answered from the old one.
+let touchQuery: { from: typeof window.matchMedia; mql: MediaQueryList } | undefined;
+const touchMql = () => {
+  if (touchQuery?.from !== window.matchMedia) {
+    touchQuery = { from: window.matchMedia, mql: window.matchMedia(TOUCH_QUERY) };
+  }
+  return touchQuery.mql;
+};
+const subscribeTouch = (onChange: () => void) => {
+  const mql = touchMql();
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+};
+const touchSnapshot = () => touchMql().matches;
+
 export function useIsTouch(): boolean {
-  const [isTouch, setIsTouch] = useState(
-    () => window.matchMedia(TOUCH_QUERY).matches,
-  );
-
-  useEffect(() => {
-    const mql = window.matchMedia(TOUCH_QUERY);
-    const onChange = () => setIsTouch(mql.matches);
-    mql.addEventListener("change", onChange);
-    setIsTouch(mql.matches);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
-
-  return isTouch;
+  return useSyncExternalStore(subscribeTouch, touchSnapshot, () => false);
 }

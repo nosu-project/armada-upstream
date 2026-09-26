@@ -987,7 +987,12 @@ export function writeOpened(
  * its rumor is stored, and a notified message must never be locally
  * destructible (issue #19). Never rejects; most callers fire and forget.
  */
-export function writeRumors(communityIdHex: string, opened: OpenedChat[]): Promise<boolean> {
+export function writeRumors(
+  communityIdHex: string,
+  opened: OpenedChat[],
+  /** `ring: false` leaves announcing the write to the caller (a throttled backfill). */
+  { ring = true }: { ring?: boolean } = {},
+): Promise<boolean> {
   // The `channel` binding rides through: the chat decode path already proved it
   // equals the coordinate whose key opened the wrap (`checkChannelBinding`).
   //
@@ -1013,7 +1018,7 @@ export function writeRumors(communityIdHex: string, opened: OpenedChat[]): Promi
   const channels = new Set(chat.map((o) => o.channelIdHex).filter(Boolean));
   notePresence(communityIdHex, chat);
   return writeStored(communityIdHex, chat).then((stored) => {
-    if (stored && channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
+    if (ring && stored && channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
     return stored;
   });
 }

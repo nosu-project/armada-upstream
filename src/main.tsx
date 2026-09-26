@@ -23,6 +23,8 @@ import { installScreenShareAudioRestriction } from "@/lib/screenShareAudioRestri
 import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
+import { getArmadaDB } from "@/lib/db/armadaDB";
+import { persistVerifiedIds } from "@/lib/verifyCache";
 // Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
 // census. Diagnostics have to be reachable from a console on the device that's
 // slow, not only from a dev build.
@@ -87,6 +89,11 @@ if (Capacitor.getPlatform() !== "android" && navigator.storage?.persist) {
     .then((already) => (already ? undefined : navigator.storage.persist()))
     .catch(() => {});
 }
+
+// Signature verdicts outlive the session, so a relaunch doesn't re-prove the
+// profiles, lists and sealed messages the last one already verified. The store
+// is resolved lazily: this opens nothing until the first verify.
+persistVerifiedIds(() => getArmadaDB().kv);
 
 // Started before render so the sampler covers the mount itself: if the loop is
 // blocked, every storage latency in the report is inflated by exactly this.

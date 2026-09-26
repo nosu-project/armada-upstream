@@ -39,6 +39,7 @@ import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
+import { CustomEmojisProvider } from "@/hooks/useCustomEmojis";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
@@ -780,6 +781,7 @@ export function GroupPage() {
             animated-width on desktop, full-screen floating card overlay on
             mobile (no drawer/backdrop). */}
         <ChatScopeContext.Provider value={chatScope}>
+        <CustomEmojisProvider>
         <ChannelNavContext.Provider value={channelNav}>
         <div className="relative flex flex-1 min-h-0">
           {!relayModeReady ? (
@@ -849,6 +851,7 @@ export function GroupPage() {
           </div>
         </div>
         </ChannelNavContext.Provider>
+        </CustomEmojisProvider>
         </ChatScopeContext.Provider>
         </main>
       </SwipeReveal>

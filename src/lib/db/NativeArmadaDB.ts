@@ -45,7 +45,7 @@
  */
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-import { perfCount, perfMark, perfTime } from "@/lib/perf";
+import { perfCount, perfKvWrite, perfMark, perfTime } from "@/lib/perf";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -498,6 +498,7 @@ class NativeKV implements ArmadaKV {
   }
 
   set<T>(key: string, value: T): Promise<void> {
+    if (import.meta.env.VITE_PROFILE === "1") perfKvWrite(key, value);
     return perfTime("kv.set", () =>
       new Promise<void>((resolve, reject) => {
         // `undefined` (and anything else without a JSON form) is out of

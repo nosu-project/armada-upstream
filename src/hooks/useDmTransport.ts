@@ -412,24 +412,21 @@ export function useDmTransport(
     };
   }, [talliesById]);
 
-  const dm17DeleteMessage = dm17.deleteMessage;
-  const deleteMessage = useCallback(
-    (event: ChatMsg) => {
-      if (dm17IdsRef.current.has(event.id)) dm17DeleteMessage(event.id, event.kind);
-    },
-    [dm17DeleteMessage],
-  );
+  // Handed to every own message row, so read through a ref with `[]` deps: the
+  // underlying senders change identity with pending state, and a new prop per
+  // render re-rendered each of those rows.
+  const dm17WritersRef = useRef({ deleteMessage: dm17.deleteMessage, editMessage: dm17.editMessage });
+  dm17WritersRef.current = { deleteMessage: dm17.deleteMessage, editMessage: dm17.editMessage };
+  const deleteMessage = useCallback((event: ChatMsg) => {
+    if (dm17IdsRef.current.has(event.id)) dm17WritersRef.current.deleteMessage(event.id, event.kind);
+  }, []);
 
-  const dm17EditMessage = dm17.editMessage;
-  const editMessage = useCallback(
-    async (original: ChatMsg, content: string) => {
-      if (!dm17IdsRef.current.has(original.id) || original.kind !== KIND_DM_CHAT) {
-        throw new Error("Only NIP-17 chat messages can be edited");
-      }
-      await dm17EditMessage(original.id, content);
-    },
-    [dm17EditMessage],
-  );
+  const editMessage = useCallback(async (original: ChatMsg, content: string) => {
+    if (!dm17IdsRef.current.has(original.id) || original.kind !== KIND_DM_CHAT) {
+      throw new Error("Only NIP-17 chat messages can be edited");
+    }
+    await dm17WritersRef.current.editMessage(original.id, content);
+  }, []);
 
   // ── Backfill: both planes page independently; sum what they prepend. ──────
   const dm17LoadOlder = dm17.loadOlder;

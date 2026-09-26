@@ -1,5 +1,10 @@
 import type { NostrSigner } from '@nostrify/types';
 import { NSecSigner, NBrowserSigner } from '@nostrify/nostrify';
+import { nip44 } from 'nostr-tools';
+
+/** Conversation keys kept per nsec signer, and first sightings remembered. */
+const CONVERSATION_KEYS_MAX = 512;
+const SEEN_ONCE_MAX = 2_048;
 
 // ---------------------------------------------------------------------------
 // BtcSigner interface
@@ -51,6 +56,54 @@ export class NSecSignerBtc extends NSecSigner implements BtcSigner {
   constructor(secretKey: Uint8Array) {
     super(secretKey);
     this.#secretKeyBytes = new Uint8Array(secretKey);
+  }
+
+  /**
+   * NIP-44 with the conversation key of a counterparty that RECURS kept for
+   * the session. The key is an ECDH — ~4ms of secp256k1 on a desktop, several
+   * times that on a phone — and `NSecSigner` derived it on every call, so
+   * opening a NIP-17 message paid two: one for the wrap, whose ephemeral
+   * author is new every time and gains nothing, and one for the seal, whose
+   * author is the sender and is the same for every message (and every typing
+   * signal) in the conversation.
+   *
+   * Admission takes a second sighting, so the one-shot wrap authors never
+   * displace the senders. The keys are no more sensitive than the secret key
+   * this instance already holds, and live exactly as long as it does.
+   */
+  override nip44 = {
+    encrypt: async (pubkey: string, plaintext: string): Promise<string> =>
+      nip44.v2.encrypt(plaintext, this.#conversationKey(pubkey)),
+    decrypt: async (pubkey: string, ciphertext: string): Promise<string> =>
+      nip44.v2.decrypt(ciphertext, this.#conversationKey(pubkey)),
+  };
+
+  readonly #conversationKeys = new Map<string, Uint8Array>();
+  readonly #seenOnce = new Set<string>();
+
+  #conversationKey(pubkey: string): Uint8Array {
+    const hit = this.#conversationKeys.get(pubkey);
+    if (hit) {
+      // Refresh recency: a Map iterates in insertion order.
+      this.#conversationKeys.delete(pubkey);
+      this.#conversationKeys.set(pubkey, hit);
+      return hit;
+    }
+    const key = nip44.v2.utils.getConversationKey(this.#secretKeyBytes, pubkey);
+    if (this.#seenOnce.delete(pubkey)) {
+      this.#conversationKeys.set(pubkey, key);
+      if (this.#conversationKeys.size > CONVERSATION_KEYS_MAX) {
+        const oldest = this.#conversationKeys.keys().next();
+        if (!oldest.done) this.#conversationKeys.delete(oldest.value);
+      }
+    } else {
+      this.#seenOnce.add(pubkey);
+      if (this.#seenOnce.size > SEEN_ONCE_MAX) {
+        const oldest = this.#seenOnce.values().next();
+        if (!oldest.done) this.#seenOnce.delete(oldest.value);
+      }
+    }
+    return key;
   }
 
   async signPsbt(psbtHex: string): Promise<string> {

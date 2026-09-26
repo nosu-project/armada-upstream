@@ -977,32 +977,41 @@ export function MessageTimeline({
    * slice, one step at a time, and stops as soon as there is something to
    * scroll.
    */
+  //
+  // Measured in the next animation frame rather than in the effect itself. A
+  // passive effect can run before paint with the layout still dirty from the
+  // commit's other effects (the composer sizing itself, rows settling), so
+  // reading `scrollHeight` here forced a layout of its own on every switch and
+  // page; in the frame, it is the layout the frame was going to do anyway.
   useEffect(() => {
     if (!listVisible || paused) return;
-    const el = scrollRef.current;
-    // An unmeasured scroller (zero height: not laid out yet, or a test
-    // environment with no layout at all) is not an underfilled one — reading it
-    // as one would walk the whole history in before the first paint.
-    if (!el || el.clientHeight === 0) return;
-    if (el.scrollHeight > el.clientHeight + AT_BOTTOM_PX) return;
-    if (startIndexRef.current > 0) {
-      const next = entriesRef.current[
-        stepBackRows(entriesRef.current, startIndexRef.current, WINDOW_STEP, (entry) =>
-          entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
-        )
-      ];
-      if (next) {
-        captureReadingAnchor();
-        setWindowStart(next.id);
+    const frame = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      // An unmeasured scroller (zero height: not laid out yet, or a test
+      // environment with no layout at all) is not an underfilled one — reading it
+      // as one would walk the whole history in before the first paint.
+      if (!el || el.clientHeight === 0) return;
+      if (el.scrollHeight > el.clientHeight + AT_BOTTOM_PX) return;
+      if (startIndexRef.current > 0) {
+        const next = entriesRef.current[
+          stepBackRows(entriesRef.current, startIndexRef.current, WINDOW_STEP, (entry) =>
+            entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
+          )
+        ];
+        if (next) {
+          captureReadingAnchor();
+          setWindowStart(next.id);
+        }
+        return;
       }
-      return;
-    }
-    if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
-    loadingOlderRef.current = true;
-    captureReadingAnchor();
-    void loadOlder().finally(() => {
-      loadingOlderRef.current = false;
+      if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
+      loadingOlderRef.current = true;
+      captureReadingAnchor();
+      void loadOlder().finally(() => {
+        loadingOlderRef.current = false;
+      });
     });
+    return () => cancelAnimationFrame(frame);
   }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
 
   const handleScroll = useCallback(() => {

@@ -30,6 +30,7 @@ import {
 } from "@/lib/schemas";
 import { APP_ID } from "@/lib/platform";
 
+import type { z } from "zod";
 import type { RailLayoutNode } from "@/lib/railLayout";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -82,6 +83,46 @@ export const SETTINGS_DOC_SCHEMAS = {
   "dms": DmsDocSchema,
   "reactions": ReactionsDocSchema,
 } as const;
+
+/** The plaintext type of the document named `N`. */
+export type ParsedSettingsDoc<N extends SettingsDocName> = z.infer<(typeof SETTINGS_DOC_SCHEMAS)[N]>;
+
+/**
+ * Validate a decrypted settings document, dropping only the top-level fields
+ * that fail rather than the whole document.
+ *
+ * A strict parse turns one out-of-range value into "no document at all": a
+ * `defaultZapMethod` or `currencyDisplay` written by a build with a wider enum
+ * took the user's theme and relay settings down with it, on every device that
+ * read it, and a writer that then merged a patch over `{}` would have
+ * republished that emptiness. Same rule as `AppConfigSchema`: a single bad key
+ * never wipes the rest. Returns null only when the value isn't an object at
+ * all, or is still invalid once the offending fields are gone.
+ */
+export function parseSettingsDoc<N extends SettingsDocName>(
+  name: N,
+  value: unknown,
+): { doc: ParsedSettingsDoc<N>; dropped: string[] } | null {
+  const schema = SETTINGS_DOC_SCHEMAS[name];
+  const first = schema.safeParse(value);
+  if (first.success) return { doc: first.data as ParsedSettingsDoc<N>, dropped: [] };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const dropped = new Set<string>();
+  for (const issue of first.error.issues) {
+    const key = issue.path[0];
+    // An issue with no field to blame is about the document itself.
+    if (typeof key !== "string") return null;
+    dropped.add(key);
+  }
+  const rest = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([key]) => !dropped.has(key)),
+  );
+  const second = schema.safeParse(rest);
+  return second.success
+    ? { doc: second.data as ParsedSettingsDoc<N>, dropped: [...dropped] }
+    : null;
+}
 
 /**
  * The fields each split document took out of `armada/metadata`.

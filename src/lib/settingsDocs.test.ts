@@ -18,6 +18,7 @@ import {
   SETTINGS_DOC_SCHEMAS,
   SETTINGS_DTAGS,
   hasMigratedKeys,
+  parseSettingsDoc,
   railLayoutOf,
   resolveLegacy,
   settingsDTag,
@@ -219,5 +220,31 @@ describe("SelfState.kt default `d` tags", () => {
 
     const tags = [...block![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
     expect(tags.sort()).toEqual(SETTINGS_DOC_NAMES.map((n) => `armada/${n}`).sort());
+  });
+});
+
+describe("parseSettingsDoc", () => {
+  it("passes a valid document through untouched", () => {
+    expect(parseSettingsDoc("metadata", { theme: "light", zapsEnabled: true })).toEqual({
+      doc: { theme: "light", zapsEnabled: true },
+      dropped: [],
+    });
+  });
+
+  it("drops only the fields that fail, keeping the theme", () => {
+    const parsed = parseSettingsDoc("metadata", {
+      theme: "light",
+      defaultZapMethod: "not-a-method",
+      currencyDisplay: "btc",
+      future: { kept: true },
+    });
+    expect(parsed?.doc).toEqual({ theme: "light", future: { kept: true } });
+    expect(parsed?.dropped.sort()).toEqual(["currencyDisplay", "defaultZapMethod"]);
+  });
+
+  it("rejects a value that is not a document at all", () => {
+    expect(parseSettingsDoc("metadata", "nope")).toBeNull();
+    expect(parseSettingsDoc("metadata", [1, 2])).toBeNull();
+    expect(parseSettingsDoc("metadata", null)).toBeNull();
   });
 });

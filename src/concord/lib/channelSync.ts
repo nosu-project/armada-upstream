@@ -136,6 +136,14 @@ export async function backfillStore(
      * timeline paints as history arrives rather than after the whole round.
      */
     onPage?: (events: NostrEvent[]) => Promise<void>;
+    /**
+     * Called after each page (once its `onPage` has resolved) with the
+     * timestamp down to which EVERY relay still paging has now been read —
+     * the shallowest relay's frontier. Not called once any relay has failed:
+     * a failed relay's region is unread, and only the end-of-round verdict
+     * may decide what that means for the cursor.
+     */
+    onProgress?: (coveredDownTo: number) => Promise<void>;
   } = {},
 ): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; count: number; exhausted: boolean; failed: boolean }> {
   const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
@@ -226,6 +234,9 @@ export async function backfillStore(
       collected.push(...pageEvents);
     }
     active = next;
+    if (opts.onProgress && !failed && next.length > 0 && !signal.aborted) {
+      await opts.onProgress(Math.max(...next.map((relay) => (relay.cursor ?? 0) + 1)));
+    }
   }
   // `exhausted` means we verifiably reached the bottom: every relay ran to a
   // short/empty page AFTER we'd seen history. An all-empty run (no events
@@ -237,6 +248,40 @@ export async function backfillStore(
   const reachedBottom = active.length === 0 && !failed;
   const exhausted = reachedBottom && count > 0;
   return { oldest, newest, events: collected, count, exhausted, failed: failed || (reachedBottom && count === 0) };
+}
+
+/** Floor between two bus rings from one round's older-history pages. */
+const OLDER_RING_MS = 1_500;
+
+interface ThrottledRing {
+  /** Note a write; rings now if the floor has passed, else once it does. */
+  ring(): void;
+  /** Ring now if a write is still unannounced. */
+  flush(): void;
+}
+
+/** Ring `scope` on the wire bus at most once per `floorMs`, never dropping the last write. */
+function throttledRing(scope: `c2:${string}`, floorMs: number): ThrottledRing {
+  let last = 0;
+  let owed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fire = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    if (!owed) return;
+    owed = false;
+    last = Date.now();
+    emitWireScopes([scope]);
+  };
+  return {
+    ring() {
+      owed = true;
+      const wait = last + floorMs - Date.now();
+      if (wait <= 0) fire();
+      else timer ??= setTimeout(fire, wait);
+    },
+    flush: fire,
+  };
 }
 
 /**
@@ -327,11 +372,15 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // lands — a deep round over slow relays used to hold everything in memory
     // and write once at the very end, minutes after decryptable history was
     // already in hand.
-    const writePage = async (events: NostrEvent[]) => {
+    // A page that failed to commit must never be covered by a saved cursor.
+    let writeFailed = false;
+    const writePage = async (events: NostrEvent[], ring?: ThrottledRing) => {
       if (signal.aborted) return;
       const opened = await openChatBatch(events, channel, { signal });
       if (opened.length === 0) return;
-      await writeRumors(community.idHex, opened);
+      const stored = await writeRumors(community.idHex, opened, { ring: !ring });
+      if (stored) ring?.ring();
+      else writeFailed = true;
       synced += opened.length;
       tick();
     };
@@ -372,13 +421,33 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // Pass 3: page OLDER history back-to-back. Resume from the saved cursor
     // if we have one; otherwise (cold channel) resume from just below pass
     // 1's newest page rather than re-fetching that page.
+    //
+    // The saved `oldest` advances page by page (`onProgress`), not only when
+    // the round completes. A round is aborted whenever the reader leaves the
+    // channel, and an aborted round stamps nothing, so with the cursor saved
+    // only at the end, every return to a channel with deep history re-paged —
+    // and re-decrypted and re-wrote — the same twenty pages per relay, and
+    // never got further while the reader kept moving.
+    //
+    // Its pages also ring the bus at most every OLDER_RING_MS rather than per
+    // page: they land below anything on screen, and every ring re-runs each
+    // community-wide reader (mentions, unread badges, threads) over the store.
     const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
-    const older = await backfillStore(nostr, community.relays, channel, signal, {
-      until: resumeFrom,
-      freezeRetired,
-      beforeRelay: authGate,
-      onPage: writePage,
-    });
+    const olderRing = throttledRing(`c2:${idHex}`, OLDER_RING_MS);
+    let older: Awaited<ReturnType<typeof backfillStore>>;
+    try {
+      older = await backfillStore(nostr, community.relays, channel, signal, {
+        until: resumeFrom,
+        freezeRetired,
+        beforeRelay: authGate,
+        onPage: (events) => writePage(events, olderRing),
+        onProgress: async (coveredDownTo) => {
+          if (!writeFailed) await updateChannelCursor(idHex, { oldest: coveredDownTo });
+        },
+      });
+    } finally {
+      olderRing.flush();
+    }
     if (signal.aborted) return;
 
     // Advance the persisted cursor (the store merge is monotonic: `newest`

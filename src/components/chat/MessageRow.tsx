@@ -21,6 +21,8 @@ import { useSwipeToReply } from "@/hooks/useSwipeToReply";
 import type { ProxyInfo } from "@/lib/nip48";
 import type { ReactNode } from "react";
 
+const NO_TAGS: string[][] = [];
+
 /**
  * An explicit display identity for a message author, used by surfaces whose
  * authors are NOT Nostr identities (the Bluetooth mesh). When supplied,
@@ -211,6 +213,8 @@ export const MessageRow = memo(function MessageRow({
   // lookups entirely for them (the pubkey is a mesh peer id, not a real key).
   const author = useAuthor(identityOverride ? undefined : pubkey);
   const metadata = author.data?.metadata;
+  // The byline hands DisplayName and BotPill what it already resolved, so
+  // neither subscribes a lookup of its own.
   const scoped = useScopedIdentity(identityOverride ? undefined : pubkey, metadata);
   const displayName = identityOverride?.name ?? scoped.displayName;
   const color = identityOverride?.color ?? scoped.color;
@@ -380,7 +384,7 @@ export const MessageRow = memo(function MessageRow({
                   className="text-[15px] font-semibold text-primary truncate min-w-0 hover:underline focus:outline-none"
                   style={color ? { color } : undefined}
                 >
-                  <DisplayName pubkey={pubkey} name={displayName} />
+                  <DisplayName pubkey={pubkey} name={displayName} tags={author.data?.event?.tags ?? NO_TAGS} />
                 </button>
               </ProfilePreviewCard>
             )}

@@ -12,7 +12,7 @@
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { _resetVerifyCacheForTests, verifyEventOnce, verifyEventsOnce } from "./verifyCache";
+import { _resetVerifyCacheForTests, persistVerifiedIds, verifyEventOnce, verifyEventsOnce } from "./verifyCache";
 import { ecVerifyBatch as inlineEcVerify } from "./verifyPool";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -166,5 +166,47 @@ describe("verifyEventsOnce", () => {
     const ecVerify = vi.fn<EcVerifyBatch>(inlineEcVerify);
     expect(await verifyEventsOnce([], ecVerify)).toEqual([]);
     expect(ecVerify).not.toHaveBeenCalled();
+  });
+});
+
+describe("persistVerifiedIds", () => {
+  /** An in-memory stand-in for ArmadaKV's key/value/prefix-list surface. */
+  function memoryKv() {
+    const rows = new Map<string, string>();
+    return {
+      rows,
+      kv: {
+        set: async (key: string, value: string) => void rows.set(key, value),
+        delete: async (key: string) => void rows.delete(key),
+        list: async <T,>({ prefix }: { prefix: string }) =>
+          [...rows].filter(([k]) => k.startsWith(prefix)).map(([key, value]) => ({ key, value: value as T })),
+      },
+    };
+  }
+
+  it("carries a verdict into the next session, but never one for different content", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = memoryKv();
+      const ev = signed("kept");
+      persistVerifiedIds(() => store.kv);
+      expect(verifyEventOnce(ev)).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect([...store.rows.keys()]).toHaveLength(1);
+
+      // A relaunch: an empty memo, the same store.
+      _resetVerifyCacheForTests();
+      persistVerifiedIds(() => store.kv);
+      // The first verify starts the load; let it land.
+      verifyEventOnce(signed("unrelated"));
+      await vi.advanceTimersByTimeAsync(0);
+      // The saved verdict answers without a Schnorr pass — the mangled sig is
+      // the proof, exactly as within one session.
+      expect(verifyEventOnce({ ...ev, sig: "00".repeat(64) })).toBe(true);
+      // Different content still has to be proven.
+      expect(verifyEventOnce({ ...ev, content: "changed", sig: "00".repeat(64) })).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

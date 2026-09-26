@@ -31,12 +31,31 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { getEventHash } from "nostr-tools/pure";
 
+import { IdLog, type IdLogKV } from "@/lib/db/idLog";
 import { perfCount } from "@/lib/perf";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Bounded FIFO — sized for a session's traffic, not a database's contents. */
-const MAX_IDS = 20_000;
+/**
+ * The memo holds the first 128 bits of each id. The recomputed hash is still
+ * compared against the FULL claimed id first (see {@link hashGate}); the prefix
+ * only answers "was content hashing to this verified", and for a different
+ * event to reuse a verdict it would need a hash agreeing on 128 bits with one
+ * already proven — a second preimage, not a lookup. Half the bytes to hold and
+ * to persist.
+ */
+const MEMO_KEY_CHARS = 32;
+const memoKey = (id: string): string => id.slice(0, MEMO_KEY_CHARS);
+
+/** Ids persisted per KV chunk, and chunks kept. */
+const CHUNK_IDS = 1024;
+const KEEP_CHUNKS = 24;
+
+/**
+ * Bounded FIFO — sized for what the persisted chunks can refill, so a relaunch
+ * starts with roughly what the last session had proven.
+ */
+const MAX_IDS = CHUNK_IDS * KEEP_CHUNKS;
 const verified = new Set<string>();
 
 /**
@@ -45,12 +64,61 @@ const verified = new Set<string>();
  * through here — a second copy of the eviction would be a second contract.
  */
 function rememberVerified(id: string): void {
+  const key = memoKey(id);
+  if (verified.has(key)) return;
   if (verified.size >= MAX_IDS) {
     // Oldest insertion first — `Set` iterates in insertion order.
     const oldest = verified.keys().next();
     if (!oldest.done) verified.delete(oldest.value);
   }
-  verified.add(id);
+  verified.add(key);
+  persistence?.log.add(key);
+}
+
+// ── Persistence ─────────────────────────────────────────────────────────────
+//
+// A session-only memo re-proved everything on every launch: the profiles, lists
+// and Concord seals a relaunch re-reads are the SAME events the last session
+// verified, and a Schnorr verify is ~2ms on a desktop and several times that on
+// a phone. The verdicts are kept in an append-only KV log (see IdLog), so an
+// add rewrites one small chunk rather than the whole set.
+//
+// A verdict is a fact about content, not about an account, so the log is not
+// scoped by account; it goes with the rest of ArmadaDB when client storage is
+// purged.
+
+let persistence: { log: IdLog; started: boolean } | undefined;
+
+/**
+ * Keep verdicts across launches in `kv`. Nothing is read until the first
+ * verify asks (so installing this at startup opens no store); the saved
+ * verdicts then merge into the memo as they land, and a verify that runs before
+ * they have is simply not saved any work.
+ */
+export function persistVerifiedIds(kv: () => IdLogKV): void {
+  if (persistence) return;
+  persistence = {
+    log: new IdLog(kv, { prefix: "verified-ids:", idChars: MEMO_KEY_CHARS, chunkIds: CHUNK_IDS, keepChunks: KEEP_CHUNKS, flushMs: 2_000 }),
+    started: false,
+  };
+}
+
+function startPersistence(): void {
+  if (!persistence || persistence.started) return;
+  persistence.started = true;
+  void persistence.log.load().then((saved) => {
+    // Oldest first, ahead of anything this session already proved, so the
+    // FIFO evicts the previous sessions' verdicts before this one's.
+    const session = [...verified];
+    verified.clear();
+    for (const key of saved) verified.add(key);
+    for (const key of session) verified.add(key);
+    while (verified.size > MAX_IDS) {
+      const oldest = verified.keys().next();
+      if (oldest.done) break;
+      verified.delete(oldest.value);
+    }
+  });
 }
 
 /**
@@ -67,6 +135,7 @@ function rememberVerified(id: string): void {
  * doesn't match its id and would have no honest copy to compare against.
  */
 function hashGate(event: NostrEvent): { state: "decided"; result: boolean } | { state: "needs-ec" } {
+  startPersistence();
   let hash: string;
   try {
     // `getEventHash` serializes, and serializing an event with missing or
@@ -80,7 +149,7 @@ function hashGate(event: NostrEvent): { state: "decided"; result: boolean } | { 
     return { state: "decided", result: false };
   }
   if (hash !== event.id) return { state: "decided", result: false };
-  if (verified.has(event.id)) return { state: "decided", result: true };
+  if (verified.has(memoKey(event.id))) return { state: "decided", result: true };
   return { state: "needs-ec" };
 }
 
@@ -109,6 +178,9 @@ export function verifyEventOnce(event: NostrEvent): boolean {
   }
   if (ok) rememberVerified(event.id);
   perfCount("crypto.verifyEvent", performance.now() - start, 1, "events");
+  // Every Schnorr verify actually performed, on any thread and by either
+  // path — the number the memo exists to keep down.
+  perfCount("crypto.ec.verify (sync)", 0, 1, "verifies");
   return ok;
 }
 
@@ -184,6 +256,7 @@ export async function verifyEventsOnce(
   perfCount("crypto.verifyEvents", performance.now() - start, events.length, "events");
 
   if (residue.length > 0) {
+    perfCount("crypto.ec.verify (batched)", 0, residue.length, "verifies");
     let oks: boolean[];
     try {
       oks = await ecVerify(residue);
@@ -200,7 +273,8 @@ export async function verifyEventsOnce(
   return result;
 }
 
-/** Test seam: forget every verified id. */
+/** Test seam: forget every verified id, and stop persisting. */
 export function _resetVerifyCacheForTests(): void {
   verified.clear();
+  persistence = undefined;
 }

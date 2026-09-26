@@ -1,4 +1,5 @@
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { perfCount } from "@/lib/perf";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 import type { BtcSigner } from "@/lib/bitcoin-signers";
@@ -158,10 +159,20 @@ export class AppSigner implements NostrSigner {
     const pending = (async () => {
       // `cache: false` (expiring DM envelopes) skips the persistent cache in
       // both directions: nothing to read back, and nothing left on disk.
-      if (!cache) return crypto.decrypt(counterparty, ciphertext);
+      if (!cache) {
+        const start = performance.now();
+        const plaintext = await crypto.decrypt(counterparty, ciphertext);
+        perfCount(`signer.${method}.decrypt (uncached)`, performance.now() - start, 1, "decrypts");
+        return plaintext;
+      }
       const cached = await this.#get(id);
-      if (cached !== undefined) return cached;
+      if (cached !== undefined) {
+        perfCount(`signer.${method}.decrypt (cache hit)`, 0, 1, "decrypts");
+        return cached;
+      }
+      const start = performance.now();
       const plaintext = await crypto.decrypt(counterparty, ciphertext);
+      perfCount(`signer.${method}.decrypt`, performance.now() - start, 1, "decrypts");
       void this.#put(id, plaintext);
       return plaintext;
     })().finally(() => {
