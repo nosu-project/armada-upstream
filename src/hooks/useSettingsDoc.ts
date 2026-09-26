@@ -21,6 +21,7 @@ import { APP_NAME } from "@/lib/platform";
 import {
   SETTINGS_DOC_SCHEMAS,
   SETTINGS_KIND,
+  parseSettingsDoc,
   settingsDTag,
   stripMigratedKeys,
   type SettingsDocName,
@@ -122,8 +123,11 @@ export async function decodeSettingsDoc<N extends SettingsDocName>(
   if (!signer.nip44) return null;
   try {
     const plaintext = await signer.nip44.decrypt(pubkey, event.content);
-    const parsed = SETTINGS_DOC_SCHEMAS[name].safeParse(JSON.parse(plaintext));
-    return parsed.success ? { event, doc: parsed.data as SettingsDocOf<N> } : null;
+    const parsed = parseSettingsDoc(name, JSON.parse(plaintext));
+    if (parsed && parsed.dropped.length > 0) {
+      console.warn(`Ignoring invalid ${name} settings field(s): ${parsed.dropped.join(", ")}`);
+    }
+    return parsed ? { event, doc: parsed.doc as SettingsDocOf<N> } : null;
   } catch (err) {
     console.warn(`Failed to decrypt ${name} settings:`, err);
     return null;

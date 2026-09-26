@@ -78,8 +78,8 @@ import {
 } from "@/lib/searchRelayList";
 import {
   SETTINGS_DOC_NAMES,
-  SETTINGS_DOC_SCHEMAS,
   SETTINGS_KIND,
+  parseSettingsDoc,
   settingsDTag,
   type SettingsDocName,
 } from "@/lib/settingsDocs";
@@ -403,9 +403,9 @@ export function usePullPortableSetup() {
         } catch {
           continue; // Not JSON at all — same class as a schema miss.
         }
-        const parsed = SETTINGS_DOC_SCHEMAS[name].safeParse(value);
-        if (!parsed.success) continue;
-        settingsDocs.push({ name, event, doc: parsed.data as Record<string, unknown> });
+        const parsed = parseSettingsDoc(name, value);
+        if (!parsed) continue;
+        settingsDocs.push({ name, event, doc: parsed.doc as Record<string, unknown> });
       }
 
       let pulledCommunity: ListData | undefined;

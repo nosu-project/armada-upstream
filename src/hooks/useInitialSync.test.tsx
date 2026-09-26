@@ -418,7 +418,7 @@ describe("useInitialSync", () => {
     expect(notificationSettingsReady(PUBKEY)).toBe(false);
   });
 
-  it("hydrates the encrypted DM index before the login gate completes", async () => {
+  it("hydrates the encrypted DM index from the login read", async () => {
     const peer = "b".repeat(64);
     const entry = {
       key: peer,
@@ -450,7 +450,7 @@ describe("useInitialSync", () => {
     const view = renderHook(() => useInitialSync(PUBKEY));
     await waitFor(() => expect(view.result.current.done).toBe(true));
 
-    expect(await getDmConversationIndexRecords(PUBKEY)).toEqual([entry]);
+    await waitFor(async () => expect(await getDmConversationIndexRecords(PUBKEY)).toEqual([entry]));
     const settingsCall = h.queryExplicitRelays.mock.calls.find(
       (call) => ((call[2] ?? []) as Array<{ kinds?: number[] }>).some((f) => f.kinds?.includes(30078)),
     );
@@ -460,6 +460,81 @@ describe("useInitialSync", () => {
       authors: [PUBKEY],
       "#t": [DM_CONVERSATIONS_EVENT_TAG],
     }));
+  });
+
+  it("restores the metadata document while DM index decrypts are still pending", async () => {
+    const shardCipher = "shard-cipher";
+    h.user.signer = {
+      nip44: {
+        // A DM index shard decrypt that never settles: the gate must not wait on it.
+        decrypt: vi.fn((_pk: string, content: string) => content === shardCipher
+          ? new Promise<string>(() => undefined)
+          : Promise.resolve(JSON.stringify({ theme: "light" }))),
+      },
+    };
+    respondByKind({
+      settings: [
+        {
+          pubkey: PUBKEY,
+          id: "d".repeat(64),
+          kind: 30078,
+          sig: "s",
+          created_at: 40,
+          tags: [
+            ["d", dmConversationIndexDTag("other-device", 0)],
+            ["t", DM_CONVERSATIONS_EVENT_TAG],
+          ],
+          content: shardCipher,
+        },
+        {
+          pubkey: PUBKEY,
+          id: "e".repeat(64),
+          kind: 30078,
+          sig: "s",
+          created_at: 41,
+          tags: [["d", "armada/metadata"]],
+          content: "metadata-cipher",
+        },
+      ],
+    });
+
+    const view = renderHook(() => useInitialSync(PUBKEY));
+    await waitFor(() => expect(view.result.current.done).toBe(true));
+
+    expect(view.result.current.log.find((line) => line.id === "settings")?.status).toBe("RESTORED");
+    expect(h.queryClient.setQueryData).toHaveBeenCalledWith(
+      ["settings-doc", "metadata", PUBKEY],
+      expect.objectContaining({ doc: expect.objectContaining({ theme: "light" }) }),
+    );
+  });
+
+  it("restores the theme from a metadata document carrying one invalid field", async () => {
+    h.user.signer = {
+      nip44: {
+        decrypt: vi.fn(async () => JSON.stringify({ theme: "light", defaultZapMethod: "not-a-method" })),
+      },
+    };
+    respondByKind({
+      settings: [{
+        pubkey: PUBKEY,
+        id: "e".repeat(64),
+        kind: 30078,
+        sig: "s",
+        created_at: 41,
+        tags: [["d", "armada/metadata"]],
+        content: "metadata-cipher",
+      }],
+    });
+
+    const view = renderHook(() => useInitialSync(PUBKEY));
+    await waitFor(() => expect(view.result.current.done).toBe(true));
+
+    expect(view.result.current.log.find((line) => line.id === "settings")?.status).toBe("RESTORED");
+    const seeded = h.queryClient.setQueryData.mock.calls.find(
+      ([key]) => JSON.stringify(key) === JSON.stringify(["settings-doc", "metadata", PUBKEY]),
+    )?.[1] as { doc: Record<string, unknown> } | undefined;
+    expect(seeded?.doc.theme).toBe("light");
+    expect(seeded?.doc).not.toHaveProperty("defaultZapMethod");
   });
 
   it("keeps the folded last-good group list when the newest decrypt transiently fails", async () => {

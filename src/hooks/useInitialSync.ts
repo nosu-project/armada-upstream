@@ -30,11 +30,11 @@ import {
 } from "@/hooks/useUserGroupList";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
-import { MetadataDocSchema } from "@/lib/schemas";
 import {
   SETTINGS_DTAGS,
   SETTINGS_KIND,
   hasMigratedKeys,
+  parseSettingsDoc,
   settingsDTag,
   settingsDocForDTag,
 } from "@/lib/settingsDocs";
@@ -50,7 +50,7 @@ import {
   readSearchRelayList,
 } from "@/lib/searchRelayList";
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
-import { logSync } from "@/lib/syncLog";
+import { logSync, sinceMs } from "@/lib/syncLog";
 import {
   decodeSettingsDoc,
   settingsDocQueryKey,
@@ -554,6 +554,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
 
         // ── 2. Encrypted settings ───────────────────────────────────────────
         const sId = begin("settings");
+        const settingsStart = Date.now();
+        const settingsStep = (what: string) =>
+          logSync("gate", `settings: ${what} (+${sinceMs(settingsStart)})`);
         let settingsFound = false;
         const automaticSettingsSync = configRef.current.automaticSettingsSync !== false;
         try {
@@ -581,17 +584,13 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               { graceMs: STEP_GRACE_MS },
             );
             const events = settingsRead.events;
+            settingsStep(
+              `read ${events.length} event(s); answered ${settingsRead.answered.length}, failed ${settingsRead.failed.length} of ${accountRelays.length}`,
+            );
             const expectedSettingsRelays = uniqueRelayUrls(accountRelays);
             const settingsAbsenceAuthoritative = expectedSettingsRelays.length > 0
               && settingsRead.failed.length === 0
               && settingsRead.answered.length === expectedSettingsRelays.length;
-
-            // Hydrate before SyncGate opens so a fresh device can draw restored
-            // rows immediately. The helper caches successful decryptions, so the
-            // standing owner will not prompt again for unchanged shard events.
-            if (accountRelays.length > 0) {
-              await decodeAndHydrateDmConversationIndex(events, user.signer, pubkey);
-            }
 
             // Seed every split document straight into its own query cache. Their
             // events are already in ArmadaDB — `queryExplicitRelays` reads
@@ -610,10 +609,14 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 newestByDTag.set(dTag, candidate);
               }
             }
+            settingsStep(
+              `documents: ${[...newestByDTag.keys()].filter((d) => settingsDocForDTag(d)).join(", ") || "none"}`,
+            );
             for (const [dTag, candidate] of newestByDTag) {
               const name = settingsDocForDTag(dTag);
               if (!name || name === "metadata") continue; // metadata is seeded below
               const decoded = await decodeSettingsDoc(candidate, user.signer, pubkey, name);
+              settingsStep(`${name} ${decoded ? "decoded" : "undecodable"}`);
               if (decoded && !cancelled) {
                 queryClient.setQueryData(settingsDocQueryKey(name, pubkey), decoded);
               }
@@ -623,14 +626,18 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             const event = newestByDTag.get(settingsDTag("metadata"));
             if (event?.content) {
               const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
-              const parsed = MetadataDocSchema.safeParse(JSON.parse(decrypted));
-              if (parsed.success && !cancelled) {
-                legacyNotificationsPresent = hasMigratedKeys(parsed.data, "notifications");
+              settingsStep("metadata decrypted");
+              const parsed = parseSettingsDoc("metadata", JSON.parse(decrypted));
+              if (parsed && parsed.dropped.length > 0) {
+                settingsStep(`metadata: ignored invalid field(s) ${parsed.dropped.join(", ")}`);
+              }
+              if (parsed && !cancelled) {
+                legacyNotificationsPresent = hasMigratedKeys(parsed.doc, "notifications");
                 // Fold this run's canonical relay reads (NIP-65 bootstrap, and
                 // the standard 10007/10050/10063 lists) over the NIP-78 blob so
                 // the seeded config already reflects them.
                 const merged = {
-                  ...parsed.data,
+                  ...parsed.doc,
                   ...(canonicalSearch && !canonicalSearch.decryptFailed
                     ? { searchRelays: canonicalSearch.relays }
                     : {}),
@@ -663,14 +670,14 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 // device with no canonical event yet would otherwise revert to
                 // defaults. Keep the blob's value alive locally; a later explicit
                 // publish promotes it to the real list. Nothing is published here.
-                const legacySearch = !canonicalSearch && Array.isArray(parsed.data.searchRelays)
-                  ? parsed.data.searchRelays
+                const legacySearch = !canonicalSearch && Array.isArray(parsed.doc.searchRelays)
+                  ? parsed.doc.searchRelays
                   : undefined;
-                const legacyDm = !canonicalDm && Array.isArray(parsed.data.dmRelays)
-                  ? parsed.data.dmRelays
+                const legacyDm = !canonicalDm && Array.isArray(parsed.doc.dmRelays)
+                  ? parsed.doc.dmRelays
                   : undefined;
-                const legacyBlossom = !canonicalBlossom && parsed.data.blossomServerMetadata
-                  ? parsed.data.blossomServerMetadata
+                const legacyBlossom = !canonicalBlossom && parsed.doc.blossomServerMetadata
+                  ? parsed.doc.blossomServerMetadata
                   : undefined;
                 if (legacySearch || legacyDm || legacyBlossom) {
                   updateConfigRef.current((current) => ({
@@ -695,9 +702,23 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             ) {
               markNotificationSettingsReady(pubkey);
             }
+
+            // Hydrate the DM conversation index from the same read, but off the
+            // settings phase: it is one sequential signer decrypt per shard
+            // edition, and an account that has accumulated a few hundred shards
+            // held the documents that decide theme and relay config behind it
+            // past the gate's hard cap. The helper caches successful
+            // decryptions, so the standing owner will not prompt again for
+            // unchanged shard events.
+            if (accountRelays.length > 0) {
+              void decodeAndHydrateDmConversationIndex(events, user.signer, pubkey)
+                .then(() => settingsStep("DM conversation index hydrated"))
+                .catch(() => undefined);
+            }
           }
-        } catch {
+        } catch (err) {
           // Best-effort; fall through to the next step.
+          settingsStep(`FAILED: ${err instanceof Error ? err.message : String(err)}`);
         }
         resolve(
           sId,
