@@ -1,5 +1,5 @@
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, type Location } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
 import { useShareTargetNavigation } from "@/hooks/useShareTargetNavigation";
@@ -39,6 +39,7 @@ import {
   type ProfileBackgroundState,
   type ProfileOverlay,
 } from "@/lib/profileOverlay";
+import { SettingsOverlayContext, useSettingsOverlayController } from "@/lib/settingsOverlay";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
 // so the boot bundle carries only the shell + the landing, which is imported
@@ -342,6 +343,10 @@ function useWarmRouteChunks() {
         // rather than on the way to a page, so nothing else would ever warm it
         // and every first profile of a session paid for it under a spinner.
         () => import("@/components/profile/ProfileDialog"),
+        // Drawn over the page from the click itself (`lib/settingsOverlay.ts`),
+        // so a cold chunk would be the only thing left between the click and
+        // the panel.
+        () => import("@/pages/SettingsPage"),
       ]) {
         void load().catch(() => undefined);
       }
@@ -380,6 +385,33 @@ function SignedInRouterServicesGate() {
 }
 
 /**
+ * `location`, keeping the previous object while it names the same history
+ * entry.
+ *
+ * Closing an overlay steps back to the entry it was drawn over, but the
+ * location history hands back is a NEW object — rebuilt from `history.state`,
+ * not the `backgroundLocation` the page was rendering. Keyed on identity, the
+ * routes below would then re-render the whole routed tree for a page that
+ * never changed, which is the close that was meant to be free.
+ */
+function useSameEntry(location: Location): Location {
+  const ref = useRef(location);
+  const prev = ref.current;
+  if (
+    prev !== location &&
+    !(
+      prev.key === location.key &&
+      prev.pathname === location.pathname &&
+      prev.search === location.search &&
+      prev.hash === location.hash
+    )
+  ) {
+    ref.current = location;
+  }
+  return ref.current;
+}
+
+/**
  * The routed app. Split out of `AppRouter` purely so it sits INSIDE
  * <BrowserRouter> and can read the location.
  *
@@ -407,9 +439,11 @@ function AppRoutes() {
     () => ({ pubkey: routedPubkey, opening, begin: () => setOpening(true) }),
     [routedPubkey, opening],
   );
+  const settings = useSettingsOverlayController(location, useNavigate());
   // The location the APP is showing, as opposed to the one in the address bar.
-  // While a profile is open these differ, and this is the one that matters.
-  const target = background ?? location;
+  // While a profile or Settings is open these differ, and this is the one that
+  // matters.
+  const target = useSameEntry(background ?? location);
 
   // Memoized on that location, which is load-bearing rather than tidiness.
   // `<Routes>` re-derives its route tree from these children on every render,
@@ -530,9 +564,11 @@ function AppRoutes() {
 
   return (
     <ProfileOverlayContext.Provider value={overlay}>
-      {/* Shell-less lazy routes still paint the branded splash. MainLayout
-          keeps waits for its child chunks inside the routed page pane. */}
-      <Suspense fallback={<RouteFallback />}>{routes}</Suspense>
+      <SettingsOverlayContext.Provider value={settings}>
+        {/* Shell-less lazy routes still paint the branded splash. MainLayout
+            keeps waits for its child chunks inside the routed page pane. */}
+        <Suspense fallback={<RouteFallback />}>{routes}</Suspense>
+      </SettingsOverlayContext.Provider>
     </ProfileOverlayContext.Provider>
   );
 }

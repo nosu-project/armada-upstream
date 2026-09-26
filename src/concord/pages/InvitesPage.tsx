@@ -44,6 +44,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { relativeTime, shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
+import { usePageCovered } from "@/lib/settingsOverlay";
 
 /**
  * The seal-verified sender as a short npub. Shown BESIDE the resolved profile
@@ -844,10 +845,13 @@ export function InvitesPage() {
   // everything seen — one high-water mark for the whole inbox, so the rail
   // badge clears. Consent is still separate: seeing an invite isn't accepting
   // it. `markRead` no-ops when the stored stamp is already past the newest.
+  // Not while Settings covers the page: an invite arriving then is unseen, and
+  // is marked once the page is back on screen.
+  const covered = usePageCovered();
   const newest = items[0]?.invite.receivedAt ?? 0;
   useEffect(() => {
-    if (newest > 0) markRead(concordInviteReadKey(), newest);
-  }, [newest, markRead]);
+    if (!covered && newest > 0) markRead(concordInviteReadKey(), newest);
+  }, [covered, newest, markRead]);
 
   // Drop a stale selection when its invite leaves the inbox (accepted/declined
   // elsewhere, or the scan refreshed it out).

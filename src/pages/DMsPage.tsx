@@ -89,6 +89,7 @@ import { useIsTouch } from "@/hooks/useIsMobile";
 import { useDmCall } from "@/contexts/DmCallContext";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
+import { usePageCovered } from "@/lib/settingsOverlay";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useRailDms } from "@/hooks/useRailDms";
@@ -702,6 +703,8 @@ const Conversation = memo(function Conversation({
     [botCommandEntries],
   );
   const { markRead } = useReadState();
+  // Covered by Settings: mounted but not on screen, so not being read.
+  const covered = usePageCovered();
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
   const { activeCall } = useCall();
@@ -934,7 +937,7 @@ const Conversation = memo(function Conversation({
 
   // Mark the thread read up to the newest message while it's visible.
   useEffect(() => {
-    if (messages.length === 0) return;
+    if (messages.length === 0 || covered) return;
     const latest = messages[messages.length - 1]?.created_at ?? 0;
     if (latest <= 0) return;
     const stamp = () => {
@@ -943,7 +946,7 @@ const Conversation = memo(function Conversation({
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [messages, conversation, markRead]);
+  }, [messages, conversation, markRead, covered]);
 
   const handleSubmit = useCallback(
     async (text: string, tags: string[][]) => {

@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
 
 import { DiscordImportWizard } from "@/components/discord-import/DiscordImportWizard";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 
 /**
  * The Discord import wizard, as a route.
@@ -18,15 +18,9 @@ import { DiscordImportWizard } from "@/components/discord-import/DiscordImportWi
  * that element's box instead of the screen.
  */
 export function DiscordImportPage() {
-  const navigate = useNavigate();
-
   // Leaving the wizard goes back where they came from. A cold deep link has no
   // entry to return to, so it falls through to the app root instead of exiting.
-  const close = () => {
-    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
-    if (idx > 0) navigate(-1);
-    else navigate("/", { replace: true });
-  };
+  const close = useBackOrHome();
 
   return createPortal(<DiscordImportWizard onClose={close} />, document.body);
 }

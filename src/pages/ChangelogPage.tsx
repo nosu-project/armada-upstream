@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { parseChangelog } from "@/lib/changelog";
 import type { ChangelogCategory, ChangelogEntry } from "@/lib/changelog";
-import { useNavigate } from "react-router-dom";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 
 const GITLAB_REPO = "https://gitlab.com/soapbox-pub/armada";
 
@@ -33,7 +33,7 @@ const buildDate = import.meta.env.BUILD_DATE;
 const isPreRelease = !commitTag;
 
 export function ChangelogPage() {
-  const navigate = useNavigate();
+  const back = useBackOrHome();
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
 
@@ -54,7 +54,7 @@ export function ChangelogPage() {
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
       {/* Header — a detached floating command bar matching the settings page chrome. */}
       <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
+        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={back}>
           <ArrowLeft className="size-5" />
         </Button>
         <h1 className="font-semibold truncate leading-tight">Changelog</h1>

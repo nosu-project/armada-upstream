@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
 
 import { CreateCommunityWizard } from "@/concord/components/CreateCommunityWizard";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 
 /**
  * The community-creation wizard, as a route.
@@ -18,15 +18,9 @@ import { CreateCommunityWizard } from "@/concord/components/CreateCommunityWizar
  * block and shrink it to that element's box instead of the screen.
  */
 export function CreateCommunityPage() {
-  const navigate = useNavigate();
-
   // Leaving the wizard goes back where they came from. A cold deep link has no
   // entry to return to, so it falls through to the app root instead of exiting.
-  const close = () => {
-    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
-    if (idx > 0) navigate(-1);
-    else navigate("/", { replace: true });
-  };
+  const close = useBackOrHome();
 
   return createPortal(<CreateCommunityWizard onClose={close} />, document.body);
 }

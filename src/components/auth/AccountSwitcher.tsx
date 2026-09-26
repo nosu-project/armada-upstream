@@ -1,8 +1,7 @@
 // NOTE: This file is stable and usually should not be modified.
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
-import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useContext, useRef, useState } from 'react';
 import { ChevronDown, IdCard, LogOut, QrCode, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
 import {
   DropdownMenu,
@@ -24,6 +23,7 @@ import { StatusDialog } from '@/components/dialogs/StatusDialog';
 import { WalletDialog } from '@/components/dialogs/WalletDialog';
 import { beginAccountExit } from '@/components/accountExitState';
 import { finalLogout } from '@/lib/finalLogout';
+import { SettingsOverlayContext } from '@/lib/settingsOverlay';
 import { useAppContext } from '@/hooks/useAppContext';
 import { cn } from '@/lib/utils';
 
@@ -73,7 +73,8 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const [serverIdentityOpen, setServerIdentityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [shareProfileOpen, setShareProfileOpen] = useState(false);
-  const navigate = useNavigate();
+  // Settings draws over the current page (`lib/settingsOverlay.ts`).
+  const settings = useContext(SettingsOverlayContext);
   // The finger press currently on the trigger: where it landed and whether the
   // menu was already open. Null for mouse/pen, which keep Radix's own
   // press-to-open. See the trigger's handlers below.
@@ -178,7 +179,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
       <DropdownMenuContent className='w-60 p-2 clip-corner-lg border-none shadow-xl animate-scale-in'>
         {/* You: identity actions first — this menu hangs off your own card. */}
         <DropdownMenuItem
-          onClick={() => navigate('/settings#profile')}
+          onClick={() => settings.show('profile')}
           className={cn(
             'flex items-center gap-2 cursor-pointer p-2 clip-corner-lg',
             // Part of the empty-profile nudge: the same dot as the trigger's
