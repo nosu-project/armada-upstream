@@ -16,7 +16,7 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 import { openDB } from "idb";
 
-import { perfCount, perfMark, perfTime } from "@/lib/perf";
+import { perfCount, perfKvWrite, perfMark, perfTime } from "@/lib/perf";
 
 import { ParsedFilter } from "./ParsedFilter";
 import {
@@ -1209,6 +1209,7 @@ class IndexedDBKV implements ArmadaKV {
   }
 
   set<T>(key: string, value: T): Promise<void> {
+    if (import.meta.env.VITE_PROFILE === "1") perfKvWrite(key, value);
     return perfTime("kv.set", () =>
       new Promise<void>((resolve, reject) => {
         // `undefined` is out of contract (it has no JSON form); normalize to

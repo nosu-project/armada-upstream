@@ -116,6 +116,23 @@ export async function perfTime<T>(
   }
 }
 
+/**
+ * Profiling builds only (callers gate on `VITE_PROFILE`): count a KV write by
+ * key family with the size of what it carried, so "many small writes" and
+ * "one value rewritten whole" are told apart. The family is the key up to its
+ * second `:` with hex runs collapsed.
+ */
+export function perfKvWrite(key: string, value: unknown): void {
+  const family = key.split(":").slice(0, 2).join(":").replace(/[0-9a-f]{16,}/g, "…");
+  let size = 0;
+  try {
+    size = typeof value === "string" ? value.length : (JSON.stringify(value)?.length ?? 0);
+  } catch {
+    // Unserializable: counted, sized 0.
+  }
+  perfCount(`kv.set ${family}`, 0, size, "chars");
+}
+
 /** Time a synchronous operation into `label`'s aggregate. */
 export function perfTimeSync<T>(label: string, fn: () => T, units?: (result: T) => number, unitName = "rows"): T {
   const start = now();

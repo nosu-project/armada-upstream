@@ -32,6 +32,10 @@
  *   node scripts/perf-profile.mjs --skip-build --cpu-profile --only live-switch --invite 'https://armada.buzz/invite/naddr1…#…'
  *     --settle <sec>  how long to let the join sync before measuring (45)
  *     --rounds <n>    switch-ins measured (6)
+ *     --boot-sec <s>  with `--only live-switch,live-boot`, then reload straight
+ *                     into the community and measure the cold start (60)
+ *     live-idle       with `--only …,live-idle`: then --idle seconds with the
+ *                     community open and nothing touched
  *     --offline       after settling, answer every REQ locally: the switch cost
  *                     against what is on disk, with no history paging behind it
  *
@@ -78,7 +82,8 @@ const OUT = resolve(root, "perf-reports");
 /** Messages in the seeded community's #general. */
 const CONCORD_BIG = 3000;
 
-const wants = (name) => (ONLY.length === 0 && name !== "live-switch") || ONLY.includes(name);
+const LIVE = ["live-switch", "live-boot", "live-idle"];
+const wants = (name) => (ONLY.length === 0 && !LIVE.includes(name)) || ONLY.includes(name);
 
 // ─── Build + serve ──────────────────────────────────────────────────────────
 
@@ -670,7 +675,7 @@ try {
     }
   }
 
-  if (wants("live-switch")) {
+  if (LIVE.some(wants)) {
     if (!INVITE) {
       console.log("\n▶ live-switch skipped: pass --invite <url>");
     } else {
@@ -738,6 +743,44 @@ try {
         errors: errorsSince(mark),
         report: await report(page),
       });
+
+      if (wants("live-boot")) {
+        // A cold start straight into the joined community, as reopening the
+        // app is: everything since the page load, for --boot-sec seconds.
+        const bootSec = Number(opt("boot-sec", "60"));
+        console.log(`▶ live-boot (reload into the community, ${bootSec}s)`);
+        const bootMark = errors.length;
+        const a2 = await metrics(cdp);
+        const t2 = Date.now();
+        const { hot: bootHot } = await cpuProfile("live-boot", async () => {
+          await page.goto(communityPath);
+          await perfReady(page);
+          await page.waitForTimeout(bootSec * 1000);
+        });
+        const b2 = await metrics(cdp);
+        // CDP's counters restart with the new document, so the reload's cost
+        // is everything the fresh document has counted.
+        const zero = Object.fromEntries(Object.keys(b2).map((k) => [k, 0]));
+        save("live-boot", {
+          hot: bootHot,
+          cost: cost(b2.TaskDuration < a2.TaskDuration ? zero : a2, b2, (Date.now() - t2) / 1000),
+          errors: errorsSince(bootMark),
+          report: await report(page),
+        });
+      }
+
+      if (wants("live-idle")) {
+        // The joined community open and nobody touching anything: what it
+        // costs to leave the app sitting in a busy room.
+        console.log(`▶ live-idle (${IDLE_SEC}s)`);
+        const idleMark = errors.length;
+        await resetCounters(page);
+        let idle;
+        const { hot: idleHot } = await cpuProfile("live-idle", async () => {
+          idle = await measureIdle(page, cdp, IDLE_SEC);
+        });
+        save("live-idle", { hot: idleHot, idle, errors: errorsSince(idleMark), report: await report(page) });
+      }
     }
   }
 

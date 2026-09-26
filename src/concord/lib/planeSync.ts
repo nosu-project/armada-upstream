@@ -62,6 +62,8 @@ import { isStreamPubkey, streamAuthsSettled } from "@/concord/lib/streamAuth";
 import { openWrap, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib/stream";
 import type { StreamKeyView } from "@/concord/lib/derive";
 import type { Community } from "@/concord/lib/types";
+import { getArmadaDB } from "@/lib/db/armadaDB";
+import { IdLog } from "@/lib/db/idLog";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { beginSyncTask } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
@@ -417,27 +419,67 @@ const JUNK_WRAPS_KEY = "plane-junk-wraps";
  */
 const JUNK_WRAPS_CAP = 4_096;
 
+// Persisted as append-only KV logs (see IdLog), not as one value holding the
+// whole set: that value was re-encoded and rewritten — a megabyte once the memo
+// fills — every time a single live message was noted seen.
+const seenWrapsLog = new IdLog(() => getArmadaDB().kv, {
+  prefix: "plane-seen-wraps:",
+  idChars: 64,
+  chunkIds: 1_024,
+  keepChunks: SEEN_WRAPS_CAP / 1_024,
+  flushMs: SEEN_WRAPS_PERSIST_MS,
+});
+const junkWrapsLog = new IdLog(() => getArmadaDB().kv, {
+  prefix: "plane-junk-wraps:",
+  idChars: 64,
+  chunkIds: 512,
+  keepChunks: JUNK_WRAPS_CAP / 512,
+  flushMs: SEEN_WRAPS_PERSIST_MS,
+});
+
 let seenWrapsLoaded: Promise<void> | undefined;
-let seenWrapsPersistTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Union the persisted memo into the session set (once per session). */
 function loadSeenWraps(): Promise<void> {
-  seenWrapsLoaded ??= Promise.all([readFolded<string[]>(SEEN_WRAPS_KEY), readFolded<string[]>(JUNK_WRAPS_KEY)])
-    .then(([seen, junk]) => {
-      if (seen) for (const id of seen) seenCompleteWraps.add(id);
-      if (junk) for (const id of junk) junkWraps.add(id);
+  seenWrapsLoaded ??= Promise.all([
+    seenWrapsLog.load(),
+    junkWrapsLog.load(),
+    // The single-value form this replaced, carried over once and removed.
+    readFolded<string[]>(SEEN_WRAPS_KEY),
+    readFolded<string[]>(JUNK_WRAPS_KEY),
+  ])
+    .then(([seen, junk, legacySeen, legacyJunk]) => {
+      for (const id of seen) seenCompleteWraps.add(id);
+      for (const id of junk) junkWraps.add(id);
+      if (legacySeen?.length) {
+        for (const id of legacySeen) if (!seenCompleteWraps.has(id)) noteSeen(id);
+        void writeFolded(SEEN_WRAPS_KEY, undefined);
+      }
+      if (legacyJunk?.length) {
+        for (const id of legacyJunk) if (!junkWraps.has(id)) noteJunk(id);
+        void writeFolded(JUNK_WRAPS_KEY, undefined);
+      }
     })
     .catch(() => undefined);
   return seenWrapsLoaded;
 }
 
-function schedulePersistSeenWraps(): void {
-  if (seenWrapsPersistTimer !== undefined) return;
-  seenWrapsPersistTimer = setTimeout(() => {
-    seenWrapsPersistTimer = undefined;
-    void writeFolded(SEEN_WRAPS_KEY, [...seenCompleteWraps]);
-    void writeFolded(JUNK_WRAPS_KEY, [...junkWraps]);
-  }, SEEN_WRAPS_PERSIST_MS);
+function noteSeen(id: string): void {
+  seenCompleteWraps.add(id);
+  seenWrapsLog.add(id);
+  if (seenCompleteWraps.size > SEEN_WRAPS_CAP) {
+    const oldest = seenCompleteWraps.values().next();
+    if (!oldest.done) seenCompleteWraps.delete(oldest.value);
+  }
+}
+
+function noteJunk(id: string): void {
+  junkWraps.add(id);
+  junkWrapsLog.add(id);
+  if (junkWraps.size > JUNK_WRAPS_CAP) {
+    const oldest = junkWraps.values().next();
+    if (!oldest.done) junkWraps.delete(oldest.value);
+  }
 }
 
 /**
@@ -447,16 +489,7 @@ function schedulePersistSeenWraps(): void {
  * then stops it ever being re-attempted.
  */
 export function notePlaneWrapsJunk(ids: string[]): void {
-  if (ids.length === 0) return;
-  for (const id of ids) junkWraps.add(id);
-  schedulePersistSeenWraps();
-  if (junkWraps.size > JUNK_WRAPS_CAP) {
-    let toDrop = junkWraps.size - JUNK_WRAPS_CAP / 2;
-    for (const id of junkWraps) {
-      if (toDrop-- <= 0) break;
-      junkWraps.delete(id);
-    }
-  }
+  for (const id of ids) if (!junkWraps.has(id)) noteJunk(id);
 }
 
 /**
@@ -466,16 +499,7 @@ export function notePlaneWrapsJunk(ids: string[]): void {
  * never re-decrypted by the other.
  */
 export function notePlaneWrapsSeen(ids: string[]): void {
-  const before = seenCompleteWraps.size;
-  for (const id of ids) seenCompleteWraps.add(id);
-  if (seenCompleteWraps.size > SEEN_WRAPS_CAP) {
-    let toDrop = seenCompleteWraps.size - SEEN_WRAPS_CAP / 2;
-    for (const id of seenCompleteWraps) {
-      if (toDrop-- <= 0) break;
-      seenCompleteWraps.delete(id);
-    }
-  }
-  if (seenCompleteWraps.size !== before) schedulePersistSeenWraps();
+  for (const id of ids) if (!seenCompleteWraps.has(id)) noteSeen(id);
 }
 
 /** The subset of `wraps` not yet processed (loads the persisted memo first). */
@@ -492,11 +516,9 @@ export function _resetPlaneSweepMemoForTests(): void {
   scopeTruncated.clear();
   scopeReached.clear();
   completeFloors.clear();
-  if (seenWrapsPersistTimer !== undefined) {
-    clearTimeout(seenWrapsPersistTimer);
-    seenWrapsPersistTimer = undefined;
-  }
   seenWrapsLoaded = Promise.resolve();
+  void seenWrapsLog.clear();
+  void junkWrapsLog.clear();
   void writeFolded(SEEN_WRAPS_KEY, []);
   void writeFolded(JUNK_WRAPS_KEY, []);
 }
