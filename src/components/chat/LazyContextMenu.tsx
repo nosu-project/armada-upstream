@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 export interface LazyContextMenu {
   open: boolean;
@@ -86,7 +87,11 @@ export function LazyContextMenuContent({
         align="start"
         sideOffset={2}
         collisionPadding={collisionPadding}
-        className={className}
+        // Inert while it animates out: a Radix item focuses itself on
+        // pointermove, so a mouse still over the closing menu took focus back
+        // from wherever the action put it (Reply's composer) and dropped it on
+        // the body when the menu unmounted.
+        className={cn("data-[state=closed]:pointer-events-none", className)}
         // Never return focus to the invisible anchor: leave it where an action
         // put it, as the context menu this replaces did.
         onCloseAutoFocus={(event) => {
