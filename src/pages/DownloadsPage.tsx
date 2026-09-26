@@ -1,11 +1,12 @@
 import { AppWindow, ArrowLeft, Check, Copy, Download, Globe, Laptop, RefreshCw, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useReleases } from "@/hooks/useReleases";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -326,7 +327,7 @@ function OlderRelease({ release }: { release: Release }) {
 }
 
 export function DownloadsPage() {
-  const navigate = useNavigate();
+  const back = useBackOrHome();
   // The page's own scroll container: the sea reads its scrollTop imperatively,
   // so it is a ref handed down, never state.
   const scrollRef = useRef<HTMLElement>(null);
@@ -379,7 +380,7 @@ export function DownloadsPage() {
         variant="ghost"
         size="icon"
         aria-label="Back"
-        onClick={() => navigate(-1)}
+        onClick={back}
         className="absolute left-2 top-2 z-20 size-9 touch:size-11 text-muted-foreground hover:text-foreground safe-area-top"
       >
         <ArrowLeft className="size-5" />

@@ -99,6 +99,18 @@ abstract class NativeSigner {
     }
 
     /**
+     * Whether a signature is made here, with no party that could prompt for
+     * it or log it — a local key only. A signer app or a bunker may ask the
+     * user per signature, so anything signed WITHOUT a user action (a call's
+     * "ringing" receipt) is skipped for them; a caller could otherwise pop
+     * approval dialogs on demand. Mirrors the web's `signerNeedsApproval`
+     * (anything but an nsec login).
+     */
+    boolean signsUnattended() {
+        return false;
+    }
+
+    /**
      * Build a signer from the sealed config the WebView shipped:
      * {@code {type:"key",sk} | {type:"amber",packageName} |
      * {type:"nip46",clientSk,bunkerPk,relays[]}}. Null when absent/invalid.
@@ -146,6 +158,11 @@ abstract class NativeSigner {
 
         DirectKey(byte[] sk) {
             this.sk = sk;
+        }
+
+        @Override
+        boolean signsUnattended() {
+            return true;
         }
 
         @Override

@@ -42,6 +42,7 @@ import {
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroup } from "@/hooks/useGroup";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
@@ -54,6 +55,7 @@ import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { usePageCovered } from "@/lib/settingsOverlay";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -420,6 +422,7 @@ export function BuzzChat({
   searchQuery = "",
 }: BuzzChatProps) {
   const { user } = useCurrentUser();
+  const isTouch = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, channelId);
   const channelName = groupDetails?.group?.name;
@@ -451,6 +454,8 @@ export function BuzzChat({
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, channelId);
   const { mutateAsync: publish } = useNostrPublish();
   const { markRead } = useReadState();
+  // Covered by Settings: mounted but not on screen, so not being read.
+  const covered = usePageCovered();
   const { typers, publishTyping } = useBuzzTyping(relayUrl, channelId);
 
   const newDividerId = useNewMessagesDivider(
@@ -621,7 +626,7 @@ export function BuzzChat({
 
   // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
-    if (!user || timeline.length === 0) return;
+    if (!user || timeline.length === 0 || covered) return;
     const latest = timeline[timeline.length - 1]?.created_at ?? 0;
     if (latest <= 0) return;
     const stamp = () => {
@@ -632,7 +637,7 @@ export function BuzzChat({
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [user, timeline, relayUrl, channelId, markRead]);
+  }, [user, timeline, relayUrl, channelId, markRead, covered]);
 
   // Panel/footer reflows need no re-pinning here (mirrors GroupChat): the
   // timeline observes its own scroller and content and holds the reading
@@ -918,6 +923,9 @@ export function BuzzChat({
             onTyping={publishTyping}
             onSlashAction={handleSlashAction}
             onEditLast={editLast}
+            // Caret in the composer on open and on each channel switch; not on
+            // touch, where it raises the keyboard.
+            autoFocus={!isTouch}
           />
         ) : membershipPending ? (
           <div className="p-2" aria-hidden>

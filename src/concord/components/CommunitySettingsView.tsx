@@ -2,12 +2,15 @@ import {
   ArrowLeft,
   Check,
   Folder,
+  Globe,
   GripVertical,
   Hash,
   History,
   ImagePlus,
   Info,
   Loader2,
+  Lock,
+  Megaphone,
   MessageSquareText,
   MoreVertical,
   Pencil,
@@ -76,6 +79,7 @@ import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concor
 import { useCommunityManagement } from "@/concord/hooks/useCommunityActions";
 import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { useCommunityDiscoverListings } from "@/concord/hooks/useDiscoverListings";
 import { refreshInviteBundlesFor } from "@/concord/hooks/useRekey";
 import { useMetadataActions } from "@/concord/hooks/useRoles";
 import { DisplayName } from "@/components/DisplayName";
@@ -134,6 +138,7 @@ export function CommunitySettingsView({
   onPrivatiseChannel,
   onRotateChannelKey,
   onMintAccessRole,
+  onOpenInvites,
 }: {
   community: Community;
   metadata: CommunityMetadata | undefined;
@@ -149,6 +154,8 @@ export function CommunitySettingsView({
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
   /** Mint another Role scoped to a private channel, widening its access list. */
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
+  /** Open the invite-links pane, where public links and listings are managed. */
+  onOpenInvites?: () => void;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions(community);
   const { mutateAsync: uploadFile } = useUploadFile();
@@ -414,6 +421,7 @@ export function CommunitySettingsView({
                   {memberCount} {memberCount === 1 ? "member" : "members"}
                 </span>
               </div>
+              <VisibilityRow community={community} onOpenInvites={onOpenInvites} />
             </div>
 
             <DisappearingSection community={community} metadata={metadata} canManage={canManageMetadata} />
@@ -802,6 +810,43 @@ function InlineEdit({
         <X className="size-4" />
       </Button>
     </form>
+  );
+}
+
+/**
+ * Public or private, and whether it is on Discover — the community's widest
+ * doors, stated where its identity is, with a way to the pane that closes
+ * them. Public means a live invite link exists (the registry fold); a Discover
+ * listing is a public post of one of those links.
+ */
+function VisibilityRow({ community, onOpenInvites }: { community: Community; onOpenInvites?: () => void }) {
+  const { data: folded } = useControlFold(community);
+  const isPublic = (folded?.liveInviteLinks.size ?? 0) > 0;
+  const { listings } = useCommunityDiscoverListings(isPublic ? community : undefined);
+  const listed = isPublic && listings.length > 0;
+  if (!folded) return null;
+  return (
+    <div className="flex items-center gap-2.5 text-sm">
+      {listed ? (
+        <Megaphone className="size-4 shrink-0 text-primary" />
+      ) : isPublic ? (
+        <Globe className="size-4 shrink-0 text-primary" />
+      ) : (
+        <Lock className="size-4 shrink-0 text-muted-foreground" />
+      )}
+      <span className="min-w-0 flex-1">
+        {listed
+          ? "Public · listed on Discover"
+          : isPublic
+            ? "Public · anyone with an invite link can join"
+            : "Private · join by direct invite only"}
+      </span>
+      {onOpenInvites && (
+        <Button type="button" size="sm" variant="ghost" className="shrink-0" onClick={onOpenInvites}>
+          Manage
+        </Button>
+      )}
+    </div>
   );
 }
 

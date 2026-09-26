@@ -4,11 +4,18 @@ import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ExistingRelayListError,
+  RelayListAbsenceUnconfirmedError,
+  relayListAbsenceConfirmed,
   relayPointerChangedDuringPreseed,
   useNip65RelaySetup,
 } from "@/hooks/useNip65RelaySetup";
-import { fetchPortableWireState } from "@/hooks/usePublishPortableSetup";
+import {
+  fetchPortableWireState,
+  mirrorPortableStateBeforeRelayChange,
+} from "@/hooks/usePublishPortableSetup";
 import { installAbortSignalPolyfills } from "@/lib/abortSignalPolyfill";
+import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
@@ -23,6 +30,14 @@ const h = vi.hoisted(() => ({
   discoverRead: vi.fn(),
   lastPublished: undefined as undefined | Record<string, unknown>,
   updateConfig: vi.fn(),
+  ownsPointer: true,
+  signedKinds: [] as number[],
+  persistedInvites: undefined as undefined | { list: unknown; newestCreatedAt: number },
+}));
+
+vi.mock("@/concord/hooks/useInvites", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/concord/hooks/useInvites")>()),
+  readPersistedInviteList: async () => h.persistedInvites,
 }));
 
 vi.mock("@/lib/nip65", async (importOriginal) => ({
@@ -51,8 +66,10 @@ vi.mock("@/hooks/useCurrentUser", () => ({
       pubkey: SELF,
       method: "nsec",
       signer: {
-        signEvent: async (template: Parameters<typeof finalizeEvent>[0]) =>
-          finalizeEvent(template, SECRET),
+        signEvent: async (template: Parameters<typeof finalizeEvent>[0]) => {
+          h.signedKinds.push(template.kind);
+          return finalizeEvent(template, SECRET);
+        },
       },
     },
   }),
@@ -68,14 +85,16 @@ vi.mock("@/hooks/useAppContext", () => ({
       useAppRelays: true,
       useUserRelays: true,
       appRelays: ["wss://app.example"],
-      relayMetadata: {
-        pubkey: SELF,
-        updatedAt: 1,
-        relays: [
-          { url: "wss://old.example", read: true, write: true },
-          { url: "wss://old-two.example", read: true, write: true },
-        ],
-      },
+      relayMetadata: h.ownsPointer
+        ? {
+          pubkey: SELF,
+          updatedAt: 1,
+          relays: [
+            { url: "wss://old.example", read: true, write: true },
+            { url: "wss://old-two.example", read: true, write: true },
+          ],
+        }
+        : { pubkey: undefined, updatedAt: 0, relays: [] },
     },
     updateConfig: h.updateConfig,
   }),
@@ -90,7 +109,10 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 beforeEach(() => {
+  h.ownsPointer = true;
   h.lastPublished = undefined;
+  h.signedKinds = [];
+  h.persistedInvites = undefined;
   h.relayEvent.mockReset().mockResolvedValue(undefined);
   h.relayQuery.mockReset().mockRejectedValue(new Error("offline"));
   h.discoverRead.mockReset().mockImplementation(async () => {
@@ -508,5 +530,140 @@ describe("useNip65RelaySetup two-phase publish", () => {
       [good, bad],
       false,
     )).resolves.toMatchObject({ events: [], communityEvents: [] });
+  });
+
+  it("hands back an existing list, not a 'changed on another device' error, when none was known locally", async () => {
+    h.ownsPointer = false;
+    h.relayQuery.mockResolvedValue([]);
+    const existing = finalizeEvent({
+      kind: 10002,
+      content: "",
+      tags: [["r", "wss://elsewhere.example"]],
+      created_at: 3,
+    }, SECRET);
+    const discovery = {
+      event: existing,
+      relays: [{ url: "wss://elsewhere.example", read: true, write: true }],
+    };
+    h.discoverRead.mockResolvedValueOnce({
+      events: [existing],
+      answered: ["wss://app.example", "wss://new.example"],
+      failed: [],
+      discovery,
+    });
+    const result = renderHook(() => useNip65RelaySetup(), { wrapper }).result;
+
+    let thrown: unknown;
+    await act(async () => {
+      thrown = await result.current.publish([
+        { url: "wss://new.example", read: true, write: true },
+      ]).catch((err: unknown) => err);
+    });
+
+    expect(thrown).toBeInstanceOf(ExistingRelayListError);
+    expect((thrown as ExistingRelayListError).discovery).toBe(discovery);
+    expect(h.relayEvent).not.toHaveBeenCalled();
+      expect(h.signedKinds).toEqual([]);
+    // Found before phase one: the portable-state mirror never even read.
+    expect(h.relayQuery).not.toHaveBeenCalled();
+  });
+
+  it("signs and publishes nothing when a first list's absence can't be confirmed", async () => {
+    h.ownsPointer = false;
+    h.relayQuery.mockResolvedValue([]);
+    h.discoverRead.mockResolvedValue({
+      events: [],
+      // The proposed relay answered, but the app relay and the indexes did not.
+      answered: ["wss://new.example"],
+      failed: ["wss://app.example", ...RELAY_LIST_DISCOVERY_RELAYS],
+    });
+    const result = renderHook(() => useNip65RelaySetup(), { wrapper }).result;
+
+    let thrown: unknown;
+    await act(async () => {
+      thrown = await result.current.publish([
+        { url: "wss://new.example", read: true, write: true },
+      ]).catch((err: unknown) => err);
+    });
+
+    expect(thrown).toBeInstanceOf(RelayListAbsenceUnconfirmedError);
+    expect(h.signedKinds).toEqual([]);
+    expect(h.relayEvent).not.toHaveBeenCalled();
+    expect(h.relayQuery).not.toHaveBeenCalled();
+    expect(h.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("creates a first list once every destination and most indexes confirm there is none", async () => {
+    h.ownsPointer = false;
+    const answered = ["wss://new.example", "wss://app.example", ...RELAY_LIST_DISCOVERY_RELAYS];
+    h.relayQuery.mockImplementation(async () => h.lastPublished ? [h.lastPublished] : []);
+    h.discoverRead.mockImplementation(async () => h.lastPublished
+      ? {
+        events: [h.lastPublished],
+        answered,
+        failed: [],
+        discovery: {
+          event: h.lastPublished,
+          relays: [{ url: "wss://new.example", read: true, write: true }],
+        },
+      }
+      : { events: [], answered, failed: [] });
+    const result = renderHook(() => useNip65RelaySetup(), { wrapper }).result;
+
+    await act(async () => {
+      await expect(result.current.publish([
+        { url: "wss://new.example", read: true, write: true },
+      ])).resolves.toMatchObject({ rejected: [] });
+    });
+
+    expect(h.signedKinds).toEqual([10002]);
+    expect(h.updateConfig).toHaveBeenCalled();
+  });
+
+  it("refuses to re-sign a known creator invite list the portable read did not return", async () => {
+    h.persistedInvites = {
+      list: { entries: [{ token: "t" }], tombstones: [] },
+      newestCreatedAt: 50,
+    };
+    const nostr = {
+      query: vi.fn(async () => []),
+      relay: () => ({ query: vi.fn(async () => []), event: h.relayEvent }),
+    };
+
+    await expect(mirrorPortableStateBeforeRelayChange(
+      nostr as never,
+      {
+        pubkey: SELF,
+        signer: {
+          signEvent: async (template: Parameters<typeof finalizeEvent>[0]) => {
+            h.signedKinds.push(template.kind);
+            return finalizeEvent(template, SECRET);
+          },
+          nip44: { decrypt: vi.fn(), encrypt: vi.fn(async () => "ciphertext") },
+        },
+      } as never,
+      ["wss://old.example"],
+      ["wss://new.example"],
+    )).rejects.toThrow(/creator invite list was absent/i);
+
+    expect(h.signedKinds).toEqual([]);
+    expect(h.relayEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("relayListAbsenceConfirmed", () => {
+  const app = ["wss://app-one.example", "wss://app-two.example"];
+  const indexes = ["wss://i1.example", "wss://i2.example", "wss://i3.example"];
+
+  it("needs every app relay and a majority of the discovery indexes", () => {
+    expect(relayListAbsenceConfirmed([...app, ...indexes], app, indexes)).toBe(true);
+    expect(relayListAbsenceConfirmed([...app, "wss://i1.example", "wss://i3.example"], app, indexes)).toBe(true);
+    expect(relayListAbsenceConfirmed([...app, "wss://i1.example"], app, indexes)).toBe(false);
+    expect(relayListAbsenceConfirmed(["wss://app-one.example", ...indexes], app, indexes)).toBe(false);
+  });
+
+  it("counts an index that is also an app relay only once, as an app relay", () => {
+    expect(relayListAbsenceConfirmed(["wss://i1.example"], ["wss://i1.example"], ["wss://i1.example"])).toBe(true);
+    expect(relayListAbsenceConfirmed([], [], [])).toBe(false);
   });
 });

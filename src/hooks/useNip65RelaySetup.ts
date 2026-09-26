@@ -50,6 +50,50 @@ export function relayPointerChangedDuringPreseed(
 }
 
 /**
+ * Thrown by `publish` when the account has no local NIP-65 list but the
+ * pre-sign refresh found one on the wire: publishing would shadow a list the
+ * user already has, so the caller should adopt `discovery` instead.
+ */
+export class ExistingRelayListError extends Error {
+  constructor(readonly discovery: RelayListDiscovery) {
+    super("Your account already has a NIP-65 relay list; review it instead of creating a new one");
+    this.name = "ExistingRelayListError";
+  }
+}
+
+/**
+ * Thrown by `publish` when the account has no local NIP-65 list and too few
+ * relays answered to rule one out: an empty read is not proof of absence.
+ */
+export class RelayListAbsenceUnconfirmedError extends Error {
+  constructor() {
+    super("Couldn't reach enough relays to confirm your account has no saved relay list yet; nothing was published");
+    this.name = "RelayListAbsenceUnconfirmedError";
+  }
+}
+
+/**
+ * Whether an EMPTY discovery read is strong enough to treat "no relay list"
+ * as a fact rather than an outage: every required relay (each one a new list
+ * would be written to) must have reached EOSE, and so must a majority of the
+ * dedicated discovery indexes that aren't also required. An empty read is
+ * otherwise indistinguishable from a failed one.
+ */
+export function relayListAbsenceConfirmed(
+  answered: Iterable<string>,
+  requiredRelays: string[],
+  discoveryRelays: string[] = RELAY_LIST_DISCOVERY_RELAYS,
+): boolean {
+  const heard = new Set(answered);
+  const app = uniqueRelayUrls(requiredRelays);
+  const indexes = uniqueRelayUrls(discoveryRelays).filter((url) => !app.includes(url));
+  if (app.length + indexes.length === 0) return false;
+  if (!app.every((url) => heard.has(url))) return false;
+  const indexesHeard = indexes.filter((url) => heard.has(url)).length;
+  return indexes.length === 0 || indexesHeard > indexes.length / 2;
+}
+
+/**
  * Discover, adopt and explicitly publish the logged-in user's NIP-65 list.
  * Discovery never signs. Publishing signs one event and fans those exact bytes
  * to every declared/app/discovery relay, so replaceable-event ordering cannot
@@ -105,6 +149,17 @@ export function useNip65RelaySetup() {
     );
   }, [discoveryRelays, nostr, user]);
 
+  /** `discover`, plus which relays reached EOSE, for callers that must tell empty from offline. */
+  const discoverWithStatus = useCallback(async (bootstrapRelays: string[] = []) => {
+    if (!user) throw new Error("User is not logged in");
+    return discoverRelayListWithStatus(
+      nostr,
+      user.pubkey,
+      uniqueRelayUrls([...bootstrapRelays, ...discoveryRelays]),
+      AbortSignal.timeout(8_000),
+    );
+  }, [discoveryRelays, nostr, user]);
+
   const publish = useCallback(async (relays: RelayPreference[]): Promise<RelayListPublishResult> => {
     if (!user) throw new Error("User is not logged in");
     const tags = buildRelayListTags(relays);
@@ -142,6 +197,29 @@ export function useNip65RelaySetup() {
           .map((relay) => relay.url)
         : [],
     );
+    const ownsPointer = config.relayMetadata.pubkey === user.pubkey;
+
+    // With no local list, this publish CREATES one — sound only once the wire
+    // affirmatively has none. Settle that before phase one: the mirror signs
+    // replaceable editions from whatever it read, and publishing those to the
+    // proposed relays would already shadow the user's real state even if the
+    // pointer itself were then refused.
+    if (!ownsPointer) {
+      const existing = await discoverRelayListWithStatus(
+        nostr,
+        user.pubkey,
+        targets,
+        AbortSignal.timeout(8_000),
+      );
+      if (existing.discovery) throw new ExistingRelayListError(existing.discovery);
+      if (!relayListAbsenceConfirmed(
+        existing.answered,
+        uniqueRelayUrls([...declared, ...config.appRelays]),
+      )) {
+        throw new RelayListAbsenceUnconfirmedError();
+      }
+    }
+
     const store = await eventStore;
     const loadLocalPortableState = async () => {
       try {
@@ -180,7 +258,6 @@ export function useNip65RelaySetup() {
     // a sibling write that lands during phase one is re-mirrored, never left
     // only on a relay the new pointer is about to remove.
     const pointerRefreshRelays = uniqueRelayUrls([...sourceRelays, ...proposedWrites]);
-    const ownsPointer = config.relayMetadata.pubkey === user.pubkey;
     const refreshPointer = async () => {
       const read = await discoverRelayListWithStatus(
         nostr,
@@ -211,6 +288,10 @@ export function useNip65RelaySetup() {
           throw new Error("Could not confirm the current NIP-65 relay-list version; retry without changing relays");
         }
       }
+      // With no local list, a list that appeared since the pre-mirror check
+      // was published elsewhere rather than having "changed on another
+      // device" relative to a baseline — hand it back to adopt.
+      if (!ownsPointer && discovery) throw new ExistingRelayListError(discovery);
       if (relayPointerChangedDuringPreseed(
         config.relayMetadata,
         user.pubkey,
@@ -329,6 +410,7 @@ export function useNip65RelaySetup() {
   return {
     discoveryRelays,
     discover,
+    discoverWithStatus,
     adopt,
     publish,
   };

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { hasNativeNotificationService } from "@/lib/platform";
 import { setActiveRooms as setWebActiveRooms } from "@/lib/activeRooms";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { usePageCovered } from "@/lib/settingsOverlay";
 
 /**
  * Tell the native background notification service which room(s) the WebView is
@@ -33,6 +34,9 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
  * (`useForegroundNotifications`) suppresses notifications only while the user
  * is actually looking at the conversation.
  *
+ * While Settings draws over the page (`usePageCovered`) the conversation is
+ * mounted but not on screen, so the active set is cleared until it closes.
+ *
  * @param roomKeys stable conversation identifiers the WebView is currently
  *                 showing. When empty/undefined, the active set is cleared.
  */
@@ -43,6 +47,7 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
     .filter((k) => k.length > 0);
 
   const sig = keys.join("\u0001");
+  const covered = usePageCovered();
 
   // Unmount-only cleanup: clear the active set when the component truly
   // unmounts (navigates away from the chat screen). This is a SEPARATE effect
@@ -60,7 +65,7 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
 
   useEffect(() => {
     const publish = () => {
-      const active = document.visibilityState === "visible" && document.hasFocus();
+      const active = !covered && document.visibilityState === "visible" && document.hasFocus();
       const next = active ? sig.split("\u0001").filter((k) => k.length > 0) : [];
       // In-process (web/desktop foreground notifier) — cheap, always.
       setWebActiveRooms(next);
@@ -86,6 +91,6 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
       window.removeEventListener("focus", publish);
       window.removeEventListener("blur", publish);
     };
-  }, [sig]);
+  }, [sig, covered]);
 
 }

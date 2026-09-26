@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { assertNotBanned, bundleToEntry } from "@/concord/hooks/useCommunityActions";
+import { assertNotBanned, assertNotDissolved, bundleToEntry } from "@/concord/hooks/useCommunityActions";
 import { useCommunityList, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { concordInviteReadKey, useReadState } from "@/hooks/useReadState";
@@ -466,6 +466,10 @@ export function useAcceptDirectInvite() {
       const { bundle } = invite;
       if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
 
+      // Nor may anyone accept into a dissolved community — the same check a
+      // link join makes (`completeJoin`): a direct invite is a bundle too, and
+      // one sent before the grave would otherwise re-add a read-only husk.
+      await assertNotDissolved(nostr, bundle);
       const entry = bundleToEntry(bundle);
       // A banned npub must not accept an invite (CORD-04 §4). This runs for a
       // catch-up too: the check is cheap, and the reasoning that once excused it

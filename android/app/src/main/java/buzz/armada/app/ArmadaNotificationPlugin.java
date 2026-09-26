@@ -657,6 +657,20 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
+     * The peer the WebView is dialing or in a DM call with ({@code peer}, empty
+     * or absent = none). The service neither rings for nor posts a missed call
+     * about that peer's offers while the report is fresh: they are the other
+     * half of a call the WebView already owns. Volatile and heartbeat-bound
+     * like {@link #setActiveRooms}; it touches no socket or subscription.
+     */
+    @PluginMethod
+    public void setCallPeer(PluginCall call) {
+        String peer = call.getString("peer", "");
+        NotificationRelayService.setCallPeer(peer);
+        call.resolve();
+    }
+
+    /**
      * Cancel tray notifications for conversations the WebView reports as read.
      * Payload: {@code { markers: [{ room, ts }, …] }} where {@code room} is the
      * WebView's read-state key (`dm:<pk>` / `c2:<id>` /

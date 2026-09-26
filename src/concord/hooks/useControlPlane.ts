@@ -473,6 +473,7 @@ async function rememberDissolved(idHex: string, atMs: number): Promise<void> {
 export function _forgetDissolvedMemoForTests(): void {
   dissolvedMemo.clear();
   aliveMemo.clear();
+  recentGraveProbes.clear();
 }
 
 /**
@@ -507,18 +508,28 @@ interface ProbeNostr {
  * the per-address `limit` isolation while paying one socket round; results
  * demux by wrap author (the dissolved address signs its own tombstone wrap).
  */
-const dissolvedProbes = new Map<string, Map<string, Array<(events: NostrEvent[]) => void>>>();
+const dissolvedProbes = new Map<string, Map<string, Array<ProbeWaiter>>>();
 const dissolvedProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+interface ProbeWaiter {
+  resolve: (events: NostrEvent[]) => void;
+  reject: (error: unknown) => void;
+}
+
+/**
+ * The wraps at `pk`'s dissolved address on `url`. Rejects when the relay did
+ * not answer, so a caller can tell "no grave here" from "no answer"; callers
+ * that don't care `.catch(() => [])`.
+ */
 function probeDissolved(nostr: ProbeNostr, url: string, pk: string): Promise<NostrEvent[]> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let byPk = dissolvedProbes.get(url);
     if (!byPk) {
       byPk = new Map();
       dissolvedProbes.set(url, byPk);
     }
     const waiters = byPk.get(pk) ?? [];
-    waiters.push(resolve);
+    waiters.push({ resolve, reject });
     byPk.set(pk, waiters);
     if (!dissolvedProbeTimers.has(url)) {
       dissolvedProbeTimers.set(url, setTimeout(() => void flushDissolvedProbes(nostr, url), 50));
@@ -532,19 +543,21 @@ async function flushDissolvedProbes(nostr: ProbeNostr, url: string): Promise<voi
   dissolvedProbes.delete(url);
   if (!byPk) return;
 
-  let events: NostrEvent[] = [];
+  let events: NostrEvent[];
   try {
     events = await nostr.relay(url).query(
       [...byPk.keys()].map((pk) => ({ kinds: [KIND_WRAP], authors: [pk], limit: 10 })),
       { signal: AbortSignal.timeout(8000) },
     );
-  } catch {
-    // A failed round answers every waiter empty — the callers' own catch/poll
-    // semantics, unchanged.
+  } catch (error) {
+    // A failed round rejects every waiter: "this relay didn't answer", which
+    // each caller either treats as empty or refuses to remember as a verdict.
+    for (const waiters of byPk.values()) for (const { reject } of waiters) reject(error);
+    return;
   }
   for (const [pk, waiters] of byPk) {
     const mine = events.filter((event) => event.pubkey === pk);
-    for (const resolve of waiters) resolve(mine);
+    for (const { resolve } of waiters) resolve(mine);
   }
 }
 
@@ -569,6 +582,127 @@ export async function dissolvedAt(idHex: string): Promise<number | undefined> {
   }
   aliveMemo.add(idHex);
   return undefined;
+}
+
+/**
+ * The tombstone ms for a community known only by its public identity — the
+ * self-certified `community_id`, its owner and its relays, which is all an
+ * invite bundle hands a NON-member. The dissolved address derives from the
+ * community_id alone (CORD-02 §9), so no keys are needed to find the grave;
+ * the owner's seal signature and the `eid` binding are what make it one.
+ *
+ * Used where there is no `Community` yet: the Discover card (a dissolved
+ * community is not a listing) and the join chain (a dissolved community is not
+ * joinable). A found grave is remembered like any other, so it stays terminal.
+ * Nothing opened here is written to a plane tenant — a non-member has none.
+ * A failed round answers "not known dissolved", never "alive for good".
+ *
+ * Answers as soon as ANY relay hands over a valid grave, and otherwise within
+ * `budgetMs` rather than after the slowest relay's own timeout — an invite
+ * preview waits on this. A grave that arrives past the budget is still
+ * remembered, so the next ask (the join that follows a preview) sees it.
+ * A "not found" answer is reused for {@link GRAVE_PROBE_REUSE_MS}, so a
+ * preview and the join it leads to pay one probe between them — but only for
+ * the same owner and relay set (a probe with the wrong owner or dead relays
+ * says nothing about the real one), and only when at least one relay actually
+ * answered: "no relay reached" is not "no grave".
+ */
+export async function probeCommunityDissolved(
+  nostr: ProbeNostr,
+  target: { communityId: string; owner: string; relays: string[] },
+  opts?: { budgetMs?: number },
+): Promise<number | undefined> {
+  // Case-folded: the id keys the persisted marker, which every other path
+  // writes from a lowercase `idHex`.
+  const communityId = target.communityId.toLowerCase();
+  const owner = target.owner.toLowerCase();
+  const known = await dissolvedAt(communityId);
+  if (known !== undefined) return known;
+  const probeKey = `${communityId}|${owner}|${[...new Set(target.relays)].sort().join(",")}`;
+  const recent = recentGraveProbes.get(probeKey);
+  if (recent && Date.now() - recent.at < GRAVE_PROBE_REUSE_MS) return recent.result;
+  let id: Uint8Array;
+  try {
+    id = hex32(communityId);
+  } catch {
+    return undefined;
+  }
+  const entry = {
+    at: Date.now(),
+    result: raceForGrave(nostr, communityId, owner, id, target.relays, opts?.budgetMs ?? GRAVE_PROBE_BUDGET_MS).then(
+      ({ at, answered }) => {
+        // Shared while in flight; kept past it only as a verdict some relay gave.
+        if (at === undefined && !answered && recentGraveProbes.get(probeKey) === entry) {
+          recentGraveProbes.delete(probeKey);
+        }
+        return at;
+      },
+    ),
+  };
+  recentGraveProbes.set(probeKey, entry);
+  return entry.result;
+}
+
+/** How long a public-identity probe may hold its caller before answering "not found". */
+const GRAVE_PROBE_BUDGET_MS = 4000;
+/** How long a "not found" probe answers for the same community again. */
+const GRAVE_PROBE_REUSE_MS = 60_000;
+/** In-flight or recent public-identity probes, per `communityId|owner|sorted relays`. */
+const recentGraveProbes = new Map<string, { at: number; result: Promise<number | undefined> }>();
+
+function raceForGrave(
+  nostr: ProbeNostr,
+  communityId: string,
+  owner: string,
+  id: Uint8Array,
+  relays: string[],
+  budgetMs: number,
+): Promise<{ at: number | undefined; answered: boolean }> {
+  const group = dissolvedGroupKey(id);
+  return new Promise((resolve) => {
+    let settled = false;
+    let pending = relays.length;
+    /** Whether any relay answered (EOSE) before the verdict was given. */
+    let answered = false;
+    const finish = (value: number | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ at: value, answered });
+    };
+    const timer = setTimeout(() => finish(undefined), budgetMs);
+    if (pending === 0) finish(undefined);
+    for (const url of relays) {
+      void probeDissolved(nostr, url, group.pk)
+        .then(
+          (wraps) => {
+            answered = true;
+            return wraps;
+          },
+          () => [] as NostrEvent[],
+        )
+        .then(async (wraps) => {
+          for (const wrap of wraps) {
+            let opened: OpenedEvent;
+            try {
+              opened = openWrap(wrap, group);
+            } catch {
+              continue;
+            }
+            if (!isDissolvedOpened(opened, owner, id)) continue;
+            // Remembered even past the budget: the grave is terminal whoever
+            // was still waiting for it.
+            await rememberDissolved(communityId, opened.ms).catch(() => undefined);
+            finish(opened.ms);
+            return;
+          }
+        })
+        .finally(() => {
+          pending -= 1;
+          if (pending === 0) finish(undefined);
+        });
+    }
+  });
 }
 
 /**
@@ -662,7 +796,13 @@ export async function publishEdition(
   // and fails OPEN on a store error: an unreadable cache must not block a
   // legitimate publish (matching Vector's `get_community_dissolved(…)
   // .unwrap_or(false)`).
+  //
+  // Both local records of a grave count: the persisted marker is the only one
+  // the dissolving owner's own client has (`markDissolvedLocally` writes it;
+  // its own tombstone is never swept back into the control plane first), and
+  // the stored plane is the one a member who folded the grave has.
   try {
+    if ((await dissolvedAt(community.idHex)) !== undefined) throw new DissolvedError();
     const cached = await queryPlane(community.idHex, "control");
     if (cached.some((o) => isDissolvedOpened(o, community.owner, community.id))) {
       throw new DissolvedError();

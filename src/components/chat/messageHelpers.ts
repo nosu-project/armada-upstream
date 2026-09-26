@@ -62,7 +62,10 @@ export function firstImageRef(event: ChatMsg): EncryptedRef | undefined {
   const imeta = parseImetaMap(event.tags);
   for (const entry of imeta.values()) {
     const isImage = entry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(entry.url);
-    if (isImage) return refOf(entry);
+    // A spoilered image gets no thumbnail: a preview would show at a glance
+    // what the sender covered up. Returned outright, since the inline match
+    // below would find the same URL.
+    if (isImage) return entry.spoiler ? undefined : refOf(entry);
   }
   const inline = event.content.match(IMAGE_URL_REGEX)?.[0];
   return inline ? { url: inline } : undefined;

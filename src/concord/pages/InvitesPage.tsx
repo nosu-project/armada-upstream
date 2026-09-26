@@ -21,7 +21,7 @@ import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { BannedFromCommunityError, bundleToEntry } from "@/concord/hooks/useCommunityActions";
+import { BannedFromCommunityError, DissolvedCommunityError, bundleToEntry } from "@/concord/hooks/useCommunityActions";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import {
   useAcceptDirectInvite,
@@ -44,6 +44,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { relativeTime, shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
+import { usePageCovered } from "@/lib/settingsOverlay";
 
 /**
  * The seal-verified sender as a short npub. Shown BESIDE the resolved profile
@@ -798,6 +799,15 @@ function InboxInviteDetail({
         await handleDecline();
         return;
       }
+      if (e instanceof DissolvedCommunityError) {
+        toast({
+          title: `${invite.name} was dissolved`,
+          description: e.message,
+          variant: "destructive",
+        });
+        await handleDecline();
+        return;
+      }
       toast({
         title: "Couldn't join",
         description: e instanceof Error ? e.message : "Unknown error",
@@ -844,10 +854,13 @@ export function InvitesPage() {
   // everything seen — one high-water mark for the whole inbox, so the rail
   // badge clears. Consent is still separate: seeing an invite isn't accepting
   // it. `markRead` no-ops when the stored stamp is already past the newest.
+  // Not while Settings covers the page: an invite arriving then is unseen, and
+  // is marked once the page is back on screen.
+  const covered = usePageCovered();
   const newest = items[0]?.invite.receivedAt ?? 0;
   useEffect(() => {
-    if (newest > 0) markRead(concordInviteReadKey(), newest);
-  }, [newest, markRead]);
+    if (!covered && newest > 0) markRead(concordInviteReadKey(), newest);
+  }, [covered, newest, markRead]);
 
   // Drop a stale selection when its invite leaves the inbox (accepted/declined
   // elsewhere, or the scan refreshed it out).

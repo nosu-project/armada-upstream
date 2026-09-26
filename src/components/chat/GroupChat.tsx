@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
 import { useGroup } from "@/hooks/useGroup";
@@ -30,6 +31,7 @@ import { useRepublish } from "@/hooks/useNostrPublish";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { usePageCovered } from "@/lib/settingsOverlay";
 import { useThreadPanel } from "@/hooks/useThreadPanel";
 import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 import { toast } from "@/hooks/useToast";
@@ -246,6 +248,7 @@ interface GroupChatProps {
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "" }: GroupChatProps) {
   const { user } = useCurrentUser();
+  const isTouch = useIsTouch();
   const location = useLocation();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, groupId);
@@ -276,6 +279,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, groupId);
   const { markRead } = useReadState();
+  // Covered by Settings: mounted but not on screen, so not being read.
+  const covered = usePageCovered();
   // Where the red "NEW" divider sits for this visit (captured before markRead
   // stamps the channel below, frozen until the channel changes).
   const newDividerId = useNewMessagesDivider(
@@ -379,7 +384,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
 
   // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
-    if (!user || messages.length === 0) return;
+    if (!user || messages.length === 0 || covered) return;
     const latest = messages[messages.length - 1]?.created_at ?? 0;
     if (latest <= 0) return;
 
@@ -391,7 +396,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [user, messages, relayUrl, groupId, markRead]);
+  }, [user, messages, relayUrl, groupId, markRead, covered]);
 
   // Opening the thread panel (its width animates over ~200ms) and the footer
   // swapping between composer / membership skeleton / join prompt both resize
@@ -663,6 +668,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             botCommands
             onSlashAction={handleSlashAction}
             onEditLast={editLast}
+            // Caret in the composer on open and on each channel switch; not on
+            // touch, where it raises the keyboard.
+            autoFocus={!isTouch}
           />
         ) : membershipPending ? (
           // Membership is still resolving — don't flash the "join to message"

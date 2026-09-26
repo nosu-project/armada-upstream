@@ -110,6 +110,19 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   },
 
   /**
+   * Subscribe to the window being closed to the tray. The page stays
+   * "visible" to the Page Visibility API (background throttling is off), so
+   * this is the only way it learns to stop playing media. Returns an
+   * unsubscribe.
+   */
+  onWindowHidden: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = () => handler();
+    ipcRenderer.on("armada:window-hidden", listener);
+    return () => ipcRenderer.removeListener("armada:window-hidden", listener);
+  },
+
+  /**
    * Read the "launch Armada at login" state: { supported, openAtLogin,
    * openAsHidden }. `openAsHidden` starts the app minimized to the tray.
    */

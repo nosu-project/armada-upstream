@@ -55,7 +55,8 @@ import { isEveryoneMention } from "@/concord/lib/everyoneMention";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
 import { SuspiciousActivityView } from "@/concord/components/SuspiciousActivityView";
 import { useSelfRemove } from "@/concord/hooks/useSelfRemove";
-import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
+import { useLinkAuthorityWatch, useLinkFreshnessWatch, useRetireCommunityLinks, type RetirementOutcome } from "@/concord/hooks/useInvites";
+import { dissolveMissToast } from "@/concord/components/dissolveMissToast";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
@@ -122,6 +123,7 @@ import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
+import { usePageCovered } from "@/lib/settingsOverlay";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
@@ -1042,6 +1044,9 @@ export function ConcordPage() {
   // every row — and their content — on every switch.
   const navigateTo = useStableNavigate();
   const isTouchDevice = useIsTouch();
+  // Covered by Settings: mounted but not on screen, so nothing here is being
+  // read — the read stamps below hold off until it closes.
+  const covered = usePageCovered();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
@@ -1294,6 +1299,18 @@ export function ConcordPage() {
   // or when a ticket conversation opens (its trust set and thread need it).
   const [projectsTouched, setProjectsTouched] = useState(false);
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
+  // The page instance outlives navigation, so the ticket panel is closed when
+  // the reader moves to another community, channel or pane — during render,
+  // so the new surface never paints with the previous context's ticket.
+  // The ROUTE's channel, not `channelIdHex`: on a pane route that falls back
+  // to the persisted last channel, which is written a beat after a switch and
+  // would otherwise close a ticket opened in the meantime.
+  const ticketContextKey = `${communityId ?? ""}|${routeChannelId ?? ""}|${view}`;
+  const [ticketContext, setTicketContext] = useState(ticketContextKey);
+  if (ticketContext !== ticketContextKey) {
+    setTicketContext(ticketContextKey);
+    setOpenTicket(undefined);
+  }
   const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
   const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched || Boolean(openTicket));
   // Clicking a mention/search result: navigate to the surface that actually
@@ -1348,14 +1365,14 @@ export function ConcordPage() {
   // a background tab doesn't silently eat the badge. (Unlike Threads there's
   // no per-row "new" highlight to preserve, so no snapshot.)
   useEffect(() => {
-    if (view !== "mentions" || !user || !hasUnreadMention) return;
+    if (view !== "mentions" || !user || !hasUnreadMention || covered) return;
     const stamp = () => {
       if (document.visibilityState === "visible") markAllMentionsRead();
     };
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [view, user, hasUnreadMention, markAllMentionsRead]);
+  }, [view, user, hasUnreadMention, markAllMentionsRead, covered]);
 
   // Having the Threads pane on screen counts as reading it: every listed
   // thread with unseen replies is marked read (the sidebar dot clears by just
@@ -1371,7 +1388,7 @@ export function ConcordPage() {
       setFreshThreadIds((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
-    if (!user || !hasNewThreadReplies) return;
+    if (!user || !hasNewThreadReplies || covered) return;
     const stamp = () => {
       if (document.visibilityState !== "visible") return;
       setFreshThreadIds((prev) => {
@@ -1386,7 +1403,7 @@ export function ConcordPage() {
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [view, user, hasNewThreadReplies, threads, markAllThreadsRead]);
+  }, [view, user, hasNewThreadReplies, threads, markAllThreadsRead, covered]);
 
   // What the Threads pane renders: the live list, with the just-auto-cleared
   // roots still lit as "new" for this visit.
@@ -1761,7 +1778,7 @@ export function ConcordPage() {
   const unreadByChannelRef = useRef(unreadByChannel);
   unreadByChannelRef.current = unreadByChannel;
   useEffect(() => {
-    if (!readerPubkey || !channelIdForRead) return;
+    if (!readerPubkey || !channelIdForRead || covered) return;
     // Newest rendered row, if any. May be 0 when every message in the channel
     // is one the render fold drops (all mod-deleted / banned / expired); the
     // badge's own `latest` (read in stamp() below) still clears it in that case.
@@ -1798,10 +1815,26 @@ export function ConcordPage() {
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
+  }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead, covered]);
 
   const { leave, isLeaving, dissolve, createChannel, privatiseChannel, mintAccessRole, setChannelCategory, arrangeChannels } =
     useCommunityManagement(community);
+  const retireLinks = useRetireCommunityLinks(community);
+  /**
+   * The dissolve toast's Retry. The community is gone by now, so this runs
+   * the retirement's own `retry`, which holds exactly what missed — and a
+   * miss again re-raises the same toast with the next `retry`.
+   */
+  const showRetirementMiss = (outcome: RetirementOutcome) => {
+    const retry = outcome.retry;
+    if (!retry) return;
+    toast(dissolveMissToast(outcome, () => {
+      void retry().then(
+        (next) => (next.retry ? showRetirementMiss(next) : toast({ title: "Invite links and listings taken down" })),
+        () => showRetirementMiss(outcome),
+      );
+    }));
+  };
 
   /**
    * File one channel, from the sidebar's own context menu — the same edition
@@ -2653,7 +2686,7 @@ export function ConcordPage() {
   // backgrounded tab doesn't silently eat the badge.
   const threadRootId = threadRoot?.id;
   useEffect(() => {
-    if (!user || !threadRootId) return;
+    if (!user || !threadRootId || covered) return;
     const replies = transport.threadRepliesFor?.(threadRootId) ?? EMPTY_REPLIES;
     const latest = replies.length > 0 ? replies[replies.length - 1].created_at : threadRoot?.created_at ?? 0;
     if (latest <= 0) return;
@@ -2664,7 +2697,7 @@ export function ConcordPage() {
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [user, threadRootId, threadRoot?.created_at, transport, markThreadRead]);
+  }, [user, threadRootId, threadRoot?.created_at, transport, markThreadRead, covered]);
 
   const moderation = useModeration(community, memberPubkeys);
 
@@ -2799,14 +2832,29 @@ export function ConcordPage() {
   };
 
   const handleDissolve = async () => {
-    if (!confirm("Permanently dissolve this community for everyone? This cannot be undone.")) return;
+    if (
+      !confirm(
+        "Permanently dissolve this community for everyone? This cannot be undone. Your invite links will be revoked and your Discover listings removed.",
+      )
+    ) return;
+    let missed: RetirementOutcome | undefined;
     try {
-      await dissolve();
+      await dissolve({
+        retire: async () => {
+          missed = await retireLinks();
+        },
+      });
       // Internal navigation home — NOT a reload. `dissolve` drops the vault
       // entry (so the community leaves the rail) but first marks it dissolved,
       // which keeps any active call alive across the transition (see
       // useCallSync). The persistent voice room rides through the SPA navigate.
-      toast({ title: "Community dissolved" });
+      // One toast either way: only one shows at a time, so a separate
+      // "dissolved" toast would replace the miss before it could be read.
+      if (missed?.retry) {
+        showRetirementMiss(missed);
+      } else {
+        toast({ title: "Community dissolved" });
+      }
       navigateTo("/");
     } catch (e) {
       toast({ title: "Couldn't dissolve", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
@@ -3762,6 +3810,7 @@ export function ConcordPage() {
                       onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
                       onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
                       onMintAccessRole={canManageRoles ? handleMintAccessRole : undefined}
+                      onOpenInvites={() => selectPane("invites")}
                     />
                   )}
                 </div>
@@ -4141,6 +4190,9 @@ export function ConcordPage() {
                           onTyping={publishTyping}
                           encryptAttachments
                           onEditLast={canWrite ? editLast : undefined}
+                          // Caret in the composer on open and on each channel
+                          // switch; not on touch, where it raises the keyboard.
+                          autoFocus={!isTouchDevice}
                         />
                       </>
                     )

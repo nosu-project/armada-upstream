@@ -36,6 +36,11 @@ describe("pinAttachmentEntries", () => {
     expect(pinAttachmentEntries("no attachment here", [])).toEqual([]);
   });
 
+  it("carries a spoiler through to the gallery refs", () => {
+    expect(pinImageRefs("", imeta("url https://x.example/a.png", "m image/png", "content-warning"))[0].spoiler).toBe(true);
+    expect(pinImageRefs("", imeta("url https://x.example/a.png", "m image/png"))[0].spoiler).toBeUndefined();
+  });
+
   it("classifies images by mime first, extension only when mime is absent", () => {
     expect(pinImageRefs("", imeta("url https://x.example/a", "m image/webp"))).toHaveLength(1);
     expect(pinImageRefs("", imeta("url https://x.example/a.png", "m application/pdf")), "mime wins").toHaveLength(0);

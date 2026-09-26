@@ -100,6 +100,7 @@ const {
 } = require("./hevcScreenShare");
 const { displayMediaGrant, displayMediaHandlerOptions } = require("./displayMediaPolicy");
 const { installYouTubeEmbedIdentity } = require("./youtubeEmbedIdentity");
+const { allowPermissionCheck, allowPermissionRequest } = require("./permissionPolicy");
 
 // Encoder selection is process-wide in Chromium and must be installed before
 // app readiness (and therefore before the GPU process starts). Software is the
@@ -537,6 +538,25 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
     mainWindow?.flashFrame(false);
   });
 
+  // Esc always leaves HTML fullscreen. An embed that went fullscreen (a Mini
+  // App is sender-written code) has keyboard focus, and a key the page
+  // consumes may never reach Electron's own Esc handling, so take it before
+  // the page sees it. The renderer shows the matching hint (fullscreenHint.ts).
+  let htmlFullscreen = false;
+  mainWindow.on("enter-html-full-screen", () => {
+    htmlFullscreen = true;
+  });
+  mainWindow.on("leave-html-full-screen", () => {
+    htmlFullscreen = false;
+  });
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (!htmlFullscreen || input.type !== "keyDown" || input.key !== "Escape") return;
+    event.preventDefault();
+    mainWindow.webContents
+      .executeJavaScript("document.exitFullscreen().catch(() => {})")
+      .catch(() => {});
+  });
+
   // The app menu is removed (Menu.setApplicationMenu(null)), and the default
   // DevTools accelerators come from that menu — so in dev mode bind them
   // directly, or there is no way into the inspector at all.
@@ -803,6 +823,10 @@ function startHiddenTrayMonitor() {
 function hideWindowToTray() {
   if (!mainWindow || mainWindow.isDestroyed() || !closeToTraySupported || !tray) return;
   mainWindow.hide();
+  // backgroundThrottling: false keeps the page's visibilityState "visible"
+  // while hidden, so the renderer cannot see the close itself. Tell it, so
+  // playing media and embeds stop instead of carrying on from the tray.
+  mainWindow.webContents.send("armada:window-hidden");
   startHiddenTrayMonitor();
 }
 
@@ -1407,7 +1431,9 @@ function installHevcScreenShareIpc() {
 // Electron's default is to grant renderer permission requests, but we set an
 // explicit handler so the policy is deliberate: media (mic/camera for LiveKit
 // voice), notifications, fullscreen, clipboard and pointer lock are allowed
-// for our own app:// origin only; everything else is denied. On macOS the OS
+// for our own app:// origin only, embeds it frames get fullscreen, and only the
+// allowlisted provider players get clipboard write (permissionPolicy.js);
+// everything else is denied. On macOS the OS
 // additionally gates mic/camera behind TCC — the Info.plist usage strings for
 // that live in electron-builder.yml (extendInfo).
 //
@@ -1418,16 +1444,6 @@ function installHevcScreenShareIpc() {
 // user, but we expose the OS access status (via getMediaAccessStatus) and a
 // deep-link to the relevant Settings page (armada:mic-access-status /
 // armada:open-mic-settings IPC below) so the renderer can guide them.
-
-const ALLOWED_PERMISSIONS = new Set([
-  "media", // getUserMedia (microphone + camera)
-  "display-capture", // getDisplayMedia (screen share)
-  "notifications",
-  "fullscreen",
-  "clipboard-read",
-  "clipboard-sanitized-write",
-  "pointerLock",
-]);
 
 // Our own origin: app://armada (isArmadaAppUrl, which compares scheme+host
 // rather than `URL.origin` — "null" for a custom scheme — and rejects
@@ -1502,14 +1518,14 @@ function installNavigationHandlers() {
 function installPermissionHandlers() {
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback, details) => {
-      const requestingUrl = details?.requestingUrl || webContents?.getURL() || "";
-      callback(isAppOrigin(requestingUrl) && ALLOWED_PERMISSIONS.has(permission));
+      const topUrl = webContents?.getURL() || "";
+      callback(allowPermissionRequest({ permission, details, topUrl, isAppOrigin }));
     },
   );
   // Synchronous check (e.g. navigator.permissions.query, mediaDevices checks).
   session.defaultSession.setPermissionCheckHandler(
-    (_webContents, permission, requestingOrigin) => {
-      return isAppOrigin(requestingOrigin) && ALLOWED_PERMISSIONS.has(permission);
+    (_webContents, permission, requestingOrigin, details) => {
+      return allowPermissionCheck({ permission, requestingOrigin, details, isAppOrigin });
     },
   );
 }

@@ -149,6 +149,14 @@ export interface ArmadaNotificationPlugin {
     broker?: string;
   }>;
   /**
+   * The peer the WebView is dialing or in a DM call with (omit/empty = none).
+   * The service does not ring, and posts no "Missed call", for that peer's
+   * offers while it is fresh — they are the other half of a call the WebView
+   * already owns (two people dialing each other at once). Volatile and
+   * heartbeat-bound like {@link setActiveRooms}; not part of `configure`.
+   */
+  setCallPeer(options: { peer?: string }): Promise<void>;
+  /**
    * The service's rolling per-room cache of raw outer wire events (newest
    * last). Unlike {@link drainEvents} — a one-shot global buffer of what
    * arrived while the WebView was down — this retains the last screenful PER
@@ -449,6 +457,17 @@ export async function consumeNativeCallAnswer(callId: string): Promise<NativeCal
   } catch {
     return null;
   }
+}
+
+/**
+ * Report the DM call peer to the background service (see `setCallPeer`).
+ * Android only, and best-effort: an APK that predates the method just keeps
+ * ringing as before.
+ */
+export function setNativeCallPeer(peer: string | null): void {
+  if (Capacitor.getPlatform() !== "android") return;
+  if (!Capacitor.isPluginAvailable("ArmadaNotification")) return;
+  ArmadaNotification.setCallPeer({ peer: peer ?? "" }).catch(() => undefined);
 }
 
 /**

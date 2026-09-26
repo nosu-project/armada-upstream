@@ -7,6 +7,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { passThroughEscape } from "@/lib/passThroughEscape";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -35,6 +36,31 @@ const LONG_PRESS_MS = 450;
 
 /** How far a finger may drift during a hold before it counts as a scroll. */
 const LONG_PRESS_SLOP_PX = 10;
+
+const TABBABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
+/** Keyboard-reachable elements inside `root`, in tab order (DOM order; positive tabindex isn't used here). */
+function tabbablesIn(root: ParentNode): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
+  );
+}
+
+/** Focus the next tabbable element after `from` in the document, skipping anything inside `skip`. */
+function focusAfter(from: HTMLElement, skip: HTMLElement) {
+  // By document position rather than by `from`'s index in the list: `from`
+  // may not be tabbable itself (hidden, or taken out of the order), and an
+  // index of -1 would send focus to the top of the document.
+  const next = tabbablesIn(document).find(
+    (el) =>
+      !skip.contains(el) &&
+      !from.contains(el) &&
+      (from.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+  );
+  if (next) next.focus();
+  else from.focus();
+}
 
 /** Renders the visual content of a reaction key (custom image or emoji glyph). */
 export function ReactionGlyph({
@@ -138,10 +164,13 @@ function ReactionPill({
   // Set when a long-press opened the popover, so the click that ends the press
   // doesn't also toggle the reaction.
   const longPressed = useRef(false);
-  // How the popover was opened. A keyboard-opened one hands focus to its
-  // content (so the "Add pack" button is reachable at all); a hover- or
-  // press-opened one must not steal focus.
-  const openReason = useRef<"hover" | "press" | "focus">("hover");
+  const pillRef = useRef<HTMLButtonElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Set by Escape, so the close hands focus back to the pill instead of
+  // letting it fall to <body> (the anchor isn't a Radix Trigger, so Radix has
+  // nothing to restore it to).
+  const restoreFocus = useRef(false);
+  const suppressFocusOpen = useRef(false);
 
   const clearTimer = (ref: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) => {
     if (ref.current) clearTimeout(ref.current);
@@ -152,7 +181,6 @@ function ReactionPill({
     clearTimer(closeTimer);
     clearTimer(openTimer);
     openTimer.current = setTimeout(() => {
-      openReason.current = "hover";
       setOpen(true);
     }, HOVER_OPEN_MS);
   };
@@ -233,7 +261,6 @@ function ReactionPill({
             clearTimer(pressTimer);
             pressTimer.current = setTimeout(() => {
               longPressed.current = true;
-              openReason.current = "press";
               setOpen(true);
             }, LONG_PRESS_MS);
           }}
@@ -253,19 +280,30 @@ function ReactionPill({
           onFocus={(e) => {
             // Keyboard focus reveals the detail the way hover does; a focus that
             // merely follows a click does not.
+            if (suppressFocusOpen.current) return;
             try {
               if (!e.currentTarget.matches(":focus-visible")) return;
             } catch {
               return; // :focus-visible unsupported — skip the keyboard affordance
             }
-            openReason.current = "focus";
             setOpen(true);
           }}
-          onBlur={() => {
-            // A keyboard-opened popover takes focus itself, so blurring the pill
-            // is expected — Radix closes it on focus/interaction outside.
-            if (openReason.current !== "focus") setOpen(false);
+          onBlur={(e) => {
+            // Tabbing into the popover's own controls keeps it open; focus
+            // going anywhere else closes it.
+            if (!contentRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
           }}
+          onKeyDown={(e) => {
+            // The popover is portalled to the end of <body>, so its controls
+            // are not next in the natural tab order. Tab steps into them
+            // explicitly; with none to reach, Tab moves on as usual.
+            if (!open || e.key !== "Tab" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            const first = contentRef.current ? tabbablesIn(contentRef.current)[0] : undefined;
+            if (!first) return;
+            e.preventDefault();
+            first.focus();
+          }}
+          ref={pillRef}
         >
           <ReactionGlyph emojiKey={tally.key} url={tally.url} className="h-5 w-5 text-base" />
           <span className="tabular-nums font-medium">{tally.count}</span>
@@ -275,10 +313,55 @@ function ReactionPill({
         side="top"
         align="start"
         sideOffset={8}
-        // Hover- and press-opened content must not steal focus (it would scroll
-        // the timeline and trap the caret away from the composer).
-        onOpenAutoFocus={(e) => {
-          if (openReason.current !== "focus") e.preventDefault();
+        ref={contentRef}
+        // The popover never takes focus: a hover/press open would scroll the
+        // timeline and pull the caret from the composer, and a keyboard open
+        // would strand focus in a portalled layer whose FocusScope swallows
+        // Tab when it holds nothing tabbable. Focus stays on the pill.
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => {
+          // Hand focus back to the pill only when the keyboard was on the pill
+          // or in the popover. A hover-opened one closes where focus is — an
+          // Escape typed in the composer must not pull the caret out of it.
+          const active = document.activeElement;
+          restoreFocus.current =
+            !!active && (active === pillRef.current || !!contentRef.current?.contains(active));
+          if (restoreFocus.current) return;
+          // Nor may it swallow that Escape: the one press closes this and still
+          // reaches the composer (dropping a reply target).
+          passThroughEscape(e);
+          clearTimer(openTimer);
+          clearTimer(closeTimer);
+          setOpen(false);
+        }}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          if (!restoreFocus.current) return;
+          restoreFocus.current = false;
+          if (document.activeElement === pillRef.current) return;
+          // A refocus that follows Escape must not reopen what it just closed.
+          suppressFocusOpen.current = true;
+          pillRef.current?.focus();
+          suppressFocusOpen.current = false;
+        }}
+        onFocusOutside={(e) => {
+          // Shift+Tab from the popover's first control lands back on the pill.
+          if (e.target === pillRef.current) e.preventDefault();
+        }}
+        onKeyDown={(e) => {
+          // Walk out of the popover's controls back into the page's tab order
+          // at the pill, rather than looping inside the popover.
+          if (e.key !== "Tab" || e.altKey || e.ctrlKey || e.metaKey) return;
+          const pill = pillRef.current;
+          const items = tabbablesIn(e.currentTarget);
+          if (!pill || items.length === 0) return;
+          if (e.shiftKey && document.activeElement === items[0]) {
+            e.preventDefault();
+            pill.focus();
+          } else if (!e.shiftKey && document.activeElement === items[items.length - 1]) {
+            e.preventDefault();
+            focusAfter(pill, e.currentTarget);
+          }
         }}
         onPointerEnter={() => clearTimer(closeTimer)}
         onPointerLeave={() => {

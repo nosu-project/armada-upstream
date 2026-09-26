@@ -1,8 +1,9 @@
 import { createPortal } from "react-dom";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
 import { HistoryAuditView } from "@/concord/components/HistoryAuditView";
 import { useCommunity } from "@/concord/hooks/useCommunityList";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 
 /**
  * The history audit + export tool, as a route.
@@ -14,15 +15,10 @@ import { useCommunity } from "@/concord/hooks/useCommunityList";
  * `position: fixed` and a transformed ancestor would shrink it to that box.
  */
 export function HistoryAuditPage() {
-  const navigate = useNavigate();
   const { communityId } = useParams<{ communityId: string }>();
   const community = useCommunity(communityId);
 
-  const close = () => {
-    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
-    if (idx > 0) navigate(-1);
-    else navigate(communityId ? `/c/${communityId}` : "/", { replace: true });
-  };
+  const close = useBackOrHome(communityId ? `/c/${communityId}` : "/");
 
   // Not joined / still resolving — the community view is the right place to be.
   if (!community) return null;

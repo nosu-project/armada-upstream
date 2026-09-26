@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { lazy, Suspense, useContext } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, type ReactNode } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
@@ -11,6 +11,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { useRegisterAllStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { useShareShortcuts } from "@/hooks/useShareShortcuts";
 import { ProfileOverlayContext } from "@/lib/profileOverlay";
+import { SettingsOverlayContext } from "@/lib/settingsOverlay";
 import { lazyWithReload } from "@/lib/chunkReload";
 
 // Loaded on first use like a route chunk: most sessions never open a profile,
@@ -19,6 +20,9 @@ const ProfileDialog = lazy(
   lazyWithReload(() =>
     import("@/components/profile/ProfileDialog").then((m) => ({ default: m.ProfileDialog })),
   ),
+);
+const SettingsPage = lazy(
+  lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))),
 );
 
 /**
@@ -66,6 +70,60 @@ function RoutePaneFallback() {
 }
 
 /**
+ * The box Settings draws in over the main pane (`lib/settingsOverlay.ts`).
+ *
+ * The page underneath stays mounted but is made `inert` by the layout, so
+ * this is modal in fact and says so. On open it takes focus — otherwise focus
+ * stays on whatever opened it (the quick switcher's input is gone, so the
+ * body; Safari never focuses a clicked button at all), and the next keystroke
+ * would go to the page under it. On close focus goes back where it was, if
+ * that is still somewhere it can be. Escape closes it, after anything stacked
+ * on it (its own dialogs and menus portal to the body) has had the key.
+ */
+function SettingsOverlayPanel({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previous && previous !== document.body && previous.isConnected && !previous.closest("[inert]")) {
+        previous.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      const panel = panelRef.current;
+      const stacked = document.querySelectorAll(
+        "[role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']",
+      );
+      if (Array.from(stacked).some((el) => el !== panel && !panel?.contains(el))) return;
+      onCloseRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  return (
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+      tabIndex={-1}
+      className="absolute inset-0 z-20 flex bg-background outline-none"
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
  * Application frame. Desktop renders the multi-pane Discord layout (server
  * rail + the routed page's own sidebars). On mobile each route is a single
  * full-screen drill-down level (servers/channels → chat → members), so the
@@ -88,6 +146,8 @@ export function MainLayout() {
   // mounted; a `/<npub>` reached cold routes to UserPage instead and draws its
   // own. `opening` is the click that hasn't become that navigation yet.
   const { pubkey: overlayPubkey, opening } = useContext(ProfileOverlayContext);
+  // Settings over the page it was opened from (`lib/settingsOverlay.ts`).
+  const settings = useContext(SettingsOverlayContext);
   return (
     <CallProvider>
       {/* DM call signaling (ring in/out, offer/answer rumors) sits inside
@@ -113,9 +173,13 @@ export function MainLayout() {
             anyway. Always rendered, overlay or not, so opening one doesn't
             reflow the page beneath it. */}
         <div className="relative flex min-w-0 flex-1">
-          <Suspense fallback={<RoutePaneFallback />}>
-            <Outlet />
-          </Suspense>
+          {/* Inert while Settings covers it: still mounted, but out of the tab
+              order and the accessibility tree, and deaf to the keyboard. */}
+          <div className="contents" inert={settings.open || undefined}>
+            <Suspense fallback={<RoutePaneFallback />}>
+              <Outlet />
+            </Suspense>
+          </div>
           {/* Nothing to go back to yet — the navigation this is waiting on is
               the one that would make a history step meaningful. */}
           {opening && !overlayPubkey && <ProfileOverlayFallback />}
@@ -128,6 +192,13 @@ export function MainLayout() {
                 onClose={() => navigate(-1)}
               />
             </Suspense>
+          )}
+          {settings.open && (
+            <SettingsOverlayPanel onClose={settings.close}>
+              <Suspense fallback={<RoutePaneFallback />}>
+                <SettingsPage section={settings.section} onClose={settings.close} />
+              </Suspense>
+            </SettingsOverlayPanel>
           )}
         </div>
         <DirectInviteNotifier />

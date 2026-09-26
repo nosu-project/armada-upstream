@@ -17,6 +17,8 @@ import {
   registerDesktopDeepLinkHost,
   signalDesktopWebReady,
 } from "@/lib/desktop";
+import { installEmbedPause } from "@/lib/embedPause";
+import { installFullscreenHint } from "@/lib/fullscreenHint";
 import { installScreenShareAudioRestriction } from "@/lib/screenShareAudioRestriction";
 import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 import { signalWebReady } from "@/lib/webReady";
@@ -39,6 +41,14 @@ installDesktopDisplayMediaAudio();
 // 141+; ignored elsewhere). AFTER the desktop wrapper above so this one is
 // outermost and the venmic path it delegates to still runs unchanged.
 installScreenShareAudioRestriction();
+
+// Closing the desktop window to the tray keeps the renderer running; stop
+// playing media and embeds so nothing plays on with no window to stop it from.
+installEmbedPause();
+
+// Electron shows no "Press Esc to exit full screen" of its own; show ours when
+// an embed takes the window full-screen.
+installFullscreenHint();
 
 // Mark the native (Capacitor APK) runtime on <html> so CSS can switch off
 // web-isms (text selection, tap highlight, document overscroll/bounce) that

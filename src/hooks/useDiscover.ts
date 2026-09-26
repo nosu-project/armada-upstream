@@ -3,6 +3,8 @@ import {
   useInfiniteQuery,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
 import { nip19 } from "nostr-tools";
@@ -518,6 +520,42 @@ function oldestInviteCursor(invites: DiscoveredInvite[]): number | undefined {
     if (oldest === undefined || invite.source.created_at < oldest) oldest = invite.source.created_at;
   }
   return oldest;
+}
+
+/**
+ * Drop un-listed announcements from every cached copy of the directory — the
+ * infinite feed, the overflow fallback and the warm-load seed — so the author
+ * who just deleted them sees the card go at once instead of on the next
+ * refresh, and a later "empty read" fallback can't paint it back from the
+ * seed. The deletion itself is what removes the listing for everyone else;
+ * this is only the local echo of it.
+ */
+export async function forgetDiscoverAnnouncements(
+  queryClient: QueryClient,
+  announcementIds: Iterable<string>,
+): Promise<void> {
+  const gone = new Set(announcementIds);
+  if (gone.size === 0) return;
+  const keep = (invite: DiscoveredInvite) => !gone.has(invite.source.id);
+  queryClient.setQueriesData<InfiniteData<CommunitiesPage>>(
+    { queryKey: ["discover", "directory-infinite"] },
+    (data) =>
+      data && { ...data, pages: data.pages.map((page) => ({ ...page, invites: page.invites.filter(keep) })) },
+  );
+  queryClient.setQueriesData<DiscoveredInvite[]>(
+    { queryKey: ["discover", "community-announcements"] },
+    (data) => data?.filter(keep),
+  );
+  try {
+    const seed = await getArmadaDB().kv.get<DiscoverDirectory>(DIRECTORY_SEED_KV);
+    if (seed && seed.invites.some((invite) => !keep(invite))) {
+      await getArmadaDB().kv.set(DIRECTORY_SEED_KV, { ...seed, invites: seed.invites.filter(keep) });
+    }
+  } catch {
+    // Best-effort: the next successful read rewrites the seed anyway.
+  }
+  void queryClient.invalidateQueries({ queryKey: ["discover", "directory-infinite"] });
+  void queryClient.invalidateQueries({ queryKey: ["discover", "community-announcements"] });
 }
 
 /** The infinite-query key for the directory (authors-independent — see the hook). */

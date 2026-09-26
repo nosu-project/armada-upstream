@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { useNostrLogin } from "@nostrify/react/login";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -53,6 +53,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useBackOrHome } from "@/hooks/useBackOrHome";
 import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
@@ -145,11 +146,22 @@ interface NavGroup {
  * with multiple controls sit behind a collapsible header (icon + title,
  * expands in place); single-item sections render their row directly.
  */
-export function SettingsPage() {
-  const navigate = useNavigate();
+export function SettingsPage({
+  section,
+  onClose,
+}: {
+  /**
+   * Drawn as an overlay (`lib/settingsOverlay.ts`), where `useLocation()` is
+   * the page underneath: the section and the close come from the overlay.
+   */
+  section?: string;
+  onClose?: () => void;
+} = {}) {
+  const back = useBackOrHome();
   // Deep-linked section (e.g. /settings#profile from the account switcher's
   // "Edit profile"): that section renders expanded and is scrolled into view.
-  const targetSection = useLocation().hash.slice(1);
+  const routedSection = useLocation().hash.slice(1);
+  const targetSection = section ?? routedSection;
   useEffect(() => {
     if (!targetSection) return;
     document.getElementById(`settings-${targetSection}`)?.scrollIntoView({ block: "start" });
@@ -1024,7 +1036,7 @@ export function SettingsPage() {
           size="icon"
           className="size-9 shrink-0"
           aria-label="Back"
-          onClick={() => navigate(-1)}
+          onClick={onClose ?? back}
         >
           <ArrowLeft className="size-5" />
         </Button>

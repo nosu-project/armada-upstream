@@ -1,5 +1,5 @@
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, type Location } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
 import { useShareTargetNavigation } from "@/hooks/useShareTargetNavigation";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/shareTarget";
 import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
 import { LocationRefProvider } from "@/components/LocationRefProvider";
+import { Nip19Route } from "@/components/Nip19Route";
 import { VersionCheck } from "@/components/VersionCheck";
 import { Toaster } from "@/components/ui/toaster";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -39,6 +40,7 @@ import {
   type ProfileBackgroundState,
   type ProfileOverlay,
 } from "@/lib/profileOverlay";
+import { SettingsOverlayContext, useSettingsOverlayController } from "@/lib/settingsOverlay";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
 // so the boot bundle carries only the shell + the landing, which is imported
@@ -91,7 +93,6 @@ const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((
 const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
 const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
-const UserPage = lazy(lazyWithReload(() => import("@/pages/UserPage").then((m) => ({ default: m.UserPage }))));
 
 /**
  * Dispatch `/invite/<segment>` to the right landing page. A Concord invite's
@@ -342,6 +343,10 @@ function useWarmRouteChunks() {
         // rather than on the way to a page, so nothing else would ever warm it
         // and every first profile of a session paid for it under a spinner.
         () => import("@/components/profile/ProfileDialog"),
+        // Drawn over the page from the click itself (`lib/settingsOverlay.ts`),
+        // so a cold chunk would be the only thing left between the click and
+        // the panel.
+        () => import("@/pages/SettingsPage"),
       ]) {
         void load().catch(() => undefined);
       }
@@ -380,6 +385,33 @@ function SignedInRouterServicesGate() {
 }
 
 /**
+ * `location`, keeping the previous object while it names the same history
+ * entry.
+ *
+ * Closing an overlay steps back to the entry it was drawn over, but the
+ * location history hands back is a NEW object — rebuilt from `history.state`,
+ * not the `backgroundLocation` the page was rendering. Keyed on identity, the
+ * routes below would then re-render the whole routed tree for a page that
+ * never changed, which is the close that was meant to be free.
+ */
+function useSameEntry(location: Location): Location {
+  const ref = useRef(location);
+  const prev = ref.current;
+  if (
+    prev !== location &&
+    !(
+      prev.key === location.key &&
+      prev.pathname === location.pathname &&
+      prev.search === location.search &&
+      prev.hash === location.hash
+    )
+  ) {
+    ref.current = location;
+  }
+  return ref.current;
+}
+
+/**
  * The routed app. Split out of `AppRouter` purely so it sits INSIDE
  * <BrowserRouter> and can read the location.
  *
@@ -407,9 +439,11 @@ function AppRoutes() {
     () => ({ pubkey: routedPubkey, opening, begin: () => setOpening(true) }),
     [routedPubkey, opening],
   );
+  const settings = useSettingsOverlayController(location, useNavigate());
   // The location the APP is showing, as opposed to the one in the address bar.
-  // While a profile is open these differ, and this is the one that matters.
-  const target = background ?? location;
+  // While a profile or Settings is open these differ, and this is the one that
+  // matters.
+  const target = useSameEntry(background ?? location);
 
   // Memoized on that location, which is load-bearing rather than tidiness.
   // `<Routes>` re-derives its route tree from these children on every render,
@@ -514,13 +548,14 @@ function AppRoutes() {
             <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
             {/* A person: `/<npub>`, `/<nprofile>`, `/<name@domain>` or
                 `/<domain>` — their profile signed in, their chat link signed
-                out. The bare NIP-19 path is the ecosystem's convention, so it
+                out — or a shared addressable event at `/<naddr>` (see
+                Nip19Route). The bare NIP-19 path is the ecosystem's convention, so it
                 gets no prefix segment of its own. Declared last for
                 readability only — React Router ranks every static segment
                 above a dynamic one regardless of order — but it DOES outrank
                 the `*` route below, so UserPage renders the 404 itself for a
                 segment that names nobody. */}
-            <Route path="/:user" element={<UserPage />} />
+            <Route path="/:user" element={<Nip19Route />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -530,9 +565,11 @@ function AppRoutes() {
 
   return (
     <ProfileOverlayContext.Provider value={overlay}>
-      {/* Shell-less lazy routes still paint the branded splash. MainLayout
-          keeps waits for its child chunks inside the routed page pane. */}
-      <Suspense fallback={<RouteFallback />}>{routes}</Suspense>
+      <SettingsOverlayContext.Provider value={settings}>
+        {/* Shell-less lazy routes still paint the branded splash. MainLayout
+            keeps waits for its child chunks inside the routed page pane. */}
+        <Suspense fallback={<RouteFallback />}>{routes}</Suspense>
+      </SettingsOverlayContext.Provider>
     </ProfileOverlayContext.Provider>
   );
 }

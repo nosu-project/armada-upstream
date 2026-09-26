@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Hash, Loader2, MessageCircle, Server, Settings } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -30,6 +30,7 @@ import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { flattenLayout, mergeLayout } from "@/lib/railLayout";
+import { SettingsOverlayContext } from "@/lib/settingsOverlay";
 import {
   buildDmSwitcherEntries,
   buildSwitcherEntries,
@@ -310,6 +311,11 @@ export function QuickSwitcher() {
     setOpen(false);
     navigate(to);
   };
+  const settings = useContext(SettingsOverlayContext);
+  const openSettings = () => {
+    setOpen(false);
+    settings.show();
+  };
 
   // Global shortcuts: Ctrl/Cmd+K toggles the palette; Alt+↑/↓ hops channels
   // within the current space (wrapping, Discord-style).
@@ -451,7 +457,7 @@ export function QuickSwitcher() {
                 Direct messages
               </CommandItem>
             )}
-            <CommandItem value="settings preferences" onSelect={() => go("/settings")}>
+            <CommandItem value="settings preferences" onSelect={openSettings}>
               <Settings className="mr-2 size-4 shrink-0 text-muted-foreground" />
               Settings
             </CommandItem>

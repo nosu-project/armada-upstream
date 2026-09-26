@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { MediaFallback } from "@/components/chat/MediaFallback";
+import { MediaSpoilerCover } from "@/components/chat/MediaSpoiler";
 import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
 import { useRoutedCandidates } from "@/hooks/useBlossomCandidates";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -56,6 +57,10 @@ interface VideoPlayerProps {
   hideActionsMenu?: boolean;
   /** Handle on the underlying element, for callers that pause it themselves. */
   videoRef?: Ref<HTMLVideoElement>;
+  /** Covered until clicked (imeta `content-warning`). */
+  spoiler?: boolean;
+  /** The sender's description (imeta `alt`). */
+  alt?: string;
   className?: string;
 }
 
@@ -99,8 +104,12 @@ export function VideoPlayer({
   gif = false,
   hideActionsMenu = false,
   videoRef: forwardedRef,
+  spoiler = false,
+  alt,
   className,
 }: VideoPlayerProps) {
+  const [revealed, setRevealed] = useState(false);
+  const spoilerCover = spoiler && !revealed ? <MediaSpoilerCover onReveal={() => setRevealed(true)} /> : null;
   const videoRef = useRef<HTMLVideoElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -195,6 +204,8 @@ export function VideoPlayer({
   // the message row's context menu, which shows them above the message's. On
   // touch our long-press sheet is the menu, so suppress the platform callout.
   const handleContextMenu = (e: React.MouseEvent) => {
+    // A spoiler's cover is the only way to the video; no Save/Share around it.
+    if (spoilerCover) return;
     longPress.onContextMenu(e);
     if (mediaActions.length === 0) return;
     if (chatMenu?.isTouch) e.preventDefault();
@@ -322,10 +333,11 @@ export function VideoPlayer({
   if (gif) {
     return (
       <div
-        className={cn("my-1.5 rounded-xl overflow-hidden max-w-xs bg-transparent", className)}
+        className={cn("relative my-1.5 rounded-xl overflow-hidden max-w-xs bg-transparent", className)}
         style={{ aspectRatio }}
         onClick={(e) => e.stopPropagation()}
       >
+        {spoilerCover}
         {ready ? (
           <video
             ref={setVideoRef}
@@ -336,6 +348,7 @@ export function VideoPlayer({
             playsInline
             disablePictureInPicture
             preload="metadata"
+            aria-label={spoilerCover ? undefined : alt}
             className="w-full h-full object-contain"
             onError={onError}
           />
@@ -377,6 +390,8 @@ export function VideoPlayer({
       onPointerUp={longPress.onPointerUp}
       onPointerCancel={longPress.onPointerCancel}
     >
+      {spoilerCover}
+
       {/* Blurhash placeholder — until a thumbnail or playback frame appears. */}
       {isValidBlurhash(blurhash) && !hasStarted && !(generatedPoster && posterLoaded) && (
         <BlurhashCanvas hash={blurhash} className="absolute inset-0 w-full h-full" />
@@ -387,6 +402,7 @@ export function VideoPlayer({
         // An empty string would resolve against the document URL and make the
         // element try to load the page itself.
         src={mediaSrc || undefined}
+        aria-label={spoilerCover ? undefined : alt}
         // A transparent poster keeps the WebView from painting its own gray
         // placeholder behind our overlays.
         poster={BLANK_POSTER}
@@ -457,7 +473,7 @@ export function VideoPlayer({
 
       {/* Download / Share (⋯) menu — reachable before playback too, so a video
           can be saved without playing it. Hidden where a host offers its own. */}
-      {ready && !hideActionsMenu && (
+      {ready && !hideActionsMenu && !spoilerCover && (
         <div
           className={cn(
             "absolute top-2 right-2 z-10 transition-opacity duration-200",

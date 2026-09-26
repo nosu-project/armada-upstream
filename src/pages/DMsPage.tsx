@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Copy, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Copy, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, PhoneOff, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
@@ -61,6 +61,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -87,8 +88,10 @@ import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmTyping } from "@/hooks/useDmTyping";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useDmCall } from "@/contexts/DmCallContext";
+import { useDmCallReach } from "@/hooks/useDmCallReach";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
+import { usePageCovered } from "@/lib/settingsOverlay";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useRailDms } from "@/hooks/useRailDms";
@@ -702,6 +705,8 @@ const Conversation = memo(function Conversation({
     [botCommandEntries],
   );
   const { markRead } = useReadState();
+  // Covered by Settings: mounted but not on screen, so not being read.
+  const covered = usePageCovered();
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
   const { activeCall } = useCall();
@@ -865,12 +870,33 @@ const Conversation = memo(function Conversation({
   const callable = canCall && Boolean(user) && !group && !noteToSelf;
   const inThisCall = Boolean(activeCall?.dmPeer && activeCall.dmPeer === peer);
 
-  // This peer has a call ringing at us (a fresh offer from a FOLLOWED peer —
-  // DmCallProvider gates the ring to follows). The full-screen ring is a modal
+  // This peer has a call ringing at us (a fresh offer from a KNOWN peer —
+  // DmCallProvider gates the ring to `useKnownDmPeers`). The full-screen ring is a modal
   // that dismisses and auto-clears after the ring window, so without surfacing
   // it here too, a peer sitting in the room waiting for us is invisible on the
   // conversation itself once the modal is gone.
   const peerCalling = Boolean(incoming && incoming.author === peer && !inThisCall);
+
+  // Whether their ring gate will admit us. A call it refuses is dropped without
+  // a word to either side, so while it looks unlikely the button is SOFT-
+  // disabled: dimmed, and a press explains why before dialing — with "Call
+  // anyway", because the prediction cannot see everything the gate admits (a
+  // 1:1 they pinned or accepted). An unresolved or failed read leaves it plain.
+  // A peer calling us is always answerable, whatever the gate says.
+  const peerWroteLoaded = useMemo(
+    () => callable && messages.some((m) => m.pubkey === peer),
+    [callable, messages, peer],
+  );
+  const callReach = useDmCallReach(callable ? peer : undefined, peerWroteLoaded);
+  const callBlocked = !peerCalling && callReach === "unlikely";
+  const [callWarnOpen, setCallWarnOpen] = useState(false);
+  const callWarnToComposer = useRef(false);
+  useEffect(() => setCallWarnOpen(false), [conversation]);
+  const callTooltip = peerCalling
+    ? "Join voice call"
+    : callBlocked
+      ? "Message them before you call"
+      : "Start voice call";
 
   // Who else is in this call's room. While WE are in the call it comes from the
   // connected room's own roster; before we join, a blind-broker room has no
@@ -934,7 +960,7 @@ const Conversation = memo(function Conversation({
 
   // Mark the thread read up to the newest message while it's visible.
   useEffect(() => {
-    if (messages.length === 0) return;
+    if (messages.length === 0 || covered) return;
     const latest = messages[messages.length - 1]?.created_at ?? 0;
     if (latest <= 0) return;
     const stamp = () => {
@@ -943,7 +969,7 @@ const Conversation = memo(function Conversation({
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [messages, conversation, markRead]);
+  }, [messages, conversation, markRead, covered]);
 
   const handleSubmit = useCallback(
     async (text: string, tags: string[][]) => {
@@ -1055,18 +1081,27 @@ const Conversation = memo(function Conversation({
                 variant="ghost"
                 size="icon"
                 aria-label={peerCalling ? "Join voice call" : "Start voice call"}
+                aria-haspopup={callBlocked ? "dialog" : undefined}
                 className={cn(
                   "relative size-8 touch:size-11 shrink-0",
                   peerCalling
                     ? "text-success hover:text-success animate-pulse"
-                    : "text-muted-foreground hover:text-success",
+                    : callBlocked
+                      ? "text-muted-foreground opacity-50 hover:opacity-100"
+                      : "text-muted-foreground hover:text-success",
                 )}
-                onClick={peerCalling ? () => acceptCall() : () => void startCall(peer)}
+                onClick={
+                  peerCalling
+                    ? () => acceptCall()
+                    : callBlocked
+                      ? () => setCallWarnOpen(true)
+                      : () => void startCall(peer)
+                }
               >
                 <Phone className="size-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{peerCalling ? "Join voice call" : "Start voice call"}</TooltipContent>
+            <TooltipContent>{callTooltip}</TooltipContent>
           </Tooltip>
         )}
         {/* Secondary actions overflow into a … menu to keep the bar uncluttered:
@@ -1500,6 +1535,68 @@ const Conversation = memo(function Conversation({
           onEditLast={editLast}
         />
       )}
+
+      <Dialog open={callWarnOpen} onOpenChange={setCallWarnOpen}>
+        <ChromeDialogContent
+          title="Message them before you call"
+          className="sm:max-w-sm focus:outline-none"
+          onOpenAutoFocus={(e) => {
+            // Focus the surface, not a button: a programmatic focus paints a
+            // keyboard ring around the cut-corner button on open.
+            e.preventDefault();
+            (e.currentTarget as HTMLElement | null)?.focus();
+          }}
+          onCloseAutoFocus={(e) => {
+            // "Send a message" hands focus to this thread's composer instead of
+            // back to the call button that opened the dialog.
+            if (!callWarnToComposer.current) return;
+            callWarnToComposer.current = false;
+            const input = composerBoundsRef.current?.querySelector("textarea");
+            if (!input) return;
+            e.preventDefault();
+            input.focus();
+          }}
+        >
+          <div className="flex flex-col items-center gap-2 text-center">
+            <div className="flex size-12 items-center justify-center clip-corner-lg bg-amber-500/15 text-amber-500">
+              <PhoneOff className="size-6" />
+            </div>
+            <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+              message them before you call
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              <DisplayName pubkey={peer} name={name} /> probably won't get your call yet. Calls only
+              ring for people who follow you or have messaged you. Send them a message, and once they
+              reply, you can call.
+            </p>
+          </div>
+          <div className="mt-6 flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex-1 clip-corner-lg"
+              onClick={() => {
+                setCallWarnOpen(false);
+                void startCall(peer);
+              }}
+            >
+              <Phone className="size-4" />
+              Call anyway
+            </Button>
+            <Button
+              type="button"
+              className="flex-1 clip-corner-lg"
+              onClick={() => {
+                callWarnToComposer.current = true;
+                setCallWarnOpen(false);
+              }}
+            >
+              <MessageSquare className="size-4" />
+              Send a message
+            </Button>
+          </div>
+        </ChromeDialogContent>
+      </Dialog>
 
       <AlertDialog open={muteConfirmOpen} onOpenChange={setMuteConfirmOpen}>
         <AlertDialogContent>

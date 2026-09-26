@@ -1,5 +1,5 @@
-import { Braces, Check, Copy, Globe, Link as LinkIcon, Loader2, Lock, TriangleAlert } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Braces, Check, Copy, Globe, Link as LinkIcon, Loader2, Lock, Megaphone, TriangleAlert } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +23,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { useCommunityDiscoverListings, useUnlistAnnouncements } from "@/concord/hooks/useDiscoverListings";
 import { useInviteActions, useMyLinkEpochs } from "@/concord/hooks/useInvites";
+import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
 import { parseInviteLink, type InviteListEntry } from "@/concord/lib/invite";
 import type { Community } from "@/concord/lib/types";
 import { DisplayName } from "@/components/DisplayName";
@@ -36,15 +38,18 @@ import { writeClipboardText } from "@/lib/clipboard";
 /**
  * Invite-link admin panel for a Concord community — CORD-05.
  *
- * Three sections, matching the two invite-link visibilities:
+ * Four sections, matching the two invite-link visibilities:
  *
  *   1. Public/Private status — whether ANY live public link exists (the
  *      community's Public flag) and which members minted the links that make
  *      it public. Derived from the aggregate control-plane registry (vsk 8).
- *   2. My links — the CURRENT user's own links for this community, with full
+ *   2. Discover listings — the public kind-3314 posts carrying one of those
+ *      links, who posted them, and the act that takes each one down: its
+ *      author can delete it, and its link's creator can revoke the link.
+ *   3. My links — the CURRENT user's own links for this community, with full
  *      detail (URL, label, expiry) + copy/revoke. Only the creator holds a
  *      link's token + signer secret, so only their own links show a URL.
- *   3. Community registry — every creator who has live links and how many,
+ *   4. Community registry — every creator who has live links and how many,
  *      identified by link-signer pubkey. Any member/admin can see WHO invited
  *      and HOW MANY, but never another creator's secret URL (by design).
  *
@@ -147,6 +152,8 @@ export function InvitesView({ community }: { community: Community }) {
     }
   };
 
+  const { listings, creatorOf, isLoading: listingsLoading } = useCommunityDiscoverListings(community, myLinkSigners);
+
   const handleRevokeAll = async () => {
     setRevokeAllOpen(false);
     try {
@@ -194,8 +201,24 @@ export function InvitesView({ community }: { community: Community }) {
               ? "One or more live invite links let anyone with the link join. Revoke every live link to make it private again."
               : "There are no live public invite links. People join only by direct invite."}
           </p>
+          {isPublic && listings.length > 0 && (
+            <p className="mt-1 flex items-center gap-1.5 font-medium text-primary">
+              <Megaphone className="size-3.5 shrink-0" />
+              Listed on Discover, so anyone browsing can find and join it.
+            </p>
+          )}
         </div>
       </section>
+
+      <DiscoverListingsSection
+        listings={listings}
+        loading={listingsLoading}
+        creatorOf={creatorOf}
+        myLinks={myLinks}
+        myLinkSigners={myLinkSigners}
+        revoking={revoking}
+        onRevoke={handleRevoke}
+      />
 
       {/* 2. My own links (full detail + revoke). */}
       <section className="space-y-2">
@@ -495,6 +518,170 @@ function RegistryRow({
       <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
         {count} live link{count === 1 ? "" : "s"}
       </span>
+    </li>
+  );
+}
+
+/**
+ * Where this community is advertised publicly. A Discover listing is a public
+ * post carrying one of its invite links, secret included, so it is the widest
+ * door the community has — and until now the only place to see it was Discover
+ * itself. Each row offers whichever take-down the viewer actually holds:
+ * deleting a listing is its AUTHOR's (NIP-09 counts no one else's delete), and
+ * revoking the link under it is its CREATOR's, which takes down every listing
+ * of that link, whoever posted it.
+ */
+function DiscoverListingsSection({
+  listings,
+  loading,
+  creatorOf,
+  myLinks,
+  myLinkSigners,
+  revoking,
+  onRevoke,
+}: {
+  listings: DiscoveredInvite[];
+  loading: boolean;
+  creatorOf: ReadonlyMap<string, string>;
+  myLinks: InviteListEntry[];
+  myLinkSigners: ReadonlySet<string>;
+  revoking: string | null;
+  onRevoke: (url: string) => void;
+}) {
+  const { user } = useCurrentUser();
+  const { unlist } = useUnlistAnnouncements();
+  const [unlisting, setUnlisting] = useState<string | null>(null);
+
+  // One row per (author, link): repeat posts of one link by one person are one
+  // listing on Discover, and deleting it must delete every copy.
+  const rows = useMemo(() => {
+    const byKey = new Map<string, DiscoveredInvite[]>();
+    for (const listing of listings) {
+      const key = `${listing.source.pubkey}:${listing.linkSigner}`;
+      byKey.set(key, [...(byKey.get(key) ?? []), listing]);
+    }
+    return [...byKey.entries()].map(([key, copies]) => ({ key, copies, newest: copies[0] }));
+  }, [listings]);
+
+  const myUrlFor = (linkSigner: string) =>
+    myLinks.find((e) => parseInviteLink(e.url)?.linkSigner === linkSigner)?.url;
+
+  const handleUnlist = async (key: string, copies: DiscoveredInvite[]) => {
+    setUnlisting(key);
+    try {
+      await unlist(copies);
+      toast({ title: "Removed from Discover" });
+    } catch (e) {
+      toast({
+        title: "Couldn't remove the listing",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setUnlisting(null);
+    }
+  };
+
+  return (
+    <section className="space-y-2">
+      <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Discover listings
+      </h3>
+      {loading ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" /> Checking Discover…
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">This community isn't listed on Discover.</p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Public posts of this community's invite links. Anyone browsing Discover can use them to
+            join.
+          </p>
+          <ul className="space-y-1.5">
+            {rows.map(({ key, copies, newest }) => {
+              const mine = !!user && newest.source.pubkey === user.pubkey;
+              const myUrl = myLinkSigners.has(newest.linkSigner) ? myUrlFor(newest.linkSigner) : undefined;
+              return (
+                <ListingRow
+                  key={key}
+                  author={newest.source.pubkey}
+                  linkCreator={creatorOf.get(newest.linkSigner)}
+                  postedAt={newest.source.created_at}
+                  action={
+                    mine ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0 text-destructive hover:text-destructive"
+                        disabled={unlisting === key}
+                        onClick={() => void handleUnlist(key, copies)}
+                      >
+                        {unlisting === key ? <Loader2 className="size-3.5 animate-spin" /> : "Remove"}
+                      </Button>
+                    ) : myUrl ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0 text-destructive hover:text-destructive"
+                        disabled={revoking === myUrl}
+                        title="The listing carries your link: revoking it takes the listing down."
+                        onClick={() => onRevoke(myUrl)}
+                      >
+                        {revoking === myUrl ? <Loader2 className="size-3.5 animate-spin" /> : "Revoke link"}
+                      </Button>
+                    ) : null
+                  }
+                />
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ListingRow({
+  author,
+  linkCreator,
+  postedAt,
+  action,
+}: {
+  author: string;
+  linkCreator: string | undefined;
+  postedAt: number;
+  action: ReactNode;
+}) {
+  const profile = useAuthor(author);
+  const name = useScopedDisplayName(author, profile.data?.metadata);
+  const creatorProfile = useAuthor(linkCreator && linkCreator !== author ? linkCreator : undefined);
+  const creatorName = useScopedDisplayName(linkCreator, creatorProfile.data?.metadata);
+  return (
+    <li className="flex items-center gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm">
+      <Avatar className="size-6 shrink-0">
+        <AvatarImage src={profile.data?.metadata?.picture} alt={name} />
+        <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
+          {name[0]?.toUpperCase() ?? "?"}
+        </AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium">
+          <DisplayName pubkey={author} name={name} />
+        </p>
+        <p className="truncate text-[11px] text-muted-foreground">
+          Posted {new Date(postedAt * 1000).toLocaleDateString()}
+          {linkCreator && linkCreator !== author && (
+            <>
+              {" · "}link by <DisplayName pubkey={linkCreator} name={creatorName} />
+            </>
+          )}
+        </p>
+      </div>
+      {action}
     </li>
   );
 }

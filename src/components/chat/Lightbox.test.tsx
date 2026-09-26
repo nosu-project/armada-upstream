@@ -84,6 +84,24 @@ describe("Lightbox", () => {
     expect(document.querySelector("video")).toBeNull();
   });
 
+  it("covers a spoilered neighbour until it is tapped, but not the one it opened on", () => {
+    const hidden: LightboxItem = { url: "https://example.com/secret.png", mime: "image/png", spoiler: true };
+    const opened: LightboxItem = { url: "https://example.com/opened.png", mime: "image/png", spoiler: true };
+    const { onClose, view } = renderLightbox([IMAGE, hidden]);
+
+    // The neighbour slot is mounted, but as a cover — its bytes never reach an <img>.
+    const imgs = () => Array.from(document.querySelectorAll("img")).map((i) => i.getAttribute("src"));
+    expect(imgs()).not.toContain(hidden.url);
+    fireEvent.click(screen.getByRole("button", { name: "Reveal spoiler" }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(imgs()).toContain(hidden.url);
+
+    view.unmount();
+    renderLightbox([opened]);
+    expect(screen.queryByRole("button", { name: "Reveal spoiler" })).not.toBeInTheDocument();
+    expect(imgs()).toContain(opened.url);
+  });
+
   it("names the kind of media in the download button", () => {
     const { view } = renderLightbox([VIDEO]);
     expect(screen.getByLabelText("Download video")).toBeInTheDocument();

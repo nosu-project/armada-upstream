@@ -1725,7 +1725,14 @@ export function CallStage({
   if (theater) {
     // Full-viewport overlay; the docked box collapses (renders nothing here).
     return createPortal(
-      <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in-0 duration-150">
+      // A dialog to assistive tech, and to the composer's type-to-focus
+      // routing, which must not send keystrokes to the chat hidden under it.
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Call"
+        className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in-0 duration-150"
+      >
         {header}
         {body}
         {/* The fixed call bar is behind this overlay, so theater carries its own

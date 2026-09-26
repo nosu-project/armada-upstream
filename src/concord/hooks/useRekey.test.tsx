@@ -22,7 +22,7 @@ import { getConversationKey } from "nostr-tools/nip44";
 import { decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
@@ -75,6 +75,8 @@ const h = vi.hoisted(() => ({
   folded: undefined as unknown,
   entry: undefined as unknown,
   updateList: undefined as unknown,
+  /** useDissolved's answer: `null` known alive, a ms dissolved, `undefined` still asking. */
+  dissolved: null as number | null | undefined,
 }));
 
 vi.mock("@nostrify/react", () => ({
@@ -85,7 +87,7 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 }));
 vi.mock("@/concord/hooks/useControlPlane", () => ({
   useControlFold: () => ({ data: h.folded }),
-  useDissolved: () => ({ data: undefined }),
+  useDissolved: () => ({ data: h.dissolved }),
   citationFor: () => undefined,
   invalidateControl: () => undefined,
   publishEdition: async () => undefined,
@@ -522,6 +524,66 @@ describe("useRekeyWatch stranded detection", () => {
 // ── useLinkRefreshWatch: creator-side stale-link roll-forward (CORD-05 §2) ──
 
 describe("useLinkRefreshWatch", () => {
+  afterEach(() => {
+    h.dissolved = null;
+  });
+
+  /** A creator holding one live link for a community, mounted on the watch. */
+  function mountCreatorWithLink() {
+    const owner = member();
+    const me = member();
+    const { community } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+    const link = mintLinkSigner();
+    const listEvent = finalizeEvent(
+      {
+        kind: KIND_INVITE_LIST,
+        content: nip44Encrypt(
+          JSON.stringify({
+            entries: [
+              { token: bytesToHex(mintToken()), signer_sk: bytesToHex(link.sk), community_id: community.idHex, url: "", created_at: 1 },
+            ],
+            tombstones: [],
+          }),
+          getConversationKey(me.sk, me.pubkey),
+        ),
+        tags: [],
+        created_at: nowSecs() - 10,
+      },
+      me.sk,
+    );
+    const relay = new FakeRelay();
+    let listReads = 0;
+    h.pool = {
+      relay: () => relay,
+      query: async (filters: Filter[]) => {
+        if (!filters.some((f) => f.kinds?.includes(KIND_INVITE_LIST))) return [];
+        listReads += 1;
+        return [listEvent];
+      },
+    };
+    h.user = asNUser(me);
+    h.folded = foldedFor(owner.pubkey, undefined, me.pubkey);
+    const { wrapper } = makeWrapper();
+    renderHook(() => useLinkRefreshWatch(community), { wrapper });
+    return { relay, link, listReads: () => listReads };
+  }
+
+  it("never re-posts a dissolved community's links", { timeout: 30_000 }, async () => {
+    h.dissolved = Date.now();
+    const { relay, listReads } = mountCreatorWithLink();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(listReads(), "not even the Invite List read").toBe(0);
+    expect(relay.published).toHaveLength(0);
+  });
+
+  it("waits while the dissolved check is still asking", { timeout: 30_000 }, async () => {
+    h.dissolved = undefined;
+    const { relay, listReads } = mountCreatorWithLink();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(listReads()).toBe(0);
+    expect(relay.published).toHaveLength(0);
+  });
+
   it(
     "a creator opening a community re-posts their live links at the current epoch",
     { timeout: 30_000 },

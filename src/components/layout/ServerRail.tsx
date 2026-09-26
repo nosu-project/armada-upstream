@@ -1,6 +1,6 @@
 import { Bell, Bluetooth, CheckCheck, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
@@ -61,6 +61,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
+import { SETTINGS_PATH, SettingsOverlayContext } from "@/lib/settingsOverlay";
 import {
   applyDrop,
   dissolveFolder,
@@ -1473,6 +1474,28 @@ function ServerRailInner({
   useEffect(() => {
     setPendingNav(null);
   }, [location]);
+
+  // The Settings button is a toggle. Normally Settings is an overlay over the
+  // page (`lib/settingsOverlay.ts`) and closing it steps back to that page —
+  // shown and hidden from the click, not from the navigation, so traffic in
+  // the page underneath can't hold it up. A `/settings` reached cold is a
+  // routed page with nothing under it; that one goes to the last location
+  // outside Settings the rail saw (it never unmounts), or home.
+  const settingsOverlay = useContext(SettingsOverlayContext);
+  const onSettingsPage = location.pathname === SETTINGS_PATH;
+  const inSettings = settingsOverlay.open || onSettingsPage;
+  const lastOutsideSettings = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onSettingsPage) {
+      lastOutsideSettings.current = location.pathname + location.search + location.hash;
+    }
+  }, [onSettingsPage, location]);
+  const toggleSettings = () => {
+    onNavigate?.();
+    if (settingsOverlay.open) settingsOverlay.close();
+    else if (onSettingsPage) navigate(lastOutsideSettings.current ?? "/");
+    else settingsOverlay.show();
+  };
   useEffect(() => {
     if (pendingNav === null) return;
     const timer = window.setTimeout(() => setPendingNav(null), 3000);
@@ -2241,17 +2264,18 @@ function ServerRailInner({
             <Button
               variant="secondary"
               size="icon"
-              aria-label="Settings"
-              className="size-12 shrink-0 clip-corner-lg transition-all"
-              onClick={() => {
-                onNavigate?.();
-                navigate("/settings");
-              }}
+              aria-label={inSettings ? "Close settings" : "Settings"}
+              aria-pressed={inSettings}
+              className={cn(
+                "size-12 shrink-0 clip-corner-lg transition-all",
+                inSettings && "bg-primary/20 text-primary hover:bg-primary/25",
+              )}
+              onClick={toggleSettings}
             >
               <Settings className="size-5" />
             </Button>
           </TooltipTrigger>
-          <RailTooltipContent side="right">Settings</RailTooltipContent>
+          <RailTooltipContent side="right">{inSettings ? "Close settings" : "Settings"}</RailTooltipContent>
         </Tooltip>
       </div>
 

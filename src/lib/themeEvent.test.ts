@@ -111,19 +111,24 @@ describe("parseDittoTheme", () => {
     expect(parsed!.title).toBe("Active");
   });
 
-  it("accepts Ditto's legacy JSON-in-content format", () => {
-    const legacy = asRumor({
+  it("ignores the legacy JSON-in-content format, whose colors are unvalidated", () => {
+    const hex = asRumor({
       kind: THEME_DEFINITION_KIND,
       content: JSON.stringify({ background: "#14141e", foreground: "#e8eaf6", primary: "#7c4dff" }),
       tags: [["d", "legacy"], ["title", "Legacy"]],
     });
+    expect(parseDittoTheme(hex)).toBeNull();
 
-    const parsed = parseDittoTheme(legacy);
-    expect(parsed).not.toBeNull();
-    expect(hslStringToHex(parsed!.colors.background)).toBe("#14141e");
-    expect(hslStringToHex(parsed!.colors.text)).toBe("#e8eaf6");
-    // `foreground` is the legacy 19-token name for what we now call `text`.
-    expect(hslStringToHex(parsed!.colors.primary)).toBe("#7c4dff");
+    const breakout = asRumor({
+      kind: THEME_DEFINITION_KIND,
+      content: JSON.stringify({
+        background: "0 0% 0%;} body{background:url(https://evil.example/x)} :root{--a:1",
+        text: "0 0% 100%",
+        primary: "0 0% 50%",
+      }),
+      tags: [["d", "evil"]],
+    });
+    expect(parseDittoTheme(breakout)).toBeNull();
   });
 
   it("falls back to the d tag when there is no title", () => {

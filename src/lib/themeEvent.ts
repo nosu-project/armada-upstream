@@ -146,22 +146,11 @@ export interface DittoTheme {
 export function parseDittoTheme(event: NostrRumor): DittoTheme | null {
   if (event.kind !== THEME_DEFINITION_KIND && event.kind !== ACTIVE_THEME_KIND) return null;
 
-  // New format: colors in `c` tags. Legacy: JSON (4-color or 19-token) in content.
-  let colors = parseColorTags(event.tags);
-  if (!colors && event.content) {
-    try {
-      const parsed = JSON.parse(event.content) as Record<string, string>;
-      const bg = parsed.background;
-      const text = parsed.text ?? parsed.foreground;
-      const primary = parsed.primary;
-      if (bg && text && primary) {
-        const toHsl = (v: string) => (isValidHex(v) ? hexToHslString(v) : v);
-        colors = { background: toHsl(bg), text: toHsl(text), primary: toHsl(primary) };
-      }
-    } catch {
-      // ignore invalid content
-    }
-  }
+  // Colors come only from the hex-validated `c` tags. The legacy
+  // JSON-in-content format is not read: its values reached the injected
+  // theme <style> unchecked (Ditto dropped it in bd1a3bdb for the same
+  // reason), and a genuine old theme renders again once its owner re-saves.
+  const colors = parseColorTags(event.tags);
   if (!colors) return null;
 
   const identifier = event.tags.find(([n]) => n === "d")?.[1] ?? "";

@@ -782,7 +782,8 @@ to fail a run:
   down with it — a generated nsec the user could not save anywhere. The list of
   plugins this applies to is `MainActivity.java`'s registrations MINUS the ones
   iOS also implements: `ArmadaNotification`, `ArmadaCredential`,
-  `BluetoothMesh`, `WebReady`, `ShareTarget`. Cross-platform plugins (Share,
+  `BluetoothMesh`, `WebReady`, `ShareTarget`, `MediaGallery` (the attach
+  sheet's recent-media grid; iOS keeps the system photo picker). Cross-platform plugins (Share,
   Haptics, Clipboard, Filesystem, StatusBar, SecureStorage) are the case
   `isNativePlatform()` is actually for. `ArmadaDb` is now in neither group: it
   is implemented on Android AND iOS but nowhere else, so `hasNativeArmadaDB()`
@@ -831,6 +832,10 @@ to fail a run:
   committing.
 - **Push only to `origin`**, and only when asked. Any other remote configured
   locally is maintainer-managed; never push or release to one.
+- **Buttons are fill-only, never bordered.** A secondary action is
+  `variant="secondary"` (a filled surface), not `variant="outline"`; a tertiary
+  one is `ghost`. Don't add a new `outline` button or a `border` class to a
+  button. The `outline` buttons already in the tree predate this rule.
 - Touch ergonomics: interactive elements target ≥44px on touch devices via the
   `touch:` Tailwind variant (`@media (hover: none) and (pointer: coarse)`) —
   e.g. `size-9 touch:size-11`. Use `touch:` (real touch), not width

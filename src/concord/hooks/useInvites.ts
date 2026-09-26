@@ -2,9 +2,10 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-import { useControlFold, citationFor, invalidateControl, publishEdition } from "@/concord/hooks/useControlPlane";
+import { useControlFold, citationFor, invalidateControl, publishEdition, useDissolved } from "@/concord/hooks/useControlPlane";
 import { useCommunity } from "@/concord/hooks/useCommunityList";
 import { resolveBundle } from "@/concord/hooks/useCommunityActions";
+import { useUnlistAnnouncements } from "@/concord/hooks/useDiscoverListings";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { selfStateRelays } from "@/contexts/AppContext";
@@ -740,13 +741,17 @@ export function useInviteActions(community: Community | undefined) {
    * link stays individually revocable on a retry) and stays IN the registry —
    * delisting a still-working held link would flip the Public flag to a lie
    * the creator can still fix.
+   *
+   * `skipRegistry` is for a DISSOLVED community: no edition may follow the
+   * grave (publishEdition refuses one anyway), and the tombstones alone are
+   * what kill the links.
    */
   const revokeAllMyLinks = useMutation<
-    { revoked: number; delisted: number; failed: number },
+    { revoked: number; delisted: number; failed: number; failedSignerSks: string[] },
     Error,
-    void
+    { skipRegistry?: boolean } | void
   >({
-    mutationFn: async () => {
+    mutationFn: async (opts) => {
       if (!user || !community) throw new Error("Not ready.");
       const entries = (inviteList.data?.entries ?? []).filter(
         (e) => e.community_id === community.idHex,
@@ -773,6 +778,11 @@ export function useInviteActions(community: Community | undefined) {
         });
       }
 
+      const failedSignerSks = kept.map((e) => e.signer_sk);
+      if (opts?.skipRegistry) {
+        return { revoked: revoked.length, delisted: 0, failed: kept.length, failedSignerSks };
+      }
+
       // My registry keeps only the links whose tombstone didn't land; every
       // other coordinate of mine — revoked or orphaned — is delisted.
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
@@ -782,7 +792,7 @@ export function useInviteActions(community: Community | undefined) {
       const delisted = [...mine].filter((s) => !keptSigners.has(s)).length;
       await publishRegistry([...mine].filter((s) => keptSigners.has(s)));
 
-      return { revoked: revoked.length, delisted, failed: kept.length };
+      return { revoked: revoked.length, delisted, failed: kept.length, failedSignerSks };
     },
   });
 
@@ -994,10 +1004,15 @@ export function useLinkFreshnessWatch(community: Community | undefined): void {
   const control = useControlFold(community);
   const folded = control.data;
   const { myLinks, refreshMyLinks } = useInviteActions(community);
+  const { data: dissolved } = useDissolved(community);
   const attempted = useRef(new Set<string>());
 
   useEffect(() => {
     if (!user || !community || !folded || myLinks.length === 0) return;
+    // Only once the community is KNOWN alive (`null`; `undefined` is still
+    // asking): re-posting a dissolved community's bundles would keep its dead
+    // links resolving, and with them its Discover listings.
+    if (dissolved !== null) return;
     if (control.isLoading || control.isFetching) return; // don't publish from a partial fold
     // Only a creator still authorized to maintain links should re-post them.
     if (
@@ -1011,7 +1026,82 @@ export function useLinkFreshnessWatch(community: Community | undefined): void {
     refreshMyLinks().catch(() => {
       attempted.current.delete(community.idHex); // retry on a later mount
     });
-  }, [user, community, folded, control.isLoading, control.isFetching, myLinks, refreshMyLinks]);
+  }, [user, community, folded, dissolved, control.isLoading, control.isFetching, myLinks, refreshMyLinks]);
+}
+
+/** What a dissolve's retirement of the owner's links took down. */
+export interface RetirementOutcome {
+  revokeFailed: boolean;
+  unlistFailed: boolean;
+  unlisted: number;
+  /** Try only what missed again. Present while anything is still up. */
+  retry?: () => Promise<RetirementOutcome>;
+}
+
+/**
+ * Retire everything of mine that still advertises this community: revoke all
+ * my invite links (so every copy of them, whoever shared it, stops resolving)
+ * and delete my own Discover listings of them. What dissolving runs, and what
+ * the ghost-listing workaround had to do by hand through "Revoke all".
+ *
+ * The two halves run side by side and fail independently; the result counts
+ * both so the caller can say which one didn't land.
+ *
+ * Run by dissolve only, AFTER the grave: so no registry edition is published
+ * (tombstones alone kill the links, and nothing may follow the grave). The
+ * community is about to leave the rail, so whatever did not land comes back as
+ * a `retry` that holds exactly the misses — the dissolve toast's Retry — rather
+ * than anything that would need the community to still be there.
+ */
+export function useRetireCommunityLinks(community: Community | undefined) {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { data: folded } = useControlFold(community);
+  const { myLinks, revokeAllMyLinks } = useInviteActions(community);
+  const { unlistLinks } = useUnlistAnnouncements();
+
+  return async (): Promise<RetirementOutcome> => {
+    const signers = new Set<string>(user ? folded?.registriesByCreator.get(user.pubkey) ?? [] : []);
+    for (const e of myLinks) {
+      const signer = parseInviteLink(e.url)?.linkSigner;
+      if (signer) signers.add(signer);
+    }
+    const relays = community?.relays ?? [];
+    const [revoke, unlist] = await Promise.allSettled([
+      revokeAllMyLinks({ skipRegistry: true }),
+      signers.size > 0 ? unlistLinks(signers) : Promise.resolve(0),
+    ]);
+    // A wholesale rejection ("Not ready.") revoked nothing: owe every link.
+    const unrevoked = revoke.status === "fulfilled" ? revoke.value.failedSignerSks : myLinks.map((e) => e.signer_sk);
+    const unlistFailed = unlist.status === "rejected";
+
+    // Later attempts publish straight from what they hold: the community,
+    // its Invite List entry and this hook are gone by the time Retry is hit.
+    const outcome = (sks: string[], unlistOwed: string[], unlisted: number): RetirementOutcome => ({
+      revokeFailed: sks.length > 0,
+      unlistFailed: unlistOwed.length > 0,
+      unlisted,
+      retry:
+        sks.length > 0 || unlistOwed.length > 0
+          ? async () => {
+              const [revocations, unlistAgain] = await Promise.all([
+                Promise.allSettled(
+                  sks.map((sk) =>
+                    publishToAnyRelay(nostr, relays, buildRevocationEvent(hexToBytes(sk)), "No relay accepted the revocation."),
+                  ),
+                ),
+                unlistOwed.length > 0 ? unlistLinks(unlistOwed).then((n) => n, () => undefined) : Promise.resolve(0),
+              ]);
+              return outcome(
+                sks.filter((_, i) => revocations[i].status === "rejected"),
+                unlistAgain === undefined ? unlistOwed : [],
+                unlisted + (unlistAgain ?? 0),
+              );
+            }
+          : undefined,
+    });
+    return outcome(unrevoked, unlistFailed ? [...signers] : [], unlist.status === "fulfilled" ? unlist.value : 0);
+  };
 }
 
 export function useLinkAuthorityWatch(community: Community | undefined): void {

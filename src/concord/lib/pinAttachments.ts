@@ -59,9 +59,13 @@ export function pinAttachmentEntries(content: string, tags: string[][]): ImetaEn
   return entries;
 }
 
-/** Just the images, as the Lightbox's ref shape. */
-export function pinImageRefs(content: string, tags: string[][]): EncryptedRef[] {
+/**
+ * Just the images, as the Lightbox's ref shape — spoiler included, so the
+ * gallery covers a spoilered pin rather than showing it to everyone who
+ * swipes past.
+ */
+export function pinImageRefs(content: string, tags: string[][]): (EncryptedRef & { spoiler?: boolean })[] {
   return pinAttachmentEntries(content, tags)
     .filter(isImageAttachment)
-    .map((e) => ({ url: e.url, encryption: e.encryption, mime: e.mime, blurhash: e.blurhash }));
+    .map((e) => ({ url: e.url, encryption: e.encryption, mime: e.mime, blurhash: e.blurhash, spoiler: e.spoiler }));
 }

@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { Button } from "@/components/ui/button";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import {
   emojiPackEntries,
   emojiPackName,
@@ -14,6 +15,13 @@ import {
   type MyEmojiPack,
 } from "@/hooks/useEmojiPacks";
 import { toast } from "@/hooks/useToast";
+
+/** Shown when a pack has no icon, or its icon fails to load. */
+const packIconPlaceholder = (
+  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/5 text-primary">
+    <Smile className="size-4" />
+  </span>
+);
 
 /** How many emojis to preview per pack before "+N". */
 const PREVIEW_LIMIT = 8;
@@ -104,15 +112,13 @@ function PackRow({ pack }: { pack: MyEmojiPack }) {
     <SettingsRow>
       <div className="flex items-center gap-3">
         {picture ? (
-          <img
+          <FallbackImage
             src={picture}
-            alt=""
             className="size-8 shrink-0 rounded-md object-cover border border-border/60"
+            fallback={packIconPlaceholder}
           />
         ) : (
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/5 text-primary">
-            <Smile className="size-4" />
-          </span>
+          packIconPlaceholder
         )}
         <div className="min-w-0 flex-1 space-y-1">
           <div className="text-sm font-medium leading-tight truncate">{name}</div>
