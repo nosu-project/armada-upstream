@@ -134,11 +134,22 @@ export function useBotManifests(
       // pill already reads (via useAuthor), so reading it here makes detection
       // agree with what the user sees, even when a fresh relay query is slow,
       // auth-gated, or simply lacks a profile the client synced on join.
+      //
+      // The network is asked only about members the cache has NO profile for.
+      // Sweeping every member's kind 0 re-downloaded the whole roster — on a
+      // 500-member community, ~1000 profiles and most of a megabyte from each
+      // relay pair — every time the member set changed or went stale, which
+      // on a phone was the largest network cost of just reading a channel. A
+      // cached profile is kept fresh by the profile sync for as long as its
+      // author is on screen, and a bot turning its flag on is rare enough to
+      // wait for that.
       const store = await eventStore;
-      const [cached, network] = await Promise.all([
-        store.query([{ kinds: [0], authors: members }]) as Promise<NostrEvent[]>,
-        queryChunked((filters, opts) => nostr.group(relays).query(filters, opts), [0], members, signal),
-      ]);
+      const cached = (await store.query([{ kinds: [0], authors: members }])) as NostrEvent[];
+      const known = new Set(cached.map((ev) => ev.pubkey));
+      const missing = members.filter((pk) => !known.has(pk));
+      const network = missing.length > 0
+        ? await queryChunked((filters, opts) => nostr.group(relays).query(filters, opts), [0], missing, signal)
+        : [];
       const events = [...cached, ...network];
       const bots: string[] = [];
       const profiles: Record<string, BotRosterProfile> = {};

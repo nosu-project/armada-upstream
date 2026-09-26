@@ -90,7 +90,7 @@ async function resolveXdc(
     const bytes = encryption
       ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
       : new Uint8Array(raw);
-    if (encryption) verifyPlaintextHash(bytes, encryption.ox);
+    if (encryption) await verifyPlaintextHash(bytes, encryption.ox);
     return bytes;
   }
   return xdc;

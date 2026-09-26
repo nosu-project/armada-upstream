@@ -26,6 +26,7 @@ import { finalLogout } from '@/lib/finalLogout';
 import { SettingsOverlayContext } from '@/lib/settingsOverlay';
 import { useAppContext } from '@/hooks/useAppContext';
 import { cn } from '@/lib/utils';
+import { MountWhenOpened } from '@/components/MountWhenOpened';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
@@ -263,16 +264,27 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    {/* Built on first open: the switcher is on every page, and closed these
+        still derived a Taproot address, an npub and an emoji palette on each
+        of its renders. */}
     {serverScope && (
-      <ServerProfileDialog
-        relayUrl={serverScope}
-        open={serverIdentityOpen}
-        onOpenChange={setServerIdentityOpen}
-      />
+      <MountWhenOpened open={serverIdentityOpen}>
+        <ServerProfileDialog
+          relayUrl={serverScope}
+          open={serverIdentityOpen}
+          onOpenChange={setServerIdentityOpen}
+        />
+      </MountWhenOpened>
     )}
-    <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />
-    <ProfileShareDialog open={shareProfileOpen} onOpenChange={setShareProfileOpen} />
-    <WalletDialog open={walletOpen} onOpenChange={setWalletOpen} />
+    <MountWhenOpened open={statusOpen}>
+      <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />
+    </MountWhenOpened>
+    <MountWhenOpened open={shareProfileOpen}>
+      <ProfileShareDialog open={shareProfileOpen} onOpenChange={setShareProfileOpen} />
+    </MountWhenOpened>
+    <MountWhenOpened open={walletOpen}>
+      <WalletDialog open={walletOpen} onOpenChange={setWalletOpen} />
+    </MountWhenOpened>
     </>
   );
 }

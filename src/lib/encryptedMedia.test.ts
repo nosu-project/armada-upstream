@@ -223,22 +223,22 @@ describe("readCapped", () => {
 describe("verifyPlaintextHash", () => {
   const bytes = new TextEncoder().encode("the real file");
 
-  it("accepts bytes matching `ox`", () => {
-    expect(() => verifyPlaintextHash(bytes, bytesToHex(sha256(bytes)))).not.toThrow();
+  it("accepts bytes matching `ox`", async () => {
+    await expect(verifyPlaintextHash(bytes, bytesToHex(sha256(bytes)))).resolves.toBeUndefined();
   });
 
-  it("accepts an uppercase `ox`", () => {
-    expect(() => verifyPlaintextHash(bytes, bytesToHex(sha256(bytes)).toUpperCase())).not.toThrow();
+  it("accepts an uppercase `ox`", async () => {
+    await expect(verifyPlaintextHash(bytes, bytesToHex(sha256(bytes)).toUpperCase())).resolves.toBeUndefined();
   });
 
-  it("rejects a swapped blob", () => {
+  it("rejects a swapped blob", async () => {
     const other = new TextEncoder().encode("a different file");
-    expect(() => verifyPlaintextHash(other, bytesToHex(sha256(bytes)))).toThrow(/ox/);
+    await expect(verifyPlaintextHash(other, bytesToHex(sha256(bytes)))).rejects.toThrow(/ox/);
   });
 
-  it("skips verification when the sender published no `ox`", () => {
+  it("skips verification when the sender published no `ox`", async () => {
     // A forward may not carry one; refusing those would break real messages.
-    expect(() => verifyPlaintextHash(bytes, undefined)).not.toThrow();
+    await expect(verifyPlaintextHash(bytes, undefined)).resolves.toBeUndefined();
   });
 });
 

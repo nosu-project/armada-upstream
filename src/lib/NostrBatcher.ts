@@ -3,6 +3,7 @@ import type { NPool } from '@nostrify/nostrify';
 import type { ArmadaEventStore } from '@/contexts/EventStoreContext';
 
 import { logNostrReq } from '@/lib/nostrQueryLog';
+import { perfCount } from '@/lib/perf';
 
 /** The relay/group handle shape we wrap for caching: query + req. */
 type NRelayLike = ReturnType<NPool['relay']>;
@@ -266,6 +267,11 @@ class ReplaceableCollector extends MicrotaskBatcher<{
   }
 
   request(pubkey: string, kind: number, signal?: AbortSignal): Promise<NostrEvent | undefined> {
+    if (import.meta.env.VITE_PROFILE === "1") {
+      // Profiling builds: who asks for replaceables, by call site.
+      const site = new Error().stack?.split("\n").slice(3, 6).join(" < ").replace(/https?:\/\/[^/]+/g, "") ?? "?";
+      perfCount(`batch.replaceable k${kind} @ ${site}`, 0, 1, "requests");
+    }
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
         reject(signal.reason);

@@ -126,8 +126,8 @@ export async function getAvatarMaskUrlAsync(shape: string): Promise<string> {
  *
  * ### Algorithm
  *
- * 1. **Draw large.** Render the emoji at 512 px via `fillText` on an
- *    oversized (768 × 768) scratch canvas so the entire glyph is captured
+ * 1. **Draw large.** Render the emoji at 256 px via `fillText` on an
+ *    oversized (384 × 384) scratch canvas so the entire glyph is captured
  *    even if the OS renders it off-centre or larger than the em-box.
  *
  * 2. **Measure.** Scan every pixel to find the tight axis-aligned bounding
@@ -147,16 +147,28 @@ export async function getAvatarMaskUrlAsync(shape: string): Promise<string> {
  * (the emoji mask is simply ignored by the browser).
  */
 export function getEmojiMaskUrl(emoji: string): string {
+  // A failure is cached too. An emoji this platform can't draw (or a canvas it
+  // won't grant) otherwise re-ran the whole draw-and-scan on every
+  // render of every avatar wearing it — measured on a phone as the single
+  // largest script cost of scrolling a busy channel.
   const cached = emojiMaskCache.get(emoji);
-  if (cached) return cached;
+  if (cached !== undefined) return cached;
+  const url = renderEmojiMask(emoji);
+  emojiMaskCache.set(emoji, url);
+  return url;
+}
 
+function renderEmojiMask(emoji: string): string {
   // ── Pass 1: draw emoji on oversized scratch canvas ──────────────────
-  const fontSize = 512;
-  const scratch = fontSize * 1.5;               // 768 – generous room
+  // 256px is plenty for a 256px mask, and the bounding-box scan below is
+  // quadratic in it: at the 512px this used to draw, one mask read and
+  // walked 590k pixels, a visible stall on a phone for every distinct emoji.
+  const fontSize = 256;
+  const scratch = fontSize * 1.5;               // 384 – generous room
   const c1 = document.createElement('canvas');
   c1.width = scratch;
   c1.height = scratch;
-  const ctx1 = c1.getContext('2d');
+  const ctx1 = c1.getContext('2d', { willReadFrequently: true });
   if (!ctx1) return '';
 
   ctx1.textAlign = 'center';
@@ -224,7 +236,5 @@ export function getEmojiMaskUrl(emoji: string): string {
   }
   ctx2.putImageData(img, 0, 0);
 
-  const url = c2.toDataURL('image/png');
-  emojiMaskCache.set(emoji, url);
-  return url;
+  return c2.toDataURL('image/png');
 }

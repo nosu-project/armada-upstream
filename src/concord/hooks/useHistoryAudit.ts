@@ -171,7 +171,7 @@ async function fetchImageDataUri(
       bytes = new Uint8Array(await decryptBuffer(raw, enc.key, enc.nonce));
       // An export is evidence; embedding a blob the sender never hashed to
       // would put bytes nobody vouched for inside an audit record.
-      verifyPlaintextHash(bytes, enc.ox);
+      await verifyPlaintextHash(bytes, enc.ox);
     }
     if (bytes.length > ASSET_MAX_EACH || bytes.length > budget.left) {
       // Too big to embed — a plaintext one stays a link, an encrypted one can't.
