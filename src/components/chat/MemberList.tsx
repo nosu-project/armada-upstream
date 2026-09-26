@@ -605,8 +605,14 @@ interface MemberListProps {
   className?: string;
 }
 
-/** Right-hand member panel: admins (with roles) first, then regular members. */
-export function MemberList({
+/**
+ * Right-hand member panel: admins (with roles) first, then regular members.
+ *
+ * Memoized: it hangs off a page that re-renders on every store write it reads
+ * (each message, each synced history page), and a roster re-render walks a
+ * DeferredRow per member even when no row inside it changes.
+ */
+export const MemberList = memo(function MemberList({
   admins,
   members,
   canModerate,
@@ -957,4 +963,4 @@ export function MemberList({
       </div>
     </aside>
   );
-}
+});

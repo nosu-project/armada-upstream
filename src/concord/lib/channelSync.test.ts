@@ -224,6 +224,46 @@ describe("channelSync — the c2: topic handler", () => {
     await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 15_000 });
     release();
   });
+
+  it("a round aborted mid-history keeps the older pages it already stored", { timeout: 60_000 }, async () => {
+    // A round is aborted whenever the reader leaves the channel, and an aborted
+    // round is never stamped — so if `oldest` were saved only when a round
+    // completes, every return to a deep channel would re-page the same history.
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const alice = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const at = (i: number) => now - 200 + i;
+
+    // 120 wraps: pass 1 takes the newest 50, pass 3's first page the next 50,
+    // and its second page never answers until the round has been abandoned.
+    let queries = 0;
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => (unblock = resolve));
+    class StallingRelay extends FakeRelay {
+      override async query(filters: Filter[]): Promise<NostrEvent[]> {
+        if (++queries === 3) await blocked;
+        return super.query(filters);
+      }
+    }
+    const relay = new StallingRelay();
+    relay.events = await Promise.all(Array.from({ length: 120 }, (_, i) => wrapChatAt(m, channel, alice, `m${i}`, at(i))));
+    const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+    m.setChannelSyncContext(channel.idHex, { nostr: makePool({ [RELAY]: relay }), community, channel });
+
+    const topic = `c2:${channel.idHex}`;
+    const release = m.want(topic);
+    try {
+      // The first older page has landed and been accounted for.
+      await vi.waitFor(async () => expect((await m.readChannelCursor(channel.idHex))?.oldest).toBe(at(20)), { timeout: 30_000 });
+      release();
+      expect(m.syncState(topic).lastSyncedAt).toBeUndefined();
+      const stored = await m.queryChannelRumors(CID, channel.idHex, { limit: 200 });
+      expect(stored).toHaveLength(100);
+    } finally {
+      unblock();
+    }
+  });
 });
 
 describe("channelFilters (retired-epoch fetch policy)", () => {

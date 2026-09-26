@@ -23,6 +23,17 @@
  *   concord-scroll  paging #general's history back
  *   concord-switch  hopping between the community's channels, heap per round
  *   discover     /discover idle — the one scenario with real relay traffic
+ *   live-switch  switching in and out of a REAL community, joined from an
+ *                invite given as `--invite <url>` (or ARMADA_PERF_INVITE);
+ *                skipped without one. Reads its real relays; every publish is
+ *                still swallowed here. The invite carries the community's
+ *                keys in its fragment, so it is never written to a report.
+ *
+ *   node scripts/perf-profile.mjs --skip-build --cpu-profile --only live-switch --invite 'https://armada.buzz/invite/naddr1…#…'
+ *     --settle <sec>  how long to let the join sync before measuring (45)
+ *     --rounds <n>    switch-ins measured (6)
+ *     --offline       after settling, answer every REQ locally: the switch cost
+ *                     against what is on disk, with no history paging behind it
  *
  * Offline except `discover`: the seeds go straight into the app's own
  * ArmadaDB through the production writers (`e2e/screenshotSeed.ts`,
@@ -55,6 +66,7 @@ const opt = (name, fallback) => {
 };
 
 const IDLE_SEC = Number(opt("idle", "120"));
+const INVITE = opt("invite", process.env.ARMADA_PERF_INVITE ?? "");
 const ONLY = opt("only", "")
   .split(",")
   .map((s) => s.trim())
@@ -66,7 +78,7 @@ const OUT = resolve(root, "perf-reports");
 /** Messages in the seeded community's #general. */
 const CONCORD_BIG = 3000;
 
-const wants = (name) => ONLY.length === 0 || ONLY.includes(name);
+const wants = (name) => (ONLY.length === 0 && name !== "live-switch") || ONLY.includes(name);
 
 // ─── Build + serve ──────────────────────────────────────────────────────────
 
@@ -202,6 +214,12 @@ await cdp.send("Performance.enable");
  * its cost) exactly as it is in the field. Reads pass through untouched.
  */
 const swallowed = {};
+/**
+ * Once set, every REQ is answered as an empty relay (like `.invalid` below):
+ * `live-switch --offline` measures switching against what is already on disk,
+ * with no history paging in behind it.
+ */
+let answerLocally = false;
 await page.routeWebSocket(/^wss?:\/\//, (ws) => {
   // The seeded community names `wss://relay.invalid`: answer it here as an
   // empty relay (EOSE for every REQ) rather than dialing nothing and leaving
@@ -209,7 +227,7 @@ await page.routeWebSocket(/^wss?:\/\//, (ws) => {
   const fake = /\.invalid(?:[:/]|$)/.test(new URL(ws.url()).hostname + "/");
   const server = fake ? null : ws.connectToServer();
   ws.onMessage((msg) => {
-    if (fake && typeof msg === "string" && msg.startsWith('["REQ"')) {
+    if ((fake || answerLocally) && typeof msg === "string" && msg.startsWith('["REQ"')) {
       try {
         ws.send(JSON.stringify(["EOSE", JSON.parse(msg)[1]]));
       } catch {
@@ -644,6 +662,77 @@ try {
       save("concord-switch", {
         hot,
         switches: (concord.channelIds.length - 1) * rounds,
+        cost: cost(a, b, (Date.now() - t) / 1000),
+        heapFloorMBPerRound: floors,
+        errors: errorsSince(mark),
+        report: await report(page),
+      });
+    }
+  }
+
+  if (wants("live-switch")) {
+    if (!INVITE) {
+      console.log("\n▶ live-switch skipped: pass --invite <url>");
+    } else {
+      console.log("\n▶ live-switch (join a real community, then switch in and out of it)");
+      const mark = errors.length;
+      const invite = new URL(INVITE);
+      await page.goto(invite.pathname + invite.hash);
+      const accept = page.getByRole("button", { name: /accept invite/i });
+      await until(page, () => accept.isVisible(), 90_000);
+      await accept.click();
+      await until(page, async () => /^\/c\/[^/]+/.test(new URL(page.url()).pathname), 90_000);
+      const communityPath = new URL(page.url()).pathname.match(/^\/c\/[^/]+/)[0];
+      // Let the join's sweeps settle: this is the community as a member has
+      // it on disk, which is what switching back into it reads.
+      const settleSec = Number(opt("settle", "45"));
+      console.log(`  joined ${communityPath.slice(0, 14)}…, settling ${settleSec}s`);
+      await page.waitForTimeout(settleSec * 1000);
+      if (flag("offline")) {
+        console.log("  answering every REQ locally from here on (--offline)");
+        answerLocally = true;
+      }
+      // Out to the DM list, not to another community, so the numbers are the
+      // community's own mount and unmount.
+      const away = "/dm";
+      await softNavigate(page, away);
+      await page.waitForTimeout(3000);
+      const floors = [await heapFloorMB(cdp)];
+      await resetCounters(page);
+      const a = await metrics(cdp);
+      const t = Date.now();
+      const rounds = Number(opt("rounds", "6"));
+      /** Time from the navigation to the first frame after it with a message row rendered. */
+      const switchInMs = [];
+      const { hot } = await cpuProfile("live-switch", async () => {
+        for (let round = 0; round < rounds; round++) {
+          const ms = await page.evaluate(
+            (path) =>
+              new Promise((done) => {
+                const start = performance.now();
+                history.pushState({}, "", path);
+                dispatchEvent(new PopStateEvent("popstate"));
+                const check = () => {
+                  if (document.querySelector("main [data-scroll-anchor]")) done(Math.round(performance.now() - start));
+                  else if (performance.now() - start > 15_000) done(-1);
+                  else requestAnimationFrame(check);
+                };
+                requestAnimationFrame(check);
+              }),
+            communityPath,
+          );
+          switchInMs.push(ms);
+          await page.waitForTimeout(3000);
+          await softNavigate(page, away);
+          await page.waitForTimeout(1500);
+          floors.push(await heapFloorMB(cdp));
+        }
+      });
+      const b = await metrics(cdp);
+      save("live-switch", {
+        hot,
+        rounds,
+        switchInMs,
         cost: cost(a, b, (Date.now() - t) / 1000),
         heapFloorMBPerRound: floors,
         errors: errorsSince(mark),
