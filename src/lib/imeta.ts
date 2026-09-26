@@ -26,6 +26,14 @@ export interface ImetaEntry {
   name?: string;
   /** Declared byte size from the NIP-94 `size` field (sender-reported; display only). */
   size?: string;
+  /** The sender's description of the media, from NIP-94 `alt`. */
+  alt?: string;
+  /**
+   * Hidden behind a click-to-reveal cover, Discord's per-attachment spoiler.
+   * Carried as `content-warning` — NIP-36's name, scoped to the one file
+   * rather than the event — so its value is a (possibly empty) reason.
+   */
+  spoiler?: boolean;
   /**
    * Alternative sources for the same bytes, from repeated `fallback` fields.
    * Per NIP-17 a fallback is encrypted with the same key and nonce as the file,
@@ -101,7 +109,11 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
     for (let i = 1; i < tag.length; i++) {
       const part = tag[i];
       const spaceIdx = part.indexOf(' ');
-      if (spaceIdx === -1) continue;
+      if (spaceIdx === -1) {
+        // The one field whose presence is the whole signal.
+        if (part === 'content-warning') entry[part] = '';
+        continue;
+      }
       const key = part.slice(0, spaceIdx);
       const value = part.slice(spaceIdx + 1);
       if (key === 'fallback') fallbacks.push(value);
@@ -122,6 +134,8 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
         blurhash: entry.blurhash,
         name: entry.name,
         size: entry.size,
+        alt: entry.alt || undefined,
+        spoiler: "content-warning" in entry || undefined,
         fallbacks: fallbacks.length ? fallbacks : undefined,
         encryption: enc,
       });

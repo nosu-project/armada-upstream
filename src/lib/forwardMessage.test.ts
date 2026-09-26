@@ -185,6 +185,18 @@ describe("forwardedAttachment", () => {
     });
   });
 
+  it("keeps a spoiler, including a bare `content-warning` with no reason", () => {
+    expect(forwardedAttachment(["imeta", `url ${URL_B}`, "m image/jpeg", "content-warning"])?.tags).toEqual([
+      ["url", URL_B],
+      ["m", "image/jpeg"],
+      ["content-warning", "spoiler"],
+    ]);
+    expect(forwardedAttachment(["imeta", `url ${URL_B}`, "content-warning plot"])?.tags).toContainEqual([
+      "content-warning",
+      "plot",
+    ]);
+  });
+
   it("lifts the encryption params (and ox) out of the pairs", () => {
     const key = "c".repeat(64);
     expect(

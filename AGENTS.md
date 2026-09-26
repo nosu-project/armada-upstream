@@ -782,7 +782,8 @@ to fail a run:
   down with it — a generated nsec the user could not save anywhere. The list of
   plugins this applies to is `MainActivity.java`'s registrations MINUS the ones
   iOS also implements: `ArmadaNotification`, `ArmadaCredential`,
-  `BluetoothMesh`, `WebReady`, `ShareTarget`. Cross-platform plugins (Share,
+  `BluetoothMesh`, `WebReady`, `ShareTarget`, `MediaGallery` (the attach
+  sheet's recent-media grid; iOS keeps the system photo picker). Cross-platform plugins (Share,
   Haptics, Clipboard, Filesystem, StatusBar, SecureStorage) are the case
   `isNativePlatform()` is actually for. `ArmadaDb` is now in neither group: it
   is implemented on Android AND iOS but nowhere else, so `hasNativeArmadaDB()`

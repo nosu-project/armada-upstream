@@ -27,12 +27,20 @@ import { KIND_DM_FILE } from "@/lib/nip17/protocol";
  * of the draft ships as a tag for content that isn't there.
  */
 
-/** An imeta field list, parsed into `key → value` (fields are `"key value"`). */
+/**
+ * An imeta field list, parsed into `key → value` (fields are `"key value"`).
+ * A bare `content-warning` — a spoiler with no reason, which is how other
+ * clients may spell it — is the one valueless field that means something, so
+ * it is kept (as the reason Armada writes) rather than dropped with the rest.
+ */
 function imetaFields(tag: string[]): Record<string, string> {
   const fields: Record<string, string> = {};
   for (let i = 1; i < tag.length; i++) {
     const sp = tag[i].indexOf(" ");
-    if (sp === -1) continue;
+    if (sp === -1) {
+      if (tag[i] === "content-warning" && !("content-warning" in fields)) fields["content-warning"] = "spoiler";
+      continue;
+    }
     const key = tag[i].slice(0, sp);
     if (!(key in fields)) fields[key] = tag[i].slice(sp + 1);
   }

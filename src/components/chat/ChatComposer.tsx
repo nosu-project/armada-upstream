@@ -3,11 +3,12 @@ import {
   ArrowUpRight,
   BarChart3,
   Blocks,
+  Camera,
+  ImageIcon,
   Loader2,
   Mic,
   MonitorPlay,
   Paperclip,
-  Play,
   Plus,
   Quote,
   Reply,
@@ -20,6 +21,8 @@ import {
 import { nip19 } from "nostr-tools";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { AttachSheet, type AttachAction } from "@/components/chat/AttachSheet";
+import { AttachmentTray, MAX_ALT_CHARS, type TrayItem } from "@/components/chat/AttachmentTray";
 import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
 import { mayFocusOnSwitch, registerTypeToFocus } from "@/components/chat/typeToFocus";
 import { authorsByRecency } from "@/components/chat/transport";
@@ -54,9 +57,8 @@ import { useMentionInsertions } from "@/hooks/useMentionBus";
 import { useIsMobile, useIsTouch } from "@/hooks/useIsMobile";
 import { useMountedTransition } from "@/hooks/useMountedTransition";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useToast } from "@/hooks/useToast";
-import { useUploadFile } from "@/hooks/useUploadFile";
+import { useUploadFile, useUploadPreflight } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { KvPrefixCache } from "@/lib/db/kvCache";
@@ -64,10 +66,13 @@ import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
-import { companionEncryption } from "@/lib/imeta";
+import { extForMime } from "@/lib/fileBytes";
+import { galleryItemFile, hasMediaGallery, type GalleryItem } from "@/lib/mediaGallery";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
+import { MAX_ENCRYPTED_BYTES, deviceInputLimit, keepUserFields, mimeOfPicked } from "@/lib/attachmentLimits";
+import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
 import { parseChatRoute, roomPath } from "@/lib/routes";
@@ -79,7 +84,6 @@ import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { buildPollTags, KIND_POLL } from "@/lib/polls";
-import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { useAddrEvent, useEvent } from "@/hooks/useEvent";
 
@@ -124,18 +128,49 @@ function readBotRecents(key: string): string[] {
 // into that margin.
 const MAX_CHARS = 5000;
 
-/**
- * Ceiling on a generic (non-media) attachment. Images/video are compressed
- * before upload, but a document is uploaded as-is, and a client-encrypted
- * attachment holds its full plaintext in memory on both encrypt and decrypt —
- * so cap the raw size to keep a huge file from OOMing a phone tab.
- */
-const MAX_FILE_BYTES = 100 * 1024 * 1024;
-
 /** Replace or append a file extension. */
 function replaceExtension(filename: string, ext: string): string {
   const dot = filename.lastIndexOf(".");
   return (dot > 0 ? filename.slice(0, dot) : filename) + ext;
+}
+
+/**
+ * How many attachments process and upload at once. Picking twenty photos
+ * shows twenty cards straight away, but resizing, transcoding and encrypting
+ * them all together would hold every one in memory at the same moment.
+ */
+const UPLOAD_CONCURRENCY = 3;
+let uploadsActive = 0;
+const uploadQueue: (() => void)[] = [];
+
+function acquireUploadSlot(): Promise<void> {
+  if (uploadsActive < UPLOAD_CONCURRENCY) {
+    uploadsActive++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => uploadQueue.push(resolve));
+}
+
+function releaseUploadSlot(): void {
+  const next = uploadQueue.shift();
+  if (next) next();
+  else uploadsActive--;
+}
+
+/** A card caption for an attachment with no known filename. */
+function fallbackLabel(url: string, mime: string): string {
+  const last = url.split(/[?#]/)[0].split("/").pop() ?? "";
+  // A content-addressed Blossom name is a 64-char hash; show the kind instead.
+  if (last && !/^[0-9a-f]{64}(\.|$)/i.test(last)) {
+    try {
+      return decodeURIComponent(last);
+    } catch {
+      return last;
+    }
+  }
+  const kind = mime.split("/")[0];
+  const ext = extForMime(mime);
+  return `${kind === "image" || kind === "video" || kind === "audio" ? kind : "file"}${ext}`;
 }
 
 /** Short random ID for poll options. */
@@ -235,12 +270,29 @@ async function getImageMeta(file: File): Promise<{ dim?: string; blurhash?: stri
 /** An attachment being processed and uploaded. */
 interface PendingUpload {
   id: string;
+  /** Its place in the tray, so a card keeps its slot when its upload lands. */
+  seq: number;
+  /** The picked file's name, for the card's label. */
+  name: string;
+  /** An object URL of the picked image, previewed while it uploads. Revoked when it settles. */
+  previewUrl?: string;
   /** Local work (transcode/encrypt) vs. the network upload. */
   phase: "processing" | "uploading";
   /** 0..1 transcode progress. Absent when the work is indeterminate. */
   progress?: number;
-  /** Aborts the transcode and drops the attachment. */
-  abort: AbortController;
+}
+
+/**
+ * A file whose bytes are still to be read — a gallery item, fetched from its
+ * content:// URI. Its card appears the moment it is picked, not once a large
+ * video has been read into memory.
+ */
+interface DeferredFile {
+  name: string;
+  type: string;
+  /** Byte length where known up front, so an oversize item is refused unread. */
+  size?: number;
+  load: () => Promise<File>;
 }
 
 /** An embed (quote or link) detected in the composer content. */
@@ -486,6 +538,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
   const { mutateAsync: uploadFile } = useUploadFile();
+  const preflightUpload = useUploadPreflight();
   const { emojis: customEmojis } = useCustomEmojis();
   const { toast } = useToast();
   const { config } = useAppContext();
@@ -619,6 +672,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // forwarded attachment only has it if the original sender sent it.
   const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox?: string }>>(new Map());
   /**
+   * Each attachment's slot in the tray, in the order it was PICKED — uploads
+   * land in whatever order the network finishes them, and a card must not jump
+   * when its upload does. Also the order the attachments are sent in.
+   */
+  const attachmentSeq = useRef<Map<string, number>>(new Map());
+  const nextSeq = useRef(0);
+  /**
+   * The picked file's name, per uploaded URL, for its card. Local
+   * only: an image's filename is not sent (it can carry a date or a place),
+   * and a restored draft simply falls back to a generic label.
+   */
+  const attachmentMeta = useRef<Map<string, { name: string }>>(new Map());
+  /**
    * Content tags from a forwarded message (NIP-92 `imeta` / NIP-30 `emoji`),
    * carried verbatim so a forwarded attachment re-references the original blob
    * instead of being re-uploaded — and, when it's client-encrypted, keeps the
@@ -633,10 +699,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    * immediately — through the slow local pre-upload work (resize, blurhash,
    * video transcode, client-side encryption) that runs *before* the network
    * request flips `useUploadFile`'s `isPending`. A list (not a counter) because
-   * files can be attached concurrently and video transcodes report progress and
-   * can be cancelled individually.
+   * files can be attached concurrently and each can be cancelled individually.
    */
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
+  /**
+   * Each in-flight upload's abort, by pending id: aborting cancels the
+   * transcode and upload and drops the card. Kept out of state so a cancel is
+   * a lookup, not a side effect inside a state updater.
+   */
+  const pendingAborts = useRef(new Map<string, AbortController>());
   /**
    * Sending is blocked while any attachment is still uploading: `attachments`
    * only gains a file once its upload resolves, so a send fired mid-upload
@@ -659,6 +730,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerToggleGroupRef = useRef<HTMLDivElement>(null);
   const { insertAtCursor, insertEmoji } = useInsertText(textareaRef, content, setContent);
@@ -899,10 +972,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         // the video and, when encrypted, under the same key and nonce).
         const icon = tags.find((t) => t[0] === "image" || t[0] === "thumb")?.[1];
         const isWebxdc = isWebxdcMime(mime);
+        const local = attachmentMeta.current.get(url);
         return {
           url,
           mime,
           name: summary ?? name,
+          // The local file's own name where this session picked it: an image
+          // sends no `name`, and a Blossom URL is only a hash.
+          label: summary ?? local?.name ?? name ?? fallbackLabel(url, mime),
+          alt: tags.find((t) => t[0] === "alt")?.[1] || undefined,
+          spoiler: tags.some((t) => t[0] === "content-warning"),
           icon,
           isImage: mime.startsWith("image/"),
           isVideo: mime.startsWith("video/"),
@@ -911,7 +990,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           dim,
           blurhash,
         };
-      }),
+      })
+        // Stable: anything without a slot (a restored draft) keeps its order, first.
+        .sort((a, b) => (attachmentSeq.current.get(a.url) ?? -1) - (attachmentSeq.current.get(b.url) ?? -1)),
       [uploadedFileGroups],
     );
 
@@ -962,6 +1043,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       return next;
     });
     attachmentEncryption.current.delete(url);
+    attachmentMeta.current.delete(url);
+    attachmentSeq.current.delete(url);
     // Also drop the URL from the text if it was typed/pasted there.
     setContent((prev) =>
       prev
@@ -969,6 +1052,29 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         .filter((line) => line.trim() !== url)
         .join("\n"),
     );
+  }, []);
+
+  /**
+   * Set an attachment's description (NIP-94 `alt`) and spoiler flag (an imeta
+   * `content-warning`). Both live in its tags like every other field, so they
+   * ride the draft and reach `buildMessageTags` with no extra plumbing.
+   */
+  const updateAttachment = useCallback((url: string, patch: { alt?: string; spoiler?: boolean }) => {
+    setUploadedFileGroups((prev) => {
+      const tags = prev.get(url);
+      if (!tags) return prev;
+      let next = tags;
+      if (patch.alt !== undefined) {
+        const alt = patch.alt.replace(/\s+/g, " ").trim().slice(0, MAX_ALT_CHARS);
+        next = next.filter((t) => t[0] !== "alt");
+        if (alt) next = [...next, ["alt", alt]];
+      }
+      if (patch.spoiler !== undefined) {
+        next = next.filter((t) => t[0] !== "content-warning");
+        if (patch.spoiler) next = [...next, ["content-warning", "spoiler"]];
+      }
+      return new Map(prev).set(url, next);
+    });
   }, []);
 
   /** Register an externally-sourced media URL (GIF, sticker) as an attachment
@@ -979,7 +1085,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const mime = extMime === "application/octet-stream" ? fallbackMime : extMime;
     const tags: string[][] = [["url", url], ["m", mime]];
     if (dim) tags.push(["dim", dim]);
-    setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
+    if (!attachmentSeq.current.has(url)) attachmentSeq.current.set(url, nextSeq.current++);
+    setUploadedFileGroups((prev) => new Map(prev).set(url, keepUserFields(prev.get(url), tags)));
   }, []);
 
   /**
@@ -1006,6 +1113,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       ["name", /\.xdc$/i.test(app.name) ? app.name : `${app.name}.xdc`],
     ];
     if (app.icon) tags.push(["image", app.icon], ["thumb", app.icon]);
+    attachmentSeq.current.set(app.url, nextSeq.current++);
     setUploadedFileGroups((prev) => new Map(prev).set(app.url, tags));
     setPickerOpen(false);
     requestAnimationFrame(() => textareaRef.current?.focus());
@@ -1017,6 +1125,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setRemovedEmbeds(new Set());
     setUploadedFileGroups(new Map());
     attachmentEncryption.current.clear();
+    attachmentMeta.current.clear();
+    attachmentSeq.current.clear();
     forwardedContentTags.current = [];
     setLightboxUrl(null);
     setMode("post");
@@ -1030,23 +1140,69 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [draftKey, onCancelReply]);
 
-  const handleFileUpload = useCallback(async (file: File) => {
+  const handleFileUpload = useCallback(async (source: File | DeferredFile, options: { spoiler?: boolean } = {}) => {
+    const tooLarge = (description: string) =>
+      toast({ title: "File too large", description, variant: "destructive" });
+    const refused = (refusal: { status: number; reason?: string }) =>
+      toast({ title: "Can't upload this file", description: describeRefusal(refusal), variant: "destructive" });
+    const limitMb = (bytes: number) => Math.round(bytes / (1024 * 1024));
+    const encryptedLimitMessage = (bytes: number) =>
+      `Encrypted attachments are limited to ${limitMb(bytes)} MB on this device, since they are sealed and opened in memory.`;
+
+    // Refused before a card appears or a byte is read, where the size is
+    // known up front: a gallery item's comes from MediaStore, and reading a
+    // content:// URI buffers the whole file. Only a device limit applies
+    // here — how big an upload may be is the server's to say.
+    const pickedMime = mimeOfPicked(source.name, source.type);
+    const pickedLimit = deviceInputLimit(pickedMime, encryptAttachments);
+    if (source.size !== undefined && pickedLimit !== undefined && source.size > pickedLimit) {
+      tooLarge(encryptedLimitMessage(pickedLimit));
+      return;
+    }
+
     // Flip on the placeholder tile immediately, before the slow local work
     // (resize/transcode/blurhash/encrypt) that precedes the network upload.
     const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const seq = nextSeq.current++;
     const abort = new AbortController();
-    setPendingUploads((prev) => [...prev, { id: pendingId, phase: "processing", abort }]);
+    // A picked image previews from its own bytes while it uploads, Discord-style.
+    let previewUrl = source instanceof File && source.type.startsWith("image/") && source.size < 40 * 1024 * 1024
+      ? URL.createObjectURL(source)
+      : undefined;
+    setPendingUploads((prev) => [
+      ...prev,
+      { id: pendingId, seq, name: source.name || "file", previewUrl, phase: "processing" },
+    ]);
+    pendingAborts.current.set(pendingId, abort);
 
     const patchPending = (patch: Partial<PendingUpload>) => {
       setPendingUploads((prev) => prev.map((p) => (p.id === pendingId ? { ...p, ...patch } : p)));
     };
 
+    let slotHeld = false;
     try {
+      // A card cancelled while it waits for a slot goes at once; the slot,
+      // when it comes, is handed straight back.
+      const slot = acquireUploadSlot();
+      const cancelled = new Promise<"cancelled">((resolve) =>
+        abort.signal.addEventListener("abort", () => resolve("cancelled"), { once: true }));
+      if (await Promise.race([slot.then(() => "slot" as const), cancelled]) === "cancelled") {
+        void slot.then(releaseUploadSlot);
+        return;
+      }
+      slotHeld = true;
+      const file = source instanceof File ? source : await source.load();
+      if (abort.signal.aborted) return;
+      if (!previewUrl && file.type.startsWith("image/") && file.size < 40 * 1024 * 1024) {
+        previewUrl = URL.createObjectURL(file);
+        patchPending({ previewUrl });
+      }
+
       // Browsers report an empty (or occasionally wrong) type for some
       // containers — `.avi` is commonly `""` — so fall back to the extension.
-      // Without this an `.avi` is misclassified as a generic file: it hits the
-      // non-media 100 MB gate ("File too large"), skips the video pipeline, and
-      // uploads with no usable type for the server or the receive-side render.
+      // Without this an `.avi` is misclassified as a generic file: it skips
+      // the video pipeline and uploads with no usable type for the server or
+      // the receive-side render.
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
       const mime = file.type || mimeFromExt(ext);
       const isImage = mime.startsWith("image/");
@@ -1054,13 +1210,26 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       const isAudio = mime.startsWith("audio/");
       const isMedia = isImage || isVideo || isAudio;
 
-      if (!isMedia && file.size > MAX_FILE_BYTES) {
-        toast({
-          title: "File too large",
-          description: `Attachments are limited to ${Math.round(MAX_FILE_BYTES / (1024 * 1024))} MB.`,
-          variant: "destructive",
-        });
+      const inputLimit = deviceInputLimit(mime, encryptAttachments);
+      if (inputLimit !== undefined && file.size > inputLimit) {
+        tooLarge(encryptedLimitMessage(inputLimit));
         return;
+      }
+
+      // BUD-06: a file processing can't shrink goes up at its picked size, so
+      // ask the servers now rather than after encrypting it. (Images and
+      // videos are asked below, once their real size is known.) Encryption
+      // adds a 16-byte tag and nothing else.
+      if (!isImage && !isVideo) {
+        const refusal = await preflightUpload(
+          { size: file.size + (encryptAttachments ? 16 : 0), type: mime },
+          abort.signal,
+        );
+        if (abort.signal.aborted) return;
+        if (refusal) {
+          refused(refusal);
+          return;
+        }
       }
 
       let uploadableFile = file;
@@ -1075,14 +1244,49 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       } else if (isVideo) {
         // Compress the video and pull out its NIP-94 metadata. Never throws for
         // media reasons — falls back to uploading the original.
+        // Progress is patched per whole percent: the worker reports far more
+        // often than that, and each patch re-renders the composer.
+        let lastPercent = -1;
         video = await processVideo(file, {
           signal: abort.signal,
-          onProgress: (progress) => patchPending({ progress }),
+          onProgress: (progress) => {
+            const percent = Math.floor(progress * 100);
+            if (percent === lastPercent) return;
+            lastPercent = percent;
+            patchPending({ progress });
+          },
         });
         uploadableFile = video.file;
       }
 
       if (abort.signal.aborted) return;
+      // Sealing holds the plaintext and ciphertext in memory at once, so an
+      // encrypted file is held to the device limit as it comes OUT of
+      // processing: a video the transcoder brought under it goes, one it
+      // passed through untouched (no encoder, already compact but long) can't.
+      if (encryptAttachments && uploadableFile.size > MAX_ENCRYPTED_BYTES) {
+        tooLarge(
+          isVideo
+            ? `${encryptedLimitMessage(MAX_ENCRYPTED_BYTES)} This video couldn't be compressed under it.`
+            : encryptedLimitMessage(MAX_ENCRYPTED_BYTES),
+        );
+        return;
+      }
+      if (isImage || isVideo) {
+        const refusal = await preflightUpload(
+          {
+            size: uploadableFile.size + (encryptAttachments ? 16 : 0),
+            // The ciphertext is uploaded under the plaintext's type.
+            type: uploadableFile.type || mime,
+          },
+          abort.signal,
+        );
+        if (abort.signal.aborted) return;
+        if (refusal) {
+          refused(refusal);
+          return;
+        }
+      }
       patchPending({ phase: "uploading", progress: undefined });
 
       // Compute preview metadata from the PLAINTEXT (before any encryption) —
@@ -1122,13 +1326,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       let posterUrl: string | undefined;
       if (posterFile) {
         try {
-          posterUrl = (await uploadFile(posterFile))[0][1];
+          posterUrl = (await uploadFile({ file: posterFile, signal: abort.signal }))[0][1];
         } catch {
           posterUrl = undefined;
         }
       }
 
-      const tags = await uploadFile(uploadableFile);
+      const tags = await uploadFile({ file: uploadableFile, signal: abort.signal });
       const url = tags[0][1];
 
       // For encrypted uploads the server's NIP-94 `m`/`x`/`size`/`dim` all
@@ -1194,19 +1398,50 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       if (abort.signal.aborted) return;
 
-      if (encryption) attachmentEncryption.current.set(url, encryption);
+      // Marked from the gallery sheet's Spoiler toggle before it was picked.
+      if (options.spoiler && (isImage || isVideo)) tags.push(["content-warning", "spoiler"]);
 
-      setUploadedFileGroups((prev) => new Map(prev).set(url, tags));
+      if (encryption) attachmentEncryption.current.set(url, encryption);
+      // An identical file already staged keeps its card's slot.
+      if (!attachmentSeq.current.has(url)) attachmentSeq.current.set(url, seq);
+      attachmentMeta.current.set(url, { name: file.name });
+
+      setUploadedFileGroups((prev) => new Map(prev).set(url, keepUserFields(prev.get(url), tags)));
       // The URL is tracked as an attachment chip (rendered above the input)
       // rather than dumped into the text; it's appended to content on send.
-    } catch {
+    } catch (error) {
       if (!abort.signal.aborted) {
-        toast({ title: "Upload failed", description: "Could not upload file.", variant: "destructive" });
+        toast({
+          title: "Upload failed",
+          // The server's own reason (its X-Reason) where it gave one.
+          description: uploadFailureReason(error) ?? "Could not upload file.",
+          variant: "destructive",
+        });
       }
     } finally {
+      if (slotHeld) releaseUploadSlot();
+      pendingAborts.current.delete(pendingId);
       setPendingUploads((prev) => prev.filter((p) => p.id !== pendingId));
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
     }
-  }, [uploadFile, toast, encryptAttachments, user?.pubkey]);
+  }, [uploadFile, preflightUpload, toast, encryptAttachments, user?.pubkey]);
+
+  /** Several picked files at once — each gets its card straight away and uploads in parallel. */
+  const handleFiles = useCallback((files: Iterable<File | DeferredFile>, options?: { spoiler?: boolean }) => {
+    for (const file of files) void handleFileUpload(file, options);
+  }, [handleFileUpload]);
+
+  const handleGalleryItems = useCallback((items: GalleryItem[], options: { spoiler: boolean }) => {
+    handleFiles(items.map((item) => ({
+      name: item.name ?? (item.video ? "video" : "image"),
+      // Never empty: the size gate needs to know a video from an image.
+      type: item.mime || (item.video ? "video/*" : "image/*"),
+      // MediaStore's size, so an oversize item is refused before it is read.
+      size: item.size > 0 ? item.size : undefined,
+      load: () => galleryItemFile(item),
+    })), options);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [handleFiles]);
 
   /**
    * Strip tracking parameters from the links in a message body, when the user
@@ -1285,15 +1520,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         setContent((cur) => (cur ? `${cur}\n${text}` : text));
       }
       textareaRef.current?.focus();
-      void (async () => {
-        for (const file of share.files) await handleFileUpload(file);
-      })();
+      handleFiles(share.files);
     };
     consume();
     return onShareStashChanged(consume);
-  }, [handleFileUpload, shareRoute, canonicalizeLinks]);
+  }, [handleFiles, shareRoute, canonicalizeLinks]);
 
-  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -1306,19 +1539,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
     if (files.length === 0) return;
     e.preventDefault();
-    for (const file of files) {
-      await handleFileUpload(file);
-    }
-  }, [handleFileUpload]);
+    handleFiles(files);
+  }, [handleFiles]);
 
   const handleGlobalImagePaste = useCallback((files: File[]) => {
     // Discord-style global paste: once an image is attached, hand keyboard
     // ownership to the composer so the user can immediately type or press Enter.
     textareaRef.current?.focus();
-    void (async () => {
-      for (const file of files) await handleFileUpload(file);
-    })();
-  }, [handleFileUpload]);
+    handleFiles(files);
+  }, [handleFiles]);
   const claimPasteOwnership = useGlobalImagePaste(handleGlobalImagePaste);
 
   // Drag-and-drop upload onto the composer. `dragDepth` tracks nested
@@ -1345,16 +1574,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (dragDepth.current === 0) setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     const files = Array.from(e.dataTransfer.files ?? []);
     dragDepth.current = 0;
     setIsDragging(false);
     if (files.length === 0) return;
     e.preventDefault();
-    for (const file of files) {
-      await handleFileUpload(file);
-    }
-  }, [handleFileUpload]);
+    handleFiles(files);
+  }, [handleFiles]);
 
   /** Build the common NIP-29 + content-derived tags for an outgoing message. */
   const buildMessageTags = useCallback((finalContent: string): string[][] => {
@@ -2003,6 +2230,107 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   };
 
+  const onPickerChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files) handleFiles(Array.from(files));
+    e.target.value = "";
+    // The native picker focuses its hidden input/button on return.
+    // Restore the send box so Enter sends without another click.
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [handleFiles]);
+
+  const cancelPending = useCallback((id: string) => {
+    pendingAborts.current.get(id)?.abort();
+  }, []);
+
+  /** Uploaded and in-flight attachments, one row, in the order they were picked. */
+  const trayItems = useMemo<TrayItem[]>(() => {
+    const done = attachments.map((att) => ({
+      seq: attachmentSeq.current.get(att.url) ?? -1,
+      item: {
+        kind: "attachment" as const,
+        url: att.url,
+        mime: att.mime,
+        label: att.label,
+        icon: att.icon,
+        isImage: att.isImage,
+        isVideo: att.isVideo,
+        isWebxdc: att.isWebxdc,
+        encryption: att.encryption,
+        alt: att.alt,
+        spoiler: att.spoiler,
+      },
+    }));
+    const pending = pendingUploads.map((p) => ({
+      seq: p.seq,
+      item: {
+        kind: "pending" as const,
+        id: p.id,
+        label: p.name,
+        previewUrl: p.previewUrl,
+        phase: p.phase,
+        progress: p.progress,
+      },
+    }));
+    return [...done, ...pending].sort((a, b) => a.seq - b.seq).map((x) => x.item);
+  }, [attachments, pendingUploads]);
+
+  const pollAvailable = !((Boolean(sendOverride) && !onPollSubmit) || !pollsEnabled);
+  const togglePoll = useCallback(() => {
+    setMode((m) => (m === "poll" ? "post" : "poll"));
+    textareaRef.current?.focus();
+  }, []);
+  const openGames = useCallback(() => {
+    setPickerTab("games");
+    setPickerOpen(true);
+  }, []);
+
+  /** The "+" menu's secondary rows, shared by the desktop popover and the touch sheet. */
+  const extraActions = useMemo<AttachAction[]>(() => {
+    const list: AttachAction[] = [];
+    if (pollAvailable) list.push({ id: "poll", label: mode === "poll" ? "Remove poll" : "Poll", icon: BarChart3, onSelect: togglePoll, active: mode === "poll" });
+    list.push({ id: "game", label: "Add game", icon: Blocks, onSelect: openGames });
+    if (appScope) list.push({ id: "watch", label: "Watch together", icon: MonitorPlay, onSelect: () => launchApp(appScope, { type: "youtube" }) });
+    // Only when a bot here actually offers something to run. Disabled
+    // mid-draft: the command menu keys off a draft that is nothing but "/",
+    // so seeding it would eat the message.
+    if (botEntries.length > 0) list.push({ id: "commands", label: "Commands", icon: SquareSlash, onSelect: openCommandMenu, disabled: hasContent });
+    return list;
+  }, [pollAvailable, mode, togglePoll, openGames, appScope, launchApp, botEntries.length, openCommandMenu, hasContent]);
+
+  const menuActions = useMemo<AttachAction[]>(() => [
+    { id: "file", label: "Upload a file", icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
+    ...extraActions,
+  ], [extraActions]);
+
+  const sheetActions = useMemo<AttachAction[]>(() => [
+    { id: "photos", label: hasMediaGallery() ? "Gallery" : "Photos", icon: ImageIcon, onSelect: () => mediaInputRef.current?.click() },
+    { id: "camera", label: "Camera", icon: Camera, onSelect: () => cameraInputRef.current?.click() },
+    { id: "file", label: "File", icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
+    // Games, Watch together and bot Commands sit behind the sheet's "Apps"
+    // tile instead, which keeps the tile row to one line (five at most).
+    ...extraActions.filter((a) => a.id !== "game" && a.id !== "watch" && a.id !== "commands"),
+  ], [extraActions]);
+
+  const sheetApps = useMemo<AttachAction[]>(
+    () => extraActions.filter((a) => a.id === "watch" || a.id === "commands"),
+    [extraActions],
+  );
+  const sheetGamePicker = useMemo(
+    () => (
+      <WebxdcGamePicker
+        relays={conversationRelays}
+        onSelect={(app) => {
+          setPlusOpen(false);
+          void registerGame(app);
+        }}
+      />
+    ),
+    [conversationRelays, registerGame],
+  );
+
+  const plusButtonClass = "p-2 shrink-0 rounded-full transition-colors flex items-center justify-center size-9 touch:size-11";
+
   const charCount = content.length;
   const placeholderText = mode === "poll" ? "Ask a question…" : (placeholder ?? "Message this channel…");
 
@@ -2047,112 +2375,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         </div>
       )}
 
-      {/* Attachment previews — uploaded images render as inline thumbnails,
-          videos as their poster frame behind a play badge. */}
-      {(attachments.length > 0 || pendingUploads.length > 0) && (
-        <div className="flex flex-wrap gap-2 px-3 pt-2 animate-in slide-in-from-top-2 fade-in-0 duration-200">
-          {attachments.map((att) => (
-            <div
-              key={att.url}
-              className="group relative size-20 rounded-lg overflow-hidden border border-border bg-secondary/40 shrink-0"
-            >
-              {att.isImage ? (
-                <button
-                  type="button"
-                  aria-label="Preview attachment"
-                  onClick={() => setLightboxUrl(att.url)}
-                  className="size-full cursor-zoom-in"
-                >
-                  <AttachmentPreviewImage
-                    url={att.url}
-                    mime={att.mime}
-                    encryption={att.encryption}
-                  />
-                </button>
-              ) : att.isVideo ? (
-                <button
-                  type="button"
-                  aria-label="Preview video"
-                  onClick={() => setLightboxUrl(att.url)}
-                  className="size-full relative cursor-zoom-in bg-black/40"
-                >
-                  {att.icon ? (
-                    <AttachmentPreviewImage
-                      url={att.icon}
-                      mime="image/jpeg"
-                      encryption={companionEncryption(att.encryption)}
-                    />
-                  ) : (
-                    <span className="absolute inset-x-0 bottom-1 text-[10px] text-white/80 truncate px-1">
-                      {att.mime.split("/")[1] || "video"}
-                    </span>
-                  )}
-                  <span className="absolute inset-0 flex items-center justify-center">
-                    <span className="rounded-full bg-black/55 p-1.5">
-                      <Play className="size-4 text-white" fill="currentColor" />
-                    </span>
-                  </span>
-                </button>
-              ) : att.isWebxdc ? (
-                <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
-                  {sanitizeImageSrc(att.icon) ? (
-                    <img src={sanitizeImageSrc(att.icon)} alt="" className="size-7 rounded object-cover" />
-                  ) : (
-                    <Blocks className="size-5 text-primary" />
-                  )}
-                  <span className="text-[10px] truncate max-w-full px-0.5">
-                    {att.name || "Game"}
-                  </span>
-                </div>
-              ) : (
-                <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
-                  <Paperclip className="size-5" />
-                  <span className="text-[10px] truncate max-w-full px-0.5">
-                    {att.name || att.mime.split("/")[1] || "file"}
-                  </span>
-                </div>
-              )}
-              <button
-                type="button"
-                aria-label="Remove attachment"
-                onClick={() => removeAttachment(att.url)}
-                className="absolute top-1 right-1 p-0.5 touch:p-1.5 rounded-full bg-background/80 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
-              >
-                <X className="size-3.5 touch:size-4" />
-              </button>
-            </div>
-          ))}
-          {pendingUploads.map((pending) => (
-            <div
-              key={pending.id}
-              className="group relative size-20 rounded-lg border border-border bg-secondary/40 shrink-0 flex flex-col items-center justify-center gap-1"
-            >
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-              {pending.phase === "processing" && pending.progress !== undefined && (
-                <span className="text-[10px] tabular-nums text-muted-foreground">
-                  {Math.round(pending.progress * 100)}%
-                </span>
-              )}
-              <button
-                type="button"
-                aria-label="Cancel attachment"
-                onClick={() => pending.abort.abort()}
-                className="absolute top-1 right-1 p-0.5 touch:p-1.5 rounded-full bg-background/80 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 touch:opacity-100 focus-visible:opacity-100 transition-opacity"
-              >
-                <X className="size-3.5 touch:size-4" />
-              </button>
-              {pending.phase === "processing" && pending.progress !== undefined && (
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-border">
-                  <div
-                    className="h-full bg-primary transition-[width] duration-200"
-                    style={{ width: `${Math.round(pending.progress * 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Staged attachments — Discord-style cards, uploads in place. */}
+      <AttachmentTray
+        items={trayItems}
+        isTouch={isTouch}
+        onPreview={setLightboxUrl}
+        onRemove={removeAttachment}
+        onCancel={cancelPending}
+        onUpdate={updateAttachment}
+      />
 
       <div className="p-2">
         {voiceRecorder.isRecording || isPublishingVoice ? (
@@ -2207,23 +2438,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           </div>
         ) : (
           <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="*/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                const files = e.target.files;
-                if (files) {
-                  Array.from(files).forEach((file) => handleFileUpload(file));
-                }
-                e.target.value = "";
-                // The native picker focuses its hidden input/button on return.
-                // Restore the send box so Enter sends without another click.
-                requestAnimationFrame(() => textareaRef.current?.focus());
-              }}
-            />
+            {/* Three pickers: any file, the photo library, and the camera.
+                On a phone the first two open different system UIs; `capture`
+                goes straight to the camera where the WebView supports it. */}
+            <input ref={fileInputRef} type="file" accept="*/*" multiple className="hidden" onChange={onPickerChange} />
+            <input ref={mediaInputRef} type="file" accept="image/*,video/*" multiple className="hidden" onChange={onPickerChange} />
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickerChange} />
 
             {/* Collecting a bot command's arguments takes over the message box:
                 the fields ARE the message, and quoting is no longer the user's
@@ -2248,113 +2468,91 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
               )}
             >
-              {/* Plus menu: attach + poll (Discord-style) */}
-              <Popover open={plusOpen} onOpenChange={setPlusOpen}>
-                <PopoverTrigger asChild>
+              {/* Plus menu. Touch: a bottom sheet with the camera roll and
+                  action tiles (Signal/Discord mobile). Pointer: Discord's
+                  popover, whose first row uploads a file — and a double-click
+                  on "+" skips the menu and opens the file picker directly. */}
+              {isTouch ? (
+                <>
                   <button
                     type="button"
-                    aria-label="More options"
-                    disabled={isUploading}
-                    className={cn(
-                      "p-2 shrink-0 rounded-full transition-colors disabled:opacity-40 flex items-center justify-center size-9 touch:size-11",
-                      plusOpen || mode === "poll"
-                        ? "text-primary bg-primary/10"
-                        : "text-muted-foreground hover:text-foreground hover:bg-secondary",
-                    )}
+                    aria-label="Attach"
+                    aria-haspopup="dialog"
+                    onClick={() => setPlusOpen(true)}
+                    className={cn(plusButtonClass, plusOpen || mode === "poll"
+                      ? "text-primary bg-primary/10"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
                   >
-                    {isUploading
-                      ? <Loader2 className="size-5 animate-spin" />
-                      : <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />}
+                    <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />
                   </button>
-                </PopoverTrigger>
-                <PopoverContent
-                  side="top"
-                  align="start"
-                  sideOffset={8}
-                  // Don't yank focus back to the "+" trigger on close — items that
-                  // redirect focus (Poll, Commands) set it themselves, and the
-                  // default restore would clobber the textarea they just focused.
-                  onCloseAutoFocus={(e) => e.preventDefault()}
-                  className="w-44 p-1.5 rounded-xl border-border shadow-lg"
-                >
-                  <div className="flex flex-col gap-0.5">
+                  <AttachSheet
+                    open={plusOpen}
+                    onOpenChange={setPlusOpen}
+                    actions={sheetActions}
+                    apps={sheetApps}
+                    gamePicker={sheetGamePicker}
+                    onPickGalleryItems={handleGalleryItems}
+                  />
+                </>
+              ) : (
+                <Popover open={plusOpen} onOpenChange={setPlusOpen}>
+                  <PopoverTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => {
+                      aria-label="More options"
+                      onDoubleClick={() => {
+                        setPlusOpen(false);
                         fileInputRef.current?.click();
-                        setPlusOpen(false);
                       }}
-                      className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                      className={cn(plusButtonClass, plusOpen || mode === "poll"
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground hover:bg-secondary")}
                     >
-                      <Paperclip className="size-4" />
-                      <span className="font-medium">Attach file</span>
+                      <Plus className={cn("size-5 transition-transform", plusOpen && "rotate-45")} />
                     </button>
-                    {/* Only when a bot here actually offers something to run.
-                        Disabled mid-draft: the command menu keys off a draft that
-                        is nothing but "/", so seeding it would eat the message. */}
-                    {botEntries.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={openCommandMenu}
-                        disabled={hasContent}
-                        className={cn(
-                          "flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm transition-colors",
-                          hasContent
-                            ? "text-muted-foreground/40 cursor-not-allowed"
-                            : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
-                        )}
-                      >
-                        <SquareSlash className="size-4" />
-                        <span className="font-medium">Commands</span>
-                      </button>
-                    )}
-                    {appScope && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          launchApp(appScope, { type: "youtube" });
-                          setPlusOpen(false);
-                        }}
-                        className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-                      >
-                        <MonitorPlay className="size-4" />
-                        <span className="font-medium">Watch together</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPickerTab("games");
-                        setPickerOpen(true);
-                        setPlusOpen(false);
-                      }}
-                      className="flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-                    >
-                      <Blocks className="size-4" />
-                      <span className="font-medium">Add game</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMode((m) => (m === "poll" ? "post" : "poll"));
-                        setPlusOpen(false);
-                        textareaRef.current?.focus();
-                      }}
-                      hidden={(Boolean(sendOverride) && !onPollSubmit) || !pollsEnabled}
-                      className={cn(
-                        "flex items-center gap-2.5 w-full px-3 py-2 touch:py-3 rounded-lg text-sm transition-colors",
-                        ((sendOverride && !onPollSubmit) || !pollsEnabled) && "hidden",
-                        mode === "poll"
-                          ? "text-primary bg-primary/10"
-                          : "text-muted-foreground hover:text-foreground hover:bg-secondary/60",
-                      )}
-                    >
-                      <BarChart3 className="size-4" />
-                      <span className="font-medium">{mode === "poll" ? "Remove poll" : "Poll"}</span>
-                    </button>
-                  </div>
-                </PopoverContent>
-              </Popover>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    side="top"
+                    align="start"
+                    sideOffset={8}
+                    // Don't yank focus back to the "+" trigger on close — items that
+                    // redirect focus (Poll, Commands) set it themselves, and the
+                    // default restore would clobber the textarea they just focused.
+                    onCloseAutoFocus={(e) => e.preventDefault()}
+                    className="w-60 p-1.5 rounded-xl border-border shadow-lg"
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      {menuActions.map((action, i) => (
+                        <button
+                          key={action.id}
+                          type="button"
+                          disabled={action.disabled}
+                          onClick={() => {
+                            setPlusOpen(false);
+                            action.onSelect();
+                          }}
+                          className={cn(
+                            "group/item flex items-center gap-3 w-full px-2 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                            action.active ? "text-primary bg-primary/10" : "text-foreground/90 hover:bg-secondary/70 enabled:hover:text-foreground",
+                            // The file upload is the menu's main job; the rest sit under a rule.
+                            i === 1 && "mt-1 relative before:absolute before:-top-0.5 before:inset-x-2 before:h-px before:bg-border/60",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "flex size-8 shrink-0 items-center justify-center rounded-lg",
+                              action.active ? "bg-primary/15" : "bg-secondary/80 text-muted-foreground group-hover/item:text-foreground",
+                            )}
+                          >
+                            <action.icon className="size-[18px]" />
+                          </span>
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
 
               {/* Borderless, self-growing textarea */}
               <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
@@ -2859,34 +3057,4 @@ function QuoteBannerBody({ event }: { event: NostrRumor }) {
       </span>
     </span>
   );
-}
-
-/**
- * Composer attachment-chip thumbnail. Plain uploads point an <img> at the URL;
- * encrypted (Concord) uploads are ciphertext on Blossom, so this resolves them
- * through {@link useResolvedMediaSrc} (fetch + AES-GCM decrypt to an object URL)
- * exactly like the message render path, so the local preview isn't a broken img.
- */
-function AttachmentPreviewImage({
-  url,
-  mime,
-  encryption,
-}: {
-  url: string;
-  mime: string;
-  encryption?: ImetaEncryption;
-}) {
-  const resolved = useResolvedMediaSrc(encryption ? { url, encryption, mime } : url);
-  if (resolved.status !== "ready") {
-    return (
-      <div className="size-full flex items-center justify-center bg-secondary/40">
-        {resolved.status === "loading" ? (
-          <Loader2 className="size-5 animate-spin text-muted-foreground" />
-        ) : (
-          <Paperclip className="size-5 text-muted-foreground" />
-        )}
-      </div>
-    );
-  }
-  return <img src={resolved.src} alt="attachment" className="size-full object-cover" />;
 }

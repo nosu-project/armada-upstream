@@ -15,6 +15,7 @@ import { InviteEmbed } from "@/components/chat/InviteEmbed";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
 import { MediaFallback } from "@/components/chat/MediaFallback";
+import { MediaSpoilerCover } from "@/components/chat/MediaSpoiler";
 import { CodeBlock, InlineCode } from "@/components/chat/Markdown";
 import { ChatRouteEmbed } from "@/components/chat/ChatRouteEmbed";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
@@ -159,12 +160,17 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
 }
 
 /** A possibly-encrypted image reference for the gallery/lightbox. */
-type ImageRef = EncryptedRef;
+type ImageRef = EncryptedRef & { alt?: string; spoiler?: boolean };
+
+/** The image a token names, for the grid and the lightbox. */
+function imageRefOf(t: Extract<ContentToken, { type: "image-embed" }>): ImageRef {
+  return { url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks, alt: t.alt, spoiler: t.spoiler };
+}
 
 /** A parsed token from message content. */
 type ContentToken =
   | { type: "text"; value: string }
-  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[] }
+  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[]; alt?: string; spoiler?: boolean }
   | { type: "image-gallery"; urls: ImageRef[] }
   | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string; fallbacks?: string[] }
   | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number }
@@ -638,6 +644,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               dim: inlineImeta?.dim,
               blurhash: inlineImeta?.blurhash,
               fallbacks: inlineImeta?.fallbacks,
+              alt: inlineImeta?.alt,
+              spoiler: inlineImeta?.spoiler,
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -884,7 +892,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (!url || renderedUrls.has(url)) continue;
         const mime = imageMimeFor(entry);
         if (mime?.startsWith("image/")) {
-          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash, fallbacks: entry.fallbacks });
+          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash, fallbacks: entry.fallbacks, alt: entry.alt, spoiler: entry.spoiler });
           renderedUrls.add(url);
         } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime, fallbacks: entry.fallbacks });
@@ -1015,11 +1023,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     while (i < tokens.length) {
       const token = tokens[i];
       if (token.type === "image-embed") {
-        const run: ImageRef[] = [{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash, fallbacks: token.fallbacks }];
+        const run: ImageRef[] = [imageRefOf(token)];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type === "image-embed") {
           const t = tokens[j] as Extract<ContentToken, { type: "image-embed" }>;
-          run.push({ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks });
+          run.push(imageRefOf(t));
           j++;
         }
         if (run.length >= 2) {
@@ -1040,7 +1048,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   const allImages = useMemo<ImageRef[]>(
     () =>
       groupedTokens.flatMap((t) => {
-        if (t.type === "image-embed") return [{ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks }];
+        if (t.type === "image-embed") return [imageRefOf(t)];
         if (t.type === "image-gallery") return t.urls;
         return [];
       }),
@@ -1229,7 +1237,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return (
           <InlineImage
             key={key}
-            image={{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash, fallbacks: token.fallbacks }}
+            image={imageRefOf(token)}
             onOpen={() => setLightboxIndex(imgIndex)}
           />
         );
@@ -1337,6 +1345,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             // A Tenor/Giphy-style .mp4 is really a GIF — present it looping and
             // chromeless rather than as a video with controls.
             gif={isGifLikeUrl(token.url)}
+            spoiler={imeta?.spoiler}
+            alt={imeta?.alt}
           />
         );
       }
@@ -1757,6 +1767,7 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
 /** Inline image thumbnail that opens the shared lightbox on click. */
 function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
   const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
 
@@ -1797,10 +1808,12 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
         {!loaded && image.blurhash && (
           <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
         )}
+        {image.spoiler && !revealed && <MediaSpoilerCover onReveal={() => setRevealed(true)} />}
         {resolved.status === "ready" && (
           <img
             src={resolved.src}
-            alt=""
+            alt={image.alt ?? ""}
+            title={image.alt}
             // Native image drag/callout starts on the same hold as our
             // long-press and cancels it (a buzz, no menu) — off on both axes.
             draggable={false}
@@ -1857,6 +1870,7 @@ function GridImage({
   overflow?: number;
 }) {
   const [loaded, setLoaded] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
   const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
 
@@ -1879,7 +1893,8 @@ function GridImage({
           {resolved.status === "ready" && (
             <img
               src={resolved.src}
-              alt=""
+              alt={image.alt ?? ""}
+              title={image.alt}
               // See InlineImage: native drag/callout would eat the long-press.
               draggable={false}
               loading="lazy"
@@ -1891,6 +1906,7 @@ function GridImage({
           )}
         </>
       )}
+      {image.spoiler && !revealed && <MediaSpoilerCover compact onReveal={() => setRevealed(true)} />}
       {overflow !== undefined && (
         <span className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-lg font-semibold">
           +{overflow}

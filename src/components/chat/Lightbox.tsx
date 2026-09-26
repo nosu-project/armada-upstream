@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { ChevronLeft, ChevronRight, Copy, Download, Loader2, Share2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Download, EyeOff, Loader2, Share2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -27,6 +27,12 @@ import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 export interface LightboxItem extends EncryptedRef {
   /** Video poster frame (NIP-94 `image`/`thumb`); ignored for images. */
   poster?: string;
+  /**
+   * Behind a spoiler (imeta `content-warning`). Swiping onto one shows a
+   * cover, not the media: a message's other images being open is not consent
+   * to this one.
+   */
+  spoiler?: boolean;
 }
 
 /** Videos get a player slot instead of a zoomable image one. */
@@ -68,6 +74,13 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
   const hasMultiple = media.length > 1;
   const canGoNext = currentIndex < media.length - 1;
   const canGoPrev = currentIndex > 0;
+
+  // Spoilers revealed in THIS viewing, by URL. The item it opened on was
+  // chosen by the viewer, so it starts revealed; every other spoiler is
+  // covered until tapped.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set([media[currentIndex]?.url ?? ""]));
+  const covered = (item: LightboxItem) => !!item.spoiler && !revealed.has(item.url);
+  const currentCovered = media[currentIndex] ? covered(media[currentIndex]) : false;
 
   // System back (Android gesture/button) closes the lightbox instead of
   // navigating the underlying screen.
@@ -324,8 +337,12 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
             <span />
           )}
           <div className="flex items-center gap-1">
-            <LightboxShareButton item={media[currentIndex]} />
-            <LightboxDownloadButton item={media[currentIndex]} />
+            {!currentCovered && (
+              <>
+                <LightboxShareButton item={media[currentIndex]} />
+                <LightboxDownloadButton item={media[currentIndex]} />
+              </>
+            )}
             <button
               type="button"
               aria-label="Close"
@@ -386,7 +403,22 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
                 className="absolute inset-0 flex items-center justify-center will-change-transform py-6 pt-14 px-4 sm:px-12"
                 style={{ transform: `translateX(${initialX}px)` }}
               >
-                {isVideoItem(media[i]) ? (
+                {covered(media[i]) ? (
+                  <button
+                    type="button"
+                    aria-label="Reveal spoiler"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const url = media[i].url;
+                      setRevealed((prev) => new Set(prev).add(url));
+                    }}
+                    className="flex flex-col items-center gap-3 rounded-2xl bg-white/10 px-8 py-6 text-white transition-colors hover:bg-white/15"
+                  >
+                    <EyeOff className="size-8" />
+                    <span className="text-sm font-bold tracking-wide">SPOILER</span>
+                    <span className="text-xs text-white/70">Tap to reveal</span>
+                  </button>
+                ) : isVideoItem(media[i]) ? (
                   <LightboxVideo video={media[i]} isActive={i === currentIndex} />
                 ) : (
                   <LightboxImage

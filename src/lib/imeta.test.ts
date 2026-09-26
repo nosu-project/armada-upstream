@@ -245,3 +245,22 @@ describe("the webxdc realtime session field", () => {
     expect(read(imeta("m image/png"))).toBeUndefined();
   });
 });
+
+describe("per-attachment alt text and spoiler", () => {
+  const url = "https://blossom.example/abc.jpg";
+
+  it("reads the description from `alt`, spaces and all", () => {
+    const map = parseImetaMap([["imeta", `url ${url}`, "m image/jpeg", "alt A cat asleep on a keyboard"]]);
+    expect(map.get(url)?.alt).toBe("A cat asleep on a keyboard");
+  });
+
+  it("marks a spoiler from `content-warning`, with a reason or without one", () => {
+    expect(parseImetaMap([["imeta", `url ${url}`, "content-warning spoiler"]]).get(url)?.spoiler).toBe(true);
+    expect(parseImetaMap([["imeta", `url ${url}`, "content-warning"]]).get(url)?.spoiler).toBe(true);
+    expect(parseImetaMap([["imeta", `url ${url}`, "m image/jpeg"]]).get(url)?.spoiler).toBeUndefined();
+  });
+
+  it("does not take an empty `alt` as a description", () => {
+    expect(parseImetaMap([["imeta", `url ${url}`, "alt "]]).get(url)?.alt).toBeUndefined();
+  });
+});

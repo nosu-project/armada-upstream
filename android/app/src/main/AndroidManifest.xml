@@ -125,6 +125,19 @@
             android:foregroundServiceType="microphone|mediaPlayback" />
     </application>
 
+    <!-- Package visibility (Android 11+) for the camera app. Capacitor's file
+         chooser checks `resolveActivity` on IMAGE_CAPTURE before launching it
+         for an `<input capture>`, and without this entry that lookup returns
+         nothing, so the attach sheet's Camera fell back to a file picker.
+         Photo only: the Camera input accepts `image/*`, and Capacitor launches
+         VIDEO_CAPTURE instead of IMAGE_CAPTURE whenever `video/*` is also
+         accepted, so there is no path that would query for it. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -159,6 +172,15 @@
          relay connections survive Doze and the service can restart on boot
          (Android 15+). Only requested when background notifications are on. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- The attach sheet's recent-media grid (MediaGalleryPlugin). Asked for
+         only when the user opens the sheet; on 14+ the user may grant just a
+         selection (READ_MEDIA_VISUAL_USER_SELECTED), which MediaStore honours
+         by returning only those items. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
     <!-- Bluetooth mesh (bitchat) permissions -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
