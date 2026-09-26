@@ -40,7 +40,8 @@ import type { NostrRumor } from "@/lib/nostrRumor";
  * community listings, NIP-30 emoji packs, and shareable themes.
  *
  * Queries the app relays directly (`config.appRelays` — the same general-purpose
- * relays everything non-group uses) via `nostr.group(...)`. Going direct
+ * relays everything non-group uses) one relay at a time ({@link queryEachRelay}),
+ * merging the answers. Going direct
  * bypasses the pool's `search`-filter router (which would otherwise divert a
  * search to the dedicated search relays only). When the user typed a query we
  * send BOTH a NIP-50 `search` filter (search-capable relays narrow server-side)
@@ -51,6 +52,73 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 const FETCH_LIMIT = 100;
 const TIMEOUT_MS = 6000;
+
+/**
+ * How long the other relays get after the FIRST one answers. Not the pool's
+ * 300ms `eoseTimeout`: that is tuned for timelines, where the fastest relay is
+ * representative of the rest, and on Discover it let a quick relay holding a
+ * handful of listings cut off every slower relay holding the rest.
+ */
+const RELAY_GRACE_MS = 2500;
+
+/**
+ * Run `filters` against each relay SEPARATELY and return each answering
+ * relay's events. Every relay waits for its own EOSE; once the first has
+ * answered the rest get {@link RELAY_GRACE_MS}, and {@link TIMEOUT_MS} caps it
+ * all, so a dead relay costs only its own events.
+ */
+async function queryEachRelay(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+  filters: NostrFilter[],
+  signal: AbortSignal,
+): Promise<NostrRumor[][]> {
+  const grace = new AbortController();
+  const settled = AbortSignal.any([signal, grace.signal, AbortSignal.timeout(TIMEOUT_MS)]);
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const answers: NostrRumor[][] = [];
+  await Promise.allSettled(
+    relays.map(async (url) => {
+      const events = await nostr.relay(url).query(filters, { signal: settled });
+      answers.push(events);
+      graceTimer ??= setTimeout(() => grace.abort(), RELAY_GRACE_MS);
+    }),
+  );
+  clearTimeout(graceTimer);
+  return answers;
+}
+
+/** Union of the per-relay answers, deduped by event id. */
+function mergeAnswers(answers: NostrRumor[][]): NostrRumor[] {
+  const byId = new Map<string, NostrRumor>();
+  for (const events of answers) for (const event of events) byId.set(event.id, event);
+  return [...byId.values()];
+}
+
+/**
+ * The oldest `created_at` every relay's answer is complete down to, or
+ * `undefined` when no relay filled its `limit` window (nothing older to page).
+ *
+ * Each relay that came back full is complete only down to its `limit`-th
+ * newest matching event, and those floors differ by relay: one relay's 100
+ * newest may span a day and another's a year. Paging from the union's oldest
+ * event would skip everything the dense relay holds in between, so a page is
+ * cut at the HIGHEST floor and the next page starts there.
+ */
+function windowFloor(
+  answers: NostrRumor[][],
+  inWindow: (event: NostrRumor) => boolean,
+): number | undefined {
+  let floor: number | undefined;
+  for (const events of answers) {
+    const times = events.filter(inWindow).map((e) => e.created_at);
+    if (times.length < FETCH_LIMIT) continue;
+    times.sort((a, b) => b - a);
+    const nth = times[FETCH_LIMIT - 1];
+    floor = floor === undefined ? nth : Math.max(floor, nth);
+  }
+  return floor;
+}
 
 /**
  * Warm-load seeds: the last successful follow-pack membership and community
@@ -139,20 +207,16 @@ function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
   return [...newest.values()].sort((a, b) => b.created_at - a.created_at);
 }
 
-/** One page of a Discover feed, plus whether the relays had nothing older. */
+/** One page of a Discover feed, plus where the next page starts. */
 interface DiscoverFeedPage {
   /** Newest-first, deduped by addressable coordinate within the page. */
   events: NostrRumor[];
-  /** The recent window came back under-full — there is nothing older to page. */
-  complete: boolean;
-}
-
-/** The `until` cursor for the page AFTER this one: its oldest event's time. */
-function oldestCreatedAt(events: NostrRumor[]): number | undefined {
-  // `events` is newest-first (newestPerAddr sorts descending), so the tail is
-  // the oldest. `until` is inclusive; cross-page addr/id dedup absorbs the
-  // one-event overlap.
-  return events.length > 0 ? events[events.length - 1].created_at : undefined;
+  /**
+   * The `until` for the page AFTER this one ({@link windowFloor}), or
+   * `undefined` when every relay came back under-full — nothing older to page.
+   * `until` is inclusive; cross-page addr/id dedup absorbs the overlap.
+   */
+  cursor: number | undefined;
 }
 
 /** Shared paginated fetch across the app relays (one page per `until`). */
@@ -176,13 +240,12 @@ async function fetchDiscoverPage(
   // plain filter, and the caller filters client-side either way.
   if (query) filters.push({ ...base, search: query });
 
-  const events = await nostr
-    .group(relays)
-    .query(filters, { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) });
-  // A full window may have more behind it; an under-full one is the end. Judged
-  // on the raw merged count (pre-dedup), so a page whose addresses collapse
-  // still pages on rather than stopping early.
-  return { events: newestPerAddr(events), complete: events.length < FETCH_LIMIT };
+  const answers = await queryEachRelay(nostr, relays, filters, signal);
+  // Judged on each relay's raw count (pre-dedup), so a page whose addresses
+  // collapse still pages on rather than stopping early.
+  const cursor = windowFloor(answers, () => true);
+  const events = mergeAnswers(answers).filter((e) => cursor === undefined || e.created_at >= cursor);
+  return { events: newestPerAddr(events), cursor };
 }
 
 /** The app relays Discover reads from (de-duplicated). */
@@ -215,10 +278,15 @@ async function fetchFollowPack(
   signal: AbortSignal,
 ): Promise<string[]> {
   const coord = TEAM_PACK_COORD!;
-  const [event] = await nostr.group(relays).query(
+  const answers = await queryEachRelay(
+    nostr,
+    relays,
     [{ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 }],
-    { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
+    signal,
   );
+  // Newest across relays: a relay holding a stale version must not win by
+  // answering first.
+  const [event] = mergeAnswers(answers).sort((a, b) => b.created_at - a.created_at);
   let pubkeys = followPackPubkeys(event);
   if (pubkeys.length === 0) {
     // An empty read on a cold pool or a dropped REQ is a probable miss, not
@@ -235,10 +303,53 @@ async function fetchFollowPack(
 }
 
 /**
- * Fetch the allow-listed community announcements (and, in the same round
- * trip, the NIP-09 un-publishes that remove listings). Used only as the
- * completeness fallback when the unfiltered directory read overflowed its
- * window — see {@link DiscoverDirectory}.
+ * Fold announcements into listings: honor un-publishes (a NIP-09 delete by the
+ * ANNOUNCEMENT'S OWN author removes the listing; anyone else's delete is
+ * ignored), and keep the newest announcement per link signer.
+ */
+function foldAnnouncements(anns: NostrRumor[], dels: NostrRumor[]): DiscoveredInvite[] {
+  const deleted = new Set<string>();
+  const byId = new Map(anns.map((e) => [e.id, e.pubkey]));
+  for (const del of dels) {
+    for (const [n, id] of del.tags) {
+      if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
+    }
+  }
+  const byLinkSigner = new Map<string, DiscoveredInvite>();
+  for (const event of [...anns].sort((a, b) => b.created_at - a.created_at)) {
+    if (deleted.has(event.id)) continue;
+    const invite = announcementFromEvent(event);
+    if (!invite) continue;
+    if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
+  }
+  return [...byLinkSigner.values()];
+}
+
+const isAnnouncement = (e: NostrRumor) => e.kind === KIND_COMMUNITY_ANNOUNCEMENT;
+
+/**
+ * Split merged per-relay answers into the announcement window (cut at
+ * {@link windowFloor}) and the un-publishes.
+ */
+function announcementWindow(answers: NostrRumor[][]): {
+  anns: NostrRumor[];
+  dels: NostrRumor[];
+  cursor: number | undefined;
+} {
+  const cursor = windowFloor(answers, isAnnouncement);
+  const events = mergeAnswers(answers);
+  return {
+    anns: events.filter((e) => isAnnouncement(e) && (cursor === undefined || e.created_at >= cursor)),
+    dels: events.filter((e) => e.kind === 5),
+    cursor,
+  };
+}
+
+/**
+ * Fetch community announcements (and, in the same round trip, the NIP-09
+ * un-publishes that remove listings) — the directory's deeper pages, and the
+ * allow-listed completeness fallback when the unfiltered first window
+ * overflowed (see {@link DiscoverDirectory}).
  */
 async function fetchCommunityAnnouncements(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -246,17 +357,15 @@ async function fetchCommunityAnnouncements(
   authorFilter: string[] | undefined,
   signal: AbortSignal,
   until?: number,
-): Promise<DiscoveredInvite[]> {
+): Promise<{ invites: DiscoveredInvite[]; cursor: number | undefined }> {
   const filter: NostrFilter = { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT };
   if (authorFilter) filter.authors = authorFilter;
   if (until !== undefined) filter.until = until;
-  // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
-  // removes the listing (anyone else's delete is ignored). Fetched in the
-  // SAME round trip as the announcements — un-listing always attaches a
-  // `["k", "3314"]` tag (ShareToDiscoverDialog), so the deletes are
-  // addressable by kind up front instead of by the announcement ids,
-  // which would serialize a second relay hop behind the first. Windowed by the
-  // same `until` so a deeper page carries the deletes for its own announcements.
+  // Un-listing always attaches a `["k", "3314"]` tag (ShareToDiscoverDialog),
+  // so the deletes are addressable by kind up front instead of by the
+  // announcement ids, which would serialize a second relay hop behind the
+  // first. Windowed by the same `until` so a deeper page carries the deletes
+  // for its own announcements.
   const delFilter: NostrFilter = {
     kinds: [5],
     "#k": [String(KIND_COMMUNITY_ANNOUNCEMENT)],
@@ -264,29 +373,9 @@ async function fetchCommunityAnnouncements(
   };
   if (authorFilter) delFilter.authors = authorFilter;
   if (until !== undefined) delFilter.until = until;
-  const timeout = () => AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
-  const [events, dels] = await Promise.all([
-    nostr.group(relays).query([filter], { signal: timeout() }),
-    nostr.group(relays).query([delFilter], { signal: timeout() }).catch(() => []),
-  ]);
-  const deleted = new Set<string>();
-  const byId = new Map(events.map((e) => [e.id, e.pubkey]));
-  for (const del of dels) {
-    for (const [n, id] of del.tags) {
-      if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
-    }
-  }
-  // Newest announcement wins for a given link.
-  events.sort((a, b) => b.created_at - a.created_at);
-  const byLinkSigner = new Map<string, DiscoveredInvite>();
-  for (const event of events) {
-    if (deleted.has(event.id)) continue;
-    const invite = announcementFromEvent(event);
-    if (!invite) continue;
-    if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
-  }
-  const invites = [...byLinkSigner.values()];
-  return invites;
+  const answers = await queryEachRelay(nostr, relays, [filter, delFilter], signal);
+  const { anns, dels, cursor } = announcementWindow(answers);
+  return { invites: foldAnnouncements(anns, dels), cursor };
 }
 
 /**
@@ -311,6 +400,11 @@ export interface DiscoverDirectory {
    * should run the (slower, authors-filtered) fallback read for completeness.
    */
   overflow: boolean;
+  /**
+   * Where the next page starts ({@link windowFloor}). Absent from seeds
+   * written before it existed, which fall back to the oldest listing.
+   */
+  cursor?: number;
 }
 
 /** Fetch the {@link DiscoverDirectory}, persisting the warm-load seeds. */
@@ -330,12 +424,10 @@ async function fetchDiscoverDirectory(
     const coord = TEAM_PACK_COORD;
     filters.push({ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 });
   }
-  const events = await nostr
-    .group(relays)
-    .query(filters, { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) });
+  const answers = await queryEachRelay(nostr, relays, filters, signal);
 
   const packEvent = TEAM_PACK_COORD
-    ? events
+    ? mergeAnswers(answers)
         .filter((e) => e.kind === TEAM_PACK_COORD.kind && e.pubkey === TEAM_PACK_COORD.pubkey)
         .sort((a, b) => b.created_at - a.created_at)[0]
     : undefined;
@@ -354,43 +446,25 @@ async function fetchDiscoverDirectory(
   // Feed the standalone pack query's seed too (the Emojis/Themes tabs).
   writeSeed(PACK_SEED_KV, packAuthors);
 
-  const anns = events.filter((e) => e.kind === KIND_COMMUNITY_ANNOUNCEMENT);
-  const dels = events.filter((e) => e.kind === 5);
-  // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
-  // removes the listing (anyone else's delete is ignored).
-  const deleted = new Set<string>();
-  const byId = new Map(anns.map((e) => [e.id, e.pubkey]));
-  for (const del of dels) {
-    for (const [n, id] of del.tags) {
-      if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
-    }
-  }
-  // Newest announcement wins for a given link.
-  anns.sort((a, b) => b.created_at - a.created_at);
-  const byLinkSigner = new Map<string, DiscoveredInvite>();
-  for (const event of anns) {
-    if (deleted.has(event.id)) continue;
-    const invite = announcementFromEvent(event);
-    if (!invite) continue;
-    if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
-  }
-  let invites = [...byLinkSigner.values()];
+  const { anns, dels, cursor } = announcementWindow(answers);
+  let invites = foldAnnouncements(anns, dels);
+  let overflow = cursor !== undefined;
+  let nextCursor = cursor;
   if (anns.length === 0) {
     // Same fail-open rule as the pack above: a round trip that returned NO
     // announcements at all is a probable miss (cold pool, dropped REQ), not
     // an emptied directory — returning it as truth would swap a painted grid
     // for the empty state on the next background refresh. Carry the last
-    // good listing set forward; a real refresh overwrites it.
+    // good listing set forward; a real refresh overwrites it. A seeded read
+    // reports no overflow, so it never paginates.
     const seeded = await getArmadaDB()
       .kv.get<DiscoverDirectory>(DIRECTORY_SEED_KV)
       .catch(() => undefined);
     if (seeded && seeded.invites.length > 0) invites = seeded.invites;
+    overflow = false;
+    nextCursor = undefined;
   }
-  const directory: DiscoverDirectory = {
-    packAuthors,
-    invites,
-    overflow: anns.length >= FETCH_LIMIT,
-  };
+  const directory: DiscoverDirectory = { packAuthors, invites, overflow, cursor: nextCursor };
   if (directory.invites.length > 0 || directory.packAuthors.length > 0) {
     getArmadaDB().kv.set(DIRECTORY_SEED_KV, directory).catch(() => undefined);
   }
@@ -405,8 +479,8 @@ interface CommunitiesPage {
   invites: DiscoveredInvite[];
   /** Page 1's unfiltered window overflowed — arm the authors-filtered fallback. */
   overflow: boolean;
-  /** The announcement window came back under-full — nothing older to page. */
-  complete: boolean;
+  /** The `until` for the next page; `undefined` when there is nothing older. */
+  cursor: number | undefined;
 }
 
 /**
@@ -422,17 +496,22 @@ async function fetchCommunitiesPage(
   until: number | undefined,
   signal: AbortSignal,
 ): Promise<CommunitiesPage> {
-  if (until === undefined) {
-    const dir = await fetchDiscoverDirectory(nostr, relays, signal);
-    // A full window (overflow) has older pages behind it; an under-full one is
-    // the end. A seeded/failed read reports overflow false, so it never paginates.
-    return { packAuthors: dir.packAuthors, invites: dir.invites, overflow: dir.overflow, complete: !dir.overflow };
-  }
-  const invites = await fetchCommunityAnnouncements(nostr, relays, undefined, signal, until);
-  return { packAuthors: [], invites, overflow: false, complete: invites.length < FETCH_LIMIT };
+  if (until === undefined) return directoryPage(await fetchDiscoverDirectory(nostr, relays, signal));
+  const { invites, cursor } = await fetchCommunityAnnouncements(nostr, relays, undefined, signal, until);
+  return { packAuthors: [], invites, overflow: false, cursor };
 }
 
-/** The `until` cursor for the page after this one — its oldest announcement. */
+/** A directory as the infinite query's first page. */
+function directoryPage(dir: DiscoverDirectory): CommunitiesPage {
+  return {
+    packAuthors: dir.packAuthors,
+    invites: dir.invites,
+    overflow: dir.overflow,
+    cursor: dir.overflow ? (dir.cursor ?? oldestInviteCursor(dir.invites)) : undefined,
+  };
+}
+
+/** The oldest listing's time — the cursor of a seed that predates `cursor`. */
 function oldestInviteCursor(invites: DiscoveredInvite[]): number | undefined {
   let oldest: number | undefined;
   for (const invite of invites) {
@@ -460,8 +539,7 @@ function communitiesInfiniteOptions(
     initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }: { pageParam: number | undefined; signal: AbortSignal }) =>
       fetchCommunitiesPage(nostr, relays, pageParam, signal),
-    getNextPageParam: (lastPage: CommunitiesPage) =>
-      lastPage.complete ? undefined : oldestInviteCursor(lastPage.invites),
+    getNextPageParam: (lastPage: CommunitiesPage) => lastPage.cursor,
   };
 }
 
@@ -592,15 +670,9 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
         const stored = await getArmadaDB().kv.get<DiscoverDirectory>(DIRECTORY_SEED_KV);
         if (cancelled || !stored) return;
         if (queryClient.getQueryData(key) !== undefined) return;
-        const firstPage: CommunitiesPage = {
-          packAuthors: stored.packAuthors,
-          invites: stored.invites,
-          overflow: stored.overflow,
-          complete: !stored.overflow,
-        };
         queryClient.setQueryData(
           key,
-          { pages: [firstPage], pageParams: [undefined] },
+          { pages: [directoryPage(stored)], pageParams: [undefined] },
           { updatedAt: 0 },
         );
       } catch {
@@ -642,7 +714,8 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
     queryKey: communitiesQueryKey(relays, authors),
     enabled: overflowed,
     staleTime: 30_000,
-    queryFn: ({ signal }) => fetchCommunityAnnouncements(nostr, relays, authors, signal),
+    queryFn: async ({ signal }) =>
+      (await fetchCommunityAnnouncements(nostr, relays, authors, signal)).invites,
   });
 
   const data = useMemo(() => {
@@ -809,13 +882,12 @@ export function useDiscoverCommunityActivity(
       const now = Math.floor(Date.now() / 1000);
       const batches = discoverActivityBatches(parsed, now);
       if (batches.length === 0) return {};
-      const deadline = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
-      // allSettled: one unreachable relay set must cost only its own listings
-      // their timestamp, not every listing in the grid.
-      const pages = await Promise.allSettled(
-        batches.map((b) => nostr.group(b.relays).query(b.filters, { signal: deadline })),
+      // Per relay, so the relay that answers first can't cut off one holding a
+      // newer wrap; an unreachable relay costs only its own events.
+      const pages = await Promise.all(
+        batches.map((b) => queryEachRelay(nostr, b.relays, b.filters, signal)),
       );
-      const events = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+      const events = pages.flatMap(mergeAnswers);
       return activityByLinkSigner(parsed, events, now);
     },
   });
@@ -857,8 +929,7 @@ export function useDiscoverEmojiPacks(query: string): DiscoverFeed<NostrRumor> {
     initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }) =>
       fetchDiscoverPage(nostr, relays, KIND_EMOJI_SET, q, authorFilter, signal, pageParam),
-    getNextPageParam: (lastPage: DiscoverFeedPage) =>
-      lastPage.complete ? undefined : oldestCreatedAt(lastPage.events),
+    getNextPageParam: (lastPage: DiscoverFeedPage) => lastPage.cursor,
   });
 
   // Narrow the flattened pages once, here: cross-page addr dedup (a newer
@@ -910,8 +981,7 @@ export function useDiscoverThemes(query: string): DiscoverFeed<NostrRumor> {
     initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }) =>
       fetchDiscoverPage(nostr, relays, THEME_DEFINITION_KIND, q, authorFilter, signal, pageParam),
-    getNextPageParam: (lastPage: DiscoverFeedPage) =>
-      lastPage.complete ? undefined : oldestCreatedAt(lastPage.events),
+    getNextPageParam: (lastPage: DiscoverFeedPage) => lastPage.cursor,
   });
 
   const data = useMemo(() => {
