@@ -107,7 +107,7 @@ const ProfileThemeEditor = lazy(
  * portals to `document.body` and, in modal mode, drops pointer events on
  * everything else — which would put this over the community rail and kill it,
  * when the rail is exactly what should stay live: it is how you leave. So this
- * is an overlay INSIDE the main pane, filling it bar a margin, positioned
+ * is an overlay INSIDE the main pane, filling it (bar a margin from `md`), positioned
  * against the `relative` `<main>` that renders it. What Radix would have given
  * for free and is hand-wired below: Escape to close, and the backdrop as a
  * dismiss target. Focus is deliberately not trapped — nothing outside is
@@ -146,7 +146,12 @@ export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: ()
         role="dialog"
         aria-modal="false"
         aria-label="Profile"
-        className="absolute inset-2 md:inset-4 z-30 clip-corner-lg overflow-hidden border border-border bg-chrome shadow-lg animate-in fade-in-0 zoom-in-95"
+        // Absolutely positioned, so the pane's `safe-area-top` padding doesn't
+        // reach it: the top inset is added here or the panel runs under the
+        // status bar. On a phone it IS the pane — a margin there only frames
+        // a narrower profile — and from `md` it floats, fill-only (a border
+        // would lose its cut corners to the clip).
+        className="absolute inset-0 pt-[var(--safe-area-inset-top,env(safe-area-inset-top,0px))] md:pt-0 md:inset-4 md:top-[calc(1rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] md:clip-corner-lg z-30 overflow-hidden bg-background animate-in fade-in-0 zoom-in-95"
       >
         <ProfileView pubkey={pubkey} onClose={onClose} />
       </div>
@@ -341,18 +346,19 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       </Button>
 
       <div className="relative h-full overflow-y-auto">
-        {/* The panel fills the pane, the content doesn't: a bio and an About
-            card stretched across a wide monitor is a line length nobody
-            reads. Capped and centred, so the width the panel gained becomes
-            margin rather than measure. */}
-        <div className="mx-auto w-full max-w-4xl px-3 py-3 md:px-6 md:py-6">
-          {/* Header card: banner, avatar, identity, actions. */}
-          <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
-            <div className="h-32 md:h-44 bg-secondary relative">
-              <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" decoding="async" />
-            </div>
+        {/* The banner runs edge to edge — the header is the page's top, not a
+            card sitting in it. */}
+        <div className="h-36 md:h-52 bg-secondary">
+          <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+        </div>
 
-            <div className="px-4 pb-4 md:px-6 md:pb-6">
+        {/* Identity: avatar, actions, name, bio. Unboxed; over a background
+            image it gets a full-width band of the translucent card surface so
+            the text stays legible. The content, unlike the panel, is capped
+            and centred: a bio stretched across a wide monitor is a line
+            length nobody reads. */}
+        <section className={background ? card : undefined}>
+            <div className="mx-auto w-full max-w-4xl px-4 pb-5 md:px-8 md:pb-6">
               <div className="flex items-end justify-between gap-2 flex-wrap">
                 <div className="-mt-10 md:-mt-12">
                   <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
@@ -363,8 +369,10 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                   </Avatar>
                 </div>
 
-                {/* Action row, right of the avatar. */}
-                <div className="flex items-center gap-2 pt-2">
+                {/* Action row, right of the avatar. Wraps rather than running
+                    off a narrow screen, where Message + Follow + the off-ramps
+                    are wider than the card. */}
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 pt-2">
                   {isSelf ? (
                     <>
                       <Button
@@ -564,7 +572,9 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 <p className="mt-3 text-sm whitespace-pre-wrap break-words">{metadata.about}</p>
               )}
             </div>
-          </section>
+        </section>
+
+        <div className="mx-auto w-full max-w-4xl px-3 pb-6 md:px-8 md:pb-8">
 
           {/* Below the header: fields on the left, badges/communities beside.
               Held back one frame so the identity above commits — and paints —
@@ -575,7 +585,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
           <div className="mt-3 md:mt-4 grid gap-3 md:gap-4 lg:grid-cols-[1fr_18rem] items-start">
             <div className="space-y-3 md:space-y-4 min-w-0">
               {(fields.length > 0 || website || metadata?.lud16) && (
-                <section className={cn("clip-corner-lg border border-border p-4 md:p-5", card)}>
+                <section className={cn("clip-corner-lg p-4 md:p-5", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
                     About
                   </h2>
@@ -612,7 +622,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                   only while nothing has arrived yet, so it gives way to real
                   content rather than stacking above it. */}
               {sidebarLoading && sidebarEmpty && (
-                <section className={cn("clip-corner-lg border border-border p-4", card)}>
+                <section className={cn("clip-corner-lg p-4", card)}>
                   <Skeleton className="h-3 w-28" />
                   <div className="mt-3 space-y-2">
                     <Skeleton className="h-7 w-full" />
@@ -623,7 +633,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               )}
 
               {badges.length > 0 && (
-                <section className={cn("clip-corner-lg border border-border p-4", card)}>
+                <section className={cn("clip-corner-lg p-4", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
                     Badges
                   </h2>
@@ -640,7 +650,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               )}
 
               {!isSelf && shared.length > 0 && (
-                <section className={cn("clip-corner-lg border border-border p-4", card)}>
+                <section className={cn("clip-corner-lg p-4", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
                     <Users className="size-3.5" />
                     {shared.length} shared {shared.length === 1 ? "community" : "communities"}
@@ -822,7 +832,7 @@ function SharedFollowersCard({
   const [showAll, setShowAll] = useState(false);
   const visible = showAll ? shared : shared.slice(0, 5);
   return (
-    <section className={cn("clip-corner-lg border border-border p-4", cardClass)}>
+    <section className={cn("clip-corner-lg p-4", cardClass)}>
       <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
         <UserCheck className="size-3.5" />
         {shared.length} shared {shared.length === 1 ? "follower" : "followers"}
