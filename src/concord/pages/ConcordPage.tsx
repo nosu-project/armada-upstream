@@ -4157,6 +4157,9 @@ export function ConcordPage() {
                           onTyping={publishTyping}
                           encryptAttachments
                           onEditLast={canWrite ? editLast : undefined}
+                          // Caret in the composer on open and on each channel
+                          // switch; not on touch, where it raises the keyboard.
+                          autoFocus={!isTouchDevice}
                         />
                       </>
                     )

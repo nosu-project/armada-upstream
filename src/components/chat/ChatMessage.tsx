@@ -296,6 +296,16 @@ function ThreadBadge({
   );
 }
 
+/**
+ * Leave focus where a menu action put it — Reply focusing the composer —
+ * instead of letting the closing menu restore it to what held it on open
+ * (usually the body, since right-clicking a row blurs the composer).
+ */
+function keepActionFocus(e: Event) {
+  const active = document.activeElement;
+  if (active && active !== document.body) e.preventDefault();
+}
+
 export interface ChatMessageProps {
   event: ChatMsg;
   canWrite: boolean;
@@ -1150,7 +1160,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       // them), keeps a right-click on text from inheriting the last image's.
       <ContextMenu onOpenChange={(open) => { setMenuOpen(open); if (!open) setImageActions(null); }}>
         <ContextMenuTrigger className="block" onContextMenuCapture={() => setImageActions(null)}>{row}</ContextMenuTrigger>
-        <ContextMenuContent className="w-52" collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
+        <ContextMenuContent className="w-52" onCloseAutoFocus={keepActionFocus} collisionPadding={menuOpen ? getComposerCollisionPadding(composerBoundsRef) : undefined}>
           {withImageActions(imageActions, menuActions).map((action) => (
             <div key={action.id}>
               {action.groupStart && <ContextMenuSeparator />}

@@ -42,6 +42,7 @@ import {
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroup } from "@/hooks/useGroup";
 import { useGroupModeration } from "@/hooks/useGroupModeration";
@@ -421,6 +422,7 @@ export function BuzzChat({
   searchQuery = "",
 }: BuzzChatProps) {
   const { user } = useCurrentUser();
+  const isTouch = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, channelId);
   const channelName = groupDetails?.group?.name;
@@ -921,6 +923,9 @@ export function BuzzChat({
             onTyping={publishTyping}
             onSlashAction={handleSlashAction}
             onEditLast={editLast}
+            // Caret in the composer on open and on each channel switch; not on
+            // touch, where it raises the keyboard.
+            autoFocus={!isTouch}
           />
         ) : membershipPending ? (
           <div className="p-2" aria-hidden>

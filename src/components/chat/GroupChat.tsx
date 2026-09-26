@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEvent } from "@/hooks/useEvent";
 import { useGroup } from "@/hooks/useGroup";
@@ -247,6 +248,7 @@ interface GroupChatProps {
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "" }: GroupChatProps) {
   const { user } = useCurrentUser();
+  const isTouch = useIsTouch();
   const location = useLocation();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, groupId);
@@ -666,6 +668,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             botCommands
             onSlashAction={handleSlashAction}
             onEditLast={editLast}
+            // Caret in the composer on open and on each channel switch; not on
+            // touch, where it raises the keyboard.
+            autoFocus={!isTouch}
           />
         ) : membershipPending ? (
           // Membership is still resolving — don't flash the "join to message"

@@ -21,6 +21,7 @@ import { nip19 } from "nostr-tools";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
+import { mayFocusOnSwitch, registerTypeToFocus } from "@/components/chat/typeToFocus";
 import { authorsByRecency } from "@/components/chat/transport";
 import type { PollDraft } from "@/components/chat/transport";
 import { ReplyPreview } from "@/components/chat/ChatMessage";
@@ -364,7 +365,11 @@ interface ChatComposerProps {
   onOptimisticFailed?: (id: string) => void;
   /** Whether the current user can moderate (enables moderation slash commands). */
   canModerate?: boolean;
-  /** Focus the textarea on mount (e.g. when a thread panel opens). */
+  /**
+   * Focus the textarea on mount and on each conversation switch (e.g. when a
+   * thread panel opens), and — on non-touch devices — catch printable keys
+   * typed while nothing editable has focus.
+   */
   autoFocus?: boolean;
   /** Fired (unthrottled) as the user types; the caller throttles + publishes a typing signal. */
   onTyping?: () => void;
@@ -743,9 +748,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return () => window.removeEventListener("resize", resize);
   }, [content, layout]);
 
-  // Focus the textarea when starting a reply.
+  // Focus the textarea when starting a reply. Deferred a frame: Reply picked
+  // from a message's context menu commits this while the menu still traps
+  // focus, which would pull an immediate focus straight back into the menu.
   useEffect(() => {
-    if (replyTo) textareaRef.current?.focus();
+    if (!replyTo) return;
+    const frame = requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
   }, [replyTo]);
 
   // Clear a pending reply when the composer moves to another channel or group:
@@ -760,10 +769,28 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     onCancelReplyRef.current?.();
   }, [relayUrl, groupId]);
 
-  // Focus on mount when requested (e.g. the thread panel opening via /thread).
+  // Focus on mount when requested (e.g. the thread panel opening via /thread),
+  // and again when the composer moves to another conversation without
+  // remounting. A field or dialog that already holds the keyboard keeps it,
+  // and so does a switch made from the keyboard (arrowing through the channel
+  // list), which leaves focus where the user is navigating.
   useEffect(() => {
-    if (autoFocus) requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [autoFocus]);
+    if (!autoFocus) return;
+    const frame = requestAnimationFrame(() => {
+      if (!mayFocusOnSwitch(textareaRef.current)) return;
+      textareaRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus, relayUrl, groupId]);
+
+  // Type-to-focus: a printable key pressed while nothing editable has focus
+  // lands in the newest auto-focusing composer, so the user never has to click
+  // back into it after touching the timeline. Not on touch, where focusing
+  // raises the soft keyboard and there is no stray hardware keypress to catch.
+  useEffect(() => {
+    if (!autoFocus || isTouch) return;
+    return registerTypeToFocus(textareaRef);
+  }, [autoFocus, isTouch]);
 
   // Dismiss the emoji/GIF/sticker picker when interacting outside it — e.g.
   // clicking back into the chat messages or the composer's text input.
@@ -1950,6 +1977,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // draft is not, since that would read as losing it.
       e.preventDefault();
       onCancel();
+    } else if (e.key === "Escape" && replyTo && onCancelReply && !e.defaultPrevented && !e.nativeEvent.isComposing) {
+      // Escape drops the reply target, keeping whatever was typed. An open
+      // autocomplete claims the key first (its native listener runs before
+      // this one and prevents the default), so Escape closes that instead.
+      e.preventDefault();
+      onCancelReply();
     } else if (
       e.key === "ArrowUp" &&
       onEditLast &&
