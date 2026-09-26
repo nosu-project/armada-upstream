@@ -444,6 +444,19 @@ export async function mirrorPortableStateBeforeRelayChange(
   const inviteEvents = [...wire.events, ...localSingletons]
     .filter((event) => event.kind === KIND_INVITE_LIST);
   const persistedInvites = await readPersistedInviteList(user.pubkey);
+  // Same rule as the community list above: a list this device knows was
+  // published (a folded relay version, or a local copy of the event) that the
+  // read did not return means the read was incomplete, and a fresh edition
+  // built without it would replace the relay copy with whatever the fold lacks.
+  const knownPublishedInvites = Boolean(
+    (persistedInvites && persistedInvites.newestCreatedAt > 0)
+    || localSingletons.some((event) => event.kind === KIND_INVITE_LIST),
+  );
+  if (knownPublishedInvites && !wire.events.some((event) => event.kind === KIND_INVITE_LIST)) {
+    throw new Error(
+      "A known creator invite list was absent from the current relay read; the NIP-65 relay set was not changed",
+    );
+  }
   if (inviteEvents.length > 0 || persistedInvites) {
     const invite = await decodeInviteListEvents(inviteEvents, user);
     const complete = persistedInvites

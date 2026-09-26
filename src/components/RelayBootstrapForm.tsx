@@ -7,10 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useNip65RelaySetup } from "@/hooks/useNip65RelaySetup";
+import {
+  ExistingRelayListError,
+  relayListAbsenceConfirmed,
+  useNip65RelaySetup,
+} from "@/hooks/useNip65RelaySetup";
 import { toast } from "@/hooks/useToast";
 import { normalizeRelayUrl } from "@/lib/platform";
-import type { RelayPreference } from "@/lib/nip65";
+import type { RelayListDiscovery, RelayPreference } from "@/lib/nip65";
 
 const EMPTY_RELAY_PREFERENCES: RelayPreference[] = [];
 
@@ -21,7 +25,7 @@ export function RelayBootstrapForm({
   onDone?: () => void;
   onSkip?: () => void;
 }) {
-  const { discover, adopt, publish } = useNip65RelaySetup();
+  const { discoverWithStatus, adopt, publish } = useNip65RelaySetup();
   const { config } = useAppContext();
   const { user } = useCurrentUser();
   const inputId = useId();
@@ -43,6 +47,15 @@ export function RelayBootstrapForm({
 
   const normalized = normalizeRelayUrl(value);
 
+  const restore = (found: RelayListDiscovery) => {
+    adopt(found);
+    toast({
+      title: "Setup found",
+      description: `Restored ${found.relays.length} ${found.relays.length === 1 ? "relay" : "relays"} for your account.`,
+    });
+    onDone?.();
+  };
+
   const find = async () => {
     if (!normalized) {
       setError("Enter a relay address that starts with wss://.");
@@ -52,16 +65,17 @@ export function RelayBootstrapForm({
     setError(undefined);
     setCheckedRelay(undefined);
     try {
-      const found = await discover([normalized]);
-      if (found) {
-        adopt(found);
-        toast({
-          title: "Setup found",
-          description: `Restored ${found.relays.length} ${found.relays.length === 1 ? "relay" : "relays"} for your account.`,
-        });
-        onDone?.();
-      } else {
+      const read = await discoverWithStatus([normalized]);
+      if (read.discovery) {
+        restore(read.discovery);
+      } else if (relayListAbsenceConfirmed(read.answered, [normalized, ...config.appRelays])) {
+        // "Use this relay" would write there and to the app relays, so all of
+        // them must have answered before "not found" means "none exists".
         setCheckedRelay(normalized);
+      } else {
+        setError(
+          "Couldn't reach enough relays to confirm your account has no saved setup yet. Check the address and try again.",
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't look that up. Try again.");
@@ -70,12 +84,12 @@ export function RelayBootstrapForm({
     }
   };
 
-  const create = async () => {
-    if (!checkedRelay) return;
+  const create = async (urls: string[]) => {
+    if (urls.length === 0) return;
     setBusy(true);
     setError(undefined);
     try {
-      const result = await publish([{ url: checkedRelay, read: true, write: true }]);
+      const result = await publish(urls.map((url) => ({ url, read: true, write: true })));
       toast({
         title: "Saved",
         description: result.rejected.length > 0
@@ -84,10 +98,47 @@ export function RelayBootstrapForm({
       });
       onDone?.();
     } catch (err) {
+      if (err instanceof ExistingRelayListError) {
+        restore(err.discovery);
+        return;
+      }
       setError(err instanceof Error ? err.message : "Couldn't save. Try again.");
     } finally {
       setBusy(false);
     }
+  };
+
+  // The app's relays are a new list only once the wire affirmatively has none:
+  // look for an existing one first (the app relays plus the discovery
+  // indexes), adopt it if found, and refuse to publish on a read too thin to
+  // tell "no list" from "couldn't reach the relays that hold it".
+  const chooseAppRelays = async () => {
+    const urls = config.appRelays;
+    if (urls.length === 0) return;
+    setBusy(true);
+    setError(undefined);
+    setCheckedRelay(undefined);
+    let read: Awaited<ReturnType<typeof discoverWithStatus>>;
+    try {
+      read = await discoverWithStatus(urls);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't look up your setup. Try again.");
+      setBusy(false);
+      return;
+    }
+    if (read.discovery) {
+      setBusy(false);
+      restore(read.discovery);
+      return;
+    }
+    if (!relayListAbsenceConfirmed(read.answered, urls)) {
+      setError(
+        "Couldn't reach enough relays to confirm your account has no saved setup yet. Try again, or look up a relay you've used before.",
+      );
+      setBusy(false);
+      return;
+    }
+    await create(urls);
   };
 
   const saveExisting = async () => {
@@ -200,7 +251,7 @@ export function RelayBootstrapForm({
           type="button"
           size="lg"
           className="h-12 w-full clip-corner-lg text-base font-medium"
-          onClick={create}
+          onClick={() => void create([checkedRelay])}
           disabled={busy}
         >
           Use this relay
@@ -215,6 +266,31 @@ export function RelayBootstrapForm({
         >
           {busy ? "Looking…" : "Look up my setup"}
         </Button>
+      )}
+
+      {config.appRelays.length > 0 && (
+        <div className="space-y-1.5">
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-11 w-full clip-corner-lg touch:h-12"
+            onClick={() => void chooseAppRelays()}
+            disabled={busy}
+          >
+            Use this app's relays
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            Checks for an existing setup first; if there is none, saves{" "}
+            {config.appRelays.map((url, index) => (
+              <span key={url}>
+                {index > 0 && ", "}
+                <span className="font-mono text-foreground">{url.replace(/^wss?:\/\//, "").replace(/\/$/, "")}</span>
+              </span>
+            ))}{" "}
+            as your account's home so your servers and settings follow you to your other
+            devices.
+          </p>
+        </div>
       )}
 
       {onSkip && (

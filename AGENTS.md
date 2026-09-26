@@ -831,6 +831,10 @@ to fail a run:
   committing.
 - **Push only to `origin`**, and only when asked. Any other remote configured
   locally is maintainer-managed; never push or release to one.
+- **Buttons are fill-only, never bordered.** A secondary action is
+  `variant="secondary"` (a filled surface), not `variant="outline"`; a tertiary
+  one is `ghost`. Don't add a new `outline` button or a `border` class to a
+  button. The `outline` buttons already in the tree predate this rule.
 - Touch ergonomics: interactive elements target ≥44px on touch devices via the
   `touch:` Tailwind variant (`@media (hover: none) and (pointer: coarse)`) —
   e.g. `size-9 touch:size-11`. Use `touch:` (real touch), not width
