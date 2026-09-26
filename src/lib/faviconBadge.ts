@@ -14,8 +14,12 @@
  * lives.
  */
 
-/** The dot's fill — `bg-primary`, matching every unread badge in the app. */
-const DOT_COLOR = "#fb4d96";
+/**
+ * The dot's fill. Not `bg-primary` like the in-app unread badges: the mark's
+ * sail IS that pink, so at tab size a primary dot reads as part of the logo
+ * rather than as something waiting. A notification red stays distinct from it.
+ */
+const DOT_COLOR = "#ff3b30";
 
 /**
  * Rasterization size. Larger than any tab favicon so a downscale stays sharp,
@@ -23,8 +27,8 @@ const DOT_COLOR = "#fb4d96";
  */
 const CANVAS_SIZE = 64;
 
-const DOT_RADIUS = CANVAS_SIZE * 0.24;
-const DOT_INSET = CANVAS_SIZE * 0.05;
+const DOT_RADIUS = CANVAS_SIZE * 0.2;
+const DOT_INSET = CANVAS_SIZE * 0.02;
 /**
  * The dot is separated from the mark by a hole punched through the icon rather
  * than by a ring drawn in a colour, because the tab strip behind it is white on
@@ -59,17 +63,20 @@ export async function renderBadgedFavicon(baseHref: string): Promise<string | nu
   const img = await loadImage(baseHref);
   ctx.drawImage(img, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
 
-  const center = CANVAS_SIZE - DOT_RADIUS - DOT_INSET;
+  // Top-right, where tab badges conventionally sit — and clear of the sail's
+  // lower edge and the wave, which a bottom-right dot sat on top of.
+  const cx = CANVAS_SIZE - DOT_RADIUS - DOT_INSET;
+  const cy = DOT_RADIUS + DOT_INSET;
 
   ctx.globalCompositeOperation = "destination-out";
   ctx.beginPath();
-  ctx.arc(center, center, DOT_RADIUS + DOT_RING, 0, Math.PI * 2);
+  ctx.arc(cx, cy, DOT_RADIUS + DOT_RING, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = DOT_COLOR;
   ctx.beginPath();
-  ctx.arc(center, center, DOT_RADIUS, 0, Math.PI * 2);
+  ctx.arc(cx, cy, DOT_RADIUS, 0, Math.PI * 2);
   ctx.fill();
 
   try {
