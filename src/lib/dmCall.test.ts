@@ -4,6 +4,7 @@ import {
   _resetDmCallBusForTests,
   deliverDmCallRumors,
   DM_CALL_RING_MS,
+  dmCallCollisionWinner,
   dmCallKeys,
   dmCallTags,
   isDmOfferFresh,
@@ -97,7 +98,7 @@ describe("parseDmCall", () => {
 
   it("parses non-offer phases without secret or broker", () => {
     const { callId } = mintDmCall();
-    for (const phase of ["answer", "decline", "end"] as const) {
+    for (const phase of ["answer", "decline", "end", "ringing", "busy"] as const) {
       const signal = parseDmCall(
         opened({ content: phase, tags: dmCallTags(PEER, callId) }),
       );
@@ -112,6 +113,14 @@ describe("parseDmCall", () => {
     expect(parseDmCall(opened({ kind: 14, tags }))).toBeNull();
     expect(parseDmCall(opened({ content: "ring", tags }))).toBeNull();
     expect(parseDmCall(opened({ tags, peers: [AUTHOR, PEER] }))).toBeNull();
+  });
+});
+
+describe("dmCallCollisionWinner", () => {
+  it("lets both sides agree on the same call", () => {
+    // Each side passes (self, peer): the two answers must name one call.
+    expect(dmCallCollisionWinner(PEER, AUTHOR)).toBe("ours");
+    expect(dmCallCollisionWinner(AUTHOR, PEER)).toBe("theirs");
   });
 });
 

@@ -1015,6 +1015,56 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * The peer the WebView is dialing or in a DM call with (see
+     * {@code ArmadaNotification.setCallPeer}), or null. Like the active rooms
+     * it is in-process only and trusted for a heartbeat window, so a WebView
+     * killed mid-call cannot silence that peer's calls for longer than that.
+     */
+    private static volatile String callPeer;
+    private static volatile long callPeerUpdatedAtElapsedMs;
+    static final long CALL_PEER_TTL_MS = 60_000L;
+
+    /**
+     * An offer another device of OURS placed (its self copy), by peer: that
+     * device owns any collision with the same peer, so this one must not ring
+     * for the peer's offer — or post a missed call when it is withdrawn.
+     * Handler thread only.
+     */
+    private String siblingDialPeer;
+    private String siblingDialCallId;
+    private long siblingDialAtMs;
+
+    static void setCallPeer(String peer) {
+        callPeer = peer != null && peer.length() == 64 ? peer : null;
+        callPeerUpdatedAtElapsedMs = android.os.SystemClock.elapsedRealtime();
+    }
+
+    /**
+     * Whether an offer (or missed call) from {@code peer} belongs to a call the
+     * WebView already owns with them: the reported peer, reported within
+     * {@link #CALL_PEER_TTL_MS}. Pure, so it is unit-testable.
+     */
+    static boolean isOwnCallPeer(String peer, String reportedPeer, long updatedAtMs, long nowMs) {
+        return peer != null && peer.equals(reportedPeer)
+                && updatedAtMs > 0L && nowMs >= updatedAtMs
+                && nowMs - updatedAtMs <= CALL_PEER_TTL_MS;
+    }
+
+    /** Whether a sibling device's offer to {@code peer}, placed at {@code dialAtMs}, still owns it. */
+    static boolean isSiblingDialFresh(String peer, String dialPeer, long dialAtMs, long nowMs) {
+        return peer != null && peer.equals(dialPeer)
+                && Math.abs(nowMs - dialAtMs) <= CALL_RING_WINDOW_MS;
+    }
+
+    /** Whether this device should stay silent about {@code peer}'s call (see above). */
+    private boolean callOwnedElsewhere(String peer) {
+        return isOwnCallPeer(peer, callPeer, callPeerUpdatedAtElapsedMs,
+                        android.os.SystemClock.elapsedRealtime())
+                || isSiblingDialFresh(peer, siblingDialPeer, siblingDialAtMs,
+                        System.currentTimeMillis());
+    }
+
     static boolean isActiveRoomStateFresh(long updatedAtMs, long nowMs) {
         return updatedAtMs > 0L && nowMs >= updatedAtMs
                 && nowMs - updatedAtMs <= ACTIVE_ROOMS_TTL_MS;
@@ -3714,8 +3764,17 @@ public class NotificationRelayService extends Service {
                         if (rumor.optInt("kind", -1) != KIND_DM_CALL) return;
                         if (author.equals(userPubkey)) {
                             // Our own signal from another device: an answer or
-                            // decline elsewhere stops this device's ring.
+                            // decline elsewhere stops this device's ring. An
+                            // offer means that device is dialing the `p` peer
+                            // and owns any collision with them.
                             String phase = rumor.optString("content", "");
+                            if ("offer".equals(phase) || "end".equals(phase)) {
+                                final String dialed = tagValue(rumor, "p");
+                                final String dialCallId = tagValue(rumor, "call");
+                                final long dialAtMs = rumor.optLong("created_at", 0) * 1000L;
+                                handler.post(() -> noteSiblingDial(phase, dialed, dialCallId, dialAtMs));
+                                return;
+                            }
                             if (!"answer".equals(phase) && !"decline".equals(phase)) return;
                             final String ownCallId = tagValue(rumor, "call");
                             if (ownCallId != null) {
@@ -3753,6 +3812,31 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * A sibling device's own offer ("offer") or its withdrawal ("end"). A fresh
+     * offer marks its peer as owned elsewhere and stops a ring this device may
+     * already have up for that peer — silently, since it is the same call
+     * attempt seen from the other side, not a missed one. Handler thread only.
+     */
+    private void noteSiblingDial(String phase, String peer, String callId, long atMs) {
+        if (peer == null || peer.length() != 64 || callId == null) return;
+        if ("end".equals(phase)) {
+            if (callId.equals(siblingDialCallId)) {
+                siblingDialPeer = null;
+                siblingDialCallId = null;
+            }
+            return;
+        }
+        long age = System.currentTimeMillis() - atMs;
+        if (age > CALL_RING_WINDOW_MS || age < -CALL_RING_WINDOW_MS) return;
+        siblingDialPeer = peer;
+        siblingDialCallId = callId;
+        siblingDialAtMs = atMs;
+        if (peer.equals(ringingPeer) && ringingCallId != null) {
+            cancelIncomingCall(ringingCallId, /*missed=*/false);
+        }
+    }
+
+    /**
      * Fold one opened voice-call rumor (kind 23314, from the peer) into the
      * ring state. Handler thread only (callers post here).
      *
@@ -3785,6 +3869,11 @@ public class NotificationRelayService extends Service {
             if (secret == null || secret.length() != 64) return;
             if (broker == null || !broker.startsWith("https://")) return;
             if (freshActiveRoomKeys().contains("dm:" + peer)) return;
+            // The WebView (or another device of ours) is already dialing or in
+            // a call with this peer: their offer is the other half of it — two
+            // people dialing each other — which the WebView settles. Ringing
+            // here would end in a false "Missed call" when it is withdrawn.
+            if (callOwnedElsewhere(peer)) return;
             postIncomingCall(peer, callId, secret, broker, relayUrl, tsMs);
         } else if ("answer".equals(phase) || "decline".equals(phase)) {
             cancelIncomingCall(callId, /*missed=*/false);
@@ -3802,7 +3891,7 @@ public class NotificationRelayService extends Service {
         // can read it. It is NOT put in the Answer action's URL: a URL is a
         // hint that a call was answered, never the proof, because every surface
         // the router is reachable on can produce one. The vetting that makes
-        // this an authorization already happened above — fresh, followed, with
+        // this an authorization already happened above — fresh, a known peer, with
         // a well-formed secret and an https broker.
         ArmadaNotificationPlugin.setCallAnswer(this, callId, peer, secret, broker);
         resolveAuthor(peer, relayUrl, profile -> {
@@ -3858,6 +3947,13 @@ public class NotificationRelayService extends Service {
                 if (m != null) {
                     m.notify(INCOMING_CALL_NOTIF_ID, b.build());
                     healthLastPresentedAtMs = System.currentTimeMillis();
+                    // The caller's "it rang" receipt — what turns their
+                    // timeout into "No answer" rather than "Couldn't reach".
+                    // Only reached for a peer dmCallAllowed admitted, and
+                    // only sent when it can be signed without a prompt.
+                    if (maySendCallReceipt(nativeSigner)) {
+                        publishCallSignal(peer, callId, "ringing", /*selfCopy=*/false);
+                    }
                 }
             } catch (Exception e) {
                 // CallStyle validation differs across OEM/API levels; a ring
@@ -3867,6 +3963,15 @@ public class NotificationRelayService extends Service {
                 notifyMissedCall(peer, relayUrl, tsMs);
             }
         });
+    }
+
+    /**
+     * Whether an unsolicited call receipt may be signed with {@code signer}:
+     * a local key only, as on the web — an Amber or bunker signature may
+     * prompt, and a receipt is signed on the caller's say-so, not the user's.
+     */
+    static boolean maySendCallReceipt(NativeSigner signer) {
+        return signer != null && signer.signsUnattended();
     }
 
     /** Dismiss the ringing notification for {@code callId}, if it is up. */
@@ -3888,6 +3993,7 @@ public class NotificationRelayService extends Service {
         if (!dmNotificationEnabled(peer)) return;
         if (!dmCallAllowed(peer)) return;
         if (freshActiveRoomKeys().contains("dm:" + peer)) return;
+        if (callOwnedElsewhere(peer)) return;
         resolveAuthor(peer, relayUrl, profile -> {
             String name = displayName(profile);
             String picture = profile != null ? profile.picture : null;
@@ -3906,6 +4012,16 @@ public class NotificationRelayService extends Service {
         final String callId = intent.getStringExtra(EXTRA_CALL_ID);
         final String peer = intent.getStringExtra(EXTRA_CALL_PEER);
         if (callId != null) handler.post(() -> cancelIncomingCall(callId, /*missed=*/false));
+        publishCallSignal(peer, callId, "decline", /*selfCopy=*/true);
+    }
+
+    /**
+     * Publish one call rumor (kind 23314) through the ephemeral NIP-17
+     * envelope: the peer's copy to their inbox ∪ our DM relays, and — for a
+     * signal our other devices must fold, like a decline — a self copy to our
+     * own DM relays. A "ringing" receipt is for the caller alone and skips it.
+     */
+    private void publishCallSignal(String peer, String callId, String phase, boolean selfCopy) {
         NativeSigner signer = nativeSigner;
         if (signer == null || peer == null || peer.length() != 64
                 || callId == null || callId.length() != 64 || userPubkey == null) {
@@ -3917,18 +4033,18 @@ public class NotificationRelayService extends Service {
                 .put(new JSONArray().put("call").put(callId));
         final JSONObject rumor = new JSONObject();
         try {
-            rumor.put("id", NostrCrypto.eventId(userPubkey, nowSecs, KIND_DM_CALL, tags, "decline"));
+            rumor.put("id", NostrCrypto.eventId(userPubkey, nowSecs, KIND_DM_CALL, tags, phase));
             rumor.put("pubkey", userPubkey);
             rumor.put("created_at", nowSecs);
             rumor.put("kind", KIND_DM_CALL);
             rumor.put("tags", tags);
-            rumor.put("content", "decline");
+            rumor.put("content", phase);
         } catch (JSONException e) {
             return;
         }
         final String rumorJson = rumor.toString();
         resolveDmInbox(peer, inboxRelays -> {
-            // Unlike a message reply, a decline is not gated on a published
+            // Unlike a message reply, a call signal is not gated on a published
             // inbox: the offer reached us, so the caller reads our shared DM
             // relays at minimum.
             List<String> targets = new ArrayList<>(inboxRelays);
@@ -3937,6 +4053,7 @@ public class NotificationRelayService extends Service {
             buildDmEphemeralEnvelope(signer, rumorJson, peer, wrap -> {
                 if (wrap != null) publishEvent(wrap, targets, ok -> { });
             });
+            if (!selfCopy) return;
             buildDmEphemeralEnvelope(signer, rumorJson, userPubkey, selfWrap -> {
                 if (selfWrap != null && !dmRelays.isEmpty()) {
                     publishEvent(selfWrap, new ArrayList<>(dmRelays), ok -> { });

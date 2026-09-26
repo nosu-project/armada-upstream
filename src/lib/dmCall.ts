@@ -26,7 +26,12 @@
  * Phases (the rumor's content): "offer" (carries the secret + a broker
  * rendezvous hint), "answer" (callee accepted — also how the callee's OTHER
  * devices learn to stop ringing), "decline", and "end" (cancel-while-ringing
- * and hangup alike). All ride EPHEMERAL kind-21059 wraps (see
+ * and hangup alike). Two RECEIPTS let the caller tell an unanswered call from
+ * one that never reached anyone: "ringing" (a callee device is ringing) and
+ * "busy" (the callee is already in a call). Both are sent only to a caller the
+ * callee's ring gate admits, so a stranger learns nothing about whether the
+ * other side is online; a client that predates them ignores the phase. All
+ * ride EPHEMERAL kind-21059 wraps (see
  * `KIND_DM_CALL`'s note in protocol.ts): relays broadcast and store nothing,
  * so no at-rest record of a call ever exists. The Android relay service holds
  * live sockets and rings with the app dead; the rumor's REAL `created_at`
@@ -78,7 +83,41 @@ export function mintDmCall(): { secretHex: string; callId: string } {
   return { secretHex, callId: dmCallKeys(secretHex).room.pk };
 }
 
-export type DmCallPhase = "offer" | "answer" | "decline" | "end";
+export type DmCallPhase = "offer" | "answer" | "decline" | "end" | "ringing" | "busy";
+
+const PHASES: ReadonlySet<string> = new Set<DmCallPhase>([
+  "offer",
+  "answer",
+  "decline",
+  "end",
+  "ringing",
+  "busy",
+]);
+
+/**
+ * How long the WINNER of a collision waits for the loser to answer its call
+ * before joining the loser's instead, counted from when the winner's offer was
+ * DELIVERED (not from when the loser's arrived — the winner may still be
+ * probing brokers or waiting on a signature then). The loser answers at once
+ * when it gets our offer, so silence past this means it never did — our offer
+ * was lost, or the loser runs a client that predates collision handling and is
+ * ringing out in its own room. Either way the loser's offer is in hand, and
+ * joining it is the only move that still connects the two. Generous on
+ * purpose: switching while the loser is mid-way into our room leaves each
+ * side's "end" for the room it left hanging up the other.
+ */
+export const DM_CALL_COLLISION_FALLBACK_MS = 15_000;
+
+/**
+ * Which call survives when two people dial each other at once: the one placed
+ * by the LOWER pubkey. Each side sees the same two pubkeys, so both reach the
+ * same answer without another round trip — the loser joins the winner's room
+ * and answers it, the winner simply keeps ringing until that answer lands (or,
+ * after {@link DM_CALL_COLLISION_FALLBACK_MS} without it, joins the loser's).
+ */
+export function dmCallCollisionWinner(self: string, peer: string): "ours" | "theirs" {
+  return self < peer ? "ours" : "theirs";
+}
 
 /** A verified, parsed call signal as opened from a DM gift wrap. */
 export interface DmCallSignal {
@@ -130,8 +169,8 @@ export function dmCallTags(
  */
 export function parseDmCall(opened: OpenedDm): DmCallSignal | null {
   if (opened.kind !== KIND_DM_CALL) return null;
-  const phase = opened.content;
-  if (phase !== "offer" && phase !== "answer" && phase !== "decline" && phase !== "end") return null;
+  if (!PHASES.has(opened.content)) return null;
+  const phase = opened.content as DmCallPhase;
   if (opened.peers.length !== 1) return null;
   // For a received signal the author IS the counterpart; for an own copy the
   // `p` tag names them. (Note to Self yields author === peer === self, which
