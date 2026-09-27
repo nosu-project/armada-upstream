@@ -19,6 +19,7 @@ import {
 } from "@/hooks/useFrequentReactions";
 import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
 import {
+  decodeAndHydrateDmConversationIndex,
   useDmConversationIndexSync,
   useRecordDmConversationIndex,
 } from "@/hooks/useDmConversationIndexSync";
@@ -43,6 +44,7 @@ import {
   SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
   SELF_SYNC_TOPIC_TAGS,
+  T_ARMADA_DM_CONVERSATIONS,
   type SelfSyncEventVersion,
 } from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
@@ -201,6 +203,10 @@ function NostrSyncInner() {
     }
   }, [queryClient, selfRelayKey]);
 
+  // Read by the live DM-index merge below without rebuilding the subscription.
+  const signerRef = useRef(user?.signer);
+  signerRef.current = user?.signer;
+
   // ─── A. Standing self-state subscription (transport / freshness) ──────
   // One long-lived REQ for the user's own replaceable/addressable events. Each
   // event is mirrored into the cache by the batcher, then the owning hook's
@@ -247,6 +253,20 @@ function NostrSyncInner() {
       for (const queryKey of batch.values()) {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
+    };
+    // Live DM-index editions, merged in one batch per flush window.
+    let pendingIndex: NostrEvent[] = [];
+    let indexTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleIndexMerge = (event: NostrEvent) => {
+      pendingIndex.push(event);
+      indexTimer ??= setTimeout(() => {
+        indexTimer = undefined;
+        const batch = pendingIndex;
+        pendingIndex = [];
+        const signer = signerRef.current;
+        if (!signer?.nip44 || controller.signal.aborted) return;
+        void decodeAndHydrateDmConversationIndex(batch, signer, pubkey).catch(() => undefined);
+      }, SELF_SYNC_FLUSH_MS);
     };
     const scheduleInvalidate = (keys: readonly (readonly string[])[]) => {
       for (const key of keys) pendingKeys.set(key.join("\u0000"), key);
@@ -325,6 +345,22 @@ function NostrSyncInner() {
       // of the version we just superseded. Ordering it here is the difference
       // between a live subscription and a live subscription that lands. A
       // duplicate write is a no-op: same id, same coordinate.
+      // A DM conversation-index edition is merged ON ITS OWN rather than by
+      // re-running the full pull. The index is an add-only union, so one newer
+      // edition is all there is to learn; the pull downloads every
+      // installation's editions from every self-state relay — ~128 events a
+      // relay on an account with many installs — and one arrived for every
+      // edition another device published.
+      if (topicTag === T_ARMADA_DM_CONVERSATIONS) {
+        void eventStore
+          .then((store) => store.event(event))
+          .catch(() => undefined)
+          .finally(() => {
+            if (!controller.signal.aborted) scheduleIndexMerge(event);
+          });
+        return;
+      }
+
       void eventStore
         .then((store) => store.event(event))
         .catch(() => undefined)
@@ -362,6 +398,7 @@ function NostrSyncInner() {
     return () => {
       controller.abort();
       if (flushTimer !== undefined) clearTimeout(flushTimer);
+      if (indexTimer !== undefined) clearTimeout(indexTimer);
     };
     // `resumeEpoch` rebuilds the subscription after a real backgrounding. A
     // socket that died while the app was away usually reconnects and replays

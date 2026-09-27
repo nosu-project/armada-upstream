@@ -185,17 +185,28 @@ function deferredPool() {
   return { pool, queries };
 }
 
-function syncCtx(pool: unknown, self: string, relays: string[]) {
+function syncCtx(pool: unknown, self: string, relays: string[], method: string | undefined = "nsec") {
   return {
     nostr: pool as never,
     signer: { nip44: {} } as never,
     self,
-    method: undefined,
+    method,
     relays,
   };
 }
 
 describe("syncDm17Inbox", () => {
+  it("fetches nothing in the background for an approval-gated signer the user has not allowed", async () => {
+    // Nothing could be opened, so a fetch would only re-download the same page
+    // every poll (the cursor cannot advance past wraps it did not open).
+    const self = getPublicKey(generateSecretKey());
+    const { pool, queries } = deferredPool();
+    const ctx = syncCtx(pool, self, ["wss://inbox.example"], "bunker");
+    await expect(syncDm17Inbox(ctx, { force: true })).resolves.toBe(false);
+    expect(queries).toHaveLength(0);
+  });
+
+
   it("seeds an empty first scan's watermark at the backdate floor so the next poll still covers backdated wraps", async () => {
     const self = getPublicKey(generateSecretKey());
     const url = "wss://quiet.example";
