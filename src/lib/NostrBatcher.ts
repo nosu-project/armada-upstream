@@ -610,6 +610,18 @@ type RelayMsg =
   | import('@nostrify/types').NostrRelayCLOSED;
 
 /**
+ * Options for a `relay()`/`group()` `.req()`. `cache: false` skips the
+ * write-through mirror, for a consumer that stores what it admits itself —
+ * the mirror would otherwise write every superseded version, once per relay.
+ * Not part of Nostrify's `NRelay` type, so pass it as a variable rather than
+ * an object literal.
+ */
+export interface CachingReqOpts {
+  signal?: AbortSignal;
+  cache?: boolean;
+}
+
+/**
  * Stable key for coalescing identical `relay()`/`group()` traffic: the scope
  * (relay set) plus the filter set, order-insensitive. Two callers that produce
  * the same key are asking the same relays the same question, so their upstream
@@ -1068,7 +1080,7 @@ export class NostrBatcher {
             coalescedQuery(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         if (prop === 'req') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
+          return (filters: NostrFilter[], opts?: CachingReqOpts) =>
             coalescedReq(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         const value = Reflect.get(target, prop, receiver);
@@ -1150,9 +1162,10 @@ export class NostrBatcher {
     scopeRelays: string[],
     sourceUrl: string | undefined,
     filters: NostrFilter[],
-    opts?: { signal?: AbortSignal },
+    opts?: CachingReqOpts,
   ): AsyncIterable<RelayMsg> {
-    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
+    const cache = opts?.cache !== false;
+    const key = `${via}::${coalesceKey(scopeRelays, filters)}${cache ? '' : '::uncached'}`;
     let shared = this.sharedSubs.get(key);
     if (!shared || !shared.isOpen()) {
       logNostrReq(scopeRelays, filters, via);
@@ -1164,7 +1177,7 @@ export class NostrBatcher {
           if (sharedSubs.get(key) === sub) sharedSubs.delete(key);
         },
         (msg) => {
-          if (msg[0] === 'EVENT') {
+          if (cache && msg[0] === 'EVENT') {
             this.cacheEvents([msg[2]], sourceUrl);
           }
         },

@@ -49,6 +49,7 @@ import {
   T_ARMADA_DM_CONVERSATIONS,
   type SelfSyncEventVersion,
 } from "@/lib/selfSyncKinds";
+import type { CachingReqOpts } from "@/lib/NostrBatcher";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
 import { verifyEventOnce } from "@/lib/verifyCache";
@@ -387,21 +388,21 @@ function NostrSyncInner() {
           : undefined;
       const topicTag = selfSyncTopicOf(event.tags);
       const keys = queryKeysForSelfEvent(event.kind, dTag, topicTag);
-      if (keys.length === 0) return; // cached, but no query watches it (e.g. 10063)
 
       if (!admitSelfSyncEvent(seen, event, dTag)) return;
 
-      // Write it to ArmadaDB, and only THEN tell the readers. The batcher
-      // mirrors everything out of `.req()` on its own, but as a fire-and-forget
-      // write that races this invalidation — and the settings document is now
-      // read from the store, so "invalidated but not yet written" is a re-read
-      // of the version we just superseded. Ordering it here is the difference
-      // between a live subscription and a live subscription that lands. A
-      // duplicate write is a no-op: same id, same coordinate.
+      // Write it to ArmadaDB, and only THEN tell the readers. This stream is
+      // opened with the batcher's write-through mirror off, so this is the
+      // only write: one per admitted version, not one per version per relay
+      // — and the settings document is read from the store, so "invalidated
+      // but not yet written" would be a re-read of the version just
+      // superseded.
       void eventStore
         .then((store) => store.event(event))
         .catch(() => undefined)
         .finally(() => {
+          // Stored, but no query watches it.
+          if (keys.length === 0) return;
           if (!controller.signal.aborted) scheduleInvalidate(keys);
         });
     };
@@ -423,7 +424,9 @@ function NostrSyncInner() {
     void (async () => {
       try {
         const source = nostr.group(relayUrls);
-        for await (const msg of source.req(filters, { signal: controller.signal })) {
+        // `onEvent` stores each version it admits itself; see CachingReqOpts.
+        const reqOpts: CachingReqOpts = { signal: controller.signal, cache: false };
+        for await (const msg of source.req(filters, reqOpts)) {
           if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
         }
       } catch {
