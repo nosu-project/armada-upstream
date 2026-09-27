@@ -36,8 +36,20 @@ export const KIND_DM = 4;
  * wire-bus invalidation.
  */
 const PULL_MIN_INTERVAL_MS = 30_000;
-/** How far below the newest held kind-4 a periodic top-up reaches back. */
+/** How far below the last completed pull a periodic top-up reaches back. */
 const DM_TOPUP_SLACK_SECS = 10 * 60;
+
+/**
+ * The `since` of a periodic kind-4 top-up: the start of the last pull that
+ * completed, less a slack for publishers with skewed clocks. Anchored to the
+ * last pull and not to the newest message held, because the newest message
+ * held is often the user's OWN — sent a moment ago over a socket that had
+ * silently stopped delivering — and a floor under it skips every message
+ * received while the socket was wedged.
+ */
+export function dmTopUpSince(lastPullStartedAtSecs: number): number {
+  return Math.max(0, lastPullStartedAtSecs - DM_TOPUP_SLACK_SECS);
+}
 
 /**
  * When each thread's relay pull last started, per query client (so the
@@ -555,9 +567,10 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastPullRef = useRef(0);
-  // Whether this session's full first page has seeded the cursors; after it,
-  // the periodic pull is a `since` top-up (see the queryFn).
-  const seededPullRef = useRef(false);
+  // When (unix seconds) the last pull that COMPLETED started; unset until this
+  // session's full first page has seeded the cursors. Once set, the periodic
+  // pull is a `since` top-up from it (see the queryFn and dmTopUpSince).
+  const pullFloorRef = useRef<number | undefined>(undefined);
   // Tracks the established-peer set the cache was last fetched with. `undefined` means
   // "this hook instance hasn't observed one yet" — the mount pass must not
   // invalidate, since the query is already fetching with the current set.
@@ -565,7 +578,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   useEffect(() => {
     cursorsRef.current = {};
     lastPullRef.current = 0;
-    seededPullRef.current = false;
+    pullFloorRef.current = undefined;
     setHasMore(true);
     // Known peers aren't in the query key, so a roster change has to re-run the
     // queryFn explicitly: the received-DM filters widen to the new authors
@@ -612,15 +625,17 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       if (pullDue) lastPullRef.current = Date.now();
       const pull = (async () => {
         if (!pullDue || signal.aborted || relays.length === 0) return;
+        const startedAt = Math.floor(Date.now() / 1000);
         // After this session's first full page has seeded the per-relay
         // cursors, the minute poll only has to catch what the live socket may
-        // have missed: NIP-04 events carry their real timestamps, so a `since`
-        // just below the newest one held is complete. Re-reading the whole
-        // first page (500 per direction per relay) every minute re-downloaded
-        // the same history for as long as the DM list was mounted.
-        if (seededPullRef.current && local.length > 0) {
-          const newest = Math.max(...local.map((e) => e.created_at));
-          const since = Math.max(0, newest - DM_TOPUP_SLACK_SECS);
+        // have missed since the last pull: NIP-04 events carry their real
+        // timestamps, so a `since` just below that pull's start is complete.
+        // Re-reading the whole first page (500 per direction per relay) every
+        // minute re-downloaded the same history for as long as the DM list
+        // was mounted.
+        const floor = pullFloorRef.current;
+        if (floor !== undefined) {
+          const since = dmTopUpSince(floor);
           try {
             const events = await queryRelaysMerged(
               nostr,
@@ -633,7 +648,11 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
               ],
               AbortSignal.any([signal, AbortSignal.timeout(8000)]),
             );
-            if (signal.aborted || events.length === 0) return;
+            if (signal.aborted) return;
+            // Only an answered top-up moves the floor, so one that failed
+            // leaves the next reaching back over its window too.
+            pullFloorRef.current = startedAt;
+            if (events.length === 0) return;
             queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => mergeDmEvents(old, events));
           } catch {
             // Best-effort backstop; the live socket is the primary path.
@@ -651,7 +670,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
           );
           if (signal.aborted) return;
           cursorsRef.current = cursors;
-          seededPullRef.current = true;
+          pullFloorRef.current = startedAt;
           setHasMore(hasMoreCursor(cursors));
           // Completed without throwing: the store has now seen whatever the
           // relays hold, so later loads may trust it and render store-first.
