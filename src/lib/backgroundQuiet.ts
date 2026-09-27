@@ -68,6 +68,11 @@ function install(): void {
       if (serviceWatching && !pageIsBusy()) set(true);
     }, QUIET_AFTER_MS);
   });
+  // Playback can also START while quiet (the lock screen's media controls),
+  // after the check above has run. `play` doesn't bubble, hence the capture.
+  if (typeof document !== "undefined") {
+    document.addEventListener("play", () => set(false), true);
+  }
 }
 
 /** Whether the WebView is quiet right now (see the module comment). */

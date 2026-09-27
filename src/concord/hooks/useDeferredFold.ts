@@ -63,7 +63,10 @@ export function clearDeferredFoldMemory(): void {
   memCache.clear();
 }
 
-/** Write `key`'s pending value now — on its timer, or as its last instance goes. */
+/**
+ * Write `key`'s pending value now — on its timer, or as ANY instance of the key
+ * unmounts or leaves it (the others find nothing pending and return early).
+ */
 function flushPersist(key: string): void {
   const timer = persistTimers.get(key);
   if (timer !== undefined) clearTimeout(timer);

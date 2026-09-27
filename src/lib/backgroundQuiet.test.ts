@@ -74,6 +74,20 @@ describe("backgroundQuiet", () => {
     expect(isBackgroundQuiet()).toBe(false);
   });
 
+  it("wakes when media starts playing while already quiet", () => {
+    // Playback can start after the grace, e.g. from the lock screen's media
+    // controls; the page must not stay quiet under it.
+    setNativeServiceWatching(true);
+    onBackgroundQuiet(() => undefined);
+    const audio = document.createElement("audio");
+    document.body.append(audio);
+    appState!(false);
+    vi.advanceTimersByTime(60_000);
+    expect(isBackgroundQuiet()).toBe(true);
+    audio.dispatchEvent(new Event("play"));
+    expect(isBackgroundQuiet()).toBe(false);
+  });
+
   it("wakes when the service stops watching or a call starts", () => {
     setNativeServiceWatching(true);
     onBackgroundQuiet(() => undefined);
