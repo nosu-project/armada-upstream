@@ -536,6 +536,110 @@ describe("DM index relay-set publication base", () => {
     view.unmount();
   });
 
+  it("never treats a coordinate as missing from a relay whose answer hit the limit", async () => {
+    // A relay answers with its newest `limit` events. With more coordinates
+    // than that, one it left out is not one it lacks — and republishing it
+    // pushes another coordinate out of the window, forever.
+    h.relays = [OLD_RELAY, NEW_RELAY];
+    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
+    h.queryData = undefined;
+    const x = localRecord(70);
+    const departedX = {
+      version: 1,
+      deviceId: "departed-x",
+      bucket: dmConversationIndexBucket(x.key),
+      records: [x],
+    } satisfies DmConversationIndexShard;
+    const y = localRecord(90);
+    const departedY = {
+      version: 1,
+      deviceId: "departed-y",
+      bucket: dmConversationIndexBucket(y.key),
+      records: [y],
+    } satisfies DmConversationIndexShard;
+    // NEW answers with a full page (the filter's limit) that happens not to
+    // include X; OLD's short answer is complete. Ids are unique to this test:
+    // decoded editions are memoized by id across the module, and a reused id
+    // decodes to another test's shard, leaving the relay unreadable and the
+    // assertions below vacuous.
+    const fullPage = Array.from({ length: 128 }, (_, i) => ({
+      ...eventForShard(departedY, "c", 200),
+      id: `9c${i.toString(16).padStart(62, "0")}`,
+    }));
+    h.relayQuery.mockImplementation(async (relay: string) =>
+      relay === NEW_RELAY ? fullPage : [eventForShard(departedX, "4", 100)]);
+    renderHook(() => useDmConversationIndexSync());
+
+    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
+      departedRepairs: Map<string, { relays: string[] }>;
+    };
+    const xId = dmConversationIndexDTag(departedX.deviceId, departedX.bucket);
+    const yId = dmConversationIndexDTag(departedY.deviceId, departedY.bucket);
+    expect(pull.departedRepairs.get(xId)?.relays ?? []).not.toContain(NEW_RELAY);
+    // Control: OLD's answer was complete, so Y's absence there IS a gap.
+    expect(pull.departedRepairs.get(yId)?.relays).toEqual([OLD_RELAY]);
+  });
+
+  it("still repairs an own shard a relay truly lacks when its answer hit the limit", async () => {
+    // The truncation guard must not cost this installation its own shards: a
+    // relay holding more coordinates than the limit that really is missing one
+    // of ours would otherwise never be sent it.
+    h.relays = [OLD_RELAY, NEW_RELAY];
+    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
+    h.queryData = undefined;
+    const own = setLocalRecords([localRecord(50)]);
+    const other = {
+      version: 1,
+      deviceId: "other-device",
+      bucket: dmConversationIndexBucket(localRecord(51).key),
+      records: [localRecord(51)],
+    } satisfies DmConversationIndexShard;
+    const fullPage = Array.from({ length: 128 }, (_, i) => ({
+      ...eventForShard(other, "e", 200),
+      id: `9a${i.toString(16).padStart(62, "0")}`,
+    }));
+    h.relayQuery.mockImplementation(async (relay: string) =>
+      relay === NEW_RELAY ? fullPage : [eventForShard(own, "5", 100)]);
+    renderHook(() => useDmConversationIndexSync());
+
+    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
+      repairTargets: Map<number, string[]>;
+    };
+    expect(pull.repairTargets.get(own.bucket)).toEqual([NEW_RELAY]);
+  });
+
+  it("asks each relay for this installation's own coordinates by exact d-tag", async () => {
+    // A relay whose newest-`limit` window leaves an own shard out still
+    // returns it to the exact read, so it is not republished there.
+    h.relays = [OLD_RELAY, NEW_RELAY];
+    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
+    h.queryData = undefined;
+    const own = setLocalRecords([localRecord(60)]);
+    const ownHead = eventForShard(own, "6", 100);
+    const other = {
+      version: 1,
+      deviceId: "other-device",
+      bucket: dmConversationIndexBucket(localRecord(61).key),
+      records: [localRecord(61)],
+    } satisfies DmConversationIndexShard;
+    const fullPage = Array.from({ length: 128 }, (_, i) => ({
+      ...eventForShard(other, "b", 200),
+      id: `9b${i.toString(16).padStart(62, "0")}`,
+    }));
+    h.relayQuery.mockImplementation(async (relay: string, filters: Array<Record<string, unknown>>) => {
+      if (relay !== NEW_RELAY) return [ownHead];
+      const exact = filters.some((filter) =>
+        (filter["#d"] as string[] | undefined)?.includes(dmConversationIndexDTag("test-device", own.bucket)));
+      return exact ? [...fullPage, ownHead] : fullPage;
+    });
+    renderHook(() => useDmConversationIndexSync());
+
+    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
+      repairTargets: Map<number, string[]>;
+    };
+    expect(pull.repairTargets.get(own.bucket) ?? []).not.toContain(NEW_RELAY);
+  });
+
   it("consolidates divergent departed-installation editions before repairing either relay", async () => {
     h.relays = [OLD_RELAY, NEW_RELAY];
     h.nip65Relays = [OLD_RELAY, NEW_RELAY];

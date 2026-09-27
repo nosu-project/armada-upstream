@@ -28,6 +28,7 @@ import {
   dmConversationIndexEventGroups,
   dmConversationIndexDTag,
   dmConversationIndexFilter,
+  dmConversationIndexOwnFilter,
   fitDmConversationIndexShard,
   mergeDmConversationIndexRecords,
   parseDmConversationIndexPlaintext,
@@ -57,7 +58,7 @@ interface DmConversationIndexPull extends DecodedDmConversationIndex {
   /** Only relays whose current edition participated in this merge base. */
   publishRelays: string[];
   /** Decrypt-validated relay-local heads; aggregate winners cannot hide a stale relay. */
-  relayReads: Map<string, Pick<DecodedDmConversationIndex, "heads" | "unreadable">>;
+  relayReads: Map<string, DmConversationIndexRelayRead>;
   /** Exact own-shard coordinates each answered relay still needs. */
   repairTargets: Map<number, string[]>;
   /** Exact non-current-installation coordinate repairs, keyed by full d-tag. */
@@ -67,6 +68,16 @@ interface DmConversationIndexPull extends DecodedDmConversationIndex {
 }
 
 type DmConversationIndexRelayTargets = ReadonlyMap<number, readonly string[]>;
+
+/**
+ * One relay's answer to the index pull. `truncated` marks an answer that hit
+ * the filter's `limit`: the relay may hold coordinates it did not return, so a
+ * coordinate ABSENT from it proves nothing — except this installation's own,
+ * which the pull also asks for by exact `d` (dmConversationIndexOwnFilter).
+ */
+type DmConversationIndexRelayRead = Pick<DecodedDmConversationIndex, "heads" | "unreadable"> & {
+  truncated: boolean;
+};
 
 interface DmConversationIndexCoordinateRepair {
   shard: DmConversationIndexShard;
@@ -78,10 +89,7 @@ function dmConversationIndexDepartedRepairPlan(
   decoded: DecodedDmConversationIndex,
   ownDeviceId: string,
   answeredRelays: readonly string[],
-  relayReads: ReadonlyMap<
-    string,
-    Pick<DecodedDmConversationIndex, "heads" | "unreadable">
-  >,
+  relayReads: ReadonlyMap<string, DmConversationIndexRelayRead>,
 ): Map<string, DmConversationIndexCoordinateRepair> {
   const repairs = new Map<string, DmConversationIndexCoordinateRepair>();
   for (const shard of decoded.shards) {
@@ -95,7 +103,15 @@ function dmConversationIndexDepartedRepairPlan(
       const read = relayReads.get(relay);
       if (!read || read.unreadable.has(identifier)) return false;
       const remote = read.heads.get(identifier)?.shard;
-      return !remote || serializeDmConversationIndexShard(remote) !== serialized;
+      // Absent from a truncated answer is not absent from the relay. Treating
+      // it as missing made every installation republish a coordinate the
+      // relay's newest-`limit` window had merely left out — which pushed
+      // ANOTHER coordinate out of the window for the next pull. With more
+      // coordinates than the limit (an account with many past installations),
+      // every running client republished shards forever: measured as tens of
+      // MB a minute of these events on every one of the account's devices.
+      if (!remote) return !read.truncated;
+      return serializeDmConversationIndexShard(remote) !== serialized;
     });
     if (targets.length === 0) continue;
     repairs.set(identifier, {
@@ -110,10 +126,7 @@ function dmConversationIndexDepartedRepairPlan(
 async function dmConversationIndexRelayRepairPlan(
   pubkey: string,
   answeredRelays: readonly string[],
-  relayReads: ReadonlyMap<
-    string,
-    Pick<DecodedDmConversationIndex, "heads" | "unreadable">
-  >,
+  relayReads: ReadonlyMap<string, DmConversationIndexRelayRead>,
 ): Promise<{ targets: Map<number, string[]>; blockedBuckets: Set<number> }> {
   const deviceId = dmConversationDeviceId(pubkey);
   const ownShards = await loadOwnDmConversationIndexShards(pubkey);
@@ -138,6 +151,9 @@ async function dmConversationIndexRelayRepairPlan(
         remote
         && serializeDmConversationIndexShard(remote) === serializeDmConversationIndexShard(shard)
       ) continue;
+      // No truncation guard here, unlike the departed plan: own coordinates
+      // are also asked for by exact `d`, so one absent from the answer is
+      // absent from the relay.
       const held = targets.get(shard.bucket) ?? [];
       held.push(relay);
       targets.set(shard.bucket, held);
@@ -484,17 +500,22 @@ export function useDmConversationIndexSync(): void {
       // self-state read. An empty target set is an unavailable sync, not a pool query.
       if (relays.length === 0) throw new Error("No self-state relays configured");
       const filter = dmConversationIndexFilter(user.pubkey);
+      const ownFilter = dmConversationIndexOwnFilter(user.pubkey, dmConversationDeviceId(user.pubkey));
       const store = await eventStore;
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
       const [settled, cached] = await Promise.all([
         Promise.allSettled(
-          relays.map((relay) => nostr.relay(relay).query([filter], { signal: deadline })),
+          relays.map((relay) => nostr.relay(relay).query([filter, ownFilter], { signal: deadline })),
         ),
         store.query([filter]).catch(() => []),
       ]);
+      // The two filters overlap (own coordinates are in the broad one too), so
+      // one event can arrive twice. Deduplicated, the answer reaches the broad
+      // filter's limit only when that filter did: when it came back complete,
+      // every own coordinate was already in it.
       const completed = settled.flatMap((result, index) => result.status === "fulfilled" ? [{
         relay: relays[index]!,
-        events: result.value,
+        events: [...new Map(result.value.map((event) => [event.id, event])).values()],
       }] : []);
       const failedRelays = settled.flatMap((result, index) =>
         result.status === "rejected" ? [relays[index]!] : []);
@@ -511,10 +532,7 @@ export function useDmConversationIndexSync(): void {
       // may hold a richer divergent edition and must not receive this round's
       // replacement until they have participated in a later merge.
       const completedRelays = completed.map(({ relay }) => relay);
-      const relayReads = new Map<
-        string,
-        Pick<DecodedDmConversationIndex, "heads" | "unreadable">
-      >();
+      const relayReads = new Map<string, DmConversationIndexRelayRead>();
       // Decode the aggregate first so valid editions enter the immutable
       // cache. The relay-local passes below then retain provenance without a
       // second signer prompt for the same event.
@@ -527,6 +545,7 @@ export function useDmConversationIndexSync(): void {
         relayReads.set(relay, {
           heads: relayDecoded.heads,
           unreadable: relayDecoded.unreadable,
+          truncated: filter.limit !== undefined && events.length >= filter.limit,
         });
       }
       // One unreadable relay-local coordinate means that relay's current state

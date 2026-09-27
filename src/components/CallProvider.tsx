@@ -13,6 +13,7 @@ import {
   type DmVoiceContext,
 } from "@/contexts/CallContext";
 import { VoiceActivityContext } from "@/contexts/VoiceActivityContext";
+import { holdBackgroundActivity } from "@/lib/backgroundQuiet";
 import { cn } from "@/lib/utils";
 
 /**
@@ -47,6 +48,10 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 export function CallProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  // A call's media lives in this page: never hand the background to the
+  // native service while one is up (see backgroundQuiet.ts).
+  const inCall = activeCall !== null;
+  useEffect(() => (inCall ? holdBackgroundActivity("call") : undefined), [inCall]);
   const [exiting, setExiting] = useState(false);
   const [slots, setSlots] = useState<HTMLElement[]>([]);
   const [stageSlots, setStageSlots] = useState<HTMLElement[]>([]);

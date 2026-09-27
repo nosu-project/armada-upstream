@@ -424,6 +424,37 @@ describe("NostrBatcher — gift wraps are never cached", () => {
     expect(cached.map((e) => e.kind)).toEqual([1]);
     expect(cached.some((e) => e.kind === 1059 || e.kind === 21059)).toBe(false);
   });
+
+  it("skips the mirror for a group().req() opened with cache: false, on its own upstream", async () => {
+    const { pool, reqCalls, feeders } = makeCoalescePool();
+    const { store, cached } = makeStore();
+    const batcher = new NostrBatcher(pool, store);
+    const filter = [{ kinds: [3], authors: ["me"] }];
+    const note = (id: string): NostrEvent => ({ ...wrapEvent(id), kind: 3 });
+
+    const drain = async (opts: { signal: AbortSignal; cache?: boolean }) => {
+      for await (const _msg of batcher.group(["wss://r1"]).req(filter, opts)) void _msg;
+    };
+    const uncached = new AbortController();
+    const p1 = drain({ signal: uncached.signal, cache: false });
+    await new Promise((r) => setTimeout(r, 0));
+    feeders.get("wss://r1")!(note("u1"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(cached).toEqual([]);
+
+    // A caching subscriber to the same filters is not folded into it.
+    const cachedSub = new AbortController();
+    const p2 = drain({ signal: cachedSub.signal });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reqCalls).toHaveLength(2);
+    feeders.get("wss://r1")!(note("c1"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(cached.map((e) => e.id)).toEqual(["c1"]);
+
+    uncached.abort();
+    cachedSub.abort();
+    await Promise.all([p1, p2]);
+  });
 });
 
 describe("detachableClient — the shared client survives being taken apart", () => {

@@ -1,8 +1,9 @@
 import { App as CapacitorApp } from "@capacitor/app";
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { isBackgroundQuiet, onBackgroundQuiet } from "@/lib/backgroundQuiet";
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
@@ -869,6 +870,7 @@ function WireSyncInner() {
   // catch-up replays mid-flight and re-issued/re-authed every subscription —
   // most with identical filters. Only relays whose own filter set changed are
   // restarted; the rest keep their round and cursor untouched.
+  const quiet = useSyncExternalStore(onBackgroundQuiet, isBackgroundQuiet, () => false);
   const loopsRef = useRef(new Map<string, { sig: string; stop: () => void; bump: () => void }>());
   const loopsOwnerRef = useRef<{ nostr: unknown; pubkey?: string } | null>(null);
   // Explicit-`since` filters (git child / CI bootstrap timestamps) that have
@@ -1065,7 +1067,12 @@ function WireSyncInner() {
       loops.clear();
       loopsOwnerRef.current = { nostr, pubkey: user?.pubkey };
     }
-    const desired = new Map<string, NostrFilter[]>(user ? spec.subs.map(({ relay, filters }) => [relay, filters]) : []);
+    // Backgrounded on Android with the native service watching: no loops at
+    // all. The service holds these relays; on resume every loop restarts from
+    // its relay's cursor, which is lossless (see backgroundQuiet.ts).
+    const desired = new Map<string, NostrFilter[]>(
+      user && !quiet ? spec.subs.map(({ relay, filters }) => [relay, filters]) : [],
+    );
     for (const [relay, loop] of loops) {
       const filters = desired.get(relay);
       if (!filters || JSON.stringify(filters) !== loop.sig) {
@@ -1079,7 +1086,7 @@ function WireSyncInner() {
     // Loops deliberately outlive this effect (the teardown effect below owns
     // them); re-diff only when the actual subscription set changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, spec.sig]);
+  }, [nostr, user?.pubkey, spec.sig, quiet]);
 
   // A backgrounded browser tab has its timers throttled and its sockets
   // idled by the engine, so the watchdog's re-REQ (30s/90s) stretches to
@@ -1165,6 +1172,10 @@ function WireSyncInner() {
 
     let liveHandle: { remove: () => void } | undefined;
     ArmadaNotification.addListener("relayEvent", ({ event, relay }) => {
+      // Quiet: the service has already stored and notified this one, and the
+      // resume drain routes it — a second pass now is exactly the work being
+      // shed (see backgroundQuiet.ts).
+      if (isBackgroundQuiet()) return;
       void ingest([event], true, relay);
     })
       .then((h) => {

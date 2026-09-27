@@ -557,6 +557,21 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
       .catch(() => {});
   });
 
+  // A renderer that dies (an OOM, a GPU/driver crash) leaves the window
+  // painting nothing but its background colour, and with the app menu removed
+  // there is no reload accelerator to get out of it — so reload here. A crash
+  // that recurs within a minute of the last reload is not retried, which keeps
+  // a page that dies on boot from spinning in a crash loop.
+  let lastRendererReload = 0;
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error(`[shell] renderer gone: ${details.reason} (exit ${details.exitCode})`);
+    if (isQuitting || details.reason === "clean-exit") return;
+    const now = Date.now();
+    if (now - lastRendererReload < 60_000) return;
+    lastRendererReload = now;
+    mainWindow?.webContents.reload();
+  });
+
   // The app menu is removed (Menu.setApplicationMenu(null)), and the default
   // DevTools accelerators come from that menu — so in dev mode bind them
   // directly, or there is no way into the inspector at all.

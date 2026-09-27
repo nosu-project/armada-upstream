@@ -19,6 +19,7 @@ import {
 } from "@/hooks/useFrequentReactions";
 import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
 import {
+  decodeAndHydrateDmConversationIndex,
   useDmConversationIndexSync,
   useRecordDmConversationIndex,
 } from "@/hooks/useDmConversationIndexSync";
@@ -35,6 +36,7 @@ import {
 } from "@/lib/nip65";
 import {
   admitSelfSyncEvent,
+  isNewerSelfSyncVersion,
   KIND_APP_SPECIFIC,
   KIND_COMMUNITY_LIST_FRAG,
   queryKeysForSelfEvent,
@@ -43,8 +45,11 @@ import {
   SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
   SELF_SYNC_TOPIC_TAGS,
+  stageNewestPerCoordinate,
+  T_ARMADA_DM_CONVERSATIONS,
   type SelfSyncEventVersion,
 } from "@/lib/selfSyncKinds";
+import type { CachingReqOpts } from "@/lib/NostrBatcher";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
 import { verifyEventOnce } from "@/lib/verifyCache";
@@ -61,6 +66,21 @@ const FREQUENT_REACTIONS_DEBOUNCE_MS = 10_000;
 
 /** Coalescing window (ms) for self-state query invalidations. */
 const SELF_SYNC_FLUSH_MS = 60;
+
+/**
+ * Coalescing window (ms) for live DM conversation-index editions. Each piece
+ * is merged at most once per window, at its newest version; an account whose
+ * installations republish in a loop otherwise costs a verify, a store write
+ * and a decrypt per edition.
+ */
+const DM_INDEX_MERGE_MS = 10_000;
+
+/**
+ * Distinct index pieces held per window. Above an account's real piece count
+ * (8 per installation), so it bounds a flood of invented pieces without ever
+ * refusing a real one.
+ */
+const DM_INDEX_MERGE_MAX_PIECES = 512;
 
 /**
  * How long the app must have been backgrounded before the standing self-state
@@ -201,6 +221,10 @@ function NostrSyncInner() {
     }
   }, [queryClient, selfRelayKey]);
 
+  // Read by the live DM-index merge below without rebuilding the subscription.
+  const signerRef = useRef(user?.signer);
+  signerRef.current = user?.signer;
+
   // ─── A. Standing self-state subscription (transport / freshness) ──────
   // One long-lived REQ for the user's own replaceable/addressable events. Each
   // event is mirrored into the cache by the batcher, then the owning hook's
@@ -248,6 +272,42 @@ function NostrSyncInner() {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
     };
+    // Live DM-index editions: only the newest version of each piece in a
+    // window is stored and merged; the versions it replaced are dropped
+    // unread. The index is an add-only union and every installation
+    // republishes its own pieces, so a skipped intermediate version is at most
+    // a delay until the next full pull. A version is verified when it contests
+    // another (so a forged one can neither displace nor outlast the real one;
+    // see stageNewestPerCoordinate) and otherwise at the flush.
+    let pendingIndex = new Map<string, NostrEvent>();
+    let indexTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushIndexMerge = () => {
+      indexTimer = undefined;
+      const batch = [...pendingIndex.values()];
+      pendingIndex = new Map();
+      if (controller.signal.aborted) return;
+      const admitted = batch.filter((event) =>
+        verifyEventOnce(event) && admitSelfSyncEvent(seen, event, dTagOf(event)));
+      if (admitted.length === 0) return;
+      void eventStore
+        .then((store) => Promise.allSettled(admitted.map((event) => store.event(event))))
+        .catch(() => undefined)
+        .finally(() => {
+          const signer = signerRef.current;
+          if (!signer?.nip44 || controller.signal.aborted) return;
+          void decodeAndHydrateDmConversationIndex(admitted, signer, pubkey)
+            .catch(() => undefined);
+        });
+    };
+    const scheduleIndexMerge = (event: NostrEvent, dTag: string) => {
+      const coordinate = `${event.kind}:${dTag}`;
+      // Already superseded by what this stream admitted: skip the verify too.
+      if (!isNewerSelfSyncVersion(seen.get(coordinate), event)) return;
+      if (!stageNewestPerCoordinate(pendingIndex, coordinate, event, DM_INDEX_MERGE_MAX_PIECES, verifyEventOnce)) {
+        return;
+      }
+      indexTimer ??= setTimeout(flushIndexMerge, DM_INDEX_MERGE_MS);
+    };
     const scheduleInvalidate = (keys: readonly (readonly string[])[]) => {
       for (const key of keys) pendingKeys.set(key.join("\u0000"), key);
       if (pendingKeys.size > 0 && flushTimer === undefined) {
@@ -258,7 +318,23 @@ function NostrSyncInner() {
     const onEvent = (event: NostrEvent) => {
       // A relay can violate our author filter. Never let another account's
       // higher timestamp poison this account's per-coordinate echo guard.
-      if (event.pubkey !== pubkey || !verifyEventOnce(event)) return;
+      if (event.pubkey !== pubkey) return;
+      // A DM conversation-index edition is merged ON ITS OWN rather than by
+      // re-running the full pull, and verified only if it is still the newest
+      // version of its piece when its window closes. The index is an add-only
+      // union, so one newer edition is all there is to learn; the pull
+      // downloads every installation's editions from every self-state relay —
+      // ~128 events a relay on an account with many installs — and one arrived
+      // for every edition another device published.
+      if (
+        event.kind === KIND_APP_SPECIFIC
+        && selfSyncTopicOf(event.tags) === T_ARMADA_DM_CONVERSATIONS
+      ) {
+        const dTag = dTagOf(event);
+        if (dTag !== undefined) scheduleIndexMerge(event, dTag);
+        return;
+      }
+      if (!verifyEventOnce(event)) return;
       if (event.kind === KIND_RELAY_LIST) {
         const previous = relayListSeenVersion.current;
         // A relay can violate our filter. This verifies the signature/kind,
@@ -314,21 +390,21 @@ function NostrSyncInner() {
           : undefined;
       const topicTag = selfSyncTopicOf(event.tags);
       const keys = queryKeysForSelfEvent(event.kind, dTag, topicTag);
-      if (keys.length === 0) return; // cached, but no query watches it (e.g. 10063)
 
       if (!admitSelfSyncEvent(seen, event, dTag)) return;
 
-      // Write it to ArmadaDB, and only THEN tell the readers. The batcher
-      // mirrors everything out of `.req()` on its own, but as a fire-and-forget
-      // write that races this invalidation — and the settings document is now
-      // read from the store, so "invalidated but not yet written" is a re-read
-      // of the version we just superseded. Ordering it here is the difference
-      // between a live subscription and a live subscription that lands. A
-      // duplicate write is a no-op: same id, same coordinate.
+      // Write it to ArmadaDB, and only THEN tell the readers. This stream is
+      // opened with the batcher's write-through mirror off, so this is the
+      // only write: one per admitted version, not one per version per relay
+      // — and the settings document is read from the store, so "invalidated
+      // but not yet written" would be a re-read of the version just
+      // superseded.
       void eventStore
         .then((store) => store.event(event))
         .catch(() => undefined)
         .finally(() => {
+          // Stored, but no query watches it.
+          if (keys.length === 0) return;
           if (!controller.signal.aborted) scheduleInvalidate(keys);
         });
     };
@@ -350,7 +426,9 @@ function NostrSyncInner() {
     void (async () => {
       try {
         const source = nostr.group(relayUrls);
-        for await (const msg of source.req(filters, { signal: controller.signal })) {
+        // `onEvent` stores each version it admits itself; see CachingReqOpts.
+        const reqOpts: CachingReqOpts = { signal: controller.signal, cache: false };
+        for await (const msg of source.req(filters, reqOpts)) {
           if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
         }
       } catch {
@@ -362,6 +440,7 @@ function NostrSyncInner() {
     return () => {
       controller.abort();
       if (flushTimer !== undefined) clearTimeout(flushTimer);
+      if (indexTimer !== undefined) clearTimeout(indexTimer);
     };
     // `resumeEpoch` rebuilds the subscription after a real backgrounding. A
     // socket that died while the app was away usually reconnects and replays

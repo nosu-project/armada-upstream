@@ -61,6 +61,31 @@ public class NotificationRelayServiceAuthTest {
     }
 
     @Test
+    public void selfTopicDocsAreKind30078WithAnArmadaTopic() throws Exception {
+        JSONObject index = new JSONObject().put("kind", 30078).put("tags", new JSONArray()
+                .put(new JSONArray().put("d").put("armada/dm-conversations/x/0"))
+                .put(new JSONArray().put("t").put("armada-dm-conversations")));
+        assertTrue(NotificationRelayService.isSelfTopicDoc(index, 30078));
+        assertFalse(NotificationRelayService.isSelfTopicDoc(index, 30079));
+        JSONObject settings = new JSONObject().put("kind", 30078).put("tags", new JSONArray()
+                .put(new JSONArray().put("d").put("armada/read-state")));
+        assertFalse(NotificationRelayService.isSelfTopicDoc(settings, 30078));
+    }
+
+    @Test
+    public void newerReplaceableBreaksEqualSecondsByLowerId() throws Exception {
+        JSONObject a = new JSONObject().put("created_at", 100).put("id", "bb");
+        assertTrue(SelfTopicWindow.isNewerReplaceable(a,
+                new JSONObject().put("created_at", 101).put("id", "zz")));
+        assertTrue(SelfTopicWindow.isNewerReplaceable(a,
+                new JSONObject().put("created_at", 100).put("id", "aa")));
+        assertFalse(SelfTopicWindow.isNewerReplaceable(a,
+                new JSONObject().put("created_at", 100).put("id", "bb")));
+        assertFalse(SelfTopicWindow.isNewerReplaceable(a,
+                new JSONObject().put("created_at", 99).put("id", "00")));
+    }
+
+    @Test
     public void filtersSignatureIgnoresSinceAndKeyOrder() throws Exception {
         JSONObject a = new JSONObject().put("kinds", new JSONArray().put(1059)).put("#p", new JSONArray().put("x")).put("since", 100);
         JSONObject b = new JSONObject().put("since", 200).put("#p", new JSONArray().put("x")).put("kinds", new JSONArray().put(1059));

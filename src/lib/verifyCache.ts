@@ -47,9 +47,13 @@ import type { NostrEvent } from "@nostrify/nostrify";
 const MEMO_KEY_CHARS = 32;
 const memoKey = (id: string): string => id.slice(0, MEMO_KEY_CHARS);
 
-/** Ids persisted per KV chunk, and chunks kept. */
-const CHUNK_IDS = 1024;
-const KEEP_CHUNKS = 24;
+/**
+ * Ids persisted per KV chunk, and chunks kept. The open chunk is rewritten
+ * whole on each flush, so it is kept small (8KB): measured on a busy account,
+ * 1024-id chunks rewrote ~1MB every two minutes while a sync was verifying.
+ */
+const CHUNK_IDS = 256;
+const KEEP_CHUNKS = 96;
 
 /**
  * Bounded FIFO — sized for what the persisted chunks can refill, so a relaunch
@@ -98,7 +102,7 @@ let persistence: { log: IdLog; started: boolean } | undefined;
 export function persistVerifiedIds(kv: () => IdLogKV): void {
   if (persistence) return;
   persistence = {
-    log: new IdLog(kv, { prefix: "verified-ids:", idChars: MEMO_KEY_CHARS, chunkIds: CHUNK_IDS, keepChunks: KEEP_CHUNKS, flushMs: 2_000 }),
+    log: new IdLog(kv, { prefix: "verified-ids:", idChars: MEMO_KEY_CHARS, chunkIds: CHUNK_IDS, keepChunks: KEEP_CHUNKS, flushMs: 10_000 }),
     started: false,
   };
 }

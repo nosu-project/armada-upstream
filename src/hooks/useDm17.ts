@@ -486,6 +486,17 @@ async function runLiveDm17Pass(
  */
 export async function syncDm17Inbox(ctx: SyncCtx, opts?: SyncOpts): Promise<boolean> {
   if (!ctx.self || !ctx.signer.nip44 || ctx.relays.length === 0) return false;
+  // A pass that could not open anything must not fetch anything. Without the
+  // user's consent a non-interactive pass declines at the decrypt gate
+  // (openAndStore) — AFTER downloading a full page of wraps from every inbox
+  // relay, and without advancing the cursor, so the next pass fetched the same
+  // page again. With an approval-gated signer and no answer to the prompt yet,
+  // that was ~1MB per relay every minute for as long as a DM surface was
+  // mounted, for nothing.
+  if (!opts?.interactive && signerNeedsApproval(ctx.method) && getDecryptConsent() !== "allowed") {
+    lastSyncDeclined.set(ctx.self, true);
+    return false;
+  }
   // Concurrent callers coalesce onto ONE pass. The unread dot and the DMs page
   // each mount their own conversations query, so both call this on a cold
   // start; without this the loser returns immediately on the throttle below

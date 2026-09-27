@@ -7,6 +7,7 @@ import {
   decryptThreadRows,
   DM_PAGE_SIZE,
   dmCounterparty,
+  dmTopUpSince,
   hasMoreCursor,
   hasUnreadDmConversations,
   keepPreviousDmPreviews,
@@ -150,6 +151,30 @@ describe("keepPreviousDmPreviews", () => {
   it("does not carry decrypted previews across consent changes", () => {
     const previousKey = ["dm", "previews", SELF, `${PEER1}:old`, "allowed"];
     expect(keepPreviousDmPreviews(previews, previousKey, SELF, "declined")).toBeUndefined();
+  });
+});
+
+describe("dmTopUpSince (kind-4 top-up after the first page)", () => {
+  it("reaches back over a wedged socket even when the newest held DM is the user's own", () => {
+    // The last pull finished at T. The live socket then wedged silently: a
+    // peer's DM at T+5min never arrived. At T+30min the user sends a DM (it
+    // lands in the list locally), and the minute poll tops up.
+    const T = 1_700_000_000;
+    const missed = dmEvent({ id: "missed", from: PEER1, to: SELF, createdAt: T + 5 * 60 });
+    const ownNew = dmEvent({ id: "own", from: SELF, to: PEER1, createdAt: T + 30 * 60 });
+
+    // Flooring under the newest message HELD (the old rule) asks from T+20min
+    // and can never return the missed DM.
+    const newestHeldFloor = Math.max(missed.created_at, ownNew.created_at) - 10 * 60;
+    expect(missed.created_at).toBeLessThan(newestHeldFloor);
+
+    // Flooring under the last completed pull covers it.
+    expect(dmTopUpSince(T)).toBeLessThanOrEqual(missed.created_at);
+  });
+
+  it("keeps a slack below the last pull for skewed publisher clocks, and never goes negative", () => {
+    expect(dmTopUpSince(1_000_000)).toBe(1_000_000 - 600);
+    expect(dmTopUpSince(10)).toBe(0);
   });
 });
 

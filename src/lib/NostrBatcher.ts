@@ -3,6 +3,7 @@ import type { NPool } from '@nostrify/nostrify';
 import type { ArmadaEventStore } from '@/contexts/EventStoreContext';
 
 import { logNostrReq } from '@/lib/nostrQueryLog';
+import { perfCount } from '@/lib/perf';
 
 /** The relay/group handle shape we wrap for caching: query + req. */
 type NRelayLike = ReturnType<NPool['relay']>;
@@ -266,6 +267,11 @@ class ReplaceableCollector extends MicrotaskBatcher<{
   }
 
   request(pubkey: string, kind: number, signal?: AbortSignal): Promise<NostrEvent | undefined> {
+    if (import.meta.env.VITE_PROFILE === "1") {
+      // Profiling builds: who asks for replaceables, by call site.
+      const site = new Error().stack?.split("\n").slice(3, 6).join(" < ").replace(/https?:\/\/[^/]+/g, "") ?? "?";
+      perfCount(`batch.replaceable k${kind} @ ${site}`, 0, 1, "requests");
+    }
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
         reject(signal.reason);
@@ -602,6 +608,18 @@ type RelayMsg =
   | import('@nostrify/types').NostrRelayEVENT
   | import('@nostrify/types').NostrRelayEOSE
   | import('@nostrify/types').NostrRelayCLOSED;
+
+/**
+ * Options for a `relay()`/`group()` `.req()`. `cache: false` skips the
+ * write-through mirror, for a consumer that stores what it admits itself —
+ * the mirror would otherwise write every superseded version, once per relay.
+ * Not part of Nostrify's `NRelay` type, so pass it as a variable rather than
+ * an object literal.
+ */
+export interface CachingReqOpts {
+  signal?: AbortSignal;
+  cache?: boolean;
+}
 
 /**
  * Stable key for coalescing identical `relay()`/`group()` traffic: the scope
@@ -1062,7 +1080,7 @@ export class NostrBatcher {
             coalescedQuery(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         if (prop === 'req') {
-          return (filters: NostrFilter[], opts?: { signal?: AbortSignal }) =>
+          return (filters: NostrFilter[], opts?: CachingReqOpts) =>
             coalescedReq(target, via, scopeRelays, sourceUrl, filters, opts);
         }
         const value = Reflect.get(target, prop, receiver);
@@ -1144,9 +1162,10 @@ export class NostrBatcher {
     scopeRelays: string[],
     sourceUrl: string | undefined,
     filters: NostrFilter[],
-    opts?: { signal?: AbortSignal },
+    opts?: CachingReqOpts,
   ): AsyncIterable<RelayMsg> {
-    const key = `${via}::${coalesceKey(scopeRelays, filters)}`;
+    const cache = opts?.cache !== false;
+    const key = `${via}::${coalesceKey(scopeRelays, filters)}${cache ? '' : '::uncached'}`;
     let shared = this.sharedSubs.get(key);
     if (!shared || !shared.isOpen()) {
       logNostrReq(scopeRelays, filters, via);
@@ -1158,7 +1177,7 @@ export class NostrBatcher {
           if (sharedSubs.get(key) === sub) sharedSubs.delete(key);
         },
         (msg) => {
-          if (msg[0] === 'EVENT') {
+          if (cache && msg[0] === 'EVENT') {
             this.cacheEvents([msg[2]], sourceUrl);
           }
         },

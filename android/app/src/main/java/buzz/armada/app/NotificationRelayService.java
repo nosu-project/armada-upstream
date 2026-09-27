@@ -422,6 +422,16 @@ public class NotificationRelayService extends Service {
     // one not newer than what was already filed is dropped before the verify
     // and the write (the store would discard it anyway, after both).
     private final Map<String, Long> selfNewestByCoordinate = new HashMap<>();
+    // Installation-sharded topic documents (the DM conversation index, GIF
+    // favorites) waiting out their window; see SelfTopicWindow. Bounded in
+    // distinct coordinates, so a flood of invented pieces cannot grow it.
+    static final long SELF_TOPIC_WINDOW_MS = 10_000L;
+    // Above an account's real piece count (8 DM-index pieces per installation).
+    static final int MAX_PENDING_SELF_TOPIC_DOCS = 512;
+    private final SelfTopicWindow selfTopicWindow =
+            new SelfTopicWindow(MAX_PENDING_SELF_TOPIC_DOCS, NostrCrypto::verifyEvent);
+    private final Runnable flushSelfTopicDocsRunnable = this::flushSelfTopicDocs;
+    private boolean selfTopicFlushPosted;
     // Small reconnect overlap tolerates cross-thread/same-second ordering and
     // mildly skewed publishers. It applies only after this service has actually
     // observed an event, so a cold start still asks from now with no backlog.
@@ -1509,6 +1519,9 @@ public class NotificationRelayService extends Service {
             selfSinceByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
+            selfTopicWindow.clear();
+            handler.removeCallbacks(flushSelfTopicDocsRunnable);
+            selfTopicFlushPosted = false;
             relayCursorsWithEvents.clear();
         }
         userPubkey = nextUserPubkey;
@@ -1617,12 +1630,21 @@ public class NotificationRelayService extends Service {
         // ready) cost a TLS handshake, a NIP-42 round of ~200 stream AUTHs and a
         // full re-subscription per relay, each time.
         Map<String, RelayConnection> keep = new HashMap<>();
+        // Connections waiting out a retry delay. A fresh connection would dial
+        // at once, so a relay that is simply DOWN was redialed on every
+        // configure — measured at 25 failed TLS handshakes in two minutes
+        // against a 502ing relay while the app reconfigured. They keep their
+        // wait (and pick the new config up when it ends); a quarantined one is
+        // still rebuilt, which is how a config change re-arms it.
+        Map<String, RelayConnection> waiting = new HashMap<>();
         if (accountChanged || signerChanged) {
             if (ServiceProfiler.ON) ServiceProfiler.count(accountChanged ? "config.reload full (account)" : "config.reload full (signer)");
             closeAllConnections();
         } else {
             for (RelayConnection rc : connections) {
                 if (rc.ws != null && rc.socketOpen && !rc.closed) keep.put(rc.relayUrl, rc);
+                else if (rc.ws == null && !rc.closed && !rc.quarantined
+                        && rc.retryPending) waiting.put(rc.relayUrl, rc);
                 else rc.close();
             }
             connections.clear();
@@ -1660,12 +1682,19 @@ public class NotificationRelayService extends Service {
                 kept.reconfigure();
                 continue;
             }
+            RelayConnection backingOff = waiting.remove(url);
+            if (backingOff != null) {
+                connections.add(backingOff);
+                if (ServiceProfiler.ON) ServiceProfiler.count("config.reload retry wait kept");
+                continue;
+            }
             RelayConnection rc = new RelayConnection(url, true);
             connections.add(rc);
             rc.connect();
         }
         // Relays the new config no longer wants.
         for (RelayConnection gone : keep.values()) gone.close();
+        for (RelayConnection gone : waiting.values()) gone.close();
         healthRelayCuratedOutCount = curatedOut;
         updateSocketHealth();
 
@@ -1973,6 +2002,8 @@ public class NotificationRelayService extends Service {
         // Single pending reconnect, cancellable — prevents a queued reconnect
         // and the network callback from racing to open duplicate sockets.
         final Runnable reconnectRunnable = this::connect;
+        /** A reconnect is scheduled after a retry delay (see loadConfigAndReconnect). */
+        boolean retryPending = false;
 
         final String subGroups = "ag-" + Long.toHexString(System.nanoTime());
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
@@ -2104,6 +2135,7 @@ public class NotificationRelayService extends Service {
         }
 
         void connect() {
+            retryPending = false;
             // ws != null guard: a socket is already open (or opening). Without
             // it, a stale queued reconnect firing after the network callback
             // already reconnected would open a second socket and orphan the
@@ -2569,8 +2601,10 @@ public class NotificationRelayService extends Service {
             FleetDecision decision = fleetPolicy.onConnectionEnded(
                     fleetState, fleetInfo, new ConnectionResult(wasOpen, uptime, outcome), now);
             handler.removeCallbacks(reconnectRunnable);
+            retryPending = false;
             if (decision instanceof FleetDecision.RetryAfter retry) {
                 handler.postDelayed(reconnectRunnable, retry.delayMs());
+                retryPending = true;
             } else {
                 quarantined = true;
                 Log.w(TAG, "Quarantined " + relayUrl + " (" + outcome
@@ -2596,6 +2630,7 @@ public class NotificationRelayService extends Service {
 
         void close() {
             closed = true;
+            retryPending = false;
             socketOpen = false;
             handler.removeCallbacks(reconnectRunnable);
             handler.removeCallbacks(resubscribeRunnable);
@@ -4266,7 +4301,11 @@ public class NotificationRelayService extends Service {
                 if (repository == null || !address.equals(repository.optString("address"))) continue;
                 JSONArray roots = repository.optJSONArray("ticketRoots"); if (roots == null) repository.put("ticketRoots", roots = new JSONArray());
                 boolean exists = false; for (int j = 0; j < roots.length(); j++) if (root.id.equals(roots.optJSONObject(j).optString("id"))) exists = true;
-                if (!exists) roots.put(new JSONObject().put("id", root.id).put("author", root.author).put("kind", root.kind));
+                // Already persisted: bumping `rev` anyway reloaded the whole
+                // config (every relay reconfigured) for a root it already had.
+                if (exists) return;
+                roots.put(new JSONObject().put("id", root.id).put("author", root.author).put("kind", root.kind));
+                if (ServiceProfiler.ON) ServiceProfiler.count("config.rev git root");
                 long revision = ArmadaNotificationPlugin.nextConfigRevision(sp);
                 sp.edit().putString("gitSubs", repositories.toString())
                         .putLong("rev", revision).apply();
@@ -4276,20 +4315,65 @@ public class NotificationRelayService extends Service {
     }
 
     private void handleEvent(JSONObject event, String relayUrl) {
+        handleEvent(event, relayUrl, false, false);
+    }
+
+    /**
+     * {@code windowClosed} marks a self topic document replayed by
+     * {@link #flushSelfTopicDocs}, which is filed now instead of staged again;
+     * {@code verified} that the window already checked its signature.
+     */
+    private void handleEvent(JSONObject event, String relayUrl, boolean windowClosed, boolean verified) {
         if (!ServiceProfiler.ON) {
-            handleEventInner(event, relayUrl);
+            handleEventInner(event, relayUrl, windowClosed, verified);
             return;
         }
         String label = "event k" + event.optInt("kind");
         long t = ServiceProfiler.begin(label);
         try {
-            handleEventInner(event, relayUrl);
+            handleEventInner(event, relayUrl, windowClosed, verified);
         } finally {
             ServiceProfiler.end(label, t);
         }
     }
 
-    private void handleEventInner(JSONObject event, String relayUrl) {
+    /** A kind-30078 document carrying one of {@link SelfState#TOPICS}. */
+    static boolean isSelfTopicDoc(JSONObject event, int kind) {
+        if (kind != SelfState.KIND_APP_SPECIFIC) return false;
+        JSONArray tags = event.optJSONArray("tags");
+        if (tags == null) return false;
+        for (int i = 0; i < tags.length(); i++) {
+            JSONArray t = tags.optJSONArray(i);
+            if (t != null && t.length() > 1 && "t".equals(t.optString(0))
+                    && SelfState.TOPICS.contains(t.optString(1))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void stageSelfTopicDoc(JSONObject event, String relayUrl, String coordinate) {
+        SelfTopicWindow.Outcome outcome = selfTopicWindow.stage(coordinate, event, relayUrl);
+        if (outcome != SelfTopicWindow.Outcome.STAGED) {
+            if (ServiceProfiler.ON) {
+                ServiceProfiler.count("event.drop self-topic " + outcome.name().toLowerCase(java.util.Locale.ROOT));
+            }
+            return;
+        }
+        if (!selfTopicFlushPosted) {
+            selfTopicFlushPosted = true;
+            handler.postDelayed(flushSelfTopicDocsRunnable, SELF_TOPIC_WINDOW_MS);
+        }
+    }
+
+    private void flushSelfTopicDocs() {
+        selfTopicFlushPosted = false;
+        for (SelfTopicWindow.Pending pending : selfTopicWindow.drain()) {
+            handleEvent(pending.event, pending.relayUrl, true, pending.verified);
+        }
+    }
+
+    private void handleEventInner(JSONObject event, String relayUrl, boolean windowClosed, boolean verified) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop duplicate");
@@ -4329,8 +4413,16 @@ public class NotificationRelayService extends Service {
                 if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state superseded");
                 return;
             }
+            // Installation-sharded topic documents wait out a window, and only
+            // the newest version of each is verified and filed.
+            if (!windowClosed && userPubkey != null
+                    && userPubkey.equals(event.optString("pubkey"))
+                    && isSelfTopicDoc(event, kind)) {
+                stageSelfTopicDoc(event, relayUrl, selfCoordinate);
+                return;
+            }
         }
-        if (kind != 1059 && kind != 21059 && !NostrCrypto.verifyEvent(event)) {
+        if (kind != 1059 && kind != 21059 && !verified && !NostrCrypto.verifyEvent(event)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop signature");
             if (BuildConfig.DEBUG) Log.d(TAG, "DROP bad signature kind=" + kind + " id=" + id);
             return;

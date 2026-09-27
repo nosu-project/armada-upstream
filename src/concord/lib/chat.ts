@@ -220,6 +220,16 @@ export async function openChatBatch(
   let cryptoMs = 0;
   let sliceStart = performance.now();
 
+  // One decode per wrap id. A history page is asked of every relay the
+  // community names, and each serves largely the same wraps; the decode memo
+  // only learns a wrap once it FINISHES, so copies within one batch were each
+  // decrypted in full. The output never carried duplicates usefully — every
+  // caller stores by rumor id.
+  if (wraps.length > 1) {
+    const seen = new Set<string>();
+    wraps = wraps.filter((w) => !seen.has(w.id) && Boolean(seen.add(w.id)));
+  }
+
   // ── Phase 1: decrypt each wrap to its seal. `resolved` keeps a slot per wrap
   // so the output stays in input order across the async verify below.
   const resolved: Array<OpenedChat | null> = new Array(wraps.length).fill(null);

@@ -100,7 +100,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
         : new Uint8Array(raw);
       // A swapped blob fails closed rather than being saved to the user's disk
       // under the sender's filename.
-      if (encryption) verifyPlaintextHash(bytes, encryption.ox);
+      if (encryption) await verifyPlaintextHash(bytes, encryption.ox);
 
       // Force a save, never a render. The sender's real MIME is deliberately
       // discarded: the web branch of `downloadBinaryFile` hands the bytes over

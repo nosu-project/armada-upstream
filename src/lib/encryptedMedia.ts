@@ -239,11 +239,28 @@ function buf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
  * of rendering. Skipped when the sender published no `ox`; a forward may not
  * carry one, and refusing those would break plenty of legitimate messages.
  */
-export function verifyPlaintextHash(plaintext: Uint8Array, ox: string | undefined): void {
+export async function verifyPlaintextHash(plaintext: Uint8Array, ox: string | undefined): Promise<void> {
   if (!ox) return;
-  if (bytesToHex(sha256(plaintext)) !== ox.toLowerCase()) {
+  if ((await sha256Hex(plaintext)) !== ox.toLowerCase()) {
     throw new Error("decrypted attachment does not match its `ox` hash");
   }
+}
+
+/**
+ * SHA-256 of a whole attachment through WebCrypto, which is native and runs
+ * off the main thread. The pure-JS hash it replaces ran on the main thread
+ * over every byte of every decrypted image, and on a phone was a visible share
+ * of scrolling a channel full of them. Falls back where `crypto.subtle` isn't
+ * available (an insecure context).
+ */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (globalThis.crypto?.subtle) {
+    // Hashed in place when the view is ArrayBuffer-backed (it always is here):
+    // `buf` would copy a whole video just to satisfy the type.
+    const view = bytes.buffer instanceof ArrayBuffer ? (bytes as Uint8Array<ArrayBuffer>) : buf(bytes);
+    return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", view)));
+  }
+  return bytesToHex(sha256(bytes));
 }
 
 /**
@@ -303,7 +320,7 @@ export async function decryptAttachmentToObjectURL(
     // both already return one and a Blob accepts one, so threading buffers
     // rather than views saves two full copies of a video.
     const plaintext = await decryptBuffer(ciphertext, enc.key, enc.nonce);
-    verifyPlaintextHash(new Uint8Array(plaintext), enc.ox);
+    await verifyPlaintextHash(new Uint8Array(plaintext), enc.ox);
     const blob = new Blob([plaintext], { type: mime || "application/octet-stream" });
     const objectUrl = URL.createObjectURL(blob);
     // Record the resolved size + URL, then trim the cache to the byte budget.

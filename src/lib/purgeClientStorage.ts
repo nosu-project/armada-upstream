@@ -5,6 +5,7 @@ import { resetKvCaches } from "@/lib/db/kvCache";
 import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { clearFoldedMemory } from "@/lib/foldedCache";
+import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
 import {
   PUSH_CLEANUP_KEY,
   PUSH_INSTALLATION_KEY,
@@ -128,6 +129,7 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   // of the stores purged below.
   clearRecentDecrypts();
   clearFoldedMemory();
+  clearDeferredFoldMemory();
   resetDecryptConsent();
   // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
   // their own copy in memory. Deleting the database underneath them would

@@ -24,6 +24,62 @@ const memCache = new Map<string, unknown>();
  */
 const FOLD_DEADLINE_MS = 250;
 
+/** Floor between two encodes of one fold for its persisted snapshot. */
+const PERSIST_MS = 2_000;
+
+/**
+ * Persisting a fold, shared by every instance of its key.
+ *
+ * A community page mounts a dozen hooks that each fold the SAME control plane
+ * under the same key, and every one of them used to encode its own copy of
+ * the result — the whole fold, often hundreds of KB — for a write that was
+ * then found identical and skipped. Every recompute also produced a fresh
+ * object, so a sync burst encoded many times a second. Here one timer per key
+ * encodes the latest value at most once per PERSIST_MS (a snapshot only has to
+ * be close for the next cold start), and a value already written is not
+ * encoded again.
+ */
+const persistPending = new Map<string, unknown>();
+const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const persistedValue = new Map<string, unknown>();
+
+function schedulePersist(key: string, value: unknown): void {
+  persistPending.set(key, value);
+  // A timer, not an idle callback, so it never takes the fold's idle slot.
+  if (!persistTimers.has(key)) persistTimers.set(key, setTimeout(() => flushPersist(key), PERSIST_MS));
+}
+
+/**
+ * Forget every fold held in memory, and drop the writes still waiting: they
+ * are decrypted community state, and a pending one would land in the store the
+ * purge just emptied, for an account that is gone. Called by
+ * `purgeClientStorage`.
+ */
+export function clearDeferredFoldMemory(): void {
+  for (const timer of persistTimers.values()) clearTimeout(timer);
+  persistTimers.clear();
+  persistPending.clear();
+  persistedValue.clear();
+  memCache.clear();
+}
+
+/**
+ * Write `key`'s pending value now — on its timer, or as ANY instance of the key
+ * unmounts or leaves it (the others find nothing pending and return early).
+ */
+function flushPersist(key: string): void {
+  const timer = persistTimers.get(key);
+  if (timer !== undefined) clearTimeout(timer);
+  persistTimers.delete(key);
+  if (!persistPending.has(key)) return;
+  const value = persistPending.get(key);
+  persistPending.delete(key);
+  if (value === persistedValue.get(key)) return;
+  persistedValue.set(key, value);
+  const serialized = encode(value);
+  void writeFolded(key, value, serialized);
+}
+
 /**
  * Compute a heavy synchronous Concord fold (roster / metadata / banlist) WITHOUT
  * blocking the render-critical path, and persist/restore it across reloads.
@@ -72,7 +128,6 @@ export function useDeferredFold<T>(
   const [restored, setRestored] = useState<T | undefined>(() =>
     key ? (memCache.get(key) as T | undefined) : undefined,
   );
-  const lastWritten = useRef<string | undefined>(undefined);
   // Keep the latest `compute` without making it a scheduling dependency.
   const computeRef = useRef(compute);
   computeRef.current = compute;
@@ -105,7 +160,6 @@ export function useDeferredFold<T>(
     setPrevKey(key);
     setLive(undefined);
     setRestored(key ? (memCache.get(key) as T | undefined) : undefined);
-    lastWritten.current = undefined;
     deadlineRef.current = undefined;
   }
 
@@ -180,23 +234,19 @@ export function useDeferredFold<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, ...deps]);
 
-  // Persist the live fold whenever its CONTENT changes (best-effort).
+  // Persist the live fold whenever its CONTENT changes (best-effort). See
+  // {@link schedulePersist}: once per key, not per instance, and throttled.
   useEffect(() => {
     if (!key || live === undefined) return;
     // Keep the in-memory cache hot so cycling back to this key repaints
     // synchronously (see the key-change seed above).
     memCache.set(key, live);
-    const persist = () => {
-      const serialized = encode(live);
-      if (serialized === lastWritten.current) return;
-      lastWritten.current = serialized;
-      void writeFolded(key, live, serialized);
-    };
-    // Encoding a fold is not cheap; do it on the next task, not in the commit.
-    // A timer, not an idle callback, so it never takes the fold's idle slot.
-    const handle = setTimeout(persist, 0);
-    return () => clearTimeout(handle);
+    schedulePersist(key, live);
   }, [key, live]);
+  useEffect(() => {
+    if (!key) return;
+    return () => flushPersist(key);
+  }, [key]);
 
   return live ?? restored;
 }

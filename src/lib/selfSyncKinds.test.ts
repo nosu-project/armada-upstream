@@ -14,6 +14,7 @@ import {
   SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
   SELF_SYNC_TOPIC_TAGS,
+  stageNewestPerCoordinate,
   T_ARMADA_DM_CONVERSATIONS,
   T_ARMADA_GIF_FAVORITES,
 } from "@/lib/selfSyncKinds";
@@ -102,6 +103,75 @@ describe("admitSelfSyncEvent", () => {
       .toBe(true);
     expect(admitSelfSyncEvent(seen, { kind: 33302, created_at: 100, id: "zz" }, "1"))
       .toBe(true);
+  });
+});
+
+describe("stageNewestPerCoordinate", () => {
+  type V = { created_at: number; id: string };
+  const authentic = () => true;
+  /** A verifier that fails exactly the ids named FORGED (and counts its calls). */
+  const verifier = () => {
+    const calls: string[] = [];
+    const verify = (e: V) => {
+      calls.push(e.id);
+      return !e.id.startsWith("forged");
+    };
+    return { verify, calls };
+  };
+
+  it("keeps only the NIP-01 winner per coordinate", () => {
+    const pending = new Map<string, V>();
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "bb" }, 8, authentic)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 99, id: "00" }, 8, authentic)).toBe(false);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "cc" }, 8, authentic)).toBe(false);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "aa" }, 8, authentic)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 101, id: "zz" }, 8, authentic)).toBe(true);
+    expect([...pending.values()]).toEqual([{ created_at: 101, id: "zz" }]);
+  });
+
+  it("refuses a new coordinate past the cap but still replaces a pending one", () => {
+    const pending = new Map<string, V>();
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 1, id: "a" }, 2, authentic)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "b", { created_at: 1, id: "b" }, 2, authentic)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "c", { created_at: 9, id: "c" }, 2, authentic)).toBe(false);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 2, id: "a2" }, 2, authentic)).toBe(true);
+    expect([...pending.keys()]).toEqual(["a", "b"]);
+  });
+
+  it("does not verify the first version of a piece in a window", () => {
+    const pending = new Map<string, V>();
+    const { verify, calls } = verifier();
+    stageNewestPerCoordinate(pending, "a", { created_at: 1, id: "a1" }, 8, verify);
+    expect(calls).toEqual([]);
+  });
+
+  it("a forged far-future version staged first cannot hold off the real one", () => {
+    // A relay injects an unsigned event under the user's pubkey, dated ahead
+    // of anything real. Without a check, the real edition loses to it on
+    // timestamp, is dropped, and the forgery then fails verification at the
+    // flush: nothing is filed at all.
+    const pending = new Map<string, V>();
+    const { verify } = verifier();
+    stageNewestPerCoordinate(pending, "a", { created_at: 9_999_999_999, id: "forged" }, 8, verify);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "real" }, 8, verify)).toBe(true);
+    expect(pending.get("a")?.id).toBe("real");
+  });
+
+  it("a forged newer version cannot displace a real pending one", () => {
+    const pending = new Map<string, V>();
+    const { verify } = verifier();
+    stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "real" }, 8, verify);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 101, id: "forged" }, 8, verify)).toBe(false);
+    expect(pending.get("a")?.id).toBe("real");
+  });
+
+  it("forged pieces filling the cap are evicted to make room for a real one", () => {
+    const pending = new Map<string, V>();
+    const { verify } = verifier();
+    stageNewestPerCoordinate(pending, "x", { created_at: 1, id: "forged-x" }, 2, verify);
+    stageNewestPerCoordinate(pending, "y", { created_at: 1, id: "forged-y" }, 2, verify);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 1, id: "real" }, 2, verify)).toBe(true);
+    expect([...pending.keys()]).toEqual(["a"]);
   });
 });
 

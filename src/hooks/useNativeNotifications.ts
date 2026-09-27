@@ -36,6 +36,7 @@ import type { GitRepositoryWireInput } from "@/wire/spec";
 import { useEventStore } from "@/hooks/useEventStore";
 import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from "@/lib/gitActivity";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
+import { setNativeServiceWatching } from "@/lib/backgroundQuiet";
 import {
   nativeNotificationConfigAction,
   type NativeNotificationEnablement,
@@ -150,6 +151,7 @@ function configureNative(
   configureQueue = configureQueue
     .catch(() => {})
     .then(() => ArmadaNotification.configure(payload))
+    .then(() => setNativeServiceWatching(payload.enabled === true))
     .catch((err) => {
       if (lastRequestedConfig === key) lastRequestedConfig = "";
       throw err;
@@ -662,7 +664,9 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const refreshHealth = useCallback(async () => {
     if (!supported) return;
     try {
-      setHealth(await ArmadaNotification.getHealth());
+      const next = await ArmadaNotification.getHealth();
+      setNativeServiceWatching(next.serviceRunning && next.configEnabled);
+      setHealth(next);
     } catch {
       // Older APK paired with a newer WebView: diagnostics are optional and the
       // notification path itself must continue to work.

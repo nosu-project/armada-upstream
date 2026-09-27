@@ -27,6 +27,7 @@
  * their miss stamp.
  */
 import { KvPrefixCache } from "@/lib/db/kvCache";
+import { perfCount } from "@/lib/perf";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { seedAuthorCache } from "@/lib/authorCache";
 import { invalidateSyncTopic, registerSyncTopic, want } from "@/sync/syncManager";
@@ -312,6 +313,7 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   );
 
   const [poolEvents, hintEvents] = await Promise.all([poolPass, hintPass]);
+  perfCount(signal.aborted ? "profiles.run (torn down)" : "profiles.run", 0, candidates.length, "pubkeys");
 
   const newest = new Map<string, NostrEvent>();
   for (const ev of [...poolEvents, ...hintEvents.flat()]) {
@@ -320,25 +322,32 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
     if (!prev || ev.created_at > prev.created_at) newest.set(ev.pubkey, ev);
   }
 
-  // A torn-down run may have stopped anywhere; stamping its partial results
-  // would gate the retry the next mount deserves.
-  if (signal.aborted) return;
-
+  // What DID arrive is kept and stamped even when the run was torn down: a
+  // profile in hand is an answer however the round ended. Dropping it made a
+  // run that the reader outlasted — scrolling, switching — throw away every
+  // profile it had fetched and ask for all of them again next time, which on a
+  // phone was megabytes of kind 0s per minute of scrolling a busy channel.
   await Promise.all(
     [...newest.values()].map((ev) => store.event(ev).catch(() => undefined)),
   );
   const at = Date.now();
-  for (const pk of candidates) {
+  for (const [pk, ev] of newest) {
     stamps.set(pk, at);
     stampedGeneration.set(pk, hintGeneration);
-    // Count this round as a miss up front; the found loop below clears it. A
-    // pubkey that keeps coming back empty backs off (see missRetryDelay).
-    if (!newest.has(pk)) missAttempts.set(pk, (missAttempts.get(pk) ?? 0) + 1);
-  }
-  for (const [pk, ev] of newest) {
     foundProfiles.add(pk);
     missAttempts.delete(pk);
     seedAuthorCache(c.queryClient, pk, ev);
+  }
+  // A MISS is only a verdict from a round that ran to the end: a torn-down run
+  // may have stopped anywhere, and stamping its gaps would gate the retry the
+  // next mount deserves.
+  if (signal.aborted) return;
+  for (const pk of candidates) {
+    if (newest.has(pk)) continue;
+    stamps.set(pk, at);
+    stampedGeneration.set(pk, hintGeneration);
+    // A pubkey that keeps coming back empty backs off (see missRetryDelay).
+    missAttempts.set(pk, (missAttempts.get(pk) ?? 0) + 1);
   }
 }
 
