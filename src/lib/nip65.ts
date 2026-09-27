@@ -1,4 +1,5 @@
 import { normalizeRelayUrl } from "@/lib/platform";
+import { queryRelayStrict, type ReqRelay } from "@/lib/strictRelayQuery";
 import { verifyEventOnce, verifyEventsOnce } from "@/lib/verifyCache";
 import { ecVerifyBatch } from "@/lib/verifyPool";
 
@@ -27,6 +28,13 @@ interface RelayQueryClient {
       filters: NostrFilter[],
       opts: { signal: AbortSignal },
     ): Promise<NostrEvent[]>;
+    /**
+     * The raw subscription stream. When present it is read instead of
+     * `query()`, which resolves a CLOSED subscription to `[]` exactly as an
+     * empty EOSE (see `strictRelayQuery.ts`). Optional so test doubles need
+     * not provide it.
+     */
+    req?: ReqRelay["req"];
   };
   /**
    * Pool-wide read, used only as a fallback when no explicit relays are given
@@ -311,8 +319,16 @@ export async function queryExplicitRelaysWithStatus(
       return { events: [], answered: [], failed: [] };
     }
   }
+  // A relay that CLOSED the read (auth-required, rate-limited) must land in
+  // `failed`, not `answered`: an empty answered read is what the list writers
+  // take as proof that no list exists.
   const settled = await settleWithGrace(
-    urls.map((url) => nostr.relay(url).query(filters, { signal })),
+    urls.map((url) => {
+      const relay = nostr.relay(url);
+      return relay.req
+        ? queryRelayStrict({ req: relay.req.bind(relay) }, filters, { signal })
+        : relay.query(filters, { signal });
+    }),
     opts?.graceMs,
   );
   const all: NostrEvent[] = [];

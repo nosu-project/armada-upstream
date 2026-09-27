@@ -39,6 +39,7 @@ import {
 import { isSigned, type NostrRumor } from "@/lib/nostrRumor";
 import { APP_NAME, normalizeRelayUrl } from "@/lib/platform";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
+import { queryRelayStrict } from "@/lib/strictRelayQuery";
 
 /** A conversation burst should produce one signer interaction, not one per message. */
 export const DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS = 60_000;
@@ -505,7 +506,11 @@ export function useDmConversationIndexSync(): void {
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
       const [settled, cached] = await Promise.all([
         Promise.allSettled(
-          relays.map((relay) => nostr.relay(relay).query([filter, ownFilter], { signal: deadline })),
+          // Strict: a relay that CLOSED the REQ (auth-required, rate-limited)
+          // must land in `failedRelays`. Read as an empty answer, it is a
+          // relay missing every coordinate — and the repair plans republish
+          // all of them to it on every pull, forever.
+          relays.map((relay) => queryRelayStrict(nostr.relay(relay), [filter, ownFilter], { signal: deadline })),
         ),
         store.query([filter]).catch(() => []),
       ]);

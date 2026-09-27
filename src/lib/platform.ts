@@ -235,12 +235,10 @@ export const CONCORD_AV_SERVERS: string[] = (
  * the public default is a gift-wrap-only relay, so legacy NIP-04 (kind 4) DMs
  * continue to use the general app relays alongside it.
  *
- * Defaults to Armada's public gift-wrap relay for every build (like
- * `CONCORD_AV_SERVERS`); operators can override with
- * `VITE_DM_RELAYS` (comma-separated ws/wss) or set it empty to disable.
+ * Empty unless an operator sets `VITE_DM_RELAYS` (comma-separated ws/wss);
+ * the app relays still carry DMs without it.
  */
-const DEFAULT_PUBLIC_DM_RELAY = "wss://relay.armada.buzz";
-export const DM_RELAYS: string[] = (import.meta.env.VITE_DM_RELAYS ?? DEFAULT_PUBLIC_DM_RELAY)
+export const DM_RELAYS: string[] = (import.meta.env.VITE_DM_RELAYS ?? "")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
