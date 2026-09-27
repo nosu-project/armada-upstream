@@ -28,6 +28,7 @@ import {
   dmConversationIndexEventGroups,
   dmConversationIndexDTag,
   dmConversationIndexFilter,
+  dmConversationIndexOwnFilter,
   fitDmConversationIndexShard,
   mergeDmConversationIndexRecords,
   parseDmConversationIndexPlaintext,
@@ -71,7 +72,8 @@ type DmConversationIndexRelayTargets = ReadonlyMap<number, readonly string[]>;
 /**
  * One relay's answer to the index pull. `truncated` marks an answer that hit
  * the filter's `limit`: the relay may hold coordinates it did not return, so a
- * coordinate ABSENT from it proves nothing.
+ * coordinate ABSENT from it proves nothing — except this installation's own,
+ * which the pull also asks for by exact `d` (dmConversationIndexOwnFilter).
  */
 type DmConversationIndexRelayRead = Pick<DecodedDmConversationIndex, "heads" | "unreadable"> & {
   truncated: boolean;
@@ -149,8 +151,9 @@ async function dmConversationIndexRelayRepairPlan(
         remote
         && serializeDmConversationIndexShard(remote) === serializeDmConversationIndexShard(shard)
       ) continue;
-      // Absent from a truncated answer proves nothing (see the departed plan).
-      if (!remote && read.truncated) continue;
+      // No truncation guard here, unlike the departed plan: own coordinates
+      // are also asked for by exact `d`, so one absent from the answer is
+      // absent from the relay.
       const held = targets.get(shard.bucket) ?? [];
       held.push(relay);
       targets.set(shard.bucket, held);
@@ -497,17 +500,22 @@ export function useDmConversationIndexSync(): void {
       // self-state read. An empty target set is an unavailable sync, not a pool query.
       if (relays.length === 0) throw new Error("No self-state relays configured");
       const filter = dmConversationIndexFilter(user.pubkey);
+      const ownFilter = dmConversationIndexOwnFilter(user.pubkey, dmConversationDeviceId(user.pubkey));
       const store = await eventStore;
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
       const [settled, cached] = await Promise.all([
         Promise.allSettled(
-          relays.map((relay) => nostr.relay(relay).query([filter], { signal: deadline })),
+          relays.map((relay) => nostr.relay(relay).query([filter, ownFilter], { signal: deadline })),
         ),
         store.query([filter]).catch(() => []),
       ]);
+      // The two filters overlap (own coordinates are in the broad one too), so
+      // one event can arrive twice. Deduplicated, the answer reaches the broad
+      // filter's limit only when that filter did: when it came back complete,
+      // every own coordinate was already in it.
       const completed = settled.flatMap((result, index) => result.status === "fulfilled" ? [{
         relay: relays[index]!,
-        events: result.value,
+        events: [...new Map(result.value.map((event) => [event.id, event])).values()],
       }] : []);
       const failedRelays = settled.flatMap((result, index) =>
         result.status === "rejected" ? [relays[index]!] : []);

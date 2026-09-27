@@ -240,6 +240,24 @@ export function dmConversationIndexFilter(pubkey: string): NostrFilter {
   };
 }
 
+/**
+ * One installation's own coordinates, by exact `d`. Asked beside
+ * {@link dmConversationIndexFilter}, whose newest-`limit` window can leave an
+ * own shard out on an account with more coordinates than the limit: answered
+ * this way, an own shard absent from a relay is absent.
+ */
+export function dmConversationIndexOwnFilter(pubkey: string, deviceId: string): NostrFilter {
+  return {
+    kinds: [DM_CONVERSATIONS_EVENT_KIND],
+    authors: [pubkey],
+    "#d": Array.from(
+      { length: DM_CONVERSATION_INDEX_BUCKETS },
+      (_, bucket) => dmConversationIndexDTag(deviceId, bucket),
+    ),
+    limit: DM_CONVERSATION_INDEX_BUCKETS * MAX_DM_CONVERSATION_VERSIONS_PER_SHARD,
+  };
+}
+
 function tagValue(event: NostrRumor, name: string): string | undefined {
   return event.tags.find((tag) => tag[0] === name)?.[1];
 }
