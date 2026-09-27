@@ -103,12 +103,38 @@ export function admitSelfSyncEvent(
   dTag?: string,
 ): boolean {
   const coordinate = dTag !== undefined ? `${event.kind}:${dTag}` : String(event.kind);
-  const previous = seen.get(coordinate);
-  const isNewer = previous === undefined
+  if (!isNewerSelfSyncVersion(seen.get(coordinate), event)) return false;
+  seen.set(coordinate, { created_at: event.created_at, id: event.id });
+  return true;
+}
+
+/** Whether `event` beats `previous` under NIP-01's replaceable ordering. */
+export function isNewerSelfSyncVersion(
+  previous: SelfSyncEventVersion | undefined,
+  event: SelfSyncEventVersion,
+): boolean {
+  return previous === undefined
     || event.created_at > previous.created_at
     || (event.created_at === previous.created_at && event.id < previous.id);
-  if (!isNewer) return false;
-  seen.set(coordinate, { created_at: event.created_at, id: event.id });
+}
+
+/**
+ * Stage `event` as the pending version of `coordinate` for one coalescing
+ * window, keeping only the NIP-01 winner per coordinate. A coordinate not yet
+ * pending is refused once `maxCoordinates` are, so a flood of distinct
+ * coordinates is bounded too; the next full read picks up what was refused.
+ * Returns whether the event is now the pending version.
+ */
+export function stageNewestPerCoordinate<T extends SelfSyncEventVersion>(
+  pending: Map<string, T>,
+  coordinate: string,
+  event: T,
+  maxCoordinates: number,
+): boolean {
+  const previous = pending.get(coordinate);
+  if (previous === undefined && pending.size >= maxCoordinates) return false;
+  if (!isNewerSelfSyncVersion(previous, event)) return false;
+  pending.set(coordinate, event);
   return true;
 }
 

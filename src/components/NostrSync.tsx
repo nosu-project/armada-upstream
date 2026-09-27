@@ -36,6 +36,7 @@ import {
 } from "@/lib/nip65";
 import {
   admitSelfSyncEvent,
+  isNewerSelfSyncVersion,
   KIND_APP_SPECIFIC,
   KIND_COMMUNITY_LIST_FRAG,
   queryKeysForSelfEvent,
@@ -44,6 +45,7 @@ import {
   SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
   SELF_SYNC_TOPIC_TAGS,
+  stageNewestPerCoordinate,
   T_ARMADA_DM_CONVERSATIONS,
   type SelfSyncEventVersion,
 } from "@/lib/selfSyncKinds";
@@ -63,6 +65,21 @@ const FREQUENT_REACTIONS_DEBOUNCE_MS = 10_000;
 
 /** Coalescing window (ms) for self-state query invalidations. */
 const SELF_SYNC_FLUSH_MS = 60;
+
+/**
+ * Coalescing window (ms) for live DM conversation-index editions. Each piece
+ * is merged at most once per window, at its newest version; an account whose
+ * installations republish in a loop otherwise costs a verify, a store write
+ * and a decrypt per edition.
+ */
+const DM_INDEX_MERGE_MS = 10_000;
+
+/**
+ * Distinct index pieces held per window. Above an account's real piece count
+ * (8 per installation), so it bounds a flood of invented pieces without ever
+ * refusing a real one.
+ */
+const DM_INDEX_MERGE_MAX_PIECES = 512;
 
 /**
  * How long the app must have been backgrounded before the standing self-state
@@ -254,19 +271,39 @@ function NostrSyncInner() {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
     };
-    // Live DM-index editions, merged in one batch per flush window.
-    let pendingIndex: NostrEvent[] = [];
+    // Live DM-index editions: only the newest version of each piece in a
+    // window is verified, stored and merged; the versions it replaced are
+    // dropped unread. The index is an add-only union and every installation
+    // republishes its own pieces, so a skipped intermediate version is at most
+    // a delay until the next full pull.
+    let pendingIndex = new Map<string, NostrEvent>();
     let indexTimer: ReturnType<typeof setTimeout> | undefined;
-    const scheduleIndexMerge = (event: NostrEvent) => {
-      pendingIndex.push(event);
-      indexTimer ??= setTimeout(() => {
-        indexTimer = undefined;
-        const batch = pendingIndex;
-        pendingIndex = [];
-        const signer = signerRef.current;
-        if (!signer?.nip44 || controller.signal.aborted) return;
-        void decodeAndHydrateDmConversationIndex(batch, signer, pubkey).catch(() => undefined);
-      }, SELF_SYNC_FLUSH_MS);
+    const flushIndexMerge = () => {
+      indexTimer = undefined;
+      const batch = [...pendingIndex.values()];
+      pendingIndex = new Map();
+      if (controller.signal.aborted) return;
+      const admitted = batch.filter((event) =>
+        verifyEventOnce(event) && admitSelfSyncEvent(seen, event, dTagOf(event)));
+      if (admitted.length === 0) return;
+      void eventStore
+        .then((store) => Promise.allSettled(admitted.map((event) => store.event(event))))
+        .catch(() => undefined)
+        .finally(() => {
+          const signer = signerRef.current;
+          if (!signer?.nip44 || controller.signal.aborted) return;
+          void decodeAndHydrateDmConversationIndex(admitted, signer, pubkey)
+            .catch(() => undefined);
+        });
+    };
+    const scheduleIndexMerge = (event: NostrEvent, dTag: string) => {
+      const coordinate = `${event.kind}:${dTag}`;
+      // Already superseded by what this stream admitted: skip the verify too.
+      if (!isNewerSelfSyncVersion(seen.get(coordinate), event)) return;
+      if (!stageNewestPerCoordinate(pendingIndex, coordinate, event, DM_INDEX_MERGE_MAX_PIECES)) {
+        return;
+      }
+      indexTimer ??= setTimeout(flushIndexMerge, DM_INDEX_MERGE_MS);
     };
     const scheduleInvalidate = (keys: readonly (readonly string[])[]) => {
       for (const key of keys) pendingKeys.set(key.join("\u0000"), key);
@@ -278,7 +315,23 @@ function NostrSyncInner() {
     const onEvent = (event: NostrEvent) => {
       // A relay can violate our author filter. Never let another account's
       // higher timestamp poison this account's per-coordinate echo guard.
-      if (event.pubkey !== pubkey || !verifyEventOnce(event)) return;
+      if (event.pubkey !== pubkey) return;
+      // A DM conversation-index edition is merged ON ITS OWN rather than by
+      // re-running the full pull, and verified only if it is still the newest
+      // version of its piece when its window closes. The index is an add-only
+      // union, so one newer edition is all there is to learn; the pull
+      // downloads every installation's editions from every self-state relay —
+      // ~128 events a relay on an account with many installs — and one arrived
+      // for every edition another device published.
+      if (
+        event.kind === KIND_APP_SPECIFIC
+        && selfSyncTopicOf(event.tags) === T_ARMADA_DM_CONVERSATIONS
+      ) {
+        const dTag = dTagOf(event);
+        if (dTag !== undefined) scheduleIndexMerge(event, dTag);
+        return;
+      }
+      if (!verifyEventOnce(event)) return;
       if (event.kind === KIND_RELAY_LIST) {
         const previous = relayListSeenVersion.current;
         // A relay can violate our filter. This verifies the signature/kind,
@@ -345,22 +398,6 @@ function NostrSyncInner() {
       // of the version we just superseded. Ordering it here is the difference
       // between a live subscription and a live subscription that lands. A
       // duplicate write is a no-op: same id, same coordinate.
-      // A DM conversation-index edition is merged ON ITS OWN rather than by
-      // re-running the full pull. The index is an add-only union, so one newer
-      // edition is all there is to learn; the pull downloads every
-      // installation's editions from every self-state relay — ~128 events a
-      // relay on an account with many installs — and one arrived for every
-      // edition another device published.
-      if (topicTag === T_ARMADA_DM_CONVERSATIONS) {
-        void eventStore
-          .then((store) => store.event(event))
-          .catch(() => undefined)
-          .finally(() => {
-            if (!controller.signal.aborted) scheduleIndexMerge(event);
-          });
-        return;
-      }
-
       void eventStore
         .then((store) => store.event(event))
         .catch(() => undefined)

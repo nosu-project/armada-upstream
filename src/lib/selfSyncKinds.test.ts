@@ -14,6 +14,7 @@ import {
   SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
   SELF_SYNC_TOPIC_TAGS,
+  stageNewestPerCoordinate,
   T_ARMADA_DM_CONVERSATIONS,
   T_ARMADA_GIF_FAVORITES,
 } from "@/lib/selfSyncKinds";
@@ -102,6 +103,27 @@ describe("admitSelfSyncEvent", () => {
       .toBe(true);
     expect(admitSelfSyncEvent(seen, { kind: 33302, created_at: 100, id: "zz" }, "1"))
       .toBe(true);
+  });
+});
+
+describe("stageNewestPerCoordinate", () => {
+  it("keeps only the NIP-01 winner per coordinate", () => {
+    const pending = new Map<string, { created_at: number; id: string }>();
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "bb" }, 8)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 99, id: "00" }, 8)).toBe(false);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "cc" }, 8)).toBe(false);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 100, id: "aa" }, 8)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 101, id: "zz" }, 8)).toBe(true);
+    expect([...pending.values()]).toEqual([{ created_at: 101, id: "zz" }]);
+  });
+
+  it("refuses a new coordinate past the cap but still replaces a pending one", () => {
+    const pending = new Map<string, { created_at: number; id: string }>();
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 1, id: "a" }, 2)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "b", { created_at: 1, id: "b" }, 2)).toBe(true);
+    expect(stageNewestPerCoordinate(pending, "c", { created_at: 9, id: "c" }, 2)).toBe(false);
+    expect(stageNewestPerCoordinate(pending, "a", { created_at: 2, id: "a2" }, 2)).toBe(true);
+    expect([...pending.keys()]).toEqual(["a", "b"]);
   });
 });
 

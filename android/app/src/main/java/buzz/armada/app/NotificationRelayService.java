@@ -422,6 +422,18 @@ public class NotificationRelayService extends Service {
     // one not newer than what was already filed is dropped before the verify
     // and the write (the store would discard it anyway, after both).
     private final Map<String, Long> selfNewestByCoordinate = new HashMap<>();
+    // Installation-sharded topic documents (the DM conversation index, GIF
+    // favorites) waiting out their window, newest version per coordinate. An
+    // account whose installations republish those pieces in a loop otherwise
+    // costs a Schnorr verify and a store write per edition; only the version
+    // still newest when the window closes is verified and filed. Bounded in
+    // distinct coordinates, so a flood of invented pieces cannot grow it.
+    private final LinkedHashMap<String, PendingSelfDoc> pendingSelfTopicDocs = new LinkedHashMap<>();
+    private final Runnable flushSelfTopicDocsRunnable = this::flushSelfTopicDocs;
+    private boolean selfTopicFlushPosted;
+    static final long SELF_TOPIC_WINDOW_MS = 10_000L;
+    // Above an account's real piece count (8 DM-index pieces per installation).
+    static final int MAX_PENDING_SELF_TOPIC_DOCS = 512;
     // Small reconnect overlap tolerates cross-thread/same-second ordering and
     // mildly skewed publishers. It applies only after this service has actually
     // observed an event, so a cold start still asks from now with no backlog.
@@ -1509,6 +1521,9 @@ public class NotificationRelayService extends Service {
             selfSinceByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
+            pendingSelfTopicDocs.clear();
+            handler.removeCallbacks(flushSelfTopicDocsRunnable);
+            selfTopicFlushPosted = false;
             relayCursorsWithEvents.clear();
         }
         userPubkey = nextUserPubkey;
@@ -4302,20 +4317,85 @@ public class NotificationRelayService extends Service {
     }
 
     private void handleEvent(JSONObject event, String relayUrl) {
+        handleEvent(event, relayUrl, false);
+    }
+
+    /**
+     * {@code windowClosed} marks a self topic document replayed by
+     * {@link #flushSelfTopicDocs}, which is filed now instead of staged again.
+     */
+    private void handleEvent(JSONObject event, String relayUrl, boolean windowClosed) {
         if (!ServiceProfiler.ON) {
-            handleEventInner(event, relayUrl);
+            handleEventInner(event, relayUrl, windowClosed);
             return;
         }
         String label = "event k" + event.optInt("kind");
         long t = ServiceProfiler.begin(label);
         try {
-            handleEventInner(event, relayUrl);
+            handleEventInner(event, relayUrl, windowClosed);
         } finally {
             ServiceProfiler.end(label, t);
         }
     }
 
-    private void handleEventInner(JSONObject event, String relayUrl) {
+    private static final class PendingSelfDoc {
+        final JSONObject event;
+        final String relayUrl;
+
+        PendingSelfDoc(JSONObject event, String relayUrl) {
+            this.event = event;
+            this.relayUrl = relayUrl;
+        }
+    }
+
+    /** A kind-30078 document carrying one of {@link SelfState#TOPICS}. */
+    static boolean isSelfTopicDoc(JSONObject event, int kind) {
+        if (kind != SelfState.KIND_APP_SPECIFIC) return false;
+        JSONArray tags = event.optJSONArray("tags");
+        if (tags == null) return false;
+        for (int i = 0; i < tags.length(); i++) {
+            JSONArray t = tags.optJSONArray(i);
+            if (t != null && t.length() > 1 && "t".equals(t.optString(0))
+                    && SelfState.TOPICS.contains(t.optString(1))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether {@code event} beats {@code previous} under NIP-01's replaceable ordering. */
+    static boolean isNewerReplaceable(JSONObject previous, JSONObject event) {
+        long a = previous.optLong("created_at"), b = event.optLong("created_at");
+        if (b != a) return b > a;
+        return event.optString("id").compareTo(previous.optString("id")) < 0;
+    }
+
+    private void stageSelfTopicDoc(JSONObject event, String relayUrl, String coordinate) {
+        PendingSelfDoc previous = pendingSelfTopicDocs.get(coordinate);
+        if (previous == null && pendingSelfTopicDocs.size() >= MAX_PENDING_SELF_TOPIC_DOCS) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-topic overflow");
+            return;
+        }
+        if (previous != null) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-topic coalesced");
+            if (!isNewerReplaceable(previous.event, event)) return;
+        }
+        pendingSelfTopicDocs.put(coordinate, new PendingSelfDoc(event, relayUrl));
+        if (!selfTopicFlushPosted) {
+            selfTopicFlushPosted = true;
+            handler.postDelayed(flushSelfTopicDocsRunnable, SELF_TOPIC_WINDOW_MS);
+        }
+    }
+
+    private void flushSelfTopicDocs() {
+        selfTopicFlushPosted = false;
+        if (pendingSelfTopicDocs.isEmpty()) return;
+        List<PendingSelfDoc> batch = new ArrayList<>(pendingSelfTopicDocs.values());
+        pendingSelfTopicDocs.clear();
+        for (PendingSelfDoc pending : batch) handleEvent(pending.event, pending.relayUrl, true);
+    }
+
+    private void handleEventInner(JSONObject event, String relayUrl, boolean windowClosed) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop duplicate");
@@ -4353,6 +4433,14 @@ public class NotificationRelayService extends Service {
             // the store decides.
             if (newest != null && event.optLong("created_at") < newest) {
                 if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state superseded");
+                return;
+            }
+            // Installation-sharded topic documents wait out a window, and only
+            // the newest version of each is verified and filed.
+            if (!windowClosed && userPubkey != null
+                    && userPubkey.equals(event.optString("pubkey"))
+                    && isSelfTopicDoc(event, kind)) {
+                stageSelfTopicDoc(event, relayUrl, selfCoordinate);
                 return;
             }
         }
