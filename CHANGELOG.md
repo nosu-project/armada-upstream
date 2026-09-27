@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.62.1] - 2026-09-27
+
+A performance and battery release. Armada does less work while in the
+background on Android, direct messages and synced settings catch up with fewer
+network requests, and messages load and decrypt faster. The desktop app now
+recovers on its own if its window crashes.
+
+### Changed
+- On Android the app stays quiet in the background while the notification service is watching, and wakes when calls or media are playing
+- Direct messages, message requests and synced settings update with fewer, smaller requests to relays
+- Incoming messages are processed and stored faster, with less repeated decryption and signature checking
+- Bot detection and member lists only fetch profiles that aren't already cached
+- Loading placeholders stop pulsing after a few seconds
+- The Fox default avatar is replaced by Hatcat by xaibott
+
+### Fixed
+- The desktop window reloads automatically if its renderer crashes
+- The Android notification service no longer reconnects to a failing relay early when its settings change
+
 ## [0.62.0] - 2026-09-26
 
 Attaching media has been reworked around a new attach sheet with a grid of your
