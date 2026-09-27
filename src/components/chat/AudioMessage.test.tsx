@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { clearAudioMetadata, primeAudioMetadata } from "@/hooks/useAudioMetadata";
+import { clearAudioMetadata, primeAudioMetadata, primeAudioWaveform } from "@/hooks/useAudioMetadata";
 
 import { AudioMessage } from "./AudioMessage";
 
@@ -24,5 +24,21 @@ describe("AudioMessage", () => {
     const { container } = render(<AudioMessage src={src} mime="audio/webm" waveform="10 50 90" />);
     expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
     expect(container.querySelector("p")).toBeNull();
+  });
+
+  it("draws the waveform computed from the file, and a flat bar where there is none", () => {
+    const heights = (container: HTMLElement) =>
+      [...container.querySelectorAll<HTMLElement>('[role="slider"] > div')].map((bar) => bar.style.height);
+
+    const shaped = "https://blossom.example/shaped.mp3";
+    primeAudioWaveform(shaped, [0, 100]);
+    const { container, unmount } = render(<AudioMessage src={shaped} mime="audio/mpeg" />);
+    expect(heights(container)).toEqual(["4px", "28px"]);
+    unmount();
+
+    const unknown = "https://blossom.example/unknown.mp3";
+    primeAudioWaveform(unknown, undefined);
+    const flat = render(<AudioMessage src={unknown} mime="audio/mpeg" />);
+    expect(new Set(heights(flat.container)).size).toBe(1);
   });
 });

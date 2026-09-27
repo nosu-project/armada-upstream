@@ -2,7 +2,7 @@ import { Music, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MediaFallback } from "@/components/chat/MediaFallback";
-import { hasAudioMetadata, useAudioMetadata } from "@/hooks/useAudioMetadata";
+import { hasAudioMetadata, useAudioMetadata, useAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import {
   pauseOthers,
@@ -30,16 +30,20 @@ interface AudioMessageProps {
 
 const BAR_COUNT = 48;
 
-/** Downsample (or pad) a waveform to a fixed number of bars. */
-function toBars(waveform: string | undefined): number[] {
-  const raw = waveform
+/** Parse the imeta `waveform` field's space-separated amplitudes. */
+function parseWaveform(waveform: string | undefined): number[] {
+  return waveform
     ?.split(/\s+/)
     .map((n) => Number.parseInt(n, 10))
     .filter((n) => Number.isFinite(n)) ?? [];
+}
 
-  if (raw.length === 0) {
-    // Synthetic gentle wave when no waveform data is available
-    return Array.from({ length: BAR_COUNT }, (_, i) => 30 + Math.round(25 * Math.sin(i / 2.5)));
+/** Downsample (or pad) a waveform to a fixed number of bars. */
+function toBars(raw: number[] | null | undefined): number[] {
+  if (!raw || raw.length === 0) {
+    // Flat while the real shape is unknown (not yet decoded, or undecodable):
+    // anything else would be a shape the file doesn't have.
+    return Array.from({ length: BAR_COUNT }, () => 20);
   }
 
   if (raw.length <= BAR_COUNT) return raw;
@@ -91,11 +95,26 @@ export function AudioMessage({
   // Plain URLs resolve immediately to themselves.
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
 
+  const resolvedSrc = resolved.status === "ready" ? resolved.src : undefined;
+
   // The file's own tags. Read from the resolved bytes: a decrypted object URL
   // in memory, or a plain URL read by range request for just the tag block.
-  const meta = useAudioMetadata(src, resolved.status === "ready" ? resolved.src : undefined);
+  const meta = useAudioMetadata(src, resolvedSrc);
 
-  const bars = useMemo(() => toBars(waveform), [waveform]);
+  // A voice message carries its recorder's waveform. Anything else has its
+  // shape computed from its own decoded samples: at once when the bytes are
+  // already in memory (a decrypted `blob:`), but for a plain URL only once it
+  // is played, since that means downloading the whole file.
+  const declared = useMemo(() => parseWaveform(waveform), [waveform]);
+  const [hasPlayed, setHasPlayed] = useState(false);
+  const waveformSrc = declared.length > 0 || !resolvedSrc
+    ? undefined
+    : resolvedSrc.startsWith("blob:") || hasPlayed
+      ? resolvedSrc
+      : undefined;
+  const computed = useAudioWaveform(src, waveformSrc);
+
+  const bars = useMemo(() => toBars(declared.length > 0 ? declared : computed), [declared, computed]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
 
   // Imperatively start playback. Used both by the play button and by the
@@ -123,6 +142,7 @@ export function AudioMessage({
     if (!audio) return;
     const onPlay = () => {
       setIsPlaying(true);
+      setHasPlayed(true);
       // Only one voice note plays at a time.
       pauseOthers(audio);
     };

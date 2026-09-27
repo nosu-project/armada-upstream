@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-
+import { createAttachmentCache } from "@/hooks/attachmentCache";
 import { readAudioMetadata, type AudioMetadata } from "@/lib/audioMetadata";
+import { computeWaveformFromUrl } from "@/lib/audioWaveform";
 
 /** An attachment's tags, with its cover as an object URL ready for an `<img>`. */
 export type AudioDisplay = Omit<AudioMetadata, "cover"> & { coverUrl?: string };
@@ -10,89 +10,64 @@ export function hasAudioMetadata(meta: AudioDisplay | undefined): meta is AudioD
   return !!meta && !!(meta.title || meta.artist || meta.album || meta.coverUrl);
 }
 
-/** How many tracks' metadata the session keeps; the oldest goes first. */
-const MAX_ENTRIES = 200;
-
-/**
- * Read once per attachment per session, keyed by the attachment's URL rather
- * than the per-decrypt object URL it resolved to. A decrypted track's title
- * and cover are plaintext, so {@link clearAudioMetadata} runs with the purge.
- */
-const settled = new Map<string, AudioDisplay>();
-const pending = new Map<string, Promise<AudioDisplay>>();
-
-function settle(key: string, meta: AudioMetadata): AudioDisplay {
-  const { cover, ...tags } = meta;
-  const display: AudioDisplay = { ...tags, coverUrl: cover ? URL.createObjectURL(cover) : undefined };
-  const previous = settled.get(key);
-  if (previous?.coverUrl) URL.revokeObjectURL(previous.coverUrl);
-  settled.delete(key);
-  settled.set(key, display);
-  while (settled.size > MAX_ENTRIES) {
-    const [oldest, entry] = settled.entries().next().value!;
-    if (entry.coverUrl) URL.revokeObjectURL(entry.coverUrl);
-    settled.delete(oldest);
-  }
-  return display;
+function toDisplay({ cover, ...tags }: AudioMetadata): AudioDisplay {
+  return { ...tags, coverUrl: cover ? URL.createObjectURL(cover) : undefined };
 }
 
+/** The tags and cover art embedded in audio attachments. */
+const metadataCache = createAttachmentCache<AudioDisplay>({
+  max: 200,
+  read: async (src) => toDisplay(await readAudioMetadata(src)),
+  dispose: (display) => {
+    if (display.coverUrl) URL.revokeObjectURL(display.coverUrl);
+  },
+});
+
 /**
- * Seed the cache with metadata already read from the local file, so the
+ * Waveforms computed from audio attachments' decoded samples. `null` records
+ * a file that has none to give (undecodable, too big), so it isn't retried.
+ */
+const waveformCache = createAttachmentCache<number[] | null>({
+  max: 500,
+  read: async (src) => (await computeWaveformFromUrl(src)) ?? null,
+});
+
+/**
+ * Seed the metadata cache with what was read from the local file, so the
  * composer's card and the sent message show it without fetching the upload
  * back.
  */
 export function primeAudioMetadata(key: string, meta: AudioMetadata): void {
-  settle(key, meta);
+  metadataCache.prime(key, toDisplay(meta));
 }
 
-/** Drop every cached track (and its cover's object URL). */
+/** Seed the waveform cache from the local file, likewise. */
+export function primeAudioWaveform(key: string, waveform: number[] | undefined): void {
+  waveformCache.prime(key, waveform ?? null);
+}
+
+/** Drop every cached track's tags, cover and waveform. */
 export function clearAudioMetadata(): void {
-  for (const entry of settled.values()) {
-    if (entry.coverUrl) URL.revokeObjectURL(entry.coverUrl);
-  }
-  settled.clear();
-  pending.clear();
-}
-
-function load(key: string, src: string): Promise<AudioDisplay> {
-  let promise = pending.get(key);
-  if (!promise) {
-    promise = readAudioMetadata(src).then((meta) => {
-      // A purge while the read was in flight dropped this entry; don't refill.
-      if (pending.get(key) !== promise) return {};
-      pending.delete(key);
-      return settle(key, meta);
-    });
-    pending.set(key, promise);
-  }
-  return promise;
+  metadataCache.clear();
+  waveformCache.clear();
 }
 
 /**
  * The tags and cover art embedded in an audio attachment. `key` names the
  * attachment; `src` is where its bytes can be read (the resolved — decrypted
  * or media-policy-routed — source), and without one only an already-read
- * result is returned.
+ * result is returned. An http(s) `src` is read by range request, so only the
+ * tag block is fetched.
  */
 export function useAudioMetadata(key: string, src?: string): AudioDisplay | undefined {
-  const [meta, setMeta] = useState<AudioDisplay | undefined>(() => settled.get(key));
+  return metadataCache.useValue(key, src);
+}
 
-  useEffect(() => {
-    const done = settled.get(key);
-    if (done) {
-      setMeta(done);
-      return;
-    }
-    setMeta(undefined);
-    if (!src) return;
-    let live = true;
-    void load(key, src).then((result) => {
-      if (live) setMeta(result);
-    });
-    return () => {
-      live = false;
-    };
-  }, [key, src]);
-
-  return meta;
+/**
+ * The waveform of an audio attachment, from its decoded samples. Unlike the
+ * tags this needs the WHOLE file, so the caller decides when `src` is worth
+ * handing over; `null` means the file has none to give.
+ */
+export function useAudioWaveform(key: string, src?: string): number[] | null | undefined {
+  return waveformCache.useValue(key, src);
 }
