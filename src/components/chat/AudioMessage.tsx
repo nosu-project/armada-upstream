@@ -2,16 +2,14 @@ import { Music, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MediaFallback } from "@/components/chat/MediaFallback";
-import { useRoutedCandidates } from "@/hooks/useBlossomCandidates";
+import { hasAudioMetadata, useAudioMetadata } from "@/hooks/useAudioMetadata";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import {
   pauseOthers,
   playNextAfter,
   registerAudioPlayer,
 } from "@/lib/audioPlaybackQueue";
 import { formatTime } from "@/lib/formatTime";
-import { companionEncryption } from "@/lib/imeta";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -27,13 +25,6 @@ interface AudioMessageProps {
   waveform?: string;
   /** Duration in seconds from the imeta `duration` field. */
   duration?: string;
-  /** Cover art (imeta `thumb`/`image`), under the same key and nonce as the audio. */
-  cover?: string;
-  /** The track's own tags, from the imeta `title`/`artist`/`album`/`year` fields. */
-  title?: string;
-  artist?: string;
-  album?: string;
-  year?: string;
   className?: string;
 }
 
@@ -71,7 +62,8 @@ function toBars(waveform: string | undefined): number[] {
  * Compact chat audio player: play/pause button, clickable waveform with
  * playback progress, and a duration label. Used for voice messages and
  * other audio attachments. A music file that carries its own tags or cover
- * art is presented as a track: the art beside its title, artist and album.
+ * art (read out of the file, not the event) is presented as a track: the art
+ * beside its title, artist and album.
  */
 export function AudioMessage({
   src,
@@ -80,11 +72,6 @@ export function AudioMessage({
   fallbacks,
   waveform,
   duration,
-  cover,
-  title,
-  artist,
-  album,
-  year,
   className,
 }: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -103,6 +90,10 @@ export function AudioMessage({
   // fetch + decrypt to an object URL before handing anything to <audio>.
   // Plain URLs resolve immediately to themselves.
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
+
+  // The file's own tags. Read from the resolved bytes: a decrypted object URL
+  // in memory, or a plain URL read by range request for just the tag block.
+  const meta = useAudioMetadata(src, resolved.status === "ready" ? resolved.src : undefined);
 
   const bars = useMemo(() => toBars(waveform), [waveform]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
@@ -240,7 +231,8 @@ export function AudioMessage({
     </>
   );
 
-  if (cover || title || artist || album) {
+  if (hasAudioMetadata(meta)) {
+    const { title, artist, album, year, coverUrl } = meta;
     const details = [artist, album, year].filter(Boolean).join(" · ");
     return (
       <div
@@ -251,7 +243,7 @@ export function AudioMessage({
         onClick={(e) => e.stopPropagation()}
       >
         {element}
-        <CoverArt url={cover} encryption={encryption} />
+        <CoverArt src={coverUrl} />
         <div className="flex-1 min-w-0">
           {(title || details) && (
             <div className="min-w-0 px-0.5">
@@ -283,20 +275,9 @@ export function AudioMessage({
   );
 }
 
-/**
- * A track's cover art, or a music glyph where it has none or it won't load.
- * An encrypted cover is ciphertext under the audio's own key and nonce (only
- * those carry over, not the `ox`), and a plain one is sender-named, so it
- * loads under the media policy like any other image.
- */
-function CoverArt({ url, encryption }: { url?: string; encryption?: ImetaEncryption }) {
-  const coverEncryption = useMemo(() => companionEncryption(encryption), [encryption]);
-  const route = useRoutedCandidates(url || undefined);
-  const candidate = route.sources[0];
-  const resolved = useResolvedMediaSrc({ url: candidate ?? "", encryption: coverEncryption, mime: "image/jpeg" });
+/** A track's cover art, or a music glyph where it has none or it won't decode. */
+function CoverArt({ src }: { src?: string }) {
   const [broken, setBroken] = useState<string | undefined>(undefined);
-  const src = candidate && resolved.status === "ready" ? resolved.src : undefined;
-
   return (
     <div className="size-20 shrink-0 overflow-hidden rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
       {src && broken !== src ? (

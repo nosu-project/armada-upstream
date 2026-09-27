@@ -29,15 +29,6 @@ export interface ImetaEntry {
   /** The sender's description of the media, from NIP-94 `alt`. */
   alt?: string;
   /**
-   * An audio file's own tags (ID3 and the like), lifted by the sender's
-   * client: `title`, `artist`, `album` and a four-digit `year`. Not NIP-94
-   * fields — imeta allows any — and display only.
-   */
-  title?: string;
-  artist?: string;
-  album?: string;
-  year?: string;
-  /**
    * Hidden behind a click-to-reveal cover, Discord's per-attachment spoiler.
    * Carried as `content-warning` — NIP-36's name, scoped to the one file
    * rather than the event — so its value is a (possibly empty) reason.
@@ -144,10 +135,6 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
         name: entry.name,
         size: entry.size,
         alt: entry.alt || undefined,
-        title: entry.title || undefined,
-        artist: entry.artist || undefined,
-        album: entry.album || undefined,
-        year: entry.year || undefined,
         spoiler: "content-warning" in entry || undefined,
         fallbacks: fallbacks.length ? fallbacks : undefined,
         encryption: enc,

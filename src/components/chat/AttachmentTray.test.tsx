@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { primeAudioMetadata } from "@/hooks/useAudioMetadata";
 
 import { AttachmentTray, type TrayItem } from "./AttachmentTray";
 
@@ -88,7 +89,8 @@ describe("AttachmentTray", () => {
     expect(screen.queryByLabelText("Description (alt text)")).not.toBeInTheDocument();
   });
 
-  it("names an audio track by its own title and artist, without a spoiler toggle", () => {
+  it("names an audio track by the title and artist read from the file, without a spoiler toggle", () => {
+    primeAudioMetadata("https://blossom.example/intro.mp3", { title: "Intro", artist: "Limp Bizkit" });
     renderTray([{
       kind: "attachment",
       url: "https://blossom.example/intro.mp3",
@@ -97,8 +99,6 @@ describe("AttachmentTray", () => {
       isImage: false,
       isVideo: false,
       isAudio: true,
-      title: "Intro",
-      artist: "Limp Bizkit",
       isWebxdc: false,
       spoiler: false,
     }]);

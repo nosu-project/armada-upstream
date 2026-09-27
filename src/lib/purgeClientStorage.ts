@@ -1,4 +1,5 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
+import { clearAudioMetadata } from "@/hooks/useAudioMetadata";
 import { clearRecentDecrypts } from "@/lib/AppSigner";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
@@ -130,6 +131,8 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   clearRecentDecrypts();
   clearFoldedMemory();
   clearDeferredFoldMemory();
+  // Tags and cover art read out of decrypted audio attachments.
+  clearAudioMetadata();
   resetDecryptConsent();
   // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
   // their own copy in memory. Deleting the database underneath them would
@@ -158,4 +161,5 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   resetKvCaches();
   clearRecentDecrypts();
   clearFoldedMemory();
+  clearAudioMetadata();
 }

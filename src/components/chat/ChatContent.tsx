@@ -1313,11 +1313,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               fallbacks={fallbacks}
               waveform={waveform}
               duration={duration}
-              cover={imeta?.thumbnail}
-              title={imeta?.title}
-              artist={imeta?.artist}
-              album={imeta?.album}
-              year={imeta?.year}
             />
           );
         }

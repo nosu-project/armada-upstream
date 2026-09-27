@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { audioTagsFrom } from "./audioMetadata";
-import { parseImetaMap } from "./imeta";
 
 describe("audioTagsFrom", () => {
   it("lifts title, artist, album and year", () => {
@@ -28,27 +27,5 @@ describe("audioTagsFrom", () => {
 
   it("ignores an unparseable date", () => {
     expect(audioTagsFrom({ date: new Date("nonsense") }).year).toBeUndefined();
-  });
-});
-
-describe("parseImetaMap audio tags", () => {
-  it("reads a track's title, artist, album, year and cover", () => {
-    const entry = parseImetaMap([[
-      "imeta",
-      "url https://blossom.example/a.mp3",
-      "m audio/mpeg",
-      "thumb https://blossom.example/cover.jpg",
-      "title Intro",
-      "artist Limp Bizkit",
-      "album Significant Other",
-      "year 1999",
-    ]]).get("https://blossom.example/a.mp3");
-    expect(entry).toMatchObject({
-      thumbnail: "https://blossom.example/cover.jpg",
-      title: "Intro",
-      artist: "Limp Bizkit",
-      album: "Significant Other",
-      year: "1999",
-    });
   });
 });

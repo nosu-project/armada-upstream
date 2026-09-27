@@ -1,35 +1,24 @@
-import type { MetadataTags } from "mediabunny";
+import type { Input, MetadataTags, Source } from "mediabunny";
 
-/** The descriptive tags of a music file that ride in its imeta. */
-export interface AudioTags {
+/**
+ * What a music file says about itself, read out of the file's own container
+ * metadata (ID3, Vorbis comments, MP4 `ilst`, …). Nothing here travels in the
+ * event: the sender's and every recipient's client read the same bytes.
+ */
+export interface AudioMetadata {
   title?: string;
   artist?: string;
   album?: string;
   /** Release year, four digits. */
   year?: string;
+  /** The embedded front cover, as the file carries it. */
+  cover?: Blob;
 }
 
-/** What an attached audio file says about itself. */
-export interface AudioMetadata extends AudioTags {
-  /** Seconds, rounded; absent when the container doesn't say. */
-  duration?: number;
-  /** The embedded front cover, re-encoded small enough to upload beside it. */
-  cover?: File;
-}
-
-/** Longest side of the re-encoded cover. It is shown at thumbnail size. */
-const COVER_MAX_DIMENSION = 600;
-
-/** JPEG quality for the re-encoded cover. */
-const COVER_QUALITY = 0.85;
-
-/** Cap on a tag value: an imeta field is one line, not a liner note. */
+/** Cap on a displayed tag: the bytes are the sender's to fill. */
 const MAX_TAG_CHARS = 200;
 
-/** The imeta field names these tags are written under, in order. */
-export const AUDIO_TAG_FIELDS = ["title", "artist", "album", "year"] as const satisfies readonly (keyof AudioTags)[];
-
-/** One line, trimmed and capped — a tag value is sender-controlled text. */
+/** One line, trimmed and capped. */
 function cleanTag(value: string | undefined): string | undefined {
   // eslint-disable-next-line no-control-regex
   const line = value?.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
@@ -37,11 +26,11 @@ function cleanTag(value: string | undefined): string | undefined {
 }
 
 /**
- * Normalize a container's metadata into the fields Armada sends. The track
- * artist wins over the album artist, which only stands in when the track has
- * none (a compilation's album artist is "Various Artists").
+ * Normalize a container's tags for display. The track artist wins over the
+ * album artist, which only stands in when the track has none (a
+ * compilation's album artist is "Various Artists").
  */
-export function audioTagsFrom(tags: MetadataTags): AudioTags {
+export function audioTagsFrom(tags: MetadataTags): Omit<AudioMetadata, "cover"> {
   const year = tags.date && !Number.isNaN(tags.date.getTime()) ? String(tags.date.getUTCFullYear()) : undefined;
   return {
     title: cleanTag(tags.title),
@@ -52,69 +41,35 @@ export function audioTagsFrom(tags: MetadataTags): AudioTags {
 }
 
 /**
- * Read an attached audio file's tags, duration and front cover (ID3, Vorbis
- * comments, MP4 `ilst`, …). Never throws: a file mediabunny can't parse just
- * comes back with nothing, and uploads as it would have anyway.
+ * Read an audio file's tags and front cover. `source` is the file itself, or
+ * a URL to it: a `blob:` URL (a decrypted attachment) is read whole, since it
+ * is already in memory; an http(s) URL is read with range requests, so only
+ * the tag block is fetched, not the track.
+ *
+ * Never throws: a file mediabunny can't parse, or a host that refuses the
+ * read, just comes back with nothing.
  */
-export async function extractAudioMetadata(file: File): Promise<AudioMetadata> {
-  let input: import("mediabunny").Input | undefined;
+export async function readAudioMetadata(source: Blob | string): Promise<AudioMetadata> {
+  let input: Input | undefined;
   try {
     // Loaded on demand: the main bundle has no other use for it.
-    const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
-    input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
-    const [tags, duration] = await Promise.all([
-      input.getMetadataTags().catch(() => ({}) as MetadataTags),
-      readDuration(input),
-    ]);
+    const { ALL_FORMATS, BlobSource, Input, UrlSource } = await import("mediabunny");
+    let src: Source;
+    if (typeof source !== "string") src = new BlobSource(source);
+    else if (source.startsWith("blob:")) src = new BlobSource(await (await fetch(source)).blob());
+    else src = new UrlSource(source);
 
-    const images = tags.images ?? [];
+    input = new Input({ source: src, formats: ALL_FORMATS });
+    const tags = await input.getMetadataTags();
+    const images = (tags.images ?? []).filter((img) => img.mimeType.startsWith("image/"));
     const art = images.find((img) => img.kind === "coverFront") ?? images[0];
-    const cover = art ? await encodeCover(art.data, art.mimeType, file.name).catch(() => undefined) : undefined;
-
     return {
       ...audioTagsFrom(tags),
-      duration: duration && Number.isFinite(duration) && duration > 0 ? Math.round(duration) : undefined,
-      cover,
+      cover: art ? new Blob([art.data as Uint8Array<ArrayBuffer>], { type: art.mimeType }) : undefined,
     };
   } catch {
     return {};
   } finally {
     input?.dispose();
   }
-}
-
-async function readDuration(input: import("mediabunny").Input): Promise<number | undefined> {
-  try {
-    return (await input.getDurationFromMetadata()) ?? (await input.computeDuration());
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Scale the embedded picture down and re-encode it as a JPEG. Re-encoding is
- * also what strips any EXIF the tagger left in it, and an embedded cover can
- * be a 3000px PNG — far too much to fetch for a thumbnail.
- */
-async function encodeCover(data: Uint8Array, mimeType: string, audioName: string): Promise<File> {
-  const bitmap = await createImageBitmap(new Blob([data as Uint8Array<ArrayBuffer>], { type: mimeType || "image/jpeg" }));
-  const scale = Math.min(1, COVER_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    bitmap.close();
-    throw new Error("Canvas 2D context unavailable");
-  }
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-
-  const blob = await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Cover encode failed"))), "image/jpeg", COVER_QUALITY));
-  const base = audioName.replace(/\.[^./]*$/, "") || "cover";
-  return new File([blob], `${base}.jpg`, { type: "image/jpeg" });
 }
