@@ -81,7 +81,7 @@ describe("signup profile step", () => {
 
     const sloth = DEFAULT_AVATARS.find((avatar) => avatar.id === "sloth");
     fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "  Ana  " } });
-    fireEvent.click(screen.getByRole("button", { name: "Fox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pig" }));
     fireEvent.click(screen.getByRole("button", { name: "Dragon by gravestoneghost" }));
     fireEvent.click(screen.getByRole("button", { name: "Sloth" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -119,6 +119,7 @@ describe("signup profile step", () => {
       "B&W Skull by collegeartist1",
       "Gamer Kitty by dudsflausino",
       "Agent Flower by Milo",
+      "Hatcat by xaibott",
     ]);
   });
 

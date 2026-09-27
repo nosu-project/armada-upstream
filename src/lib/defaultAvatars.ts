@@ -111,12 +111,12 @@ export const DEFAULT_AVATARS: readonly DefaultAvatar[] = [
     url: `${BLOSSOM}/836dd87cc9d92ba2411ee1574f60825e23733aca2406ed20c735e19486e49222.png`,
     label: "Agent Flower by Milo",
   },
-  // PLACEHOLDER rows, replace with artist submissions.
   {
-    id: "fox",
-    url: `${BLOSSOM}/0d5495d30a971d7703cf2492e548d7c9639aa605b3b49a6c24ada8e50ad15118.png`,
-    label: "Fox",
+    id: "hatcat",
+    url: `${BLOSSOM}/d44ab1328a81e0d958fd7ccab38bf39de87e2b3b945483c25d2a2295be8c1f30.jpeg`,
+    label: "Hatcat by xaibott",
   },
+  // PLACEHOLDER rows, replace with artist submissions.
   {
     id: "sloth",
     url: `${BLOSSOM}/dcaec4220f3af5b7dd18df1801b7daaabb41f3835f50bb2041db61d1d162975a.png`,
