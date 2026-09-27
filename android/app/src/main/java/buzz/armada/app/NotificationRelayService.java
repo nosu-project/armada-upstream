@@ -423,17 +423,15 @@ public class NotificationRelayService extends Service {
     // and the write (the store would discard it anyway, after both).
     private final Map<String, Long> selfNewestByCoordinate = new HashMap<>();
     // Installation-sharded topic documents (the DM conversation index, GIF
-    // favorites) waiting out their window, newest version per coordinate. An
-    // account whose installations republish those pieces in a loop otherwise
-    // costs a Schnorr verify and a store write per edition; only the version
-    // still newest when the window closes is verified and filed. Bounded in
+    // favorites) waiting out their window; see SelfTopicWindow. Bounded in
     // distinct coordinates, so a flood of invented pieces cannot grow it.
-    private final LinkedHashMap<String, PendingSelfDoc> pendingSelfTopicDocs = new LinkedHashMap<>();
-    private final Runnable flushSelfTopicDocsRunnable = this::flushSelfTopicDocs;
-    private boolean selfTopicFlushPosted;
     static final long SELF_TOPIC_WINDOW_MS = 10_000L;
     // Above an account's real piece count (8 DM-index pieces per installation).
     static final int MAX_PENDING_SELF_TOPIC_DOCS = 512;
+    private final SelfTopicWindow selfTopicWindow =
+            new SelfTopicWindow(MAX_PENDING_SELF_TOPIC_DOCS, NostrCrypto::verifyEvent);
+    private final Runnable flushSelfTopicDocsRunnable = this::flushSelfTopicDocs;
+    private boolean selfTopicFlushPosted;
     // Small reconnect overlap tolerates cross-thread/same-second ordering and
     // mildly skewed publishers. It applies only after this service has actually
     // observed an event, so a cold start still asks from now with no backlog.
@@ -1521,7 +1519,7 @@ public class NotificationRelayService extends Service {
             selfSinceByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
-            pendingSelfTopicDocs.clear();
+            selfTopicWindow.clear();
             handler.removeCallbacks(flushSelfTopicDocsRunnable);
             selfTopicFlushPosted = false;
             relayCursorsWithEvents.clear();
@@ -4317,34 +4315,25 @@ public class NotificationRelayService extends Service {
     }
 
     private void handleEvent(JSONObject event, String relayUrl) {
-        handleEvent(event, relayUrl, false);
+        handleEvent(event, relayUrl, false, false);
     }
 
     /**
      * {@code windowClosed} marks a self topic document replayed by
-     * {@link #flushSelfTopicDocs}, which is filed now instead of staged again.
+     * {@link #flushSelfTopicDocs}, which is filed now instead of staged again;
+     * {@code verified} that the window already checked its signature.
      */
-    private void handleEvent(JSONObject event, String relayUrl, boolean windowClosed) {
+    private void handleEvent(JSONObject event, String relayUrl, boolean windowClosed, boolean verified) {
         if (!ServiceProfiler.ON) {
-            handleEventInner(event, relayUrl, windowClosed);
+            handleEventInner(event, relayUrl, windowClosed, verified);
             return;
         }
         String label = "event k" + event.optInt("kind");
         long t = ServiceProfiler.begin(label);
         try {
-            handleEventInner(event, relayUrl, windowClosed);
+            handleEventInner(event, relayUrl, windowClosed, verified);
         } finally {
             ServiceProfiler.end(label, t);
-        }
-    }
-
-    private static final class PendingSelfDoc {
-        final JSONObject event;
-        final String relayUrl;
-
-        PendingSelfDoc(JSONObject event, String relayUrl) {
-            this.event = event;
-            this.relayUrl = relayUrl;
         }
     }
 
@@ -4363,24 +4352,14 @@ public class NotificationRelayService extends Service {
         return false;
     }
 
-    /** Whether {@code event} beats {@code previous} under NIP-01's replaceable ordering. */
-    static boolean isNewerReplaceable(JSONObject previous, JSONObject event) {
-        long a = previous.optLong("created_at"), b = event.optLong("created_at");
-        if (b != a) return b > a;
-        return event.optString("id").compareTo(previous.optString("id")) < 0;
-    }
-
     private void stageSelfTopicDoc(JSONObject event, String relayUrl, String coordinate) {
-        PendingSelfDoc previous = pendingSelfTopicDocs.get(coordinate);
-        if (previous == null && pendingSelfTopicDocs.size() >= MAX_PENDING_SELF_TOPIC_DOCS) {
-            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-topic overflow");
+        SelfTopicWindow.Outcome outcome = selfTopicWindow.stage(coordinate, event, relayUrl);
+        if (outcome != SelfTopicWindow.Outcome.STAGED) {
+            if (ServiceProfiler.ON) {
+                ServiceProfiler.count("event.drop self-topic " + outcome.name().toLowerCase(java.util.Locale.ROOT));
+            }
             return;
         }
-        if (previous != null) {
-            if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-topic coalesced");
-            if (!isNewerReplaceable(previous.event, event)) return;
-        }
-        pendingSelfTopicDocs.put(coordinate, new PendingSelfDoc(event, relayUrl));
         if (!selfTopicFlushPosted) {
             selfTopicFlushPosted = true;
             handler.postDelayed(flushSelfTopicDocsRunnable, SELF_TOPIC_WINDOW_MS);
@@ -4389,13 +4368,12 @@ public class NotificationRelayService extends Service {
 
     private void flushSelfTopicDocs() {
         selfTopicFlushPosted = false;
-        if (pendingSelfTopicDocs.isEmpty()) return;
-        List<PendingSelfDoc> batch = new ArrayList<>(pendingSelfTopicDocs.values());
-        pendingSelfTopicDocs.clear();
-        for (PendingSelfDoc pending : batch) handleEvent(pending.event, pending.relayUrl, true);
+        for (SelfTopicWindow.Pending pending : selfTopicWindow.drain()) {
+            handleEvent(pending.event, pending.relayUrl, true, pending.verified);
+        }
     }
 
-    private void handleEventInner(JSONObject event, String relayUrl, boolean windowClosed) {
+    private void handleEventInner(JSONObject event, String relayUrl, boolean windowClosed, boolean verified) {
         String id = event.optString("id");
         if (id.isEmpty() || notifiedIds.contains(id)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop duplicate");
@@ -4444,7 +4422,7 @@ public class NotificationRelayService extends Service {
                 return;
             }
         }
-        if (kind != 1059 && kind != 21059 && !NostrCrypto.verifyEvent(event)) {
+        if (kind != 1059 && kind != 21059 && !verified && !NostrCrypto.verifyEvent(event)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop signature");
             if (BuildConfig.DEBUG) Log.d(TAG, "DROP bad signature kind=" + kind + " id=" + id);
             return;

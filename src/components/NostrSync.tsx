@@ -273,10 +273,12 @@ function NostrSyncInner() {
       }
     };
     // Live DM-index editions: only the newest version of each piece in a
-    // window is verified, stored and merged; the versions it replaced are
-    // dropped unread. The index is an add-only union and every installation
+    // window is stored and merged; the versions it replaced are dropped
+    // unread. The index is an add-only union and every installation
     // republishes its own pieces, so a skipped intermediate version is at most
-    // a delay until the next full pull.
+    // a delay until the next full pull. A version is verified when it contests
+    // another (so a forged one can neither displace nor outlast the real one;
+    // see stageNewestPerCoordinate) and otherwise at the flush.
     let pendingIndex = new Map<string, NostrEvent>();
     let indexTimer: ReturnType<typeof setTimeout> | undefined;
     const flushIndexMerge = () => {
@@ -301,7 +303,7 @@ function NostrSyncInner() {
       const coordinate = `${event.kind}:${dTag}`;
       // Already superseded by what this stream admitted: skip the verify too.
       if (!isNewerSelfSyncVersion(seen.get(coordinate), event)) return;
-      if (!stageNewestPerCoordinate(pendingIndex, coordinate, event, DM_INDEX_MERGE_MAX_PIECES)) {
+      if (!stageNewestPerCoordinate(pendingIndex, coordinate, event, DM_INDEX_MERGE_MAX_PIECES, verifyEventOnce)) {
         return;
       }
       indexTimer ??= setTimeout(flushIndexMerge, DM_INDEX_MERGE_MS);

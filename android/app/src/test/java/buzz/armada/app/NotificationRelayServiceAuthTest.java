@@ -75,13 +75,13 @@ public class NotificationRelayServiceAuthTest {
     @Test
     public void newerReplaceableBreaksEqualSecondsByLowerId() throws Exception {
         JSONObject a = new JSONObject().put("created_at", 100).put("id", "bb");
-        assertTrue(NotificationRelayService.isNewerReplaceable(a,
+        assertTrue(SelfTopicWindow.isNewerReplaceable(a,
                 new JSONObject().put("created_at", 101).put("id", "zz")));
-        assertTrue(NotificationRelayService.isNewerReplaceable(a,
+        assertTrue(SelfTopicWindow.isNewerReplaceable(a,
                 new JSONObject().put("created_at", 100).put("id", "aa")));
-        assertFalse(NotificationRelayService.isNewerReplaceable(a,
+        assertFalse(SelfTopicWindow.isNewerReplaceable(a,
                 new JSONObject().put("created_at", 100).put("id", "bb")));
-        assertFalse(NotificationRelayService.isNewerReplaceable(a,
+        assertFalse(SelfTopicWindow.isNewerReplaceable(a,
                 new JSONObject().put("created_at", 99).put("id", "00")));
     }
 

@@ -124,16 +124,39 @@ export function isNewerSelfSyncVersion(
  * pending is refused once `maxCoordinates` are, so a flood of distinct
  * coordinates is bounded too; the next full read picks up what was refused.
  * Returns whether the event is now the pending version.
+ *
+ * The first version of a piece in a window is staged unverified (the flush
+ * verifies it). Every decision that DROPS a version is made against a
+ * verified one, because a relay can serve an unsigned event under the user's
+ * pubkey: a forged newer version must not displace the real one, a forged
+ * pending one must not make the real one lose, and forged pieces holding the
+ * cap are evicted before a new piece is refused. `verify` is called only on
+ * those contested paths, and is expected to memoize.
  */
 export function stageNewestPerCoordinate<T extends SelfSyncEventVersion>(
   pending: Map<string, T>,
   coordinate: string,
   event: T,
   maxCoordinates: number,
+  verify: (event: T) => boolean,
 ): boolean {
   const previous = pending.get(coordinate);
-  if (previous === undefined && pending.size >= maxCoordinates) return false;
-  if (!isNewerSelfSyncVersion(previous, event)) return false;
+  if (previous === undefined) {
+    if (pending.size >= maxCoordinates) {
+      for (const [staged, candidate] of pending) {
+        if (!verify(candidate)) pending.delete(staged);
+      }
+      if (pending.size >= maxCoordinates) return false;
+    }
+    pending.set(coordinate, event);
+    return true;
+  }
+  if (previous.id === event.id) return false;
+  if (isNewerSelfSyncVersion(previous, event)) {
+    if (!verify(event)) return false;
+  } else if (verify(previous)) {
+    return false;
+  }
   pending.set(coordinate, event);
   return true;
 }
