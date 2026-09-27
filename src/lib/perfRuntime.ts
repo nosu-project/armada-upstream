@@ -111,7 +111,9 @@ const state = {
   intervalSites: new Map<string, number>(),
 
   eventsByKind: new Map<number, { count: number; bytes: number }>(),
-  queries: new Map<string, { fetches: number; updates: number; observers: number }>(),
+  queries: new Map<string, { fetches: number; updates: number; observers: number; errors: number }>(),
+  /** Who STARTED each family's fetches: the app frames on the stack at the fetch action. */
+  fetchSites: new Map<string, number>(),
   shapes: new Map<string, { reqs: number; events: number; bytes: number; eose: number }>(),
 };
 
@@ -132,6 +134,7 @@ function resetWindow(): void {
   state.eventsByKind.clear();
   state.shapes.clear();
   state.queries.clear();
+  state.fetchSites.clear();
   for (const s of relays.values()) {
     const keep = { open: s.open, liveSubs: s.liveSubs, peakSubs: s.liveSubs };
     Object.assign(s, emptyRelayStats(), keep);
@@ -626,13 +629,44 @@ export function instrumentQueryCache(cache: QueryCacheLike): () => void {
       return;
     }
     if (event.type !== "updated" || !event.action) return;
-    if (event.action.type === "fetch") entry(queryFamily(event.query.queryKey)).fetches += 1;
-    else if (event.action.type === "success") entry(queryFamily(event.query.queryKey)).updates += 1;
+    if (event.action.type === "fetch") {
+      const family = queryFamily(event.query.queryKey);
+      entry(family).fetches += 1;
+      // The fetch action is dispatched synchronously inside whatever started
+      // it, so the stack names the caller: an invalidation, a refetch timer, a
+      // mount. The app frames only — the cache's own are the same every time.
+      // Bundled, this module shares a chunk with the app, so the frames are
+      // kept whole (minus the cache's own vendor frames) and resolved through
+      // the build's sourcemaps afterwards.
+      // V8 keeps 10 frames by default, and the cache's own dispatch uses most
+      // of them: without a deeper trace the caller is always cut off.
+      const limit = Error.stackTraceLimit;
+      Error.stackTraceLimit = 60;
+      const stack = new Error().stack ?? "";
+      Error.stackTraceLimit = limit;
+      const site = stack
+        .split("\n")
+        .filter((line) => /\/assets\//.test(line) && !/vendor-/.test(line))
+        .slice(1, 8)
+        .map((line) => line.trim().replace(/https?:\/\/[^/]+/g, ""))
+        .join(" < ");
+      // The key's shape too: a family whose key keeps CHANGING refetches as
+      // a brand-new query each time, with no app frame on the stack.
+      let keyShape = "";
+      try {
+        keyShape = JSON.stringify(event.query.queryKey).replace(/[0-9a-f]{16,}/g, "…").slice(0, 160);
+      } catch {
+        // unserializable key
+      }
+      const key = `${family} ${keyShape} @ ${site || "?"}`;
+      state.fetchSites.set(key, (state.fetchSites.get(key) ?? 0) + 1);
+    } else if (event.action.type === "success") entry(queryFamily(event.query.queryKey)).updates += 1;
+    else if (event.action.type === "error") entry(queryFamily(event.query.queryKey)).errors += 1;
   });
   function entry(family: string) {
     let e = state.queries.get(family);
     if (!e) {
-      e = { fetches: 0, updates: 0, observers: 0 };
+      e = { fetches: 0, updates: 0, observers: 0, errors: 0 };
       state.queries.set(family, e);
     }
     return e;
@@ -975,7 +1009,9 @@ export interface RuntimeReport {
   relays: ({ url: string } & RelayStats)[];
   eventsByKind: { kind: number; count: number; bytes: number }[];
   /** Per query family: fetches, data replacements, observers added (see {@link instrumentQueryCache}). */
-  queries: { family: string; fetches: number; updates: number; observers: number }[];
+  queries: { family: string; fetches: number; updates: number; observers: number; errors: number }[];
+  /** Per query family and starting call site, how many fetches (see {@link instrumentQueryCache}). */
+  queryFetchSites: { site: string; fetches: number }[];
   reqShapes: { shape: string; reqs: number; events: number; bytes: number; eose: number }[];
   animations: { name: string; target: string; count: number }[];
   samples: Sample[];
@@ -1073,6 +1109,11 @@ export function runtimeReport(): RuntimeReport {
       [...state.queries.entries()].map(([family, q]) => ({ family, ...q })),
       (q) => q.fetches + q.updates,
       40,
+    ),
+    queryFetchSites: top(
+      [...state.fetchSites.entries()].map(([site, fetches]) => ({ site, fetches })),
+      (q) => q.fetches,
+      30,
     ),
     reqShapes: top(
       [...state.shapes.entries()].map(([shape, a]) => ({ shape, ...a })),

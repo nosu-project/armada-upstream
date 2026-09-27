@@ -402,7 +402,7 @@ const seenCompleteWraps = new Set<string>();
 const SEEN_WRAPS_CAP = 16_384;
 const SEEN_WRAPS_KEY = "plane-seen-wraps";
 /** Debounce for the persisted-memo write, so a sweep burst is one write. */
-const SEEN_WRAPS_PERSIST_MS = 1_000;
+const SEEN_WRAPS_PERSIST_MS = 5_000;
 
 /**
  * Wrap ids that were fetched and would NOT open. Persisted beside the memo:
@@ -425,15 +425,16 @@ const JUNK_WRAPS_CAP = 4_096;
 const seenWrapsLog = new IdLog(() => getArmadaDB().kv, {
   prefix: "plane-seen-wraps:",
   idChars: 64,
-  chunkIds: 1_024,
-  keepChunks: SEEN_WRAPS_CAP / 1_024,
+  // Small chunks: the open one is rewritten whole on every flush.
+  chunkIds: 256,
+  keepChunks: SEEN_WRAPS_CAP / 256,
   flushMs: SEEN_WRAPS_PERSIST_MS,
 });
 const junkWrapsLog = new IdLog(() => getArmadaDB().kv, {
   prefix: "plane-junk-wraps:",
   idChars: 64,
-  chunkIds: 512,
-  keepChunks: JUNK_WRAPS_CAP / 512,
+  chunkIds: 256,
+  keepChunks: JUNK_WRAPS_CAP / 256,
   flushMs: SEEN_WRAPS_PERSIST_MS,
 });
 

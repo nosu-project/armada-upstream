@@ -536,6 +536,44 @@ describe("DM index relay-set publication base", () => {
     view.unmount();
   });
 
+  it("never treats a coordinate as missing from a relay whose answer hit the limit", async () => {
+    // A relay answers with its newest `limit` events. With more coordinates
+    // than that, one it left out is not one it lacks — and republishing it
+    // pushes another coordinate out of the window, forever.
+    h.relays = [OLD_RELAY, NEW_RELAY];
+    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
+    h.queryData = undefined;
+    const x = localRecord(70);
+    const departedX = {
+      version: 1,
+      deviceId: "departed-x",
+      bucket: dmConversationIndexBucket(x.key),
+      records: [x],
+    } satisfies DmConversationIndexShard;
+    const y = localRecord(90);
+    const departedY = {
+      version: 1,
+      deviceId: "departed-y",
+      bucket: dmConversationIndexBucket(y.key),
+      records: [y],
+    } satisfies DmConversationIndexShard;
+    // NEW answers with a full page (the filter's limit) that happens not to
+    // include X; OLD's short answer is complete.
+    const fullPage = Array.from({ length: 128 }, (_, i) => ({
+      ...eventForShard(departedY, "c", 200),
+      id: `c${i.toString(16).padStart(63, "0")}`,
+    }));
+    h.relayQuery.mockImplementation(async (relay: string) =>
+      relay === NEW_RELAY ? fullPage : [eventForShard(departedX, "d", 100)]);
+    renderHook(() => useDmConversationIndexSync());
+
+    const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
+      departedRepairs: Map<string, { relays: string[] }>;
+    };
+    const xId = dmConversationIndexDTag(departedX.deviceId, departedX.bucket);
+    expect(pull.departedRepairs.get(xId)?.relays ?? []).not.toContain(NEW_RELAY);
+  });
+
   it("consolidates divergent departed-installation editions before repairing either relay", async () => {
     h.relays = [OLD_RELAY, NEW_RELAY];
     h.nip65Relays = [OLD_RELAY, NEW_RELAY];

@@ -33,6 +33,7 @@
  * policy sits idle, and `registerSyncTopic` re-schedules, so a hook that
  * mounts before the owning module registers is picked up then.
  */
+import { isBackgroundQuiet, onBackgroundQuiet } from "@/lib/backgroundQuiet";
 import { isBootGateOpen, onBootGateOpen } from "@/lib/bootGate";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { logSync } from "@/lib/syncLog";
@@ -279,6 +280,7 @@ function ensureWired(): void {
     requestSchedule();
   });
   onBootGateOpen(requestSchedule);
+  onBackgroundQuiet(requestSchedule);
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", requestSchedule);
   }
@@ -292,6 +294,10 @@ function paused(): boolean {
   if (!isBootGateOpen()) return true;
   if (!stampsSettled) return true;
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return true;
+  // Android, backgrounded, with the native service watching: the WebView's
+  // `visibilityState` is not reliable there, so this is the signal that it is
+  // off screen (see backgroundQuiet.ts).
+  if (isBackgroundQuiet()) return true;
   return false;
 }
 
