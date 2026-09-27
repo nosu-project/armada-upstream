@@ -705,6 +705,7 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     @PluginMethod
     public void configure(PluginCall call) {
+        if (ServiceProfiler.ON) ServiceProfiler.count("plugin.configure");
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
         String userPubkey = call.getString("userPubkey");
         // Missing flags mean "replace", preserving the all-at-once contract of

@@ -1617,12 +1617,21 @@ public class NotificationRelayService extends Service {
         // ready) cost a TLS handshake, a NIP-42 round of ~200 stream AUTHs and a
         // full re-subscription per relay, each time.
         Map<String, RelayConnection> keep = new HashMap<>();
+        // Connections waiting out a retry delay. A fresh connection would dial
+        // at once, so a relay that is simply DOWN was redialed on every
+        // configure — measured at 25 failed TLS handshakes in two minutes
+        // against a 502ing relay while the app reconfigured. They keep their
+        // wait (and pick the new config up when it ends); a quarantined one is
+        // still rebuilt, which is how a config change re-arms it.
+        Map<String, RelayConnection> waiting = new HashMap<>();
         if (accountChanged || signerChanged) {
             if (ServiceProfiler.ON) ServiceProfiler.count(accountChanged ? "config.reload full (account)" : "config.reload full (signer)");
             closeAllConnections();
         } else {
             for (RelayConnection rc : connections) {
                 if (rc.ws != null && rc.socketOpen && !rc.closed) keep.put(rc.relayUrl, rc);
+                else if (rc.ws == null && !rc.closed && !rc.quarantined
+                        && rc.retryPending) waiting.put(rc.relayUrl, rc);
                 else rc.close();
             }
             connections.clear();
@@ -1660,12 +1669,19 @@ public class NotificationRelayService extends Service {
                 kept.reconfigure();
                 continue;
             }
+            RelayConnection backingOff = waiting.remove(url);
+            if (backingOff != null) {
+                connections.add(backingOff);
+                if (ServiceProfiler.ON) ServiceProfiler.count("config.reload retry wait kept");
+                continue;
+            }
             RelayConnection rc = new RelayConnection(url, true);
             connections.add(rc);
             rc.connect();
         }
         // Relays the new config no longer wants.
         for (RelayConnection gone : keep.values()) gone.close();
+        for (RelayConnection gone : waiting.values()) gone.close();
         healthRelayCuratedOutCount = curatedOut;
         updateSocketHealth();
 
@@ -1973,6 +1989,8 @@ public class NotificationRelayService extends Service {
         // Single pending reconnect, cancellable — prevents a queued reconnect
         // and the network callback from racing to open duplicate sockets.
         final Runnable reconnectRunnable = this::connect;
+        /** A reconnect is scheduled after a retry delay (see loadConfigAndReconnect). */
+        boolean retryPending = false;
 
         final String subGroups = "ag-" + Long.toHexString(System.nanoTime());
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
@@ -2104,6 +2122,7 @@ public class NotificationRelayService extends Service {
         }
 
         void connect() {
+            retryPending = false;
             // ws != null guard: a socket is already open (or opening). Without
             // it, a stale queued reconnect firing after the network callback
             // already reconnected would open a second socket and orphan the
@@ -2569,8 +2588,10 @@ public class NotificationRelayService extends Service {
             FleetDecision decision = fleetPolicy.onConnectionEnded(
                     fleetState, fleetInfo, new ConnectionResult(wasOpen, uptime, outcome), now);
             handler.removeCallbacks(reconnectRunnable);
+            retryPending = false;
             if (decision instanceof FleetDecision.RetryAfter retry) {
                 handler.postDelayed(reconnectRunnable, retry.delayMs());
+                retryPending = true;
             } else {
                 quarantined = true;
                 Log.w(TAG, "Quarantined " + relayUrl + " (" + outcome
@@ -2596,6 +2617,7 @@ public class NotificationRelayService extends Service {
 
         void close() {
             closed = true;
+            retryPending = false;
             socketOpen = false;
             handler.removeCallbacks(reconnectRunnable);
             handler.removeCallbacks(resubscribeRunnable);
@@ -4266,7 +4288,11 @@ public class NotificationRelayService extends Service {
                 if (repository == null || !address.equals(repository.optString("address"))) continue;
                 JSONArray roots = repository.optJSONArray("ticketRoots"); if (roots == null) repository.put("ticketRoots", roots = new JSONArray());
                 boolean exists = false; for (int j = 0; j < roots.length(); j++) if (root.id.equals(roots.optJSONObject(j).optString("id"))) exists = true;
-                if (!exists) roots.put(new JSONObject().put("id", root.id).put("author", root.author).put("kind", root.kind));
+                // Already persisted: bumping `rev` anyway reloaded the whole
+                // config (every relay reconfigured) for a root it already had.
+                if (exists) return;
+                roots.put(new JSONObject().put("id", root.id).put("author", root.author).put("kind", root.kind));
+                if (ServiceProfiler.ON) ServiceProfiler.count("config.rev git root");
                 long revision = ArmadaNotificationPlugin.nextConfigRevision(sp);
                 sp.edit().putString("gitSubs", repositories.toString())
                         .putLong("rev", revision).apply();
