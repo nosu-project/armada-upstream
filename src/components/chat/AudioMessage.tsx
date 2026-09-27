@@ -1,14 +1,17 @@
-import { Pause, Play } from "lucide-react";
+import { Music, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MediaFallback } from "@/components/chat/MediaFallback";
+import { useRoutedCandidates } from "@/hooks/useBlossomCandidates";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
+import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import {
   pauseOthers,
   playNextAfter,
   registerAudioPlayer,
 } from "@/lib/audioPlaybackQueue";
 import { formatTime } from "@/lib/formatTime";
+import { companionEncryption } from "@/lib/imeta";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -24,6 +27,13 @@ interface AudioMessageProps {
   waveform?: string;
   /** Duration in seconds from the imeta `duration` field. */
   duration?: string;
+  /** Cover art (imeta `thumb`/`image`), under the same key and nonce as the audio. */
+  cover?: string;
+  /** The track's own tags, from the imeta `title`/`artist`/`album`/`year` fields. */
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: string;
   className?: string;
 }
 
@@ -60,9 +70,23 @@ function toBars(waveform: string | undefined): number[] {
 /**
  * Compact chat audio player: play/pause button, clickable waveform with
  * playback progress, and a duration label. Used for voice messages and
- * other audio attachments.
+ * other audio attachments. A music file that carries its own tags or cover
+ * art is presented as a track: the art beside its title, artist and album.
  */
-export function AudioMessage({ src, mime, encryption, fallbacks, waveform, duration, className }: AudioMessageProps) {
+export function AudioMessage({
+  src,
+  mime,
+  encryption,
+  fallbacks,
+  waveform,
+  duration,
+  cover,
+  title,
+  artist,
+  album,
+  year,
+  className,
+}: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   // Set when a coordinated `play()` request arrives before the <audio> element
   // has mounted (encrypted blobs mount lazily once decrypted); consumed on the
@@ -166,29 +190,25 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
     return <MediaFallback {...fallbackProps} label="Audio" />;
   }
 
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2.5 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2",
-        className,
-      )}
-      onClick={(e) => e.stopPropagation()}
+  const element = resolved.status === "ready" && (
+    <audio ref={audioRef} preload="metadata" className="hidden" onError={onError}>
+      {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}
+    </audio>
+  );
+
+  const playButton = (
+    <button
+      type="button"
+      onClick={togglePlay}
+      aria-label={isPlaying ? "Pause" : "Play"}
+      className="size-9 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
     >
-      {resolved.status === "ready" && (
-        <audio ref={audioRef} preload="metadata" className="hidden" onError={onError}>
-          {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}
-        </audio>
-      )}
+      {isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="size-4 ml-0.5" fill="currentColor" />}
+    </button>
+  );
 
-      <button
-        type="button"
-        onClick={togglePlay}
-        aria-label={isPlaying ? "Pause" : "Play"}
-        className="size-9 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
-      >
-        {isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="size-4 ml-0.5" fill="currentColor" />}
-      </button>
-
+  const scrubber = (
+    <>
       <div
         className="flex-1 min-w-0 overflow-hidden flex items-center gap-[2px] h-8 cursor-pointer"
         onClick={handleSeek}
@@ -217,6 +237,73 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
       <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
         {formatTime(isPlaying || currentTime > 0 ? currentTime : mediaDuration)}
       </span>
+    </>
+  );
+
+  if (cover || title || artist || album) {
+    const details = [artist, album, year].filter(Boolean).join(" · ");
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-3 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 p-2 pr-3",
+          className,
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {element}
+        <CoverArt url={cover} encryption={encryption} />
+        <div className="flex-1 min-w-0">
+          {(title || details) && (
+            <div className="min-w-0 px-0.5">
+              {title && <p className="truncate text-sm font-semibold leading-snug">{title}</p>}
+              {details && <p className="truncate text-xs text-muted-foreground leading-snug">{details}</p>}
+            </div>
+          )}
+          <div className="flex items-center gap-2.5 mt-1">
+            {playButton}
+            {scrubber}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2.5 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2",
+        className,
+      )}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {element}
+      {playButton}
+      {scrubber}
+    </div>
+  );
+}
+
+/**
+ * A track's cover art, or a music glyph where it has none or it won't load.
+ * An encrypted cover is ciphertext under the audio's own key and nonce (only
+ * those carry over, not the `ox`), and a plain one is sender-named, so it
+ * loads under the media policy like any other image.
+ */
+function CoverArt({ url, encryption }: { url?: string; encryption?: ImetaEncryption }) {
+  const coverEncryption = useMemo(() => companionEncryption(encryption), [encryption]);
+  const route = useRoutedCandidates(url || undefined);
+  const candidate = route.sources[0];
+  const resolved = useResolvedMediaSrc({ url: candidate ?? "", encryption: coverEncryption, mime: "image/jpeg" });
+  const [broken, setBroken] = useState<string | undefined>(undefined);
+  const src = candidate && resolved.status === "ready" ? resolved.src : undefined;
+
+  return (
+    <div className="size-20 shrink-0 overflow-hidden rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
+      {src && broken !== src ? (
+        <img src={src} alt="" className="size-full object-cover" onError={() => setBroken(src)} />
+      ) : (
+        <Music className="size-7" />
+      )}
     </div>
   );
 }

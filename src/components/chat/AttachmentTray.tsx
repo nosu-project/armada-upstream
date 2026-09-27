@@ -1,4 +1,4 @@
-import { Blocks, EyeOff, Eye, FileIcon, Loader2, Paperclip, Pencil, Play, Trash2, X } from "lucide-react";
+import { Blocks, EyeOff, Eye, FileIcon, Loader2, Music, Paperclip, Pencil, Play, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -25,10 +25,14 @@ export interface TrayAttachment {
   mime: string;
   /** The file's name where known — the card's tooltip and accessible name. */
   label: string;
-  /** A webxdc icon, or a video's poster frame. */
+  /** A webxdc icon, a video's poster frame, or an audio file's cover art. */
   icon?: string;
   isImage: boolean;
   isVideo: boolean;
+  isAudio: boolean;
+  /** An audio file's own title and artist tags. */
+  title?: string;
+  artist?: string;
   isWebxdc: boolean;
   encryption?: ImetaEncryption;
   alt?: string;
@@ -334,6 +338,23 @@ function CardPreview({ item }: { item: TrayAttachment }) {
           <span className="rounded-full bg-black/55 p-1.5">
             <Play className="size-4 text-white" fill="currentColor" />
           </span>
+        </span>
+      </span>
+    );
+  }
+  if (item.isAudio) {
+    return (
+      <span className="relative block size-full">
+        {item.icon ? (
+          <AttachmentPreviewImage url={item.icon} mime="image/jpeg" encryption={companionEncryption(item.encryption)} />
+        ) : (
+          <span className="flex size-full items-center justify-center pb-6 text-muted-foreground">
+            <Music className="size-8" />
+          </span>
+        )}
+        <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 pb-1 pt-4 text-left text-white">
+          <span className="block truncate text-[10px] font-semibold leading-tight">{item.title ?? item.label}</span>
+          {item.artist && <span className="block truncate text-[9px] leading-tight opacity-80">{item.artist}</span>}
         </span>
       </span>
     );

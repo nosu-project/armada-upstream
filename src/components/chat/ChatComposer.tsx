@@ -61,6 +61,7 @@ import { useToast } from "@/hooks/useToast";
 import { useUploadFile, useUploadPreflight } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { AUDIO_TAG_FIELDS, extractAudioMetadata, type AudioMetadata } from "@/lib/audioMetadata";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
@@ -1024,6 +1025,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           icon,
           isImage: mime.startsWith("image/"),
           isVideo: mime.startsWith("video/"),
+          isAudio: mime.startsWith("audio/"),
+          title: tags.find((t) => t[0] === "title")?.[1],
+          artist: tags.find((t) => t[0] === "artist")?.[1],
           isWebxdc,
           encryption,
           dim,
@@ -1274,6 +1278,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       let uploadableFile = file;
       let resizedDim: string | undefined;
       let video: ProcessedVideo | undefined;
+      let audio: AudioMetadata | undefined;
 
       if (isImage) {
         // Resize & optimize images before uploading.
@@ -1296,6 +1301,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           },
         });
         uploadableFile = video.file;
+      } else if (isAudio) {
+        // A music file's tags and cover art make it read as a song rather
+        // than a bare waveform. The cover stands in for the card's preview
+        // while the track uploads.
+        audio = await extractAudioMetadata(file);
+        if (audio.cover && !previewUrl && !abort.signal.aborted) {
+          previewUrl = URL.createObjectURL(audio.cover);
+          patchPending({ previewUrl });
+        }
       }
 
       if (abort.signal.aborted) return;
@@ -1339,11 +1353,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       const originalMime = uploadableFile.type || mime;
 
-      // The video poster frame is a second blob, uploaded alongside and
-      // referenced from the video's imeta as `image`/`thumb`.
+      // The video poster frame (or an audio file's cover art) is a second
+      // blob, uploaded alongside and referenced from the imeta as `image`/`thumb`.
       let posterFile = video?.poster
         ? new File([video.poster], replaceExtension(uploadableFile.name, ".jpg"), { type: "image/jpeg" })
-        : undefined;
+        : audio?.cover;
 
       // Concord: encrypt the blob client-side (AES-256-GCM) so Blossom only
       // ever holds ciphertext; the key/nonce ride in the message imeta.
@@ -1396,6 +1410,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         if (blurhashTag && !hasTag("blurhash")) tags.push(["blurhash", blurhashTag]);
       }
       if (video?.duration && !hasTag("duration")) tags.push(["duration", String(video.duration)]);
+      if (audio) {
+        if (audio.duration && !hasTag("duration")) tags.push(["duration", String(audio.duration)]);
+        for (const field of AUDIO_TAG_FIELDS) {
+          const value = audio[field];
+          if (value && !hasTag(field)) tags.push([field, value]);
+        }
+        // The Blossom URL is a content hash; the filename is what a track
+        // without a title tag is called.
+        if (file.name && !hasTag("name")) tags.push(["name", file.name]);
+      }
       if (posterUrl) {
         // NIP-94 defines both; clients differ on which they read.
         tags.push(["image", posterUrl], ["thumb", posterUrl]);
@@ -2294,6 +2318,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         icon: att.icon,
         isImage: att.isImage,
         isVideo: att.isVideo,
+        isAudio: att.isAudio,
+        title: att.title,
+        artist: att.artist,
         isWebxdc: att.isWebxdc,
         encryption: att.encryption,
         alt: att.alt,
