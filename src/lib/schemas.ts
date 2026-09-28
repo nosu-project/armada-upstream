@@ -138,6 +138,7 @@ export const AppConfigSchema = z.object({
   showDmRequests: z.boolean().catch(defaultConfig.showDmRequests),
   showRecentRailDms: z.boolean().catch(defaultConfig.showRecentRailDms),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
+  discoverCuration: z.string().catch(defaultConfig.discoverCuration),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   mediaProxies: z.array(z.string()).catch(defaultConfig.mediaProxies),
   // Keyed by device class; each unset means "auto" (see AppConfig.sendOnEnter).
@@ -207,6 +208,8 @@ export const MetadataDocSchema = z.looseObject({
   showRecentRailDms: z.boolean().optional(),
   /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
   discoverAllContent: z.boolean().optional(),
+  /** Discover's curation source override; empty = build default (see AppConfig). */
+  discoverCuration: z.string().optional(),
   /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
   stripTrackingParams: z.boolean().optional(),
   /** Media proxy templates; empty = off (see AppConfig.mediaProxies). */

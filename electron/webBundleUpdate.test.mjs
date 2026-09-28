@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -10,8 +11,15 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const { extractBundle, parseTar, updateWebBundle } = require("./webBundleUpdate.js");
-const { BUNDLE_POINTER, BUNDLE_SHELL_VERSION, contentId, readBundleShellVersion, resolveDistRoot } =
-  require("./bundleStore.js");
+const {
+  BUNDLE_POINTER,
+  BUNDLE_SHELL_VERSION,
+  contentId,
+  readBundleManifestAt,
+  readBundleShellVersion,
+  resolveDistRoot,
+  writeBundleManifestAt,
+} = require("./bundleStore.js");
 
 let workspaces = [];
 afterEach(() => {
@@ -77,67 +85,132 @@ describe("web bundle extraction", () => {
   });
 });
 
+/** A resolved bundle (updateFeed.cjs's shape) naming `archive`. */
+function bundleOf(archive, createdAt = 1_800_000_000, overrides = {}) {
+  return {
+    createdAt,
+    sha256: createHash("sha256").update(archive).digest("hex"),
+    urls: ["https://blossom.one/abc", "https://blossom.two/abc"],
+    ...overrides,
+  };
+}
+
+const neverFetch = async () => {
+  throw new Error("fetched");
+};
+
 describe("updateWebBundle", () => {
-  it("installs a new bundle, activates it and records the ETag", async () => {
+  it("installs the named bundle, activates it and records the manifest time", async () => {
     const archive = archiveOf({ "index.html": "<!doctype html>v2" });
     const bundlesDir = tmp();
+    fs.mkdirSync(bundlesDir, { recursive: true });
+    fs.writeFileSync(path.join(bundlesDir, "etag"), '"stale"');
     const calls = [];
     const outcome = await updateWebBundle({
       bundlesDir,
-      url: "https://example.test/downloads/armada-web.tar.gz",
+      bundle: bundleOf(archive),
       activeId: null,
-      etag: null,
-      fetchImpl: async (url, init) => {
-        calls.push({ url, init });
-        return response(200, archive, '"e2"');
+      shellVersion: "0.59.13",
+      fetchImpl: async (url) => {
+        calls.push(url);
+        return response(200, archive);
       },
     });
     expect(outcome).toEqual({ result: "installed", id: contentId(archive) });
-    expect(calls[0].init.headers).toEqual({});
+    expect(calls).toEqual(["https://blossom.one/abc"]);
     expect(fs.readFileSync(path.join(bundlesDir, BUNDLE_POINTER), "utf8")).toBe(contentId(archive));
-    expect(fs.readFileSync(path.join(bundlesDir, "etag"), "utf8")).toBe('"e2"');
-    expect(resolveDistRoot({ bundlesDir, shippedDist: "/nope" }).source).toBe("bundle");
-  });
-
-  it("records the shell version it was downloaded under", async () => {
-    const archive = archiveOf({ "index.html": "<!doctype html>v2" });
-    const bundlesDir = tmp();
-    await updateWebBundle({
-      bundlesDir,
-      url: "https://example.test/x",
-      activeId: null,
-      etag: null,
-      shellVersion: "0.59.13",
-      fetchImpl: async () => response(200, archive, '"e2"'),
-    });
+    expect(fs.existsSync(path.join(bundlesDir, "etag"))).toBe(false);
+    expect(readBundleManifestAt(bundlesDir)).toBe(1_800_000_000);
     expect(readBundleShellVersion(bundlesDir)).toBe("0.59.13");
+    expect(
+      resolveDistRoot({ bundlesDir, shippedDist: "/nope", shellVersion: "0.59.13" }).source,
+    ).toBe("bundle");
     // And a later shell keeps serving its own shipped bundle over this download.
     expect(
       resolveDistRoot({ bundlesDir, shippedDist: "/nope", shellVersion: "0.59.14" }).source,
     ).toBe("shipped");
-    // The same shell still serves the download.
-    expect(
-      resolveDistRoot({ bundlesDir, shippedDist: "/nope", shellVersion: "0.59.13" }).source,
-    ).toBe("bundle");
   });
 
-  it("re-stamps the shell version when the active bundle is unchanged", async () => {
+  it("moves to the next server when one answers with other bytes or not at all", async () => {
+    const archive = archiveOf({ "index.html": "<!doctype html>real" });
+    const other = archiveOf({ "index.html": "<!doctype html>other" });
+    const bundle = bundleOf(archive, 1_800_000_000, {
+      urls: ["https://down.example/x", "https://wrong.example/x", "https://good.example/x"],
+    });
+    const outcome = await updateWebBundle({
+      bundlesDir: tmp(),
+      bundle,
+      shellVersion: "0.59.13",
+      fetchImpl: async (url) => {
+        if (url.startsWith("https://down.")) return response(502, new ArrayBuffer(0));
+        if (url.startsWith("https://wrong.")) return response(200, other);
+        return response(200, archive);
+      },
+    });
+    expect(outcome).toEqual({ result: "installed", id: contentId(archive) });
+  });
+
+  it("extracts nothing when no server has the named bytes", async () => {
+    const archive = archiveOf({ "index.html": "<!doctype html>real" });
+    const other = archiveOf({ "index.html": "<!doctype html>other" });
+    const bundlesDir = tmp();
+    await expect(
+      updateWebBundle({
+        bundlesDir,
+        bundle: bundleOf(archive),
+        shellVersion: "0.59.13",
+        fetchImpl: async () => response(200, other),
+      }),
+    ).rejects.toThrow(/hash mismatch/);
+    expect(fs.existsSync(path.join(bundlesDir, BUNDLE_POINTER))).toBe(false);
+    expect(fs.existsSync(path.join(bundlesDir, contentId(other)))).toBe(false);
+  });
+
+  it("refuses a bundle with no usable sha256 or manifest time", async () => {
+    const archive = archiveOf({ "index.html": "x" });
+    await expect(
+      updateWebBundle({ bundlesDir: tmp(), bundle: bundleOf(archive, 1, { sha256: "" }), fetchImpl: neverFetch }),
+    ).rejects.toThrow(/no sha256/);
+    await expect(
+      updateWebBundle({ bundlesDir: tmp(), bundle: bundleOf(archive, 0), fetchImpl: neverFetch }),
+    ).rejects.toThrow(/no manifest time/);
+  });
+
+  it("ignores a bundle named by a manifest older than the installed one", async () => {
+    const archive = archiveOf({ "index.html": "older" });
+    const bundlesDir = tmp();
+    fs.mkdirSync(bundlesDir, { recursive: true });
+    writeBundleManifestAt(bundlesDir, 1_800_000_500);
+    const outcome = await updateWebBundle({
+      bundlesDir,
+      bundle: bundleOf(archive, 1_800_000_000),
+      shellVersion: "0.59.13",
+      fetchImpl: neverFetch,
+    });
+    expect(outcome).toEqual({ result: "unchanged" });
+    expect(readBundleManifestAt(bundlesDir)).toBe(1_800_000_500);
+  });
+
+  it("re-stamps the active bundle without fetching it again", async () => {
     // The same bytes under a newer shell means the download is this shell's, so
-    // it must keep winning — the stamp has to advance even on a no-op fetch.
+    // it must keep winning — the stamp has to advance even on a no-op check.
     const archive = archiveOf({ "index.html": "same" });
     const bundlesDir = tmp();
     const id = extractBundle({ bundlesDir, archive });
+    const marker = path.join(bundlesDir, id, "dist", "marker");
+    fs.writeFileSync(marker, "kept");
     fs.writeFileSync(path.join(bundlesDir, BUNDLE_SHELL_VERSION), "0.59.12");
     const outcome = await updateWebBundle({
       bundlesDir,
-      url: "https://example.test/x",
+      bundle: bundleOf(archive, 1_800_000_100),
       activeId: id,
-      etag: null,
       shellVersion: "0.59.13",
-      fetchImpl: async () => response(200, archive, '"e3"'),
+      fetchImpl: neverFetch,
     });
     expect(outcome).toEqual({ result: "unchanged" });
     expect(readBundleShellVersion(bundlesDir)).toBe("0.59.13");
+    expect(readBundleManifestAt(bundlesDir)).toBe(1_800_000_100);
+    expect(fs.existsSync(marker)).toBe(true);
   });
 
   it("refuses to activate a download older than the running shell", async () => {
@@ -149,14 +222,12 @@ describe("updateWebBundle", () => {
     const bundlesDir = tmp();
     const outcome = await updateWebBundle({
       bundlesDir,
-      url: "https://example.test/x",
+      bundle: bundleOf(archive),
       activeId: null,
-      etag: null,
       shellVersion: "0.59.14",
-      fetchImpl: async () => response(200, archive, '"e-old"'),
+      fetchImpl: async () => response(200, archive),
     });
     expect(outcome).toEqual({ result: "unchanged" });
-    // Nothing was activated, and the stale extraction was cleaned up.
     expect(fs.existsSync(path.join(bundlesDir, BUNDLE_POINTER))).toBe(false);
     expect(fs.existsSync(path.join(bundlesDir, contentId(archive)))).toBe(false);
   });
@@ -164,48 +235,14 @@ describe("updateWebBundle", () => {
   it("activates a download whose own version matches the shell", async () => {
     const changelog = "# Changelog\n\n## [0.59.14] - 2026-01-01\n\n- new\n";
     const archive = archiveOf({ "index.html": "<!doctype html>new", "CHANGELOG.md": changelog });
-    const bundlesDir = tmp();
-    const outcome = await updateWebBundle({
-      bundlesDir,
-      url: "https://example.test/x",
-      activeId: null,
-      etag: null,
-      shellVersion: "0.59.14",
-      fetchImpl: async () => response(200, archive, '"e-new"'),
-    });
-    expect(outcome).toEqual({ result: "installed", id: contentId(archive) });
-    expect(readBundleShellVersion(bundlesDir)).toBe("0.59.14");
-  });
-
-  it("sends the ETag and treats 304 as unchanged", async () => {
     const outcome = await updateWebBundle({
       bundlesDir: tmp(),
-      url: "https://example.test/x",
-      activeId: "a".repeat(32),
-      etag: '"e1"',
-      fetchImpl: async (url, init) => {
-        expect(init.headers).toEqual({ "If-None-Match": '"e1"' });
-        return response(304, new ArrayBuffer(0));
-      },
+      bundle: bundleOf(archive),
+      activeId: null,
+      shellVersion: "0.59.14",
+      fetchImpl: async () => response(200, archive),
     });
-    expect(outcome).toEqual({ result: "unchanged" });
-  });
-
-  it("does not reinstall the bundle that is already active", async () => {
-    const archive = archiveOf({ "index.html": "same" });
-    const bundlesDir = tmp();
-    const id = extractBundle({ bundlesDir, archive });
-    const marker = path.join(bundlesDir, id, "dist", "marker");
-    fs.writeFileSync(marker, "kept");
-    const outcome = await updateWebBundle({
-      bundlesDir,
-      url: "https://example.test/x",
-      activeId: id,
-      etag: null,
-      fetchImpl: async () => response(200, archive, '"e3"'),
-    });
-    expect(outcome).toEqual({ result: "unchanged" });
-    expect(fs.existsSync(marker)).toBe(true);
+    expect(outcome).toEqual({ result: "installed", id: contentId(archive) });
   });
 
   it("prunes the superseded bundle", async () => {
@@ -215,21 +252,22 @@ describe("updateWebBundle", () => {
     const oldId = extractBundle({ bundlesDir, archive: old });
     const outcome = await updateWebBundle({
       bundlesDir,
-      url: "https://example.test/x",
+      bundle: bundleOf(fresh),
       activeId: oldId,
-      etag: null,
+      shellVersion: "0.59.13",
       fetchImpl: async () => response(200, fresh),
     });
     expect(outcome.result).toBe("installed");
     expect(fs.existsSync(path.join(bundlesDir, oldId))).toBe(false);
   });
 
-  it("fails on a non-2xx answer without touching the store", async () => {
+  it("fails when every server fails, without touching the store", async () => {
     const bundlesDir = tmp();
     await expect(
       updateWebBundle({
         bundlesDir,
-        url: "https://example.test/x",
+        bundle: bundleOf(Buffer.from("x")),
+        shellVersion: "0.59.13",
         fetchImpl: async () => response(502, new ArrayBuffer(0)),
       }),
     ).rejects.toThrow(/HTTP 502/);

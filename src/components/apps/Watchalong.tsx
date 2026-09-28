@@ -2,83 +2,60 @@ import { ArrowDown, ArrowUp, ListVideo, MonitorPlay, Play, Plus, SkipBack, SkipF
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
+import { MediaFallback } from "@/components/chat/MediaFallback";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useWebxdcApi, type AppSync } from "@/hooks/useWebxdcApi";
 import { useYouTubeTitle } from "@/hooks/useYouTubeTitle";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { parseYouTubeTarget } from "@/lib/linkEmbed";
 import {
   hasNativeYouTubePlayer,
   needsNativeYouTubePlayer,
   openNativeYouTube,
   openYouTubeTargetPage,
 } from "@/lib/nativeYouTube";
+import {
+  applySnapshotToVideo,
+  classifyWatchLink,
+  directVideoTitle,
+  DRIFT_TOLERANCE,
+  EMPTY_SNAPSHOT,
+  isSnapshot,
+  queueItemPlayer,
+  targetPlaybackTime,
+  videoMatchesSnapshot,
+  type QueueItem,
+  type WatchSnapshot,
+} from "@/lib/watchalong";
 import { loadYouTubeApi, YT_STATE, type YTPlayer } from "@/lib/youtubeApi";
 import { cn } from "@/lib/utils";
-
-/** One entry in the shared watch queue. */
-interface QueueItem {
-  /** Stable id for this queue entry (not the video id — lets dupes coexist). */
-  id: string;
-  /** A single video, when the entry is a video. */
-  videoId?: string;
-  /** A playlist, when the entry is a whole playlist (played natively). */
-  playlistId?: string;
-  /** Hex pubkey of whoever added it. */
-  addedBy?: string;
-}
-
-/**
- * The full shared watchalong state, broadcast as a snapshot on every change.
- * Latest `rev` wins, so anyone can edit the queue / control playback and
- * everyone converges. (A snapshot model — rather than per-action commands — is
- * what keeps a *shared ordered queue* consistent across peers.)
- */
-interface WatchSnapshot {
-  queue: QueueItem[];
-  /** Index into `queue` of the now-playing item, or -1 when nothing's playing. */
-  current: number;
-  /** Whether the now-playing item should be playing. */
-  playing: boolean;
-  /** Playback position (seconds) of the now-playing item at time `at`. */
-  time: number;
-  /** Monotonic revision + wall-clock; higher `rev` wins, `at` extrapolates play position. */
-  rev: number;
-  at: number;
-}
-
-const EMPTY: WatchSnapshot = { queue: [], current: -1, playing: false, time: 0, rev: 0, at: 0 };
-
-/** How far (seconds) local playback may drift before we hard-seek to resync. */
-const DRIFT_TOLERANCE = 1.5;
-
-function isSnapshot(v: unknown): v is WatchSnapshot {
-  return Boolean(v && typeof v === "object" && Array.isArray((v as WatchSnapshot).queue));
-}
 
 function newId(): string {
   return crypto.randomUUID().slice(0, 8);
 }
 
 /**
- * A YouTube watchalong with a shared queue. Anyone can add videos (or a
- * playlist) by pasting a link, reorder/skip, and play/pause; the player plays
- * the queue in order and stays synchronised across everyone in the chat via the
- * {@link AppSync} coordination plane (the same plane that backs webxdc apps).
+ * A watchalong with a shared queue. Anyone can add YouTube videos (or a
+ * playlist) or direct video-file links by pasting them, reorder/skip, and
+ * play/pause; the player plays the queue in order and stays synchronised across
+ * everyone in the chat via the {@link AppSync} coordination plane (the same
+ * plane that backs webxdc apps). YouTube entries play in the IFrame embed;
+ * direct links in a `<video>` ({@link DirectVideoPlayer}) driven by the same
+ * snapshot. The snapshot's wire format is documented in `lib/watchalong.ts`.
  *
  * Ads: the embedded player serves ads per-viewer and exposes no ad controls, so
  * they can't be skipped and they desync playback during breaks; the drift guard
  * resyncs everyone once the break ends.
  */
-export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
+export function Watchalong({ sync }: { sync: AppSync }) {
   const api = useWebxdcApi(sync);
   const { user } = useCurrentUser();
 
-  const [snap, setSnap] = useState<WatchSnapshot>(EMPTY);
+  const [snap, setSnap] = useState<WatchSnapshot>(EMPTY_SNAPSHOT);
   const snapRef = useRef(snap);
   useEffect(() => {
     snapRef.current = snap;
@@ -96,6 +73,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
 
   const current = snap.current >= 0 ? snap.queue[snap.current] : undefined;
   const currentKey = current ? current.id : "";
+  const currentPlayer = queueItemPlayer(current);
 
   // ── Broadcast a new snapshot (and apply it locally) ──────────────────────
   const commit = useCallback(
@@ -124,7 +102,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
     const s = snapRef.current;
     applyingRemote.current = true;
     try {
-      const targetTime = s.playing ? s.time + Math.max(0, (Date.now() - s.at) / 1000) : s.time;
+      const targetTime = targetPlaybackTime(s, Date.now());
       if (Math.abs(player.getCurrentTime() - targetTime) > DRIFT_TOLERANCE) {
         player.seekTo(targetTime, true);
       }
@@ -144,15 +122,27 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
 
   // ── (Re)build the player when the now-playing entry changes ──────────────
   useEffect(() => {
-    if (nativeIosPlayer || !current || !containerRef.current) return;
+    if (nativeIosPlayer || currentPlayer !== "youtube" || !current || !containerRef.current) return;
     let destroyed = false;
     let player: YTPlayer | null = null;
     const entry = current;
 
+    // The API REPLACES the node it is given with its iframe, so it gets a node
+    // created here rather than the React-owned container: React can then
+    // unmount the container (say, for a direct video) whether or not the
+    // player's cleanup has run yet.
+    const host = containerRef.current;
+    const mount = document.createElement("div");
+    mount.className = "h-full w-full";
+    host.appendChild(mount);
+
     loadYouTubeApi().then((YT) => {
-      if (destroyed || !containerRef.current) return;
-      player = new YT.Player(containerRef.current, {
+      if (destroyed) return;
+      player = new YT.Player(mount, {
         videoId: entry.videoId,
+        // The iframe takes the mount's place inside the full-bleed container.
+        width: "100%",
+        height: "100%",
         host: "https://www.youtube-nocookie.com",
         playerVars: {
           autoplay: 1,
@@ -186,6 +176,8 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
       } catch {
         /* ignore */
       }
+      // Whatever the API left behind (its iframe, if destroy threw).
+      host.replaceChildren();
       playerRef.current = null;
       setReady(false);
     };
@@ -201,14 +193,16 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
 
   // ── Queue mutations ──────────────────────────────────────────────────────
   const addToQueue = useCallback(() => {
-    const t = parseYouTubeTarget(urlInput);
-    if (!t) {
-      setInputError("Paste a YouTube video or playlist link");
+    const link = classifyWatchLink(urlInput);
+    if (link.kind === "invalid") {
+      setInputError(link.reason);
       return;
     }
     setInputError(null);
     setUrlInput("");
-    const item: QueueItem = { id: newId(), videoId: t.videoId, playlistId: t.playlistId, addedBy: user?.pubkey };
+    const item: QueueItem = link.kind === "youtube"
+      ? { id: newId(), videoId: link.videoId, playlistId: link.playlistId, addedBy: user?.pubkey }
+      : { id: newId(), url: link.url, addedBy: user?.pubkey };
     const s = snapRef.current;
     const queue = [...s.queue, item];
     const startNow = s.current < 0 || s.current >= s.queue.length;
@@ -217,6 +211,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
       current: startNow ? queue.length - 1 : s.current,
       playing: startNow ? true : s.playing,
       time: startNow ? 0 : s.time,
+      rate: s.rate,
     });
   }, [urlInput, user?.pubkey, commit]);
 
@@ -271,7 +266,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
     const entry = s.current >= 0 ? s.queue[s.current] : undefined;
     if (!entry) return;
 
-    const startSeconds = s.playing ? s.time + Math.max(0, (Date.now() - s.at) / 1000) : s.time;
+    const startSeconds = targetPlaybackTime(s, Date.now());
     const target = {
       videoId: entry.videoId,
       playlistId: entry.playlistId,
@@ -289,13 +284,19 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
     });
   }, []);
 
+  // A viewer's own play/pause/seek/speed on the `<video>` becomes the room's state.
+  const commitPlayback = useCallback(
+    (patch: Pick<WatchSnapshot, "playing" | "time" | "rate">) => commit({ ...snapRef.current, ...patch }),
+    [commit],
+  );
+
   return (
     <div className="flex flex-col gap-3">
       {/* Add-to-queue bar — link only (no in-app search). */}
       <div>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <MonitorPlay className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-[#ff0000] pointer-events-none" />
+            <MonitorPlay className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
             <Input
               value={urlInput}
               onChange={(e) => {
@@ -306,8 +307,8 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
                 if (e.key === "Enter") addToQueue();
               }}
               inputMode="url"
-              placeholder="Paste a YouTube link to add to the queue…"
-              aria-label="YouTube video or playlist link"
+              placeholder="Paste a YouTube or video link to add to the queue…"
+              aria-label="YouTube or video link"
               className={cn("h-9 pl-8 text-sm", inputError && "border-destructive focus-visible:border-destructive")}
             />
           </div>
@@ -323,7 +324,19 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
           isn't scrollable; an unbounded 16:9 box would push the queue off). */}
       {current ? (
         <div className="mx-auto w-full max-h-[45vh] aspect-video overflow-hidden clip-corner-lg bg-black relative">
-          {nativeIosPlayer ? (
+          {currentPlayer === "video" && current.url ? (
+            <DirectVideoPlayer
+              key={currentKey}
+              url={current.url}
+              snap={snap}
+              onPlayback={commitPlayback}
+              onEnded={advance}
+            />
+          ) : currentPlayer !== "youtube" ? (
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-white/70">
+              This video can't be played in this version of Armada.
+            </div>
+          ) : nativeIosPlayer ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#100b15] px-6 text-center text-white">
               <MonitorPlay className="size-10 text-[#ff0000]" />
               <div>
@@ -347,7 +360,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
           ) : (
             <div ref={containerRef} className="absolute inset-0 h-full w-full" />
           )}
-          {!nativeIosPlayer && !ready && (
+          {currentPlayer === "youtube" && !nativeIosPlayer && !ready && (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/70">
               Loading player…
             </div>
@@ -356,7 +369,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
       ) : (
         <div className="flex flex-col items-center justify-center gap-2 clip-corner-lg bg-secondary/40 py-10 text-center">
           <MonitorPlay className="size-7 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Paste a YouTube link above to start the queue.</p>
+          <p className="text-sm text-muted-foreground">Paste a YouTube or video link above to start the queue.</p>
         </div>
       )}
 
@@ -424,6 +437,131 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
   );
 }
 
+/**
+ * A direct video-file entry, played in a `<video>` driven by the shared
+ * snapshot the same way the YouTube embed is: the snapshot is applied on load
+ * and on every change ({@link applySnapshotToVideo}), and the viewer's own
+ * play/pause/seek/speed changes on the native controls are committed back.
+ * Changes this component makes itself are ignored for a short window, as the
+ * embed path does, so applying a snapshot never echoes as a new one.
+ *
+ * The URL is peer-supplied, so it loads through the media policy
+ * (`useMediaWithFallback`, as `VideoPlayer` does) — proxied when a proxy is set.
+ */
+function DirectVideoPlayer({
+  url,
+  snap,
+  onPlayback,
+  onEnded,
+}: {
+  url: string;
+  snap: WatchSnapshot;
+  onPlayback: (patch: Pick<WatchSnapshot, "playing" | "time" | "rate">) => void;
+  onEnded: () => void;
+}) {
+  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url });
+  const src = resolved.status === "ready" ? resolved.src : undefined;
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const snapRef = useRef(snap);
+  useEffect(() => {
+    snapRef.current = snap;
+  }, [snap]);
+  const applying = useRef(false);
+  const applyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The browser refused to start playback without a gesture on this page.
+  const [blocked, setBlocked] = useState(false);
+  // Read by `report`: while a play this component asked for is unsettled or
+  // was refused, the element is paused only because the BROWSER said no, and
+  // a late `seeked` from the same apply must not broadcast that as the room
+  // pausing — which is what a late joiner with autoplay blocked would do.
+  const playNotOurs = useRef(false);
+
+  const apply = useCallback(() => {
+    const video = videoRef.current;
+    // Seeking before metadata is a no-op in some engines; loadedmetadata re-applies.
+    if (!video || video.readyState < 1) return;
+    applying.current = true;
+    clearTimeout(applyTimer.current);
+    applyTimer.current = setTimeout(() => (applying.current = false), 400);
+    const playing = applySnapshotToVideo(video, snapRef.current, Date.now());
+    if (!playing) return;
+    playNotOurs.current = true;
+    playing.then(
+      () => {
+        playNotOurs.current = false;
+        setBlocked(false);
+      },
+      (err: unknown) => {
+        if (err instanceof DOMException && err.name === "NotAllowedError") setBlocked(true);
+        else playNotOurs.current = false;
+      },
+    );
+  }, []);
+
+  useEffect(() => () => clearTimeout(applyTimer.current), []);
+
+  useEffect(() => {
+    apply();
+  }, [apply, snap.playing, snap.time, snap.at, snap.rate, src]);
+
+  const report = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || applying.current || playNotOurs.current) return;
+    if (videoMatchesSnapshot(video, snapRef.current, Date.now())) return;
+    onPlayback({ playing: !video.paused, time: video.currentTime, rate: video.playbackRate });
+  }, [onPlayback]);
+
+  const handlePause = useCallback(() => {
+    // The pause at the end of the file is `ended`'s to handle (it advances).
+    if (videoRef.current?.ended) return;
+    report();
+  }, [report]);
+
+  if (failed) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <MediaFallback {...fallbackProps} label="Video" />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <video
+        ref={videoRef}
+        src={src}
+        className="absolute inset-0 h-full w-full"
+        controls
+        playsInline
+        preload="auto"
+        onLoadedMetadata={apply}
+        onError={onError}
+        onPlay={report}
+        onPause={handlePause}
+        onSeeked={report}
+        onRateChange={report}
+        onEnded={onEnded}
+      />
+      {blocked && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+          <Button
+            type="button"
+            onClick={() => {
+              setBlocked(false);
+              playNotOurs.current = false;
+              apply();
+            }}
+          >
+            <Play className="size-4 fill-current" />
+            Join playback
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** One row in the queue: thumbnail/title (resolved via keyless oEmbed) + controls. */
 function QueueRow({
   item,
@@ -450,7 +588,7 @@ function QueueRow({
 
   const title = item.playlistId
     ? "Playlist"
-    : meta?.title ?? (item.videoId ? `youtu.be/${item.videoId}` : "Video");
+    : meta?.title ?? (item.videoId ? `youtu.be/${item.videoId}` : item.url ? directVideoTitle(item.url) : "Video");
 
   return (
     <div

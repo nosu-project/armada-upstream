@@ -51,7 +51,9 @@ vi.mock("@/concord/lib/rumorStore", () => ({
   queryRumorsByChannel: vi.fn(async (communityIdHex: string, channelIds: string[]) => {
     h.reads.push(communityIdHex);
     const marker = ++h.seq;
-    return new Map(channelIds.map((id) => [id, [{ id: `${communityIdHex}:${id}:${marker}` }]]));
+    // `rumorId` is what the delta compares rows by; a row without one would
+    // read as unchanged and hide the re-render this suite counts.
+    return new Map(channelIds.map((id) => [id, [{ rumorId: `${communityIdHex}:${id}:${marker}` }]]));
   }),
 }));
 

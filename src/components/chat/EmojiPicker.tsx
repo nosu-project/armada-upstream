@@ -1,8 +1,11 @@
 import data from "@emoji-mart/data";
 import { Picker } from "emoji-mart";
+import { Compass } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { recordReaction } from "@/hooks/useFrequentReactions";
 import { syncEmojiMartCategories } from "@/lib/emojiMartCategories";
@@ -28,6 +31,17 @@ interface EmojiPickerProps {
   onSelect: (selection: EmojiSelection) => void;
   /** NIP-30 custom emojis to display in a dedicated tab. */
   customEmojis?: CustomEmoji[];
+  /**
+   * Show a footer linking to Discover's emoji packs. Opt-in: the link leaves
+   * the current page, so only hosts that close with it (the chat surfaces) use
+   * it. Called before navigating so the host can dismiss itself.
+   */
+  onBrowsePacks?: () => void;
+  /**
+   * The host carries its own compact packs link (the composer's tab row), so
+   * the footer is kept only as the empty state for a user with no custom emoji.
+   */
+  packsLinkInHost?: boolean;
 }
 
 /** An entry in an emoji-mart `custom` category. */
@@ -55,7 +69,7 @@ interface EmojiMartEmoji {
  * and remounts the component. Custom NIP-30 emojis are added via emoji-mart's
  * `custom` prop in a dedicated tab.
  */
-export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkInHost }: EmojiPickerProps) {
   const isMobile = useIsMobile();
   const { user } = useCurrentUser();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -205,17 +219,52 @@ export function EmojiPicker({ onSelect, customEmojis }: EmojiPickerProps) {
     };
   }, [handleSelect, customCategories, isMobile]);
 
+  // The footer lives INSIDE the fixed height rather than adding to it: hosts
+  // such as the reaction popover size themselves to the picker and clip.
   return (
-    <div
-      ref={containerRef}
-      className="emoji-mart-wrapper flex w-full h-[min(360px,55dvh)] min-h-[220px] max-h-full"
-      style={{ isolation: "isolate" }}
-      onWheel={(e) => {
-        e.stopPropagation();
-      }}
-      onTouchMove={(e) => {
-        e.stopPropagation();
-      }}
-    />
+    <div className="flex w-full flex-col h-[min(360px,55dvh)] min-h-[220px] max-h-full">
+      <div
+        ref={containerRef}
+        className="emoji-mart-wrapper flex w-full flex-1 min-h-0"
+        style={{ isolation: "isolate" }}
+        onWheel={(e) => {
+          e.stopPropagation();
+        }}
+        onTouchMove={(e) => {
+          e.stopPropagation();
+        }}
+      />
+      {onBrowsePacks && !(packsLinkInHost && customEmojis?.length) && (
+        <BrowsePacksFooter hasCustom={Boolean(customEmojis?.length)} onBrowse={onBrowsePacks} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Footer pointing at Discover's emoji packs. In a host with its own link
+ * (`packsLinkInHost`) it is only the empty state, for a user with no custom
+ * emoji, for whom packs are otherwise invisible.
+ */
+function BrowsePacksFooter({ hasCustom, onBrowse }: { hasCustom: boolean; onBrowse: () => void }) {
+  const navigate = useStableNavigate();
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-3 py-1.5">
+      <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        {hasCustom ? "Find more emoji packs" : "Add custom emoji packs"}
+      </div>
+      <Button
+        size="sm"
+        variant="secondary"
+        className="h-7 touch:h-11 shrink-0 rounded-lg px-2 text-xs"
+        onClick={() => {
+          onBrowse();
+          navigate("/discover?tab=emojis");
+        }}
+      >
+        <Compass className="size-3" />
+        Browse
+      </Button>
+    </div>
   );
 }

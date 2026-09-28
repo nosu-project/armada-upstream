@@ -200,10 +200,8 @@ export function useNip65RelaySetup() {
     const ownsPointer = config.relayMetadata.pubkey === user.pubkey;
 
     // With no local list, this publish CREATES one — sound only once the wire
-    // affirmatively has none. Settle that before phase one: the mirror signs
-    // replaceable editions from whatever it read, and publishing those to the
-    // proposed relays would already shadow the user's real state even if the
-    // pointer itself were then refused.
+    // affirmatively has none. That absence read is the whole precondition;
+    // nothing is signed before it.
     if (!ownsPointer) {
       const existing = await discoverRelayListWithStatus(
         nostr,
@@ -220,62 +218,67 @@ export function useNip65RelaySetup() {
       }
     }
 
-    const store = await eventStore;
-    const loadLocalPortableState = async () => {
-      try {
-        return await store.query([{
-          kinds: [
-            KIND_RELAY_LIST,
-            10007,
-            KIND_USER_GROUPS,
-            10050,
-            10063,
-            KIND_INVITE_LIST,
-            SETTINGS_KIND,
-            33302,
-          ],
-          authors: [user.pubkey],
-        }]);
-      } catch {
-        // Wire-only preseed remains possible when the local store is unavailable.
-        return [];
-      }
-    };
-    let localSingletons = await loadLocalPortableState();
-    let mirrored = await mirrorPortableStateBeforeRelayChange(
-      nostr,
-      user,
-      sourceRelays,
-      proposedWrites,
-      oldDeclaredWrites.length > 0 ? oldDeclaredWrites : sourceRelays,
-      oldDeclaredWrites.length > 0,
-      localSingletons,
-    );
-
-    // Phase one can take several signer/relay round-trips. Re-read both the
-    // pointer and every portable coordinate until two consecutive snapshots
-    // agree. This is the bounded optimistic-transaction available on Nostr:
-    // a sibling write that lands during phase one is re-mirrored, never left
-    // only on a relay the new pointer is about to remove.
-    const pointerRefreshRelays = uniqueRelayUrls([...sourceRelays, ...proposedWrites]);
-    const refreshPointer = async () => {
-      const read = await discoverRelayListWithStatus(
+    // Phase one exists to move state off an old pointer before other devices
+    // stop following it. A first list replaces no pointer: the state already
+    // lives on the app relays, which keep carrying it, and the declared write
+    // set is filled by ordinary settings sync once it is live.
+    let refreshed: RelayListDiscovery | undefined;
+    if (ownsPointer) {
+      const store = await eventStore;
+      const loadLocalPortableState = async () => {
+        try {
+          return await store.query([{
+            kinds: [
+              KIND_RELAY_LIST,
+              10007,
+              KIND_USER_GROUPS,
+              10050,
+              10063,
+              KIND_INVITE_LIST,
+              SETTINGS_KIND,
+              33302,
+            ],
+            authors: [user.pubkey],
+          }]);
+        } catch {
+          // Wire-only preseed remains possible when the local store is unavailable.
+          return [];
+        }
+      };
+      let localSingletons = await loadLocalPortableState();
+      let mirrored = await mirrorPortableStateBeforeRelayChange(
         nostr,
-        user.pubkey,
-        pointerRefreshRelays,
-        AbortSignal.timeout(8_000),
+        user,
+        sourceRelays,
+        proposedWrites,
+        oldDeclaredWrites.length > 0 ? oldDeclaredWrites : sourceRelays,
+        oldDeclaredWrites.length > 0,
+        localSingletons,
       );
-      const discovery = read.discovery;
-      const answered = new Set(read.answered);
-      const sourceComplete = oldDeclaredWrites.length > 0
-        ? oldDeclaredWrites.every((url) => answered.has(url))
-        : sourceRelays.some((url) => answered.has(url));
-      const complete = sourceComplete
-        && proposedWrites.every((url) => answered.has(url));
-      if (!complete || (ownsPointer && !discovery)) {
-        throw new Error("Could not refresh the current NIP-65 relay list after copying setup; retry without changing relays");
-      }
-      if (ownsPointer && discovery) {
+
+      // Phase one can take several signer/relay round-trips. Re-read both the
+      // pointer and every portable coordinate until two consecutive snapshots
+      // agree. This is the bounded optimistic-transaction available on Nostr:
+      // a sibling write that lands during phase one is re-mirrored, never left
+      // only on a relay the new pointer is about to remove.
+      const pointerRefreshRelays = uniqueRelayUrls([...sourceRelays, ...proposedWrites]);
+      const refreshPointer = async () => {
+        const read = await discoverRelayListWithStatus(
+          nostr,
+          user.pubkey,
+          pointerRefreshRelays,
+          AbortSignal.timeout(8_000),
+        );
+        const discovery = read.discovery;
+        const answered = new Set(read.answered);
+        const sourceComplete = oldDeclaredWrites.length > 0
+          ? oldDeclaredWrites.every((url) => answered.has(url))
+          : sourceRelays.some((url) => answered.has(url));
+        const complete = sourceComplete
+          && proposedWrites.every((url) => answered.has(url));
+        if (!complete || !discovery) {
+          throw new Error("Could not refresh the current NIP-65 relay list after copying setup; retry without changing relays");
+        }
         const baselineId = config.relayMetadata.eventId;
         const isKnownBaseline = baselineId !== undefined
           ? discovery.event.id === baselineId
@@ -287,44 +290,39 @@ export function useNip65RelaySetup() {
         )) {
           throw new Error("Could not confirm the current NIP-65 relay-list version; retry without changing relays");
         }
-      }
-      // With no local list, a list that appeared since the pre-mirror check
-      // was published elsewhere rather than having "changed on another
-      // device" relative to a baseline — hand it back to adopt.
-      if (!ownsPointer && discovery) throw new ExistingRelayListError(discovery);
-      if (relayPointerChangedDuringPreseed(
-        config.relayMetadata,
-        user.pubkey,
-        discovery?.event,
-      )) {
-        throw new Error("Your NIP-65 relay list changed on another device; review it and retry");
-      }
-      return discovery;
-    };
+        if (relayPointerChangedDuringPreseed(
+          config.relayMetadata,
+          user.pubkey,
+          discovery.event,
+        )) {
+          throw new Error("Your NIP-65 relay list changed on another device; review it and retry");
+        }
+        return discovery;
+      };
 
-    await refreshPointer();
-    let refreshed: RelayListDiscovery | undefined;
-    let portableStable = false;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      localSingletons = await loadLocalPortableState();
-      const next = await mirrorPortableStateBeforeRelayChange(
-        nostr,
-        user,
-        sourceRelays,
-        proposedWrites,
-        oldDeclaredWrites.length > 0 ? oldDeclaredWrites : sourceRelays,
-        oldDeclaredWrites.length > 0,
-        localSingletons,
-      );
-      refreshed = await refreshPointer();
-      if (next.fingerprint === mirrored.fingerprint) {
-        portableStable = true;
-        break;
+      await refreshPointer();
+      let portableStable = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        localSingletons = await loadLocalPortableState();
+        const next = await mirrorPortableStateBeforeRelayChange(
+          nostr,
+          user,
+          sourceRelays,
+          proposedWrites,
+          oldDeclaredWrites.length > 0 ? oldDeclaredWrites : sourceRelays,
+          oldDeclaredWrites.length > 0,
+          localSingletons,
+        );
+        refreshed = await refreshPointer();
+        if (next.fingerprint === mirrored.fingerprint) {
+          portableStable = true;
+          break;
+        }
+        mirrored = next;
       }
-      mirrored = next;
-    }
-    if (!portableStable) {
-      throw new Error("Portable account state kept changing during relay migration; retry after the other device finishes syncing");
+      if (!portableStable) {
+        throw new Error("Portable account state kept changing during relay migration; retry after the other device finishes syncing");
+      }
     }
     const createdAt = Math.max(
       Math.floor(Date.now() / 1000),

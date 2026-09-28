@@ -49,6 +49,24 @@ describe("publish outbox", () => {
     expect(await getQueuedPublishes()).toEqual([]);
   });
 
+  it("drops an entry past its expiry, undelivered, and keeps one without", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const bounded = event({ id: "b".repeat(64) });
+      const owed = event({ id: "c".repeat(64) });
+      await queueSignedEvent(bounded, undefined, ["wss://dead.example"], { expiresAt: Date.now() + 1000 });
+      await queueSignedEvent(owed, undefined, ["wss://dead.example"]);
+      expect((await getQueuedPublishes()).map((item) => item.id).sort()).toEqual([bounded.id, owed.id].sort());
+
+      vi.setSystemTime(Date.now() + 2000);
+      expect((await getQueuedPublishes()).map((item) => item.id)).toEqual([owed.id]);
+      // Deleted from storage, not just hidden from this read.
+      await vi.waitFor(async () => expect(await getArmadaDB().kv.get(`outbox:${bounded.id}`)).toBeUndefined());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not duplicate the same event id", async () => {
     const ev = event();
     await queueSignedEvent(ev);

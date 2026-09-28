@@ -1,6 +1,8 @@
 import type { LucideIcon } from "lucide-react";
 import { createContext } from "react";
 
+import type { RolePickerOption } from "@/components/chat/RolePickerItems";
+
 /**
  * What the VIEWER may do to one member of the current community, for surfaces
  * shared across chat backends.
@@ -39,6 +41,22 @@ export interface MemberActionsValue {
    * doesn't outrank them".
    */
   actionsFor: (pubkey: string) => MemberActionItem[];
+  /**
+   * The role picker for this member, or undefined when the viewer may change
+   * none of their roles. Unlike an action it is a checklist, toggled in place
+   * with the card left open, so it is handed over as data rather than as a
+   * finished button.
+   */
+  rolePickerFor?: (pubkey: string) => MemberRolePicker | undefined;
+}
+
+export interface MemberRolePicker {
+  /** Every role, display-ordered; ones the viewer doesn't outrank are disabled. */
+  catalog: RolePickerOption[];
+  /** The roles this member holds, as this client last asked for them. */
+  heldRoleIds: string[];
+  isToggling: (pubkey: string, roleId: string) => boolean;
+  onToggle: (pubkey: string, roleId: string, on: boolean) => void;
 }
 
 export const MemberActionsContext = createContext<MemberActionsValue | undefined>(undefined);

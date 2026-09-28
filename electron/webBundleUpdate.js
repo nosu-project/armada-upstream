@@ -1,23 +1,33 @@
 "use strict";
 
 /**
- * Vesktop-style web bundle update: fetch the site's `dist` archive, extract it
- * into userData, and switch the app:// origin to it (bundleStore.js). The
- * shell itself is never replaced — for a Flatpak nothing could replace it —
- * so this is the whole update path of that edition.
+ * Vesktop-style web bundle update: fetch the `dist` archive the signed site
+ * manifest names, verify it against the manifest's hash, extract it into
+ * userData, and switch the app:// origin to it (bundleStore.js). The shell
+ * itself is never replaced — for a Flatpak nothing could replace it — so this
+ * is the whole update path of that edition.
  *
  * Electron-free and fetch-injected so it runs on the Linux CI runner.
  */
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const zlib = require("node:zlib");
 
-const { bundleVersion, commitBundle, contentId, pruneBundles, versionOrdinal } = require("./bundleStore");
+const {
+  bundleVersion,
+  commitBundle,
+  contentId,
+  pruneBundles,
+  readBundleManifestAt,
+  versionOrdinal,
+  writeBundleManifestAt,
+} = require("./bundleStore");
 
-/** Where a web deploy publishes its own dist as one archive. */
-const WEB_BUNDLE_PATH = "/downloads/armada-web.tar.gz";
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
+/** A cap on the unpacked tar, so a gzip bomb fails the update, not the shell. */
+const MAX_UNPACKED_BYTES = 1024 * 1024 * 1024;
 
 function field(header, start, length) {
   const raw = header.subarray(start, start + length);
@@ -69,7 +79,7 @@ function extractBundle({ bundlesDir, archive }) {
   const dist = path.join(bundlesDir, id, "dist");
   fs.rmSync(path.join(bundlesDir, id), { recursive: true, force: true });
   fs.mkdirSync(dist, { recursive: true });
-  for (const entry of parseTar(zlib.gunzipSync(archive))) {
+  for (const entry of parseTar(zlib.gunzipSync(archive, { maxOutputLength: MAX_UNPACKED_BYTES }))) {
     const rel = safeRelative(entry.name);
     if (!rel) continue;
     const target = path.join(dist, rel);
@@ -86,31 +96,68 @@ function extractBundle({ bundlesDir, archive }) {
 }
 
 /**
- * Fetch, extract and activate the bundle at `url` unless it is the one already
- * active. Resolves `{ result: "unchanged" }` or `{ result: "installed", id }`.
+ * Download `bundle.sha256` from the first of `bundle.urls` that serves those
+ * exact bytes. A server answering with anything else is skipped like one that
+ * is down, so one bad mirror costs a round-trip rather than the update.
+ */
+async function fetchVerified(bundle, fetchImpl) {
+  let lastError = new Error("no bundle source");
+  for (const url of bundle.urls) {
+    try {
+      const response = await fetchImpl(url, { redirect: "follow" });
+      if (!response.ok) throw new Error(`bundle fetch failed: HTTP ${response.status}`);
+      const declared = Number(response.headers?.get?.("content-length"));
+      if (Number.isFinite(declared) && declared > MAX_ARCHIVE_BYTES) throw new Error("bundle archive too large");
+      const archive = Buffer.from(await response.arrayBuffer());
+      if (archive.length > MAX_ARCHIVE_BYTES) throw new Error("bundle archive too large");
+      const actual = crypto.createHash("sha256").update(archive).digest("hex");
+      if (actual !== bundle.sha256) throw new Error(`bundle archive hash mismatch from ${url}`);
+      return archive;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Fetch, verify, extract and activate the bundle the site manifest names,
+ * unless it is the one already active. Resolves `{ result: "unchanged" }` or
+ * `{ result: "installed", id }`.
+ *
+ * `bundle` is `resolveWebBundle()` from updateFeed.cjs: read from a
+ * signature-checked site manifest under a pinned key, so its `sha256` is the
+ * signer's statement of what the bytes are, and nothing is extracted until the
+ * download matches it. Its `createdAt` is recorded with the install, and a
+ * bundle named by an OLDER manifest is refused, so a relay serving a stale
+ * copy of the replaceable manifest cannot roll the web layer back.
  *
  * `shellVersion` is recorded alongside the activated bundle so a later shell —
  * one whose self-update brought a newer shipped bundle — can tell a download it
  * made from one an older shell made (bundleStore.resolveDistRoot). It also gates
- * activation: a freshly fetched bundle whose own version is older than this
- * shell is dropped rather than activated, so a site that is briefly behind the
- * shell cannot downgrade the web layer.
+ * activation: a bundle whose own version is older than this shell is dropped
+ * rather than activated, so a site that is briefly behind the shell cannot
+ * downgrade the web layer.
  */
-async function updateWebBundle({ bundlesDir, url, activeId, etag, shellVersion, fetchImpl = fetch }) {
-  const headers = etag ? { "If-None-Match": etag } : {};
-  const response = await fetchImpl(url, { headers, redirect: "follow" });
-  if (response.status === 304) return { result: "unchanged" };
-  if (!response.ok) throw new Error(`bundle fetch failed: HTTP ${response.status}`);
-  const archive = Buffer.from(await response.arrayBuffer());
-  if (archive.length > MAX_ARCHIVE_BYTES) throw new Error("bundle archive too large");
-  const newEtag = response.headers?.get?.("etag") || null;
+async function updateWebBundle({ bundlesDir, bundle, activeId, shellVersion, fetchImpl = fetch }) {
+  const sha256 = String(bundle?.sha256 ?? "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("web bundle carries no sha256");
+  if (!Number.isSafeInteger(bundle.createdAt) || bundle.createdAt <= 0) {
+    throw new Error("web bundle carries no manifest time");
+  }
+  const recorded = readBundleManifestAt(bundlesDir);
+  if (recorded !== null && bundle.createdAt < recorded) return { result: "unchanged" };
   fs.mkdirSync(bundlesDir, { recursive: true });
-  if (activeId && contentId(archive) === activeId) {
+  // The content id is the first half of the archive's sha256, so the active
+  // bundle is recognized without downloading it again.
+  if (activeId && sha256.slice(0, 32) === activeId) {
     // Re-stamp: the same bytes under this shell means the active download is
     // this shell's, so it must keep winning over the shipped copy.
-    commitBundle(bundlesDir, activeId, newEtag, shellVersion);
+    commitBundle(bundlesDir, activeId, null, shellVersion);
+    writeBundleManifestAt(bundlesDir, bundle.createdAt);
     return { result: "unchanged" };
   }
+  const archive = await fetchVerified({ ...bundle, sha256 }, fetchImpl);
   const id = extractBundle({ bundlesDir, archive });
   // Refuse to activate a bundle OLDER than this shell's own shipped copy. The
   // site can be behind the shell — a `flatpak update` lands the new shell
@@ -125,14 +172,14 @@ async function updateWebBundle({ bundlesDir, url, activeId, etag, shellVersion, 
     fs.rmSync(path.join(bundlesDir, id), { recursive: true, force: true });
     return { result: "unchanged" };
   }
-  commitBundle(bundlesDir, id, newEtag, shellVersion);
+  commitBundle(bundlesDir, id, null, shellVersion);
+  writeBundleManifestAt(bundlesDir, bundle.createdAt);
   pruneBundles(bundlesDir, id);
   return { result: "installed", id };
 }
 
 module.exports = {
   MAX_ARCHIVE_BYTES,
-  WEB_BUNDLE_PATH,
   extractBundle,
   parseTar,
   updateWebBundle,

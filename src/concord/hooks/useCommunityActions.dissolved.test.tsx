@@ -66,8 +66,9 @@ vi.mock("@/concord/hooks/useControlPlane", () => ({
 vi.mock("@/concord/hooks/useCommunityList", () => ({
   useCommunityEntry: () => undefined,
   useUpdateCommunityList: () => ({
-    mutateAsync: async (write: { type: string }) => {
+    mutateAsync: async (write: { type: string; entry?: unknown }) => {
       h.ops.push(`list:${write.type}`);
+      return { entries: write.entry ? [write.entry] : [], tombstones: [] };
     },
   }),
 }));

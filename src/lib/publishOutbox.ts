@@ -48,6 +48,14 @@ export interface QueuedPublish {
   attempts: number;
   nextAttemptAt?: number;
   lastError?: string;
+  /**
+   * When set, the entry is dropped undelivered after this time. For
+   * best-effort traffic whose relays may never come back (a Guestbook Leave to
+   * a community relay that died): without it, one dead relay keeps the entry
+   * retrying on every launch forever. Absent for anything the user expects to
+   * be sent, which waits as long as it takes.
+   */
+  expiresAt?: number;
 }
 
 export class PublishQueuedError extends Error {
@@ -152,10 +160,22 @@ function replaceableKey(event: NostrEvent, relay?: string, relays?: string[]): s
 export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
   await migrateLegacyOutbox();
   const entries = await getArmadaDB().kv.list<QueuedPublish>({ prefix: KEY_PREFIX });
-  return entries
+  const now = Date.now();
+  const items = entries
     .map(({ value }) => value)
     // `outbox:migrated` shares the prefix, and is a boolean rather than an entry.
-    .filter(isQueuedPublish)
+    .filter(isQueuedPublish);
+  const expired = items.filter((item) => item.expiresAt !== undefined && item.expiresAt <= now);
+  // Not awaited: this is also read from INSIDE an outbox mutation, which a
+  // chained one would wait behind forever.
+  if (expired.length > 0) {
+    void mutateOutbox(async () => {
+      const { kv } = getArmadaDB();
+      await Promise.all(expired.map((item) => kv.delete(itemKey(item.id))));
+    }).catch(() => undefined);
+  }
+  return items
+    .filter((item) => !expired.includes(item))
     // `list()` comes back in key order, i.e. by event id — meaningless here.
     .sort((a, b) => a.enqueuedAt - b.enqueuedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
@@ -165,7 +185,7 @@ export async function queueSignedEvent(
   event: NostrEvent,
   relay?: string,
   relays?: string[],
-  options: { inheritPendingTargets?: boolean } = {},
+  options: { inheritPendingTargets?: boolean; expiresAt?: number } = {},
 ): Promise<void> {
   const { kv } = getArmadaDB();
   await migrateLegacyOutbox();
@@ -271,6 +291,7 @@ export async function queueSignedEvent(
       relays: inheritedRelays,
       enqueuedAt: Date.now(),
       attempts: 0,
+      ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
     } satisfies QueuedPublish;
     // Establish and verify the replacement before removing its predecessor.
     // If this write fails, the old signed obligation remains recoverable.

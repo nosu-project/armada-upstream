@@ -1,6 +1,6 @@
 import { useContext } from "react";
 
-import { MemberActionsContext, type MemberActionItem } from "@/contexts/MemberActionsContext";
+import { MemberActionsContext, type MemberActionItem, type MemberRolePicker } from "@/contexts/MemberActionsContext";
 
 /**
  * The moderation actions the viewer may take against one member, or an empty
@@ -14,3 +14,13 @@ export function useMemberActions(pubkey: string | undefined): MemberActionItem[]
 }
 
 const EMPTY: MemberActionItem[] = [];
+
+/**
+ * The role picker the viewer may use on one member, or undefined — outside a
+ * community, or for a member whose roles they cannot change.
+ */
+export function useMemberRolePicker(pubkey: string | undefined): MemberRolePicker | undefined {
+  const ctx = useContext(MemberActionsContext);
+  if (!ctx?.rolePickerFor || !pubkey) return undefined;
+  return ctx.rolePickerFor(pubkey);
+}

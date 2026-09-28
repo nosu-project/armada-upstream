@@ -28,6 +28,7 @@ import type { FoldedControl } from "@/concord/lib/control";
 import type { CoalescedMember } from "@/concord/lib/guestbook";
 import type { ListData } from "@/concord/hooks/useCommunityList";
 import type { Community } from "@/concord/lib/types";
+import { _resetPendingJoinsForTests, hasPendingJoin, persistPendingJoin } from "@/concord/lib/pendingJoins";
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ const h = vi.hoisted(() => ({
   guestbookRefetch: vi.fn(async () => {}),
   controlRefetch: vi.fn(async () => {}),
   updateList: vi.fn(),
+  removeRailKey: vi.fn(),
   toasts: [] as unknown[],
 }));
 
@@ -54,11 +56,18 @@ vi.mock("@/concord/hooks/useGuestbook", () => ({
     refetch: h.guestbookRefetch,
   }),
 }));
-vi.mock("@/concord/hooks/useCommunityList", () => ({
+// The real `removeCommunityLocally` (the local tombstone), over an in-memory
+// folded cache; the entry and the vault write are the test's.
+vi.mock("@/concord/hooks/useCommunityList", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/concord/hooks/useCommunityList")>()),
   useCommunityEntry: () => h.entry,
   useUpdateCommunityList: () => ({ mutateAsync: h.updateList }),
-  listQueryKey: (pubkey: string | undefined) => ["concord", "list", pubkey],
 }));
+vi.mock("@/lib/foldedCache", () => ({
+  readFolded: async () => undefined,
+  writeFolded: async () => undefined,
+}));
+vi.mock("@/hooks/useRemoveRailKey", () => ({ useRemoveRailKey: () => h.removeRailKey }));
 vi.mock("@/hooks/useToast", () => ({ toast: (t: unknown) => h.toasts.push(t) }));
 
 import { useSelfRemove } from "./useSelfRemove";
@@ -138,6 +147,7 @@ beforeEach(() => {
   h.guestbookRefetch = vi.fn(async () => {});
   h.controlRefetch = vi.fn(async () => {});
   h.toasts = [];
+  _resetPendingJoinsForTests();
 });
 
 afterEach(() => {
@@ -177,7 +187,12 @@ describe("useSelfRemove", () => {
     // land while the vault write is still in flight (never released).
     await waitFor(() => expect(onRemoved).toHaveBeenCalledTimes(1));
     expect(h.toasts).toHaveLength(1);
-    expect(h.updateList).toHaveBeenCalledWith({ type: "remove", communityId: bytesToHex(communityId) });
+    expect(h.updateList).toHaveBeenCalledWith({
+      type: "remove",
+      communityId: bytesToHex(communityId),
+      removedAt: expect.any(Number),
+    });
+    expect(h.removeRailKey).toHaveBeenCalledWith(`c2:${bytesToHex(communityId)}`);
     // The rail icon drops NOW, optimistically — not on the vault RMW.
     expect(isLive(client.getQueryData<ListData>(["concord", "list", self])!.list, bytesToHex(communityId))).toBe(false);
 
@@ -215,5 +230,29 @@ describe("useSelfRemove", () => {
     h.guestbookRefetch = vi.fn(async () => {});
     rerender();
     await waitFor(() => expect(h.updateList).toHaveBeenCalledTimes(2));
+  });
+
+  it("forgets a pending join for the community, so no later launch resumes it", async () => {
+    h.updateList.mockResolvedValue(undefined);
+    const material = jm();
+    await persistPendingJoin(self, {
+      community_id: bytesToHex(communityId),
+      seed: material,
+      current: material,
+      added_at: 1_000,
+    });
+    expect(hasPendingJoin(self, bytesToHex(communityId))).toBe(true);
+
+    const client = makeClient();
+    const onRemoved = vi.fn();
+    const { rerender } = renderHook(() => useSelfRemove(community(), onRemoved), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(h.guestbookRefetch).toHaveBeenCalledTimes(1));
+    h.guestbookRefetch = vi.fn(async () => {});
+    rerender();
+
+    await waitFor(() => expect(onRemoved).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hasPendingJoin(self, bytesToHex(communityId))).toBe(false));
   });
 });

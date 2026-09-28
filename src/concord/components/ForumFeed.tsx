@@ -1,14 +1,16 @@
-import { ChevronDown, Clock, Flame, Loader2, MessageSquareText, MessagesSquare, Pin, Plus } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { ChevronDown, Clock, EyeOff, Flame, ImageOff, Loader2, MessageSquareText, MessagesSquare, Pin, Plus } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
+import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { type ForumPost, type ForumSort } from "@/concord/lib/forum";
+import { forumImages, type ForumImage, type ForumPost, type ForumSort } from "@/concord/lib/forum";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { fullDateTime, shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
@@ -68,47 +70,165 @@ const ForumPostRow = memo(function ForumPostRow({
   onOpen: (post: ForumPost) => void;
 }) {
   const hasComments = post.replyCount > 0;
+  const images = useMemo(() => forumImages(post.root), [post.root]);
   return (
     <button
       type="button"
       onClick={() => onOpen(post)}
       data-event-id={post.root.id}
       className={cn(
-        "flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-foreground/5 focus:outline-none focus-visible:bg-foreground/5",
+        "flex w-full flex-col p-3 text-left transition-colors hover:bg-foreground/5 focus:outline-none focus-visible:bg-foreground/5",
         isNew && "bg-primary/5",
       )}
     >
-      <AuthorAvatar pubkey={post.root.pubkey} className="shrink-0" />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          {isNew && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="New activity" />}
-          <span className={cn("truncate text-sm leading-5 text-foreground", isNew ? "font-bold" : "font-semibold")}>
-            {post.title}
+      <span className="flex w-full items-center gap-3">
+        <AuthorAvatar pubkey={post.root.pubkey} className="shrink-0" />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            {isNew && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="New activity" />}
+            <span className={cn("truncate text-sm leading-5 text-foreground", isNew ? "font-bold" : "font-semibold")}>
+              {post.title}
+            </span>
+          </span>
+          <span className="block truncate text-xs leading-4 text-muted-foreground">
+            <DisplayName pubkey={post.root.pubkey} />
+            <span title={fullDateTime(post.root.created_at)}> · {shortTimeAgo(post.root.created_at)}</span>
+            {hasComments && (
+              <span title={fullDateTime(post.lastActivityAt)}> · active {shortTimeAgo(post.lastActivityAt)}</span>
+            )}
           </span>
         </span>
-        <span className="block truncate text-xs leading-4 text-muted-foreground">
-          <DisplayName pubkey={post.root.pubkey} />
-          <span title={fullDateTime(post.root.created_at)}> · {shortTimeAgo(post.root.created_at)}</span>
-          {hasComments && (
-            <span title={fullDateTime(post.lastActivityAt)}> · active {shortTimeAgo(post.lastActivityAt)}</span>
-          )}
+        <span className="flex shrink-0 items-center gap-2">
+          {hasComments && <ParticipantStack pubkeys={post.participants} />}
+          <span
+            className={cn(
+              "flex items-center gap-1 text-xs tabular-nums",
+              isNew ? "font-medium text-primary" : "text-muted-foreground",
+            )}
+          >
+            <MessagesSquare className="size-3.5" />
+            {post.replyCount}
+          </span>
         </span>
       </span>
-      <span className="flex shrink-0 items-center gap-2">
-        {hasComments && <ParticipantStack pubkeys={post.participants} />}
-        <span
-          className={cn(
-            "flex items-center gap-1 text-xs tabular-nums",
-            isNew ? "font-medium text-primary" : "text-muted-foreground",
-          )}
-        >
-          <MessagesSquare className="size-3.5" />
-          {post.replyCount}
-        </span>
-      </span>
+      {images.length > 0 && <ForumGallery images={images} />}
     </button>
   );
 });
+
+/**
+ * The post's images under its title, Reddit-style: one image shown whole over
+ * a blurred fill of itself (art isn't cropped to fit the frame), two side by
+ * side, three or more as a mosaic with a `+N` on the last tile. Aligned with
+ * the title on wider screens, full-width on a phone.
+ */
+function ForumGallery({ images }: { images: readonly ForumImage[] }) {
+  const frame = "mt-2 w-full max-w-md aspect-video overflow-hidden rounded-lg sm:ml-11 sm:w-[calc(100%-2.75rem)]";
+  if (images.length === 1) {
+    return (
+      <span className={cn("block", frame)}>
+        <ForumImageTile image={images[0]} fit="contain" className="size-full" />
+      </span>
+    );
+  }
+  if (images.length === 2) {
+    return (
+      <span className={cn("grid grid-cols-2 gap-1", frame)}>
+        {images.map((image, i) => (
+          <ForumImageTile key={i} image={image} className="size-full" />
+        ))}
+      </span>
+    );
+  }
+  const extra = images.length - 3;
+  return (
+    <span className={cn("grid grid-cols-3 grid-rows-2 gap-1", frame)}>
+      <ForumImageTile image={images[0]} className="col-span-2 row-span-2 size-full" />
+      <ForumImageTile image={images[1]} className="size-full" />
+      <ForumImageTile image={images[2]} className="size-full" overflow={extra > 0 ? extra : undefined} />
+    </span>
+  );
+}
+
+/** A preview tile. A spoilered image is never fetched — the post page reveals it. */
+function ForumImageTile(props: {
+  image: ForumImage;
+  fit?: "cover" | "contain";
+  overflow?: number;
+  className?: string;
+}) {
+  const { image, overflow, className } = props;
+  return (
+    <span className={cn("relative block overflow-hidden bg-muted", className)}>
+      {image.spoiler ? (
+        <>
+          {image.blurhash && <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />}
+          <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/40 text-xs font-medium text-white">
+            <EyeOff className="size-3.5" />
+            Spoiler
+          </span>
+        </>
+      ) : (
+        <ResolvedImage image={image} fit={props.fit ?? "cover"} />
+      )}
+      {overflow !== undefined && (
+        <span className="absolute inset-0 flex items-center justify-center bg-black/60 text-lg font-semibold text-white">
+          +{overflow}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The image itself, under the media policy and decrypted when encrypted. */
+function ResolvedImage({ image, fit }: { image: ForumImage; fit: "cover" | "contain" }) {
+  const [loaded, setLoaded] = useState(false);
+  const { resolved, onError, failed } = useMediaWithFallback(image);
+  if (failed) {
+    return (
+      <span className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+        <ImageOff className="size-5" />
+      </span>
+    );
+  }
+  return (
+    <>
+      {/* A letterboxed image sits on a blur of itself: its blurhash, which is
+          already blurred and costs nothing per frame, or failing that a
+          blurred, cropped copy — a full-size filter on every such row. */}
+      {image.blurhash && (!loaded || fit === "contain") && (
+        <BlurhashCanvas hash={image.blurhash} className={cn("absolute inset-0", loaded && "opacity-50")} />
+      )}
+      {resolved.status === "ready" && (
+        <>
+          {fit === "contain" && loaded && !image.blurhash && (
+            <img
+              src={resolved.src}
+              alt=""
+              aria-hidden
+              draggable={false}
+              className="absolute inset-0 size-full scale-110 object-cover opacity-50 blur-2xl"
+            />
+          )}
+          <img
+            src={resolved.src}
+            alt=""
+            draggable={false}
+            loading="lazy"
+            decoding="async"
+            onLoad={() => setLoaded(true)}
+            onError={onError}
+            className={cn(
+              "absolute inset-0 size-full transition-opacity",
+              fit === "contain" ? "object-contain" : "object-cover",
+              loaded ? "opacity-100" : "opacity-0",
+            )}
+          />
+        </>
+      )}
+    </>
+  );
+}
 
 /** A titled group of rows: the eyebrow, then one surface holding them. */
 function PostGroup({

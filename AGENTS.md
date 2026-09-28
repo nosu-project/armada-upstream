@@ -567,10 +567,16 @@ Things to know before touching it:
   tree cannot be listed in `electron-builder.yml`'s `files:`. The static
   `latest*.yml` feed is GONE — not generated (`publishAutoUpdate: false`) and not
   deployed, and nothing is sent over SSH. The Flatpak updates on two clocks: its
-  web bundle in place (it fetches the archive every web deploy publishes at
-  `/downloads/armada-web.tar.gz` — `electron/webBundleUpdate.js`,
-  `bundleStore.js` — and serves that), and its shell through `flatpak update`
-  from whichever remote it was installed from. The published build is
+  web bundle in place (the archive every web deploy publishes at
+  `/downloads/armada-web.tar.gz`, resolved through the signed kind-35128 site
+  manifest under the pinned `RELEASE_AUTHORS` key — `resolveWebBundle` in
+  `desktopUpdate.ts` — fetched from the manifest's Blossom servers, checked
+  against its `path` hash before extraction, and refused when named by a
+  manifest older than the installed one; `electron/webBundleUpdate.js`,
+  `bundleStore.js`), and its shell through `flatpak update` from whichever
+  remote it was installed from. The bundle becomes the app:// origin with the
+  whole preload bridge, so it is resolved only through that manifest, never
+  from a URL the renderer supplies. The published build is
   distributed by npkg at `pkg.soapbox.pub`, which watches the kind-30622 release
   events, hash-verifies each artifact, and re-signs the apt/flatpak/fdroid
   repositories under its own keys — so Armada ships the `.flatpak` (and `.deb`
@@ -804,10 +810,11 @@ to fail a run:
   whatever host the sender named, so an image in a message learns the IP of
   everyone who scrolls past it; no referrer policy or CSP touches the TCP
   connection. `src/lib/mediaPolicy.ts` is the ONE place the rule lives, and the
-  rule is a single PROXY: with `mediaProxy` set (Ditto's `{href}` template, ON
-  by default at the public proxy Ditto ships, user-clearable) every such load
-  goes through it, so the host sees the proxy's address; cleared, media loads
-  directly. A loopback/private address is never proxied and never loaded.
+  rule is a single PROXY: with `mediaProxies` set (Ditto's `{href}` template,
+  OFF by default, user-settable — turning it on in settings suggests the public
+  proxy Ditto ships, `DEFAULT_MEDIA_PROXY`) every such load goes through it, so
+  the host sees the proxy's address; unset, media loads directly. A
+  loopback/private address is never proxied and never loaded.
   Apply it by going through the hooks that already do (`useMediaWithFallback`,
   `useImageFallback`/`FallbackImage`, `useRoutedCandidates`, `useMediaSrc`,
   `AvatarImage`), never by putting a raw event URL into an element. The three
@@ -815,7 +822,9 @@ to fail a run:
   `MediaPolicy.java`, `ArmadaNotify`'s `MediaPolicy.swift` — carry the same
   proxy in their configs and must stay in step with the TS
   (`MediaPolicyTest.java`, `MediaPolicyTests.swift` mirror `mediaPolicy.test.ts`);
-  an absent proxy config there is the DEFAULT (proxy on), never "load directly".
+  an absent or unreadable proxy config there is the DEFAULT — proxying off,
+  loading directly — matching the web client, since it can only mean the user
+  never turned a proxy on. An explicit `""` is off too.
   Two bypasses load directly on purpose: a Buzz-hosted blob (its signed GET
   header would not survive a proxy, and its host is a relay the viewer joined),
   and a deliberate file download or Mini App open (`FileAttachment`, `Webxdc`),

@@ -161,9 +161,11 @@ jobs:
           WEBXDC_RT_REQUIRED: "1"
 
       # The web bundle as one archive, served beside the site. The desktop
-      # shell (electron/webBundleUpdate.js) fetches it and swaps its app://
-      # origin to it — the Flatpak's only update path. Deterministic tar+gzip
-      # so an unchanged build keeps its hash.
+      # shell (electron/webBundleUpdate.js) reads its hash and servers from the
+      # signed site manifest this deploy publishes, fetches it from Blossom,
+      # and swaps its app:// origin to it — the Flatpak's only update path.
+      # Keep the path in step with WEB_BUNDLE_PATH in src/lib/desktopUpdate.ts.
+      # Deterministic tar+gzip so an unchanged build keeps its hash.
       - name: Pack the web bundle
         run: |
           set -eu

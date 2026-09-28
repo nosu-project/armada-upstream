@@ -25,6 +25,7 @@ import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { NUser } from "@nostrify/react/login";
+import type { NostrRelayCLOSED, NostrRelayEOSE } from "@nostrify/types";
 
 const h = vi.hoisted(() => ({
   readFolded: vi.fn(),
@@ -500,6 +501,58 @@ describe("syncCommunityList — reconcile", () => {
     expect(decoded.tombstones.map((item) => item.community_id)).toContain(b64of("aa".repeat(32)));
   });
 
+  describe("a replayed add (a pending join settled after its click)", () => {
+    const CLICK = 1_719_800_000_000;
+    const replay = async (wireList: CommunityList, cached?: CommunityList) => {
+      const { updateCommunityList, listQueryKey } = await import("./useCommunityList");
+      const { published, nostr } = fakeNostr(fragment(wireList).map((f, i) => fragEvent(f, i)));
+      const queryClient = new QueryClient();
+      if (cached) queryClient.setQueryData(listQueryKey(SELF), { event: null, list: cached });
+      const list = await updateCommunityList(
+        nostr,
+        user,
+        queryClient,
+        ["wss://self.example.com"],
+        { type: "add", entry: { ...entry("aa", "Clicked"), added_at: CLICK }, replay: true },
+      );
+      return { list, published };
+    };
+
+    it("publishes nothing over a Leave taken after the click", async () => {
+      const { list, published } = await replay({
+        entries: [entry("bb", "Other")],
+        tombstones: [{ community_id: "aa".repeat(32), removed_at: CLICK + 60_000 }],
+      });
+      expect(published).toHaveLength(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(false);
+    });
+
+    it("honors a removal held only locally (a kick not yet on the wire)", async () => {
+      const { list, published } = await replay(
+        { entries: [entry("bb", "Other")], tombstones: [] },
+        { entries: [], tombstones: [{ community_id: "aa".repeat(32), removed_at: CLICK + 1 }] },
+      );
+      expect(published).toHaveLength(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(false);
+    });
+
+    it("publishes nothing when the earlier run's write already landed", async () => {
+      const { list, published } = await replay({ entries: [{ ...entry("aa", "Clicked"), added_at: CLICK }], tombstones: [] });
+      expect(published).toHaveLength(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(true);
+    });
+
+    it("writes a join that predates the only removal, dated by its click", async () => {
+      const { list, published } = await replay({
+        entries: [entry("bb", "Other")],
+        tombstones: [{ community_id: "aa".repeat(32), removed_at: CLICK - 60_000 }],
+      });
+      expect(published.length).toBeGreaterThan(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(true);
+      expect(list.entries.find((e) => e.community_id === "aa".repeat(32))?.added_at).toBe(CLICK);
+    });
+  });
+
   it("bases a mutation on a newer ArmadaDB fragment even when reachable wire is stale", async () => {
     const { updateCommunityList } = await import("./useCommunityList");
     const [staleFrag] = fragment({
@@ -576,6 +629,46 @@ describe("syncCommunityList — reconcile", () => {
     ].sort());
   });
 
+  it("keeps a leave taken during the retired-list read in the persisted list", async () => {
+    const { syncCommunityList, listQueryKey } = await import("./useCommunityList");
+    const cid = "aa".repeat(32);
+    const wire = fragment({ entries: [entry("aa", "Left mid-sync")], tombstones: [] }).map((f, i) => fragEvent(f, i));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const before: CommunityList = { entries: [entry("aa", "Left mid-sync")], tombstones: [] };
+    queryClient.setQueryData(listQueryKey(SELF), { event: null, list: before, decryptFailed: false });
+    h.readFolded.mockResolvedValue(undefined);
+
+    const { nostr } = fakeNostr(wire);
+    const queryWire = nostr.relay("wss://self.example.com").query;
+    // The user leaves while the retired-list rescue is on the network: the
+    // leave tombstones the query cache (removeCommunityLocally).
+    const racing = {
+      ...nostr,
+      relay: (url: string) => ({
+        ...nostr.relay(url),
+        query: async (filters: Array<{ kinds?: number[] }>) => {
+          if (filters.some((f) => f.kinds?.includes(13302))) {
+            queryClient.setQueryData(listQueryKey(SELF), {
+              event: null,
+              list: { entries: before.entries, tombstones: [{ community_id: cid, removed_at: Date.now() }] },
+              decryptFailed: false,
+            });
+          }
+          return queryWire(filters);
+        },
+      }),
+    };
+
+    const data = await syncCommunityList(racing, user, queryClient, undefined, ["wss://self.example.com"]);
+
+    expect(isLive(data.list, cid)).toBe(false);
+    const persisted = h.writeFolded.mock.calls
+      .filter(([key]) => String(key).startsWith("concord2-list:"))
+      .map(([, value]) => (value as { list: CommunityList }).list);
+    expect(persisted.length).toBeGreaterThan(0);
+    for (const list of persisted) expect(isLive(list, cid)).toBe(false);
+  });
+
   it("publishes the union when the folded cache holds memberships the wire lacks", async () => {
     // Vector seeded §8 from ITS holds (community B only); this device recorded
     // A under the retired single-event list. The union must reach the wire
@@ -619,6 +712,38 @@ describe("syncCommunityList — reconcile", () => {
 
     expect(delivered).not.toContain(unavailable);
     for (const relay of STOCK_RELAYS.slice(1)) expect(delivered).toContain(relay);
+  });
+
+  it("defers seeding when a relay CLOSED the per-relay empty confirmation", async () => {
+    const { syncCommunityList } = await import("./useCommunityList");
+    const local: CommunityList = { entries: [entry("aa", "Must not seed")], tombstones: [] };
+    const run = async (refuseConfirm: boolean) => {
+      h.readFolded.mockImplementation(async (key: string) =>
+        key.startsWith("concord2-list:") ? { event: null, list: local } : undefined,
+      );
+      const delivered: string[] = [];
+      const nostr = {
+        query: vi.fn(async () => []),
+        relay: (url: string) => ({
+          query: vi.fn(async () => []),
+          // `query()` resolves [] on a CLOSED; only `req()` can tell it apart.
+          async *req(filters: Array<{ limit?: number }>): AsyncGenerator<NostrRelayEOSE | NostrRelayCLOSED> {
+            if (refuseConfirm && filters.some((f) => f.limit === 1)) {
+              yield ["CLOSED", "sub", "rate-limited: slow down"];
+              return;
+            }
+            yield ["EOSE", "sub"];
+          },
+          event: vi.fn(async () => { delivered.push(url); }),
+        }),
+      };
+      await syncCommunityList(nostr, user, new QueryClient(), undefined, ["wss://self.example.com"]);
+      return delivered;
+    };
+
+    expect(await run(true)).toEqual([]);
+    // Control: the same wire answering EOSE confirms the empty read and seeds.
+    expect(await run(false)).toContain("wss://self.example.com");
   });
 
   it("defers legacy seeding when no authoritative retired-list rescue source answers", async () => {

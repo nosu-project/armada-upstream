@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   refetch: vi.fn(),
   publish: vi.fn(),
   relayQuery: vi.fn(),
+  closedRelays: new Set<string>(),
   storeQuery: vi.fn(async () => [] as NostrEvent[]),
   encrypt: vi.fn(async (_pubkey: string, plaintext: string) => `encrypted:${plaintext}`),
   decrypt: vi.fn(async (_pubkey: string, ciphertext: string) =>
@@ -37,7 +38,14 @@ vi.mock("@nostrify/react", () => ({
   useNostr: () => ({
     nostr: {
       relay: (relay: string) => ({
-        query: (filters: unknown, options: unknown) => h.relayQuery(relay, filters, options),
+        // NRelay1.req's shape: EVENTs then EOSE, or an end with neither when
+        // the relay CLOSED the REQ.
+        async *req(filters: unknown, options: unknown) {
+          if (h.closedRelays.has(relay)) return;
+          const events = await h.relayQuery(relay, filters, options) as NostrEvent[];
+          for (const event of events) yield ["EVENT", "sub", event] as const;
+          yield ["EOSE", "sub"] as const;
+        },
       }),
     },
   }),
@@ -578,6 +586,44 @@ describe("DM index relay-set publication base", () => {
     expect(pull.departedRepairs.get(xId)?.relays ?? []).not.toContain(NEW_RELAY);
     // Control: OLD's answer was complete, so Y's absence there IS a gap.
     expect(pull.departedRepairs.get(yId)?.relays).toEqual([OLD_RELAY]);
+  });
+
+  it("treats a relay that CLOSED the pull as unanswered, not as empty", async () => {
+    // A relay that refuses the REQ (auth-required, rate-limited) ends the
+    // stream with no EOSE. Read as an empty answer it lacked every coordinate,
+    // and each pull republished all of them to it, forever.
+    h.relays = [OLD_RELAY, NEW_RELAY];
+    h.nip65Relays = [OLD_RELAY, NEW_RELAY];
+    h.queryData = undefined;
+    h.closedRelays.add(NEW_RELAY);
+    try {
+      const x = localRecord(110);
+      const departedX = {
+        version: 1,
+        deviceId: "departed-closed",
+        bucket: dmConversationIndexBucket(x.key),
+        records: [x],
+      } satisfies DmConversationIndexShard;
+      h.relayQuery.mockImplementation(async () => [{
+        ...eventForShard(departedX, "d", 100),
+        id: `9d${"0".repeat(62)}`,
+      }]);
+      renderHook(() => useDmConversationIndexSync());
+
+      const pull = await h.queryOptions!.queryFn({ signal: new AbortController().signal }) as {
+        publishRelays: string[];
+        relayReads: Map<string, unknown>;
+        departedRepairs: Map<string, { relays: string[] }>;
+        repairPending: boolean;
+      };
+      expect(pull.publishRelays).toEqual([OLD_RELAY]);
+      expect(pull.relayReads.has(NEW_RELAY)).toBe(false);
+      expect(pull.departedRepairs.size).toBe(0);
+      // Still a read obligation: the bounded retry keeps asking until it answers.
+      expect(pull.repairPending).toBe(true);
+    } finally {
+      h.closedRelays.clear();
+    }
   });
 
   it("still repairs an own shard a relay truly lacks when its answer hit the limit", async () => {

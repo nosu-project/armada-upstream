@@ -230,17 +230,13 @@ export const CONCORD_AV_SERVERS: string[] = (
 /**
  * Default DM relay(s): the fallback direct-message relays used when a user has
  * not configured their own (no kind-10050 inbox, `useOwnDmRelays` off). Added
- * to the app relays in `effectiveDmRelays` so gift-wrapped DMs (NIP-17, kind
- * 1059) have a dependable home that the push/native watch sets can rely on —
- * the public default is a gift-wrap-only relay, so legacy NIP-04 (kind 4) DMs
- * continue to use the general app relays alongside it.
+ * to the app relays in `effectiveDmRelays`, which also keep carrying legacy
+ * NIP-04 (kind 4) DMs alongside it.
  *
- * Defaults to Armada's public gift-wrap relay for every build (like
- * `CONCORD_AV_SERVERS`); operators can override with
- * `VITE_DM_RELAYS` (comma-separated ws/wss) or set it empty to disable.
+ * Empty unless an operator sets `VITE_DM_RELAYS` (comma-separated ws/wss);
+ * the app relays carry DMs without it.
  */
-const DEFAULT_PUBLIC_DM_RELAY = "wss://relay.armada.buzz";
-export const DM_RELAYS: string[] = (import.meta.env.VITE_DM_RELAYS ?? DEFAULT_PUBLIC_DM_RELAY)
+export const DM_RELAYS: string[] = (import.meta.env.VITE_DM_RELAYS ?? "")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));

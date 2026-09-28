@@ -7,11 +7,12 @@ import XCTest
 /// the app would have loaded the picture from.
 final class MediaPolicyTests: XCTestCase {
 
+    private let proxy = "https://proxy.shakespeare.diy/?url={href}"
     private let img = "https://henk.example/ip/ip.png"
     private let proxied = "https://proxy.shakespeare.diy/?url=https%3A%2F%2Fhenk.example%2Fip%2Fip.png"
 
     func testProxiesAHostWhenAProxyIsSet() {
-        XCTAssertEqual(MediaPolicy(proxy: MediaPolicy.defaultProxy).resolve(img), proxied)
+        XCTAssertEqual(MediaPolicy(proxy: proxy).resolve(img), proxied)
     }
 
     func testLoadsDirectlyWithNoProxy() {
@@ -19,7 +20,7 @@ final class MediaPolicyTests: XCTestCase {
     }
 
     func testLocalNetworkAddressesAreNeverFetchedOrProxied() {
-        XCTAssertNil(MediaPolicy(proxy: MediaPolicy.defaultProxy).resolve("http://192.168.1.1/x.png"))
+        XCTAssertNil(MediaPolicy(proxy: proxy).resolve("http://192.168.1.1/x.png"))
         XCTAssertNil(MediaPolicy(proxy: "").resolve("http://localhost:8080/x.png"))
         XCTAssertTrue(MediaPolicy.isLocalNetworkUrl("http://[::ffff:7f00:1]/x"))
         XCTAssertTrue(MediaPolicy.isLocalNetworkUrl("http://10.0.0.5/x"))
@@ -37,7 +38,7 @@ final class MediaPolicyTests: XCTestCase {
     }
 
     func testAnAlreadyProxiedUrlIsNotWrappedTwice() {
-        XCTAssertEqual(MediaPolicy(proxy: MediaPolicy.defaultProxy).resolve(proxied), proxied)
+        XCTAssertEqual(MediaPolicy(proxy: proxy).resolve(proxied), proxied)
     }
 
     func testProxyTemplateNormalizationMatchesTheApp() {
@@ -64,15 +65,16 @@ final class MediaPolicyTests: XCTestCase {
 
     func testParseReadsTheAppShapeAndDefaultsTheRest() {
         XCTAssertEqual(MediaPolicy.parse(["proxy": "https://p.example/?u="]).proxy, "https://p.example/?u={href}")
-        // An explicitly EMPTY proxy is a choice; an absent one is the default.
+        // Empty and absent are both proxying off, the app's default.
         XCTAssertEqual(MediaPolicy.parse(["proxy": ""]).proxy, "")
-        XCTAssertEqual(MediaPolicy.parse([:]).proxy, MediaPolicy.defaultProxy)
+        XCTAssertEqual(MediaPolicy.parse([:]).proxy, "")
     }
 
-    func testMissingConfigIsTheDefaultPolicyNotDirect() {
+    func testMissingConfigIsTheDefaultPolicyProxyOff() {
+        XCTAssertEqual(MediaPolicy.defaults.proxy, "")
         let p = MediaPolicy.parse(nil)
         XCTAssertEqual(p, MediaPolicy.defaults)
-        XCTAssertEqual(p.resolve(img), proxied)
+        XCTAssertEqual(p.resolve(img), img)
     }
 
     func testPushConfigCarriesThePolicy() {

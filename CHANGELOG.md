@@ -4,6 +4,58 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.62.3] - 2026-09-28
+
+A security and reliability release. The Flatpak desktop app verifies its web
+updates against the signed site before installing them, media links and CI log
+links are checked more strictly, and server invite links fill in their invite
+code so joining takes one click.
+
+### Changed
+- Server invite links fill in the invite code and join with a single click
+- The Flatpak app installs web updates only from the signed site, checking each download and refusing older versions
+
+### Fixed
+- Looking up a linked event no longer fails on relays that require sign-in
+- Media links are validated more strictly before loading, including through the media proxy
+- Only web links are opened from CI logs
+- The iOS app accepts messages only from its own page
+
+## [0.62.2] - 2026-09-28
+
+A polish and reliability release. Joining or leaving a community now survives
+restarts and failed sends, Watch together accepts direct video links, attached
+audio files show their title, artist and cover art, and roles can be assigned
+straight from a profile card. Sheets and lightboxes close on back, and audio and
+video playback is more robust.
+
+### Added
+- Watch together accepts direct video links, with tighter playback sync
+- Attached audio files show their title, artist, cover art and a waveform in the tray and the player
+- Assign roles from a member's profile card
+- Emoji pickers link to Discover's emoji packs
+- Forum feed rows show a gallery preview of a post's images
+- Copy link action on the theme publish confirmation
+- Discover explains how its listings are curated
+- A tap-to-explain tooltip on the account standing summary
+- Back button and Escape on the restore step of setup, with a confirmation
+
+### Changed
+- Joining and leaving a community completes even if the app restarts or a send fails partway
+- No relay is added by default for direct messages
+- Discover finds your own listings on the app relays as well as yours
+- The "Get Armada" link is hidden on the landing page inside the apps
+
+### Fixed
+- Sheets, lightboxes and the mobile member list close on back and when navigating
+- A relay that refuses a read is no longer taken to mean you have no data there
+- Audio falls back to its next source correctly when one can't play
+- Video fullscreen covers the whole player
+- Message action toolbars are no longer caught in text selection
+- Dragging channels no longer starts from menus and popups
+- The unread badge on the browser tab icon draws reliably
+- The profile card scrolls when it's taller than the screen
+
 ## [0.62.1] - 2026-09-27
 
 A performance and battery release. Armada does less work while in the

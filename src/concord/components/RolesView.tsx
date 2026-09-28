@@ -97,15 +97,17 @@ function RolesBody({ community }: { community: Community }) {
   );
 
   // Live channels a role can scope to; a role's channel is looked up here for
-  // the list row's "# name" hint (deleted channels fall back to a stub label).
+  // the list row's "# name" hint. A deleted channel is not named anywhere in
+  // this view — the fold keeps its old definition (and name) flagged, which
+  // would otherwise surface as a hint for a channel that no longer exists.
   const channels = useMemo(
     () => [...(folded?.channels.values() ?? [])].filter((c) => !c.deleted),
     [folded],
   );
-  const channelName = (channelId: string) =>
-    folded?.channels.get(channelId)?.name ?? "deleted channel";
-  const channelIsPrivate = (channelId: string) =>
-    Boolean(folded?.channels.get(channelId)?.isPrivate);
+  const liveChannel = (channelId: string) => {
+    const c = folded?.channels.get(channelId);
+    return c && !c.deleted ? c : undefined;
+  };
 
   // Per role, how many grants list it: Discord's member count, and the
   // fastest read of "is this access role actually granting anyone anything".
@@ -441,9 +443,16 @@ function RolesBody({ community }: { community: Community }) {
               With no permissions left it confers nothing there either.
             </p>
           )}
+          {/* Why, in the user's terms: roles are control-plane editions every
+              member's fold replays (CORD-04 §2), and the protocol has no Role
+              tombstone. Reuse is offered only when no one still lists the role,
+              since new permissions would reach the members it couldn't be
+              taken from. */}
           <p className="text-sm text-muted-foreground">
-            This does not delete it. Concord has no way to remove a role, so the name stays in this list and
-            keeps one of the community's {MAX_ROLES_PER_COMMUNITY} role slots for good.
+            Roles can't be deleted: they're part of the community's signed history, which every member's app
+            replays so that everyone sees the same list. So it stays here, holding one of the
+            community's {MAX_ROLES_PER_COMMUNITY} role slots, but grants nothing
+            {skipped.length === 0 ? " — and you can rename it later to reuse the slot." : "."}
           </p>
         </div>
         {error && (
@@ -550,6 +559,7 @@ function RolesBody({ community }: { community: Community }) {
           roles.map((r, i) => {
             const movable = mayTouch(r.position) && !busy;
             const tint = colorToHex(r.color);
+            const scopedTo = r.scope.kind === "channel" ? liveChannel(r.scope.channelId) : undefined;
             return (
               <div
                 key={r.roleId}
@@ -587,19 +597,19 @@ function RolesBody({ community }: { community: Community }) {
                   <span className="flex-1 truncate text-sm font-medium" style={tint ? { color: tint } : undefined}>
                     {r.name}
                   </span>
-                  {r.scope.kind === "channel" && (
+                  {scopedTo && (
                     <span
                       className="inline-flex min-w-0 items-center gap-0.5 text-[11px] text-muted-foreground"
                       title={
-                        channelIsPrivate(r.scope.channelId)
-                          ? `Access role: holders can read #${channelName(r.scope.channelId)}`
-                          : `Permissions apply only in #${channelName(r.scope.channelId)}`
+                        scopedTo.isPrivate
+                          ? `Access role: holders can read #${scopedTo.name}`
+                          : `Permissions apply only in #${scopedTo.name}`
                       }
                     >
-                      {channelIsPrivate(r.scope.channelId)
+                      {scopedTo.isPrivate
                         ? <Lock className="size-3 shrink-0" aria-label="Private channel access" />
                         : <Hash className="size-3 shrink-0" aria-hidden />}
-                      <span className="truncate max-w-24">{channelName(r.scope.channelId)}</span>
+                      <span className="truncate max-w-24">{scopedTo.name}</span>
                     </span>
                   )}
                   <span
@@ -616,10 +626,13 @@ function RolesBody({ community }: { community: Community }) {
         )}
       </div>
 
+      {/* The cap is CORD-04 §2's, and revoked roles count toward it: there is
+          no Role tombstone, so a revoked role is still an entity in the fold. */}
       {roles.length >= MAX_ROLES_PER_COMMUNITY && (
         <p className="text-xs text-muted-foreground">
-          This community holds the maximum of {MAX_ROLES_PER_COMMUNITY} roles (CORD-04 §2). Revoking one does
-          not free its slot.
+          This community has reached the limit of {MAX_ROLES_PER_COMMUNITY} roles. Roles can't be deleted —
+          every member's app replays the same signed history — so revoked ones still count. To make room,
+          rename a revoked role that nobody holds and give it new permissions.
         </p>
       )}
       {/*
@@ -652,7 +665,7 @@ function RolesBody({ community }: { community: Community }) {
   );
 }
 
-function RoleEditor({
+export function RoleEditor({
   role,
   channels,
   holders,
@@ -689,22 +702,17 @@ function RoleEditor({
     setPerms((p) => (on ? p | bit : p & ~bit));
   };
 
-  // A role scoped to a since-deleted channel still edits cleanly: keep its
-  // channel selectable (as a stub) rather than silently rescoping on save.
-  const scopeOptions = useMemo(() => {
-    const opts = [...channels];
-    const scope = role.scope;
-    if (scope.kind === "channel" && !opts.some((c) => c.idHex === scope.channelId)) {
-      opts.push({ idHex: scope.channelId, name: "deleted channel" });
-    }
-    return opts;
-  }, [channels, role.scope]);
+  // A role scoped to a since-deleted channel still edits cleanly, but the
+  // channel is not offered as a choice: `scopeValue` keeps its id, so a save
+  // that doesn't touch the scope writes it back unchanged rather than silently
+  // rescoping the role, and only the trigger says what it currently is.
+  const savedScopeId = role.scope.kind === "channel" ? role.scope.channelId : undefined;
+  const deletedScope = savedScopeId && !channels.some((c) => c.idHex === savedScopeId) ? savedScopeId : undefined;
+  const onDeletedScope = deletedScope !== undefined && scopeValue === deletedScope;
 
-  const selectedChannel = scopeValue === "server" ? undefined : scopeOptions.find((c) => c.idHex === scopeValue);
+  const selectedChannel = scopeValue === "server" ? undefined : channels.find((c) => c.idHex === scopeValue);
   // The channel this role gates TODAY (its saved scope), for the rescope guard.
-  const savedChannel = role.scope.kind === "channel"
-    ? scopeOptions.find((c) => role.scope.kind === "channel" && c.idHex === role.scope.channelId)
-    : undefined;
+  const savedChannel = savedScopeId ? channels.find((c) => c.idHex === savedScopeId) : undefined;
 
   return (
     <form
@@ -771,11 +779,12 @@ function RoleEditor({
         <Label htmlFor="role2-scope">Scope</Label>
         <Select value={scopeValue} onValueChange={setScopeValue}>
           <SelectTrigger id="role2-scope">
-            <SelectValue />
+            {/* No item carries the deleted channel's id, so name it here. */}
+            <SelectValue>{onDeletedScope ? <span className="text-muted-foreground">A deleted channel</span> : undefined}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="server">Entire community</SelectItem>
-            {scopeOptions.map((c) => (
+            {channels.map((c) => (
               <SelectItem key={c.idHex} value={c.idHex}>
                 <span className="inline-flex items-center gap-1">
                   {c.isPrivate
@@ -789,7 +798,9 @@ function RoleEditor({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          {selectedChannel?.isPrivate
+          {onDeletedScope
+            ? "The channel this role was scoped to has been deleted. Saving keeps the role as it is; pick a scope above to move it."
+            : selectedChannel?.isPrivate
             ? <>Holders of this role can read <span className="font-medium">#{selectedChannel.name}</span>. Scoping a role to a private channel is how it grants access: granting the role sends the channel key, revoking it rotates the key away.</>
             : selectedChannel
               ? "Scoping names the channel this role is about. It does not confine the permission bits below."

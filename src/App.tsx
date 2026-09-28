@@ -89,6 +89,14 @@ const queryClient = new QueryClient({
       // its own refetch interval or sweep to catch up on.
       networkMode: "always",
     },
+    mutations: {
+      // The same default for writes. A paused mutation holds its button
+      // disabled until the browser reports `online` — which in an Android
+      // WebView can be never — and a paused one ahead in a scoped queue (the
+      // Concord list's) holds every write behind it too. Every relay call a
+      // mutation makes carries its own timeout.
+      networkMode: "always",
+    },
   },
 });
 

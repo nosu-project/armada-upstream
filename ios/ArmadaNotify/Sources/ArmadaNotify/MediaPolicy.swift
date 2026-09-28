@@ -13,23 +13,21 @@ import Foundation
 /// public proxy cannot reach it) and never fetched, so it resolves to nil.
 struct MediaPolicy: Equatable {
 
-    /// Ditto's default CORS proxy — a byte-for-byte pass-through.
-    static let defaultProxy = "https://proxy.shakespeare.diy/?url={href}"
-
     /// Normalized proxy template, or "" for none.
     let proxy: String
 
-    init(proxy: String = MediaPolicy.defaultProxy) {
+    init(proxy: String = "") {
         self.proxy = MediaPolicy.normalizeProxy(proxy)
     }
 
-    /// The policy a fresh install has: the default proxy on.
+    /// The policy a fresh install has: proxying off, the app's own default. A
+    /// proxy is only ever one the user turned on in settings.
     static let defaults = MediaPolicy()
 
     /// Parse the `mediaPolicy` object the app writes into the push config
-    /// (`{proxy}`). A missing or unreadable one is the default policy, never
-    /// "load directly": a config written before the field existed still
-    /// proxies a stranger's avatar.
+    /// (`{proxy}`). A missing or unreadable one is the default policy —
+    /// proxying off — since a config written without it belongs to a user who
+    /// never turned a proxy on.
     static func parse(_ object: [String: Any]?) -> MediaPolicy {
         guard let object, let proxy = object["proxy"] as? String else { return defaults }
         return MediaPolicy(proxy: proxy)

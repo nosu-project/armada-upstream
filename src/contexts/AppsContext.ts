@@ -55,9 +55,13 @@ export function defaultSessionId(scope: AppScope, app: AppKind): string {
 }
 
 /**
- * Which app is running. A built-in app (`youtube` watchalong) is identified by
- * its type; a `webxdc` app additionally carries the `.xdc` archive URL and
- * display metadata parsed from its manifest.
+ * Which app is running. A built-in app (`youtube`, the "Watch together"
+ * watchalong) is identified by its type; a `webxdc` app additionally carries
+ * the `.xdc` archive URL and display metadata parsed from its manifest.
+ *
+ * The watchalong plays direct video links too, but keeps the `youtube` type:
+ * it is part of the cross-client session id ({@link defaultSessionId}), so a
+ * new spelling would put this build in a different session from older ones.
  */
 export type AppKind =
   | { type: "youtube" }

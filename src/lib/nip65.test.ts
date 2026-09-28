@@ -323,6 +323,31 @@ describe("NIP-65 relay lists", () => {
     }
   });
 
+  it("counts a relay that CLOSED the read as failed, not as an empty answer", async () => {
+    const held = relayList([["r", "wss://home.example"]], 9_000);
+    const stream = (msgs: unknown[]) =>
+      async function* () {
+        for (const msg of msgs) yield msg;
+      };
+    const nostr = {
+      relay: (url: string) => ({
+        query: async () => [],
+        req: url === "wss://closed.example"
+          ? stream([["CLOSED", "sub", "auth-required: sign in"]])
+          : stream([["EVENT", "sub", held], ["EOSE", "sub"]]),
+      }),
+    };
+    const result = await queryExplicitRelaysWithStatus(
+      nostr as never,
+      ["wss://closed.example", "wss://open.example"],
+      [{ kinds: [KIND_RELAY_LIST] }],
+      new AbortController().signal,
+    );
+    expect(result.events).toEqual([held]);
+    expect(result.answered).toEqual(["wss://open.example"]);
+    expect(result.failed).toEqual(["wss://closed.example"]);
+  });
+
   it("fans the exact signed event to each relay and reports partial acceptance", async () => {
     const event = relayList([["r", "wss://home.example"]], 5_000);
     const delivered: Array<{ url: string; event: NostrEvent }> = [];

@@ -80,8 +80,8 @@ public class NotificationRelayServiceFleetTest {
     // code. A relay whose proxy is up in front of a dead backend returns a
     // persistent 5xx; with only the throwable it is indistinguishable from a
     // transient blip and is retried on the bounded backoff forever — the
-    // battery drain in report b49c2110be73, where wss://relay.armada.buzz
-    // returned '502 Bad Gateway' on every attempt and was never quarantined.
+    // battery drain in report b49c2110be73, where a relay returned
+    // '502 Bad Gateway' on every attempt and was never quarantined.
     // These pin the code-aware classification the breaker needs.
 
     @Test

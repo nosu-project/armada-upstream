@@ -24,6 +24,10 @@ const HINTED = "wss://hinted.example";
 const h = vi.hoisted(() => ({
   relays: new Map<string, NostrEvent[]>(),
   groupCalls: [] as string[][],
+  /** Relays the pool already holds a connection to. */
+  pooled: new Set<string>(),
+  /** Standalone connections opened for a lookup: url, options, closed. */
+  standalone: [] as { url: string; opts: unknown; closed: boolean }[],
 }));
 
 function matches(ev: NostrEvent, f: NostrFilter): boolean {
@@ -56,8 +60,27 @@ vi.mock("@nostrify/react", () => ({
         h.groupCalls.push(urls);
         return { query: async (filters: NostrFilter[]) => serve(urls, filters) };
       },
+      get relays() {
+        return new Map([...h.pooled].map((url) => [url, {}]));
+      },
     },
   }),
+}));
+
+vi.mock("@/lib/verifiedRelay", () => ({
+  VerifiedRelay: class {
+    private record: { url: string; opts: unknown; closed: boolean };
+    constructor(url: string, opts?: unknown) {
+      this.record = { url, opts, closed: false };
+      h.standalone.push(this.record);
+    }
+    async query(filters: NostrFilter[]) {
+      return serve([this.record.url], filters);
+    }
+    async close() {
+      this.record.closed = true;
+    }
+  },
 }));
 
 vi.mock("@/hooks/useEventStore", () => ({
@@ -79,7 +102,12 @@ function wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => {
   h.relays = new Map();
   h.groupCalls = [];
+  h.pooled = new Set();
+  h.standalone = [];
 });
+
+/** Every relay a lookup asked, through the pool or on its own connection. */
+const asked = () => [...h.groupCalls.flat(), ...h.standalone.map((c) => c.url)];
 
 describe("useEvent", () => {
   it("finds the event on the quoting author's outbox when the identifier names no author", async () => {
@@ -123,7 +151,7 @@ describe("useEvent", () => {
     const { result } = renderHook(() => useEvent(TARGET_ID, undefined, undefined, { discover: true }), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
-    expect(h.groupCalls.flat()).toEqual([]);
+    expect(asked()).toEqual([]);
   });
 
   it("does not ask about references unless discovery is opted into", async () => {
@@ -133,7 +161,26 @@ describe("useEvent", () => {
     const { result } = renderHook(() => useEvent(TARGET_ID), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
+    expect(asked()).toEqual([]);
+  });
+
+  it("asks a hinted relay the pool isn't connected to over its own connection, without AUTH", async () => {
+    h.relays.set(HINTED, [target]);
+    const { result } = renderHook(() => useEvent(TARGET_ID, [HINTED]), { wrapper });
+    await waitFor(() => expect(result.current.data?.id).toBe(TARGET_ID));
     expect(h.groupCalls).toEqual([]);
+    expect(h.standalone.map((c) => c.url)).toEqual([HINTED]);
+    expect(h.standalone[0].opts).toBeUndefined();
+    await waitFor(() => expect(h.standalone[0].closed).toBe(true));
+  });
+
+  it("reuses the pool's connection for a hinted relay it already holds", async () => {
+    h.pooled.add(HINTED);
+    h.relays.set(HINTED, [target]);
+    const { result } = renderHook(() => useEvent(TARGET_ID, [HINTED]), { wrapper });
+    await waitFor(() => expect(result.current.data?.id).toBe(TARGET_ID));
+    expect(h.groupCalls).toEqual([[HINTED]]);
+    expect(h.standalone).toEqual([]);
   });
 
   it("finds the event again on refetch once it has appeared", async () => {

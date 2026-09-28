@@ -9,6 +9,7 @@ import { PublishOutbox } from "@/components/PublishOutbox";
 import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
 import { LoginSetup } from "@/components/onboarding/LoginSetup";
+import { useResumePendingJoins } from "@/concord/hooks/useCommunityActions";
 import { useWarmDiscover } from "@/hooks/useDiscover";
 import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
 import { WireSync } from "@/wire/WireSync";
@@ -84,9 +85,12 @@ export function SignedInPushServices() {
  *   skeleton waterfall. That first open is the signup wizard's exit, which is
  *   to say it is always a signed-in one; warming it for a visitor reading the
  *   landing page would be a relay round trip nobody asked for.
+ * - Resuming the Concord joins a previous launch was closed on before their
+ *   vault write landed (`pendingJoins.ts`), for the signed-in account.
  */
 export function SignedInRouterServices() {
   useForegroundNotifications();
   useWarmDiscover();
+  useResumePendingJoins();
   return null;
 }

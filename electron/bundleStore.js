@@ -42,6 +42,13 @@ const BUNDLE_ETAG = "etag";
  * assets under a freshly upgraded shell.
  */
 const BUNDLE_SHELL_VERSION = "shell-version";
+/**
+ * The `created_at` of the site manifest the active download was named by. The
+ * manifest is a replaceable event, so a relay can still serve an older one
+ * after it has been replaced; an update named by a manifest older than this is
+ * refused rather than installed over a newer bundle.
+ */
+const BUNDLE_MANIFEST_AT = "manifest-at";
 const CONTENT_ID = /^[0-9a-f]{32}$/;
 
 /** The directory name for an archive: the first half of its sha256. */
@@ -166,6 +173,21 @@ function readBundleEtag(bundlesDir) {
   }
 }
 
+/** The manifest `created_at` recorded with the newest download, if any. */
+function readBundleManifestAt(bundlesDir) {
+  try {
+    const value = Number(fs.readFileSync(path.join(bundlesDir, BUNDLE_MANIFEST_AT), "utf8").trim());
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Record the manifest `created_at` a download was named by. */
+function writeBundleManifestAt(bundlesDir, createdAt) {
+  fs.writeFileSync(path.join(bundlesDir, BUNDLE_MANIFEST_AT), String(createdAt));
+}
+
 /**
  * Make a freshly extracted bundle the active one.
  *
@@ -206,6 +228,7 @@ function pruneBundles(bundlesDir, keepId) {
 
 module.exports = {
   BUNDLE_ETAG,
+  BUNDLE_MANIFEST_AT,
   BUNDLE_POINTER,
   BUNDLE_SHELL_VERSION,
   bundleVersion,
@@ -213,7 +236,9 @@ module.exports = {
   contentId,
   pruneBundles,
   readBundleEtag,
+  readBundleManifestAt,
   readBundleShellVersion,
   resolveDistRoot,
   versionOrdinal,
+  writeBundleManifestAt,
 };

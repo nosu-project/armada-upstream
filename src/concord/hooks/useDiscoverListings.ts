@@ -11,7 +11,7 @@ import {
   type DiscoveredInvite,
 } from "@/concord/lib/inviteDiscovery";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { forgetDiscoverAnnouncements, useDiscoverRelays } from "@/hooks/useDiscover";
+import { forgetDiscoverAnnouncements, useListingRelays } from "@/hooks/useDiscover";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { queryExplicitRelaysWithStatus } from "@/lib/nip65";
 
@@ -117,7 +117,7 @@ export async function fetchLinkAnnouncements(
  */
 export function useLinkAnnouncements(linkSigners: readonly string[], authors: readonly string[] = []) {
   const { nostr } = useNostr();
-  const relays = useDiscoverRelays();
+  const relays = useListingRelays();
   const sorted = useMemo(() => [...new Set(linkSigners)].sort(), [linkSigners]);
   const sortedAuthors = useMemo(() => [...new Set(authors)].sort(), [authors]);
 
@@ -182,7 +182,7 @@ export function useCommunityDiscoverListings(
 export function useUnlistAnnouncements() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
-  const relays = useDiscoverRelays();
+  const relays = useListingRelays();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent } = useNostrPublish();
 

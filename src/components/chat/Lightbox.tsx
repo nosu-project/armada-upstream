@@ -12,7 +12,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { ChatImageMenuContext } from "@/contexts/ChatImageMenuContext";
+import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
@@ -52,6 +53,18 @@ const EASING = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
 const DURATION = 280;
 
 /**
+ * A slot's place in the strip: `delta` whole strip-widths from the current
+ * one, plus the live drag. In percent of the slot's own width (which is the
+ * strip's) rather than pixels of `window.innerWidth`, so a rotation or a
+ * resized window moves the neighbours with it — a pixel offset captured in
+ * portrait leaves the next slot, which paints above the current one, covering
+ * the right half of a landscape screen.
+ */
+function slotTransform(delta: number, offsetPx: number): string {
+  return offsetPx === 0 ? `translateX(${delta * 100}%)` : `translateX(calc(${delta * 100}% + ${offsetPx}px))`;
+}
+
+/**
  * Fullscreen media lightbox — cinematic gallery ported from Ditto.
  *
  * Features: horizontal swipe between items (a slot strip that keeps decoded
@@ -61,7 +74,7 @@ const DURATION = 280;
  * button.
  *
  * Each slot is rendered at a stable key and positioned absolutely at
- * `translateX((index - currentIndex) * 100vw + dragOffset)`; only the current
+ * `translateX((index - currentIndex) * 100% + dragOffset)`; only the current
  * item and its immediate neighbours are mounted to cap DOM size.
  *
  * A video slot plays in place with native controls, which is why every gesture
@@ -82,9 +95,9 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
   const covered = (item: LightboxItem) => !!item.spoiler && !revealed.has(item.url);
   const currentCovered = media[currentIndex] ? covered(media[currentIndex]) : false;
 
-  // System back (Android gesture/button) closes the lightbox instead of
-  // navigating the underlying screen.
-  useAndroidBack(() => {
+  // System back (Android gesture/button, or the browser's) closes the
+  // lightbox instead of navigating the underlying screen.
+  useOverlayBack(() => {
     onClose();
     return true;
   });
@@ -129,9 +142,8 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     (idx: number, offsetPx: number, transition: string) => {
       const el = slotRefs.current.get(idx);
       if (!el) return;
-      const base = (idx - currentIndex) * window.innerWidth;
       el.style.transition = transition;
-      el.style.transform = `translateX(${base + offsetPx}px)`;
+      el.style.transform = slotTransform(idx - currentIndex, offsetPx);
     },
     [currentIndex],
   );
@@ -392,7 +404,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
         {/* Per-image slots — each absolutely positioned by index offset. */}
         <div data-lightbox-strip className="absolute inset-0 overflow-hidden">
           {visibleIndices.map((i) => {
-            const initialX = (i - currentIndex) * window.innerWidth;
             return (
               <div
                 key={media[i].url || i}
@@ -401,7 +412,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
                   else slotRefs.current.delete(i);
                 }}
                 className="absolute inset-0 flex items-center justify-center will-change-transform py-6 pt-14 px-4 sm:px-12"
-                style={{ transform: `translateX(${initialX}px)` }}
+                style={{ transform: slotTransform(i - currentIndex, 0) }}
               >
                 {covered(media[i]) ? (
                   <button
@@ -593,26 +604,33 @@ function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boo
     if (!isActive) videoRef.current?.pause();
   }, [isActive]);
 
+  // Context crosses the portal: a lightbox opened from a message still sits
+  // under that row's image menu, and a long-press here would open the
+  // message's action sheet behind the lightbox (or behind a fullscreen
+  // video), locking the page's pointer events. The top bar carries this
+  // video's actions instead.
   return (
-    <div className="w-full h-full flex items-center justify-center">
-      <VideoPlayer
-        videoRef={videoRef}
-        src={video.url}
-        poster={video.poster}
-        mime={video.mime}
-        dim={video.dim}
-        blurhash={video.blurhash}
-        encryption={video.encryption}
-        fallbacks={video.fallbacks}
-        // The lightbox top bar already carries Download and Share, so the
-        // in-player ⋯ menu would only duplicate them here.
-        hideActionsMenu
-        // The player's inline chrome (framed black card, capped at max-w-md)
-        // is wrong at full screen: let it fill the slot and drop the frame, so
-        // any letterboxing is just the backdrop showing through.
-        className="my-0 w-full max-w-4xl max-h-full border-0 rounded-none bg-transparent"
-      />
-    </div>
+    <ChatImageMenuContext.Provider value={null}>
+      <div className="w-full h-full flex items-center justify-center">
+        <VideoPlayer
+          videoRef={videoRef}
+          src={video.url}
+          poster={video.poster}
+          mime={video.mime}
+          dim={video.dim}
+          blurhash={video.blurhash}
+          encryption={video.encryption}
+          fallbacks={video.fallbacks}
+          // The lightbox top bar already carries Download and Share, so the
+          // in-player ⋯ menu would only duplicate them here.
+          hideActionsMenu
+          // The player's inline chrome (framed black card, capped at max-w-md)
+          // is wrong at full screen: let it fill the slot and drop the frame, so
+          // any letterboxing is just the backdrop showing through.
+          className="my-0 w-full max-w-4xl max-h-full border-0 rounded-none bg-transparent"
+        />
+      </div>
+    </ChatImageMenuContext.Provider>
   );
 }
 

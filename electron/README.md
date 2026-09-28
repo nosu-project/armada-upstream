@@ -398,9 +398,11 @@ most Flatpak installations already have one. If needed, add it first with the
 
 Two update paths, and they do not conflict:
 
-- **The web bundle updates in place.** Armada fetches
-  `/downloads/armada-web.tar.gz` from the public site — published by every web
-  deploy — unpacks it into the app's userData and serves that, then offers a
+- **The web bundle updates in place.** Every web deploy publishes its `dist`
+  as `/downloads/armada-web.tar.gz` in the signed nsite manifest. Armada reads
+  the newest manifest from the pinned release key, downloads the archive from
+  the Blossom servers it names, refuses it unless its sha256 matches the
+  manifest, unpacks it into the app's userData and serves that, then offers a
   restart (`checkForWebBundleUpdate` in `electron/main.js`,
   `electron/webBundleUpdate.js`). Most releases touch only `src/`, so this is
   what carries them, without a `flatpak update`.

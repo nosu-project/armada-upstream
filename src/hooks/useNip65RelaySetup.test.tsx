@@ -16,6 +16,7 @@ import {
 } from "@/hooks/usePublishPortableSetup";
 import { installAbortSignalPolyfills } from "@/lib/abortSignalPolyfill";
 import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
+import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
@@ -617,6 +618,45 @@ describe("useNip65RelaySetup two-phase publish", () => {
     });
 
     expect(h.signedKinds).toEqual([10002]);
+    expect(h.updateConfig).toHaveBeenCalled();
+  });
+
+  it("does not mirror portable state before a first list, so a relay's copies can't block it", async () => {
+    h.ownsPointer = false;
+    const answered = ["wss://new.example", "wss://app.example", ...RELAY_LIST_DISCOVERY_RELAYS];
+    // A settings document the app relay holds and the new relay would never
+    // read back, which is what failed a strict portable-state confirmation.
+    const settings = finalizeEvent({
+      kind: 30078,
+      content: "ciphertext",
+      tags: [["d", SETTINGS_DTAGS[0]!]],
+      created_at: 2,
+    }, SECRET);
+    h.relayQuery.mockImplementation(async (url) => {
+      if (h.lastPublished) return [h.lastPublished];
+      return url === "wss://new.example" ? [] : [settings];
+    });
+    h.discoverRead.mockImplementation(async () => h.lastPublished
+      ? {
+        events: [h.lastPublished],
+        answered,
+        failed: [],
+        discovery: {
+          event: h.lastPublished,
+          relays: [{ url: "wss://new.example", read: true, write: true }],
+        },
+      }
+      : { events: [], answered, failed: [] });
+    const result = renderHook(() => useNip65RelaySetup(), { wrapper }).result;
+
+    await act(async () => {
+      await expect(result.current.publish([
+        { url: "wss://new.example", read: true, write: true },
+      ])).resolves.toMatchObject({ rejected: [] });
+    });
+
+    const sentKinds = h.relayEvent.mock.calls.map(([, event]) => (event as { kind: number }).kind);
+    expect(new Set(sentKinds)).toEqual(new Set([10002]));
     expect(h.updateConfig).toHaveBeenCalled();
   });
 

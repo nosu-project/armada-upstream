@@ -34,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { RolePickerItems, type RolePickerOption } from "@/components/chat/RolePickerItems";
 import { DisplayName } from "@/components/DisplayName";
 import { Input } from "@/components/ui/input";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -80,18 +81,6 @@ interface MenuParts {
     onSelect?: (e: Event) => void;
     children?: ReactNode;
   }>;
-}
-
-/** A grantable role in the member-row "Roles" picker (Concord custom roles). */
-export interface RolePickerOption {
-  id: string;
-  name: string;
-  /** Cosmetic badge tint (low 24 bits an #rrggbb); 0 = theme default. */
-  color: number;
-  /** Set when the role is channel-scoped — rendered as a "# channel" hint. */
-  channelName?: string;
-  /** Whether the viewer outranks this role's position (may grant/revoke it). */
-  assignable: boolean;
 }
 
 const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
@@ -274,27 +263,14 @@ const MemberRow = memo(function MemberRow({
                 Roles
               </SubTrigger>
               <SubContent className="w-56 max-h-72 overflow-y-auto p-1.5">
-                {roleCatalog!.map((role) => (
-                  <CheckboxItem
-                    key={role.id}
-                    className="py-2"
-                    checked={customRoleIds?.includes(role.id) ?? false}
-                    // A Grant replaces the member's whole role list, so a
-                    // second click before the first lands would publish from a
-                    // stale set and re-trigger any gated-channel rotation.
-                    disabled={!role.assignable || Boolean(isRoleToggling?.(pubkey, role.id))}
-                    onCheckedChange={(on) => onToggleRole!(pubkey, role.id, on)}
-                    // Keep the menu open so several roles can be toggled in one visit.
-                    onSelect={(e) => e.preventDefault()}
-                  >
-                    <span className="min-w-0 flex-1 truncate text-sm" style={role.color ? { color: roleTint(role.color) } : undefined}>
-                      {role.name}
-                    </span>
-                    {role.channelName && (
-                      <span className="ml-2 shrink-0 text-[11px] text-muted-foreground truncate max-w-24"># {role.channelName}</span>
-                    )}
-                  </CheckboxItem>
-                ))}
+                <RolePickerItems
+                  CheckboxItem={CheckboxItem}
+                  pubkey={pubkey}
+                  catalog={roleCatalog!}
+                  heldRoleIds={customRoleIds}
+                  isToggling={isRoleToggling}
+                  onToggle={onToggleRole!}
+                />
               </SubContent>
             </Sub>
           )}
@@ -671,7 +647,7 @@ export const MemberList = memo(function MemberList({
   const customBadgeOf = (pubkey: string): { name: string; color: number } | undefined => {
     const held = memberRoleIds?.[pubkey];
     if (!held?.length || !roleCatalog) return undefined;
-    return roleCatalog.find((r) => !r.channelName && held.includes(r.id));
+    return roleCatalog.find((r) => r.channelName === undefined && held.includes(r.id));
   };
   // NIP-29 relays don't guarantee a stable order for the `p` tags in the
   // members/admins events, so each 30s refetch could otherwise reshuffle the

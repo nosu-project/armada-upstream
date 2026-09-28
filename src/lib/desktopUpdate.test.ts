@@ -6,7 +6,9 @@ import {
   downloadUrl,
   pickDesktopArtifact,
   selectDesktopRelease,
+  selectWebBundle,
   toDesktopUpdate,
+  WEB_BUNDLE_PATH,
 } from "./desktopUpdate";
 import { parseRelease, type Release } from "./releases";
 
@@ -337,5 +339,82 @@ describe("selectDesktopRelease", () => {
     // the events are signed by a key unrelated to `author`.
     expect(bytesToHex(secretKey)).toHaveLength(64);
     expect(releaseEvent(secretKey, { version: "v1.0.0" }).pubkey).toBe(author);
+  });
+});
+
+describe("selectWebBundle", () => {
+  const BUNDLE = "b".repeat(64);
+
+  function manifest(
+    secretKey: Uint8Array,
+    {
+      createdAt = 1_800_000_000,
+      site = "armada",
+      bundle = BUNDLE as string | undefined,
+      servers = ["https://blossom.one", "https://blossom.two/"],
+    } = {},
+  ): WireEvent {
+    const signed = finalizeEvent(
+      {
+        kind: 35128,
+        created_at: createdAt,
+        content: "",
+        tags: [
+          ["d", site],
+          ["path", "/index.html", "c".repeat(64)],
+          ...(bundle ? [["path", WEB_BUNDLE_PATH, bundle]] : []),
+          ...servers.map((server) => ["server", server]),
+        ],
+      },
+      secretKey,
+    );
+    // JSON round-trip: see releaseEvent — a spread would carry the verified mark.
+    return JSON.parse(JSON.stringify(signed)) as WireEvent;
+  }
+
+  it("reads the bundle's hash and Blossom URLs from the newest pinned manifest", () => {
+    const key = generateSecretKey();
+    const pubkey = getPublicKey(key);
+    const older = manifest(key, { createdAt: 1_700_000_000, bundle: "d".repeat(64) });
+    const newer = manifest(key);
+    expect(selectWebBundle([newer, older], { authors: [pubkey] })).toEqual({
+      createdAt: 1_800_000_000,
+      sha256: BUNDLE,
+      urls: [`https://blossom.one/${BUNDLE}`, `https://blossom.two/${BUNDLE}`],
+    });
+  });
+
+  it("ignores a manifest from any key but the pinned one", () => {
+    const pinned = getPublicKey(generateSecretKey());
+    expect(selectWebBundle([manifest(generateSecretKey())], { authors: [pinned] })).toBeUndefined();
+  });
+
+  it("ignores a manifest whose signature does not verify", () => {
+    const key = generateSecretKey();
+    const tampered = manifest(key);
+    tampered.tags = tampered.tags.map((tag) => (tag[1] === WEB_BUNDLE_PATH ? [tag[0], tag[1], "e".repeat(64)] : tag));
+    expect(selectWebBundle([tampered], { authors: [getPublicKey(key)] })).toBeUndefined();
+  });
+
+  it("does not let a newer forged manifest hide the valid one", () => {
+    const key = generateSecretKey();
+    const valid = manifest(key);
+    const forged = { ...manifest(key, { createdAt: 1_900_000_000 }), sig: "0".repeat(128) };
+    expect(selectWebBundle([forged, valid], { authors: [getPublicKey(key)] })?.createdAt).toBe(1_800_000_000);
+  });
+
+  it("ignores another site of the same key", () => {
+    const key = generateSecretKey();
+    expect(selectWebBundle([manifest(key, { site: "other" })], { authors: [getPublicKey(key)] })).toBeUndefined();
+  });
+
+  it("offers nothing when the manifest names no bundle, no hash or no https server", () => {
+    const key = generateSecretKey();
+    const authors = [getPublicKey(key)];
+    expect(selectWebBundle([manifest(key, { bundle: "" })], { authors })).toBeUndefined();
+    expect(selectWebBundle([manifest(key, { bundle: "not-a-hash" })], { authors })).toBeUndefined();
+    expect(
+      selectWebBundle([manifest(key, { servers: ["http://blossom.one", "not a url"] })], { authors }),
+    ).toBeUndefined();
   });
 });

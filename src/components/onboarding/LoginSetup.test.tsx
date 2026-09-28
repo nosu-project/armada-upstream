@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   nativeNotificationService: false,
   checkPermission: vi.fn(),
   isIgnoringBatteryOptimizations: vi.fn(),
+  logout: vi.fn(),
 }));
 
 vi.mock("@capacitor/core", () => ({
@@ -27,7 +28,12 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 vi.mock("@/components/onboarding/WizardShell", () => ({
-  WizardShell: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  WizardShell: ({ children, onBack }: { children: ReactNode; onBack?: () => void }) => (
+    <div>
+      {onBack && <button type="button" onClick={onBack}>Back</button>}
+      {children}
+    </div>
+  ),
   WizardStepBody: ({ title, children }: { title: string; children: ReactNode }) => (
     <div><h1>{title}</h1>{children}</div>
   ),
@@ -42,6 +48,7 @@ vi.mock("@/hooks/useOnboarding", () => ({ useOnboardingActive: () => false }));
 vi.mock("@/hooks/useAppContext", () => ({ useAppContext: () => ({ config: h.config }) }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: h.user }) }));
 vi.mock("@/hooks/useEncryptedSettings", () => ({ useEncryptedSettings: () => h.settings }));
+vi.mock("@/hooks/useLoginActions", () => ({ useLoginActions: () => ({ logout: h.logout }) }));
 vi.mock("@/hooks/useNip29Servers", () => ({ useNip29Servers: () => h.servers }));
 vi.mock("@/hooks/useNativeNotifications", () => ({
   enableNativeNotifications: vi.fn(),
@@ -80,6 +87,55 @@ describe("LoginSetup relay discovery", () => {
     h.config.relayMetadata = { relays: [], updatedAt: 0, pubkey: undefined };
     h.settings = { doc: null, isFetched: true };
     h.servers = [];
+    h.logout.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("signs the account out when the user backs out of the recovery prompt", async () => {
+    render(<LoginSetup />);
+    expect(await screen.findByRole("heading", { name: "restore your setup" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    // Logout wipes this device's data, so backing out asks first.
+    expect(h.logout).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(h.logout).toHaveBeenCalledTimes(1);
+    // Signing the same key in again asks again.
+    expect(localStorage.getItem(`armada:relay-prompt-shown:${h.user.pubkey}`)).toBeNull();
+  });
+
+  it("stays signed in when the sign-out confirmation is declined", async () => {
+    render(<LoginSetup />);
+    expect(await screen.findByRole("heading", { name: "restore your setup" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stay signed in" }));
+    expect(screen.getByRole("heading", { name: "restore your setup" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("heading", { name: "restore your setup" })).toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+  });
+
+  it("asks to back out on Escape, but not when Escape dismissed a popover or left a field", async () => {
+    render(<LoginSetup />);
+    expect(await screen.findByRole("heading", { name: "restore your setup" })).toBeInTheDocument();
+
+    const spent = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    spent.preventDefault();
+    window.dispatchEvent(spent);
+    const field = document.body.appendChild(document.createElement("input"));
+    fireEvent.keyDown(field, { key: "Escape" });
+    field.remove();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true }));
+    expect(screen.queryByRole("heading", { name: "sign out?" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("heading", { name: "sign out?" })).toBeInTheDocument();
+    expect(h.logout).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(h.logout).toHaveBeenCalledTimes(1);
   });
 
   it("dismisses a queued recovery prompt when signed discovery finishes", async () => {

@@ -65,6 +65,7 @@ vi.mock("@/sync/useSyncTopic", () => ({ useSyncTopic: () => {} }));
 vi.mock("@/wire/useWireScopes", () => ({ useWireScopes: () => {} }));
 vi.mock("@/concord/lib/rumorStore", () => ({
   ackPendingWraps: () => {},
+  CHAT_ROW_KINDS: [9, 1068, 1111, 1740, 31922, 31923],
   clearChannelExhausted: async () => undefined,
   peekPendingWraps: async () => [],
   queryChannelFirstSeen: async () => new Map(),

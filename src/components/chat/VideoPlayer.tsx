@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { Download, Expand, Loader2, Pause, Play, Share2, Volume1, Volume2, VolumeX } from "lucide-react";
+import { Download, Expand, Loader2, Pause, Play, Share2, Shrink, Volume1, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
@@ -73,6 +73,24 @@ function parseDim(dim: string | undefined): { width: number; height: number } | 
   const height = Number.parseInt(match[2], 10);
   if (!width || !height) return undefined;
   return { width, height };
+}
+
+/** WebKit's prefixed fullscreen surface (Safari before 16.4, iPhone's video-only mode). */
+type WebkitDocument = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => void };
+type WebkitElement = HTMLElement & { webkitRequestFullscreen?: () => void };
+type WebkitVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void; webkitDisplayingFullscreen?: boolean };
+
+function fullscreenElement(): Element | null {
+  return document.fullscreenElement ?? (document as WebkitDocument).webkitFullscreenElement ?? null;
+}
+
+/**
+ * Whether the bare `<video>` is what's fullscreen — the UA's native controls,
+ * not ours, are then on screen, and a tap on one of them reaches the page as a
+ * click on the element.
+ */
+function videoIsNativeFullscreen(video: HTMLVideoElement): boolean {
+  return fullscreenElement() === video || !!(video as WebkitVideo).webkitDisplayingFullscreen;
 }
 
 /**
@@ -176,10 +194,34 @@ export function VideoPlayer({
   const { showControls, revealControls, scheduleHide, isMuted, volume, toggleMute, handleVolumeChange } =
     usePlayerControls({ mediaRef: videoRef, containerRef, isPlaying });
 
+  // Whether the player's container is the fullscreen element, for the
+  // Expand/Exit button and the fullscreen layout. Only this player's own
+  // button puts its container there, so the document listeners are attached
+  // from that press until it leaves fullscreen again — a timeline of videos
+  // otherwise holds two per mounted player, all woken by every toggle.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [watchingFullscreen, setWatchingFullscreen] = useState(false);
+  useEffect(() => {
+    if (!watchingFullscreen) return;
+    const update = () => {
+      const inside = !!containerRef.current && fullscreenElement() === containerRef.current;
+      setIsFullscreen(inside);
+      if (!inside) setWatchingFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", update);
+    document.addEventListener("webkitfullscreenchange", update);
+    return () => {
+      document.removeEventListener("fullscreenchange", update);
+      document.removeEventListener("webkitfullscreenchange", update);
+    };
+  }, [watchingFullscreen]);
+
   // Long-press (touch) / right-click (desktop) menu, mirroring how message
   // images offer Save / Share. The ambient menu is null outside a chat message
-  // row (e.g. in the lightbox, which carries its own top-bar actions), where
-  // this wiring becomes inert and the native menu is left alone.
+  // row — the lightbox clears it explicitly, since context crosses its portal
+  // and it carries its own top-bar actions — and there this wiring is inert
+  // and the native menu is left alone. It is inert in fullscreen too: the
+  // message's action sheet would open behind the fullscreen layer.
   const chatMenu = useChatImageMenu();
   const mediaActions = useMemo<MessageActionItem[]>(() => {
     if (gif || !mediaSrc) return [];
@@ -197,7 +239,11 @@ export function VideoPlayer({
     return list;
   }, [gif, mediaSrc, src, mime]);
   const longPress = useLongPress(
-    chatMenu?.isTouch && mediaActions.length > 0 ? () => chatMenu.openSheet(mediaActions) : undefined,
+    chatMenu?.isTouch && mediaActions.length > 0 && !isFullscreen
+      ? () => {
+          if (!fullscreenElement()) chatMenu.openSheet(mediaActions);
+        }
+      : undefined,
   );
 
   // Desktop right-click: stage the video's actions and let the event bubble to
@@ -300,9 +346,37 @@ export function VideoPlayer({
     else video.pause();
   };
 
+  // Fullscreen the whole player, not the bare <video>: the control bar is a
+  // sibling of the element, so fullscreening the element alone leaves our
+  // chrome behind and hands the screen to the UA's native controls, whose taps
+  // then also reach handleVideoClick. Where only a video can go fullscreen
+  // (iPhone Safari), its native player is the fallback.
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation();
-    videoRef.current?.requestFullscreen?.();
+    const container = containerRef.current as WebkitElement | null;
+    const video = videoRef.current as WebkitVideo | null;
+    if (!container) return;
+    // Older engines return nothing rather than a promise, hence the `?.`.
+    if (fullscreenElement() === container) {
+      const doc = document as WebkitDocument;
+      if (document.exitFullscreen) void (document.exitFullscreen() as Promise<void> | undefined)?.catch(() => {});
+      else doc.webkitExitFullscreen?.();
+      return;
+    }
+    const nativeFallback = () => {
+      // The bare <video> is the native player's, never our container.
+      setWatchingFullscreen(false);
+      if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
+      else void (video?.requestFullscreen?.() as Promise<void> | undefined)?.catch(() => {});
+    };
+    setWatchingFullscreen(true);
+    if (container.requestFullscreen) {
+      void (container.requestFullscreen({ navigationUI: "hide" }) as Promise<void> | undefined)?.catch(nativeFallback);
+    } else if (container.webkitRequestFullscreen) {
+      container.webkitRequestFullscreen();
+    } else {
+      nativeFallback();
+    }
   };
 
   const handleSeek = (e: React.MouseEvent) => {
@@ -321,6 +395,9 @@ export function VideoPlayer({
     longPress.onClick(e);
     if (e.defaultPrevented) return;
     e.stopPropagation();
+    // The UA's native fullscreen controls act on the element themselves; a
+    // tap on one arrives here too, and toggling again would undo it.
+    if (videoRef.current && videoIsNativeFullscreen(videoRef.current)) return;
     if (!hasStarted) {
       videoRef.current?.play();
       return;
@@ -377,8 +454,11 @@ export function VideoPlayer({
       className={cn(
         "relative my-1.5 rounded-xl overflow-hidden max-w-md border border-border bg-black group",
         className,
+        // Fullscreen fills the screen whatever the caller's sizing said; the
+        // video is contained in it below, letterboxed on black.
+        isFullscreen && "m-0 w-full h-full max-w-none max-h-none rounded-none border-0 bg-black",
       )}
-      style={{ aspectRatio }}
+      style={isFullscreen ? undefined : { aspectRatio }}
       onMouseMove={revealControls}
       onMouseLeave={() => {
         if (isPlaying) scheduleHide();
@@ -407,9 +487,11 @@ export function VideoPlayer({
         // placeholder behind our overlays.
         poster={BLANK_POSTER}
         className={cn(
-          "absolute inset-0 w-full h-full object-cover cursor-pointer",
-          // In real fullscreen the element fills the screen, so object-cover
-          // would crop it — contain it and reset the layout constraints.
+          "absolute inset-0 w-full h-full cursor-pointer",
+          // Fullscreen (the player's, or the element's own where only a video
+          // can go fullscreen) fills the screen, so object-cover would crop
+          // it — contain it and reset the layout constraints.
+          isFullscreen ? "object-contain" : "object-cover",
           "fullscreen:object-contain fullscreen:static fullscreen:max-h-none fullscreen:h-full fullscreen:w-full",
           // The element shows a transparent poster until playback, so keep it
           // hidden while the thumbnail <img> covers it. Reveal on playback, or —
@@ -503,6 +585,10 @@ export function VideoPlayer({
           className={cn(
             "absolute bottom-0 left-0 right-0 transition-opacity duration-200",
             "bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-8 pb-2 px-3",
+            // Clear the home indicator and a landscape notch when the bar is
+            // at the physical screen's edge.
+            isFullscreen &&
+              "pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]",
             showControls ? "opacity-100" : "opacity-0 pointer-events-none",
           )}
         >
@@ -572,14 +658,14 @@ export function VideoPlayer({
 
             <div className="flex-1" />
 
-            {/* Fullscreen */}
+            {/* Fullscreen / exit */}
             <button
               type="button"
               onClick={handleFullscreen}
               className="text-white hover:text-white/80 transition-colors"
-              aria-label="Fullscreen"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             >
-              <Expand className="size-[18px]" />
+              {isFullscreen ? <Shrink className="size-[18px]" /> : <Expand className="size-[18px]" />}
             </button>
           </div>
         </div>

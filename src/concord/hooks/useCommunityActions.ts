@@ -2,16 +2,17 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
+import { removeCommunityLocally, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useControlFold, citationFor, invalidateControl, markDissolvedLocally, probeCommunityDissolved, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord/lib/guestbook";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
-import { channelKeysToWire, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord/lib/communityList";
+import { channelKeysToWire, isLive, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord/lib/communityList";
 import { mintCommunity } from "@/concord/lib/community";
 import { DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord/lib/disappearing";
 import { accessRolePosition, isAuthorized, MAX_ROLES_PER_COMMUNITY, Permissions } from "@/concord/lib/roles";
@@ -33,8 +34,19 @@ import {
   type ParsedInviteLink,
 } from "@/concord/lib/invite";
 import { KIND_INVITE_BUNDLE, VSK_INVITE_REVOKED } from "@/concord/lib/kinds";
-import { addPendingJoin, removePendingJoin } from "@/concord/lib/pendingJoins";
+import {
+  claimPendingJoinRun,
+  forgetPendingJoin,
+  hasPendingJoin,
+  hydratePendingJoins,
+  pendingJoinEntriesFor,
+  pendingJoinEntry,
+  persistPendingJoin,
+  recordPendingJoinFailure,
+  takeExpiredPendingJoins,
+} from "@/concord/lib/pendingJoins";
 import { toast } from "@/hooks/useToast";
+import { logSync } from "@/lib/syncLog";
 import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin } from "@/concord/lib/voice";
 import {
@@ -104,6 +116,40 @@ export async function assertNotDissolved(
     relays: Array.isArray(bundle.relays) ? bundle.relays : [],
   });
   if (grave !== undefined) throw new DissolvedCommunityError();
+}
+
+/** Thrown when none of a community's relays is usable on this platform (#47). */
+export class UnusableRelaysError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnusableRelaysError";
+  }
+}
+
+/**
+ * Whether a failed join chain is a VERDICT — the invite or the community says
+ * no, and asking again will say the same — rather than a network that didn't
+ * answer. Only a verdict may drop a persisted pending join outright; anything
+ * else — including an invite no longer found on its relays — keeps it for the
+ * next launch to retry, until the record's own bound gives up on it
+ * (`PENDING_JOIN_MAX_AGE_MS` / `PENDING_JOIN_MAX_ATTEMPTS`).
+ */
+export function isJoinRejected(error: unknown): boolean {
+  return (
+    error instanceof BannedFromCommunityError ||
+    error instanceof DissolvedCommunityError ||
+    error instanceof UnusableRelaysError ||
+    error instanceof InviteError
+  );
+}
+
+/** Tell the user a pending join was given up on after failing past its bound. */
+function toastJoinAbandoned(name: string): void {
+  toast({
+    title: `Couldn't join ${name}`,
+    description: "Armada stopped retrying. Ask for a new invite to try again.",
+    variant: "destructive",
+  });
 }
 
 /** Thrown when the control plane can't be read to verify access (retryable). */
@@ -656,11 +702,17 @@ export function useCommunityActions() {
   // resolve (catches a revocation the preview's copy predates), the platform
   // reachability check, the ban check BEFORE anything is recorded or
   // published, then the vault write and the best-effort Guestbook Join.
-  const completeJoin = async (invite: ParsedInviteLink): Promise<{ communityId: string; name: string }> => {
+  //
+  // `pendingId` names the pending join this chain settles: one the user has
+  // since walked away from (Leave on its optimistic entry) is not written.
+  const completeJoin = async (
+    invite: ParsedInviteLink,
+    pendingId?: string,
+  ): Promise<{ communityId: string; name: string }> => {
       if (!user) throw new Error("Sign in to join an encrypted community.");
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
-      if (unusable) throw new Error(unusable);
+      if (unusable) throw new UnusableRelaysError(unusable);
       // Neither may anyone join a dissolved community — checked here too, not
       // only in the preview, since the optimistic path joins from a preview's
       // bundle that may predate the grave.
@@ -670,25 +722,88 @@ export function useCommunityActions() {
       // entry or publishing anything.
       const community = rehydrateCommunity(entry);
       if (community) await assertNotBanned(nostr, community, user.pubkey);
-      await updateList({ type: "add", entry });
+      const walkedAway = () => pendingId !== undefined && !hasPendingJoin(user.pubkey, pendingId);
+      if (walkedAway()) return { communityId: bundle.community_id, name: bundle.name };
+      // A pending join is dated by its CLICK, not by this run, which may be a
+      // resume launches later: the newest of `added_at`/`removed_at` decides
+      // liveness, so a replay stamped now would outrank a Leave taken since on
+      // another device, or a kick.
+      const clicked = pendingId !== undefined ? pendingJoinEntry(user.pubkey, pendingId)?.added_at : undefined;
+      if (clicked !== undefined) entry.added_at = clicked;
+      const list = await updateList({ type: "add", entry, replay: pendingId !== undefined });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+      // A replay a later removal superseded wrote nothing, and announces nothing.
+      if (!isLive(list, bundle.community_id)) return { communityId: bundle.community_id, name: bundle.name };
 
       // Best-effort self-signed Guestbook Join, echoing the link's attribution
       // (CORD-02 §5 / CORD-05 §1) — the coalesce self-heals if it never lands.
-      if (community) {
-        void (async () => {
-          const attribution = bundle.creator_npub
-            ? { creator: bundle.creator_npub, label: bundle.label }
-            : undefined;
-          const rumor = buildJoinRumor(user.pubkey, Date.now(), attribution);
-          const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
-          await Promise.allSettled(
+      // Asked again after each await: a Leave taken while the vault write or
+      // the seal was in flight has already published its Guestbook Leave, and
+      // a Join after it would be the newest entry — joined, to everyone else.
+      // The seal is awaited HERE, not in the background, because the pending
+      // record is what tells a leave apart and it is forgotten once this
+      // returns. Dated like the entry, so a resumed Join can't postdate a
+      // Leave or kick that came after the click.
+      if (community && !walkedAway()) {
+        const attribution = bundle.creator_npub
+          ? { creator: bundle.creator_npub, label: bundle.label }
+          : undefined;
+        const rumor = buildJoinRumor(user.pubkey, entry.added_at, attribution);
+        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer).catch(() => undefined);
+        if (wrap && !walkedAway()) {
+          void Promise.allSettled(
             community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
           );
-        })().catch(() => undefined);
+        }
       }
 
       return { communityId: bundle.community_id, name: bundle.name };
+  };
+
+  /**
+   * Run a pending join's durable chain in the background and settle its
+   * record: forgotten once the vault write lands or the join is refused
+   * outright, KEPT on a transient failure so the next launch retries it — and
+   * counted, so one that keeps failing is eventually given up on.
+   * `resumed` marks a retry from a previous launch, whose transient failures
+   * stay quiet — it already told the user "Joined" once.
+   */
+  const settleJoin = (
+    invite: ParsedInviteLink,
+    communityId: string,
+    name: string,
+    resumed = false,
+  ): void => {
+    if (!user) return;
+    const pubkey = user.pubkey;
+    claimPendingJoinRun(pubkey, communityId);
+    void completeJoin(invite, communityId)
+      .then(() => forgetPendingJoin(pubkey, communityId))
+      .catch(async (e) => {
+        const rejected = isJoinRejected(e);
+        const gaveUp = !rejected && (await recordPendingJoinFailure(pubkey, communityId));
+        logSync(
+          "list2",
+          `pending join ${communityId.slice(0, 8)} ${rejected ? "refused" : gaveUp ? "failed, given up on" : "failed, kept for retry"}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        if (gaveUp) return toastJoinAbandoned(name);
+        if (rejected) void forgetPendingJoin(pubkey, communityId);
+        else if (resumed) return;
+        toast({
+          title:
+            e instanceof BannedFromCommunityError
+              ? "You're banned"
+              : e instanceof DissolvedCommunityError
+                ? `${name} was dissolved`
+                : rejected
+                  ? `Couldn't join ${name}`
+                  : `Couldn't finish joining ${name}`,
+          description: rejected
+            ? (e instanceof Error ? e.message : "The invite didn't work.")
+            : "Armada will try again the next time it starts.",
+          ...(rejected ? { variant: "destructive" as const } : {}),
+        });
+      });
   };
 
   const join = useMutation<
@@ -703,35 +818,23 @@ export function useCommunityActions() {
 
       // Optimistic path: the preview already resolved and verified this
       // bundle, so the community's identity, name and keys are in hand at
-      // click time. Record a UI-only pending entry and answer NOW; the
-      // durable chain runs behind it, the real vault entry replaces the
-      // pending one when it lands, and the ban check still precedes every
-      // publish and every durable record. Nothing exists to revert on
-      // failure — the pending entry is dropped and a toast says why.
+      // click time. Record a pending entry — on disk, so closing the app
+      // mid-chain doesn't lose the join — and answer NOW; the durable chain
+      // runs behind it, the real vault entry replaces the pending one when it
+      // lands, and the ban check still precedes every publish and every
+      // vault record. Nothing is published to revert on failure — a refused
+      // join drops the pending entry and a toast says why.
       const unusable = unusableRelaysReason(resolved.relays);
-      if (unusable) throw new Error(unusable);
-      addPendingJoin(bundleToEntry(resolved, { inviteRef: inviteRefOf(invite) }));
+      if (unusable) throw new UnusableRelaysError(unusable);
+      await persistPendingJoin(user.pubkey, bundleToEntry(resolved, { inviteRef: inviteRefOf(invite) }));
       const { community_id: communityId, name } = resolved;
-      void completeJoin(invite)
-        .then(() => removePendingJoin(communityId))
-        .catch((e) => {
-          removePendingJoin(communityId);
-          toast({
-            title:
-              e instanceof BannedFromCommunityError
-                ? "You're banned"
-                : e instanceof DissolvedCommunityError
-                  ? `${name} was dissolved`
-                  : `Couldn't join ${name}`,
-            description: e instanceof Error ? e.message : "The invite didn't work.",
-            variant: "destructive",
-          });
-        });
+      settleJoin(invite, communityId, name);
       return { communityId, name };
     },
   });
 
   return {
+    settleJoin,
     create: create.mutateAsync,
     isCreating: create.isPending,
     preview: preview.mutateAsync,
@@ -739,6 +842,45 @@ export function useCommunityActions() {
     join: join.mutateAsync,
     isJoining: join.isPending,
   };
+}
+
+/**
+ * Resume the pending joins a previous launch was closed on (see
+ * pendingJoins.ts), once per session, for the signed-in account only. A
+ * record whose invite no longer parses can never finish, so it is dropped; one
+ * the load found past its retry bound was already dropped, and is announced.
+ */
+export function useResumePendingJoins(): void {
+  const { user } = useCurrentUser();
+  const { settleJoin } = useCommunityActions();
+  const settleRef = useRef(settleJoin);
+  settleRef.current = settleJoin;
+  const pubkey = user?.pubkey;
+  const canWrite = Boolean(user?.signer.nip44);
+
+  useEffect(() => {
+    if (!pubkey || !canWrite) return;
+    let cancelled = false;
+    void hydratePendingJoins(pubkey).then(() => {
+      if (cancelled) return;
+      for (const entry of takeExpiredPendingJoins(pubkey)) {
+        logSync("list2", `pending join ${entry.community_id.slice(0, 8)} past its retry bound, given up on`);
+        toastJoinAbandoned(entry.current.name);
+      }
+      for (const entry of pendingJoinEntriesFor(pubkey)) {
+        if (!claimPendingJoinRun(pubkey, entry.community_id)) continue;
+        const invite = typeof entry.invite_ref === "string" ? parseInviteLink(entry.invite_ref) : undefined;
+        if (!invite) {
+          void forgetPendingJoin(pubkey, entry.community_id);
+          continue;
+        }
+        settleRef.current(invite, entry.community_id, entry.current.name, true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pubkey, canWrite]);
 }
 
 /** Per-community actions: leave, dissolve, and channel management. */
@@ -750,13 +892,40 @@ export function useCommunityManagement(community: Community | undefined) {
   const publisher = useGuestbookPublisher(community);
   const entry = useCommunityEntry(community?.idHex);
   const queryClient = useQueryClient();
+  const removeRailKey = useRemoveRailKey();
 
   const leave = useMutation<void, Error, void>({
+    // Purely local until it returns, so nothing here should wait on
+    // `navigator.onLine` (unreliable in the Android WebView).
+    networkMode: "always",
     mutationFn: async () => {
       if (!user || !community) throw new Error("Not ready.");
-      // Best-effort Leave (the tombstone is the authoritative local act).
-      await publisher.mutateAsync({ type: "leave" }).catch(() => undefined);
-      await updateList({ type: "remove", communityId: community.idHex });
+      const communityId = community.idHex;
+      const removedAt = Date.now();
+      // Leave locally FIRST — the tombstone is the authoritative act, and it
+      // is on disk before this returns, so the community is off the rail now
+      // and stays off after a restart. A join still pending is walked away
+      // from too, or its chain would write the membership right back.
+      await forgetPendingJoin(user.pubkey, communityId);
+      await removeCommunityLocally(queryClient, user.pubkey, communityId, removedAt);
+      // The arrangement follows the local leave, not the vault write: a write
+      // that fails still leaves the community left, and a later rejoin must
+      // not land back in the folder it used to live in.
+      removeRailKey(`c2:${communityId}`);
+      // Then, in the background and side by side, the Guestbook Leave and the
+      // vault write (a full read-modify-write, queued behind any other list
+      // write). Neither holds the button: one dead relay costs the publish its
+      // timeout, and a list write stuck on a remote signer ahead in the queue
+      // can take a minute. A Leave no relay took stays in the publish outbox
+      // for a retry; a vault write that never lands is republished from the
+      // local tombstone by the next sync's reconcile.
+      void publisher.mutateAsync({ type: "leave" }).catch(() => undefined);
+      void updateList({ type: "remove", communityId, removedAt }).catch((e) => {
+        logSync(
+          "list2",
+          `leave ${communityId.slice(0, 8)}: vault write failed (${e instanceof Error ? e.message : String(e)}) — left locally, the next sync republishes it`,
+        );
+      });
     },
   });
 

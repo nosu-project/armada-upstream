@@ -25,6 +25,13 @@ let badgedHref: string | null = null;
 let rendering: Promise<string | null> | null = null;
 /** Set when rendering has proven impossible here; stops per-message retries. */
 let unsupported = false;
+/**
+ * When a FAILED render (the icon didn't load) may be tried again. Not a
+ * permanent `unsupported`: one network blip in a tab left open for days would
+ * otherwise switch the badge off for the rest of its life, silently.
+ */
+let retryAt = 0;
+const RETRY_DELAY_MS = 60_000;
 /** The document's real icon links, held while the badge stands in for them. */
 let detachedIcons: HTMLLinkElement[] = [];
 
@@ -49,29 +56,34 @@ function baseIconHref(): string {
 
 function badgedIcon(): Promise<string | null> {
   if (badgedHref) return Promise.resolve(badgedHref);
-  if (unsupported) return Promise.resolve(null);
+  if (unsupported || (!rendering && Date.now() < retryAt)) return Promise.resolve(null);
   rendering ??= renderBadgedFavicon(baseIconHref())
-    .catch(() => null)
     .then((href) => {
-      rendering = null;
       if (href) badgedHref = href;
       else unsupported = true;
       return href;
-    });
+    }, () => {
+      retryAt = Date.now() + RETRY_DELAY_MS;
+      return null;
+    })
+    .finally(() => { rendering = null; });
   return rendering;
 }
 
 function showBadge(href: string): void {
   if (document.getElementById(BADGE_LINK_ID)) return;
+  // Detach FIRST, then append. Brave keeps showing the old icon when the
+  // stand-in is appended while the real links are still in the head, even
+  // once they are removed a moment later; removed-then-appended, it switches.
   const icons = iconLinks();
+  for (const icon of icons) icon.remove();
+  detachedIcons = icons;
   const link = document.createElement("link");
   link.id = BADGE_LINK_ID;
   link.rel = "icon";
   link.type = "image/png";
   link.href = href;
   document.head.appendChild(link);
-  for (const icon of icons) icon.remove();
-  detachedIcons = icons;
 }
 
 function hideBadge(): void {

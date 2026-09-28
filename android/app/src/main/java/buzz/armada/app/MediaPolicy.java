@@ -23,9 +23,6 @@ import java.util.Locale;
  * <p>Pure: no Android imports, so it runs under the JVM unit tests.
  */
 final class MediaPolicy {
-    /** Ditto's default CORS proxy — a byte-for-byte pass-through. */
-    static final String DEFAULT_PROXY = "https://proxy.shakespeare.diy/?url={href}";
-
     /** Normalized proxy template, or "" for none. */
     final String proxy;
 
@@ -33,15 +30,18 @@ final class MediaPolicy {
         this.proxy = normalizeProxy(proxy);
     }
 
-    /** The policy a fresh install has: the default proxy on. */
+    /**
+     * The policy a fresh install has: proxying off, the WebView's own default.
+     * A proxy is only ever one the user turned on in settings.
+     */
     static MediaPolicy defaults() {
-        return new MediaPolicy(DEFAULT_PROXY);
+        return new MediaPolicy("");
     }
 
     /**
      * Parse the {@code mediaPolicy} object the WebView ships ({@code {proxy}}).
-     * A missing or unreadable one is the default policy, never "load directly":
-     * an older WebView that sends nothing still proxies a stranger's avatar.
+     * A missing or unreadable one is the default policy — proxying off — since
+     * a WebView that sent none is one whose user never turned a proxy on.
      */
     static MediaPolicy parse(String json) {
         if (json == null || json.isEmpty()) return defaults();

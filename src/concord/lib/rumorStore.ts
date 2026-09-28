@@ -57,6 +57,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import { readFoldedShared, writeFolded } from "@/lib/foldedCache";
 import {
   KIND_COMMENT,
+  KIND_DELETE,
   KIND_EDIT,
   KIND_MESSAGE,
   KIND_SEAL_PLAINTEXT,
@@ -329,6 +330,55 @@ export async function queryChannelRumors(
     { signal: opts.signal },
   );
   return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
+}
+
+/**
+ * Read the page of chat rows OLDER than a cursor, with the side-events that
+ * decorate them. This is what scrolling back reads, instead of re-reading the
+ * whole loaded history with a wider limit: each page costs the same however
+ * far back it is.
+ *
+ * `until` is inclusive and `skip` names the rows at exactly `until` that are
+ * already loaded, so rows sharing a second with the cursor are neither lost nor
+ * read twice.
+ *
+ * Side-events are selected by the rows they `e`-reference, NOT by time: a
+ * reaction added today to a message from last year sits above any time cursor
+ * but still belongs to this page. They keep their own per-row budget (see
+ * {@link SIDE_EVENT_FACTOR}), and the deletes that retract those side-events
+ * (an un-react is a kind 5 naming the reaction, not the row) are read one hop
+ * further, under the same bound.
+ *
+ * `full` reports whether the store may hold more rows beyond this page.
+ */
+export async function queryChannelPageBefore(
+  communityIdHex: string,
+  channelIdHex: string,
+  opts: { until: number; skip: ReadonlySet<string>; limit: number; signal?: AbortSignal },
+): Promise<{ events: OpenedChat[]; full: boolean }> {
+  const store = rumorStore(communityIdHex);
+  const want = opts.limit + opts.skip.size;
+  const fetched = await store.query(
+    [{ kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex], until: opts.until, limit: want }],
+    { signal: opts.signal },
+  );
+  const rows = fetched.filter((ev) => !opts.skip.has(ev.id));
+  const rowIds = rows.map((ev) => ev.id);
+  const side = rowIds.length
+    ? await store.query(
+        [{ kinds: CHAT_SIDE_KINDS, "#channel": [channelIdHex], "#e": rowIds, limit: rowIds.length * SIDE_EVENT_FACTOR }],
+        { signal: opts.signal },
+      )
+    : [];
+  const retractable = side.filter((ev) => ev.kind !== KIND_DELETE).map((ev) => ev.id);
+  const retractions = retractable.length
+    ? await store.query(
+        [{ kinds: [KIND_DELETE], "#channel": [channelIdHex], "#e": retractable, limit: retractable.length }],
+        { signal: opts.signal },
+      )
+    : [];
+  const events = notExpired([...rows, ...side, ...retractions]).map((ev) => storedToOpenedChat(ev, channelIdHex));
+  return { events, full: fetched.length >= want };
 }
 
 /**

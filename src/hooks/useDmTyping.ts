@@ -7,7 +7,8 @@
  * `src/lib/nip17/protocol.ts`; this hook owns the relay traffic:
  *
  *   - RECEIVE: a live `{kinds:[21059], "#p":[me]}` sub on the same relay set
- *     the inbox sync reads, feeding a decaying in-memory map. Nothing is ever
+ *     the inbox sync reads (shared across conversations, `ephemeralInbox.ts`),
+ *     feeding a decaying in-memory map. Nothing is ever
  *     written to the rumor store or the signer's decrypt cache.
  *   - SEND: throttled to one signal per TYPING_THROTTLE_MS, sealed to the peer
  *     ONLY (no self copy — you don't need your own typing indicator) and
@@ -40,6 +41,7 @@ import {
   wrapDmSealEphemeral,
   type Dm17Signer,
 } from "@/lib/nip17/protocol";
+import { subscribeDmEphemeral } from "@/lib/nip17/ephemeralInbox";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -116,20 +118,30 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
     setTypers([]);
     lastSeen.current = new Map();
     if (!on || myRelays.length === 0) return;
-    const controller = new AbortController();
+    let released = false;
     const signer = user!.signer as unknown as Dm17Signer;
 
+    // Decay is a one-shot timer armed for the next signal to expire, so a
+    // conversation nobody is typing in schedules no wakeups at all.
+    let decay: ReturnType<typeof setTimeout> | undefined;
     const recompute = () => {
-      const cutoff = Date.now() - TYPING_WINDOW_MS;
+      if (decay) clearTimeout(decay);
+      decay = undefined;
+      const now = Date.now();
+      const cutoff = now - TYPING_WINDOW_MS;
       const live: string[] = [];
+      let oldest = Infinity;
       for (const [pubkey, at] of lastSeen.current) {
-        if (at > cutoff) live.push(pubkey);
-        else lastSeen.current.delete(pubkey);
+        if (at > cutoff) {
+          live.push(pubkey);
+          oldest = Math.min(oldest, at);
+        } else lastSeen.current.delete(pubkey);
       }
       live.sort();
       setTypers((prev) =>
         prev.length === live.length && prev.every((pk, i) => pk === live[i]) ? prev : live,
       );
+      if (live.length > 0) decay = setTimeout(recompute, oldest + TYPING_WINDOW_MS - now + 1);
     };
 
     const apply = async (wrap: NostrEvent) => {
@@ -138,7 +150,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
         wrapKind: KIND_DM_WRAP_EPHEMERAL,
         cache: false,
       }).catch(() => undefined);
-      if (!opened || opened.kind !== KIND_DM_TYPING) return;
+      if (released || !opened || opened.kind !== KIND_DM_TYPING) return;
       // Only THIS conversation, and never our own signal echoing back off a
       // shared relay (we publish to our own DM relays too). The author check is
       // what excludes our own copy; the conversation check is what keeps a
@@ -152,30 +164,15 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
       recompute();
     };
 
-    for (const url of myRelays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_DM_WRAP_EPHEMERAL], "#p": [self!], since: Math.floor(Date.now() / 1000) }],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") void apply(msg[2] as NostrEvent);
-          }
-        } catch (err) {
-          // Teardown aborts every sub; only a real failure is worth reporting.
-          // A relay that rejects kind 21059 (or the filter) surfaces here, and
-          // silence made that indistinguishable from "nobody is typing".
-          if (!controller.signal.aborted) {
-            console.warn(`[dm-typing] subscription to ${url} ended:`, err);
-          }
-        }
-      })();
-    }
+    // Shared per (relay, me) and kept across conversation switches — see
+    // `ephemeralInbox.ts`.
+    const handler = (wrap: NostrEvent) => void apply(wrap);
+    const unsubs = myRelays.map((url) => subscribeDmEphemeral(nostr, url, self!, handler));
 
-    const decay = setInterval(recompute, TYPING_WINDOW_MS / 2);
     return () => {
-      controller.abort();
-      clearInterval(decay);
+      released = true;
+      for (const unsub of unsubs) unsub();
+      if (decay) clearTimeout(decay);
     };
     // `user` is read for its signer; keyed on the pubkey (the signer is stable
     // per login) so a profile refresh doesn't tear down the subscriptions.

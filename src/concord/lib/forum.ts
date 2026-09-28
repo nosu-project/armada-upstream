@@ -18,7 +18,10 @@
  */
 
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
+import { isImageAttachment, pinAttachmentEntries } from "@/concord/lib/pinAttachments";
 import { threadSummary, type ChatMsg } from "@/components/chat/transport";
+
+import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 
 /** The NIP-14 tag a titled post carries. */
 export const SUBJECT_TAG = "subject";
@@ -87,6 +90,30 @@ export function subjectTags(title: string): string[][] {
 /** Bytes of a draft title, for the composer's remaining-budget hint. */
 export function subjectBytes(title: string): number {
   return utf8Len(title.replace(/\s+/g, " ").trim());
+}
+
+/** A feed row's preview image. */
+export type ForumImage = EncryptedRef & { spoiler?: boolean };
+
+/**
+ * The images a post carries, in order, for the feed row's gallery preview.
+ * Uses the pin extractor's rules (URLs sanitized, local-network hosts and SVG
+ * never auto-rendered) since a feed row, like a pin, renders unprompted for
+ * every reader of the channel. The spoiler flag is kept so the row can cover
+ * the image rather than drop it.
+ */
+export function forumImages(root: { content: string; tags: string[][] }): ForumImage[] {
+  return pinAttachmentEntries(root.content, root.tags)
+    .filter(isImageAttachment)
+    .map((e) => ({
+      url: e.url,
+      encryption: e.encryption,
+      mime: e.mime,
+      dim: e.dim,
+      blurhash: e.blurhash,
+      fallbacks: e.fallbacks,
+      spoiler: e.spoiler,
+    }));
 }
 
 /** One post as the feed lists it, derived from the timeline and its threads. */

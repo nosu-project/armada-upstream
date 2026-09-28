@@ -89,6 +89,13 @@ describe("parsing", () => {
     expect(job.logs).toBe("https://blossom.example/log.txt");
   });
 
+  it("drops a log URL that is not http(s)", () => {
+    for (const logs of ["data:text/html,x", "intent://x", "not a url"]) {
+      const event = { ...jobResult, tags: jobResult.tags.map((t) => (t[0] === "logs" ? ["logs", logs] : t)) };
+      expect(parseCIJobResult(event)!.logs).toBeUndefined();
+    }
+  });
+
   it("treats a progress marker without a conclusion as in-progress", () => {
     const run = parseCIRun(event({
       kind: CI_PROGRESS_KIND,
