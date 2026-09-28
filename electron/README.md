@@ -398,12 +398,13 @@ most Flatpak installations already have one. If needed, add it first with the
 
 Two update paths, and they do not conflict:
 
-- **The web bundle updates in place.** Armada fetches
-  `/downloads/armada-web.tar.gz` from the public site — published by every web
-  deploy — unpacks it into the app's userData and serves that, then offers a
-  restart (`checkForWebBundleUpdate` in `electron/main.js`,
-  `electron/webBundleUpdate.js`). Most releases touch only `src/`, so this is
-  what carries them, without a `flatpak update`.
+- **The web bundle updates in place.** Armada reads the newest kind-30622
+  release event from the pinned release key, downloads its `web` artifact
+  (`Armada-vX.Y.Z-web.tar.gz`, the desktop build's `dist`), refuses it unless
+  its sha256 matches the event's `x`, unpacks it into the app's userData and
+  serves that, then offers a restart (`checkForWebBundleUpdate` in
+  `electron/main.js`, `electron/webBundleUpdate.js`). Most releases touch only
+  `src/`, so this is what carries them, without a `flatpak update`.
 - **The shell updates through `flatpak update`.** Electron, the native modules
   and any major version bump arrive when the soapbox remote publishes a newer
   bundle and the user (or GNOME Software) runs `flatpak update`. The web bundle

@@ -160,10 +160,12 @@ jobs:
         env:
           WEBXDC_RT_REQUIRED: "1"
 
-      # The web bundle as one archive, served beside the site. The desktop
-      # shell (electron/webBundleUpdate.js) fetches it and swaps its app://
-      # origin to it — the Flatpak's only update path. Deterministic tar+gzip
-      # so an unchanged build keeps its hash.
+      # The web bundle as one archive, served beside the site. LEGACY: only
+      # Flatpak shells older than the release-event bundle updater fetch this;
+      # current ones install the `web` artifact of the signed kind-30622
+      # release (release.yml) and never read it. Drop it once those shells
+      # have aged out. Deterministic tar+gzip so an unchanged build keeps its
+      # hash.
       - name: Pack the web bundle
         run: |
           set -eu

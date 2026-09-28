@@ -567,10 +567,14 @@ Things to know before touching it:
   tree cannot be listed in `electron-builder.yml`'s `files:`. The static
   `latest*.yml` feed is GONE — not generated (`publishAutoUpdate: false`) and not
   deployed, and nothing is sent over SSH. The Flatpak updates on two clocks: its
-  web bundle in place (it fetches the archive every web deploy publishes at
-  `/downloads/armada-web.tar.gz` — `electron/webBundleUpdate.js`,
-  `bundleStore.js` — and serves that), and its shell through `flatpak update`
-  from whichever remote it was installed from. The published build is
+  web bundle in place (the `web` artifact of the same release event — the
+  desktop job's `dist` as `Armada-vX.Y.Z-web.tar.gz` — hash-checked against its
+  `x` BEFORE extraction, `electron/webBundleUpdate.js`, `bundleStore.js`), and
+  its shell through `flatpak update` from whichever remote it was installed
+  from. The bundle becomes the app:// origin with the whole preload bridge, so
+  it is resolved only through the pinned-author event, never from a URL the
+  renderer supplies. The deploy-time `/downloads/armada-web.tar.gz` is still
+  published for older shells. The published build is
   distributed by npkg at `pkg.soapbox.pub`, which watches the kind-30622 release
   events, hash-verifies each artifact, and re-signs the apt/flatpak/fdroid
   repositories under its own keys — so Armada ships the `.flatpak` (and `.deb`

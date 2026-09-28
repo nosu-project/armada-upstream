@@ -37,6 +37,7 @@ function allArtifacts(version: string): string[][] {
     of(`Armada-${version}-mac-x64.zip`, "darwin-x86_64", "application/zip"),
     of(`Armada-${version}-mac-arm64.zip`, "darwin-aarch64", "application/zip"),
     of(`Armada-${version}.apk`, "android-arm64-v8a"),
+    of(`Armada-${version}-web.tar.gz`, "web", "application/gzip"),
   ];
 }
 
@@ -141,6 +142,24 @@ describe("pickDesktopArtifact", () => {
     // The bundle is per-arch, so an x86_64 bundle must not be offered to an
     // arm64 machine even though the extension matches.
     expect(pickDesktopArtifact(release, { platform: "flatpak", arch: "arm64" })).toBeUndefined();
+  });
+
+  it("takes the web bundle for the `web` target, on any architecture", () => {
+    for (const arch of ["x64", "arm64"]) {
+      const picked = pickDesktopArtifact(release, { platform: "web", arch });
+      expect(picked?.filename).toBe("Armada-v1.2.3-web.tar.gz");
+    }
+  });
+
+  it("never offers the web bundle to an installer target", () => {
+    for (const platform of ["linux", "flatpak", "win32", "darwin"]) {
+      const picked = pickDesktopArtifact(release, { platform, arch: "x64" });
+      expect(picked?.filename.endsWith("-web.tar.gz")).toBe(false);
+    }
+  });
+
+  it("resolves nothing for an unknown or inherited platform name", () => {
+    expect(pickDesktopArtifact(release, { platform: "constructor", arch: "x64" })).toBeUndefined();
   });
 
   it("takes the NSIS installer on Windows, never the portable build", () => {

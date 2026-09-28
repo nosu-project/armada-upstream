@@ -30,6 +30,7 @@ import {
   RELEASE_RELAYS,
   RELEASE_REPO_ID,
   foldReleases,
+  isWebBundleArtifact,
   parseRelease,
   type Release,
   type ReleaseArtifact,
@@ -73,15 +74,20 @@ const RELEASE_QUERY_LIMIT = 50;
  * and `quitAndInstall` has no installer for the format. The Flatpak shell
  * updates its web bundle instead (`electron/webBundleUpdate.js`); this row is
  * how a caller resolves the bundle artifact if it ever needs to.
+ *
+ * `web` is the other synthetic target, and the one the Flatpak actually uses:
+ * the desktop build's `dist` as a `.tar.gz`, which `electron/webBundleUpdate.js`
+ * swaps in as the app:// origin. It is resolved here, through the pinned-author
+ * event, because that bundle IS the code the shell runs with the whole preload
+ * bridge — the `x` below is the only thing that archive is checked against.
  */
-const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) => boolean }> = {
-  linux: { os: "linux", accepts: (name) => /\.appimage$/i.test(name) },
-  win32: {
-    os: "windows",
-    accepts: (name) => /\.exe$/i.test(name) && !/-portable\.exe$/i.test(name),
-  },
-  darwin: { os: "macos", accepts: (name) => /\.zip$/i.test(name) },
-  flatpak: { os: "linux", accepts: (name) => /\.flatpak$/i.test(name) },
+const DESKTOP_FORMATS: Record<string, (artifact: ReleaseArtifact) => boolean> = {
+  linux: (a) => a.os === "linux" && /\.appimage$/i.test(a.filename),
+  win32: (a) =>
+    a.os === "windows" && /\.exe$/i.test(a.filename) && !/-portable\.exe$/i.test(a.filename),
+  darwin: (a) => a.os === "macos" && /\.zip$/i.test(a.filename),
+  flatpak: (a) => a.os === "linux" && /\.flatpak$/i.test(a.filename),
+  web: (a) => isWebBundleArtifact(a) && /\.tar\.gz$/i.test(a.filename),
 };
 
 /**
@@ -199,12 +205,13 @@ export function pickDesktopArtifact(
   release: Release,
   target: DesktopTarget,
 ): ReleaseArtifact | undefined {
-  const format = DESKTOP_FORMATS[target.platform];
-  if (!format) return undefined;
+  const matches = Object.hasOwn(DESKTOP_FORMATS, target.platform)
+    ? DESKTOP_FORMATS[target.platform]
+    : undefined;
+  if (!matches) return undefined;
   return release.artifacts.find(
     (artifact) =>
-      artifact.os === format.os &&
-      format.accepts(artifact.filename) &&
+      matches(artifact) &&
       archMatches(artifact.platform, target.arch) &&
       /^[0-9a-f]{64}$/.test(artifact.hash),
   );

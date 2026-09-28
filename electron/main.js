@@ -189,13 +189,6 @@ function installBundleIpc() {
   ipcMain.on("armada:register-deep-link-host", (event, host) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
     deepLinkHost = typeof host === "string" && host ? host.toLowerCase() : null;
-    // Run a web-bundle check that was deferred because the host wasn't known
-    // yet, so a startup check that beat this registration doesn't leave the
-    // update path idle until the next scheduled poll.
-    if (deepLinkHost && bundleCheckAwaitingHost) {
-      bundleCheckAwaitingHost = false;
-      void checkForDesktopUpdates(false);
-    }
   });
 }
 
@@ -280,13 +273,9 @@ async function openExternalUrl(url) {
 // navigation handlers is then recognized as ours and routed inward instead of
 // out to the system browser (there is no OS-level https handoff into a desktop
 // app short of being the default browser).
+// It routes navigations and nothing else; the web-bundle updater resolves its
+// source from the release event instead.
 let deepLinkHost = null;
-// A web-bundle update check that fired before the renderer reported its host
-// (the update fetch needs it) sets this rather than skipping until the next
-// four-hourly poll. The host arrives on first paint, and its IPC handler runs
-// the deferred check then — so a cold start that loses the race against the
-// 10s startup check still updates promptly instead of hours later.
-let bundleCheckAwaitingHost = false;
 
 /**
  * Ask the renderer to route an in-app path through its own router.
@@ -947,8 +936,9 @@ async function checkForDesktopUpdates(manual = false) {
 }
 
 // Vesktop-style: the Flatpak shell is never replaced, its WEB BUNDLE is.
-// Fetch the site's dist archive from the public host the renderer registered,
-// activate it (electron/webBundleUpdate.js + bundleStore.js), offer a restart.
+// Resolve the `web` artifact of the newest pinned-author release event
+// (updateFeed.cjs), download and hash-check it, activate it
+// (electron/webBundleUpdate.js + bundleStore.js), offer a restart.
 async function checkForWebBundleUpdate(manual = false) {
   if (updateCheckInFlight) {
     if (manual) manualUpdateCheck = true;
@@ -957,25 +947,25 @@ async function checkForWebBundleUpdate(manual = false) {
   updateCheckInFlight = true;
   manualUpdateCheck = manual;
   try {
-    const { updateWebBundle, WEB_BUNDLE_PATH } = require("./webBundleUpdate");
-    const { readBundleEtag } = require("./bundleStore");
+    const { updateWebBundle } = require("./webBundleUpdate");
+    const { resolveDesktopUpdate } = require("./updateFeed.cjs");
     const wasManual = manualUpdateCheck;
     manualUpdateCheck = false;
-    if (!deepLinkHost) {
-      // Deferred, not dropped: the register-deep-link-host handler re-runs this
-      // once the renderer reports the host, so losing the race against the
-      // startup check costs a moment rather than the next four-hour poll.
-      console.warn("[bundle] no public host registered yet; deferring bundle check");
-      bundleCheckAwaitingHost = true;
-      return;
-    }
-    const outcome = await updateWebBundle({
-      bundlesDir: BUNDLES_DIR,
-      url: `https://${deepLinkHost}${WEB_BUNDLE_PATH}`,
-      activeId: activeBundleId,
-      etag: readBundleEtag(BUNDLES_DIR),
-      shellVersion: app.getVersion(),
+    const shellVersion = app.getVersion();
+    const update = await resolveDesktopUpdate({
+      target: { platform: "web", arch: process.arch },
+      // electron-updater's own rule: a prerelease build accepts prereleases.
+      allowPrerelease: shellVersion.includes("-"),
     });
+    // No release carrying a web bundle yet is "nothing newer", not a failure.
+    const outcome = update
+      ? await updateWebBundle({
+          bundlesDir: BUNDLES_DIR,
+          update,
+          activeId: activeBundleId,
+          shellVersion,
+        })
+      : { result: "unchanged" };
     if (outcome.result !== "installed") {
       if (wasManual) {
         await showUpdateMessage({
