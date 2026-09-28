@@ -39,6 +39,7 @@ const h = vi.hoisted(() => ({
   guestbookRefetch: vi.fn(async () => {}),
   controlRefetch: vi.fn(async () => {}),
   updateList: vi.fn(),
+  removeRailKey: vi.fn(),
   toasts: [] as unknown[],
 }));
 
@@ -54,11 +55,18 @@ vi.mock("@/concord/hooks/useGuestbook", () => ({
     refetch: h.guestbookRefetch,
   }),
 }));
-vi.mock("@/concord/hooks/useCommunityList", () => ({
+// The real `removeCommunityLocally` (the local tombstone), over an in-memory
+// folded cache; the entry and the vault write are the test's.
+vi.mock("@/concord/hooks/useCommunityList", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/concord/hooks/useCommunityList")>()),
   useCommunityEntry: () => h.entry,
   useUpdateCommunityList: () => ({ mutateAsync: h.updateList }),
-  listQueryKey: (pubkey: string | undefined) => ["concord", "list", pubkey],
 }));
+vi.mock("@/lib/foldedCache", () => ({
+  readFolded: async () => undefined,
+  writeFolded: async () => undefined,
+}));
+vi.mock("@/hooks/useRemoveRailKey", () => ({ useRemoveRailKey: () => h.removeRailKey }));
 vi.mock("@/hooks/useToast", () => ({ toast: (t: unknown) => h.toasts.push(t) }));
 
 import { useSelfRemove } from "./useSelfRemove";
@@ -177,7 +185,12 @@ describe("useSelfRemove", () => {
     // land while the vault write is still in flight (never released).
     await waitFor(() => expect(onRemoved).toHaveBeenCalledTimes(1));
     expect(h.toasts).toHaveLength(1);
-    expect(h.updateList).toHaveBeenCalledWith({ type: "remove", communityId: bytesToHex(communityId) });
+    expect(h.updateList).toHaveBeenCalledWith({
+      type: "remove",
+      communityId: bytesToHex(communityId),
+      removedAt: expect.any(Number),
+    });
+    expect(h.removeRailKey).toHaveBeenCalledWith(`c2:${bytesToHex(communityId)}`);
     // The rail icon drops NOW, optimistically — not on the vault RMW.
     expect(isLive(client.getQueryData<ListData>(["concord", "list", self])!.list, bytesToHex(communityId))).toBe(false);
 

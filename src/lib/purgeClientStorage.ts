@@ -7,6 +7,7 @@ import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
+import { clearPendingJoins } from "@/concord/lib/pendingJoins";
 import {
   PUSH_CLEANUP_KEY,
   PUSH_INSTALLATION_KEY,
@@ -133,6 +134,7 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   clearDeferredFoldMemory();
   // Tags and cover art read out of decrypted audio attachments.
   clearAudioMetadata();
+  clearPendingJoins();
   resetDecryptConsent();
   // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
   // their own copy in memory. Deleting the database underneath them would
@@ -162,4 +164,5 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   clearRecentDecrypts();
   clearFoldedMemory();
   clearAudioMetadata();
+  clearPendingJoins();
 }

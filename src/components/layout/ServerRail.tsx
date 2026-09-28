@@ -755,8 +755,8 @@ const Concord2Button = memo(function Concord2Button({
     }
   }, [byChannel, markC2Read]);
 
-  // Leave from the rail's right-click menu (best-effort Guestbook leave, then
-  // tombstone it locally), then go home.
+  // Leave from the rail's right-click menu (tombstone it locally; the Guestbook
+  // leave and the vault write follow in the background), then go home.
   const navigate = useNavigate();
   const { leave } = useCommunityManagement(community);
   const handleLeave = async () => {

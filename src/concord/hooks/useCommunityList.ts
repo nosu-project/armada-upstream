@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -37,7 +37,7 @@ import {
   type FragList,
 } from "@/concord/lib/listFrag";
 import { STOCK_RELAYS } from "@/concord/lib/invite";
-import { pendingJoinEntries, subscribePendingJoins } from "@/concord/lib/pendingJoins";
+import { hydratePendingJoins, pendingJoinEntriesFor, subscribePendingJoins } from "@/concord/lib/pendingJoins";
 import { KIND_COMMUNITY_LIST_FRAG, KIND_COMMUNITY_LIST_RETIRED } from "@/concord/lib/kinds";
 import type { Community } from "@/concord/lib/types";
 import { logSync } from "@/lib/syncLog";
@@ -137,6 +137,22 @@ type PublishingNostr = NostrLike & { relay: NonNullable<NostrLike["relay"]> };
  */
 function canPublish(client: NostrLike): client is PublishingNostr {
   return typeof client.relay === "function";
+}
+
+/**
+ * Carry forward the removals recorded locally while a network read was in
+ * flight. A leave tombstones the cached list at once and writes the vault
+ * behind it; a sync or list write that snapshotted the cache BEFORE that must
+ * not hand its older list back to the cache and the folded copy, or the leave
+ * silently undoes itself. Tombstones only — they are monotonic (the newer
+ * `removed_at` always wins), so carrying one can never lose a fact the way
+ * merging whole entries over a refresh could.
+ */
+function withLocalTombstones(list: CommunityList, local: CommunityList | undefined): CommunityList {
+  if (!local || local.tombstones.length === 0) return list;
+  const held = new Map(list.tombstones.map((t) => [t.community_id, t.removed_at]));
+  const newer = local.tombstones.filter((t) => t.removed_at > (held.get(t.community_id) ?? -Infinity));
+  return newer.length === 0 ? list : mergeCommunityLists(list, { entries: [], tombstones: newer });
 }
 
 /**
@@ -928,9 +944,14 @@ export async function syncCommunityList(
     }
     logSync("list2", "relay fetch: no fragments");
     if (selfRelays) await seedCommunityList(nostr, user, queryClient, selfRelays);
-    const next = (
-      queryClient.getQueryData<ListData>(queryKey) ?? prev ?? { event: null, list: EMPTY_COMMUNITY_LIST }
-    );
+    // Same fallback as the merge below: on the first sync of a boot the cache
+    // may not be primed yet, and answering EMPTY here would blank the rail
+    // until the folded plaintext is read again.
+    const held = queryClient.getQueryData<ListData>(queryKey) ?? prev;
+    const persisted = held ? undefined : await readFolded<PersistedList>(foldKeyOf(user.pubkey));
+    const next = held
+      ?? queryClient.getQueryData<ListData>(queryKey)
+      ?? (persisted ? { event: persisted.event ?? null, list: persisted.list } : { event: null, list: EMPTY_COMMUNITY_LIST });
     return { ...next, repairPending };
   }
 
@@ -945,7 +966,9 @@ export async function syncCommunityList(
   // folded plaintext — it is what holds the memberships recorded under the
   // retired single-event list, which only exist locally.
   const local =
-    prev?.list ?? (await readFolded<PersistedList>(foldKeyOf(user.pubkey)))?.list;
+    queryClient.getQueryData<ListData>(queryKey)?.list
+    ?? prev?.list
+    ?? (await readFolded<PersistedList>(foldKeyOf(user.pubkey)))?.list;
   let retired: CommunityList | undefined;
   if (!(await readFolded<boolean>(retiredRescueKeyOf(user.pubkey)))) {
     try {
@@ -960,7 +983,13 @@ export async function syncCommunityList(
     }
   }
   const liveAndLocal = local ? mergeCommunityLists(local, set.list) : set.list;
-  const merged = retired ? mergeCommunityLists(liveAndLocal, retired) : liveAndLocal;
+  // `local` was read before the rescue's network round, so a leave taken
+  // during it is only in the cache NOW — fold it in before this is persisted,
+  // or the write below restores the membership on disk.
+  const merged = withLocalTombstones(
+    retired ? mergeCommunityLists(liveAndLocal, retired) : liveAndLocal,
+    queryClient.getQueryData<ListData>(queryKey)?.list,
+  );
   const next: ListData = {
     event: set.newestEvent,
     list: merged,
@@ -1017,6 +1046,7 @@ export async function syncCommunityList(
       );
     }
   }
+  next.list = withLocalTombstones(next.list, queryClient.getQueryData<ListData>(queryKey)?.list);
   return next;
 }
 
@@ -1229,14 +1259,45 @@ export async function updateCommunityList(
   );
 
   const event = newest ?? set?.newestEvent ?? cached?.event ?? null;
+  // A leave recorded locally while this write was on the network is not in
+  // `next` (see withLocalTombstones); the next sync's reconcile publishes it.
+  const stored = withLocalTombstones(next, queryClient.getQueryData<ListData>(listQueryKey(user.pubkey))?.list);
   queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), {
     event,
-    list: next,
+    list: stored,
     repairPending: read.failed.some((url) => requiredFloor.includes(url)),
   });
-  void writeFolded(foldKeyOf(user.pubkey), { event, list: next } satisfies PersistedList);
+  void writeFolded(foldKeyOf(user.pubkey), { event, list: stored } satisfies PersistedList);
   void writeFolded(seedKeyOf(user.pubkey), true);
-  return next;
+  return stored;
+}
+
+/**
+ * Leave a community LOCALLY, now: tombstone it in the cached list and in the
+ * folded plaintext, so it is off the rail this instant and stays off after a
+ * restart. The vault write that tells the user's other devices runs behind
+ * it; if that never lands, the tombstone is still in the local list, and the
+ * next sync's reconcile publishes the union — tombstone included — over a
+ * complete read, like any other fact the wire is missing.
+ */
+export async function removeCommunityLocally(
+  queryClient: QueryClient,
+  pubkey: string,
+  communityId: string,
+  removedAt: number,
+): Promise<void> {
+  const queryKey = listQueryKey(pubkey);
+  const persisted = queryClient.getQueryData<ListData>(queryKey)
+    ? undefined
+    : await readFolded<PersistedList>(foldKeyOf(pubkey));
+  const base = queryClient.getQueryData<ListData>(queryKey)
+    ?? (persisted ? { event: persisted.event ?? null, list: persisted.list } : undefined);
+  // Nothing held locally means nothing on the rail to take down; the vault
+  // write behind this still records the removal.
+  if (!base) return;
+  const next: ListData = { ...base, list: removeFromList(base.list, communityId, removedAt) };
+  queryClient.setQueryData<ListData>(queryKey, next);
+  await writeFolded(foldKeyOf(pubkey), { event: next.event, list: next.list } satisfies PersistedList);
 }
 
 export function useUpdateCommunityList() {
@@ -1282,11 +1343,18 @@ export function useUpdateCommunityList() {
 }
 
 /**
- * The optimistic pending-join entries (see pendingJoins.ts), reactive. UI-only
- * overlays for joins whose durable list write is still in flight.
+ * The optimistic pending-join entries (see pendingJoins.ts), reactive:
+ * overlays for joins whose durable list write is still in flight, including
+ * ones a previous launch was closed on (loaded from disk on first use).
  */
 function usePendingJoins(): CommunityListEntry[] {
-  return useSyncExternalStore(subscribePendingJoins, pendingJoinEntries, pendingJoinEntries);
+  const { user } = useCurrentUser();
+  const pubkey = user?.pubkey;
+  useEffect(() => {
+    if (pubkey) void hydratePendingJoins(pubkey);
+  }, [pubkey]);
+  const snapshot = useCallback(() => pendingJoinEntriesFor(pubkey), [pubkey]);
+  return useSyncExternalStore(subscribePendingJoins, snapshot, snapshot);
 }
 
 /** The LIVE Concord membership entries (tombstoned ones stay in the doc but not here). */

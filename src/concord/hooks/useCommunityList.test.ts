@@ -576,6 +576,46 @@ describe("syncCommunityList — reconcile", () => {
     ].sort());
   });
 
+  it("keeps a leave taken during the retired-list read in the persisted list", async () => {
+    const { syncCommunityList, listQueryKey } = await import("./useCommunityList");
+    const cid = "aa".repeat(32);
+    const wire = fragment({ entries: [entry("aa", "Left mid-sync")], tombstones: [] }).map((f, i) => fragEvent(f, i));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const before: CommunityList = { entries: [entry("aa", "Left mid-sync")], tombstones: [] };
+    queryClient.setQueryData(listQueryKey(SELF), { event: null, list: before, decryptFailed: false });
+    h.readFolded.mockResolvedValue(undefined);
+
+    const { nostr } = fakeNostr(wire);
+    const queryWire = nostr.relay("wss://self.example.com").query;
+    // The user leaves while the retired-list rescue is on the network: the
+    // leave tombstones the query cache (removeCommunityLocally).
+    const racing = {
+      ...nostr,
+      relay: (url: string) => ({
+        ...nostr.relay(url),
+        query: async (filters: Array<{ kinds?: number[] }>) => {
+          if (filters.some((f) => f.kinds?.includes(13302))) {
+            queryClient.setQueryData(listQueryKey(SELF), {
+              event: null,
+              list: { entries: before.entries, tombstones: [{ community_id: cid, removed_at: Date.now() }] },
+              decryptFailed: false,
+            });
+          }
+          return queryWire(filters);
+        },
+      }),
+    };
+
+    const data = await syncCommunityList(racing, user, queryClient, undefined, ["wss://self.example.com"]);
+
+    expect(isLive(data.list, cid)).toBe(false);
+    const persisted = h.writeFolded.mock.calls
+      .filter(([key]) => String(key).startsWith("concord2-list:"))
+      .map(([, value]) => (value as { list: CommunityList }).list);
+    expect(persisted.length).toBeGreaterThan(0);
+    for (const list of persisted) expect(isLive(list, cid)).toBe(false);
+  });
+
   it("publishes the union when the folded cache holds memberships the wire lacks", async () => {
     // Vector seeded §8 from ITS holds (community B only); this device recorded
     // A under the retired single-event list. The union must reach the wire

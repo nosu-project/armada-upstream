@@ -2854,8 +2854,12 @@ export function ConcordPage() {
     try {
       await leave();
       navigateTo("/");
-    } catch {
-      // best-effort
+    } catch (e) {
+      toast({
+        title: "Couldn't leave",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 

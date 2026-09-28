@@ -1,21 +1,74 @@
 /**
- * Optimistic pending joins — UI-only membership entries for communities whose
- * durable join chain (fresh bundle resolve → ban check → vault write) is still
- * running in the background after the user clicked Join.
+ * Optimistic pending joins — membership entries for communities whose durable
+ * join chain (fresh bundle resolve → ban check → vault write) is still running
+ * in the background after the user clicked Join.
  *
  * The Community List is the vault and the only durable record of membership;
- * nothing here is persisted or published. A pending entry merely lets
- * `useCommunity`/`useLiveCommunities` resolve the community immediately so the
- * page can open and start syncing while the list write is in flight. On
- * success the real list entry replaces it; on failure it is removed and the
- * community page falls through to its ordinary no-access handling.
+ * nothing here is published. A pending entry lets `useCommunity`/
+ * `useLiveCommunities` resolve the community immediately so the page can open
+ * and start syncing while the list write is in flight. On success the real
+ * list entry replaces it; on a definitive failure (banned, dissolved, a dead
+ * invite) it is removed and the community page falls through to its ordinary
+ * no-access handling.
+ *
+ * It IS persisted locally, per account, in the folded KV cache: the user was
+ * told "Joined" at click time, and the chain behind that can take many seconds
+ * of relay round trips. An app closed inside that window must come back with
+ * the community still there and the chain resumed (`useResumePendingJoins`),
+ * not with a join that silently never happened. A transient failure keeps the
+ * record so the next launch retries it — but not forever: each record carries
+ * when it was first recorded and how many runs have failed, and one past
+ * {@link PENDING_JOIN_MAX_AGE_MS} or {@link PENDING_JOIN_MAX_ATTEMPTS} is given
+ * up on. An invite whose bundle has vanished from its relays is
+ * indistinguishable from relays that are merely slow, so it stays retryable
+ * too, under the same bound.
  */
+import { readFolded, writeFolded } from "@/lib/foldedCache";
+
 import type { CommunityListEntry } from "@/concord/lib/communityList";
+
+/** Folded-cache key holding one account's pending joins. */
+export const pendingJoinsKey = (pubkey: string) => `concord2-pending-joins:${pubkey}`;
+
+/** A pending join older than this is given up on, however its runs failed. */
+export const PENDING_JOIN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A pending join whose chain has failed this many times is given up on. The
+ * age bound is the real one; this backstops a clock that moved backwards.
+ */
+export const PENDING_JOIN_MAX_ATTEMPTS = 25;
+
+/** Retry bookkeeping for one pending join, kept beside (not inside) the entry. */
+interface PendingJoinMeta {
+  /** Epoch ms the join was first recorded. */
+  firstSeenAt: number;
+  /** Chain runs that failed transiently. */
+  attempts: number;
+}
+
+/** The on-disk form: the entry with its bookkeeping inlined. */
+type StoredPendingJoin = CommunityListEntry & {
+  pending_first_seen?: number;
+  pending_attempts?: number;
+};
 
 const entries = new Map<string, CommunityListEntry>();
 const listeners = new Set<() => void>();
+const EMPTY: CommunityListEntry[] = [];
 /** Stable snapshot for useSyncExternalStore; rebuilt only on change. */
-let snapshot: CommunityListEntry[] = [];
+let snapshot: CommunityListEntry[] = EMPTY;
+/** The account the in-memory entries belong to. */
+let owner: string | undefined;
+/** Per account, the one load of its persisted entries this session. */
+const hydrations = new Map<string, Promise<void>>();
+/** Ids forgotten this session, so a load that lands late can't resurrect them. */
+const forgotten = new Set<string>();
+/** `<pubkey>:<id>` joins whose chain already ran (or is running) this session. */
+const runs = new Set<string>();
+const meta = new Map<string, PendingJoinMeta>();
+/** Joins a load found past their bound and dropped, awaiting {@link takeExpiredPendingJoins}. */
+let expired: CommunityListEntry[] = [];
+let writes: Promise<void> = Promise.resolve();
 
 function notify(): void {
   snapshot = [...entries.values()];
@@ -28,6 +81,19 @@ function notify(): void {
   }
 }
 
+/** Point the in-memory store at `pubkey`, dropping another account's entries. */
+function ownBy(pubkey: string): void {
+  if (owner === pubkey) return;
+  owner = pubkey;
+  forgotten.clear();
+  meta.clear();
+  expired = [];
+  if (entries.size > 0) {
+    entries.clear();
+    notify();
+  }
+}
+
 /** Register an optimistic entry (keyed by community id; newest wins). */
 export function addPendingJoin(entry: CommunityListEntry): void {
   entries.set(entry.community_id, entry);
@@ -36,12 +102,27 @@ export function addPendingJoin(entry: CommunityListEntry): void {
 
 /** Drop an optimistic entry — the durable join landed, or it failed. */
 export function removePendingJoin(communityId: string): void {
+  meta.delete(communityId);
   if (entries.delete(communityId)) notify();
+}
+
+function isExpired(m: PendingJoinMeta, now: number): boolean {
+  return now - m.firstSeenAt > PENDING_JOIN_MAX_AGE_MS || m.attempts >= PENDING_JOIN_MAX_ATTEMPTS;
 }
 
 /** The current optimistic entries (stable identity between changes). */
 export function pendingJoinEntries(): CommunityListEntry[] {
   return snapshot;
+}
+
+/** The entries belonging to `pubkey` — empty for any other account. */
+export function pendingJoinEntriesFor(pubkey: string | undefined): CommunityListEntry[] {
+  return pubkey !== undefined && owner === pubkey ? snapshot : EMPTY;
+}
+
+/** Whether a join for this community is still pending (not landed, not abandoned). */
+export function hasPendingJoin(pubkey: string, communityId: string): boolean {
+  return owner === pubkey && entries.has(communityId);
 }
 
 /** Subscribe to changes. Returns an unsubscribe. */
@@ -52,9 +133,149 @@ export function subscribePendingJoins(listener: () => void): () => void {
   };
 }
 
+/**
+ * Load `pubkey`'s persisted pending joins into memory, once per session.
+ * Entries already in memory win over their persisted copy. One past its bound
+ * is dropped here, on disk too, and queued for {@link takeExpiredPendingJoins};
+ * one written before the bookkeeping existed counts as first seen now.
+ */
+export function hydratePendingJoins(pubkey: string): Promise<void> {
+  ownBy(pubkey);
+  let loading = hydrations.get(pubkey);
+  if (!loading) {
+    loading = readFolded<StoredPendingJoin[]>(pendingJoinsKey(pubkey)).then(async (stored) => {
+      if (owner !== pubkey || !Array.isArray(stored)) return;
+      const now = Date.now();
+      let changed = false;
+      let rewrite = false;
+      for (const record of stored) {
+        if (!record || typeof record.community_id !== "string") continue;
+        if (entries.has(record.community_id) || forgotten.has(record.community_id)) continue;
+        const { pending_first_seen: firstSeen, pending_attempts: attempts, ...entry } = record;
+        const known = typeof firstSeen === "number" && Number.isFinite(firstSeen);
+        const m: PendingJoinMeta = {
+          // A future timestamp is a clock that moved; restart the window.
+          firstSeenAt: known && firstSeen <= now ? firstSeen : now,
+          attempts: typeof attempts === "number" && attempts >= 0 ? attempts : 0,
+        };
+        if (m.firstSeenAt !== firstSeen) rewrite = true;
+        if (isExpired(m, now)) {
+          forgotten.add(entry.community_id);
+          expired.push(entry);
+          rewrite = true;
+          continue;
+        }
+        meta.set(entry.community_id, m);
+        entries.set(entry.community_id, entry);
+        changed = true;
+      }
+      if (changed) notify();
+      if (rewrite) await persist(pubkey);
+    });
+    hydrations.set(pubkey, loading);
+  }
+  return loading;
+}
+
+/** Write `pubkey`'s entries as they stand when the write runs, in call order. */
+function persist(pubkey: string): Promise<void> {
+  writes = writes.then(async () => {
+    if (owner !== pubkey) return;
+    const now = Date.now();
+    await writeFolded(
+      pendingJoinsKey(pubkey),
+      [...entries.values()].map((entry): StoredPendingJoin => {
+        const m = meta.get(entry.community_id);
+        return { ...entry, pending_first_seen: m?.firstSeenAt ?? now, pending_attempts: m?.attempts ?? 0 };
+      }),
+    );
+  });
+  return writes;
+}
+
+/** Record a pending join in memory and on disk. Resolves once it is written. */
+export async function persistPendingJoin(pubkey: string, entry: CommunityListEntry): Promise<void> {
+  ownBy(pubkey);
+  forgotten.delete(entry.community_id);
+  addPendingJoin(entry);
+  // A fresh click is a fresh intent: its retry window starts now.
+  meta.set(entry.community_id, { firstSeenAt: Date.now(), attempts: 0 });
+  // Merge the persisted set in first, or this write would replace it.
+  await hydratePendingJoins(pubkey);
+  await persist(pubkey);
+}
+
+/** Forget a pending join — landed, rejected, or walked away from. */
+export async function forgetPendingJoin(pubkey: string, communityId: string): Promise<void> {
+  if (owner !== pubkey) return;
+  forgotten.add(communityId);
+  removePendingJoin(communityId);
+  await hydratePendingJoins(pubkey);
+  await persist(pubkey);
+}
+
+/**
+ * Count a transient failure of a pending join's chain. Resolves `true` when
+ * that failure put it past its bound — it has then been forgotten, and the
+ * caller owns telling the user.
+ */
+export async function recordPendingJoinFailure(pubkey: string, communityId: string): Promise<boolean> {
+  if (owner !== pubkey) return false;
+  await hydratePendingJoins(pubkey);
+  const m = meta.get(communityId);
+  if (!m || !entries.has(communityId)) return false;
+  m.attempts += 1;
+  if (isExpired(m, Date.now())) {
+    await forgetPendingJoin(pubkey, communityId);
+    return true;
+  }
+  await persist(pubkey);
+  return false;
+}
+
+/**
+ * The pending joins a load dropped as past their bound, once: the caller that
+ * takes them is the one that tells the user.
+ */
+export function takeExpiredPendingJoins(pubkey: string): CommunityListEntry[] {
+  if (owner !== pubkey || expired.length === 0) return EMPTY;
+  const taken = expired;
+  expired = [];
+  return taken;
+}
+
+/**
+ * Claim the one run of a pending join's chain this session. `false` when it
+ * already ran (or is running) — the click that started it, or an earlier resume.
+ */
+export function claimPendingJoinRun(pubkey: string, communityId: string): boolean {
+  const key = `${pubkey}:${communityId}`;
+  if (runs.has(key)) return false;
+  runs.add(key);
+  return true;
+}
+
+/**
+ * Drop everything held in memory. Called by `purgeClientStorage`: the entries
+ * carry community roots, and the next account must not inherit them.
+ */
+export function clearPendingJoins(): void {
+  owner = undefined;
+  hydrations.clear();
+  forgotten.clear();
+  runs.clear();
+  meta.clear();
+  expired = [];
+  if (entries.size > 0) {
+    entries.clear();
+    notify();
+  }
+}
+
 /** Test helper: drop all entries and listeners. */
 export function _resetPendingJoinsForTests(): void {
-  entries.clear();
-  snapshot = [];
+  clearPendingJoins();
+  snapshot = EMPTY;
   listeners.clear();
+  writes = Promise.resolve();
 }

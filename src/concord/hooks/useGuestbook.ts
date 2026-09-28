@@ -22,6 +22,7 @@ import type { OpenedEvent } from "@/concord/lib/stream";
 import { citationSatisfied } from "@/concord/lib/control";
 import { canActOnMember, Permissions } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
+import { queueSignedEvent, recordQueuedPublishAttempt } from "@/lib/publishOutbox";
 import { emitWireScopes, onWireScopes } from "@/wire/bus";
 
 /**
@@ -204,6 +205,9 @@ export function useMembers(
   return { members, coalesced };
 }
 
+/** How long a Guestbook Leave no relay has taken stays in the publish outbox. */
+export const GUESTBOOK_LEAVE_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Publish one guestbook rumor to the community relays. */
 export function useGuestbookPublisher(community: Community | undefined) {
   const { nostr } = useNostr();
@@ -233,9 +237,29 @@ export function useGuestbookPublisher(community: Community | undefined) {
             ? buildLeaveRumor(user.pubkey, ms)
             : buildKickRumor(user.pubkey, action.target, ms, action.vac);
       const wrap = await sealGuestbook(rumor, group, user.signer);
+      // A Leave is owed to the other members however this attempt goes: the
+      // leaver is already gone locally and has no screen left to retry from.
+      // So its exact signed wrap goes into the publish outbox FIRST, targeted
+      // at the community relays, and each relay that takes it below is struck
+      // off — only the ones that refused are retried, on this launch or a
+      // later one. A queue that can't be written doesn't stop the attempt.
+      // Owed, but not forever: a community relay that never comes back would
+      // otherwise keep this entry retrying on every launch for good.
+      const queued =
+        action.type === "leave" &&
+        (await queueSignedEvent(wrap, undefined, community.relays, {
+          expiresAt: Date.now() + GUESTBOOK_LEAVE_RETRY_MS,
+        }).then(
+          () => true,
+          () => false,
+        ));
       const results = await Promise.allSettled(
         community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
       );
+      if (queued) {
+        const rejected = community.relays.filter((_, i) => results[i]?.status === "rejected");
+        await recordQueuedPublishAttempt(wrap.id, community.relays, rejected).catch(() => undefined);
+      }
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the update.");
       }

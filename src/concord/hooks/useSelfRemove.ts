@@ -3,12 +3,12 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
-import { listQueryKey, useCommunityEntry, useUpdateCommunityList, type ListData } from "@/concord/hooks/useCommunityList";
-import { removeFromList } from "@/concord/lib/communityList";
+import { removeCommunityLocally, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { banlistLocator, bytesToHex } from "@/concord/lib/derive";
 import { selfRemovalVerdict, type SelfRemovalVerdict } from "@/concord/lib/selfRemoval";
 import type { Community } from "@/concord/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { toast } from "@/hooks/useToast";
 import { logSync } from "@/lib/syncLog";
 
@@ -47,6 +47,7 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
   const { mutateAsync: updateList } = useUpdateCommunityList();
   const entry = useCommunityEntry(community?.idHex);
   const queryClient = useQueryClient();
+  const removeRailKey = useRemoveRailKey();
   const handled = useRef(new Set<string>());
   // Verdicts we've seen once and forced a confirming refetch for; keyed by
   // community AND verdict, since the two are confirmed against different
@@ -112,22 +113,26 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
     // on a (possibly NIP-42-gated) account-state relay plus a publish. Gating
     // the route-away on it left the kickee sitting in a room they'd already been
     // removed from for seconds after the kick had been decided locally.
-    // Tombstone the rail entry NOW. The list query is otherwise only refreshed
+    // Tombstone the rail entry NOW, in the cache AND in the folded list on
+    // disk, exactly as a Leave does. The list query is otherwise only refreshed
     // by updateCommunityList's own setQueryData at the END of its network RMW,
-    // so the community icon lingered in the rail for the RMW's duration after
-    // the room had already been torn down. This optimistic removal mirrors the
-    // same tombstone the vault write will record durably (removeFromList), and
-    // the background write reconciles it against the relays.
-    queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), (prev) =>
-      prev ? { ...prev, list: removeFromList(prev.list, community.idHex, Date.now()) } : prev,
-    );
+    // and the rail boots from the folded list: a kickee whose vault write never
+    // landed would relaunch with the community back. The vault write records
+    // the same tombstone (same `removedAt`) and reconciles it with the relays;
+    // if it never lands, the next sync's reconcile republishes it.
+    const removedAt = Date.now();
+    removeCommunityLocally(queryClient, user.pubkey, community.idHex, removedAt).catch((e) => {
+      logSync("list2", `${key.slice(0, 8)} self-removal: folded write failed (${e instanceof Error ? e.message : String(e)})`);
+    });
+    removeRailKey(`c2:${community.idHex}`);
     queryClient.removeQueries({ queryKey: ["concord", key] });
     toast(REMOVAL_TOAST[verdict]);
     onRemoved?.();
-    updateList({ type: "remove", communityId: community.idHex }).catch(() => {
-      // The vault write failed (offline / no relay confirmed). The verdict is
-      // still standing in the store, so clear `handled` and let the next mount
-      // (a later visit, or app relaunch) re-derive it and retry the write.
+    updateList({ type: "remove", communityId: community.idHex, removedAt }).catch(() => {
+      // The vault write failed (offline / no relay confirmed). The local
+      // tombstone stands and the next sync's reconcile republishes it; clear
+      // `handled` too, so a mount that still resolves the entry (a pending
+      // join's overlay) re-derives the verdict and retries the write.
       handled.current.delete(key);
     });
     // `control`/`guestbook` are fresh objects each render; depend on their
@@ -147,6 +152,7 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
     guestbook.refetch,
     updateList,
     queryClient,
+    removeRailKey,
     onRemoved,
   ]);
 }
