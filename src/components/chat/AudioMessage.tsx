@@ -117,29 +117,54 @@ export function AudioMessage({
   const bars = useMemo(() => toBars(declared.length > 0 ? declared : computed), [declared, computed]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
 
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  // A rejected play() is either the browser refusing to start without a
+  // gesture (NotAllowedError — leave it paused for the user to tap) or the
+  // source being unplayable (NotSupportedError). The latter is a failed
+  // candidate just like an `error` event, so it walks to the next one — and
+  // the viewer asked to hear it, so the next candidate starts playing.
+  //
+  // Only for the element still mounted: a candidate whose <source> error has
+  // already walked the fallback on can reject its play() afterwards, and
+  // acting on that too would skip the candidate that replaced it.
+  const playOn = useCallback((audio: HTMLAudioElement) => {
+    audio.play().catch((err: unknown) => {
+      if (audioRef.current !== audio) return;
+      if ((err as { name?: string } | null)?.name !== "NotSupportedError") return;
+      wantsPlayRef.current = true;
+      onErrorRef.current();
+    });
+  }, []);
+
   // Imperatively start playback. Used both by the play button and by the
   // playback coordinator (auto-advance). If the <audio> element hasn't mounted
   // yet (encrypted blob still decrypting), flag it to play as soon as it does.
   const play = useCallback(() => {
     const audio = audioRef.current;
     if (audio) {
-      audio.play().catch(() => {
-        /* autoplay may be blocked; ignore */
-      });
+      playOn(audio);
     } else {
       wantsPlayRef.current = true;
     }
-  }, []);
+  }, [playOn]);
 
   // Register with the cross-component coordinator so this player participates in
   // single-playback and auto-advance. `play` is stable, so this runs once.
   useEffect(() => registerAudioPlayer({ get el() { return audioRef.current; }, play }), [play]);
 
-  // The <audio> element only mounts once the src is resolved, so re-attach
-  // listeners when the resolve state changes.
+  // The <audio> element only mounts once the src is resolved, and is replaced
+  // whenever the fallback walk moves to another candidate (see its `key`), so
+  // re-attach listeners to whichever element is current.
+  const currentSrc = resolved.status === "ready" ? resolved.src : undefined;
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    // A replacement element starts from nothing; the one it replaced may have
+    // been torn down mid-playback, before its `pause` could arrive.
+    setIsPlaying(!audio.paused);
+    setCurrentTime(audio.currentTime);
     const onPlay = () => {
       setIsPlaying(true);
       setHasPlayed(true);
@@ -159,9 +184,7 @@ export function AudioMessage({
     // Honour a play request that arrived before this element mounted.
     if (wantsPlayRef.current) {
       wantsPlayRef.current = false;
-      audio.play().catch(() => {
-        /* autoplay may be blocked; ignore */
-      });
+      playOn(audio);
     }
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
@@ -177,7 +200,13 @@ export function AudioMessage({
       audio.removeEventListener("durationchange", onDur);
       audio.removeEventListener("loadedmetadata", onDur);
     };
-  }, [resolved.status]);
+  }, [currentSrc, playOn]);
+
+  // A walk that ran out of candidates drops the request to play: a later
+  // Retry is a fresh start, not permission to begin playing unprompted.
+  useEffect(() => {
+    if (failed) wantsPlayRef.current = false;
+  }, [failed]);
 
   const togglePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -201,8 +230,12 @@ export function AudioMessage({
     return <MediaFallback {...fallbackProps} label="Audio" />;
   }
 
+  // Keyed by source: changing a mounted <source>'s src does nothing until
+  // load() is called, so a fallback step would otherwise leave the element
+  // stuck on the candidate that just failed. A fresh element runs resource
+  // selection on the new one.
   const element = resolved.status === "ready" && (
-    <audio ref={audioRef} preload="metadata" className="hidden" onError={onError}>
+    <audio key={resolved.src} ref={audioRef} preload="metadata" className="hidden" onError={onError}>
       {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}
     </audio>
   );
