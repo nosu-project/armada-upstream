@@ -42,6 +42,7 @@ import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
 import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
+import { DiscoverSourceSettings } from "@/components/settings/DiscoverSourceSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
@@ -927,25 +928,24 @@ export function SettingsPage({
           <>
             <SettingsRow
               label="Show all content"
-              description="Discover normally shows only communities, emoji packs, and themes from a curated set of authors: the Armada follow pack, plus people you follow. Turn this on to browse everything published to your relays instead."
+              description={
+                <>
+                  Discover normally shows only communities, emoji packs, and themes from a curated set of authors: the members of the curated list below, plus you and the people you follow. Turn this on to browse everything published to your Discover relays instead.
+                  {config.discoverAllContent && (
+                    <span className="mt-1 flex items-center gap-1.5 text-destructive">
+                      <AlertTriangle className="size-3.5 shrink-0" />
+                      Unfiltered and not moderated.
+                    </span>
+                  )}
+                </>
+              }
             >
               <Switch
                 checked={config.discoverAllContent}
                 onCheckedChange={setDiscoverAllContent}
               />
             </SettingsRow>
-            {config.discoverAllContent && (
-              <SettingsRow>
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="size-4 text-destructive shrink-0 mt-0.5" />
-                  <p className="text-sm text-destructive leading-snug">
-                    Discover is now unfiltered. Content comes from anyone on your
-                    relays and is not vetted or moderated, so you may encounter
-                    spam or objectionable material.
-                  </p>
-                </div>
-              </SettingsRow>
-            )}
+            <DiscoverSourceSettings />
           </>
         );
       case "voice":

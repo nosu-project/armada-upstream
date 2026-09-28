@@ -401,6 +401,19 @@ export interface AppConfig {
    */
   discoverAllContent: boolean;
   /**
+   * Where Discover's curated author list comes from, overriding this build's
+   * default (`BUILD_DISCOVER_CURATION` in `lib/discoverSource.ts`): an `naddr`
+   * of a list with `p` tags, an npub/hex pubkey (that person's follows), or
+   * `none`. Empty = the build default. Read-only on the network: choosing a
+   * source publishes nothing. Synced across devices.
+   */
+  discoverCuration: string;
+  /**
+   * The relays Discover reads listings, packs and themes from. Empty = the app
+   * relays (`appRelays`). Synced across devices.
+   */
+  discoverRelays: string[];
+  /**
    * Whether tracking parameters are stripped from links — both from what this
    * client SENDS and from what it renders and fetches. ON by default.
    *
@@ -554,6 +567,8 @@ export const METADATA_CONFIG_KEYS = [
   "showDmRequests",
   "showRecentRailDms",
   "discoverAllContent",
+  "discoverCuration",
+  "discoverRelays",
   "stripTrackingParams",
   "mediaProxies",
   "sendOnEnter",
@@ -653,6 +668,8 @@ export const defaultConfig: AppConfig = {
   showDmRequests: true,
   showRecentRailDms: true,
   discoverAllContent: false,
+  discoverCuration: "",
+  discoverRelays: [],
   stripTrackingParams: true,
   mediaProxies: [],
   meshIncognito: true,

@@ -7,7 +7,6 @@ import {
   type QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
-import { nip19 } from "nostr-tools";
 import { useEffect, useMemo } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
@@ -28,8 +27,16 @@ import {
   announcementFromEvent,
   type DiscoveredInvite,
 } from "@/concord/lib/inviteDiscovery";
-import { isNostrId } from "@/lib/nostrId";
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import {
+  curatedPubkeys,
+  curationFilter,
+  curationKey,
+  isCurationEvent,
+  resolveDiscoverCuration,
+  resolveDiscoverRelays,
+  type DiscoverCuration,
+} from "@/lib/discoverSource";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
@@ -168,33 +175,51 @@ function writeSeed(kvKey: string, value: unknown[]): void {
 }
 
 /**
- * The "team soapbox" follow pack (kind 39089). Its members are the seed
- * authorship of every Discover feed: a logged-out visitor sees only their
- * content, and a logged-in user sees it merged with their own follows. Discover
- * is deliberately gated: it is never the unfiltered public firehose by default.
+ * The pack seed is per curation source: a membership carried forward from one
+ * source must never stand in for another's when the user switches. (The
+ * directory seed records its source instead — see {@link seededDirectory}.)
  */
-const TEAM_FOLLOW_PACK =
-  "naddr1qvzqqqyckypzpyexz3t34l966ngh5xg7u2q788hthdqmj0av3lv8s2tz9t43zt6dqqxxkdrsx4mnqm3jxfeh2ess5pyrw";
+function packSeedKey(curation: DiscoverCuration): string {
+  return `${PACK_SEED_KV}:${curationKey(curation)}`;
+}
 
-/** The decoded follow-pack coordinate (`null` if the naddr ever fails to parse). */
-const TEAM_PACK_COORD = ((): { kind: number; pubkey: string; identifier: string } | null => {
-  try {
-    const decoded = nip19.decode(TEAM_FOLLOW_PACK);
-    if (decoded.type !== "naddr") return null;
-    const { kind, pubkey, identifier } = decoded.data;
-    return { kind, pubkey, identifier };
-  } catch {
-    return null;
-  }
-})();
+/**
+ * A stored directory as usable under `curation`: its listings are unfiltered
+ * and hold under any source, but its pack members are dropped unless the seed
+ * was written under the same one.
+ */
+function seededDirectory(stored: DiscoverDirectory, curation: DiscoverCuration): DiscoverDirectory {
+  return stored.curation === curationKey(curation) ? stored : { ...stored, packAuthors: [] };
+}
 
-/** Valid (hex) member pubkeys from a follow pack's `p` tags. */
-function followPackPubkeys(event: NostrRumor | null | undefined): string[] {
-  if (!event) return [];
-  return event.tags
-    .filter(([name]) => name === "p")
-    .map(([, pk]) => pk)
-    .filter(isNostrId);
+/**
+ * The curation source in effect (`lib/discoverSource.ts`): the user's
+ * override, or this build's default — by default the Armada team follow pack
+ * (kind 39089). Its members are the seed authorship of every Discover feed: a
+ * logged-out visitor sees only their content, and a logged-in user sees it
+ * merged with their own follows. Discover is deliberately gated: it is never
+ * the unfiltered public firehose by default.
+ */
+export function useDiscoverCuration(): DiscoverCuration {
+  const { config } = useAppContext();
+  return useMemo(() => resolveDiscoverCuration(config.discoverCuration ?? ""), [config.discoverCuration]);
+}
+
+/**
+ * Relays that only the curation source names (its naddr/nprofile hints), read
+ * for the list event alone alongside the Discover relays.
+ */
+function extraCurationRelays(curation: DiscoverCuration, relays: string[]): string[] {
+  if (curation.type === "none") return [];
+  return curation.relays.filter((url) => !relays.includes(url));
+}
+
+/** Newest version of the curation list across the answers → its members. */
+function curationMembers(curation: DiscoverCuration, answers: NostrRumor[][]): string[] {
+  const [event] = mergeAnswers(answers)
+    .filter((e) => isCurationEvent(curation, e))
+    .sort((a, b) => b.created_at - a.created_at);
+  return curatedPubkeys(event);
 }
 
 /** Newest event per addressable coordinate (`kind:pubkey:d`), newest first. */
@@ -250,22 +275,41 @@ async function fetchDiscoverPage(
   return { events: newestPerAddr(events), cursor };
 }
 
-/** The app relays Discover reads from (de-duplicated). */
+/**
+ * The relays Discover reads from (de-duplicated): the user's own Discover
+ * relays when set, otherwise the app relays.
+ */
 export function useDiscoverRelays(): string[] {
   const { config } = useAppContext();
-  return useMemo(() => {
-    const urls = new Set<string>();
-    for (const url of config.appRelays) {
-      const normalized = normalizeRelayUrl(url);
-      if (normalized) urls.add(normalized);
-    }
-    return [...urls];
-  }, [config.appRelays]);
+  // `?? []`: hooks far from Discover mount this through partial configs
+  // (test doubles of AppContext); an absent override means "app relays".
+  return useMemo(
+    () => resolveDiscoverRelays(config.discoverRelays ?? [], config.appRelays),
+    [config.discoverRelays, config.appRelays],
+  );
 }
 
-/** The react-query key of the follow-pack membership read. */
-function packQueryKey(relays: string[]): QueryKey {
-  return ["discover", "follow-pack", TEAM_FOLLOW_PACK, relays];
+/**
+ * Where to look for listings the viewer PUBLISHED, or one community's
+ * listings: the Discover relays plus the app relays. An override changes what
+ * Discover browses, not where a listing is published (`useNostrPublish` still
+ * sends it through the usual relays), so a read of one's own listings — and
+ * the strict re-read an unlisting deletes from — must not narrow to the
+ * override, or it finds nothing and an unlisting "succeeds" with every listing
+ * still standing.
+ */
+export function useListingRelays(): string[] {
+  const { config } = useAppContext();
+  const discover = useDiscoverRelays();
+  return useMemo(
+    () => [...new Set([...discover, ...resolveDiscoverRelays([], config.appRelays)])],
+    [discover, config.appRelays],
+  );
+}
+
+/** The react-query key of the curated-list membership read. */
+function packQueryKey(relays: string[], curation: DiscoverCuration): QueryKey {
+  return ["discover", "follow-pack", curationKey(curation), relays];
 }
 
 /** The react-query key of the community-announcements read. */
@@ -273,34 +317,35 @@ function communitiesQueryKey(relays: string[], authorFilter: string[] | undefine
   return ["discover", "community-announcements", relays, authorFilter ?? "all"];
 }
 
-/** Fetch the team follow pack's member pubkeys, persisting the warm-load seed. */
+/** Fetch the curated list's member pubkeys, persisting the warm-load seed. */
 async function fetchFollowPack(
   nostr: ReturnType<typeof useNostr>["nostr"],
   relays: string[],
+  curation: DiscoverCuration,
   signal: AbortSignal,
 ): Promise<string[]> {
-  const coord = TEAM_PACK_COORD!;
+  const filter = curationFilter(curation);
+  if (!filter) return [];
   const answers = await queryEachRelay(
     nostr,
-    relays,
-    [{ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 }],
+    [...relays, ...extraCurationRelays(curation, relays)],
+    [filter],
     signal,
   );
   // Newest across relays: a relay holding a stale version must not win by
   // answering first.
-  const [event] = mergeAnswers(answers).sort((a, b) => b.created_at - a.created_at);
-  let pubkeys = followPackPubkeys(event);
+  let pubkeys = curationMembers(curation, answers);
   if (pubkeys.length === 0) {
     // An empty read on a cold pool or a dropped REQ is a probable miss, not
     // an empty pack — and an empty pack collapses the allow-list, blanking
     // feeds that had already painted. Carry the last good membership forward
     // (writeSeed's fail-open rule, same as fetchDiscoverDirectory's).
     const seeded = await getArmadaDB()
-      .kv.get<string[]>(PACK_SEED_KV)
+      .kv.get<string[]>(packSeedKey(curation))
       .catch(() => undefined);
     if (seeded && seeded.length > 0) pubkeys = seeded;
   }
-  writeSeed(PACK_SEED_KV, pubkeys);
+  writeSeed(packSeedKey(curation), pubkeys);
   return pubkeys;
 }
 
@@ -407,12 +452,19 @@ export interface DiscoverDirectory {
    * written before it existed, which fall back to the oldest listing.
    */
   cursor?: number;
+  /**
+   * The curation source ({@link curationKey}) `packAuthors` was read from.
+   * Absent from seeds written before sources were configurable, whose pack
+   * members are then not trusted ({@link seededDirectory}).
+   */
+  curation?: string;
 }
 
 /** Fetch the {@link DiscoverDirectory}, persisting the warm-load seeds. */
 async function fetchDiscoverDirectory(
   nostr: ReturnType<typeof useNostr>["nostr"],
   relays: string[],
+  curation: DiscoverCuration,
   signal: AbortSignal,
 ): Promise<DiscoverDirectory> {
   const filters: NostrFilter[] = [
@@ -422,31 +474,32 @@ async function fetchDiscoverDirectory(
     // announcement ids, which would serialize a second hop behind the first.
     { kinds: [5], "#k": [String(KIND_COMMUNITY_ANNOUNCEMENT)], limit: FETCH_LIMIT },
   ];
-  if (TEAM_PACK_COORD) {
-    const coord = TEAM_PACK_COORD;
-    filters.push({ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 });
-  }
-  const answers = await queryEachRelay(nostr, relays, filters, signal);
+  const packFilter = curationFilter(curation);
+  if (packFilter) filters.push(packFilter);
+  // Relays only the curation source names are asked for its list alone,
+  // concurrently, so they never widen where announcements are read from.
+  const hinted = extraCurationRelays(curation, relays);
+  const [answers, hintAnswers] = await Promise.all([
+    queryEachRelay(nostr, relays, filters, signal),
+    packFilter && hinted.length > 0
+      ? queryEachRelay(nostr, hinted, [packFilter], signal)
+      : Promise.resolve([]),
+  ]);
 
-  const packEvent = TEAM_PACK_COORD
-    ? mergeAnswers(answers)
-        .filter((e) => e.kind === TEAM_PACK_COORD.kind && e.pubkey === TEAM_PACK_COORD.pubkey)
-        .sort((a, b) => b.created_at - a.created_at)[0]
-    : undefined;
-  let packAuthors = followPackPubkeys(packEvent);
-  if (packAuthors.length === 0) {
+  let packAuthors = curationMembers(curation, [...answers, ...hintAnswers]);
+  if (packAuthors.length === 0 && packFilter) {
     // The pack is a `limit: 1` addressable event piggybacked on the
     // announcements REQ, and a round trip that drops it reads as an empty
     // pack — which would collapse the allow-list and blank a grid that had
     // just painted. Treat empty as a probable miss and carry the last good
     // pack forward, mirroring writeSeed's fail-open rule.
     const seeded = await getArmadaDB()
-      .kv.get<string[]>(PACK_SEED_KV)
+      .kv.get<string[]>(packSeedKey(curation))
       .catch(() => undefined);
     if (seeded && seeded.length > 0) packAuthors = seeded;
   }
   // Feed the standalone pack query's seed too (the Emojis/Themes tabs).
-  writeSeed(PACK_SEED_KV, packAuthors);
+  writeSeed(packSeedKey(curation), packAuthors);
 
   const { anns, dels, cursor } = announcementWindow(answers);
   let invites = foldAnnouncements(anns, dels);
@@ -466,7 +519,13 @@ async function fetchDiscoverDirectory(
     overflow = false;
     nextCursor = undefined;
   }
-  const directory: DiscoverDirectory = { packAuthors, invites, overflow, cursor: nextCursor };
+  const directory: DiscoverDirectory = {
+    packAuthors,
+    invites,
+    overflow,
+    cursor: nextCursor,
+    curation: curationKey(curation),
+  };
   if (directory.invites.length > 0 || directory.packAuthors.length > 0) {
     getArmadaDB().kv.set(DIRECTORY_SEED_KV, directory).catch(() => undefined);
   }
@@ -475,7 +534,7 @@ async function fetchDiscoverDirectory(
 
 /** One page of the paginated Communities directory. */
 interface CommunitiesPage {
-  /** Team follow-pack members — carried only by page 1 (`until === undefined`). */
+  /** Curated-list members — carried only by page 1 (`until === undefined`). */
   packAuthors: string[];
   /** Announcements in this window, deduped by link signer, un-publishes removed. */
   invites: DiscoveredInvite[];
@@ -495,10 +554,13 @@ interface CommunitiesPage {
 async function fetchCommunitiesPage(
   nostr: ReturnType<typeof useNostr>["nostr"],
   relays: string[],
+  curation: DiscoverCuration,
   until: number | undefined,
   signal: AbortSignal,
 ): Promise<CommunitiesPage> {
-  if (until === undefined) return directoryPage(await fetchDiscoverDirectory(nostr, relays, signal));
+  if (until === undefined) {
+    return directoryPage(await fetchDiscoverDirectory(nostr, relays, curation, signal));
+  }
   const { invites, cursor } = await fetchCommunityAnnouncements(nostr, relays, undefined, signal, until);
   return { packAuthors: [], invites, overflow: false, cursor };
 }
@@ -558,9 +620,12 @@ export async function forgetDiscoverAnnouncements(
   void queryClient.invalidateQueries({ queryKey: ["discover", "community-announcements"] });
 }
 
-/** The infinite-query key for the directory (authors-independent — see the hook). */
-function directoryInfiniteKey(relays: string[]): QueryKey {
-  return ["discover", "directory-infinite", relays];
+/**
+ * The infinite-query key for the directory (authors-independent — see the
+ * hook — but not source-independent: page 1 carries the curated members).
+ */
+function directoryInfiniteKey(relays: string[], curation: DiscoverCuration): QueryKey {
+  return ["discover", "directory-infinite", relays, curationKey(curation)];
 }
 
 /**
@@ -571,12 +636,13 @@ function directoryInfiniteKey(relays: string[]): QueryKey {
 function communitiesInfiniteOptions(
   nostr: ReturnType<typeof useNostr>["nostr"],
   relays: string[],
+  curation: DiscoverCuration,
 ) {
   return {
-    queryKey: directoryInfiniteKey(relays),
+    queryKey: directoryInfiniteKey(relays, curation),
     initialPageParam: undefined as number | undefined,
     queryFn: ({ pageParam, signal }: { pageParam: number | undefined; signal: AbortSignal }) =>
-      fetchCommunitiesPage(nostr, relays, pageParam, signal),
+      fetchCommunitiesPage(nostr, relays, curation, pageParam, signal),
     getNextPageParam: (lastPage: CommunitiesPage) => lastPage.cursor,
   };
 }
@@ -584,9 +650,11 @@ function communitiesInfiniteOptions(
 /**
  * The author allow-list that gates every Discover feed.
  *
- * - Logged out: the members of the team-soapbox follow pack (its `p` tags).
+ * - Logged out: the members of the curated list ({@link useDiscoverCuration} —
+ *   by default the team-soapbox follow pack; its `p` tags).
  * - Logged in: those members merged with the viewer's own follows (kind 3) and
  *   the viewer themselves.
+ * - With no curated list (`none`): the viewer and their follows only.
  *
  * Fail-closed: if the pack can't be read and the viewer has no follows, the
  * list is empty and the feeds show nothing rather than the public firehose (an
@@ -609,19 +677,23 @@ export function useDiscoverAuthors(): {
   const { user } = useCurrentUser();
   const followList = useFollowList();
 
-  const unrestricted = config.discoverAllContent;
+  const curation = useDiscoverCuration();
 
-  const packKey = packQueryKey(relays);
+  const unrestricted = config.discoverAllContent;
+  const curated = curation.type !== "none";
+
+  const packKey = packQueryKey(relays, curation);
   // Warm loads: last session's pack membership paints (and un-gates the
   // feeds) immediately; the fetch below still runs and overwrites it.
-  useKvQuerySeed<string[]>(PACK_SEED_KV, unrestricted ? undefined : packKey);
+  useKvQuerySeed<string[]>(packSeedKey(curation), unrestricted || !curated ? undefined : packKey);
 
   const pack = useQuery<string[]>({
     queryKey: packKey,
-    // Skip the pack fetch entirely when the allow-list is bypassed.
-    enabled: relays.length > 0 && TEAM_PACK_COORD !== null && !unrestricted,
+    // Skip the pack fetch entirely when the allow-list is bypassed or there
+    // is no curated list to read.
+    enabled: relays.length > 0 && curated && !unrestricted,
     staleTime: 60 * 60 * 1000,
-    queryFn: ({ signal }) => fetchFollowPack(nostr, relays, signal),
+    queryFn: ({ signal }) => fetchFollowPack(nostr, relays, curation, signal),
   });
 
   const authors = useMemo(() => {
@@ -649,7 +721,7 @@ export function useDiscoverAuthors(): {
     // `authors` changes, the feed queries re-key and refetch, and
     // `placeholderData` holds the pack-authored results meanwhile — so first
     // paint doesn't wait the follow-list round trip out.
-    isLoading: unrestricted ? false : pack.isLoading,
+    isLoading: unrestricted || !curated ? false : pack.isLoading,
   };
 }
 
@@ -674,7 +746,7 @@ export function useDiscoverAuthors(): {
  * is nothing server-side to match. The Communities tab filters the rendered
  * cards against their RESOLVED names instead.
  *
- * Returned alongside the invites: `packAuthors` (the team follow pack's
+ * Returned alongside the invites: `packAuthors` (the curated list's
  * members) and `trustedAuthors` (pack ∪ viewer ∪ follows), so the tab can
  * rank listings — pack-owned communities first, the rest of the trusted set
  * after — without a second membership read.
@@ -692,6 +764,7 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
   const { user } = useCurrentUser();
   const followList = useFollowList();
   const queryClient = useQueryClient();
+  const curation = useDiscoverCuration();
 
   const unrestricted = config.discoverAllContent;
 
@@ -701,7 +774,7 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
   // refresh). The plain-shaped KV seed is wrapped into the `{ pages }` shape.
   useEffect(() => {
     if (relays.length === 0) return;
-    const key = directoryInfiniteKey(relays);
+    const key = directoryInfiniteKey(relays, curation);
     let cancelled = false;
     void (async () => {
       try {
@@ -710,7 +783,7 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
         if (queryClient.getQueryData(key) !== undefined) return;
         queryClient.setQueryData(
           key,
-          { pages: [directoryPage(stored)], pageParams: [undefined] },
+          { pages: [directoryPage(seededDirectory(stored, curation))], pageParams: [undefined] },
           { updatedAt: 0 },
         );
       } catch {
@@ -720,10 +793,10 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
     return () => {
       cancelled = true;
     };
-  }, [relays, queryClient]);
+  }, [relays, curation, queryClient]);
 
   const result = useInfiniteQuery({
-    ...communitiesInfiniteOptions(nostr, relays),
+    ...communitiesInfiniteOptions(nostr, relays, curation),
     enabled: relays.length > 0,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -811,6 +884,7 @@ export function useWarmDiscover(): void {
   const relays = useDiscoverRelays();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const curation = useDiscoverCuration();
 
   const unrestricted = config.discoverAllContent;
   const pubkey = user?.pubkey;
@@ -823,7 +897,7 @@ export function useWarmDiscover(): void {
           // Prime the SAME infinite-query cache entry the page reads, through
           // the same cursor options — its first page is the directory.
           const infinite = await queryClient.fetchInfiniteQuery({
-            ...communitiesInfiniteOptions(nostr, relays),
+            ...communitiesInfiniteOptions(nostr, relays, curation),
             staleTime: 30_000,
           });
           const directory = infinite.pages[0] ?? { packAuthors: [], invites: [] };
@@ -868,7 +942,7 @@ export function useWarmDiscover(): void {
       })();
     }, WARM_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [nostr, queryClient, relays, unrestricted, pubkey]);
+  }, [nostr, queryClient, relays, curation, unrestricted, pubkey]);
 }
 
 /**

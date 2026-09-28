@@ -33,7 +33,7 @@ import {
 import { parseInviteLink } from "@/concord/lib/invite";
 import { badgeOf } from "@/concord/lib/roles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useDiscoverRelays } from "@/hooks/useDiscover";
+import { useListingRelays } from "@/hooks/useDiscover";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 
@@ -236,7 +236,7 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
 function useMyAnnouncements(idHex: string, myLinkSigners: string[]) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
-  const relays = useDiscoverRelays();
+  const relays = useListingRelays();
   const signers = useMemo(() => new Set(myLinkSigners), [myLinkSigners]);
 
   return useQuery({

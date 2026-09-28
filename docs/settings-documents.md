@@ -5,7 +5,7 @@ kind 30078, NIP-44-encrypted to self, named `${APP_ID}/<name>`.
 
 | `d` tag | Contents | Written when | Merge |
 |---|---|---|---|
-| `armada/metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, replaceable app DM/media endpoints, voice-server preference, DM typing indicators, DM requests, Discover scope, zap defaults, Account Standing nag | a preference changes | wholesale |
+| `armada/metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, replaceable app DM/media endpoints, voice-server preference, DM typing indicators, DM requests, Discover scope/curated list/relays, zap defaults, Account Standing nag | a preference changes | wholesale |
 | `armada/rail` | `railLayout` | every rail drag | wholesale |
 | `armada/read-state` | `readState` | every channel view (4 s debounce) | max per key |
 | `armada/notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |

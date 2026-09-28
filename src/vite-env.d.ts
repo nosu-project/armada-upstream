@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_NIP65_DISCOVERY_RELAYS?: string;
   /** NIP-34 repository directory relay. Empty = no directory search. */
   readonly VITE_GIT_DISCOVERY_RELAY?: string;
+  /** Discover's curated author list: an naddr, npub/hex pubkey, or empty/"none". Unset = Armada's follow pack. */
+  readonly VITE_DISCOVER_CURATION?: string;
   readonly VITE_APP_BLOSSOM_SERVERS?: string;
   readonly VITE_CONCORD_AV_SERVERS?: string;
   readonly VITE_DEFAULT_NOISE_SUPPRESSION?: string;

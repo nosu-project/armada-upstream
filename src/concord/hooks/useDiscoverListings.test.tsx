@@ -27,12 +27,13 @@ const h = vi.hoisted(() => ({
   user: undefined as unknown,
   published: [] as Array<{ kind: number; tags: string[][] }>,
   pool: undefined as unknown,
+  config: { appRelays: ["wss://discover.test"] } as { appRelays: string[]; discoverRelays?: string[] },
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: h.pool }) }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: h.user }) }));
 vi.mock("@/hooks/useAppContext", () => ({
-  useAppContext: () => ({ config: { appRelays: ["wss://discover.test"] } }),
+  useAppContext: () => ({ config: h.config }),
 }));
 vi.mock("@/hooks/useNostrPublish", () => ({
   useNostrPublish: () => ({
@@ -92,6 +93,7 @@ function relayOf(events: NostrEvent[], fail: (round: number) => boolean = () => 
 
 beforeEach(() => {
   h.published = [];
+  h.config = { appRelays: ["wss://discover.test"] };
 });
 
 describe("fetchLinkAnnouncements", () => {
@@ -244,6 +246,23 @@ describe("useUnlistAnnouncements", () => {
     expect(await result.current.unlistLinks([mine.signer])).toBe(2);
     const deleted = h.published[0].tags.filter((t) => t[0] === "e").map((t) => t[1]);
     expect(deleted.sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it("unlistLinks still finds listings on the app relays when Discover reads elsewhere", async () => {
+    const me = generateSecretKey();
+    h.user = { pubkey: getPublicKey(me) };
+    // Discover browses another relay, but the listing was published through
+    // the usual relays — which is where the unlisting has to find it.
+    h.config = { appRelays: ["wss://discover.test"], discoverRelays: ["wss://elsewhere.test"] };
+    const mine = linkUrl();
+    const a = announce(me, mine.url, 1);
+    const held = relayOf([a]).pool.relay();
+    const empty = relayOf([]).pool.relay();
+    h.pool = { relay: (url: string) => (url.includes("discover.test") ? held : empty) };
+
+    const { result } = renderHook(() => useUnlistAnnouncements(), { wrapper });
+    expect(await result.current.unlistLinks([mine.signer])).toBe(1);
+    expect(h.published[0].tags).toContainEqual(["e", a.id]);
   });
 
   it("publishes nothing when none of them are the viewer's", async () => {

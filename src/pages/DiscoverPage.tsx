@@ -1,5 +1,5 @@
-import { Compass, Loader2, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
-import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Compass, Loader2, Palette, Plus, Search, SlidersHorizontal, Smile, Users, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -7,6 +7,7 @@ import {
   CommunityListingCardSkeleton,
 } from "@/components/discover/CommunityListingCard";
 import { CreateCommunityCard } from "@/components/discover/CreateCommunityCard";
+import { CurationSourceText } from "@/components/discover/CurationSource";
 import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
 import { DeferredRow } from "@/components/DeferredRow";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
@@ -17,14 +18,17 @@ import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DiscoverActivityTarget } from "@/concord/lib/discoverActivity";
 import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDiscoverCommunities,
+  useDiscoverCuration,
   useDiscoverCommunityActivity,
   useDiscoverEmojiPacks,
   useDiscoverThemes,
 } from "@/hooks/useDiscover";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
+import { SettingsOverlayContext } from "@/lib/settingsOverlay";
 
 const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
@@ -187,9 +191,11 @@ export function DiscoverPage() {
             </div>
           </div>
 
+          <DiscoverScopeNote tab={tab} signedIn={!!user} />
+
           {/* Results — the top spacing is a MARGIN, not scroll padding, so the
               gap under the search bar stays put as the grid scrolls beneath it. */}
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable mt-4 sm:mt-6 pb-8">
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable mt-3 sm:mt-4 pb-8">
             {tab === "communities" && <CommunitiesTab query={query} />}
             {tab === "emojis" && <EmojisTab query={query} />}
             {tab === "themes" && <ThemesTab query={query} />}
@@ -215,6 +221,71 @@ export function DiscoverPage() {
         </Suspense>
       )}
     </>
+  );
+}
+
+/**
+ * What the grid below is drawn from and how it is ordered — stated plainly, so
+ * a curated view never passes for the whole network. Mirrors `useDiscover.ts`:
+ * the author allow-list (curated list ∪ viewer ∪ follows, or nothing at all
+ * with "Show all content" on) and the Communities tab's owner-tier ordering.
+ * Emoji packs and themes are newest-first with no tiers. Links to the settings
+ * section that holds the source, the relays, and the show-everything switch
+ * with its warning.
+ */
+function DiscoverScopeNote({ tab, signedIn }: { tab: DiscoverTab; signedIn: boolean }) {
+  const { config } = useAppContext();
+  const curation = useDiscoverCuration();
+  const settings = useContext(SettingsOverlayContext);
+  const unrestricted = config.discoverAllContent;
+  const curated = curation.type !== "none";
+  const followers = signedIn ? "you and people you follow" : "";
+
+  let source: ReactNode;
+  if (unrestricted) {
+    source = "Showing everything published to your Discover relays. It is unfiltered and not moderated.";
+  } else if (curated) {
+    source = (
+      <>
+        Showing only what members of <CurationSourceText curation={curation} />
+        {followers ? `, ${followers},` : ""} publish. Anything else on your relays is hidden.
+      </>
+    );
+  } else {
+    source = signedIn
+      ? "Showing only what you and people you follow publish. Anything else on your relays is hidden."
+      : "No curated list is set, so there is nothing to show until you sign in.";
+  }
+
+  // The tiers are by the community's verified OWNER, not whoever listed it —
+  // so a curated or followed author can share a community that still sorts
+  // into the last tier, and a card can move once its owner resolves.
+  const tiers = [
+    curated && "run by list members",
+    signedIn && "run by you or people you follow",
+  ].filter(Boolean);
+  const order =
+    tab !== "communities"
+      ? "Newest first."
+      : tiers.length === 0
+        ? "Newest listing first."
+        : `Communities ${tiers.join(", then ")} come first, then the rest; newest listing first within each. Cards can shift as each community's owner is confirmed.`;
+
+  return (
+    <div className="mt-3 flex items-start gap-2 px-1">
+      <p className="min-w-0 flex-1 text-xs leading-snug text-muted-foreground">
+        {source} {order}
+      </p>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 touch:h-11 shrink-0 -my-1 px-2 text-xs"
+        onClick={() => settings.show("discover")}
+      >
+        <SlidersHorizontal className="size-3.5" />
+        {unrestricted ? "Discover settings" : "Show everything"}
+      </Button>
+    </div>
   );
 }
 
@@ -278,6 +349,7 @@ function CommunitiesTab({ query }: { query: string }) {
     isFetchingNextPage,
     pageCount,
   } = useDiscoverCommunities();
+  const unrestricted = useAppContext().config.discoverAllContent;
   const sentinelRef = useInfiniteScroll({
     hasNextPage,
     isFetchingNextPage,
@@ -339,9 +411,11 @@ function CommunitiesTab({ query }: { query: string }) {
   const activityTargetList = useMemo(() => Object.values(activityTargets), [activityTargets]);
   const lastActiveBySigner = useDiscoverCommunityActivity(activityTargetList);
 
-  // Display order: communities owned by team-follow-pack members first, then
-  // the rest of the trusted set (pack ∪ viewer ∪ follows), then — only in
-  // unrestricted mode, where the allow-list is bypassed — everyone else.
+  // Display order: communities owned by curated-list members first, then the
+  // rest of the trusted set (list ∪ viewer ∪ follows), then everyone else —
+  // an owner outside the trusted set, whose community a trusted author
+  // listed, or (unrestricted mode, allow-list bypassed) anyone at all.
+  // DiscoverScopeNote states this order on the page; keep the two in step.
   // Newest-first within each tier (a stable partition preserves the hook's
   // order). The verified bundle owner ranks a card once it resolves; until
   // then the announcement's author stands in, so the first paint is already
@@ -394,7 +468,9 @@ function CommunitiesTab({ query }: { query: string }) {
           <CreateCommunityCard />
         </div>
         <TabState icon={Users}>
-          No public communities listed yet. Yours could be the first.
+          {unrestricted
+            ? "No public communities listed yet. Yours could be the first."
+            : "None of the authors Discover is showing have listed a community yet. Yours could be the first."}
         </TabState>
       </div>
     );
