@@ -5,6 +5,9 @@ import { useEffect } from 'react';
 
 import { useEventStore } from '@/hooks/useEventStore';
 
+/** How recently a cache entry must have been written for the seed to skip its store read. */
+const SEED_FRESH_MS = 60_000;
+
 interface CacheFirstSeedOptions<T> {
   /**
    * The TanStack Query key to seed. Pass `undefined` to disable (e.g. while a
@@ -46,6 +49,15 @@ export function useCacheFirstSeed<T>(opts: CacheFirstSeedOptions<T>): void {
 
   useEffect(() => {
     if (!queryKey) {
+      return;
+    }
+
+    // An entry written moments ago (by the network query, a publish, or an
+    // earlier seed) already holds at least what the store does. Skipping the
+    // read keeps remount-heavy views — every member row's status on every
+    // channel switch — from re-querying the store for the same event.
+    const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
+    if (Date.now() - updatedAt < SEED_FRESH_MS) {
       return;
     }
 
