@@ -119,6 +119,30 @@ describe("video fullscreen controls", () => {
     expect(document.querySelector('button[aria-label="Fullscreen"]')).not.toBeNull();
   });
 
+  it("holds no document fullscreen listener until its own Expand, and drops it on exit", async () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const watched = (spy: typeof add) => spy.mock.calls.filter(([type]) => String(type).endsWith("fullscreenchange")).length;
+    try {
+      renderLightbox([VIDEO]);
+      const video = document.querySelector("video")!;
+      const container = document.querySelector<HTMLElement>("[data-video-player]")!;
+      container.requestFullscreen = vi.fn().mockResolvedValue(undefined);
+      await startPlayback(video);
+      expect(watched(add)).toBe(0);
+
+      fireEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="Fullscreen"]')!);
+      expect(watched(add)).toBe(2);
+      act(() => setFullscreen(container));
+      act(() => setFullscreen(null));
+      expect(watched(remove)).toBe(2);
+      expect(document.querySelector('button[aria-label="Fullscreen"]')).not.toBeNull();
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
+  });
+
   it("falls back to the video's native fullscreen where the container can't go fullscreen (iPhone)", async () => {
     renderLightbox([VIDEO]);
     const video = document.querySelector("video")! as HTMLVideoElement & { webkitEnterFullscreen?: () => void };

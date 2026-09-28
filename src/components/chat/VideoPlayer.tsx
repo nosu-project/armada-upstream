@@ -195,17 +195,26 @@ export function VideoPlayer({
     usePlayerControls({ mediaRef: videoRef, containerRef, isPlaying });
 
   // Whether the player's container is the fullscreen element, for the
-  // Expand/Exit button and the fullscreen layout.
+  // Expand/Exit button and the fullscreen layout. Only this player's own
+  // button puts its container there, so the document listeners are attached
+  // from that press until it leaves fullscreen again — a timeline of videos
+  // otherwise holds two per mounted player, all woken by every toggle.
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [watchingFullscreen, setWatchingFullscreen] = useState(false);
   useEffect(() => {
-    const update = () => setIsFullscreen(!!containerRef.current && fullscreenElement() === containerRef.current);
+    if (!watchingFullscreen) return;
+    const update = () => {
+      const inside = !!containerRef.current && fullscreenElement() === containerRef.current;
+      setIsFullscreen(inside);
+      if (!inside) setWatchingFullscreen(false);
+    };
     document.addEventListener("fullscreenchange", update);
     document.addEventListener("webkitfullscreenchange", update);
     return () => {
       document.removeEventListener("fullscreenchange", update);
       document.removeEventListener("webkitfullscreenchange", update);
     };
-  }, []);
+  }, [watchingFullscreen]);
 
   // Long-press (touch) / right-click (desktop) menu, mirroring how message
   // images offer Save / Share. The ambient menu is null outside a chat message
@@ -355,9 +364,12 @@ export function VideoPlayer({
       return;
     }
     const nativeFallback = () => {
+      // The bare <video> is the native player's, never our container.
+      setWatchingFullscreen(false);
       if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
       else void (video?.requestFullscreen?.() as Promise<void> | undefined)?.catch(() => {});
     };
+    setWatchingFullscreen(true);
     if (container.requestFullscreen) {
       void (container.requestFullscreen({ navigationUI: "hide" }) as Promise<void> | undefined)?.catch(nativeFallback);
     } else if (container.webkitRequestFullscreen) {

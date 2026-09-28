@@ -193,11 +193,15 @@ function ResolvedImage({ image, fit }: { image: ForumImage; fit: "cover" | "cont
   }
   return (
     <>
-      {!loaded && image.blurhash && <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />}
+      {/* A letterboxed image sits on a blur of itself: its blurhash, which is
+          already blurred and costs nothing per frame, or failing that a
+          blurred, cropped copy — a full-size filter on every such row. */}
+      {image.blurhash && (!loaded || fit === "contain") && (
+        <BlurhashCanvas hash={image.blurhash} className={cn("absolute inset-0", loaded && "opacity-50")} />
+      )}
       {resolved.status === "ready" && (
         <>
-          {/* A letterboxed image sits on a blurred, cropped copy of itself. */}
-          {fit === "contain" && loaded && (
+          {fit === "contain" && loaded && !image.blurhash && (
             <img
               src={resolved.src}
               alt=""

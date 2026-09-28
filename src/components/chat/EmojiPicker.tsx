@@ -2,10 +2,10 @@ import data from "@emoji-mart/data";
 import { Picker } from "emoji-mart";
 import { Compass } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { recordReaction } from "@/hooks/useFrequentReactions";
 import { syncEmojiMartCategories } from "@/lib/emojiMartCategories";
@@ -247,7 +247,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
  * emoji, for whom packs are otherwise invisible.
  */
 function BrowsePacksFooter({ hasCustom, onBrowse }: { hasCustom: boolean; onBrowse: () => void }) {
-  const navigate = useNavigate();
+  const navigate = useStableNavigate();
   return (
     <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-3 py-1.5">
       <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
