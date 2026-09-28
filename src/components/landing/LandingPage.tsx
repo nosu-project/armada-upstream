@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
 import { EncryptionQuiz } from "./EncryptionQuiz";
+import { usePauseOffscreenAnimations } from "./pauseOffscreenAnimations";
 import { PitchToy } from "./PitchToy";
 import { ProductShots } from "./ProductShots";
 import { SailingSea } from "./SailingSea";
@@ -61,6 +62,8 @@ export const LandingPage = memo(function LandingPage({
   scrollRef: React.RefObject<HTMLElement | null>;
 }) {
   const statementRef = useRef<HTMLElement>(null);
+  const deckRef = useRef<HTMLDivElement>(null);
+  usePauseOffscreenAnimations(deckRef, scrollRef);
 
   const scrollToStatement = () => {
     statementRef.current?.scrollIntoView({
@@ -80,7 +83,7 @@ export const LandingPage = memo(function LandingPage({
         <AsciiSea scrollRef={scrollRef} />
       </div>
 
-      <div className="relative z-10">
+      <div ref={deckRef} className="relative z-10">
         {/* A quiet way to the downloads page in the top-right. `absolute`, not
             `fixed`: it sits at the top of the page and scrolls away with the
             hero rather than following the reader down the deck. `safe-area-top`

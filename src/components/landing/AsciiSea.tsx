@@ -258,6 +258,13 @@ export function AsciiSea({
       };
     }
 
+    // Each layer gets its own compositor layer. Otherwise every redraw
+    // re-rasterizes the rows it touched THROUGH the host's mask, which cost
+    // ~2.5× the raster time of rasterizing the layers alone and masking them at
+    // composite. Measured pixel-identical, at 1× and 2×. Only while animating:
+    // still water paints once and doesn't need the extra layers' memory.
+    for (const layer of [swellLayer, crestLayer]) layer.style.willChange = "transform";
+
     // Driven by a timer at the paint cadence, not a free-running rAF loop: a
     // loop at the display rate for a 14 fps effect woke the renderer 60 times
     // a second and rewrote the mask on every one of them, which on an idle
