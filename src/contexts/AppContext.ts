@@ -203,10 +203,11 @@ export interface AppConfig {
    */
   useAppDmRelays: boolean;
   /**
-   * Additional app-provided DM relays. Seeded from `VITE_DM_RELAYS`, but kept
-   * in encrypted settings so restoring a custom setup replaces the shipped
-   * Armada address instead of silently adding it back. General `appRelays`
-   * remain part of the app DM set for legacy NIP-04 interoperability.
+   * Additional app-provided DM relays. Seeded from `VITE_DM_RELAYS` (empty
+   * unless the operator set it), but kept in encrypted settings so restoring a
+   * custom setup replaces the seeded set instead of silently adding it back.
+   * General `appRelays` remain part of the app DM set for legacy NIP-04
+   * interoperability.
    */
   appDmRelays: string[];
   /**
@@ -688,9 +689,9 @@ export const AppContext = createContext<AppContextType | undefined>(undefined);
  *
  *   - app DM relays (`useAppDmRelays`): the general app relays plus the
  *     synchronized app DM relay set (`appDmRelays`). The app relays keep legacy
- *     NIP-04 (kind 4) DMs working; `DM_RELAYS` gives gift-wrapped (NIP-17) DMs
- *     a dependable home the push/native watch sets follow. A fresh config
- *     seeds that set from `DM_RELAYS`; a restored setup replaces it wholesale.
+ *     NIP-04 (kind 4) DMs working. A fresh config seeds the app DM set from
+ *     `DM_RELAYS` (empty unless the operator set `VITE_DM_RELAYS`); a restored
+ *     setup replaces it wholesale.
  *   - the user's own DM relays (`useOwnDmRelays` + `dmRelays`).
  *
  * Both on ⇒ both sets; one on ⇒ that set; neither ⇒ empty (the user has opted
