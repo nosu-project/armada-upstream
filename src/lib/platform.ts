@@ -444,3 +444,36 @@ export const NOSTR_PUSH_RELAYS: string[] = (import.meta.env.VITE_NOSTR_PUSH_RELA
 export function nostrPushConfigured(): boolean {
   return Boolean(NOSTR_PUSH_PUBKEY) && NOSTR_PUSH_RELAYS.length > 0;
 }
+
+/**
+ * nostr-push2, the gateway browser Web Push goes through (`nostrPush2.ts`).
+ * The legacy `VITE_NOSTR_PUSH_*` pair above now serves only the iOS app's APNs
+ * path, which still speaks the older protocol.
+ *
+ * Neither value is a secret — both end up in the bundle either way — so the
+ * public service is the default, and a build variable only overrides it:
+ *
+ * - `VITE_NOSTR_PUSH2_PUBKEY` — the service's pubkey (npub or hex).
+ * - `VITE_NOSTR_PUSH2_RELAYS` — relays its kind-25742 RPC is carried over
+ *   (comma-separated). They must be relays the service itself reads.
+ *
+ * An empty variable counts as unset, since CI passes an unprovisioned secret
+ * as the empty string. Inside Tenna, `window.napp.push` needs neither.
+ */
+const DEFAULT_NOSTR_PUSH2_PUBKEY = "4c812266b5b8039b4bd98cf2e6c77dcbcae5ea9d9f7d591933c7e4e9b6e174c7";
+const DEFAULT_NOSTR_PUSH2_RELAYS = "wss://relay.ditto.pub,wss://relay.dreamith.to";
+
+export const NOSTR_PUSH2_PUBKEY: string | undefined = decodePushPubkey(
+  import.meta.env.VITE_NOSTR_PUSH2_PUBKEY?.trim() || DEFAULT_NOSTR_PUSH2_PUBKEY,
+);
+
+export const NOSTR_PUSH2_RELAYS: string[] = (
+  import.meta.env.VITE_NOSTR_PUSH2_RELAYS?.trim() || DEFAULT_NOSTR_PUSH2_RELAYS
+)
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+export function nostrPush2Configured(): boolean {
+  return Boolean(NOSTR_PUSH2_PUBKEY) && NOSTR_PUSH2_RELAYS.length > 0;
+}

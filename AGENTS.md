@@ -298,14 +298,15 @@ surface dead UI or throw: the `ArmadaNotification` background relay service
 touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export (itself Android 14+ only — see Conventions).
 
-### Notifications: APNs through the same nostr-push gateway
+### Notifications: APNs through the legacy nostr-push gateway
 
 iOS is the one platform that cannot listen for its own events in the
 background — no equivalent of Android's foreground service, and no Web Push in
 WKWebView — so it takes an APNs device token (`ios/App/App/ArmadaPushPlugin.swift`,
-`src/lib/nativePush.ts`) and registers it with the SAME content-blind
-nostr-push gateway the web client uses, as NIP-PUSH's `type: "apns"`
-subscription. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
+`src/lib/nativePush.ts`) and registers it with the content-blind nostr-push
+gateway, as NIP-PUSH's `type: "apns"` subscription. The web client has moved to
+nostr-push2 (next section); this path has not, so `nostrPush.ts`,
+`VITE_NOSTR_PUSH_*` and the per-record id bookkeeping below are iOS-only now. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
 register one watch set (`usePushWatchSet.ts`) and expose one
 `UsePushNotificationsReturn`, so the settings UI never learns which it has.
 Apple is unavoidably in the delivery path; what survives is that the GATEWAY
@@ -405,9 +406,7 @@ message.
   `domain` with the hosted client. Without the extra dimension
   (`pushInstallationId`), signing in on an iPhone would silently take over the
   same account's browser records and the browser's next sync would take them
-  back. Two BROWSERS on one origin still collide this way; that is pre-existing
-  and left alone, because changing web ids would make every install prune and
-  re-register.
+  back. (Browsers no longer register here at all.)
 - **The gateway is build-time config, and iOS has no CI to set it.**
   `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` must be in the
   environment of the `npm run build` that precedes `npx cap sync ios`, or the
@@ -438,6 +437,44 @@ does not resolve — deliberately: per `deepLinkUrl.ts` that scheme is emitted
 ONLY by the Android notification service's PendingIntents, and iOS push taps
 reach the router through the plugin rather than through a URL, so nothing on
 iOS can produce one.
+
+### Web notifications: nostr-push2 and `window.napp.push`
+
+The web build has two ways to be woken while closed, and `useNostrPush.ts`
+drives both: Tenna's `window.napp.push` when Armada runs there as an nsite
+(`~/Projects/tenna/NAPP.md`), and Web Push through a
+nostr-push2 (`nostr://npub1q3sle0kvfsehgsuexttt3ugjd8xdklxfwwkh559wxckmzddywnws6cd26p/git.shakespeare.diy/nostr-push2`)
+gateway everywhere else (`nostrPush2.ts`; the public service is hardcoded in
+`platform.ts`, and `VITE_NOSTR_PUSH2_*` only overrides it). They differ
+ONLY in the `PushTarget` the list is handed to. Both take the same
+`NappSubscription[]` (`nappPush.ts` packs the shared watch set into them) and
+both deliver the same `napp.push.payload` to `sw.js`, which normalizes it and
+presents it through the one path the legacy payloads also use. Don't give
+either transport a presentation path of its own.
+
+- **`set` replaces the whole list.** A snapshot with a plane still loading
+  would unsubscribe that plane, so `carryForwardWatches` keeps the last-set
+  watches of every plane that is not ready. This is the prune rule, and the
+  only one — there are no per-record ids to reconcile any more.
+- **The gateway client is an ephemeral per-install key, never the account's.**
+  So bunker and extension logins get Web Push too, and account exit can always
+  clear the list with no signer. The install also mints its OWN VAPID key and
+  hands the private half to the gateway in `create`; a browser subscription
+  made against any other key is dropped at preparation. Both keys live in
+  localStorage and go with logout's purge.
+- **The payload names no subscription.** The worker reads the plane off the
+  event (`pushScope` in `pushRuntime.ts`: a 1059 authored by one of our stream
+  addresses is Concord, one addressed to us is NIP-17, an `h`-tagged group kind
+  is NIP-29) and takes a NIP-29 room's relay from `relays`, the relay the event
+  arrived from. An event too big for the ~4 KB transport arrives as `event_id`
+  and is fetched BEFORE anything is shown, because its plane is unknowable
+  without it.
+- **Verify the event in the worker.** Tenna delivers what its relays sent
+  unchecked; `preparePush` drops anything whose signature does not hold.
+- **nostr-push2 ignores `relays`**: it matches against the firehose of its own
+  relays only. Tenna on Android does honour them (and cannot answer NIP-42).
+- The page must not show its own OS notification while either path is live —
+  `backgroundPushActive` is the one check, used by the foreground notifier.
 
 ## Local storage: ArmadaDB
 

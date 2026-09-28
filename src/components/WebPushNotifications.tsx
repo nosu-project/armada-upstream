@@ -10,6 +10,7 @@ import { useIosPush } from "@/hooks/useIosPush";
 import { isNativeRuntime } from "@/lib/platform";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
+import { hasNappPush } from "@/lib/nappPush";
 import { hasIosPush } from "@/lib/nativePush";
 import { DEFAULT_PUSH_PREFS, type UsePushNotificationsReturn } from "@/lib/pushPrefs";
 import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
@@ -24,15 +25,17 @@ import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
  * VAPID/server syncs.
  *
  * Which controller depends on how this build can be reached, and exactly one is
- * ever mounted: Web Push in a browser, APNs in the iOS app. The Android APK has
+ * ever mounted: `useNostrPush` in a browser — Web Push, or `window.napp.push`
+ * when Tenna hosts Armada as an nsite — and APNs in the iOS app. The Android APK has
  * neither — it runs its own background relay service instead (see
  * NativeNotifications), which needs no third party in the delivery path — so it
  * gets the inert value below. Both real controllers self-gate on `supported`,
- * so this is also inert when no nostr-push gateway is configured for the build.
+ * so this is also inert when no push gateway is configured for the build.
  */
 export function WebPushNotifications({ children }: { children: ReactNode }) {
   // Platform is fixed for the life of the process, so branching on it before
   // the hooks is stable — each branch mounts one component with its own hooks.
+  if (hasNappPush()) return <WebPushBridge>{children}</WebPushBridge>;
   if (hasIosPush()) return <IosPushBridge>{children}</IosPushBridge>;
   if (isNativeRuntime()) {
     const unavailable: UsePushNotificationsReturn = {

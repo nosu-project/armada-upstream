@@ -1,8 +1,9 @@
 /**
  * Armada Service Worker
  *
- * Push-only: receive Web Push notifications from the relay and route
- * notificationclick to the correct conversation. It deliberately does NOT
+ * Push-only: receive push notifications — Web Push from the nostr-push2
+ * gateway, or Tenna's `window.napp.push` delivery when Armada is an nsite
+ * there — and route notificationclick to the correct conversation. It deliberately does NOT
  * cache or intercept fetches.
  *
  * An earlier version of this worker also did app-shell caching (precached
@@ -62,16 +63,25 @@ self.addEventListener("activate", (event) => {
 // Web Push
 // ---------------------------------------------------------------------------
 
-// Two payload sources land here:
+// Every current payload is a `napp.push.payload` (src/lib/nappPush.ts):
 //
-//  - The legacy relay gateway sends a fully-rendered payload:
+//    { $type: "napp.push.payload", event_id, event?, relays }
+//
+// It arrives by one of two roads that this worker cannot and need not tell
+// apart: Web Push from the nostr-push2 gateway in a browser, or Tenna waking
+// the worker itself when Armada is an nsite there (`window.napp.push`). Either
+// way it is normalized below into the `{ scope, relays, event_id, event }` the
+// rest of this worker reads — the event is fetched by id when it was too big to
+// carry, and its plane (`scope`) is read off the event itself.
+//
+// Two older shapes are still understood, for pushes already in flight to an
+// endpoint made before the switch:
+//
+//  - The legacy relay gateway's fully-rendered payload:
 //    { title, body, icon, badge, data: { url, tag } } — shown as-is.
 //
-//  - The content-blind nostr-push gateway sends a static wake-up plus routing
-//    hints: { title, body, data: { event_id, scope, relays } } (see
-//    pushSubscriptions.ts), and — because every subscription this worker can
-//    open asks for `inline_event` — usually the matched event itself in
-//    `data.event`.
+//  - The retired nostr-push gateway's static wake-up plus routing hints:
+//    { title, body, data: { event_id, scope, relays, event? } }.
 //
 // When the event is there, the runtime bundle opens it, stores it and hands
 // back a real notification: the sender's name and avatar, the room's title and
@@ -680,17 +690,23 @@ async function handlePush(payload, data, base) {
   // encrypted wraps, where the old room-tag replacement produced two banners.
   if (!data.event_id) return;
   const relays = Array.isArray(data.relays) ? data.relays : [];
-  if (relays.length === 0) return;
   const canOpenEncrypted = (data.scope === "dm" || data.scope === "c2")
     && self.ArmadaDmCrypto
     && typeof self.ArmadaDmCrypto.preparePush === "function";
   if (!PLAINTEXT_SCOPES.has(data.scope) && !canOpenEncrypted) return;
 
-  let ev;
-  try {
-    ev = await fetchEventFromRelays(relays, data.event_id, 4000);
-  } catch {
-    return; // leave the static notification in place
+  // A plaintext event in hand needs no second fetch; an encrypted one the
+  // bundle already failed to open would fail again.
+  let ev = data.event;
+  if (ev && canOpenEncrypted) return;
+  if (!ev) {
+    // `fetched`: the napp path already asked the relays, before presenting.
+    if (data.fetched || relays.length === 0) return;
+    try {
+      ev = await fetchEventFromRelays(relays, data.event_id, 4000);
+    } catch {
+      return; // leave the static notification in place
+    }
   }
   if (!ev) return;
 
@@ -753,6 +769,74 @@ function runPush(payload, data, base) {
   return tracked;
 }
 
+const NAPP_PUSH_PAYLOAD_TYPE = "napp.push.payload";
+
+/** What the worker shows when it can't open the event, per plane. */
+const FALLBACK_TEXT = {
+  dm: "New direct message",
+  c2: "New message in a community",
+  group: "New message in a channel",
+  "group-mention": "Someone mentioned you",
+};
+
+/** The plane an event belongs to (the runtime's `pushScope`, or a guess without it). */
+async function scopeOfEvent(ev) {
+  if (!ev || typeof ev !== "object") return undefined;
+  const runtime = self.ArmadaDmCrypto;
+  if (runtime && typeof runtime.pushScope === "function") {
+    try {
+      const cfg = await runtime.openConfig(await readSealedConfig());
+      return runtime.pushScope(ev, cfg);
+    } catch {
+      // fall through to the guess
+    }
+  }
+  // Without the bundle nothing encrypted can be opened anyway; only the
+  // plaintext planes matter, and they are recognizable by shape.
+  if (ev.kind === 4) return "dm";
+  if ([9, 1111, 7].includes(ev.kind) && tagValue(ev, "h")) return "group";
+  return undefined;
+}
+
+/**
+ * Normalize a `napp.push.payload` into the `{ title, body }` fallback and the
+ * `data` the rest of the worker reads. The event is fetched here when it did
+ * not fit the transport, BEFORE anything is shown: its plane, and so whether
+ * and how to show it, is only knowable from the event.
+ */
+async function nappPush(raw) {
+  const eventId = typeof raw.event_id === "string" ? raw.event_id : "";
+  const relays = Array.isArray(raw.relays)
+    ? raw.relays.filter((relay) => typeof relay === "string")
+    : [];
+  let ev = raw.event && typeof raw.event === "object" && raw.event.id === eventId
+    ? raw.event
+    : undefined;
+  if (!ev && eventId && relays.length > 0) {
+    try {
+      ev = await fetchEventFromRelays(relays, eventId, 4000);
+    } catch {
+      ev = undefined;
+    }
+  }
+
+  const scope = await scopeOfEvent(ev);
+  const data = { event_id: eventId, relays, fetched: true };
+  if (scope) data.scope = scope;
+  if (ev) data.event = ev;
+  if (scope === "dm") data.url = "/dm";
+  const h = ev ? tagValue(ev, "h") : undefined;
+  if (PLAINTEXT_SCOPES.has(scope) && h && relays.length === 1) {
+    data.url = groupUrl(relays[0], h, eventId);
+  }
+  return {
+    payload: scope
+      ? { title: "New message", body: FALLBACK_TEXT[scope] }
+      : { title: "Armada", body: "New message" },
+    data,
+  };
+}
+
 self.addEventListener("push", (event) => {
   let payload;
   if (!event.data) {
@@ -765,7 +849,6 @@ self.addEventListener("push", (event) => {
     }
   }
 
-  const data = payload?.data ?? {};
   const base = {
     icon: payload?.icon || "/favicon.png",
     // Single-colour on transparency: the platform keeps only this image's alpha
@@ -774,6 +857,22 @@ self.addEventListener("push", (event) => {
     badge: payload?.badge || "/badge-96.png",
     renotify: true,
   };
+
+  if (payload?.$type === NAPP_PUSH_PAYLOAD_TYPE) {
+    event.waitUntil((async () => {
+      // The kill switch before the fetch: a disabled install asks no relay
+      // anything on a push's behalf.
+      if (await pushDisabled()) {
+        await dropOwnSubscription();
+        return;
+      }
+      const normalized = await nappPush(payload);
+      await runPush(normalized.payload, normalized.data, base);
+    })());
+    return;
+  }
+
+  const data = payload?.data ?? {};
   event.waitUntil(runPush(payload ?? {}, data, base));
 });
 
@@ -804,12 +903,18 @@ function groupUrl(relayUrl, groupId, eventId) {
 
 /**
  * Fetch one event by id, racing the given relays, resolving with the first hit
- * (or undefined). Each socket is torn down on resolve or after `timeoutMs`.
+ * — or undefined once every relay has said it has none, or after `timeoutMs`.
+ * Each socket is torn down on resolve.
  */
 function fetchEventFromRelays(relays, id, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
     const sockets = [];
+    let unanswered = 0;
+    const answered = () => {
+      unanswered -= 1;
+      if (unanswered <= 0) done(undefined);
+    };
     const done = (ev) => {
       if (settled) return;
       settled = true;
@@ -833,6 +938,13 @@ function fetchEventFromRelays(relays, id, timeoutMs) {
         continue;
       }
       sockets.push(ws);
+      unanswered += 1;
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        answered();
+      };
       const subId = `sw-${Math.random().toString(36).slice(2, 10)}`;
       ws.onopen = () => {
         try {
@@ -850,20 +962,22 @@ function fetchEventFromRelays(relays, id, timeoutMs) {
         }
         if (frame[0] === "EVENT" && frame[1] === subId && frame[2] && frame[2].id === id) {
           done(frame[2]);
-        } else if (frame[0] === "EOSE" && frame[1] === subId) {
+        } else if ((frame[0] === "EOSE" || frame[0] === "CLOSED") && frame[1] === subId) {
           try {
             ws.close();
           } catch {
             /* ignore */
           }
+          finish();
         }
       };
       ws.onerror = () => {
-        /* other relays may still answer */
+        // Other relays may still answer.
+        finish();
       };
     }
 
-    if (relays.length === 0) done(undefined);
+    if (unanswered === 0) done(undefined);
   });
 }
 
@@ -872,9 +986,9 @@ self.addEventListener("pushsubscriptionchange", (event) => {
   // push-service key rotation). Until a new subscription is registered with
   // the relay, every push goes to a dead endpoint. Resubscribe with the same
   // server key so a live subscription exists again, then tell open pages to
-  // re-register it — the registration PUT needs a NIP-98 signature that only
-  // the page's signer can produce. With no page open, the page-load sync in
-  // useNostrPush re-registers on the next visit.
+  // re-register it — the gateway client key that must sign the `create` lives
+  // in page storage, out of this worker's reach. With no page open, the
+  // page-load sync in useNostrPush re-registers on the next visit.
   const key = event.oldSubscription?.options?.applicationServerKey;
   event.waitUntil(
     (async () => {

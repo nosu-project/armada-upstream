@@ -22,6 +22,7 @@ import { isDesktop, requestDesktopAttention } from "@/lib/desktop";
 import { desktopNotificationTag } from "@/lib/desktopNotificationTag";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaSrc } from "@/lib/mediaPolicy";
+import { backgroundPushActive } from "@/lib/nappPush";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { dmConvPeers } from "@/lib/nip17/protocol";
 import {
@@ -105,7 +106,7 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
 
 /**
  * The page may construct an OS notification only after proving this install
- * has no Web Push subscription. Fail closed: an indeterminate registration is
+ * has no background push (a Web Push subscription, or Tenna subscriptions). Fail closed: an indeterminate registration is
  * preferable to two banners/sounds for one event when its PushEvent arrives.
  */
 export async function pageMayShowOsNotification(): Promise<boolean> {
@@ -120,7 +121,7 @@ export async function pageMayShowOsNotification(): Promise<boolean> {
   try {
     const registration = await navigator.serviceWorker.getRegistration();
     if (!registration) return true;
-    return !(await registration.pushManager.getSubscription());
+    return !(await backgroundPushActive(registration));
   } catch {
     return false;
   }
@@ -170,12 +171,12 @@ export async function showPageOsNotification(
         // Re-check at the final presentation boundary. A subscription can be
         // enabled while profile/room enrichment is awaiting; `null` hands the
         // event back to the PushEvent without constructing a second banner.
-        if (!coordination.allowActivePush && await current.pushManager.getSubscription()) {
+        if (!coordination.allowActivePush && await backgroundPushActive(current)) {
           return null;
         }
         const registration = await navigator.serviceWorker.ready;
         if (abort()) return null;
-        if (!coordination.allowActivePush && await registration.pushManager.getSubscription()) {
+        if (!coordination.allowActivePush && await backgroundPushActive(registration)) {
           return null;
         }
         if (abort()) return null;
@@ -191,7 +192,7 @@ export async function showPageOsNotification(
         if (
           !coordination.allowActivePush
           && current
-          && await current.pushManager.getSubscription()
+          && await backgroundPushActive(current)
         ) return null;
       } catch {
         return null; // indeterminate ownership: fail closed against duplicates

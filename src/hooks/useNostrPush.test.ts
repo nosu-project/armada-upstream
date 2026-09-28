@@ -1,346 +1,204 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  mutateWebPushRegistrations,
-  type WebPushSyncJob,
+  mutatePushRegistrations,
+  nappPushTarget,
+  webPushTarget,
+  type PushSyncJob,
+  type PushTarget,
 } from "@/hooks/useNostrPush";
-import { savePushRegistrationState } from "@/lib/pushRegistry";
-import { scopePushSubscriptionId } from "@/lib/pushSubscriptions";
+import { loadLastPushSet, NAPP_LIMITS, saveLastPushSet, type NappSubscription } from "@/lib/nappPush";
+import { NostrPush2Error, type NostrPush2Client } from "@/lib/nostrPush2";
 
-beforeEach(() => {
-  localStorage.clear();
+import type { PushSubscriptionSpec } from "@/lib/pushSubscriptions";
+
+const A = "a".repeat(64);
+
+const spec = (id: string, relay: string, filter: PushSubscriptionSpec["filter"]): PushSubscriptionSpec => ({
+  id,
+  relays: [relay],
+  filter,
+  notification: { title: "", body: "", data: { scope: "dm", relays: [relay] } },
+});
+const dm17 = spec("armada-dm17", "wss://dm", { kinds: [1059], "#p": [A] });
+const group = spec("armada-groups-x", "wss://g", { kinds: [9], "#h": ["general"] });
+
+function fakeTarget(over: Partial<PushTarget> = {}) {
+  const sets: NappSubscription[][] = [];
+  const target: PushTarget = {
+    kind: "napp",
+    limits: NAPP_LIMITS,
+    set: vi.fn(async (subscriptions: NappSubscription[]) => {
+      sets.push(subscriptions);
+      return true;
+    }),
+    clear: vi.fn(async () => {}),
+    activate: vi.fn(async (prepareConfig: () => Promise<void>) => {
+      await prepareConfig();
+      return true;
+    }),
+    ...over,
+  };
+  return { target, sets };
+}
+
+const job = (target: PushTarget, over: Partial<PushSyncJob> = {}): PushSyncJob => ({
+  kind: "sync",
+  target,
+  pubkey: A,
+  specs: [dm17],
+  notificationSettingsReady: true,
+  planes: { groups: true, dm: true, concord: true },
+  prepareConfig: vi.fn(async () => {}),
+  ...over,
 });
 
-describe("mutateWebPushRegistrations", () => {
-  it("does not register, replace worker config, or activate before policy authority", async () => {
-    const getSubscription = vi.fn();
-    const registerSubscription = vi.fn();
-    const prepareConfig = vi.fn();
-    const job = {
-      kind: "sync",
-      client: { registerSubscription },
-      pubkey: "a".repeat(64),
-      domain: "armada.example",
-      installation: "install",
-      prepared: {
-        registration: { pushManager: { getSubscription } },
-        key: new ArrayBuffer(0),
-        options: { userVisibleOnly: true },
-      },
-      specs: [{
-        id: "armada-dm17",
-        relays: ["wss://relay.example"],
-        filter: { kinds: [1059] },
-        notification: {
-          title: "New message",
-          body: "New direct message",
-          data: { scope: "dm", relays: ["wss://relay.example"] },
-        },
-      }],
-      authoritative: false,
-      notificationSettingsReady: false,
-      groupPlaneReady: false,
-      dmPlaneReady: false,
-      concordPlaneReady: false,
-      prepareConfig,
-    } as unknown as WebPushSyncJob;
+beforeEach(() => localStorage.clear());
 
-    await expect(mutateWebPushRegistrations(job, () => true)).resolves.toEqual({
-      completed: false,
-      activated: false,
-      deferredRegistrations: [],
-    });
-    expect(getSubscription).not.toHaveBeenCalled();
-    expect(registerSubscription).not.toHaveBeenCalled();
-    expect(prepareConfig).not.toHaveBeenCalled();
-  });
-
-  it("activates an independent NIP-29 partial watch while encrypted planes are unready", async () => {
-    const subscription = {
-      endpoint: "https://push.example/nip29-only",
-      options: {},
-      toJSON: () => ({ keys: { p256dh: "p256", auth: "auth" } }),
-    } as unknown as PushSubscription;
-    const registerSubscription = vi.fn(async () => {});
-    const prepareConfig = vi.fn(async () => {
-      // The hook's real callback seals dmReady:false/concordReady:false here.
-    });
-    const job = {
-      kind: "sync",
-      client: {
-        registerSubscription,
-        deleteSubscription: vi.fn(async () => {}),
-      },
-      pubkey: "b".repeat(64),
-      domain: "nip29-only.example",
-      installation: "install",
-      prepared: {
-        registration: {
-          pushManager: { getSubscription: vi.fn(async () => subscription) },
-        },
-        key: new ArrayBuffer(0),
-        options: { userVisibleOnly: true },
-      },
-      specs: [{
-        id: "armada-groups-relay",
-        relays: ["wss://groups.example"],
-        filter: { kinds: [9], "#h": ["general"] },
-        notification: {
-          title: "New message",
-          body: "New message in a channel",
-          data: { scope: "group", relays: ["wss://groups.example"] },
-        },
-      }],
-      authoritative: false,
-      notificationSettingsReady: true,
-      groupPlaneReady: true,
-      dmPlaneReady: false,
-      concordPlaneReady: false,
-      prepareConfig,
-    } as unknown as WebPushSyncJob;
-
-    const result = await mutateWebPushRegistrations(job, () => true);
-
-    expect(result).toEqual({
-      completed: true,
-      activated: true,
-      deferredRegistrations: [],
-    });
-    expect(registerSubscription).toHaveBeenCalledTimes(1);
-    expect(prepareConfig).toHaveBeenCalledTimes(1);
-  });
-
-  it("activates stable records and reports a deferred full-quota partial addition", async () => {
-    const pubkey = "c".repeat(64);
-    const domain = "partial-quota.example";
-    const installation = "install";
-    const scoped = (id: string) => scopePushSubscriptionId(
-      id,
-      pubkey,
-      domain,
-      installation,
+describe("mutatePushRegistrations", () => {
+  it("hands over nothing and lifts nothing before policy authority", async () => {
+    const { target } = fakeTarget();
+    const result = await mutatePushRegistrations(
+      job(target, { notificationSettingsReady: false }),
+      () => true,
     );
-    savePushRegistrationState({ pubkey, domain, installation }, {
-      ids: [scoped("armada-c2-old"), scoped("armada-dm17")],
-      legacyMigrationComplete: true,
-    });
-    const subscription = {
-      endpoint: "https://push.example/partial-quota",
-      options: {},
-      toJSON: () => ({ keys: { p256dh: "p256", auth: "auth" } }),
-    } as unknown as PushSubscription;
-    const registerSubscription = vi.fn(async (input: { subscription_id: string }) => {
-      if (input.subscription_id === scoped("armada-c2-new")) {
-        throw new Error("quota exceeded");
-      }
-    });
+    expect(result.completed).toBe(false);
+    expect(target.set).not.toHaveBeenCalled();
+    expect(target.activate).not.toHaveBeenCalled();
+  });
+
+  it("hands over the whole list, then seals config and activates", async () => {
+    const { target, sets } = fakeTarget();
     const prepareConfig = vi.fn(async () => {});
-    const makeSpec = (id: string) => ({
-      id,
-      relays: ["wss://relay.example"],
-      filter: { kinds: [1059] },
-      notification: {
-        title: "New message",
-        body: "New message",
-        data: { scope: "dm" as const, relays: ["wss://relay.example"] },
-      },
-    });
-    const job = {
-      kind: "sync",
-      client: {
-        registerSubscription,
-        deleteSubscription: vi.fn(async () => {}),
-      },
-      pubkey,
-      domain,
-      installation,
-      prepared: {
-        registration: {
-          pushManager: { getSubscription: vi.fn(async () => subscription) },
-        },
-        key: new ArrayBuffer(0),
-        options: { userVisibleOnly: true },
-      },
-      specs: [
-        makeSpec("armada-c2-new"),
-        makeSpec("armada-dm17"),
-        makeSpec("armada-c2-old"),
-      ],
-      authoritative: false,
-      notificationSettingsReady: true,
-      groupPlaneReady: false,
-      dmPlaneReady: true,
-      concordPlaneReady: false,
-      prepareConfig,
-    } as unknown as WebPushSyncJob;
+    const result = await mutatePushRegistrations(job(target, { prepareConfig }), () => true);
 
-    const result = await mutateWebPushRegistrations(job, () => true);
-
-    expect(result).toEqual({
-      completed: true,
-      activated: true,
-      deferredRegistrations: [scoped("armada-c2-new")],
-    });
-    expect(registerSubscription.mock.calls.map(([input]) => input.subscription_id))
-      .toEqual([
-        scoped("armada-dm17"),
-        scoped("armada-c2-new"),
-      ]);
+    expect(result).toEqual({ completed: true, activated: true, dropped: 0 });
+    expect(sets).toEqual([[{ filters: [dm17.filter], relays: ["wss://dm"] }]]);
     expect(prepareConfig).toHaveBeenCalledTimes(1);
+    expect(loadLastPushSet(A).map((w) => w.id)).toEqual(["armada-dm17"]);
   });
 
-  it("uses Concord-only prune authority to recover a zero-overlap full quota", async () => {
-    const pubkey = "d".repeat(64);
-    const domain = "plane-prune.example";
-    const installation = "install";
-    const scoped = (id: string) => scopePushSubscriptionId(
-      id,
-      pubkey,
-      domain,
-      installation,
+  it("keeps a plane that has not loaded subscribed as it was last set", async () => {
+    saveLastPushSet(A, [group]);
+    const { target, sets } = fakeTarget();
+    await mutatePushRegistrations(
+      job(target, { planes: { groups: false, dm: true, concord: true } }),
+      () => true,
     );
-    const oldId = scoped("armada-c2-old-relays");
-    const newId = scoped("armada-c2-new-relays");
-    const live = new Set([oldId]);
-    savePushRegistrationState({ pubkey, domain, installation }, {
-      ids: [...live],
-      legacyMigrationComplete: true,
-    });
-    const order: string[] = [];
-    const subscription = {
-      endpoint: "https://push.example/plane-prune",
-      options: {},
-      toJSON: () => ({ keys: { p256dh: "p256", auth: "auth" } }),
-    } as unknown as PushSubscription;
-    const prepareConfig = vi.fn(async () => {});
-    const job = {
-      kind: "sync",
-      client: {
-        registerSubscription: vi.fn(async (input: { subscription_id: string }) => {
-          order.push(`put:${input.subscription_id}`);
-          if (!live.has(input.subscription_id) && live.size >= 1) {
-            throw new Error("quota exceeded");
-          }
-          live.add(input.subscription_id);
-        }),
-        deleteSubscription: vi.fn(async (id: string) => {
-          order.push(`delete:${id}`);
-          live.delete(id);
-        }),
-      },
-      pubkey,
-      domain,
-      installation,
-      prepared: {
-        registration: {
-          pushManager: { getSubscription: vi.fn(async () => subscription) },
-        },
-        key: new ArrayBuffer(0),
-        options: { userVisibleOnly: true },
-      },
-      specs: [{
-        id: "armada-c2-new-relays",
-        relays: ["wss://new.example"],
-        filter: { kinds: [1059], authors: ["e".repeat(64)] },
-        notification: {
-          title: "New message",
-          body: "New message in a community",
-          data: { scope: "c2", relays: ["wss://new.example"] },
-        },
-      }],
-      authoritative: false,
-      notificationSettingsReady: true,
-      groupPlaneReady: false,
-      dmPlaneReady: false,
-      concordPlaneReady: true,
-      prepareConfig,
-    } as unknown as WebPushSyncJob;
-
-    await expect(mutateWebPushRegistrations(job, () => true)).resolves.toEqual({
-      completed: true,
-      activated: true,
-      deferredRegistrations: [],
-    });
-    expect(order).toEqual([`delete:${oldId}`, `put:${newId}`]);
-    expect(live).toEqual(new Set([newId]));
-    expect(prepareConfig).toHaveBeenCalledTimes(1);
+    expect(sets[0]).toContainEqual({ filters: [group.filter], relays: ["wss://g"] });
+    expect(loadLastPushSet(A).map((w) => w.id).sort()).toEqual(["armada-dm17", "armada-groups-x"]);
   });
 
-  it("still seals config and lifts the kill switch when a stale DELETE fails", async () => {
-    // Endpoint safety and gateway prune completeness are deliberately
-    // unrelated (see `activateRegisteredWebPush`). A transient 5xx on one
-    // orphaned record must not leave an install whose PUTs all succeeded
-    // sitting behind the durable account-exit kill switch with no sealed
-    // policy — that is silently "no notifications at all" until the record
-    // becomes deletable, while the endpoint and registrations are correct.
-    const pubkey = "f".repeat(64);
-    const domain = "stale-delete.example";
-    const installation = "install";
-    const scoped = (id: string) => scopePushSubscriptionId(
-      id,
-      pubkey,
-      domain,
-      installation,
-    );
-    const orphanId = scoped("armada-c2-orphan");
-    savePushRegistrationState({ pubkey, domain, installation }, {
-      ids: [orphanId],
-      legacyMigrationComplete: true,
+  it("drops a loaded plane's stale watches", async () => {
+    saveLastPushSet(A, [group]);
+    const { target, sets } = fakeTarget();
+    await mutatePushRegistrations(job(target), () => true);
+    expect(sets[0]).toEqual([{ filters: [dm17.filter], relays: ["wss://dm"] }]);
+  });
+
+  it("records nothing when superseded mid-flight", async () => {
+    let current = true;
+    const { target } = fakeTarget({
+      set: vi.fn(async () => {
+        current = false;
+        return false;
+      }),
     });
-    const subscription = {
-      endpoint: "https://push.example/stale-delete",
-      options: {},
-      toJSON: () => ({ keys: { p256dh: "p256", auth: "auth" } }),
-    } as unknown as PushSubscription;
-    const registerSubscription = vi.fn(
-      async (_input: { subscription_id: string }) => {},
-    );
-    const deleteSubscription = vi.fn(async () => {
-      throw new Error("gateway unavailable");
-    });
-    const prepareConfig = vi.fn(async () => {});
-    const job = {
-      kind: "sync",
-      client: { registerSubscription, deleteSubscription },
-      pubkey,
-      domain,
-      installation,
-      prepared: {
-        registration: {
-          pushManager: { getSubscription: vi.fn(async () => subscription) },
-        },
-        key: new ArrayBuffer(0),
-        options: { userVisibleOnly: true },
+    const result = await mutatePushRegistrations(job(target), () => current);
+    expect(result.completed).toBe(false);
+    expect(loadLastPushSet(A)).toEqual([]);
+    expect(target.activate).not.toHaveBeenCalled();
+  });
+
+  it("reports an activation it could not make safely", async () => {
+    const { target } = fakeTarget({ activate: vi.fn(async () => false) });
+    await expect(mutatePushRegistrations(job(target), () => true)).rejects.toThrow("retired safely");
+  });
+
+  it("clears the target and forgets the last set", async () => {
+    saveLastPushSet(A, [dm17]);
+    const { target } = fakeTarget();
+    await mutatePushRegistrations({ kind: "clear", target }, () => true);
+    expect(target.clear).toHaveBeenCalled();
+    expect(loadLastPushSet(A)).toEqual([]);
+  });
+});
+
+describe("webPushTarget", () => {
+  const key = new Uint8Array(65).fill(4).buffer;
+  const subscription = {
+    endpoint: "https://push.example/abc",
+    options: { applicationServerKey: key },
+    toJSON: () => ({ keys: { p256dh: "p", auth: "a" } }),
+    unsubscribe: vi.fn(async () => true),
+  } as unknown as PushSubscription;
+  const prepared = {
+    registration: {
+      pushManager: {
+        getSubscription: async () => subscription,
+        subscribe: vi.fn(),
       },
-      specs: [{
-        id: "armada-dm17",
-        relays: ["wss://relay.example"],
-        filter: { kinds: [1059], "#p": [pubkey] },
-        notification: {
-          title: "New message",
-          body: "New direct message",
-          data: { scope: "dm", relays: ["wss://relay.example"] },
-        },
-      }],
-      authoritative: true,
-      notificationSettingsReady: true,
-      groupPlaneReady: true,
-      dmPlaneReady: true,
-      concordPlaneReady: true,
-      prepareConfig,
-    } as unknown as WebPushSyncJob;
+    } as unknown as ServiceWorkerRegistration,
+    key,
+    options: { userVisibleOnly: true, applicationServerKey: key },
+    identity: { secretKey: new Uint8Array(32), vapidPrivateKey: "d", vapidPublicKey: "k" },
+  };
 
-    // The failed deletion is still reported to the caller, so its bounded
-    // retry keeps trying to release the orphan.
-    await expect(mutateWebPushRegistrations(job, () => true))
-      .rejects.toThrow(/stale push subscription/);
+  it("creates the client once per endpoint, then sets", async () => {
+    const client = { create: vi.fn(async () => {}), set: vi.fn(async () => {}) };
+    const target = webPushTarget(client as unknown as NostrPush2Client, () => prepared);
 
-    expect(registerSubscription).toHaveBeenCalledTimes(1);
-    expect(registerSubscription.mock.calls[0]?.[0]).toMatchObject({
-      subscription_id: scoped("armada-dm17"),
+    await target.set([], () => true);
+    await target.set([], () => true);
+
+    expect(client.create).toHaveBeenCalledTimes(1);
+    expect(client.create).toHaveBeenCalledWith({
+      method: "web",
+      endpoint: "https://push.example/abc",
+      p256dh: "p",
+      auth: "a",
+      vapid_private_key: "d",
     });
-    expect(deleteSubscription).toHaveBeenCalledWith(orphanId, domain);
-    // The point of the test: the successful registration was activated.
-    expect(prepareConfig).toHaveBeenCalledTimes(1);
+    expect(client.set).toHaveBeenCalledTimes(2);
+  });
+
+  it("registers again when the gateway has forgotten this client", async () => {
+    const set = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new NostrPush2Error("unknown client; call create first"))
+      .mockResolvedValueOnce(undefined);
+    const client = { create: vi.fn(async () => {}), set };
+    const target = webPushTarget(client as unknown as NostrPush2Client, () => prepared);
+
+    await target.set([], () => true);
+    await expect(target.set([], () => true)).resolves.toBe(true);
+    expect(client.create).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses before the worker and key are prepared", async () => {
+    const target = webPushTarget({} as NostrPush2Client, () => undefined);
+    await expect(target.set([], () => true)).rejects.toThrow("Push not ready");
+  });
+});
+
+describe("nappPushTarget", () => {
+  it("hands the list to the host and clears with an empty one", async () => {
+    const api = { set: vi.fn(async () => {}), get: vi.fn(async () => []) };
+    const target = nappPushTarget(api);
+    const subs = [{ filters: [{ kinds: [1] }], relays: ["wss://r"] }];
+
+    await expect(target.set(subs, () => true)).resolves.toBe(true);
+    await target.clear();
+
+    expect(api.set.mock.calls).toEqual([[subs], [[]]]);
+  });
+
+  it("seals the account's config before it activates", async () => {
+    const target = nappPushTarget({ set: vi.fn(), get: vi.fn() });
+    const prepareConfig = vi.fn(async () => {});
+    await expect(target.activate(prepareConfig, () => true)).resolves.toBe(true);
+    expect(prepareConfig).toHaveBeenCalled();
+    await expect(target.activate(prepareConfig, () => false)).resolves.toBe(false);
   });
 });

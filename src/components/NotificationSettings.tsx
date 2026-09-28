@@ -18,6 +18,7 @@ import {
   type NotificationSoundSettings as NotificationSoundSettingsValue,
 } from "@/lib/notificationSounds";
 import { hasIosPush } from "@/lib/nativePush";
+import { hasNappPush } from "@/lib/nappPush";
 import { type DmRequestLevel, type PushPrefs } from "@/lib/pushPrefs";
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
 import {
@@ -410,8 +411,8 @@ function BatteryOptimizationWarning() {
 }
 
 function WebPushSettings() {
-  // The content-blind nostr-push path, which self-gates on `supported` when no
-  // push server is configured for this build.
+  // Web Push through nostr-push2, or Tenna's `window.napp.push`. Self-gates on
+  // `supported` when neither is available to this build.
   const {
     supported,
     unavailableReason,
@@ -471,7 +472,9 @@ function WebPushSettings() {
           // gateway's fixed wake-up text is what the lock screen shows. Say so
           // rather than let it read as a bug.
           ? "Get notified even when Armada is closed. Notifications say a new message arrived without naming the sender or quoting it — Armada only decrypts once you open it."
-          : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
+          : hasNappPush()
+            ? "Get notified even when Armada is closed."
+            : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}

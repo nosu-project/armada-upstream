@@ -9,11 +9,6 @@ import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
-import {
-  PUSH_CLEANUP_KEY,
-  PUSH_INSTALLATION_KEY,
-  stagePushCleanupForPurge,
-} from "@/lib/pushRegistry";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
@@ -92,16 +87,13 @@ async function purgeCacheStorage(): Promise<void> {
 }
 
 /** Wipe all Armada localStorage (everything except the preserved keys). */
-function purgeLocalStorage(preservePushCleanup: boolean): void {
+function purgeLocalStorage(): void {
   if (typeof localStorage === "undefined") return;
   try {
-    const preserve = preservePushCleanup
-      ? new Set([...PRESERVE_LOCAL_STORAGE_KEYS, PUSH_CLEANUP_KEY, PUSH_INSTALLATION_KEY])
-      : PRESERVE_LOCAL_STORAGE_KEYS;
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && !preserve.has(key)) toRemove.push(key);
+      if (key && !PRESERVE_LOCAL_STORAGE_KEYS.has(key)) toRemove.push(key);
     }
     for (const key of toRemove) localStorage.removeItem(key);
   } catch {
@@ -117,16 +109,11 @@ function purgeLocalStorage(preservePushCleanup: boolean): void {
  * dropped too.
  *
  * `armada:login` is intentionally left for the caller's `removeLogin` to manage
- * in the same tick. A hash-only failed-push cleanup tombstone and its opaque
- * installation id also survive only while a gateway delete remains pending;
- * everything else (including `armada:app-config`) is wiped so the next session
- * starts truly clean.
+ * in the same tick. Everything else (including `armada:app-config` and the
+ * push gateway's per-install client key) is wiped so the next session starts
+ * truly clean.
  */
-export async function purgeClientStorage(outgoingPubkey?: string | null): Promise<void> {
-  // The bounded gateway teardown can time out. Before its ordinary scoped
-  // registry is wiped, retain only this account/current installation's opaque
-  // ids under a hash-only tombstone so the same signer can retry after login.
-  const preservePushCleanup = stagePushCleanupForPurge(outgoingPubkey);
+export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   // Decrypted plaintext and decoded community state held in memory in front
   // of the stores purged below.
@@ -150,7 +137,7 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   // account may not be in. Not awaited with the rest: it is a system call that
   // can be rate-limited, and no other teardown step depends on it.
   void clearShareShortcuts();
-  purgeLocalStorage(preservePushCleanup);
+  purgeLocalStorage();
   // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
   // not applied, so its databases have to be closed before the sweep runs.
   await purgeArmadaDB();

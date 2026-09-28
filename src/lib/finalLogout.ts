@@ -77,7 +77,7 @@ export async function finalLogout(pubkey: string | null): Promise<void> {
   setActivePubkey(null);
 
   // Fence other tabs, then give the notification controllers their bounded
-  // window BEFORE purge erases the durable prune ids they need.
+  // window BEFORE purge erases the push client key they clear with.
   beginCrossTabAccountExit(pubkey, null);
   exitStep("teardown", "closing secure channel");
   try {
@@ -88,7 +88,7 @@ export async function finalLogout(pubkey: string | null): Promise<void> {
 
   exitStep("purge", "purging local vault");
   try {
-    await purgeClientStorage(pubkey);
+    await purgeClientStorage();
   } catch {
     // best-effort — the deadline still navigates
   }

@@ -103,12 +103,15 @@ the box; other hostnames need HTTPS.
   import itself runs on the portal, which signs the resulting community with the
   user's own Nostr key and hands back an ordinary invite link. Must be an
   `http(s)` URL; anything else is treated as unset.
-- `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` — identity of a
-  content-blind NIP-PUSH gateway and the comma-separated Nostr relays used for
-  its encrypted RPC. When configured, web and Home-Screen installs can receive
-  standards-based Web Push while Armada is closed; when empty, background Web
-  Push is unavailable. These values are public client configuration (Vite
-  embeds them in the bundle), even when deployment CI supplies them as secrets.
+- `VITE_NOSTR_PUSH2_PUBKEY` / `VITE_NOSTR_PUSH2_RELAYS` — override the
+  nostr-push2 gateway web and Home-Screen installs register with for Web Push
+  while Armada is closed, and the comma-separated Nostr relays its encrypted
+  RPC is carried over (relays the gateway itself reads). Unset, they default to
+  the public service (`4c812266…e174c7` on `wss://relay.ditto.pub` and
+  `wss://relay.dreamith.to`). Inside Tenna Armada uses the host's
+  `window.napp.push` instead and needs neither.
+- `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` — the older NIP-PUSH
+  gateway the iOS app registers its APNs token with.
 - `VITE_APP_NAME` — display name.
 
 ## Packaging
