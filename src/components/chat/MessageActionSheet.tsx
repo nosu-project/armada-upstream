@@ -126,6 +126,7 @@ export function MessageActionSheet({
             <Suspense fallback={<div className="w-full" />}>
               <LazyEmojiPicker
                 customEmojis={customEmojis}
+                onBrowsePacks={() => onOpenChange(false)}
                 onSelect={(selection) => {
                   if (selection.type === "native") react(selection.emoji);
                   else react(`:${selection.shortcode}:`, selection.url);

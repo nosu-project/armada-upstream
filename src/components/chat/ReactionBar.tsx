@@ -503,6 +503,7 @@ export function ReactionActions({
           <Suspense fallback={<div className="w-full" />}>
             <LazyEmojiPicker
               customEmojis={customEmojis}
+              onBrowsePacks={() => setOpen(false)}
               onSelect={(selection) => {
                 if (selection.type === "native") {
                   react(selection.emoji);

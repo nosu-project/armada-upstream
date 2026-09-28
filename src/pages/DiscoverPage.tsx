@@ -1,5 +1,6 @@
 import { Compass, Loader2, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import {
   CommunityListingCard,
@@ -73,7 +74,12 @@ const TABS: (PillTab<DiscoverTab> & { placeholder: string; blurb: string })[] = 
  */
 export function DiscoverPage() {
   const { user } = useCurrentUser();
-  const [tab, setTab] = useState<DiscoverTab>("communities");
+  // `?tab=` lets a link land on a tab (the emoji picker's "Browse" → emojis).
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<DiscoverTab>(() => {
+    const requested = searchParams.get("tab");
+    return TABS.find((t) => t.id === requested)?.id ?? "communities";
+  });
   // Independent query per tab so switching tabs doesn't carry a stale search.
   const [queries, setQueries] = useState<Record<DiscoverTab, string>>({
     communities: "",

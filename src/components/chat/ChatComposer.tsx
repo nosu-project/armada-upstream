@@ -24,6 +24,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { AttachSheet, type AttachAction } from "@/components/chat/AttachSheet";
 import { AttachmentTray, MAX_ALT_CHARS, type TrayItem } from "@/components/chat/AttachmentTray";
 import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
+import { BrowseEmojiPacksButton } from "@/components/chat/BrowseEmojiPacksButton";
 import { mayFocusOnSwitch, registerTypeToFocus } from "@/components/chat/typeToFocus";
 import { authorsByRecency } from "@/components/chat/transport";
 import type { PollDraft } from "@/components/chat/transport";
@@ -2971,6 +2972,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <Sticker className="size-3.5" />
                 Stickers
               </button>
+              <BrowseEmojiPacksButton className="ml-auto" onBrowse={() => setPickerOpen(false)} />
             </div>
           )}
 
@@ -2984,6 +2986,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             >
               <LazyEmojiPicker
                 customEmojis={customEmojis}
+                onBrowsePacks={() => setPickerOpen(false)}
+                packsLinkInHost
                 onSelect={(selection) => {
                   if (selection.type === "native") {
                     insertEmoji(selection.emoji);
