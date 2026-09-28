@@ -357,13 +357,6 @@ jobs:
           cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
           # The unsigned Flatpak bundle. npkg re-signs on import.
           cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
-          # The web layer alone: this job's dist, the same bytes the asar check
-          # above compared against. The Flatpak shell installs it in place
-          # (electron/webBundleUpdate.js) after checking it against this
-          # release's `x`, so it has to be named by the signed event rather than
-          # served beside the site. Deterministic, so a rebuild keeps its hash.
-          tar -C dist --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-            --exclude=./downloads -cf - . | gzip -n > "$out/Armada-$TAG-web.tar.gz"
           ls -lh "$out"
 
       - uses: actions/upload-artifact@v4
@@ -373,7 +366,6 @@ jobs:
             .release-artifacts/Armada-${{ github.ref_name }}.AppImage
             .release-artifacts/Armada-${{ github.ref_name }}.deb
             .release-artifacts/Armada-${{ github.ref_name }}.flatpak
-            .release-artifacts/Armada-${{ github.ref_name }}-web.tar.gz
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4

@@ -274,7 +274,7 @@ async function openExternalUrl(url) {
 // out to the system browser (there is no OS-level https handoff into a desktop
 // app short of being the default browser).
 // It routes navigations and nothing else; the web-bundle updater resolves its
-// source from the release event instead.
+// source from the signed site manifest instead.
 let deepLinkHost = null;
 
 /**
@@ -936,7 +936,7 @@ async function checkForDesktopUpdates(manual = false) {
 }
 
 // Vesktop-style: the Flatpak shell is never replaced, its WEB BUNDLE is.
-// Resolve the `web` artifact of the newest pinned-author release event
+// Resolve the dist archive the newest signed site manifest names
 // (updateFeed.cjs), download and hash-check it, activate it
 // (electron/webBundleUpdate.js + bundleStore.js), offer a restart.
 async function checkForWebBundleUpdate(manual = false) {
@@ -948,22 +948,17 @@ async function checkForWebBundleUpdate(manual = false) {
   manualUpdateCheck = manual;
   try {
     const { updateWebBundle } = require("./webBundleUpdate");
-    const { resolveDesktopUpdate } = require("./updateFeed.cjs");
+    const { resolveWebBundle } = require("./updateFeed.cjs");
     const wasManual = manualUpdateCheck;
     manualUpdateCheck = false;
-    const shellVersion = app.getVersion();
-    const update = await resolveDesktopUpdate({
-      target: { platform: "web", arch: process.arch },
-      // electron-updater's own rule: a prerelease build accepts prereleases.
-      allowPrerelease: shellVersion.includes("-"),
-    });
-    // No release carrying a web bundle yet is "nothing newer", not a failure.
-    const outcome = update
+    const bundle = await resolveWebBundle();
+    // No manifest naming a bundle is "nothing newer", not a failure.
+    const outcome = bundle
       ? await updateWebBundle({
           bundlesDir: BUNDLES_DIR,
-          update,
+          bundle,
           activeId: activeBundleId,
-          shellVersion,
+          shellVersion: app.getVersion(),
         })
       : { result: "unchanged" };
     if (outcome.result !== "installed") {

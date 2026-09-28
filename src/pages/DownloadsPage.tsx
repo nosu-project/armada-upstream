@@ -23,7 +23,7 @@ import {
 } from "@/lib/downloads";
 import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
-import { featuredRelease, isWebBundleArtifact, type Release, type ReleaseArtifact } from "@/lib/releases";
+import { featuredRelease, type Release, type ReleaseArtifact } from "@/lib/releases";
 
 /**
  * The downloads deck: a headless page in the landing's visual language — the
@@ -317,7 +317,7 @@ function OlderRelease({ release }: { release: Release }) {
       </summary>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {release.artifacts
-          .filter((artifact) => !isRepublishedPackage(artifact.filename) && !isWebBundleArtifact(artifact))
+          .filter((artifact) => !isRepublishedPackage(artifact.filename))
           .map((artifact) => (
             <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} />
           ))}

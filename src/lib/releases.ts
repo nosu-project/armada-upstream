@@ -69,19 +69,6 @@ export const RELEASE_AUTHORS: string[] = (
   .map((pubkey: string) => pubkey.trim().toLowerCase())
   .filter((pubkey: string) => /^[0-9a-f]{64}$/.test(pubkey));
 
-/**
- * The `f` token of the web bundle artifact: the desktop build's `dist` as one
- * `.tar.gz`, which the Flatpak shell installs in place of its own web layer
- * (`electron/webBundleUpdate.js`). An update payload, not a download, so it is
- * filed under no platform card.
- */
-export const WEB_BUNDLE_PLATFORM = "web";
-
-/** Whether an artifact is the in-place web bundle rather than an installer. */
-export function isWebBundleArtifact(artifact: Pick<ReleaseArtifact, "platform">): boolean {
-  return artifact.platform.toLowerCase() === WEB_BUNDLE_PLATFORM;
-}
-
 /** One build output of a release. */
 export interface ReleaseArtifact {
   /** Where the bytes are. Blossom, so the path carries the hash. */
@@ -161,9 +148,6 @@ function parseFields(tag: string[]): Map<string, string> {
  */
 export function artifactOs(platform: string, filename: string): DownloadOs | undefined {
   const f = platform.toLowerCase();
-  // Checked before the filename fallback, which would file the bundle's
-  // `.tar.gz` under Linux.
-  if (f === WEB_BUNDLE_PLATFORM) return undefined;
   if (f.startsWith("linux")) return "linux";
   if (f.startsWith("windows") || f.startsWith("win")) return "windows";
   if (f.startsWith("darwin") || f.startsWith("macos") || f.startsWith("mac")) return "macos";

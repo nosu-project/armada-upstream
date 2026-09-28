@@ -135,9 +135,6 @@ const ARTIFACT_KINDS = [
   { match: /-mac-arm64\.zip$/i, m: 'application/zip', f: 'darwin-aarch64', alt: 'macOS (Apple silicon)' },
   { match: /-mac-x64\.zip$/i, m: 'application/zip', f: 'darwin-x86_64', alt: 'macOS (Intel)' },
   { match: /\.apk$/i, m: 'application/vnd.android.package-archive', f: 'android-arm64-v8a', alt: 'Android APK' },
-  // Not a download: the Flatpak's in-place web update (WEB_BUNDLE_PLATFORM in
-  // src/lib/releases.ts), which it only installs if the bytes match this `x`.
-  { match: /-web\.tar\.gz$/i, m: 'application/gzip', f: 'web', alt: 'Web bundle (desktop in-place update)' },
 ];
 
 function usage(message) {

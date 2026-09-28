@@ -115,10 +115,6 @@ describe("artifactOs", () => {
     expect(artifactOs("android-arm64-v8a", "x.apk")).toBe("android");
   });
 
-  it("files the web bundle under no platform, despite its .tar.gz", () => {
-    expect(artifactOs("web", "Armada-v1.2.3-web.tar.gz")).toBeUndefined();
-  });
-
   it("falls back to the filename for a token this build doesn't know", () => {
     // `f` is advisory: the published vocabulary is thin and still moving, so an
     // unrecognized token must cost a grouping hint, never a download button.

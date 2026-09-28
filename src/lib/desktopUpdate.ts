@@ -12,6 +12,10 @@
  * half with the weaker guarantee. Reading the event gives it the stronger one
  * and removes a second place a release has to be published to.
  *
+ * The Flatpak's web bundle is resolved here too ({@link resolveWebBundle}),
+ * from the signed nsite manifest the web deploy publishes under the same
+ * pinned key, so both things the desktop app installs are checked the same way.
+ *
  * This file is ordinary `src/` TypeScript, bundled into `electron/updateFeed.cjs`
  * by `vite.config.electron.ts` exactly as `src/lib/db/electronMain.ts` is
  * bundled into `electron/db.cjs`, and for the same reason: `parseRelease()` is
@@ -30,7 +34,6 @@ import {
   RELEASE_RELAYS,
   RELEASE_REPO_ID,
   foldReleases,
-  isWebBundleArtifact,
   parseRelease,
   type Release,
   type ReleaseArtifact,
@@ -74,20 +77,15 @@ const RELEASE_QUERY_LIMIT = 50;
  * and `quitAndInstall` has no installer for the format. The Flatpak shell
  * updates its web bundle instead (`electron/webBundleUpdate.js`); this row is
  * how a caller resolves the bundle artifact if it ever needs to.
- *
- * `web` is the other synthetic target, and the one the Flatpak actually uses:
- * the desktop build's `dist` as a `.tar.gz`, which `electron/webBundleUpdate.js`
- * swaps in as the app:// origin. It is resolved here, through the pinned-author
- * event, because that bundle IS the code the shell runs with the whole preload
- * bridge — the `x` below is the only thing that archive is checked against.
  */
-const DESKTOP_FORMATS: Record<string, (artifact: ReleaseArtifact) => boolean> = {
-  linux: (a) => a.os === "linux" && /\.appimage$/i.test(a.filename),
-  win32: (a) =>
-    a.os === "windows" && /\.exe$/i.test(a.filename) && !/-portable\.exe$/i.test(a.filename),
-  darwin: (a) => a.os === "macos" && /\.zip$/i.test(a.filename),
-  flatpak: (a) => a.os === "linux" && /\.flatpak$/i.test(a.filename),
-  web: (a) => isWebBundleArtifact(a) && /\.tar\.gz$/i.test(a.filename),
+const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) => boolean }> = {
+  linux: { os: "linux", accepts: (name) => /\.appimage$/i.test(name) },
+  win32: {
+    os: "windows",
+    accepts: (name) => /\.exe$/i.test(name) && !/-portable\.exe$/i.test(name),
+  },
+  darwin: { os: "macos", accepts: (name) => /\.zip$/i.test(name) },
+  flatpak: { os: "linux", accepts: (name) => /\.flatpak$/i.test(name) },
 };
 
 /**
@@ -205,13 +203,12 @@ export function pickDesktopArtifact(
   release: Release,
   target: DesktopTarget,
 ): ReleaseArtifact | undefined {
-  const matches = Object.hasOwn(DESKTOP_FORMATS, target.platform)
-    ? DESKTOP_FORMATS[target.platform]
-    : undefined;
-  if (!matches) return undefined;
+  const format = DESKTOP_FORMATS[target.platform];
+  if (!format) return undefined;
   return release.artifacts.find(
     (artifact) =>
-      matches(artifact) &&
+      artifact.os === format.os &&
+      format.accepts(artifact.filename) &&
       archMatches(artifact.platform, target.arch) &&
       /^[0-9a-f]{64}$/.test(artifact.hash),
   );
@@ -310,10 +307,14 @@ interface SignedEvent {
 }
 
 function isReleaseEvent(value: unknown): value is SignedEvent {
+  return isSignedEvent(value) && value.kind === RELEASE_KIND;
+}
+
+function isSignedEvent(value: unknown): value is SignedEvent {
   if (typeof value !== "object" || value === null) return false;
   const event = value as Record<string, unknown>;
   return (
-    event.kind === RELEASE_KIND &&
+    typeof event.kind === "number" &&
     typeof event.id === "string" &&
     typeof event.pubkey === "string" &&
     typeof event.sig === "string" &&
@@ -395,6 +396,112 @@ function queryRelay(
     socket.addEventListener("error", finish);
     socket.addEventListener("close", finish);
   });
+}
+
+/** NIP-5A named site manifest. */
+const NSITE_KIND = 35128;
+
+/** The named site `.nsite/config.json` publishes: the deployed web client. */
+export const WEB_BUNDLE_SITE_ID = "armada";
+
+/** Where every web deploy puts its own `dist` as one archive (deploy-nsite.yml). */
+export const WEB_BUNDLE_PATH = "/downloads/armada-web.tar.gz";
+
+/** The deployed web bundle, as the site manifest names it. */
+export interface WebBundleUpdate {
+  /**
+   * The manifest's `created_at`. The shell records it with the bundle it
+   * installs and refuses an older one, since a replaceable event can be
+   * served stale by a relay long after it was replaced.
+   */
+  createdAt: number;
+  /** hex sha256 of the archive; what the download is verified against. */
+  sha256: string;
+  /** `<server>/<sha256>` for each https Blossom server the manifest names, in order. */
+  urls: string[];
+}
+
+/**
+ * The web bundle the newest signed site manifest names, or undefined when no
+ * acceptable manifest carries one.
+ *
+ * The same refusals as {@link selectDesktopRelease}, for the same reason: the
+ * manifest arrives from untrusted relays and names code the shell will run.
+ * The signature must verify and the author must be a BUILD-PINNED release key
+ * (the site is published under the same key as the releases). The `path` and
+ * `server` tags are read only from that verified event, so where the bytes
+ * come from is as much the signer's statement as what they hash to.
+ */
+export function selectWebBundle(
+  events: readonly unknown[],
+  {
+    authors = RELEASE_AUTHORS,
+    siteId = WEB_BUNDLE_SITE_ID,
+  }: { authors?: readonly string[]; siteId?: string } = {},
+): WebBundleUpdate | undefined {
+  const trusted = new Set(authors.map((author) => author.toLowerCase()));
+  let newest: SignedEvent | undefined;
+  for (const event of events) {
+    if (!isSignedEvent(event) || event.kind !== NSITE_KIND) continue;
+    if (!trusted.has(event.pubkey.toLowerCase())) continue;
+    if (!event.tags.some((tag) => tag[0] === "d" && tag[1] === siteId)) continue;
+    if (newest && event.created_at <= newest.created_at) continue;
+    if (!verifyEvent(event)) continue;
+    newest = event;
+  }
+  if (!newest) return undefined;
+
+  const hash = newest.tags.find((tag) => tag[0] === "path" && tag[1] === WEB_BUNDLE_PATH)?.[2];
+  const sha256 = typeof hash === "string" ? hash.toLowerCase() : "";
+  if (!/^[0-9a-f]{64}$/.test(sha256)) return undefined;
+  const urls: string[] = [];
+  for (const tag of newest.tags) {
+    if (tag[0] !== "server" || typeof tag[1] !== "string") continue;
+    try {
+      const server = new URL(tag[1]);
+      if (server.protocol !== "https:") continue;
+      const url = new URL(`/${sha256}`, server).href;
+      if (!urls.includes(url)) urls.push(url);
+    } catch {
+      // A malformed server tag names nowhere to fetch from.
+    }
+  }
+  if (urls.length === 0) return undefined;
+  return { createdAt: newest.created_at, sha256, urls };
+}
+
+/**
+ * The deployed web bundle, resolved from the site manifest on the release
+ * relays (which are also the relays `.nsite/config.json` publishes to).
+ * Never rejects for a relay that is down; undefined when none answered with
+ * an acceptable manifest.
+ */
+export async function resolveWebBundle({
+  relays = RELEASE_RELAYS,
+  authors = RELEASE_AUTHORS,
+  siteId = WEB_BUNDLE_SITE_ID,
+  webSocket,
+  signal,
+}: {
+  relays?: readonly string[];
+  authors?: readonly string[];
+  siteId?: string;
+  webSocket?: typeof WebSocket;
+  signal?: AbortSignal;
+} = {}): Promise<WebBundleUpdate | undefined> {
+  const WebSocketImpl =
+    webSocket ?? (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+  if (!WebSocketImpl) {
+    throw new Error("no WebSocket implementation available for the bundle check");
+  }
+  if (relays.length === 0) throw new Error("no site relays configured");
+  if (authors.length === 0) throw new Error("no release authors configured");
+
+  const filter = { kinds: [NSITE_KIND], authors: [...authors], "#d": [siteId] };
+  const responses = await Promise.all(
+    relays.map((relay) => queryRelay(relay, filter, WebSocketImpl, signal)),
+  );
+  return selectWebBundle(responses.flat(), { authors, siteId });
 }
 
 /**
