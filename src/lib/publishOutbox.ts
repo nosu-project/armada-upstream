@@ -13,9 +13,6 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 const KEY_PREFIX = "outbox:";
-/** Pre-ArmadaDB localStorage key, drained by {@link migrateLegacyOutbox}. */
-const LEGACY_KEY = "armada:publish-outbox";
-const DONE_KEY = "outbox:migrated";
 
 export interface QueuedPublish {
   id: string;
@@ -129,7 +126,6 @@ function replaceableKey(event: NostrEvent, relay?: string, relays?: string[]): s
 
 /** Every queued publish, oldest first (the order the flush should deliver in). */
 export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
-  await migrateLegacyOutbox();
   const entries = await getArmadaDB().kv.list<QueuedPublish>({ prefix: KEY_PREFIX });
   const now = Date.now();
   const items = entries
@@ -158,7 +154,6 @@ export async function queueSignedEvent(
   options: { inheritPendingTargets?: boolean; expiresAt?: number } = {},
 ): Promise<void> {
   const { kv } = getArmadaDB();
-  await migrateLegacyOutbox();
   if (!isSigned(event)) return;
 
   if (relay && relays) throw new Error("Specify either one relay or an explicit relay set");
@@ -306,7 +301,6 @@ export async function recordQueuedPublishAttempt(
  */
 export async function withSignature(rumor: NostrRumor): Promise<NostrEvent> {
   if (isSigned(rumor)) return rumor;
-  await migrateLegacyOutbox();
   const item = await getArmadaDB().kv.get<QueuedPublish>(itemKey(rumor.id));
   if (isQueuedPublish(item)) return item.event;
   throw new Error("This message can no longer be sent: its signature was not kept.");
@@ -342,42 +336,7 @@ export async function clearPublishOutbox(): Promise<void> {
   });
 }
 
-let drain: Promise<void> | undefined;
-
-/**
- * Copy the legacy localStorage queue into KV, once per session, awaited by
- * every accessor. The legacy key is removed only after the copy is read back:
- * KV silently no-ops without IndexedDB.
- */
-export function migrateLegacyOutbox(): Promise<void> {
-  drain ??= drainLegacyOutbox();
-  return drain;
-}
-
-async function drainLegacyOutbox(): Promise<void> {
-  if (typeof localStorage === "undefined") return;
-  const { kv } = getArmadaDB();
-
-  try {
-    if (await kv.get<boolean>(DONE_KEY)) return;
-
-    const raw = localStorage.getItem(LEGACY_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) {
-      for (const item of parsed.filter(isQueuedPublish)) {
-        await kv.set(itemKey(item.id), item);
-      }
-    }
-
-    await kv.set(DONE_KEY, true);
-    if (await kv.get<boolean>(DONE_KEY)) localStorage.removeItem(LEGACY_KEY);
-  } catch {
-    drain = undefined;
-  }
-}
-
-/** Test seam: forget the memoised drain so the next access runs it again. */
+/** Test seam: reset the mutation chain. */
 export function __resetOutboxForTests(): void {
-  drain = undefined;
   mutationChain = Promise.resolve();
 }

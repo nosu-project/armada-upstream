@@ -3,7 +3,6 @@ import { clearAudioMetadata } from "@/hooks/useAudioMetadata";
 import { clearRecentDecrypts } from "@/lib/AppSigner";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
-import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
@@ -29,6 +28,21 @@ const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>([
   WEB_PUSH_RETIREMENT_KEY,
 ]);
 
+/**
+ * Pre-ArmadaDB databases. Upgraded installs may still hold them (undrained, with
+ * decrypted data), so logout keeps deleting them.
+ */
+const RETIRED_DATABASES = [
+  "armada-concord-cache",
+  "armada-decrypt-cache",
+  "armada-concord-invites",
+  "armada-dm17-rumors",
+  "armada-concord-rumors",
+  "armada-events",
+  "armada-relay-provenance",
+  "armada-concord-pending",
+];
+
 /** Remove the retired SQLite-WASM store's OPFS directory, still present on upgraded devices. */
 async function purgeOrphanedOpfs(): Promise<void> {
   try {
@@ -47,8 +61,7 @@ async function purgeIndexedDB(): Promise<void> {
     const known = [
       // Tenant DBs (`armada:t:<id>`) are deleted by `purgeArmadaDB`, which can close them first.
       `${ARMADA_DB_NAME}:kv`,
-      // From the migration catalogue: delete them whether or not migration has run.
-      ...legacyDatabaseNames(),
+      ...RETIRED_DATABASES,
     ];
     const dbs =
       typeof indexedDB.databases === "function"

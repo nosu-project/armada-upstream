@@ -17,10 +17,7 @@ export const FAVORITE_GIFS_D_PREFIX = "armada/gif-favorites/";
  */
 const DEVICE_ID_PREFIX = "armada:favorite-gifs:device-id:";
 
-/**
- * Shards live in ArmadaDB KV. Two caches, so the localStorage move (`LOCALSTORAGE_MOVES`)
- * can't reach `device-id:`, which must stay in localStorage.
- */
+/** Shards live in ArmadaDB KV; `device-id:` must stay in localStorage. */
 const shardStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-shard:" });
 const mergedStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-merged:" });
 

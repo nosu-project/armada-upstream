@@ -28,14 +28,12 @@
  *   rumor_coords   replaceable/addressable coordinate → current rumor.
  *   kv             {@link ArmadaKV}: JSON text by key.
  *
- * REQUIRES FTS5 ≥ 3.43 (contentless deletes) and JSON1 (v0→v1 rebuild). Native
+ * REQUIRES FTS5 ≥ 3.43 (contentless deletes). Native
  * transports owning their own file must check these and mirror the statements.
  */
 
 /**
- * Schema version in `PRAGMA user_version`; older files upgrade before the
- * `CREATE IF NOT EXISTS` statements run.
- *   0  pre-versioning: tenant TEXT columns, whole rumor in `rumors.json`.
+ * Schema version in `PRAGMA user_version`.
  *   1  tenant-interned layout.
  *   2  adds `rumor_terms` and `rumor_term_tenants` (with generation; see
  *      {@link TenantOpts.termsGeneration}). Creating them empty is the whole
@@ -119,17 +117,6 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
 ];
 
 /**
- * Drop the term index for an unreleased dev layout (`rumor_term_tenants`
- * without `generation`) that's already at the current version and would make
- * every term read/write throw. Detected by layout, like v0. Safe: terms are a
- * cache, recreated and backfilled. Deletable once no pre-release installs remain.
- */
-export const ARMADA_DB_DROP_TERM_INDEX: readonly string[] = [
-  `DROP TABLE IF EXISTS rumor_terms`,
-  `DROP TABLE IF EXISTS rumor_term_tenants`,
-];
-
-/**
  * NIP-50 search index (unless constructed with `search: false`). Separate from
  * the token index to tokenize prose differently (`unicode61`: case- and
  * accent-insensitive). Maintained by triggers so no writer (incl. the Android
@@ -151,45 +138,4 @@ export const ARMADA_DB_FTS_SCHEMA: readonly string[] = [
   `CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
     DELETE FROM rumors_fts WHERE rowid = old.seq;
   END`,
-];
-
-/**
- * v0 → v1 rebuild in one transaction: split `json` into columns and intern
- * tenants, before {@link ARMADA_DB_SCHEMA} recreates indexes/triggers. Rowids
- * are preserved so FTS rows stay valid; dropping tables fires no triggers.
- * `INSERT OR IGNORE` interning ensures the joins can't silently drop rows.
- */
-export const ARMADA_DB_REBUILD_V1: readonly string[] = [
-  `INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumors`,
-  `INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumor_coords`,
-  `CREATE TABLE rumors_v1 (
-    seq INTEGER PRIMARY KEY,
-    tenant INTEGER NOT NULL,
-    id TEXT NOT NULL,
-    kind INTEGER NOT NULL,
-    pubkey TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    tags TEXT NOT NULL,
-    content TEXT NOT NULL
-  )`,
-  `INSERT INTO rumors_v1 (seq, tenant, id, kind, pubkey, created_at, tags, content)
-    SELECT r.seq, t.ord, r.id, r.kind, r.pubkey, r.created_at,
-      COALESCE(json_extract(r.json, '$.tags'), '[]'),
-      COALESCE(json_extract(r.json, '$.content'), '')
-    FROM rumors r JOIN tenants t ON t.id = r.tenant`,
-  `DROP TABLE rumors`,
-  `ALTER TABLE rumors_v1 RENAME TO rumors`,
-  `CREATE TABLE rumor_coords_v1 (
-    tenant INTEGER NOT NULL,
-    coord TEXT NOT NULL,
-    id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (tenant, coord)
-  ) WITHOUT ROWID`,
-  `INSERT INTO rumor_coords_v1 (tenant, coord, id, seq, created_at)
-    SELECT t.ord, c.coord, c.id, c.seq, c.created_at
-    FROM rumor_coords c JOIN tenants t ON t.id = c.tenant`,
-  `DROP TABLE rumor_coords`,
-  `ALTER TABLE rumor_coords_v1 RENAME TO rumor_coords`,
 ];

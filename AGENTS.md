@@ -458,6 +458,11 @@ one whose background writer needs the query engine in-process (Android's
 service, iOS's future notification extension) does add an engine port below the
 bridge.
 
+Upgrades are supported from **v0.50.0**. The pre-ArmadaDB databases
+(`RETIRED_DATABASES` in `purgeClientStorage.ts`) are never read or migrated —
+only deleted on logout — and format changes go through `SCHEMA_MIGRATIONS` in
+`db/schema.ts`.
+
 On Android the query engine is native and there is exactly one database file.
 The background notification service writes an event into the same tenant the
 WebView reads it from, so a message received while the app was dead is simply
@@ -589,12 +594,9 @@ Things to know before touching it:
   reads that file on every DOWNLOAD (`updaterCacheDirName`, plus `publisherName`
   on Windows), so deleting it leaves the update check succeeding and the download
   throwing ENOENT — visible only on a manual check. Its `url:` is never fetched.
-- **The adapter is chosen before anything reads.** The legacy drains in
-  `migrations.ts` write through `getArmadaDB()`, so on Android and desktop they
-  land in the native store directly — there is no IndexedDB ArmadaDB to move
-  (the desktop shell had no released build storing data), and adding a
-  second hop would be a second chance to strand decrypted Concord and NIP-17
-  history that exists nowhere else.
+- **The adapter is chosen before anything reads.** Migrations write through
+  `getArmadaDB()`, so on Android and desktop they land in the native store
+  directly; don't add an IndexedDB hop there.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
   ports NIP-17's kind filter and NIP-40 expiry refusal;
   `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule;
@@ -684,22 +686,14 @@ Things to know before touching it:
   conversation" is not a deletion anyone should be able to ask for), never
   matched row-wise, and refused outright rather than approximated — two of them,
   or a namespace that isn't one, fail closed.
-- **A drain converts to the CURRENT shape; it does not copy rows across.** The
-  pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
-  event's tags and told the planes apart by the `stream` tag at read time, so
-  it enforced no kind or seal-form rule at write. Planes read back by kind now,
-  and that is sound only because `writeOpened` refuses, at ingest, a rumor whose
-  kind does not belong to the plane whose keys opened its wrap — so
-  `rumorMigration.ts` applies those same three refusals to every row it copies,
-  using the `stream` tag it is about to strip as proof of the arrival plane.
-  Copying verbatim would mint a control edition out of any guestbook
-  keyholder's rumor.
-- **The localStorage→KV move happens in the gate, and nowhere else.**
-  `LOCALSTORAGE_MOVES` in `db/schema.ts` is the only place the old key
-  spellings are written down; `KvPrefixCache` knows nothing about localStorage
-  and reads KV only. Don't put a "check localStorage on miss" fallback in a
-  cache or a hook — that is the drift the single table exists to prevent, and
-  it would re-run on every warm forever.
+- **A migration converts to the CURRENT shape; it does not copy rows across.**
+  Planes read back by kind, which is sound only because `writeOpened` refuses a
+  rumor whose kind doesn't belong to the plane that opened its wrap — a
+  migration touching Concord rows must apply the same refusals, or it can mint a
+  control edition out of any guestbook keyholder's rumor.
+- **Old key spellings are converted once, in a schema migration.** Don't put a
+  "check the old key on miss" fallback in a cache or hook: it drifts and re-runs
+  on every warm forever.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.

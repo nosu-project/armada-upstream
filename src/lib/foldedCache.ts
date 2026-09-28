@@ -3,18 +3,10 @@
  * reloads, in ArmadaDB KV under `folded:`. bigint/Uint8Array/Map/Set are
  * tag-encoded. Stores decrypted data at rest — same trust level as the keys.
  */
-import { openDB } from "idb";
-
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { legacyMigrationsComplete, skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import { perfCount, perfTime } from "@/lib/perf";
 
-/** Legacy standalone database, drained by {@link migrateLegacyFolded}. */
-export const LEGACY_FOLDED_DB_NAME = "armada-concord-cache";
-
-const STORE = "kv";
 const KEY_PREFIX = "folded:";
-const DONE_KEY = "folded:migrated";
 
 function foldedKey(key: string): string {
   return `${KEY_PREFIX}${key}`;
@@ -114,7 +106,6 @@ const knownEncoding = new Map<string, string>();
 
 export async function readFolded<T>(key: string): Promise<T | undefined> {
   try {
-    await migrateLegacyFolded();
     if (import.meta.env.VITE_PROFILE === "1") {
       const site = new Error().stack?.split("\n").slice(2, 4).join(" < ").replace(/https?:\/\/[^/]+/g, "") ?? "?";
       perfCount(`readFolded ${key.split(":")[0]} @ ${site}`, 0);
@@ -196,8 +187,6 @@ export async function writeFolded(key: string, value: unknown, encoded?: string)
   try {
     const json = encoded ?? encode(value);
     if (knownEncoding.get(key) === json) return;
-    // Before writing: otherwise the drain would clobber this write with the stale legacy value.
-    await migrateLegacyFolded();
     // Set before the await so concurrent identical writes collapse to one.
     knownEncoding.set(key, json);
     sharedMissing.delete(key);
@@ -223,58 +212,8 @@ export async function writeFolded(key: string, value: unknown, encoded?: string)
   }
 }
 
-let drain: Promise<void> | undefined;
-
-/**
- * Copy the legacy fold cache into KV, once per session. Awaited by both
- * accessors so `rumorMigration` (which reads folds) never sees pre-drain state.
- * REJECTS on failure: the startup gate deletes legacy DBs only if every drain resolved.
- */
-export function migrateLegacyFolded(): Promise<void> {
-  drain ??= drainLegacyFolded().catch((err: unknown) => {
-    // Don't cache the rejection; rethrow so the gate keeps the legacy DB.
-    drain = undefined;
-    throw err;
-  });
-  return drain;
-}
-
-async function drainLegacyFolded(): Promise<void> {
-  // The shared flag is stronger and memoised, so warm boots skip the KV read.
-  if (await legacyMigrationsComplete()) return;
-  const db = getArmadaDB();
-  if (await db.kv.get<boolean>(DONE_KEY)) return;
-  if (typeof indexedDB === "undefined") return;
-  // `openDB` would create the DB if absent, confusing the startup gate.
-  if (await skipLegacyDrain(LEGACY_FOLDED_DB_NAME)) return;
-
-  const legacy = await openDB(LEGACY_FOLDED_DB_NAME, 1, {
-    upgrade(d) {
-      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
-    },
-  });
-  try {
-    // Same encoded strings: a copy, not a re-encode.
-    const [keys, values] = await Promise.all([
-      legacy.getAllKeys(STORE),
-      legacy.getAll(STORE),
-    ]);
-    for (const [i, key] of keys.entries()) {
-      const value: unknown = values[i];
-      if (typeof key === "string" && typeof value === "string") {
-        await db.kv.set(foldedKey(key), value);
-      }
-    }
-  } finally {
-    legacy.close();
-  }
-
-  await db.kv.set(DONE_KEY, true);
-}
-
-/** Test seam: forget the memoised drain so the next access runs it again. */
+/** Test seam: forget this session's in-memory state. */
 export function __resetFoldedForTests(): void {
-  drain = undefined;
   knownEncoding.clear();
   sharedDecoded.clear();
   sharedInFlight.clear();

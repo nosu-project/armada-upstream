@@ -10,11 +10,9 @@
  * Stores DECRYPTED messages at rest; wiped on logout (purgeClientStorage).
  */
 
-import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import { tenantOptsFor } from "@/lib/db/termPolicies";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
@@ -40,15 +38,6 @@ import {
 } from "@/lib/nip17/protocol";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 
-const LEGACY_DB_NAME = "armada-dm17-rumors";
-
-/**
- * Tags earlier builds injected; stripped when copying legacy rows. Rumor tags
- * are what the id commits to, and a `peer` tag was forgeable — the conversation
- * is derivable from `p` ({@link dmPeersOf}).
- */
-const PROVENANCE = new Set(["peer", "wrap"]);
-
 /**
  * The opened-DM store for one account, bound to its conversation term policy
  * (also declared natively by the Android service and iOS extension).
@@ -56,113 +45,6 @@ const PROVENANCE = new Set(["peer", "wrap"]);
 export function dm17Store(self: string): NRumorStore {
   const id = `dm17:${self}`;
   return getArmadaDB().tenant(id, tenantOptsFor(id));
-}
-
-// Legacy drain: the old global DB didn't record which account opened a rumor,
-// so records are attributed before moving — messages by `pubkey`/`p`, then
-// reactions/deletes via their `e` target. Attributing by shared `peer` would
-// leak between two accounts that talked to the same person.
-
-/** Page size for the full legacy scan (attribution needs every record at once). Not a ceiling. */
-export const DM17_DRAIN_PAGE = 500;
-
-/** Hitting this means broken paging; the drain FAILS rather than copy a prefix the gate then deletes. */
-const DRAIN_MAX_PAGES = 2_000;
-
-const DRAIN_KEY = (self: string) => `dm17:migrated:${self}`;
-
-const drains = new Map<string, Promise<void>>();
-
-/**
- * Copy `self`'s share of the legacy DB. Idempotent, memoised. REJECTS on failure:
- * the startup gate deletes the legacy DB only once every drain resolved.
- */
-export function migrateLegacyDms(self: string): Promise<void> {
-  let drain = drains.get(self);
-  if (!drain) {
-    drain = drainLegacyDms(self).catch((err: unknown) => {
-      // Drop the memo so a later read retries; rewrites by id are free.
-      drains.delete(self);
-      throw err;
-    });
-    drains.set(self, drain);
-  }
-  return drain;
-}
-
-/** Whether a stored record names `self` outright (author or recipient). */
-function namesSelf(ev: NostrEvent, self: string): boolean {
-  return ev.pubkey === self || ev.tags.some(([name, value]) => name === "p" && value === self);
-}
-
-/** Every legacy record, newest first, paged. */
-async function readLegacyDms(legacy: NIndexedDB): Promise<NostrEvent[]> {
-  const all: NostrEvent[] = [];
-  const seen = new Set<string>();
-  let until: number | undefined;
-
-  for (let page = 0; page < DRAIN_MAX_PAGES; page++) {
-    const filter: { kinds: number[]; limit: number; until?: number } = {
-      kinds: DM_RUMOR_KINDS,
-      limit: DM17_DRAIN_PAGE,
-    };
-    if (until !== undefined) filter.until = until;
-    const rows = await legacy.query([filter]);
-    // `created_at` ties make pages overlap, so count progress in new ids.
-    const fresh = rows.filter((ev) => !seen.has(ev.id));
-    if (fresh.length === 0) return all;
-    for (const ev of fresh) {
-      seen.add(ev.id);
-      all.push(ev);
-    }
-    if (rows.length < DM17_DRAIN_PAGE) return all;
-    until = Math.min(...rows.map((ev) => ev.created_at));
-  }
-
-  throw new Error("dm17 legacy drain exceeded its page bound");
-}
-
-async function drainLegacyDms(self: string): Promise<void> {
-  const db = getArmadaDB();
-  const key = DRAIN_KEY(self);
-  if (await db.kv.get<boolean>(key)) return;
-  // `NIndexedDB` creates the DB on first query, which would confuse the startup gate.
-  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
-
-  const legacy = new NIndexedDB(LEGACY_DB_NAME);
-  try {
-    const all = await readLegacyDms(legacy);
-
-    const mine = new Set<string>();
-    for (const ev of all) {
-      if (namesSelf(ev, self)) mine.add(ev.id);
-    }
-    // Pass two: reactions/deletes targeting attributed records, to a fixpoint.
-    for (;;) {
-      let added = false;
-      for (const ev of all) {
-        if (mine.has(ev.id)) continue;
-        const targets = ev.tags.filter(([name]) => name === "e").map(([, value]) => value);
-        if (targets.some((id) => mine.has(id))) {
-          mine.add(ev.id);
-          added = true;
-        }
-      }
-      if (!added) break;
-    }
-
-    const tenant = dm17Store(self);
-    for (const ev of all) {
-      if (!mine.has(ev.id)) continue;
-      const { sig: _sig, ...rumor } = ev;
-      // Strip injected provenance tags so every stored row is what its sender signed.
-      await tenant.event({ ...rumor, tags: rumor.tags.filter((t) => !PROVENANCE.has(t[0])) });
-    }
-  } finally {
-    await legacy.close().catch(() => undefined);
-  }
-
-  await db.kv.set(key, true);
 }
 
 /** Build the stored rumor for an opened DM: the rumor itself, unaltered. */
@@ -224,7 +106,6 @@ export async function queryDm17Thread(
   peers: readonly string[],
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedDm[]> {
-  await migrateLegacyDms(self).catch(() => undefined);
   const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
     conversationFilters(self, peers, { limit: opts.limit, before: opts.before }),
@@ -247,7 +128,6 @@ export async function countUnreadDm17Messages(
 ): Promise<number> {
   const incomingAuthors = peers.filter((peer) => peer !== self);
   if (incomingAuthors.length === 0) return 0;
-  await migrateLegacyDms(self).catch(() => undefined);
   const filters = conversationFilters(self, peers).map((filter) => ({
     ...filter,
     kinds: [...DM_MESSAGE_KINDS],
@@ -268,7 +148,6 @@ export async function queryDm17Rumor(
   rumorId: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<OpenedDm | undefined> {
-  await migrateLegacyDms(self).catch(() => undefined);
   const events = await dm17Store(self).query(
     [{ ids: [rumorId], kinds: DM_RUMOR_KINDS, limit: 1 }],
     { signal: opts.signal },
@@ -311,7 +190,6 @@ export async function queryDm17Timer(
   peers: readonly string[],
   opts: { signal?: AbortSignal } = {},
 ): Promise<number | undefined> {
-  await migrateLegacyDms(self).catch(() => undefined);
   const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
     conversationFilters(self, peers, { limit: 1 }).map((f) => ({
@@ -342,7 +220,6 @@ export async function queryDm17Webxdc(
   opts: { signal?: AbortSignal } = {},
 ): Promise<OpenedDm[]> {
   if (!uuid) return [];
-  await migrateLegacyDms(self).catch(() => undefined);
   const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
     conversationFilters(self, peers, { limit: WEBXDC_PAGE }).map((f) => ({
@@ -381,7 +258,6 @@ export async function queryDm17Conversations(
   self: string,
   opts: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<Dm17ConversationRow[]> {
-  await migrateLegacyDms(self).catch(() => undefined);
   const collapse = (namespace: string): NostrFilter => {
     const filter: NostrFilter = { search: `distinct:${namespace}` };
     // No `kinds`: the namespace already implies chat-or-file, and a kind test inside
@@ -473,7 +349,6 @@ export async function searchDm17Rumors(
 ): Promise<OpenedDm[]> {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
-  await migrateLegacyDms(self).catch(() => undefined);
   const events = await dm17Store(self).query(
     [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.scan ?? 2000 }],
     { signal: opts.signal },

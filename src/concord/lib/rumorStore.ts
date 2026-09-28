@@ -94,7 +94,6 @@ export async function readControlSnapshot(
  * Record which control stream each fresh rumor arrived on. Last-writer-wins is
  * fine: COMPLETE-mode sweeps re-offer the whole plane. Only needed for Refounded
  * communities, so {@link writeOpened} skips it when `refounded` is false.
- * Exported for the legacy drain (takes just the two fields it reads).
  */
 export async function noteControlSnapshot(
   communityIdHex: string,
@@ -672,15 +671,6 @@ export async function readStoredSeal(
   } catch {
     return undefined;
   }
-}
-
-/** Keep the seal a stored rumor arrived in (also used by the legacy drain). */
-export async function writeStoredSeal(
-  communityIdHex: string,
-  rumorId: string,
-  seal: NostrEvent,
-): Promise<void> {
-  await getArmadaDB().kv.set(sealKey(communityIdHex, rumorId), seal);
 }
 
 /**

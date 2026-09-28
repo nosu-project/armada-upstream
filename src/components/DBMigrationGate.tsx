@@ -9,13 +9,9 @@ import { markUpToDate, pendingUpgrades, runMigrations } from "@/lib/db/migration
 import type { SyncLogLine } from "@/hooks/useInitialSync";
 
 /**
- * Full-screen storage-upgrade overlay. Runs legacy drains (old per-subsystem
- * IndexedDBs copied into ArmadaDB, deleted once every logged-in account has
- * drained) then schema migrations (see `db/schema.ts`).
- *
- * Only this can delete legacy DBs since it's the only place draining ALL
- * accounts; lazy per-module drains copy but never delete. Renders nothing when
- * on-disk data already matches this build.
+ * Full-screen storage-upgrade overlay while schema migrations (`db/schema.ts`)
+ * run for every logged-in account. Renders nothing when on-disk data already
+ * matches this build.
  */
 export function DBMigrationGate() {
   const { logins } = useNostrLogin();
@@ -23,8 +19,7 @@ export function DBMigrationGate() {
   const [log, setLog] = useState<SyncLogLine[]>([]);
   const started = useRef(false);
 
-  // Accounts read once: a mid-migration login would otherwise restart the run;
-  // the lazy drain covers it.
+  // Accounts read once: a mid-migration login would otherwise restart the run.
   const accounts = logins.map((l) => l.pubkey);
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
@@ -42,9 +37,7 @@ export function DBMigrationGate() {
       // version marker backwards.
       if (pending.future) return;
 
-      if (pending.legacy.length === 0 && pending.schema.length === 0) {
-        // Stamping matters: the completion flag stops drains from opening (and thereby
-        // CREATING) a legacy DB, which would bring this gate back next launch.
+      if (pending.schema.length === 0) {
         await markUpToDate().catch(() => undefined);
         return;
       }

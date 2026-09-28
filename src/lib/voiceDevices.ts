@@ -21,8 +21,6 @@ const SCREEN_SHARE_VOLUME_KEY = "armada:voice:screenShareVolumes";
 export const MAX_PLAYBACK_VOLUME = 2;
 
 const VOICE_SERVER_KEY = "armada:voice:preferredServer";
-/** The Concord-v1-era key for the same setting; read as a fallback. */
-const LEGACY_VOICE_SERVER_KEY = "armada:voice:concordServer";
 
 function read(key: string): string | undefined {
   try {
@@ -88,7 +86,7 @@ export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): vo
  */
 export function getPreferredVoiceServer(): string {
   try {
-    const v = localStorage.getItem(VOICE_SERVER_KEY) ?? localStorage.getItem(LEGACY_VOICE_SERVER_KEY);
+    const v = localStorage.getItem(VOICE_SERVER_KEY);
     return v?.trim() ?? "";
   } catch {
     return "";
@@ -101,7 +99,6 @@ export function setPreferredVoiceServer(value: string): void {
     const v = value.trim().replace(/\/+$/, "");
     if (v) localStorage.setItem(VOICE_SERVER_KEY, v);
     else localStorage.removeItem(VOICE_SERVER_KEY);
-    localStorage.removeItem(LEGACY_VOICE_SERVER_KEY);
   } catch {
     // localStorage unavailable — ignore.
   }

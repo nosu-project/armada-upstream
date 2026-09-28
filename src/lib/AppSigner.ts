@@ -12,9 +12,6 @@ import type { BtcSigner } from "@/lib/bitcoin-signers";
 // Trust: persists DECRYPTED plaintext at rest (deliberate, like the fold
 // cache); wiped on final logout by `purgeClientStorage`.
 
-/** The pre-ArmadaDB database, drained by the `decrypt-cache` migration. */
-export const DECRYPT_CACHE_DB_NAME = "armada-decrypt-cache";
-
 /** KV key for a derived cache id (the KV namespace is shared, so prefixed). */
 export const decryptCacheKey = (id: string): string => `decrypt:${id}`;
 

@@ -6,8 +6,7 @@
  * Reads before the warm return `undefined`, so only caches/resumable cursors
  * with an existing miss path belong here; {@link KvPrefixCache.subscribe}
  * re-renders on warm. The whole prefix is held in memory, so the key space must
- * be bounded by user actions, not traffic. The one-time localStorage copy is
- * the `LOCALSTORAGE_MOVES` schema migration (`db/schema.ts`).
+ * be bounded by user actions, not traffic.
  */
 import { getArmadaDB } from "./armadaDB";
 
@@ -137,7 +136,7 @@ export class KvPrefixCache<T> {
 }
 
 /**
- * Drop every cache's memory map (logout, and after the localStorage migration).
+ * Drop every cache's memory map (logout).
  * Without this the next account would read the previous one's data from memory.
  */
 export function resetKvCaches(): void {

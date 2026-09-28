@@ -22,7 +22,6 @@ import {
   inviteInboxSince,
   queryStoredInvites,
   rebufferLiveInviteWraps,
-  warmInviteInbox,
   writeStoredInvites,
 } from "@/concord/lib/inviteInbox";
 import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
@@ -316,9 +315,6 @@ export function useDirectInvites() {
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
-
-      // Warm the invite tenant so its cold-open overlaps the store read.
-      warmInviteInbox(pubkey);
 
       // Un-awaited network sweep; catches invites that arrived while the wire was deaf.
       void sweepInviteInbox(nostr, user!, signal)

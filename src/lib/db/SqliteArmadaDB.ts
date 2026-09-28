@@ -32,9 +32,7 @@ import { utf8ToBytes } from "@noble/hashes/utils.js";
 import { ParsedFilter } from "./ParsedFilter";
 import { batch, memberOf, qs, where } from "./sql";
 import {
-  ARMADA_DB_DROP_TERM_INDEX,
   ARMADA_DB_FTS_SCHEMA,
-  ARMADA_DB_REBUILD_V1,
   ARMADA_DB_SCHEMA,
   ARMADA_DB_VERSION,
 } from "./sqliteSchema";
@@ -229,43 +227,11 @@ export class SqliteArmadaDB implements ArmadaDB {
     );
   }
 
-  /** Create tables/indexes/triggers if missing, upgrading older layouts first. */
+  /** Create tables/indexes/triggers if missing. */
   async migrate(): Promise<void> {
-    const [version] = await this.all(`PRAGMA user_version`);
-
-    if (Number(version?.user_version ?? 0) < ARMADA_DB_VERSION) {
-      // v0 predates versioning; recognized by its `json` column.
-      const [legacy] = await this.all(
-        `SELECT 1 AS legacy FROM pragma_table_info('rumors') WHERE name = 'json'`,
-      );
-
-      if (legacy) {
-        await this.transaction(async () => {
-          for (const statement of ARMADA_DB_REBUILD_V1) {
-            await this.run(statement.trim().replace(/\s+/g, " "));
-          }
-        });
-
-        // Advisory; VACUUM can't run inside the rebuild's transaction.
-        try {
-          await this.run(`VACUUM`);
-        } catch {
-          // keep the slack
-        }
-      }
-    }
-
     const schema = this.search
       ? [...ARMADA_DB_SCHEMA, ...ARMADA_DB_FTS_SCHEMA]
       : ARMADA_DB_SCHEMA;
-
-    // Drop a dev-era term index lacking `generation`, by layout
-    // ({@link ARMADA_DB_DROP_TERM_INDEX}).
-    const marker = (await this.all(`SELECT name FROM pragma_table_info('rumor_term_tenants')`))
-      .map((row) => String(row.name));
-    if (marker.length > 0 && !marker.includes("generation")) {
-      for (const statement of ARMADA_DB_DROP_TERM_INDEX) await this.run(statement);
-    }
 
     for (const statement of schema) {
       await this.run(statement.trim().replace(/\s+/g, " "));

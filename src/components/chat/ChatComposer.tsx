@@ -181,14 +181,12 @@ const EMPTY_DRAFT: Draft = { content: "", attachments: [] };
 /**
  * Per-channel drafts in ArmadaDB's KV behind a synchronous cache (unbounded,
  * sensitive: plaintext + `decryption-key` imeta; covered by the logout purge).
- * A non-object value is the legacy plain-string format.
  */
-const draftCache = new KvPrefixCache<Partial<Draft> | string>({ prefix: "draft:" });
+const draftCache = new KvPrefixCache<Partial<Draft>>({ prefix: "draft:" });
 
 function readDraft(key: string): Draft {
   const stored = draftCache.get(key);
   if (stored === undefined) return EMPTY_DRAFT;
-  if (typeof stored === "string") return { content: stored, attachments: [] };
   return {
     content: typeof stored.content === "string" ? stored.content : "",
     attachments: Array.isArray(stored.attachments) ? stored.attachments : [],
@@ -432,7 +430,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return caps;
   }, [sendOverride, pollsEnabled, onPollSubmit, onSlashAction, canModerate]);
 
-  // No prefix in the id: the cache adds `draft:`; a prefixed id would miss migrated drafts.
+  // No prefix in the id: the cache adds `draft:`.
   const draftKey = `${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
