@@ -376,8 +376,10 @@ function ProfilePreviewBody({
             clicking someone is the shortest path to acting on them, and the
             destructive-last ordering matches every other menu here. Absent
             for everyone who isn't staff over this member — which is why it
-            can be buttons rather than a third menu. */}
-        {!isSelf && <MemberModerationActions pubkey={pubkey} onAction={onAction} className="mt-3" />}
+            can be buttons rather than a third menu. Not gated on `isSelf`:
+            the provider already offers no action against yourself, and the
+            owner may assign themselves a cosmetic role, as in the member list. */}
+        <MemberModerationActions pubkey={pubkey} onAction={onAction} className="mt-3" />
       </div>
     </>
   );
@@ -485,7 +487,11 @@ function ThemedPreviewContent({
       align="start"
       sideOffset={8}
       style={themeStyle}
-      className="w-72 p-0 rounded-2xl overflow-hidden border border-border shadow-xl"
+      // PopoverContent caps its height to the space Radix reports as available,
+      // so a card taller than that (a landscape phone, an avatar low on the
+      // screen, a moderator's extra row) scrolls rather than clipping its last
+      // rows. Scrolling still clips to the rounded corners.
+      className="w-72 p-0 rounded-2xl overflow-x-hidden overflow-y-auto overscroll-contain border border-border shadow-xl"
       onClick={(e) => e.stopPropagation()}
     >
       <ProfilePreviewBody pubkey={pubkey} onAction={onClose} onReport={onReport} />

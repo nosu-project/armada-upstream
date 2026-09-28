@@ -12,6 +12,7 @@ import { ReplyContext } from "@/components/chat/ReplyContext";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
+import type { RolePickerOption } from "@/components/chat/RolePickerItems";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ChannelCategoryHeading } from "@/concord/components/ChannelCategoryHeading";
 import { CategoryNameDialog } from "@/concord/components/CategoryNameDialog";
@@ -2198,16 +2199,18 @@ export function ConcordPage() {
     if (!roster || !user) return undefined;
     return [...roster.roles]
       .sort(byDisplayOrder)
-      .map((r) => ({
-        id: r.roleId,
-        name: r.name,
-        color: r.color,
-        channelName:
-          r.scope.kind === "channel"
-            ? (folded?.channels.get(r.scope.channelId)?.name ?? "deleted channel")
-            : undefined,
-        assignable: canActOnPosition(roster, user.pubkey, ownerHex, r.position, Permissions.MANAGE_ROLES),
-      }));
+      .map((r): RolePickerOption => {
+        const scoped = r.scope.kind === "channel" ? folded?.channels.get(r.scope.channelId) : undefined;
+        return {
+          id: r.roleId,
+          name: r.name,
+          color: r.color,
+          // A channel deleted since (or never seen) names nothing: the role
+          // stays listed, since a member may still hold it, without a hint.
+          channelName: r.scope.kind === "channel" ? (scoped && !scoped.deleted ? scoped.name : null) : undefined,
+          assignable: canActOnPosition(roster, user.pubkey, ownerHex, r.position, Permissions.MANAGE_ROLES),
+        };
+      });
   }, [roster, user, ownerHex, folded]);
 
   // Per channel, the Roles scoped to it — the channel's access list
@@ -2228,6 +2231,7 @@ export function ConcordPage() {
     [roster],
   );
   const roleIntent = useRoleIntent(memberRoleIds, setMemberRoles);
+  const { rolesFor: intendedRolesFor, isPending: isRoleTogglePending } = roleIntent;
 
   // Every surface that shows a person (profile card today) can name their
   // roles without each one re-deriving the roster.
@@ -2769,8 +2773,24 @@ export function ConcordPage() {
         }
         return out;
       },
+      // The member list's ⋮ → Roles picker, on the card too: same catalog,
+      // same outrank gate (canEditMemberRoles), same toggle. Offered only when
+      // at least one role is the viewer's to assign — a list of nothing but
+      // disabled rows is not a control.
+      rolePickerFor: (pubkey: string) => {
+        if (!canManageRoles || !roleCatalog?.some((r) => r.assignable) || !canEditMemberRoles(pubkey)) return undefined;
+        return {
+          catalog: roleCatalog,
+          heldRoleIds: intendedRolesFor(pubkey),
+          isToggling: isRoleTogglePending,
+          onToggle: handleToggleRoleStable,
+        };
+      },
     }),
-    [user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel],
+    [
+      user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel,
+      canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
+    ],
   );
 
   // Stable identities for the memoized ChannelRow's callbacks; these close
