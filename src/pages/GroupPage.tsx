@@ -1,5 +1,5 @@
 import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MessageSquareText, MoreVertical, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { BuzzCanvasBar } from "@/buzz/BuzzCanvas";
@@ -61,6 +61,7 @@ import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
+import { displayHost } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { activateScope, nip29Scope } from "@/wire/activation";
 
@@ -72,8 +73,10 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   // NIP-29 `?invite=` (the naddr invite-code suffix, see buildGroupNaddr).
   const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? searchParams.get("invite") ?? "";
   const [code, setCode] = useState(inviteCode);
-  const autoJoined = useRef(false);
 
+  // An invite link only pre-fills the code: joining signs to this relay and
+  // adds it to the user's 10009 list, so it waits for the click, with the
+  // server named beside the button.
   const handleJoin = useCallback(async () => {
     try {
       await join.mutateAsync({ code: code.trim() || undefined });
@@ -91,19 +94,15 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
     }
   }, [join, code, updateList, groupId, relayUrl]);
 
-  // Shared invite link → join automatically once on arrival.
-  useEffect(() => {
-    if (inviteCode && !autoJoined.current && !join.isPending) {
-      autoJoined.current = true;
-      void handleJoin();
-    }
-  }, [inviteCode, join.isPending, handleJoin]);
-
   return (
     <div className="flex flex-wrap items-center gap-2 mx-2 mt-2 px-4 py-2.5 clip-corner-lg bg-chrome">
       <DoorOpen className="size-4 text-primary shrink-0" />
       <span className="text-sm flex-1 min-w-40">
-        You're not a member of this channel{isClosed ? " — it's invite-only" : ""}.
+        {inviteCode ? (
+          <>You've been invited to this channel on <span className="font-medium">{displayHost(relayUrl)}</span>.</>
+        ) : (
+          <>You're not a member of this channel{isClosed ? " — it's invite-only" : ""}.</>
+        )}
       </span>
       {isClosed && (
         <Input
