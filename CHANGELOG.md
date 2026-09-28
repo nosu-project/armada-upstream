@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.62.3] - 2026-09-28
+
+A security and reliability release. The Flatpak desktop app verifies its web
+updates against the signed site before installing them, media links and CI log
+links are checked more strictly, and server invite links fill in their invite
+code so joining takes one click.
+
+### Changed
+- Server invite links fill in the invite code and join with a single click
+- The Flatpak app installs web updates only from the signed site, checking each download and refusing older versions
+
+### Fixed
+- Looking up a linked event no longer fails on relays that require sign-in
+- Media links are validated more strictly before loading, including through the media proxy
+- Only web links are opened from CI logs
+- The iOS app accepts messages only from its own page
+
 ## [0.62.2] - 2026-09-28
 
 A polish and reliability release. Joining or leaving a community now survives
