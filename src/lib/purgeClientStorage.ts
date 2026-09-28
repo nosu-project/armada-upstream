@@ -5,6 +5,7 @@ import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
 import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
+import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
@@ -136,6 +137,9 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   clearAudioMetadata();
   clearPendingJoins();
   resetDecryptConsent();
+  // The shared DM ephemeral REQs outlive their last consumer by a linger;
+  // the outgoing account's must not.
+  closeDmEphemeralSubs();
   // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
   // their own copy in memory. Deleting the database underneath them would
   // leave the next account reading the previous one's data straight out of it.
