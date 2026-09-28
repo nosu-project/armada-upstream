@@ -42,6 +42,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { primeAudioMetadata, primeAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
@@ -61,6 +62,8 @@ import { useToast } from "@/hooks/useToast";
 import { useUploadFile, useUploadPreflight } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { readAudioMetadata, type AudioMetadata } from "@/lib/audioMetadata";
+import { computeWaveform } from "@/lib/audioWaveform";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
@@ -1024,6 +1027,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           icon,
           isImage: mime.startsWith("image/"),
           isVideo: mime.startsWith("video/"),
+          isAudio: mime.startsWith("audio/"),
           isWebxdc,
           encryption,
           dim,
@@ -1274,6 +1278,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       let uploadableFile = file;
       let resizedDim: string | undefined;
       let video: ProcessedVideo | undefined;
+      let audio: AudioMetadata | undefined;
+      let audioWaveform: Promise<number[] | undefined> | undefined;
 
       if (isImage) {
         // Resize & optimize images before uploading.
@@ -1296,6 +1302,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           },
         });
         uploadableFile = video.file;
+      } else if (isAudio) {
+        // A music file's own tags and cover art, read here only to show on
+        // its card — recipients read them out of the same bytes. The cover
+        // stands in for the card's preview while the track uploads.
+        // Its waveform, likewise from the local bytes, decodes alongside the
+        // upload rather than ahead of it.
+        audioWaveform = computeWaveform(file);
+        audio = await readAudioMetadata(file);
+        if (audio.cover && !previewUrl && !abort.signal.aborted) {
+          previewUrl = URL.createObjectURL(audio.cover);
+          patchPending({ previewUrl });
+        }
       }
 
       if (abort.signal.aborted) return;
@@ -1435,6 +1453,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         }
       }
 
+      // Usually long done: the upload took longer than the decode.
+      const waveform = await audioWaveform;
       if (abort.signal.aborted) return;
 
       // Marked from the gallery sheet's Spoiler toggle before it was picked.
@@ -1444,6 +1464,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // An identical file already staged keeps its card's slot.
       if (!attachmentSeq.current.has(url)) attachmentSeq.current.set(url, seq);
       attachmentMeta.current.set(url, { name: file.name });
+      if (audio) primeAudioMetadata(url, audio);
+      if (audioWaveform) primeAudioWaveform(url, waveform);
 
       setUploadedFileGroups((prev) => new Map(prev).set(url, keepUserFields(prev.get(url), tags)));
       // The URL is tracked as an attachment chip (rendered above the input)
@@ -2294,6 +2316,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         icon: att.icon,
         isImage: att.isImage,
         isVideo: att.isVideo,
+        isAudio: att.isAudio,
         isWebxdc: att.isWebxdc,
         encryption: att.encryption,
         alt: att.alt,

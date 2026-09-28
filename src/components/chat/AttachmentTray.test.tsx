@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { primeAudioMetadata } from "@/hooks/useAudioMetadata";
 
 import { AttachmentTray, type TrayItem } from "./AttachmentTray";
 
@@ -12,6 +13,7 @@ const doc: TrayItem = {
   label: "report.pdf",
   isImage: false,
   isVideo: false,
+  isAudio: false,
   isWebxdc: false,
   spoiler: false,
 };
@@ -23,6 +25,7 @@ const photo: TrayItem = {
   label: "cat.jpg",
   isImage: true,
   isVideo: false,
+  isAudio: false,
   isWebxdc: false,
   spoiler: false,
 };
@@ -84,6 +87,24 @@ describe("AttachmentTray", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove cat.jpg" }));
     expect(onRemove).toHaveBeenCalledWith("https://blossom.example/cat.jpg");
     expect(screen.queryByLabelText("Description (alt text)")).not.toBeInTheDocument();
+  });
+
+  it("names an audio track by the title and artist read from the file, without a spoiler toggle", () => {
+    primeAudioMetadata("https://blossom.example/intro.mp3", { title: "Intro", artist: "Limp Bizkit" });
+    renderTray([{
+      kind: "attachment",
+      url: "https://blossom.example/intro.mp3",
+      mime: "audio/mpeg",
+      label: "1-01 Intro.mp3",
+      isImage: false,
+      isVideo: false,
+      isAudio: true,
+      isWebxdc: false,
+      spoiler: false,
+    }]);
+    expect(screen.getByText("Intro")).toBeInTheDocument();
+    expect(screen.getByText("Limp Bizkit")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Mark as spoiler/ })).not.toBeInTheDocument();
   });
 
   it("shows a video's transcode progress on its pending card", () => {

@@ -1,4 +1,4 @@
-import { Blocks, EyeOff, Eye, FileIcon, Loader2, Paperclip, Pencil, Play, Trash2, X } from "lucide-react";
+import { Blocks, EyeOff, Eye, FileIcon, Loader2, Music, Paperclip, Pencil, Play, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAudioMetadata } from "@/hooks/useAudioMetadata";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { companionEncryption } from "@/lib/imeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
@@ -29,6 +30,7 @@ export interface TrayAttachment {
   icon?: string;
   isImage: boolean;
   isVideo: boolean;
+  isAudio: boolean;
   isWebxdc: boolean;
   encryption?: ImetaEncryption;
   alt?: string;
@@ -338,6 +340,7 @@ function CardPreview({ item }: { item: TrayAttachment }) {
       </span>
     );
   }
+  if (item.isAudio) return <AudioCardPreview item={item} />;
   if (item.isWebxdc) {
     const icon = sanitizeImageSrc(item.icon);
     const placeholder = <Blocks className="size-8 text-primary" />;
@@ -355,6 +358,30 @@ function CardPreview({ item }: { item: TrayAttachment }) {
     <span className="flex size-full flex-col items-center justify-center gap-1.5 px-1.5 text-muted-foreground">
       <FileIcon className="size-7 shrink-0" />
       <span className="line-clamp-2 break-all text-center text-[10px] font-medium leading-tight">{item.label}</span>
+    </span>
+  );
+}
+
+/**
+ * A track's card: the cover art and title the file itself carries, read when
+ * it was picked. A restored draft's track was never read this session and
+ * shows its name over a music glyph.
+ */
+function AudioCardPreview({ item }: { item: TrayAttachment }) {
+  const meta = useAudioMetadata(item.url);
+  return (
+    <span className="relative block size-full">
+      {meta?.coverUrl ? (
+        <img src={meta.coverUrl} alt="" className="size-full object-cover" />
+      ) : (
+        <span className="flex size-full items-center justify-center pb-6 text-muted-foreground">
+          <Music className="size-8" />
+        </span>
+      )}
+      <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 pb-1 pt-4 text-left text-white">
+        <span className="block truncate text-[10px] font-semibold leading-tight">{meta?.title ?? item.label}</span>
+        {meta?.artist && <span className="block truncate text-[9px] leading-tight opacity-80">{meta.artist}</span>}
+      </span>
     </span>
   );
 }

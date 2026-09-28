@@ -1,7 +1,8 @@
-import { Pause, Play } from "lucide-react";
+import { Music, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MediaFallback } from "@/components/chat/MediaFallback";
+import { hasAudioMetadata, useAudioMetadata, useAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import {
   pauseOthers,
@@ -29,16 +30,20 @@ interface AudioMessageProps {
 
 const BAR_COUNT = 48;
 
-/** Downsample (or pad) a waveform to a fixed number of bars. */
-function toBars(waveform: string | undefined): number[] {
-  const raw = waveform
+/** Parse the imeta `waveform` field's space-separated amplitudes. */
+function parseWaveform(waveform: string | undefined): number[] {
+  return waveform
     ?.split(/\s+/)
     .map((n) => Number.parseInt(n, 10))
     .filter((n) => Number.isFinite(n)) ?? [];
+}
 
-  if (raw.length === 0) {
-    // Synthetic gentle wave when no waveform data is available
-    return Array.from({ length: BAR_COUNT }, (_, i) => 30 + Math.round(25 * Math.sin(i / 2.5)));
+/** Downsample (or pad) a waveform to a fixed number of bars. */
+function toBars(raw: number[] | null | undefined): number[] {
+  if (!raw || raw.length === 0) {
+    // Flat while the real shape is unknown (not yet decoded, or undecodable):
+    // anything else would be a shape the file doesn't have.
+    return Array.from({ length: BAR_COUNT }, () => 20);
   }
 
   if (raw.length <= BAR_COUNT) return raw;
@@ -60,9 +65,19 @@ function toBars(waveform: string | undefined): number[] {
 /**
  * Compact chat audio player: play/pause button, clickable waveform with
  * playback progress, and a duration label. Used for voice messages and
- * other audio attachments.
+ * other audio attachments. A music file that carries its own tags or cover
+ * art (read out of the file, not the event) is presented as a track: the art
+ * beside its title, artist and album.
  */
-export function AudioMessage({ src, mime, encryption, fallbacks, waveform, duration, className }: AudioMessageProps) {
+export function AudioMessage({
+  src,
+  mime,
+  encryption,
+  fallbacks,
+  waveform,
+  duration,
+  className,
+}: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   // Set when a coordinated `play()` request arrives before the <audio> element
   // has mounted (encrypted blobs mount lazily once decrypted); consumed on the
@@ -80,7 +95,26 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
   // Plain URLs resolve immediately to themselves.
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
 
-  const bars = useMemo(() => toBars(waveform), [waveform]);
+  const resolvedSrc = resolved.status === "ready" ? resolved.src : undefined;
+
+  // The file's own tags. Read from the resolved bytes: a decrypted object URL
+  // in memory, or a plain URL read by range request for just the tag block.
+  const meta = useAudioMetadata(src, resolvedSrc);
+
+  // A voice message carries its recorder's waveform. Anything else has its
+  // shape computed from its own decoded samples: at once when the bytes are
+  // already in memory (a decrypted `blob:`), but for a plain URL only once it
+  // is played, since that means downloading the whole file.
+  const declared = useMemo(() => parseWaveform(waveform), [waveform]);
+  const [hasPlayed, setHasPlayed] = useState(false);
+  const waveformSrc = declared.length > 0 || !resolvedSrc
+    ? undefined
+    : resolvedSrc.startsWith("blob:") || hasPlayed
+      ? resolvedSrc
+      : undefined;
+  const computed = useAudioWaveform(src, waveformSrc);
+
+  const bars = useMemo(() => toBars(declared.length > 0 ? declared : computed), [declared, computed]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
 
   // Imperatively start playback. Used both by the play button and by the
@@ -108,6 +142,7 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
     if (!audio) return;
     const onPlay = () => {
       setIsPlaying(true);
+      setHasPlayed(true);
       // Only one voice note plays at a time.
       pauseOthers(audio);
     };
@@ -166,29 +201,25 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
     return <MediaFallback {...fallbackProps} label="Audio" />;
   }
 
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2.5 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2",
-        className,
-      )}
-      onClick={(e) => e.stopPropagation()}
+  const element = resolved.status === "ready" && (
+    <audio ref={audioRef} preload="metadata" className="hidden" onError={onError}>
+      {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}
+    </audio>
+  );
+
+  const playButton = (
+    <button
+      type="button"
+      onClick={togglePlay}
+      aria-label={isPlaying ? "Pause" : "Play"}
+      className="size-9 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
     >
-      {resolved.status === "ready" && (
-        <audio ref={audioRef} preload="metadata" className="hidden" onError={onError}>
-          {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}
-        </audio>
-      )}
+      {isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="size-4 ml-0.5" fill="currentColor" />}
+    </button>
+  );
 
-      <button
-        type="button"
-        onClick={togglePlay}
-        aria-label={isPlaying ? "Pause" : "Play"}
-        className="size-9 shrink-0 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity"
-      >
-        {isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="size-4 ml-0.5" fill="currentColor" />}
-      </button>
-
+  const scrubber = (
+    <>
       <div
         className="flex-1 min-w-0 overflow-hidden flex items-center gap-[2px] h-8 cursor-pointer"
         onClick={handleSeek}
@@ -217,6 +248,63 @@ export function AudioMessage({ src, mime, encryption, fallbacks, waveform, durat
       <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
         {formatTime(isPlaying || currentTime > 0 ? currentTime : mediaDuration)}
       </span>
+    </>
+  );
+
+  if (hasAudioMetadata(meta)) {
+    const { title, artist, album, year, coverUrl } = meta;
+    const details = [artist, album, year].filter(Boolean).join(" · ");
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-3 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 p-2 pr-3",
+          className,
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {element}
+        <CoverArt src={coverUrl} />
+        <div className="flex-1 min-w-0">
+          {(title || details) && (
+            <div className="min-w-0 px-0.5">
+              {title && <p className="truncate text-sm font-semibold leading-snug">{title}</p>}
+              {details && <p className="truncate text-xs text-muted-foreground leading-snug">{details}</p>}
+            </div>
+          )}
+          <div className="flex items-center gap-2.5 mt-1">
+            {playButton}
+            {scrubber}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2.5 my-1.5 max-w-sm rounded-2xl border border-border bg-secondary/30 px-3 py-2",
+        className,
+      )}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {element}
+      {playButton}
+      {scrubber}
+    </div>
+  );
+}
+
+/** A track's cover art, or a music glyph where it has none or it won't decode. */
+function CoverArt({ src }: { src?: string }) {
+  const [broken, setBroken] = useState<string | undefined>(undefined);
+  return (
+    <div className="size-20 shrink-0 overflow-hidden rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
+      {src && broken !== src ? (
+        <img src={src} alt="" className="size-full object-cover" onError={() => setBroken(src)} />
+      ) : (
+        <Music className="size-7" />
+      )}
     </div>
   );
 }
