@@ -1,6 +1,6 @@
 /**
- * Notification presentation shared by every notifier (sw.js, the in-app
- * notifier, Electron); a TypeScript port of Android's `NotificationContent.java`.
+ * Notification presentation shared by every notifier (the service worker, the
+ * in-app notifier, Electron); a TypeScript port of Android's `NotificationContent.java`.
  * Mirrors MessagingStyle: rooms are titled by the room with "sender: text"
  * bodies; DMs are titled by the sender. Pure and platform-free, so it can be
  * bundled into the service worker; callers pass names/images already resolved.

@@ -2,7 +2,7 @@
  * The Web Push kill switch, enforced by the service worker: written FIRST on
  * disable (the network teardown is best-effort), the worker then shows nothing
  * and unsubscribes itself so the gateway gets 410s. Path must match
- * `PUSH_DISABLED_URL` in `public/sw.js`.
+ * `PUSH_DISABLED_URL` in `src/sw/worker.ts`.
  */
 
 const PUSH_STATE_CACHE = "armada-push-state-v1";

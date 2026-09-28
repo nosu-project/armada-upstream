@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { queryChannelRumors } from "@/concord/lib/rumorStore";
 import { queryDm17Thread } from "@/lib/nip17/dm17Store";
 
-import { openConcord, openDm, preparePush } from "./pushRuntime";
+import { openConcord, openDm, preparePush, pushScope } from "./pushRuntime";
 
 import type { SwConcordStream, SwPushConfig } from "@/lib/swPushConfig";
 
@@ -480,7 +480,7 @@ describe("preparePush — DM request gating", () => {
   });
 
   it("declines an unknown scope", async () => {
-    expect(await preparePush({ scope: "zap", event: dmWrap() as never }, cfg())).toBeUndefined();
+    expect(await preparePush({ scope: "zap" as never, event: dmWrap() as never }, cfg())).toBeUndefined();
   });
 });
 
@@ -775,8 +775,8 @@ describe("preparePush — showing nothing on purpose", () => {
     // subscription that lingers past the mute (the prune is gated on the watch
     // set being authoritative — see useNostrPush.ts) still wakes the device.
     // Before the fix the wrap reached the worker with NO matching stream in the
-    // config, `prepareConcord` returned `undefined`, and `public/sw.js` rendered
-    // the gateway's visible static "New message" (sw.js:661-676) — a
+    // config, `prepareConcord` returned `undefined`, and the worker rendered
+    // the gateway's visible static "New message" — a
     // notification from a muted community.
     //
     // The muted channel is now kept in the sealed config, flagged `muted`, so
@@ -831,5 +831,79 @@ describe("preparePush — showing nothing on purpose", () => {
     // Still stored — a muted channel's timeline stays complete.
     const rows = await queryChannelRumors(COMMUNITY, CHANNEL, { limit: 10 });
     expect(rows.map((r) => r.content)).toContain("chatter in a muted channel");
+  });
+});
+
+describe("napp.push.payload: the plane read off the event", () => {
+  // Neither Tenna nor nostr-push2 says which subscription matched, so a push
+  // carries no `scope`. The event itself decides.
+  const selfSk = generateSecretKey();
+  const self = getPublicKey(selfSk);
+  const streamPk = getPublicKey(generateSecretKey());
+  const cfg = (over: Partial<SwPushConfig> = {}): SwPushConfig => ({
+    policy: "full",
+    self,
+    knownPeers: [],
+    ...over,
+  });
+  const event = (kind: number, tags: string[][], sk = generateSecretKey()) =>
+    finalizeEvent({ kind, content: "x", tags, created_at: now() }, sk);
+
+  it("files a gift wrap addressed to the viewer as a DM", () => {
+    expect(pushScope(event(1059, [["p", self]]), cfg())).toBe("dm");
+  });
+
+  it("files a wrap authored by a stream address as Concord, whatever it p-tags", () => {
+    const streamSk = generateSecretKey();
+    const wrapEvent = event(1059, [["p", streamPk]], streamSk);
+    const stream = { pk: wrapEvent.pubkey } as SwConcordStream;
+    expect(pushScope(wrapEvent, cfg({ concord: [stream] }))).toBe("c2");
+  });
+
+  it("places no wrap it cannot attribute", () => {
+    expect(pushScope(event(1059, [["p", streamPk]]), cfg())).toBeUndefined();
+    expect(pushScope(event(1059, [["p", self]]), null)).toBeUndefined();
+  });
+
+  it("files an h-tagged group kind as NIP-29, and a mention of the viewer as one", () => {
+    expect(pushScope(event(9, [["h", "general"]]), cfg())).toBe("group");
+    expect(pushScope(event(1111, [["h", "general"], ["p", self]]), cfg())).toBe("group-mention");
+    expect(pushScope(event(9, [["h", "a"], ["h", "b"]]), cfg())).toBeUndefined();
+    expect(pushScope(event(1, [["h", "general"]]), cfg())).toBeUndefined();
+  });
+
+  it("opens a DM that arrives with no scope", async () => {
+    const senderSk = generateSecretKey();
+    const senderPk = getPublicKey(senderSk);
+    const dm = wrap(seal({
+      pubkey: senderPk,
+      kind: 14,
+      content: "see you there",
+      tags: [["p", self]],
+      created_at: now(),
+    }, senderSk, self), self);
+
+    const prepared = await preparePush(
+      { event: dm, relays: ["wss://relay.example"] },
+      cfg({ sk: bytesToHex(selfSk), knownPeers: [senderPk] }),
+    );
+    expect(prepared?.line).toContain("see you there");
+    expect(prepared?.roomKey).toBe(`dm:${senderPk}`);
+  });
+
+  it("names a NIP-29 room after the relay the event arrived from", async () => {
+    const prepared = await preparePush(
+      { event: event(9, [["h", "general"]]), relays: ["wss://relay-a.example"] },
+      cfg(),
+    );
+    expect(prepared?.roomKey).toBe("h:wss://relay-a.example|general");
+  });
+
+  it("shows nothing for an event whose signature does not hold", async () => {
+    // Through JSON, as a push arrives: nostr-tools caches a passed check on the
+    // object itself, and a spread copy would inherit it.
+    const forged = { ...JSON.parse(JSON.stringify(event(9, [["h", "general"]]))), content: "not what was signed" };
+    const prepared = await preparePush({ event: forged, relays: ["wss://relay-a.example"] }, cfg());
+    expect(prepared?.drop).toBe(true);
   });
 });

@@ -3,7 +3,7 @@
 // ArmadaNotify: the decrypt/store/present pipeline the iOS Notification Service
 // Extension runs, and the third port of it.
 //
-// The other two are `public/sw.js` + `src/sw/pushRuntime.ts` on the web and
+// The other two are `src/sw/worker.ts` + `src/sw/pushRuntime.ts` on the web and
 // `Dm17.kt` + `ServiceStore.kt` on Android. All three exist for the same
 // reason: the push gateway is content-blind, so it can only say that SOMETHING
 // matching a filter arrived. Whoever wants to name the sender or show the

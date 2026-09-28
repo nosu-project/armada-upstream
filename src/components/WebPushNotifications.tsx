@@ -10,17 +10,20 @@ import { useIosPush } from "@/hooks/useIosPush";
 import { isNativeRuntime } from "@/lib/platform";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
+import { hasNappPush } from "@/lib/nappPush";
 import { hasIosPush } from "@/lib/nativePush";
 import { DEFAULT_PUSH_PREFS, type UsePushNotificationsReturn } from "@/lib/pushPrefs";
 import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
 
 /**
- * One app-wide push controller: Web Push in a browser, APNs in the iOS app,
- * inert on Android (NativeNotifications) or without a nostr-push gateway.
- * Keeps auto-(re)enable running outside Settings without racing a second controller.
+ * One app-wide push controller: `useNostrPush` in a browser (Web Push, or
+ * `window.napp.push` under Tenna), APNs in the iOS app, inert on Android
+ * (NativeNotifications) or without a push gateway. Keeps auto-(re)enable
+ * running outside Settings without racing a second controller.
  */
 export function WebPushNotifications({ children }: { children: ReactNode }) {
   // Platform is fixed per process, so branching before hooks is stable.
+  if (hasNappPush()) return <WebPushBridge>{children}</WebPushBridge>;
   if (hasIosPush()) return <IosPushBridge>{children}</IosPushBridge>;
   if (isNativeRuntime()) {
     const unavailable: UsePushNotificationsReturn = {

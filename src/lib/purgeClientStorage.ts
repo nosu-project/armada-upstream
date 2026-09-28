@@ -8,11 +8,6 @@ import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
-import {
-  PUSH_CLEANUP_KEY,
-  PUSH_INSTALLATION_KEY,
-  stagePushCleanupForPurge,
-} from "@/lib/pushRegistry";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
@@ -93,16 +88,13 @@ async function purgeCacheStorage(): Promise<void> {
 }
 
 /** Wipe all Armada localStorage (everything except the preserved keys). */
-function purgeLocalStorage(preservePushCleanup: boolean): void {
+function purgeLocalStorage(): void {
   if (typeof localStorage === "undefined") return;
   try {
-    const preserve = preservePushCleanup
-      ? new Set([...PRESERVE_LOCAL_STORAGE_KEYS, PUSH_CLEANUP_KEY, PUSH_INSTALLATION_KEY])
-      : PRESERVE_LOCAL_STORAGE_KEYS;
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && !preserve.has(key)) toRemove.push(key);
+      if (key && !PRESERVE_LOCAL_STORAGE_KEYS.has(key)) toRemove.push(key);
     }
     for (const key of toRemove) localStorage.removeItem(key);
   } catch {
@@ -112,13 +104,10 @@ function purgeLocalStorage(preservePushCleanup: boolean): void {
 
 /**
  * Purge all client-side persistence on logout (caches, decrypt cache, read
- * state, drafts, prefs, …). `armada:login` is left to the caller's
- * `removeLogin`; a hash-only push-cleanup tombstone and installation id survive
- * only while a gateway delete is pending.
+ * state, drafts, prefs, the push gateway's per-install client key, …).
+ * `armada:login` is left to the caller's `removeLogin`.
  */
-export async function purgeClientStorage(outgoingPubkey?: string | null): Promise<void> {
-  // Keep this install's opaque ids in a hash-only tombstone so the same signer can retry cleanup after login.
-  const preservePushCleanup = stagePushCleanupForPurge(outgoingPubkey);
+export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   clearRecentDecrypts();
   clearFoldedMemory();
@@ -133,7 +122,7 @@ export async function purgeClientStorage(outgoingPubkey?: string | null): Promis
   // Android share-sheet suggestions would keep naming the old account's rooms.
   // Not awaited: a rate-limitable system call nothing else depends on.
   void clearShareShortcuts();
-  purgeLocalStorage(preservePushCleanup);
+  purgeLocalStorage();
   // ArmadaDB first: `deleteDatabase` is blocked by open connections.
   await purgeArmadaDB();
   await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeOrphanedOpfs()]);

@@ -1,19 +1,17 @@
 /**
- * The Web Push service worker's runtime, bundled to an IIFE that the classic
- * `public/sw.js` loads via `importScripts` (so the logic is typed/linted/tested
- * source; same arrangement as `electron/db.cjs`). For the inlined push event
- * (`inline_event`, see `pushSubscriptions.ts`) it:
+ * The Web Push service worker's runtime. `worker.ts` handles the worker's
+ * events and `sw.ts` hands it these functions; the build bundles all three
+ * into `/sw.js`. For the inlined push event (`inline_event`, see
+ * `pushSubscriptions.ts`) it:
  *   - OPENS it via the app's own `openDmWrap`/`openWrap`, so the worker can't
  *     apply laxer anti-spoof/seal/NIP-40 rules than the page;
  *   - STORES it in ArmadaDB (IndexedDB) via `writeDm17Rumors`/`writeRumors`;
  *   - PRESENTS it with names/images read from that same database.
  * Every step is best-effort; failure falls back to the gateway's static wake-up.
- *
- * NAMES: keep the emitted `sw-crypto.js` and global `ArmadaDmCrypto` — already
- * installed workers request them. Don't "finish" the rename.
  */
 
 import { getConversationKey, decrypt as nip44Decrypt } from "nostr-tools/nip44";
+import { verifyEvent } from "nostr-tools/pure";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { checkChannelBinding, FUTURE_HOLD_MS, openWrap } from "@/concord/lib/stream";
@@ -46,14 +44,19 @@ import type { OpenedChat } from "@/concord/lib/chat";
 import type { ImagePointer } from "@/concord/lib/types";
 import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import type { PushScope } from "@/lib/pushSubscriptions";
 import type { SwConcordStream, SwPushConfig } from "@/lib/swPushConfig";
 
 // The worker shares the page's store; fix the adapter before anything reads.
 presetIndexedDBArmadaDB();
 
-/** The routing hints the gateway echoes back in `data` (see pushSubscriptions). */
-interface PushData {
-  scope?: string;
+/**
+ * What the worker knows about one push. A legacy gateway echoed `scope` and
+ * `relays` back from the registration; a `napp.push.payload` carries only the
+ * event and where it came from, so `scope` is derived ({@link pushScope}).
+ */
+export interface PushData {
+  scope?: PushScope;
   relays?: unknown;
   url?: string;
   event?: NostrEvent;
@@ -287,6 +290,34 @@ async function present(
   };
 }
 
+/** NIP-29 kinds the group subscriptions watch (`buildPushSubscriptions`). */
+const GROUP_KINDS = new Set([9, 1111, 7]);
+
+/**
+ * Which plane an event belongs to, from the event alone.
+ *
+ * A `napp.push.payload` says nothing about which subscription matched: both
+ * transports send the event and the relay it came from, and nostr-push2 merges
+ * every subscription into one list. The event is enough. A kind-1059 is a
+ * Concord wrap when its author is one of our stream addresses — routing is by
+ * `pubkey` there, as in {@link openConcord} — and a NIP-17 wrap when it is
+ * addressed to us; an `h`-tagged group kind is NIP-29. Undefined for anything
+ * this install cannot place, which then gets the generic fallback.
+ */
+export function pushScope(event: NostrEvent, cfg: SwPushConfig | null): PushScope | undefined {
+  const addressedToSelf = Boolean(cfg?.self)
+    && event.tags.some(([name, value]) => name === "p" && value === cfg?.self);
+  if (event.kind === 1059) {
+    if (cfg?.concord?.some((stream) => stream.pk === event.pubkey)) return "c2";
+    return addressedToSelf ? "dm" : undefined;
+  }
+  if (event.kind === 4) return "dm";
+  if (GROUP_KINDS.has(event.kind) && uniqueTag(event.tags, "h") !== undefined) {
+    return addressedToSelf ? "group-mention" : "group";
+  }
+  return undefined;
+}
+
 /**
  * Open the inlined event, store it, and return what to show (undefined = static
  * fallback). Storing comes FIRST: the message must survive even if presentation fails.
@@ -298,18 +329,24 @@ export async function preparePush(
   const wrapOrEvent = data.event;
   if (!wrapOrEvent || typeof wrapOrEvent !== "object") return undefined;
 
+  // Tenna delivers what its relays sent without checking it, and a fetched
+  // event is only as good as the relay that answered. A forged event is not a
+  // message; say nothing about it.
+  if (!verifyEvent(wrapOrEvent)) return DROP;
+
   const relays = Array.isArray(data.relays) ? (data.relays as string[]) : [];
+  const scope = data.scope ?? pushScope(wrapOrEvent, cfg);
 
   // Fail closed only for the non-authoritative plane; `undefined` = ready (older configs).
-  if (data.scope === "dm") {
+  if (scope === "dm") {
     if (cfg?.dmReady === false) return DROP;
     return prepareDm(wrapOrEvent, cfg);
   }
-  if (data.scope === "c2") {
+  if (scope === "c2") {
     if (cfg?.concordReady === false) return DROP;
     return prepareConcord(wrapOrEvent, cfg);
   }
-  if (data.scope === "group" || data.scope === "group-mention") {
+  if (scope === "group" || scope === "group-mention") {
     return prepareGroup(wrapOrEvent, relays, cfg);
   }
   return undefined;
@@ -497,14 +534,3 @@ export async function openConfig(sealed: Uint8Array | undefined): Promise<SwPush
     return null;
   }
 }
-
-// Expose to the classic worker (no ES imports there); a top-level side effect
-// so rollup keeps it in the IIFE.
-(
-  globalThis as unknown as { ArmadaDmCrypto?: Record<string, unknown> }
-).ArmadaDmCrypto = {
-  preparePush,
-  openDm,
-  openConcord,
-  openConfig,
-};

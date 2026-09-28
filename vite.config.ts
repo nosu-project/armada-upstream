@@ -4,7 +4,7 @@ import { availableParallelism } from "node:os";
 import path from "node:path";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { build, defineConfig, type InlineConfig, type Plugin } from "vite";
 import { configDefaults } from "vitest/config";
 
 import { manualChunks } from "./src/build/manualChunks";
@@ -96,9 +96,8 @@ function serveChangelog(): Plugin {
  *  - index.html: fills the `<meta name="build">` placeholder so a device's
  *    running bundle can be identified from the DOM when debugging stale-PWA
  *    issues (installed iOS PWAs resume from memory and can serve a stale cached
- *    shell, making deploys appear to fail).
- *  - sw.js: rotates the SW cache name every build, so a new deploy changes the
- *    SW bytes (forcing a SW update) and drops the previous shell cache.
+ *    shell, making deploys appear to fail). `main.tsx` also puts it in the
+ *    service worker's script URL, so every deploy installs a fresh worker.
  *
  * Also stamps `__PUBLIC_ORIGIN__` into index.html's Open Graph tags. Those have
  * to be absolute (crawlers don't resolve relative ones), which means a
@@ -115,13 +114,85 @@ function buildStamp(): Plugin {
     transformIndexHtml(html) {
       return html.replaceAll("__BUILD_STAMP__", stamp).replaceAll("__PUBLIC_ORIGIN__", origin);
     },
-    closeBundle() {
-      // sw.js is copied verbatim from public/ during the bundle write; stamp
-      // it afterwards.
-      const swPath = path.resolve(import.meta.dirname, "dist/sw.js");
-      if (fs.existsSync(swPath)) {
-        fs.writeFileSync(swPath, fs.readFileSync(swPath, "utf8").replaceAll("__BUILD_STAMP__", stamp));
-      }
+  };
+}
+
+/**
+ * Builds the service worker (`src/sw/sw.ts`) to `/sw.js`: written beside the
+ * app by `vite build`, and bundled on request by the dev server.
+ *
+ * Its own build rather than an entry of the app's, because a service worker
+ * is one self-contained CLASSIC script: rollup can't emit an IIFE entry beside
+ * the app's ES chunks, and a module worker (`type: "module"`) is still missing
+ * from engines Armada supports. So none of the app's chunks are shared with it
+ * and none of it enters the app bundle.
+ */
+function serviceWorker(): Plugin {
+  const entry = path.resolve(import.meta.dirname, "src/sw/sw.ts");
+  let outDir = path.resolve(import.meta.dirname, "dist");
+  let mode = "production";
+  let logLevel: InlineConfig["logLevel"];
+  let isBuild = false;
+
+  const workerConfig = (write: boolean): InlineConfig => ({
+    configFile: false,
+    root: import.meta.dirname,
+    mode,
+    logLevel,
+    publicDir: false,
+    resolve: {
+      alias: { "@": path.resolve(import.meta.dirname, "./src") },
+    },
+    build: {
+      // Every push-capable engine, iOS 16.4+ Safari included; es2020 covers
+      // BigInt (secp256k1, and Concord's epoch arithmetic).
+      target: "es2020",
+      outDir,
+      emptyOutDir: false,
+      copyPublicDir: false,
+      minify: true,
+      write,
+      lib: {
+        entry,
+        formats: ["iife"],
+        name: "ArmadaServiceWorker",
+        fileName: () => "sw.js",
+      },
+    },
+  });
+
+  return {
+    name: "armada-service-worker",
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir);
+      mode = config.mode;
+      logLevel = config.logLevel;
+      isBuild = config.command === "build";
+    },
+    configureServer(server) {
+      // Rebuilt per request: the browser asks for /sw.js only on registration
+      // and update checks, so a cache would buy little and could serve a stale
+      // worker.
+      server.middlewares.use(async (req, res, next) => {
+        if (req.url?.split("?")[0] !== "/sw.js") return next();
+        try {
+          const result = await build(workerConfig(false));
+          const outputs = Array.isArray(result) ? result : [result];
+          const chunk = outputs
+            .flatMap((out) => ("output" in out ? out.output : []))
+            .find((file) => file.type === "chunk");
+          if (!chunk || chunk.type !== "chunk") throw new Error("service worker build emitted no chunk");
+          res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          res.end(chunk.code);
+        } catch (err) {
+          next(err);
+        }
+      });
+    },
+    async closeBundle() {
+      if (!isBuild) return;
+      await build(workerConfig(true));
     },
   };
 }
@@ -246,7 +317,7 @@ export default defineConfig({
       ignored: [...BUILD_ARTIFACT_EXCLUDES, "**/electron/.dev-profile/**"],
     },
   },
-  plugins: [react(), buildStamp(), serveChangelog()],
+  plugins: [react(), buildStamp(), serveChangelog(), serviceWorker()],
   optimizeDeps: {
     // Pin the dep-scanner's entry points to the real HTML entries. Left to its
     // default the scanner GLOBS `**/*.html` from the project root, and that

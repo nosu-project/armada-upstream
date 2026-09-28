@@ -1,9 +1,11 @@
+/// <reference lib="webworker" />
 /**
  * Armada Service Worker
  *
- * Push-only: receive Web Push notifications from the relay and route
- * notificationclick to the correct conversation. It deliberately does NOT
- * cache or intercept fetches.
+ * Push-only: receive push notifications — Web Push from the nostr-push2
+ * gateway, or Tenna's `window.napp.push` delivery when Armada is an nsite
+ * there — and route notificationclick to the correct conversation. It
+ * deliberately does NOT cache or intercept fetches.
  *
  * An earlier version of this worker also did app-shell caching (precached
  * index.html and served /assets/* cache-first). That made every release boot
@@ -12,104 +14,141 @@
  * hosted web app and inside the Capacitor WebView. HTTP caching of the build
  * (immutable hashed /assets/*, no-cache index.html — see nginx.conf) covers
  * fast loads without a second, self-managed cache layer that can go stale.
+ *
+ * This module is the worker's event handling; `sw.ts` is the entry that
+ * installs it with the real runtime (`pushRuntime.ts`), and the build bundles
+ * the two into one classic `sw.js` (`serviceWorker()` in vite.config.ts). The
+ * runtime is a parameter rather than an import so the suite can drive the
+ * worker's half — whether it asks, and whether it presents the answer
+ * faithfully — against a stub, while `pushRuntime.test.ts` covers the runtime
+ * against the real crypto and store.
  */
 
-// Replaced with the real build stamp by the armada-build-stamp Vite plugin, so
-// every deploy changes this file's bytes and browsers install the update on
-// the next navigation's sw.js re-check.
-const BUILD = "__BUILD_STAMP__";
-void BUILD;
+import type { NostrEvent } from "@nostrify/nostrify";
 
-// The push runtime: opening an inlined event, storing it, and composing what to
-// show. A classic worker can't `import`, WebCrypto has no secp256k1, and none of
-// the app's store or presentation code is reachable here — so this is a
-// separately-built bundle (vite.config.sw-runtime.ts → dist/sw-crypto.js, a name
-// kept for installed workers) exposing self.ArmadaDmCrypto. Guarded: it's absent
-// in the unit-test VM and in any build that didn't ship it, in which case push
-// degrades to the gateway's static wake-up. `typeof` is safe on the undeclared
-// name in that VM.
-try {
-  if (typeof importScripts === "function") {
-    importScripts(new URL("sw-crypto.js", self.location.href).href);
-  }
-} catch {
-  // Bundle missing/unparseable — self.ArmadaDmCrypto stays undefined.
+import type { PushScope } from "@/lib/pushSubscriptions";
+import type { SwPushConfig } from "@/lib/swPushConfig";
+import type { PreparedPush, PushData } from "@/sw/pushRuntime";
+
+declare const self: ServiceWorkerGlobalScope;
+
+/** What the worker needs from `pushRuntime.ts`. */
+export interface PushRuntime {
+  preparePush(data: PushData, cfg: SwPushConfig | null): Promise<PreparedPush | undefined>;
+  pushScope(event: NostrEvent, cfg: SwPushConfig | null): PushScope | undefined;
+  openConfig(sealed: Uint8Array | undefined): Promise<SwPushConfig | null>;
 }
-
-self.addEventListener("install", () => {
-  // Take over immediately: this worker holds no per-build state, so there is
-  // no old-build/new-build consistency to preserve across a swap.
-  self.skipWaiting();
-});
-
-self.addEventListener("activate", (event) => {
-  // Purge every shell cache left behind by the old caching worker and claim
-  // open clients, so installs that are stuck booting a stale cached shell heal
-  // themselves as soon as this worker replaces the old one.
-  event.waitUntil(
-    Promise.all([
-      caches
-        .keys()
-        .then((keys) =>
-          Promise.all(keys.filter((k) => k.startsWith("armada-shell-")).map((k) => caches.delete(k))),
-        ),
-      self.clients.claim(),
-    ]),
-  );
-});
 
 // ---------------------------------------------------------------------------
 // Web Push
 // ---------------------------------------------------------------------------
 
-// Two payload sources land here:
+// Every current payload is a `napp.push.payload` (src/lib/nappPush.ts):
 //
-//  - The legacy relay gateway sends a fully-rendered payload:
+//    { $type: "napp.push.payload", event_id, event?, relays }
+//
+// It arrives by one of two roads that this worker cannot and need not tell
+// apart: Web Push from the nostr-push2 gateway in a browser, or Tenna waking
+// the worker itself when Armada is an nsite there (`window.napp.push`). Either
+// way it is normalized below into the `{ scope, relays, event_id, event }` the
+// rest of this worker reads — the event is fetched by id when it was too big to
+// carry, and its plane (`scope`) is read off the event itself.
+//
+// Two older shapes are still understood, for pushes already in flight to an
+// endpoint made before the switch:
+//
+//  - The legacy relay gateway's fully-rendered payload:
 //    { title, body, icon, badge, data: { url, tag } } — shown as-is.
 //
-//  - The content-blind nostr-push gateway sends a static wake-up plus routing
-//    hints: { title, body, data: { event_id, scope, relays } } (see
-//    pushSubscriptions.ts), and — because every subscription this worker can
-//    open asks for `inline_event` — usually the matched event itself in
-//    `data.event`.
+//  - The retired nostr-push gateway's static wake-up plus routing hints:
+//    { title, body, data: { event_id, scope, relays, event? } }.
 //
-// When the event is there, the runtime bundle opens it, stores it and hands
-// back a real notification: the sender's name and avatar, the room's title and
+// When the event is there, the runtime opens it, stores it and hands back a
+// real notification: the sender's name and avatar, the room's title and
 // image, the message text. The gateway's static `title`/`body` are only the
 // FALLBACK, for a payload too big to carry its event (nostr-push drops it past
-// ~3800 bytes), a scope whose keys this worker doesn't hold, or a build with no
-// bundle. That path shows the static wake-up first to satisfy userVisibleOnly,
-// then fetches by id and updates the SAME stable tag silently: plaintext and
-// decryptable messages gain their preview without a second alert; a decrypted
-// drop becomes a fixed, non-leaking sync entry on Apple (and is withdrawn on
-// push services that allow true silence).
+// ~3800 bytes) or a scope whose keys this worker doesn't hold. That path shows
+// the static wake-up first to satisfy userVisibleOnly, then fetches by id and
+// updates the SAME stable tag silently: plaintext and decryptable messages
+// gain their preview without a second alert; a decrypted drop becomes a fixed,
+// non-leaking sync entry on Apple (and is withdrawn on push services that
+// allow true silence).
 
-const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
+/** The routing half of a push, whichever payload shape it arrived in. */
+interface WorkerPushData extends PushData {
+  event_id?: string;
+  tag?: string;
+  subscription_id?: string;
+  /** The napp path already asked the relays for the event, before presenting. */
+  fetched?: boolean;
+  lines?: string[];
+}
+
+/** A push payload as `PushEvent.data.json()` returns it. */
+interface PushPayload {
+  $type?: string;
+  title?: string;
+  body?: string;
+  icon?: string;
+  badge?: string;
+  data?: WorkerPushData;
+  [key: string]: unknown;
+}
+
+/** The fields every notification of one push shares. */
+interface NotificationBase {
+  icon: string;
+  badge: string;
+  renotify: boolean;
+  silent?: boolean;
+}
+
+/** What the seen ledger remembers about a handled event. */
+interface SeenDetails {
+  outcome: string;
+  roomKey?: string;
+}
+
+/** A live page's answer about one opened event. */
+interface PageOutcome {
+  outcome: string;
+  roomKey?: string;
+}
+
+/** `showNotification` options this worker uses beyond the DOM lib's. */
+type ArmadaNotificationOptions = NotificationOptions & {
+  renotify?: boolean;
+  timestamp?: number;
+};
+
+const PLAINTEXT_SCOPES = new Set<string | undefined>(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_STATE_PREFIX = "/.armada-push-state/";
-const BADGE_STATE_URL = new URL(`${PUSH_STATE_PREFIX}badge`, self.location.origin).href;
+
+/** An absolute URL under the push-state prefix, the Cache Storage key. */
+function stateUrl(path: string): string {
+  return new URL(`${PUSH_STATE_PREFIX}${path}`, self.location.origin).href;
+}
+
+const BADGE_STATE_PATH = "badge";
 // The page-provided push config: the DM request policy, the known-peer set, the
 // viewer's pubkey, (nsec logins only) the decrypt key, and the per-channel
 // Concord stream keys. Written by swPushConfig.ts; read here per push. Must
 // match that module's path — `dm-config` is the ON-DISK spelling from when the
 // blob only carried DM state, kept so an existing install's config stays
 // readable across the update.
-const PUSH_CONFIG_URL = new URL(`${PUSH_STATE_PREFIX}dm-config`, self.location.origin).href;
+const PUSH_CONFIG_PATH = "dm-config";
 // The user's push kill switch, written by swPushDisabled.ts BEFORE the disable
 // path's best-effort network teardown and deleted when push is re-enabled.
 // While it is set this worker displays nothing and tears down its own
 // subscription — the page's unsubscribe/server-delete can fail or be cut off
 // mid-way, and a gateway that never saw the delete keeps pushing forever at a
 // device whose user said stop.
-const PUSH_DISABLED_URL = new URL(`${PUSH_STATE_PREFIX}disabled`, self.location.origin).href;
+const PUSH_DISABLED_PATH = "disabled";
 // Event ids this install has already presented, so a replayed push can't
 // re-alert for a message the user has seen. Bounded like the own-event set.
-const SEEN_EVENT_PREFIX = `${PUSH_STATE_PREFIX}seen/`;
+const SEEN_EVENT_PATH = "seen/";
 const MAX_SEEN_EVENTS = 256;
-// One worker global handles concurrent PushEvents. Claim an event id before the
-// first await so overlapping gateway filters cannot both race through the
-// persistent Cache check and alert for the same event.
-const IN_FLIGHT_EVENTS = new Map();
 
 /**
  * Persistent/in-flight identity for one push match. NIP-29 event ids are not
@@ -118,7 +157,7 @@ const IN_FLIGHT_EVENTS = new Map();
  * exact source; include the inline event's `h` when available. Other planes
  * keep their ordinary event-id identity.
  */
-function pushEventKey(data) {
+function pushEventKey(data: WorkerPushData): string {
   const eventId = typeof data?.event_id === "string" ? data.event_id : "";
   if (!eventId) return "";
   if (!PLAINTEXT_SCOPES.has(data.scope)) return eventId;
@@ -138,7 +177,7 @@ function pushEventKey(data) {
 // Content-blind, exactly like native: nothing is classified, a flood simply
 // stops buzzing. The worker is killed between pushes, so the window's alert
 // timestamps live in the push-state cache, keyed by tag.
-const ROOM_ALERT_PREFIX = `${PUSH_STATE_PREFIX}alert/`;
+const ROOM_ALERT_PATH = "alert/";
 const ROOM_ALERT_MAX = 5;
 const ROOM_ALERT_WINDOW_MS = 120_000;
 // Cap the timestamps one tag re-serializes while a flood is live (native's
@@ -148,15 +187,16 @@ const ROOM_ALERT_WINDOW_MS = 120_000;
 const ROOM_ALERT_MAX_TRACKED = 64;
 
 /** Increment the Home-Screen badge without needing a live page. */
-async function incrementAppBadge() {
+async function incrementAppBadge(): Promise<void> {
   if (typeof self.navigator?.setAppBadge !== "function") return;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const stored = await cache.match(BADGE_STATE_URL);
+    const url = stateUrl(BADGE_STATE_PATH);
+    const stored = await cache.match(url);
     const current = stored ? Number.parseInt(await stored.text(), 10) || 0 : 0;
     const next = Math.min(current + 1, 999);
     await Promise.all([
-      cache.put(BADGE_STATE_URL, new Response(String(next))),
+      cache.put(url, new Response(String(next))),
       self.navigator.setAppBadge(next),
     ]);
   } catch {
@@ -165,10 +205,10 @@ async function incrementAppBadge() {
 }
 
 /** Clear both the OS badge and the counter the next push increments. */
-async function clearAppBadge() {
+async function clearAppBadge(): Promise<void> {
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    await cache.delete(BADGE_STATE_URL);
+    await cache.delete(stateUrl(BADGE_STATE_PATH));
     if (typeof self.navigator?.clearAppBadge === "function") {
       await self.navigator.clearAppBadge();
     }
@@ -178,31 +218,23 @@ async function clearAppBadge() {
 }
 
 /** Whether this push references an event created by this browser install. */
-async function isOwnPush(data) {
+async function isOwnPush(data: WorkerPushData): Promise<boolean> {
   if (!data.event_id) return false;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const ownUrl = new URL(
-      `${PUSH_STATE_PREFIX}own/${encodeURIComponent(data.event_id)}`,
-      self.location.origin,
-    ).href;
-    return Boolean(await cache.match(ownUrl));
+    return Boolean(await cache.match(stateUrl(`own/${encodeURIComponent(data.event_id)}`)));
   } catch {
     return false;
   }
 }
 
 /** Metadata for an event successfully handled by an earlier PushEvent. */
-async function seenBefore(data) {
+async function seenBefore(data: WorkerPushData): Promise<SeenDetails | undefined> {
   const eventKey = pushEventKey(data);
   if (!eventKey) return undefined;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const url = new URL(
-      `${SEEN_EVENT_PREFIX}${encodeURIComponent(eventKey)}`,
-      self.location.origin,
-    ).href;
-    const stored = await cache.match(url);
+    const stored = await cache.match(stateUrl(`${SEEN_EVENT_PATH}${encodeURIComponent(eventKey)}`));
     if (!stored) return undefined;
     try {
       const parsed = JSON.parse(await stored.text());
@@ -223,19 +255,21 @@ async function seenBefore(data) {
  * event disappear forever on replay; the ledger must describe success, not an
  * attempt.
  */
-async function markSeen(data, details = { outcome: "worker" }) {
+async function markSeen(
+  data: WorkerPushData,
+  details: SeenDetails = { outcome: "worker" },
+): Promise<void> {
   const eventKey = pushEventKey(data);
   if (!eventKey) return;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const url = new URL(
-      `${SEEN_EVENT_PREFIX}${encodeURIComponent(eventKey)}`,
-      self.location.origin,
-    ).href;
-    await cache.put(url, new Response(JSON.stringify(details)));
+    await cache.put(
+      stateUrl(`${SEEN_EVENT_PATH}${encodeURIComponent(eventKey)}`),
+      new Response(JSON.stringify(details)),
+    );
     try {
       // Cache.keys() preserves insertion order, so the oldest go first.
-      const prefix = new URL(SEEN_EVENT_PREFIX, self.location.origin).href;
+      const prefix = stateUrl(SEEN_EVENT_PATH);
       const seen = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
       if (seen.length > MAX_SEEN_EVENTS) {
         await Promise.all(
@@ -254,9 +288,9 @@ async function markSeen(data, details = { outcome: "worker" }) {
  * Apple requires every PushEvent to produce a visible notification. A locally
  * authored event, replay, policy drop, or exact foreground-page acknowledgement
  * therefore updates one silent collapsed sync entry instead of going dark.
- * Returns whether it displayed one; other push services retain true silence.
+ * Other push services retain true silence.
  */
-async function quietSync(tag = "armada-quiet-sync") {
+async function quietSync(tag = "armada-quiet-sync"): Promise<void> {
   if (!(await isApplePushEndpoint())) return;
   await self.registration.showNotification("Armada", {
     // Deliberately fixed, not inherited from the gateway payload: suppression
@@ -269,8 +303,7 @@ async function quietSync(tag = "armada-quiet-sync") {
     renotify: false,
     silent: true,
     data: { url: "/" },
-  });
-  return true;
+  } as ArmadaNotificationOptions);
 }
 
 const PAGE_PRESENTATION_OUTCOMES = new Set([
@@ -282,7 +315,12 @@ const PAGE_PRESENTATION_OUTCOMES = new Set([
 ]);
 
 /** Ask or claim one exact opened event in a live page (room may be unresolved). */
-function clientPresentationState(client, prepared, type, timeoutMs) {
+function clientPresentationState(
+  client: Client,
+  prepared: PreparedPush,
+  type: string,
+  timeoutMs: number,
+): Promise<PageOutcome> {
   if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
     return Promise.resolve({ outcome: "unhandled", roomKey: prepared.roomKey });
   }
@@ -290,7 +328,7 @@ function clientPresentationState(client, prepared, type, timeoutMs) {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     let settled = false;
-    const finish = (outcome) => {
+    const finish = (outcome: PageOutcome) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -327,7 +365,7 @@ function clientPresentationState(client, prepared, type, timeoutMs) {
   });
 }
 
-function strongestPageOutcome(outcomes) {
+function strongestPageOutcome(outcomes: PageOutcome[]): PageOutcome | undefined {
   for (const outcome of ["presented", "presenting", "suppressed"]) {
     const match = outcomes.find((candidate) => candidate?.outcome === outcome);
     if (match) return match;
@@ -341,7 +379,7 @@ function strongestPageOutcome(outcomes) {
  * a page that presented in between reports that outcome; otherwise it records
  * worker ownership before acknowledging.
  */
-async function pagePresentationOutcome(prepared) {
+async function pagePresentationOutcome(prepared: PreparedPush): Promise<PageOutcome | undefined> {
   if (!prepared?.eventId) return undefined;
   try {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -372,22 +410,22 @@ async function pagePresentationOutcome(prepared) {
 }
 
 /**
- * The page-provided push config's SEALED bytes, or null if none.
+ * The page-provided push config, or null if there is none or it won't open.
  *
- * Sealed at rest under a non-extractable AES-GCM key; only the runtime bundle
- * can open it (swSecretVault), so it is handed over as ciphertext and a config
- * we can't decrypt — or a build without the bundle — safely degrades to the
+ * Sealed at rest under a non-extractable AES-GCM key (swSecretVault); the
+ * runtime opens it, and a config it can't decrypt safely degrades to the
  * generic wake-up.
  */
-async function readSealedConfig() {
+async function readConfig(runtime: PushRuntime): Promise<SwPushConfig | null> {
+  let sealed: Uint8Array | undefined;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const stored = await cache.match(PUSH_CONFIG_URL);
-    if (!stored) return undefined;
-    return new Uint8Array(await stored.arrayBuffer());
+    const stored = await cache.match(stateUrl(PUSH_CONFIG_PATH));
+    if (stored) sealed = new Uint8Array(await stored.arrayBuffer());
   } catch {
-    return undefined;
+    // Treated as no config.
   }
+  return runtime.openConfig(sealed);
 }
 
 /**
@@ -397,12 +435,10 @@ async function readSealedConfig() {
  * path first, where even a fixed "New message" would violate the plane gate.
  * Missing flags retain the behavior of configs written by older clients.
  */
-async function pushPlaneUnready(data) {
+async function pushPlaneUnready(runtime: PushRuntime, data: WorkerPushData): Promise<boolean> {
   if (data.scope !== "dm" && data.scope !== "c2") return false;
-  const runtime = self.ArmadaDmCrypto;
-  if (!runtime || typeof runtime.openConfig !== "function") return false;
   try {
-    const cfg = await runtime.openConfig(await readSealedConfig());
+    const cfg = await readConfig(runtime);
     return data.scope === "dm"
       ? cfg?.dmReady === false
       : cfg?.concordReady === false;
@@ -412,23 +448,39 @@ async function pushPlaneUnready(data) {
 }
 
 /** Open/store/resolve an inlined (or just-fetched) event without presenting it. */
-async function prepareNotification(data) {
-  const runtime = self.ArmadaDmCrypto;
-  if (!data.event || !runtime || typeof runtime.preparePush !== "function") return undefined;
+async function prepareNotification(
+  runtime: PushRuntime,
+  data: WorkerPushData,
+): Promise<PreparedPush | undefined> {
+  if (!data.event) return undefined;
   try {
-    const cfg = await runtime.openConfig(await readSealedConfig());
-    return await runtime.preparePush(data, cfg);
+    return await runtime.preparePush(data, await readConfig(runtime));
   } catch {
-    return undefined; // never trade the notification for a bundle failure
+    return undefined; // never trade the notification for a runtime failure
   }
 }
 
-/** Present one already-resolved notification. */
-async function showPreparedNotification(base, data, prepared, options = {}) {
-  // Drop the (large) inlined event from the data we attach to the notification.
+/** Options for {@link showPreparedNotification}. */
+interface ShowOptions {
+  tag?: string;
+  silent?: boolean;
+  reuseExisting?: boolean;
+}
+
+/** The routing data a notification carries, without the (large) inlined event. */
+function routeDataOf(data: WorkerPushData): WorkerPushData {
   const routeData = { ...data };
   delete routeData.event;
+  return routeData;
+}
 
+/** Present one already-resolved notification. */
+async function showPreparedNotification(
+  base: NotificationBase,
+  data: WorkerPushData,
+  prepared: PreparedPush,
+  options: ShowOptions = {},
+): Promise<void> {
   const displayTag = options.tag || prepared.tag;
   // A content-blind request ping must not accumulate the room's lines — the
   // whole point is that it reveals nothing the sender chose.
@@ -449,12 +501,16 @@ async function showPreparedNotification(base, data, prepared, options = {}) {
     ...(Number.isFinite(prepared.timestamp) && prepared.timestamp > 0
       ? { timestamp: prepared.timestamp }
       : {}),
-    data: { ...routeData, url: prepared.url, lines: prepared.accumulate ? lines : undefined },
-  });
+    data: {
+      ...routeDataOf(data),
+      url: prepared.url,
+      lines: prepared.accumulate ? lines : undefined,
+    },
+  } as ArmadaNotificationOptions);
 }
 
 /** Close every notification currently shown under `tag`. Best-effort. */
-async function withdrawNotifications(tag) {
+async function withdrawNotifications(tag: string): Promise<void> {
   try {
     if (typeof self.registration.getNotifications !== "function") return;
     const shown = await self.registration.getNotifications({ tag });
@@ -472,19 +528,18 @@ async function withdrawNotifications(tag) {
  * the newest message. Browsers without notification introspection just get
  * the single line.
  */
-async function appendRoomLine(tag, line) {
-  const lines = (await existingRoomLines(tag) ?? []).slice(-4);
+async function appendRoomLine(tag: string, line: string): Promise<string[]> {
+  const lines = ((await existingRoomLines(tag)) ?? []).slice(-4);
   lines.push(line);
   return lines;
 }
 
 /** Lines already carried by the notification under this exact room tag. */
-async function existingRoomLines(tag) {
+async function existingRoomLines(tag: string): Promise<string[] | undefined> {
   try {
     if (typeof self.registration.getNotifications === "function") {
       const [prior] = await self.registration.getNotifications({ tag });
-      const held = prior && prior.data && Array.isArray(prior.data.lines) ? prior.data.lines : [];
-      return held;
+      return prior && prior.data && Array.isArray(prior.data.lines) ? prior.data.lines : [];
     }
   } catch {
     // No introspection — caller uses a single-line body.
@@ -497,7 +552,7 @@ async function existingRoomLines(tag) {
  * PushEvent to display something, so a suppressed Apple push becomes a silent
  * collapsed sync entry. Other push services retain true suppression.
  */
-async function isApplePushEndpoint() {
+async function isApplePushEndpoint(): Promise<boolean> {
   try {
     const sub = await self.registration.pushManager.getSubscription();
     return Boolean(sub && new URL(sub.endpoint).hostname.endsWith("push.apple.com"));
@@ -513,14 +568,14 @@ async function isApplePushEndpoint() {
  * keeps its own window full and stays quiet until it actually stops. Call once
  * per push, before showing; a bookkeeping failure never silences a real alert.
  */
-async function roomAlertSilent(tag) {
+async function roomAlertSilent(tag: string | undefined): Promise<boolean> {
   if (!tag) return false;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const url = new URL(`${ROOM_ALERT_PREFIX}${encodeURIComponent(tag)}`, self.location.origin).href;
+    const url = stateUrl(`${ROOM_ALERT_PATH}${encodeURIComponent(tag)}`);
     const now = Date.now();
     const stored = await cache.match(url);
-    let times = [];
+    let times: unknown[] = [];
     if (stored) {
       try {
         const parsed = JSON.parse(await stored.text());
@@ -529,11 +584,11 @@ async function roomAlertSilent(tag) {
         // Corrupt entry — treat as empty.
       }
     }
-    times = times.filter((t) => typeof t === "number" && now - t <= ROOM_ALERT_WINDOW_MS);
-    const silent = times.length >= ROOM_ALERT_MAX;
-    times.push(now);
-    if (times.length > ROOM_ALERT_MAX_TRACKED) times = times.slice(-ROOM_ALERT_MAX_TRACKED);
-    await cache.put(url, new Response(JSON.stringify(times)));
+    let recent = times.filter((t): t is number => typeof t === "number" && now - t <= ROOM_ALERT_WINDOW_MS);
+    const silent = recent.length >= ROOM_ALERT_MAX;
+    recent.push(now);
+    if (recent.length > ROOM_ALERT_MAX_TRACKED) recent = recent.slice(-ROOM_ALERT_MAX_TRACKED);
+    await cache.put(url, new Response(JSON.stringify(recent)));
     return silent;
   } catch {
     return false;
@@ -546,10 +601,10 @@ async function roomAlertSilent(tag) {
  * best-effort over the network; this flag is the local truth the worker can
  * enforce without any page open.
  */
-async function pushDisabled() {
+async function pushDisabled(): Promise<boolean> {
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
-    return Boolean(await cache.match(PUSH_DISABLED_URL));
+    return Boolean(await cache.match(stateUrl(PUSH_DISABLED_PATH)));
   } catch {
     return false;
   }
@@ -560,7 +615,7 @@ async function pushDisabled() {
  * source: once the endpoint is gone the push service answers 410 and the
  * gateway drops the registration — no relay cooperation needed.
  */
-async function dropOwnSubscription() {
+async function dropOwnSubscription(): Promise<void> {
   try {
     const sub = await self.registration.pushManager.getSubscription();
     if (sub) await sub.unsubscribe();
@@ -570,7 +625,12 @@ async function dropOwnSubscription() {
 }
 
 /** Handle one unique PushEvent. The caller serializes equal event ids. */
-async function handlePush(payload, data, base) {
+async function handlePush(
+  runtime: PushRuntime,
+  payload: PushPayload,
+  data: WorkerPushData,
+  base: NotificationBase,
+): Promise<void> {
   // The user turned push off. Showing nothing is intentional here: dropping
   // the endpoint is the requested outcome, even if WebKit also revokes it.
   if (await pushDisabled()) {
@@ -578,7 +638,7 @@ async function handlePush(payload, data, base) {
     return;
   }
 
-  if (await pushPlaneUnready(data)) {
+  if (await pushPlaneUnready(runtime, data)) {
     await quietSync();
     await markSeen(data, { outcome: "suppressed" });
     return;
@@ -596,7 +656,7 @@ async function handlePush(payload, data, base) {
       && typeof seen.roomKey === "string"
       && await isApplePushEndpoint()
     ) {
-      const replay = await prepareNotification(data);
+      const replay = await prepareNotification(runtime, data);
       if (replay && !replay.drop && replay.roomKey === seen.roomKey) {
         await showPreparedNotification(base, data, replay, {
           tag: seen.roomKey,
@@ -613,7 +673,7 @@ async function handlePush(payload, data, base) {
   // Open/store first. Only a resolved event has an exact room/event identity a
   // page may acknowledge; generic capability or stale WindowClient URLs never
   // suppress a push again.
-  const prepared = await prepareNotification(data);
+  const prepared = await prepareNotification(runtime, data);
   if (prepared) {
     if (prepared.drop) {
       await quietSync();
@@ -658,44 +718,49 @@ async function handlePush(payload, data, base) {
     return;
   }
 
-  // No key/event/runtime: show the gateway wake-up exactly once. Prefer an
+  // No key/event: show the gateway wake-up exactly once. Prefer an
   // event-stable tag so later enrichment can update this same entry without a
   // second alert; fall back to the subscription tag only when no event exists.
   const tag = pushEventKey(data) || data.tag || data.subscription_id || "armada-notification";
   const rateKey = data.tag || data.subscription_id || tag;
   const silent = await roomAlertSilent(rateKey);
   const alertBase = silent ? { ...base, silent: true, renotify: false } : base;
-  const routeData = { ...data };
-  delete routeData.event;
+  const routeData = routeDataOf(data);
   await self.registration.showNotification(payload.title ?? "Armada", {
     ...alertBase,
     body: payload.body ?? "",
     data: routeData,
     tag,
-  });
+  } as ArmadaNotificationOptions);
   await Promise.all([incrementAppBadge(), markSeen(data)]);
 
   // Best-effort enrichment is an UPDATE, never a second alert: keep the exact
   // static tag and force silent/non-renotify. This matters most for oversized
   // encrypted wraps, where the old room-tag replacement produced two banners.
   if (!data.event_id) return;
-  const relays = Array.isArray(data.relays) ? data.relays : [];
-  if (relays.length === 0) return;
-  const canOpenEncrypted = (data.scope === "dm" || data.scope === "c2")
-    && self.ArmadaDmCrypto
-    && typeof self.ArmadaDmCrypto.preparePush === "function";
-  if (!PLAINTEXT_SCOPES.has(data.scope) && !canOpenEncrypted) return;
+  const relays = Array.isArray(data.relays)
+    ? data.relays.filter((relay): relay is string => typeof relay === "string")
+    : [];
+  const encrypted = data.scope === "dm" || data.scope === "c2";
+  if (!PLAINTEXT_SCOPES.has(data.scope) && !encrypted) return;
 
-  let ev;
-  try {
-    ev = await fetchEventFromRelays(relays, data.event_id, 4000);
-  } catch {
-    return; // leave the static notification in place
+  // A plaintext event in hand needs no second fetch; an encrypted one the
+  // runtime already failed to open would fail again.
+  let ev = data.event;
+  if (ev && encrypted) return;
+  if (!ev) {
+    // `fetched`: the napp path already asked the relays, before presenting.
+    if (data.fetched || relays.length === 0) return;
+    try {
+      ev = await fetchEventFromRelays(relays, data.event_id, 4000);
+    } catch {
+      return; // leave the static notification in place
+    }
   }
   if (!ev) return;
 
-  if (canOpenEncrypted) {
-    const enriched = await prepareNotification({ ...data, event: ev });
+  if (encrypted) {
+    const enriched = await prepareNotification(runtime, { ...data, event: ev });
     if (!enriched) return;
     if (enriched.drop) {
       if (await isApplePushEndpoint()) {
@@ -720,81 +785,125 @@ async function handlePush(payload, data, base) {
       ...routeData,
       url: h && relays[0] ? groupUrl(relays[0], h, ev.id) : data.url,
     },
-  });
+  } as ArmadaNotificationOptions);
 }
 
-/** Serialize duplicate gateway matches without pre-committing the seen key. */
-function runPush(payload, data, base) {
-  const eventKey = pushEventKey(data);
-  if (!eventKey) return handlePush(payload, data, base);
+/** Serializes duplicate gateway matches without pre-committing the seen key. */
+function pushRunner(runtime: PushRuntime) {
+  // One worker global handles concurrent PushEvents. Claim an event id before
+  // the first await so overlapping gateway filters cannot both race through the
+  // persistent Cache check and alert for the same event.
+  const inFlight = new Map<string, Promise<void>>();
 
-  const existing = IN_FLIGHT_EVENTS.get(eventKey);
-  if (existing) {
-    return (async () => {
-      try {
-        await existing;
-      } catch {
-        // The first show failed and therefore did not commit `seen`; this push
-        // is the retry, not a duplicate to suppress.
-        return handlePush(payload, data, base);
-      }
-      // Re-enter through the committed seen metadata. In particular, an Apple
-      // event first presented by the page must silently update that same room
-      // entry, not create a second generic sync notification.
-      return handlePush(payload, data, base);
-    })();
+  return (payload: PushPayload, data: WorkerPushData, base: NotificationBase): Promise<void> => {
+    const eventKey = pushEventKey(data);
+    if (!eventKey) return handlePush(runtime, payload, data, base);
+
+    const existing = inFlight.get(eventKey);
+    if (existing) {
+      return (async () => {
+        try {
+          await existing;
+        } catch {
+          // The first show failed and therefore did not commit `seen`; this
+          // push is the retry, not a duplicate to suppress.
+        }
+        // Re-enter through the committed seen metadata. In particular, an
+        // Apple event first presented by the page must silently update that
+        // same room entry, not create a second generic sync notification.
+        return handlePush(runtime, payload, data, base);
+      })();
+    }
+
+    const tracked: Promise<void> = handlePush(runtime, payload, data, base).finally(() => {
+      if (inFlight.get(eventKey) === tracked) inFlight.delete(eventKey);
+    });
+    inFlight.set(eventKey, tracked);
+    return tracked;
+  };
+}
+
+const NAPP_PUSH_PAYLOAD_TYPE = "napp.push.payload";
+
+/** What the worker shows when it can't open the event, per plane. */
+const FALLBACK_TEXT: Record<PushScope, string> = {
+  dm: "New direct message",
+  c2: "New message in a community",
+  group: "New message in a channel",
+  "group-mention": "Someone mentioned you",
+};
+
+/** The plane an event belongs to, or undefined for anything unplaceable. */
+async function scopeOfEvent(
+  runtime: PushRuntime,
+  ev: NostrEvent | undefined,
+): Promise<PushScope | undefined> {
+  if (!ev || typeof ev !== "object") return undefined;
+  try {
+    return runtime.pushScope(ev, await readConfig(runtime));
+  } catch {
+    return undefined;
   }
-
-  const current = handlePush(payload, data, base);
-  const tracked = current.finally(() => {
-    if (IN_FLIGHT_EVENTS.get(eventKey) === tracked) IN_FLIGHT_EVENTS.delete(eventKey);
-  });
-  IN_FLIGHT_EVENTS.set(eventKey, tracked);
-  return tracked;
 }
 
-self.addEventListener("push", (event) => {
-  let payload;
-  if (!event.data) {
-    payload = { title: "Armada", body: "Messages synced", data: {} };
-  } else {
+/**
+ * Normalize a `napp.push.payload` into the `{ title, body }` fallback and the
+ * `data` the rest of the worker reads. The event is fetched here when it did
+ * not fit the transport, BEFORE anything is shown: its plane, and so whether
+ * and how to show it, is only knowable from the event.
+ */
+async function nappPush(
+  runtime: PushRuntime,
+  raw: PushPayload,
+): Promise<{ payload: PushPayload; data: WorkerPushData }> {
+  const eventId = typeof raw.event_id === "string" ? raw.event_id : "";
+  const relays = Array.isArray(raw.relays)
+    ? raw.relays.filter((relay): relay is string => typeof relay === "string")
+    : [];
+  const inlined = raw.event as NostrEvent | undefined;
+  let ev = inlined && typeof inlined === "object" && inlined.id === eventId ? inlined : undefined;
+  if (!ev && eventId && relays.length > 0) {
     try {
-      payload = event.data.json();
+      ev = await fetchEventFromRelays(relays, eventId, 4000);
     } catch {
-      payload = { title: "Armada", body: event.data.text(), data: {} };
+      ev = undefined;
     }
   }
 
-  const data = payload?.data ?? {};
-  const base = {
-    icon: payload?.icon || "/favicon.png",
-    // Single-colour on transparency: the platform keeps only this image's alpha
-    // channel, so the full-colour favicon that used to sit here rendered as a
-    // solid blob in the status bar.
-    badge: payload?.badge || "/badge-96.png",
-    renotify: true,
+  const scope = await scopeOfEvent(runtime, ev);
+  const data: WorkerPushData = { event_id: eventId, relays, fetched: true };
+  if (scope) data.scope = scope;
+  if (ev) data.event = ev;
+  if (scope === "dm") data.url = "/dm";
+  const h = ev ? tagValue(ev, "h") : undefined;
+  if (PLAINTEXT_SCOPES.has(scope) && h && relays.length === 1) {
+    data.url = groupUrl(relays[0], h, eventId);
+  }
+  return {
+    payload: scope
+      ? { title: "New message", body: FALLBACK_TEXT[scope] }
+      : { title: "Armada", body: "New message" },
+    data,
   };
-  event.waitUntil(runPush(payload ?? {}, data, base));
-});
+}
 
 /** First value of the first `name` tag on an event, or undefined. */
-function tagValue(event, name) {
+function tagValue(event: { tags?: string[][] }, name: string): string | undefined {
   const t = (event.tags || []).find((x) => x[0] === name);
   return t ? t[1] : undefined;
 }
 
-function truncate(text, max) {
+function truncate(text: unknown, max: number): string {
   if (typeof text !== "string") return "";
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 /**
  * Deep link to a message in a NIP-29 group, matching the SPA's chat routes
- * (`src/lib/routes.ts`) — including the relay route param. A worker can't
- * import the app's module, so this stays a hand-written mirror; the shapes it
- * has to agree with are `/s/:server/:groupId` and its `/m/:messageId` suffix.
+ * (`src/lib/routes.ts`) — including the relay route param. The shapes it has
+ * to agree with are `/s/:server/:groupId` and its `/m/:messageId` suffix.
  */
-function groupUrl(relayUrl, groupId, eventId) {
+function groupUrl(relayUrl: string, groupId: string, eventId?: string): string {
   const param = encodeURIComponent(
     relayUrl.replace(/^wss?:\/\//i, (m) => (m.toLowerCase() === "ws://" ? "ws:" : "")),
   );
@@ -804,13 +913,23 @@ function groupUrl(relayUrl, groupId, eventId) {
 
 /**
  * Fetch one event by id, racing the given relays, resolving with the first hit
- * (or undefined). Each socket is torn down on resolve or after `timeoutMs`.
+ * — or undefined once every relay has said it has none, or after `timeoutMs`.
+ * Each socket is torn down on resolve.
  */
-function fetchEventFromRelays(relays, id, timeoutMs) {
+function fetchEventFromRelays(
+  relays: string[],
+  id: string,
+  timeoutMs: number,
+): Promise<NostrEvent | undefined> {
   return new Promise((resolve) => {
     let settled = false;
-    const sockets = [];
-    const done = (ev) => {
+    const sockets: WebSocket[] = [];
+    let unanswered = 0;
+    const answered = () => {
+      unanswered -= 1;
+      if (unanswered <= 0) done(undefined);
+    };
+    const done = (ev: NostrEvent | undefined) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -826,13 +945,20 @@ function fetchEventFromRelays(relays, id, timeoutMs) {
     const timer = setTimeout(() => done(undefined), timeoutMs);
 
     for (const url of relays) {
-      let ws;
+      let ws: WebSocket;
       try {
         ws = new WebSocket(url);
       } catch {
         continue;
       }
       sockets.push(ws);
+      unanswered += 1;
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        answered();
+      };
       const subId = `sw-${Math.random().toString(36).slice(2, 10)}`;
       ws.onopen = () => {
         try {
@@ -850,74 +976,27 @@ function fetchEventFromRelays(relays, id, timeoutMs) {
         }
         if (frame[0] === "EVENT" && frame[1] === subId && frame[2] && frame[2].id === id) {
           done(frame[2]);
-        } else if (frame[0] === "EOSE" && frame[1] === subId) {
+        } else if ((frame[0] === "EOSE" || frame[0] === "CLOSED") && frame[1] === subId) {
           try {
             ws.close();
           } catch {
             /* ignore */
           }
+          finish();
         }
       };
       ws.onerror = () => {
-        /* other relays may still answer */
+        // Other relays may still answer.
+        finish();
       };
     }
 
-    if (relays.length === 0) done(undefined);
+    if (unanswered === 0) done(undefined);
   });
 }
 
-self.addEventListener("pushsubscriptionchange", (event) => {
-  // The browser invalidated or rotated the push subscription (endpoint expiry,
-  // push-service key rotation). Until a new subscription is registered with
-  // the relay, every push goes to a dead endpoint. Resubscribe with the same
-  // server key so a live subscription exists again, then tell open pages to
-  // re-register it — the registration PUT needs a NIP-98 signature that only
-  // the page's signer can produce. With no page open, the page-load sync in
-  // useNostrPush re-registers on the next visit.
-  const key = event.oldSubscription?.options?.applicationServerKey;
-  event.waitUntil(
-    (async () => {
-      // While the user's kill switch is set, a rotation must not resurrect
-      // push: drop whatever the browser minted instead of re-subscribing.
-      if (await pushDisabled()) {
-        try {
-          if (event.newSubscription) await event.newSubscription.unsubscribe();
-        } catch {
-          // Already dead, or the push service is unreachable — either way no
-          // page will re-register it while the flag stands.
-        }
-        return;
-      }
-      if (!event.newSubscription && key) {
-        try {
-          await self.registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: key,
-          });
-        } catch {
-          // Permission revoked or push service unreachable — nothing to do.
-        }
-      }
-      const clientList = await self.clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-      for (const client of clientList) {
-        client.postMessage({ type: "armada-push-changed" });
-      }
-    })(),
-  );
-});
-
-self.addEventListener("message", (event) => {
-  if (event.data?.type === "armada-clear-badge") {
-    event.waitUntil(clearAppBadge());
-  }
-});
-
 /** Keep notification routes inside this installed app's origin. */
-function notificationTarget(raw) {
+function notificationTarget(raw: unknown): string {
   try {
     const url = new URL(typeof raw === "string" ? raw : "/", self.location.origin);
     if (url.origin !== self.location.origin) return "/";
@@ -928,8 +1007,8 @@ function notificationTarget(raw) {
 }
 
 /** Navigate before focusing; if either step fails, open the route explicitly. */
-async function openNotificationTarget(target) {
-  let fallbackClient;
+async function openNotificationTarget(target: string): Promise<WindowClient | null | undefined> {
+  let fallbackClient: WindowClient | undefined;
   try {
     const clientList = await self.clients.matchAll({
       type: "window",
@@ -973,13 +1052,131 @@ async function openNotificationTarget(target) {
   }
 }
 
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
+/** Register every event handler on the worker global. */
+export function installServiceWorker(runtime: PushRuntime): void {
+  const runPush = pushRunner(runtime);
 
-  const target = notificationTarget(event.notification.data?.url);
+  self.addEventListener("install", () => {
+    // Take over immediately: this worker holds no per-build state, so there
+    // is no old-build/new-build consistency to preserve across a swap.
+    void self.skipWaiting();
+  });
 
-  event.waitUntil(Promise.all([
-    clearAppBadge(),
-    openNotificationTarget(target),
-  ]));
-});
+  self.addEventListener("activate", (event) => {
+    // Purge every shell cache left behind by the old caching worker and claim
+    // open clients, so installs that are stuck booting a stale cached shell
+    // heal themselves as soon as this worker replaces the old one.
+    event.waitUntil(
+      Promise.all([
+        caches
+          .keys()
+          .then((keys) =>
+            Promise.all(keys.filter((k) => k.startsWith("armada-shell-")).map((k) => caches.delete(k))),
+          ),
+        self.clients.claim(),
+      ]),
+    );
+  });
+
+  self.addEventListener("push", (event) => {
+    let payload: PushPayload;
+    if (!event.data) {
+      payload = { title: "Armada", body: "Messages synced", data: {} };
+    } else {
+      try {
+        payload = event.data.json();
+      } catch {
+        payload = { title: "Armada", body: event.data.text(), data: {} };
+      }
+    }
+
+    const base: NotificationBase = {
+      icon: payload?.icon || "/favicon.png",
+      // Single-colour on transparency: the platform keeps only this image's
+      // alpha channel, so the full-colour favicon that used to sit here
+      // rendered as a solid blob in the status bar.
+      badge: payload?.badge || "/badge-96.png",
+      renotify: true,
+    };
+
+    if (payload?.$type === NAPP_PUSH_PAYLOAD_TYPE) {
+      event.waitUntil((async () => {
+        // The kill switch before the fetch: a disabled install asks no relay
+        // anything on a push's behalf.
+        if (await pushDisabled()) {
+          await dropOwnSubscription();
+          return;
+        }
+        const normalized = await nappPush(runtime, payload);
+        await runPush(normalized.payload, normalized.data, base);
+      })());
+      return;
+    }
+
+    event.waitUntil(runPush(payload ?? {}, payload?.data ?? {}, base));
+  });
+
+  self.addEventListener("pushsubscriptionchange", (event: Event) => {
+    // The browser invalidated or rotated the push subscription (endpoint
+    // expiry, push-service key rotation). Until a new subscription is
+    // registered with the relay, every push goes to a dead endpoint. Resubscribe
+    // with the same server key so a live subscription exists again, then tell
+    // open pages to re-register it — the gateway client key that must sign the
+    // `create` lives in page storage, out of this worker's reach. With no page
+    // open, the page-load sync in useNostrPush re-registers on the next visit.
+    const change = event as ExtendableEvent & {
+      oldSubscription?: PushSubscription | null;
+      newSubscription?: PushSubscription | null;
+    };
+    const key = change.oldSubscription?.options?.applicationServerKey;
+    change.waitUntil(
+      (async () => {
+        // While the user's kill switch is set, a rotation must not resurrect
+        // push: drop whatever the browser minted instead of re-subscribing.
+        if (await pushDisabled()) {
+          try {
+            if (change.newSubscription) await change.newSubscription.unsubscribe();
+          } catch {
+            // Already dead, or the push service is unreachable — either way no
+            // page will re-register it while the flag stands.
+          }
+          return;
+        }
+        if (!change.newSubscription && key) {
+          try {
+            await self.registration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: key,
+            });
+          } catch {
+            // Permission revoked or push service unreachable — nothing to do.
+          }
+        }
+        const clientList = await self.clients.matchAll({
+          type: "window",
+          includeUncontrolled: true,
+        });
+        for (const client of clientList) {
+          client.postMessage({ type: "armada-push-changed" });
+        }
+      })(),
+    );
+  });
+
+  self.addEventListener("message", (event) => {
+    if (event.data?.type === "armada-clear-badge") {
+      event.waitUntil(clearAppBadge());
+    }
+  });
+
+  self.addEventListener("notificationclick", (event) => {
+    event.notification.close();
+
+    const target = notificationTarget(event.notification.data?.url);
+
+    event.waitUntil(Promise.all([
+      clearAppBadge(),
+      openNotificationTarget(target),
+    ]));
+  });
+}

@@ -51,7 +51,8 @@ export async function finalLogout(pubkey: string | null): Promise<void> {
   } catch { /* ignore */ }
   setActivePubkey(null);
 
-  // Notification controllers must run before purge erases their prune ids.
+  // Notification controllers must run before purge erases the push client key
+  // they clear with.
   beginCrossTabAccountExit(pubkey, null);
   exitStep("teardown", "closing secure channel");
   try {
@@ -60,7 +61,7 @@ export async function finalLogout(pubkey: string | null): Promise<void> {
 
   exitStep("purge", "purging local vault");
   try {
-    await purgeClientStorage(pubkey);
+    await purgeClientStorage();
   } catch {
     // best-effort — the deadline still navigates
   }

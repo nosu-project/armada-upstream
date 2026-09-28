@@ -7,338 +7,257 @@ import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
 import { installCrossTabAccountExit } from "@/lib/crossTabAccountExit";
+import { isDesktop } from "@/lib/desktop";
+import {
+  carryForwardWatches,
+  forgetLastPushSet,
+  loadLastPushSet,
+  NAPP_LIMITS,
+  nappPushApi,
+  NOSTR_PUSH2_LIMITS,
+  saveLastPushSet,
+  toNappSubscriptions,
+  type NappLimits,
+  type NappPush,
+  type NappSubscription,
+  type PushPlane,
+} from "@/lib/nappPush";
+import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
+import type { PushRelayPool } from "@/lib/nostrPush";
+import {
+  base64urlToBytes,
+  isUnknownClientError,
+  loadNostrPush2Identity,
+  NostrPush2Client,
+  webPushConnection,
+  type NostrPush2Identity,
+} from "@/lib/nostrPush2";
+import {
+  isNativeRuntime,
+  NOSTR_PUSH2_PUBKEY,
+  NOSTR_PUSH2_RELAYS,
+  nostrPush2Configured,
+} from "@/lib/platform";
+import type { PushPrefs, UsePushNotificationsReturn } from "@/lib/pushPrefs";
+import { loadPushIntent, savePushIntent, savePushPrefs } from "@/lib/pushRegistry";
+import { LatestSerialRunner } from "@/lib/pushRegistration";
+import type { PushSubscriptionSpec } from "@/lib/pushSubscriptions";
+import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
 import {
-  activateRegisteredWebPush,
   acquireWebPushSubscription,
+  activateRegisteredWebPush,
   finishWebPushAccountExit,
   matchesWebPushServerKey,
   retireWebPushEndpoint,
 } from "@/lib/webPushEndpoint";
-import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
-import type { PushPrefs, UsePushNotificationsReturn } from "@/lib/pushPrefs";
-import {
-  completePushIdMigration,
-  loadPushIntent,
-  loadPushRegistrationState,
-  pushInstallationId,
-  savePushIntent,
-  savePushPrefs,
-  savePushRegistrationState,
-  type PushRegistryScope,
-} from "@/lib/pushRegistry";
-import {
-  LatestSerialRunner,
-  mergePushReplacementSpec,
-  reconcilePushRegistrations,
-} from "@/lib/pushRegistration";
-import { isDesktop } from "@/lib/desktop";
-import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
-import {
-  scopePushSubscriptionId,
-  type PushSubscriptionSpec,
-} from "@/lib/pushSubscriptions";
-import {
-  NOSTR_PUSH_PUBKEY,
-  NOSTR_PUSH_RELAYS,
-  isNativeRuntime,
-  nostrPushConfigured,
-} from "@/lib/platform";
 import {
   notificationPermissionOf,
   webPushUnavailableReason,
 } from "@/lib/webPushSupport";
 
 /**
- * Web Push via a content-blind NIP-PUSH gateway: it matches our raw filters and sends a
- * static wake-up; `sw.js` fetches and decrypts the event. The watch set is `usePushWatchSet` (shared
- * with the Android service and `useIosPush`). `supported` is false unless a gateway is configured and
- * the signer can NIP-44.
+ * useNostrPush
+ *
+ * Closed-app notifications for the web build, over whichever of two
+ * transports this page has:
+ *
+ *   - `window.napp.push`, when Armada is an nsite inside Tenna (tenna/NAPP.md).
+ *     The host holds the subscriptions and wakes the worker itself.
+ *   - Web Push through a nostr-push2 gateway (`nostrPush2.ts`) everywhere else.
+ *
+ * Both take the same `NappSubscription[]` and both deliver the same
+ * `napp.push.payload` to `sw.js`, which presents it through one code path. So
+ * the only thing that differs here is the {@link PushTarget}: everything else —
+ * the watch set, the worker's sealed decrypt config, the kill switch, the
+ * account-exit ordering — is shared.
+ *
+ * The watch set is `usePushWatchSet`, the same one the Android service and the
+ * iOS APNs controller use. Exposes the shared `UsePushNotificationsReturn`.
  */
 
-const VAPID_KEY = "armada:nostr-push-vapid";
-
-function urlBase64ToBuffer(base64String: string): ArrayBuffer {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  const buffer = new ArrayBuffer(raw.length);
-  const view = new Uint8Array(buffer);
-  for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
-  return buffer;
+/**
+ * Where the subscription list goes. `set` replaces it whole; keeping an
+ * incomplete snapshot from pruning happens before, in `mutatePushRegistrations`.
+ */
+export interface PushTarget {
+  kind: "web" | "napp";
+  limits: NappLimits;
+  /** Hand the list over. False when superseded before it landed. */
+  set(
+    subscriptions: NappSubscription[],
+    isCurrent: () => boolean,
+    gestureSubscription?: PushSubscription,
+  ): Promise<boolean>;
+  /** Remove everything this install is subscribed to. */
+  clear(): Promise<void>;
+  /**
+   * Lift the worker's kill switch now that the list is this account's, after
+   * sealing this account's config. False when that could not be done safely.
+   */
+  activate(prepareConfig: () => Promise<void>, isCurrent: () => boolean): Promise<boolean>;
 }
 
-function pushDomain(): string {
-  return typeof location !== "undefined" ? location.hostname : "";
-}
-
-interface PreparedPush {
+interface PreparedWeb {
   registration: ServiceWorkerRegistration;
   key: ArrayBuffer;
   options: PushSubscriptionOptionsInit;
+  identity: NostrPush2Identity;
 }
 
-export interface WebPushSyncJob {
+/** Web Push via nostr-push2. The browser endpoint is made and repaired here. */
+export function webPushTarget(
+  client: NostrPush2Client,
+  prepared: () => PreparedWeb | undefined,
+): PushTarget {
+  let subscription: PushSubscription | undefined;
+  // The endpoint the gateway was last told about by this target. `create` is
+  // repeated whenever it changes, and once per session regardless, so a client
+  // the gateway reaped is recreated without waiting for an error.
+  let created: string | undefined;
+
+  return {
+    kind: "web",
+    limits: NOSTR_PUSH2_LIMITS,
+    async set(subscriptions, isCurrent, gestureSubscription) {
+      const ready = prepared();
+      if (!ready) throw new Error("Push not ready");
+      const sub = await acquireWebPushSubscription(
+        ready.registration,
+        ready.key,
+        ready.options,
+        gestureSubscription,
+        isCurrent,
+      );
+      if (!sub || !isCurrent()) return false;
+      subscription = sub;
+
+      const connection = webPushConnection(sub, ready.identity);
+      const fingerprint = `${connection.endpoint}\0${connection.p256dh}\0${connection.auth}`;
+      if (created !== fingerprint) {
+        await client.create(connection);
+        created = fingerprint;
+      }
+      try {
+        await client.set(subscriptions);
+      } catch (err) {
+        if (!isUnknownClientError(err)) throw err;
+        await client.create(connection);
+        await client.set(subscriptions);
+      }
+      return isCurrent();
+    },
+    async clear() {
+      created = undefined;
+      await client.delete();
+    },
+    activate(prepareConfig, isCurrent) {
+      if (!subscription) return Promise.resolve(false);
+      return activateRegisteredWebPush({
+        subscription,
+        registered: true,
+        prepareConfig,
+        isCurrent,
+      });
+    },
+  };
+}
+
+/** Tenna's `window.napp.push`. The host owns the sockets and the consent prompt. */
+export function nappPushTarget(api: NappPush): PushTarget {
+  return {
+    kind: "napp",
+    limits: NAPP_LIMITS,
+    async set(subscriptions, isCurrent) {
+      await api.set(subscriptions);
+      return isCurrent();
+    },
+    clear: () => api.set([]),
+    async activate(prepareConfig, isCurrent) {
+      // No endpoint to prove retired: `set` just replaced the host's whole list
+      // with this account's, so the only thing left is the worker's policy.
+      await prepareConfig();
+      if (!isCurrent()) return false;
+      await clearPushDisabledFlag();
+      if (isCurrent()) return true;
+      await writePushDisabledFlag();
+      return false;
+    },
+  };
+}
+
+export interface PushSyncJob {
   kind: "sync";
-  client: NostrPushClient;
+  target: PushTarget;
   pubkey: string;
-  domain: string;
-  installation: string;
-  prepared: PreparedPush;
   specs: PushSubscriptionSpec[];
-  /** False for an additive cold-load snapshot that must never prune. */
-  authoritative: boolean;
   /** Whether the account's notification policy (NIP-78/local opt-out) is trusted. */
   notificationSettingsReady: boolean;
-  groupPlaneReady: boolean;
-  dmPlaneReady: boolean;
-  concordPlaneReady: boolean;
-  /** Seal this account's policy/keys before its endpoint may be exposed. */
+  /** Which planes of `specs` are complete; the rest keep what was last set. */
+  planes: Record<PushPlane, boolean>;
+  /** Seal this account's policy/keys before the kill switch may lift. */
   prepareConfig: (isCurrent: () => boolean) => Promise<void>;
   gestureSubscription?: PushSubscription;
 }
 
-interface WebPushDeleteJob {
-  kind: "delete";
-  client: NostrPushClient;
-  pubkey: string;
-  domain: string;
-  installation: string;
-  legacyIds: string[];
+interface PushClearJob {
+  kind: "clear";
+  target: PushTarget;
 }
 
-type WebPushMutationJob = WebPushSyncJob | WebPushDeleteJob;
+type PushMutationJob = PushSyncJob | PushClearJob;
 
-export interface WebPushMutationResult {
+export interface PushMutationResult {
+  /** False when a newer generation superseded this mutation. */
   completed: boolean;
+  /** The worker kill switch was lifted for this account. */
   activated: boolean;
-  /** Additive records that didn't fit/reach the gateway and need a retry. */
-  deferredRegistrations: string[];
+  /** Subscriptions past the transport's ceiling that were not handed over. */
+  dropped: number;
 }
 
-function registryScopeOf(job: WebPushMutationJob): PushRegistryScope {
-  return {
-    pubkey: job.pubkey,
-    domain: job.domain,
-    installation: job.installation,
-  };
-}
+const NOT_COMPLETED: PushMutationResult = { completed: false, activated: false, dropped: 0 };
 
-export async function mutateWebPushRegistrations(
-  job: WebPushMutationJob,
+/** One serialized, generation-aware hand-over of the subscription list. */
+export async function mutatePushRegistrations(
+  job: PushMutationJob,
   isCurrent: () => boolean,
-): Promise<WebPushMutationResult> {
-  // Until the policy is trusted, registering default-derived filters could expose notifications
-  // the account disabled.
-  if (job.kind === "sync" && !job.notificationSettingsReady) {
-    return { completed: false, activated: false, deferredRegistrations: [] };
+): Promise<PushMutationResult> {
+  if (job.kind === "clear") {
+    await job.target.clear();
+    forgetLastPushSet();
+    return { completed: true, activated: false, dropped: 0 };
   }
-  const scope = registryScopeOf(job);
-  const specs = job.kind === "sync" ? job.specs : [];
-  const legacyIds = job.kind === "sync"
-    ? [...new Set(specs.flatMap((spec) => [spec.id, ...(spec.replaces ?? [])]))]
-      .map((logicalId) => scopePushSubscriptionId(logicalId, job.pubkey, job.domain))
-    : job.legacyIds;
-  const state = loadPushRegistrationState(scope, legacyIds);
 
-  let pushSubscription:
-    | {
-      type: "web";
-      endpoint: string;
-      p256dh_key: string;
-      auth_key: string;
+  // A partial watch set may be additive, but its policy is not. Until the
+  // NIP-78 settings represented in the sealed worker config are trusted,
+  // registering default-derived filters and lifting the kill switch could
+  // expose notifications the account explicitly disabled.
+  if (!job.notificationSettingsReady) return NOT_COMPLETED;
+
+  const watches = carryForwardWatches(job.specs, loadLastPushSet(job.pubkey), job.planes);
+  const { subscriptions, dropped } = toNappSubscriptions(watches, job.target.limits);
+  if (dropped > 0) {
+    console.warn(`[push] ${dropped} subscription(s) exceed the ${job.target.kind} limit and were not registered`);
+  }
+
+  const landed = await job.target.set(subscriptions, isCurrent, job.gestureSubscription);
+  if (!landed || !isCurrent()) return NOT_COMPLETED;
+  saveLastPushSet(job.pubkey, watches);
+
+  const activated = await job.target.activate(() => job.prepareConfig(isCurrent), isCurrent);
+  if (!activated) {
+    if (isCurrent()) {
+      throw new Error(
+        "The previous account's push endpoint could not be retired safely. Disable and re-enable notifications to retry.",
+      );
     }
-    | undefined;
-  let browserSubscription: PushSubscription | undefined;
-
-  if (job.kind === "sync") {
-    const { registration, key, options } = job.prepared;
-    const sub = await acquireWebPushSubscription(
-      registration,
-      key,
-      options,
-      job.gestureSubscription,
-      isCurrent,
-    );
-    if (!sub || !isCurrent()) {
-      return { completed: false, activated: false, deferredRegistrations: [] };
-    }
-    browserSubscription = sub;
-
-    const json = sub.toJSON();
-    pushSubscription = {
-      type: "web",
-      endpoint: sub.endpoint,
-      p256dh_key: json.keys?.p256dh ?? "",
-      auth_key: json.keys?.auth ?? "",
-    };
+    return NOT_COMPLETED;
   }
-
-  const scopedSpecs = specs.map((spec) => ({
-    ...spec,
-    id: scopePushSubscriptionId(
-      spec.id,
-      job.pubkey,
-      job.domain,
-      job.installation,
-    ),
-  }));
-  const replacementSpecs = new Map<string, PushSubscriptionSpec>();
-  for (const logicalId of new Set(specs.flatMap((spec) => spec.replaces ?? []))) {
-    replacementSpecs.set(
-      logicalId,
-      mergePushReplacementSpec(
-        logicalId,
-        specs.filter((spec) => spec.replaces?.includes(logicalId)),
-      ),
-    );
-  }
-
-  const result = await reconcilePushRegistrations({
-    desired: scopedSpecs.map((spec, index) => {
-      const registerSpecAs = async (source: PushSubscriptionSpec, id: string) => {
-        if (!pushSubscription) throw new Error("Missing Web Push subscription");
-        await job.client.registerSubscription({
-          subscription_id: id,
-          domain: job.domain,
-          filter: source.filter,
-          relays: source.relays,
-          notification: source.notification,
-          push_subscription: pushSubscription,
-        });
-      };
-      const registerAs = (id: string) => registerSpecAs(spec, id);
-      const fallbackLogicalId = spec.replaces?.[0];
-      const fallbackSpec = fallbackLogicalId
-        ? replacementSpecs.get(fallbackLogicalId)
-        : undefined;
-      const fallbackId = fallbackLogicalId
-        ? scopePushSubscriptionId(
-          fallbackLogicalId,
-          job.pubkey,
-          job.domain,
-          job.installation,
-        )
-        : undefined;
-      return {
-        id: spec.id,
-        replaces: [
-          // Logical migrations (flat NIP-29 ids → per-relay ids) happen even after the migration latch.
-          ...(spec.replaces ?? []).map((logicalId) => scopePushSubscriptionId(
-            logicalId,
-            job.pubkey,
-            job.domain,
-            job.installation,
-          )),
-          ...(!state.legacyMigrationComplete
-            ? [specs[index]!.id, ...(spec.replaces ?? [])].map((logicalId) =>
-              scopePushSubscriptionId(logicalId, job.pubkey, job.domain))
-            : []),
-        ],
-        register: () => registerAs(spec.id),
-        restoreReplaced: registerAs,
-        ...(fallbackSpec && fallbackId ? {
-          replacementGroup: {
-            key: fallbackId,
-            fallbackId,
-            fallbackIds: [
-              fallbackId,
-              ...specs
-                .filter((candidate) => candidate.replaces?.includes(fallbackSpec.id))
-                .map((candidate) => scopePushSubscriptionId(
-                  candidate.id,
-                  job.pubkey,
-                  job.domain,
-                  job.installation,
-                )),
-              ...(!state.legacyMigrationComplete ? [scopePushSubscriptionId(
-                fallbackSpec.id,
-                job.pubkey,
-                job.domain,
-              )] : []),
-            ],
-            restoreFallback: (id: string) => registerSpecAs(fallbackSpec, id),
-          },
-        } : {}),
-      };
-    }),
-    trackedIds: state.ids,
-    deleteRegistration: (id) => job.client.deleteSubscription(id, job.domain),
-    persistTrackedIds: (ids) => savePushRegistrationState(scope, {
-      ids,
-      legacyMigrationComplete: state.legacyMigrationComplete,
-    }),
-    isCurrent,
-    allowPrune: job.kind === "delete" || job.authoritative,
-    ...(job.kind === "sync" ? {
-      canPruneId: (id: string) => {
-        if (id.startsWith("armada-groups")) return job.groupPlaneReady;
-        if (id.startsWith("armada-dm")) return job.dmPlaneReady;
-        if (id.startsWith("armada-c2")) return job.concordPlaneReady;
-        return false;
-      },
-    } : {}),
-  });
-
-  if (!result.completed) {
-    return { completed: false, activated: false, deferredRegistrations: [] };
-  }
-
-  // An unreleasable stale record is a retry, not a reason to withhold activation (which would
-  // mean no notifications at all). The error is raised below.
-  const staleDeletionsRemain = result.failedDeletions.length > 0;
-
-  // An incomplete pass can't prove old records stale, so don't complete migration (or latch
-  // while a delete is outstanding).
-  if ((job.kind === "sync" && !job.authoritative) || staleDeletionsRemain) {
-    savePushRegistrationState(scope, {
-      ids: result.trackedIds,
-      legacyMigrationComplete: state.legacyMigrationComplete,
-    });
-  } else if (!state.legacyMigrationComplete) {
-    completePushIdMigration(scope, result.trackedIds);
-  } else {
-    savePushRegistrationState(scope, {
-      ids: result.trackedIds,
-      legacyMigrationComplete: true,
-    });
-  }
-
-  // Activate only after endpoint retirement is proven and this account's sealed config landed.
-  let activated = false;
-  if (job.kind === "sync" && browserSubscription && result.registeredAny) {
-    const activationAllowed = await activateRegisteredWebPush({
-      subscription: browserSubscription,
-      registered: true,
-      prepareConfig: () => job.prepareConfig(isCurrent),
-      isCurrent,
-    });
-    if (!activationAllowed) {
-      if (isCurrent()) {
-        throw new Error(
-          "The previous account's push endpoint could not be retired safely. Disable and re-enable notifications to retry.",
-        );
-      }
-      return { completed: false, activated: false, deferredRegistrations: [] };
-    }
-    // Don't claim activation when nothing was attempted; a prior kill switch stays intentional.
-    activated = true;
-  }
-
-  // Report the orphan last so the retry doesn't block notifications.
-  if (staleDeletionsRemain) {
-    throw new Error(
-      `Failed to remove ${result.failedDeletions.length} stale push subscription(s)`,
-    );
-  }
-  return {
-    completed: true,
-    activated,
-    deferredRegistrations: result.deferredRegistrations ?? [],
-  };
+  return { completed: true, activated: true, dropped };
 }
 
-async function pushPermission(prepared: PreparedPush): Promise<NotificationPermission> {
+async function webPermission(prepared: PreparedWeb): Promise<NotificationPermission> {
   if (typeof Notification !== "undefined") return Notification.permission;
   const existing = await prepared.registration.pushManager.getSubscription();
   if (existing) return "granted";
@@ -349,18 +268,40 @@ async function pushPermission(prepared: PreparedPush): Promise<NotificationPermi
   return "default";
 }
 
+/**
+ * Tenna's page `Notification.permission` is real. Where a host has none, a
+ * stored list is the only evidence the user ever said yes.
+ */
+function nappPermission(stored: NappSubscription[]): NotificationPermission {
+  if (typeof Notification !== "undefined") return Notification.permission;
+  return stored.length > 0 ? "granted" : "default";
+}
+
+/** What `window.napp.push.set` rejects with when the user declines its prompt. */
+function isUserRejection(err: unknown): boolean {
+  return err instanceof Error && /user rejected/i.test(err.message);
+}
+
 export function useNostrPush(): UsePushNotificationsReturn {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
   const { config, updateConfig } = useAppContext();
 
-  const unavailableReason = isNativeRuntime()
-    ? "native-runtime" as const
-    : isDesktop()
-      // Electron exposes PushManager but has no push service behind it; report unavailable so
-      // Settings offers the foreground notifier.
-      ? "desktop" as const
-      : webPushUnavailableReason(nostrPushConfigured());
+  // Fixed for the life of the page: Tenna defines it before any script runs.
+  const napp = useMemo(() => nappPushApi(), []);
+
+  const unavailableReason = napp
+    ? undefined
+    : isNativeRuntime()
+      ? "native-runtime" as const
+      : isDesktop()
+        // Electron exposes window.PushManager and registers a service worker,
+        // so the plain capability probe reports Web Push "supported" — but its
+        // Chromium has no push service behind that API, so subscribe can only
+        // fail. Report it unavailable so Settings offers the foreground
+        // notifier — the only notifier the desktop shell has.
+        ? "desktop" as const
+        : webPushUnavailableReason(nostrPush2Configured());
   const supported = unavailableReason === undefined;
 
   const [permission, setPermission] = useState<NotificationPermission>(
@@ -372,10 +313,10 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const [error, setError] = useState<string>();
   const [prepareNonce, setPrepareNonce] = useState(0);
   const prefs = config.pushPrefs;
-  const preparedRef = useRef<PreparedPush | undefined>(undefined);
-  /** Once account exit starts, this instance may never write again. */
+  const preparedRef = useRef<PreparedWeb | undefined>(undefined);
+  /** Once account exit starts, this mounted instance may never write again. */
   const exitingRef = useRef(false);
-  /** Serialized so exit can clear strictly after pending config writes. */
+  /** Serialize and expose config writes so exit can clear strictly after them. */
   const swConfigTailRef = useRef<Promise<void>>(Promise.resolve());
   const queueSwConfig = useCallback((operation: () => Promise<void>) => {
     const work = swConfigTailRef.current.then(operation, operation);
@@ -403,7 +344,11 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const notificationSettingsReadyRef = useRef(notificationSettingsReady);
   notificationSettingsReadyRef.current = notificationSettingsReady;
 
-  /** The generation check is repeated inside the serialized write so stale keys never land last. */
+  /**
+   * Seal one current-account config snapshot. The generation check is repeated
+   * before and inside the serialized write so neither a newer watch snapshot
+   * nor account exit can let stale keys land last.
+   */
   const writeCurrentSwConfig = useCallback(async (
     isCurrent: () => boolean = () => true,
   ) => {
@@ -414,7 +359,9 @@ export function useNostrPush(): UsePushNotificationsReturn {
       throw new Error("Push session changed before its config could be written");
     }
 
-    // Mirror useKnownDmPeers' `mine`; bounded so a wedged IndexedDB can't block registration.
+    // Mirror useKnownDmPeers' `mine` dimension. This local-store enhancement
+    // is bounded: a wedged IndexedDB must not indefinitely hold the kill
+    // switch or prevent otherwise-valid current-account registrations.
     let mineConversationKeys: string[] = [];
     try {
       const rows = await Promise.race([
@@ -486,25 +433,30 @@ export function useNostrPush(): UsePushNotificationsReturn {
     queueSwConfig,
   ]);
 
-  // Keep the worker's push config (DM policy, known set, nsec key, Concord stream keys) current;
-  // cleared when push is off or logged out. Display data isn't sealed: the worker reads ArmadaDB at
-  // push time (`pushRuntime.ts`).
+  // Keep the service worker's push config current — the DM policy + known set,
+  // the decrypt key for nsec logins, and the per-channel Concord stream keys.
+  // Cleared whenever push is off or logged out, so no key lingers past a
+  // session that can use it.
+  //
+  // Display data is deliberately NOT sealed here. The worker reads names,
+  // avatars, community icons and channel titles out of ArmadaDB at push time
+  // (`pushRuntime.ts`).
   useEffect(() => {
-    // Clear only when no session should hold a key. `enabled` is false during preparation, so
-    // clearing on it wiped the worker config at every start.
+    // Clear only in states that MEAN no session should hold a key: logged out,
+    // unsupported runtime, or the user's push intent turned off. `enabled` is
+    // false during every session's PREPARATION, so clearing on it would delete
+    // the worker's decrypt config at each app start.
     if (!supported || !user || !loadPushIntent()) {
       void queueSwConfig(clearSwPushConfig).catch(() => undefined);
       return;
     }
     if (exitingRef.current) return;
-    // Still preparing: leave the existing config for the worker to use.
     if (!enabled) return;
-    // Only this file's authorities matter; a group-list/DM-relay outage mustn't pin old keys.
     if (!notificationSettingsReady) return;
     let cancelled = false;
     writeCurrentSwConfig(() => !cancelled).catch((err) => {
       if (!cancelled && !exitingRef.current) {
-        console.warn("[nostr-push] writing worker config failed:", err);
+        console.warn("[push] writing worker config failed:", err);
       }
     });
     return () => {
@@ -519,34 +471,59 @@ export function useNostrPush(): UsePushNotificationsReturn {
     writeCurrentSwConfig,
   ]);
 
-  const client = useMemo(() => {
-    if (!supported || !user || !NOSTR_PUSH_PUBKEY) return undefined;
-    return new NostrPushClient({
-      serverPubkey: NOSTR_PUSH_PUBKEY,
-      relays: NOSTR_PUSH_RELAYS,
-      signer: user.signer as unknown as PushSigner,
-      pool: nostr as unknown as PushRelayPool,
-    });
-  }, [supported, user, nostr]);
+  // ── Target ─────────────────────────────────────────────────────────────────
 
-  const installation = useMemo(() => pushInstallationId(), []);
+  const [identity, setIdentity] = useState<NostrPush2Identity>();
+  useEffect(() => {
+    if (napp || !supported) return;
+    let cancelled = false;
+    loadNostrPush2Identity().then((next) => {
+      if (!cancelled) setIdentity(next);
+    }).catch((err) => {
+      if (cancelled) return;
+      console.warn("[push] generating the push identity failed:", err);
+      setError("Armada couldn't prepare background notifications in this browser.");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [napp, supported, prepareNonce]);
+
+  const target = useMemo<PushTarget | undefined>(() => {
+    if (!supported) return undefined;
+    if (napp) return nappPushTarget(napp);
+    if (!identity || !NOSTR_PUSH2_PUBKEY) return undefined;
+    return webPushTarget(
+      new NostrPush2Client({
+        servicePubkey: NOSTR_PUSH2_PUBKEY,
+        relays: NOSTR_PUSH2_RELAYS,
+        secretKey: identity.secretKey,
+        pool: nostr as unknown as PushRelayPool,
+      }),
+      () => preparedRef.current,
+    );
+  }, [supported, napp, identity, nostr]);
+
   const mutationRunnerRef = useRef<
-    LatestSerialRunner<WebPushMutationJob, WebPushMutationResult> | null
+    LatestSerialRunner<PushMutationJob, PushMutationResult> | null
   >(null);
   if (!mutationRunnerRef.current) {
-    mutationRunnerRef.current = new LatestSerialRunner(mutateWebPushRegistrations);
+    mutationRunnerRef.current = new LatestSerialRunner(mutatePushRegistrations);
   }
   const mutationRunner = mutationRunnerRef.current;
 
-  // Supersede in-flight transactions as soon as policy authority is lost.
+  // Supersede a hand-over as soon as policy authority is lost.
+  // `writeCurrentSwConfig` also reads the ref immediately before its
+  // serialized write, closing the async gap before this effect.
   useEffect(() => {
     if (!notificationSettingsReady) mutationRunner.invalidate();
   }, [notificationSettingsReady, mutationRunner]);
 
-  // Prepare before showing enable: iOS requires PushManager.subscribe() directly from the tap,
-  // and an RPC first would consume the activation.
+  // Prepare before showing an enable action. Web: PushManager.subscribe() has
+  // to run directly from the user's tap on iOS, so the worker and the VAPID key
+  // must be in hand first. Tenna: nothing to prepare but the current state.
   useEffect(() => {
-    if (!supported || !client || !user || exitingRef.current) {
+    if (!target || !user || exitingRef.current) {
       preparedRef.current = undefined;
       setReady(false);
       return;
@@ -556,48 +533,35 @@ export function useNostrPush(): UsePushNotificationsReturn {
     setReady(false);
     setError(undefined);
     (async () => {
-      const domain = pushDomain();
-      let cached = "";
-      try {
-        cached = localStorage.getItem(`${VAPID_KEY}:${domain}`) || "";
-      } catch {
-        // Storage can be unavailable in private browsing; the RPC covers it.
-      }
-      // Always fetch the CURRENT key: a rotated VAPID pair would otherwise 403 forever. The cache is
-      // only a fallback.
-      let vapid = "";
-      try {
-        vapid = await client.getVapidKey(domain);
-      } catch (err) {
-        if (!cached) throw err;
-        vapid = cached;
-      }
-      if (vapid && vapid !== cached) {
-        try {
-          localStorage.setItem(`${VAPID_KEY}:${domain}`, vapid);
-        } catch {
-          // The in-memory prepared value still works for this session.
-        }
+      if (napp) {
+        const stored = await napp.get();
+        if (cancelled || exitingRef.current) return;
+        const nextPermission = nappPermission(stored);
+        setPermission(nextPermission);
+        setEnabled(stored.length > 0 && nextPermission === "granted" && loadPushIntent());
+        setReady(true);
+        return;
       }
 
-      const [registration, key] = await Promise.all([
-        navigator.serviceWorker.ready,
-        Promise.resolve(urlBase64ToBuffer(vapid)),
-      ]);
+      if (!identity) return;
+      const key = base64urlToBytes(identity.vapidPublicKey).buffer;
+      const registration = await navigator.serviceWorker.ready;
       const options: PushSubscriptionOptionsInit = {
         userVisibleOnly: true,
         applicationServerKey: key,
       };
 
-      // A VAPID rotation invalidates the old subscription; remove it now so the next tap can subscribe
-      // first thing.
+      // A subscription made against any other key — the retired gateway's, or
+      // a previous identity's — cannot be pushed to by this install. Drop it
+      // here so the next tap can subscribe as its first permission-sensitive
+      // operation; its old gateway record then dies of a 410.
       const existing = await registration.pushManager.getSubscription();
       if (existing && !matchesWebPushServerKey(existing, key)) {
         await existing.unsubscribe().catch(() => false);
       }
 
-      const prepared = { registration, key, options };
-      const nextPermission = await pushPermission(prepared);
+      const prepared = { registration, key, options, identity };
+      const nextPermission = await webPermission(prepared);
       const current = await registration.pushManager.getSubscription();
       if (cancelled || exitingRef.current) return;
       preparedRef.current = prepared;
@@ -606,7 +570,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       setReady(true);
     })().catch((err) => {
       if (cancelled) return;
-      console.warn("[nostr-push] preparation failed:", err);
+      console.warn("[push] preparation failed:", err);
       preparedRef.current = undefined;
       setReady(false);
       setError("Armada couldn't prepare background notifications. Check your connection and try again.");
@@ -615,82 +579,89 @@ export function useNostrPush(): UsePushNotificationsReturn {
     return () => {
       cancelled = true;
     };
-  }, [supported, client, user, prepareNonce]);
+  }, [target, napp, identity, user, prepareNonce]);
 
-  /** Incomplete snapshots are strictly additive. */
+  const planes = useMemo<Record<PushPlane, boolean>>(() => ({
+    groups: groupPlaneReady,
+    dm: dmPlaneReady,
+    concord: concordPlaneReady,
+  }), [groupPlaneReady, dmPlaneReady, concordPlaneReady]);
+
+  /** Queue one snapshot; incomplete planes keep what was last handed over. */
   const sync = useCallback(async (gestureSubscription?: PushSubscription) => {
-    const prepared = preparedRef.current;
-    if (!client || !user || !prepared) throw new Error("Push not ready");
+    if (!target || !user) throw new Error("Push not ready");
     if (exitingRef.current || !notificationSettingsReady) return undefined;
-    // Empty while not ready means "not loaded"; partial sets register but never prune.
+    // Empty while nothing has loaded is "not loaded", never an instruction to
+    // clear. A non-empty partial set is still useful and is handed over with
+    // the unloaded planes carried forward.
     if (!watchSetReady
       && specs.length === 0
       && !groupPlaneReady
       && !dmPlaneReady
       && !concordPlaneReady) return undefined;
-    if (exitingRef.current || !notificationSettingsReady) return undefined;
     return mutationRunner.run({
       kind: "sync",
-      client,
+      target,
       pubkey: user.pubkey,
-      domain: pushDomain(),
-      installation,
-      prepared,
       specs,
-      authoritative: watchSetReady,
       notificationSettingsReady,
-      groupPlaneReady,
-      dmPlaneReady,
-      concordPlaneReady,
+      planes,
       prepareConfig: writeCurrentSwConfig,
       ...(gestureSubscription ? { gestureSubscription } : {}),
     });
   }, [
-    client,
+    target,
     user,
     notificationSettingsReady,
     groupPlaneReady,
     dmPlaneReady,
     concordPlaneReady,
     watchSetReady,
+    planes,
     mutationRunner,
-    installation,
     specs,
     writeCurrentSwConfig,
   ]);
 
-  const deleteGatewayRecords = useCallback(async () => {
-    if (!client || !user) return;
-    await mutationRunner.runExclusive({
-      kind: "delete",
-      client,
-      pubkey: user.pubkey,
-      domain: pushDomain(),
-      installation,
-      legacyIds: specs.map((spec) =>
-        scopePushSubscriptionId(spec.id, user.pubkey, pushDomain())),
-    });
-  }, [client, user, mutationRunner, installation, specs]);
+  /** Remove this install's subscriptions in the same serial lane. */
+  const clearTarget = useCallback(async () => {
+    if (!target) return;
+    await mutationRunner.runExclusive({ kind: "clear", target });
+  }, [target, mutationRunner]);
 
-  // Switching and logout are too fast for render-driven cleanup, so register with the shared
-  // pre-exit choke point.
+  // Account switching hard-reloads, and final logout purges storage. Both
+  // happen too quickly for a render-driven cleanup, so register with the
+  // shared pre-exit choke point.
   useEffect(() => {
     if (!user) return;
     return registerBeforeAccountExit(async () => {
-      // Stop every writer synchronously before the first await.
+      // Stop every render-driven writer synchronously before the first await,
+      // and supersede a queued/running hand-over.
       exitingRef.current = true;
       mutationRunner.invalidate();
-      // Local safety first: the worker stays deny-by-default until the next account registers.
+      // Local safety comes before the bounded network cleanup on EVERY exit:
+      // the worker stays deny-by-default until the next account's list lands.
+      if (napp) {
+        await writePushDisabledFlag();
+        await queueSwConfig(clearSwPushConfig).catch(() => undefined);
+        try {
+          await clearTarget();
+        } finally {
+          await writePushDisabledFlag();
+        }
+        return;
+      }
       await finishWebPushAccountExit({
         registration: preparedRef.current?.registration,
         clearConfig: () => queueSwConfig(clearSwPushConfig),
-        deleteGatewayRecords,
+        deleteGatewayRecords: clearTarget,
       });
     });
-  }, [user, mutationRunner, queueSwConfig, deleteGatewayRecords]);
+  }, [user, napp, mutationRunner, queueSwConfig, clearTarget]);
 
-  // The active-account marker is origin-global; fence stale tabs so they can't rewrite the shared
-  // worker config. Only the initiating tab cleans up.
+  // The active-account marker is origin-global. A switch in another tab does
+  // not reload this document, so without this fence its old session could
+  // rewrite the shared worker config behind the new account.
   useEffect(() => {
     if (!user) return;
     return installCrossTabAccountExit({
@@ -702,17 +673,17 @@ export function useNostrPush(): UsePushNotificationsReturn {
     });
   }, [user, mutationRunner]);
 
-  // Auto-(re)sync on load and watch-set changes (signature-guarded, with backoff).
+  // Auto-(re)sync on every load and whenever the watch set changes, as long as
+  // the user intends push and permission is granted. Every load hands the list
+  // over at least once, which is also what keeps an idle gateway client from
+  // expiring. Transient failures retry with backoff.
   const syncSig = useMemo(
     () => JSON.stringify({
-      domain: pushDomain(),
       pubkey: user?.pubkey,
       notificationSettingsReady,
       dmConfigReady,
       concordConfigReady,
-      groupPlaneReady,
-      dmPlaneReady,
-      concordPlaneReady,
+      planes,
       authoritative: watchSetReady,
       specs,
     }),
@@ -721,9 +692,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       notificationSettingsReady,
       dmConfigReady,
       concordConfigReady,
-      groupPlaneReady,
-      dmPlaneReady,
-      concordPlaneReady,
+      planes,
       watchSetReady,
       specs,
     ],
@@ -732,7 +701,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const retry = useRef(0);
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
-    if (!supported || !ready || !client || !user) return;
+    if (!supported || !ready || !target || !user) return;
     if (exitingRef.current) return;
     if (permission !== "granted") return;
     if (!loadPushIntent()) return;
@@ -750,24 +719,13 @@ export function useNostrPush(): UsePushNotificationsReturn {
       try {
         const outcome = await sync();
         if (cancelled || !outcome?.completed) return;
-        if (outcome.activated) setEnabled(true);
-        if (outcome.deferredRegistrations.length > 0) {
-          if (retry.current < 3) {
-            const delay = 10_000 * 2 ** retry.current;
-            retry.current += 1;
-            timer = setTimeout(() => setNonce((n) => n + 1), delay);
-          } else {
-            setError("Some background notification watches could not be refreshed. Check your connection and retry.");
-          }
-          return;
-        }
         lastSynced.current = syncSig;
         retry.current = 0;
         setError(undefined);
         setEnabled(true);
       } catch (err) {
         if (cancelled) return;
-        console.warn("[nostr-push] sync failed:", err);
+        console.warn("[push] sync failed:", err);
         if (retry.current < 3) {
           const delay = 10_000 * 2 ** retry.current;
           retry.current += 1;
@@ -785,7 +743,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     supported,
     ready,
     permission,
-    client,
+    target,
     user,
     notificationSettingsReady,
     groupPlaneReady,
@@ -798,9 +756,10 @@ export function useNostrPush(): UsePushNotificationsReturn {
     nonce,
   ]);
 
-  // Re-register a rotated browser subscription (SW pushsubscriptionchange).
+  // A rotated browser subscription (SW pushsubscriptionchange → message) must
+  // be handed to the gateway again.
   useEffect(() => {
-    if (!supported || !ready) return;
+    if (napp || !supported || !ready) return;
     const onMessage = (event: MessageEvent) => {
       if (exitingRef.current) return;
       if (event.data?.type !== "armada-push-changed") return;
@@ -810,11 +769,13 @@ export function useNostrPush(): UsePushNotificationsReturn {
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [supported, ready]);
+  }, [napp, supported, ready]);
 
-  // iOS may rotate/revoke subscriptions while closed; recheck on visible/online.
+  // iOS can rotate or revoke a subscription while Armada is closed. Recheck
+  // whenever the app becomes visible/online; granted intent with no current
+  // subscription is repaired by the auto-sync effect above.
   useEffect(() => {
-    if (!supported || !ready) return;
+    if (napp || !supported || !ready) return;
     let cancelled = false;
     const recheck = async () => {
       if (exitingRef.current) return;
@@ -823,7 +784,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       if (!prepared) return;
       try {
         const [nextPermission, existing] = await Promise.all([
-          pushPermission(prepared),
+          webPermission(prepared),
           prepared.registration.pushManager.getSubscription(),
         ]);
         if (cancelled || exitingRef.current) return;
@@ -845,61 +806,76 @@ export function useNostrPush(): UsePushNotificationsReturn {
       document.removeEventListener("visibilitychange", recheck);
       window.removeEventListener("online", recheck);
     };
-  }, [supported, ready]);
+  }, [napp, supported, ready]);
+
+  // ── Public actions ─────────────────────────────────────────────────────────
 
   const enable = useCallback(async () => {
+    if (!supported || !ready || !user || !target || exitingRef.current) return;
     const prepared = preparedRef.current;
-    if (!supported || !ready || !user || !prepared || exitingRef.current) return;
+    if (!napp && !prepared) return;
     setBusy(true);
     setError(undefined);
 
-    // subscribe() synchronously from the click: it's also the permission request, and works in iOS
-    // Home-Screen apps where window.Notification is absent.
-    const subscriptionPromise = prepared.registration.pushManager.subscribe(prepared.options);
+    // Web: subscribe synchronously from the toggle's tap. Besides creating the
+    // endpoint, this is the standards-based permission request; unlike
+    // Notification.requestPermission(), it also works in iOS Home-Screen web
+    // apps where window.Notification is absent. Tenna: `set` itself asks.
+    const subscriptionPromise = prepared
+      ? prepared.registration.pushManager.subscribe(prepared.options)
+      : undefined;
     try {
       const subscription = await subscriptionPromise;
-      setPermission("granted");
       savePushIntent(true);
       lastSynced.current = null;
       const outcome = await sync(subscription);
       if (outcome?.completed) {
-        if (outcome.deferredRegistrations.length > 0) {
-          // Existing records may be active even if a new id hit quota; keep it live and retry.
-          if (outcome.activated) setEnabled(true);
-          setError("Background notifications are enabled, but some watches still need to be refreshed.");
-          setNonce((n) => n + 1);
-          return;
-        }
+        setPermission("granted");
         lastSynced.current = syncSig;
         setEnabled(true);
       } else {
-        // Endpoint exists but no default-derived watch was exposed; the sync effect activates it once
-        // the notification document is authoritative.
+        // The endpoint exists (the gesture cannot be replayed automatically on
+        // iOS), but nothing default-derived was handed over. Once the
+        // notification document becomes authoritative, the standing sync
+        // effect finishes the job.
+        if (subscription) setPermission("granted");
         setEnabled(false);
         setError("Armada is still restoring your notification settings. Background notifications will finish enabling automatically.");
       }
     } catch (err) {
-      const nextPermission = await pushPermission(prepared).catch(() => permission);
+      if (napp && isUserRejection(err)) {
+        // Declined at Tenna's prompt. Don't let the auto-sync ask again on
+        // every load; the toggle is still there.
+        savePushIntent(false);
+        setPermission(typeof Notification !== "undefined" ? Notification.permission : "default");
+        return;
+      }
+      const nextPermission = prepared
+        ? await webPermission(prepared).catch(() => permission)
+        : typeof Notification !== "undefined" ? Notification.permission : permission;
       setPermission(nextPermission);
       if (nextPermission !== "denied") {
-        console.warn("[nostr-push] enable failed:", err);
+        console.warn("[push] enable failed:", err);
         setError("Armada couldn't enable background notifications. Check your connection and retry.");
       }
     } finally {
       setBusy(false);
     }
-  }, [supported, ready, user, sync, syncSig, permission]);
+  }, [supported, ready, user, target, napp, sync, syncSig, permission]);
 
   const disable = useCallback(async () => {
     setBusy(true);
     try {
       savePushIntent(false);
       mutationRunner.invalidate();
-      // Retry retirement even after a timed-out exit attempt, so the next enable can recover.
-      await retireWebPushEndpoint(preparedRef.current?.registration);
-      // Serialized after any in-flight sync; failed deletes stay for retry.
-      await deleteGatewayRecords().catch((err) => {
-        console.warn("[nostr-push] gateway cleanup failed:", err);
+      // The worker's kill switch first: the network teardown below can fail.
+      if (napp) {
+        await writePushDisabledFlag();
+      } else {
+        await retireWebPushEndpoint(preparedRef.current?.registration);
+      }
+      await clearTarget().catch((err) => {
+        console.warn("[push] clearing subscriptions failed:", err);
       });
       await queueSwConfig(clearSwPushConfig).catch(() => undefined);
       lastSynced.current = null;
@@ -907,7 +883,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     } finally {
       setBusy(false);
     }
-  }, [deleteGatewayRecords, mutationRunner, queueSwConfig]);
+  }, [napp, clearTarget, mutationRunner, queueSwConfig]);
 
   const setPrefs = useCallback(
     async (next: PushPrefs) => {

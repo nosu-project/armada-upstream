@@ -22,6 +22,7 @@ import { isDesktop, requestDesktopAttention } from "@/lib/desktop";
 import { desktopNotificationTag } from "@/lib/desktopNotificationTag";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaSrc } from "@/lib/mediaPolicy";
+import { backgroundPushActive } from "@/lib/nappPush";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { dmConvPeers } from "@/lib/nip17/conversation";
 import {
@@ -76,8 +77,9 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
 }
 
 /**
- * The page may show an OS notification only after proving there's no Web Push
- * subscription. Fail closed to avoid duplicates.
+ * The page may show an OS notification only after proving there's no background
+ * push (a Web Push subscription, or Tenna subscriptions). Fail closed to avoid
+ * duplicates.
  */
 export async function pageMayShowOsNotification(): Promise<boolean> {
   // Desktop (app://armada) throws SecurityError on service-worker lookups and has no Web Push,
@@ -87,7 +89,7 @@ export async function pageMayShowOsNotification(): Promise<boolean> {
   try {
     const registration = await navigator.serviceWorker.getRegistration();
     if (!registration) return true;
-    return !(await registration.pushManager.getSubscription());
+    return !(await backgroundPushActive(registration));
   } catch {
     return false;
   }
@@ -125,12 +127,12 @@ export async function showPageOsNotification(
       const current = await navigator.serviceWorker.getRegistration();
       if (current) {
         // A subscription may have been enabled meanwhile; `null` hands the event to the PushEvent.
-        if (!coordination.allowActivePush && await current.pushManager.getSubscription()) {
+        if (!coordination.allowActivePush && await backgroundPushActive(current)) {
           return null;
         }
         const registration = await navigator.serviceWorker.ready;
         if (abort()) return null;
-        if (!coordination.allowActivePush && await registration.pushManager.getSubscription()) {
+        if (!coordination.allowActivePush && await backgroundPushActive(registration)) {
           return null;
         }
         if (abort()) return null;
@@ -145,7 +147,7 @@ export async function showPageOsNotification(
         if (
           !coordination.allowActivePush
           && current
-          && await current.pushManager.getSubscription()
+          && await backgroundPushActive(current)
         ) return null;
       } catch {
         return null; // indeterminate ownership: fail closed against duplicates

@@ -1,7 +1,5 @@
 // @vitest-environment node
 
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,8 +9,8 @@ import {
   retireSeenRoomLines,
   showPageOsNotification,
 } from "@/hooks/useForegroundNotifications";
-
-const workerSource = readFileSync(new URL("../public/sw.js", import.meta.url), "utf8");
+import { pushScope as realPushScope } from "@/sw/pushRuntime";
+import { installServiceWorker, type PushRuntime } from "@/sw/worker";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -41,13 +39,13 @@ function loadWorker(options: {
   ownEventId?: string;
   badging?: boolean;
   /**
-   * The runtime bundle (`src/sw/pushRuntime.ts`), stubbed. What it decides —
+   * The runtime (`src/sw/pushRuntime.ts`), stubbed. What it decides —
    * opening the inlined event, the DM request policy, storing, composing the
    * title/body/icon — is tested against the real crypto and the real store in
    * `src/sw/pushRuntime.test.ts`. What these tests own is the worker's half:
    * whether it asks, and whether it presents the answer faithfully.
    */
-  runtime?: { preparePush?: (...args: unknown[]) => unknown };
+  runtime?: { preparePush?: (...args: unknown[]) => unknown; pushScope?: (...args: unknown[]) => unknown };
   pushConfig?: Record<string, unknown>;
   pushEndpoint?: string;
   pushDisabled?: boolean;
@@ -92,7 +90,7 @@ function loadWorker(options: {
     match: vi.fn(async (request: string) => {
       if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
       if (options.pushConfig && request.endsWith("/.armada-push-state/dm-config")) {
-        // The worker reads sealed bytes and opens them via the bundle's
+        // The worker reads sealed bytes and opens them via the runtime's
         // openConfig (stubbed below); the bytes themselves are opaque here.
         return { arrayBuffer: async () => new ArrayBuffer(16) };
       }
@@ -154,12 +152,6 @@ function loadWorker(options: {
         }
         : {}),
     },
-    // The worker opens the sealed config via the bundle's openConfig; stub it
-    // to hand back the injected config directly (the vault crypto is unit-tested
-    // separately in swSecretVault.test.ts).
-    ArmadaDmCrypto: (options.runtime || options.pushConfig)
-      ? { ...(options.runtime ?? {}), openConfig: async () => options.pushConfig ?? null }
-      : undefined,
     clients: {
       matchAll: vi.fn(async () => clients),
       claim: vi.fn(async () => undefined),
@@ -177,6 +169,7 @@ function loadWorker(options: {
 
   // A relay socket that answers the worker's by-id REQ with `relayEvent` (if
   // any) followed by EOSE — the fetch path for pushes without an inlined event.
+  const sockets: string[] = [];
   class FakeWebSocket {
     url: string;
     onopen?: () => void;
@@ -184,6 +177,7 @@ function loadWorker(options: {
     onerror?: () => void;
     constructor(url: string) {
       this.url = url;
+      sockets.push(url);
       setTimeout(() => this.onopen?.(), 0);
     }
     send(raw: string) {
@@ -199,17 +193,21 @@ function loadWorker(options: {
     close() {}
   }
 
-  runInNewContext(workerSource, {
-    self,
-    caches,
-    URL,
-    MessageChannel,
-    Response,
-    console,
-    setTimeout,
-    clearTimeout,
-    WebSocket: FakeWebSocket,
-  });
+  vi.stubGlobal("self", self);
+  vi.stubGlobal("caches", caches);
+  vi.stubGlobal("WebSocket", FakeWebSocket);
+  // Unstubbed, a push this runtime can't open falls back to the static
+  // wake-up, and its plane is read off the event by the real `pushScope`.
+  const runtime: PushRuntime = {
+    preparePush: async () => undefined,
+    pushScope: realPushScope,
+    ...(options.runtime as Partial<PushRuntime> | undefined),
+    // The worker hands the sealed config bytes to the runtime's openConfig;
+    // stub it to hand back the injected config directly (the vault crypto is
+    // unit-tested separately in swSecretVault.test.ts).
+    openConfig: async () => (options.pushConfig ?? null) as never,
+  };
+  installServiceWorker(runtime);
 
   async function push(data?: Record<string, unknown>): Promise<void> {
     let pending: Promise<unknown> | undefined;
@@ -222,6 +220,19 @@ function loadWorker(options: {
           },
         }
         : {}),
+      waitUntil: (promise) => { pending = promise; },
+    };
+    const handler = handlers.get("push") as ((event: PushEventStub) => void) | undefined;
+    expect(handler).toBeTypeOf("function");
+    handler!(event);
+    await pending;
+  }
+
+  /** Deliver an exact `event.data.json()` value, as either napp transport does. */
+  async function pushPayload(payload: unknown): Promise<void> {
+    let pending: Promise<unknown> | undefined;
+    const event: PushEventStub = {
+      data: { json: () => payload, text: () => JSON.stringify(payload) },
       waitUntil: (promise) => { pending = promise; },
     };
     const handler = handlers.get("push") as ((event: PushEventStub) => void) | undefined;
@@ -257,6 +268,8 @@ function loadWorker(options: {
 
   return {
     push,
+    pushPayload,
+    sockets,
     notificationClick,
     pushSubscriptionChange,
     showNotification,
@@ -1410,5 +1423,150 @@ describe("Fetched (non-inlined) encrypted pushes", () => {
 
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     expect(staticEntry.close).not.toHaveBeenCalled();
+  });
+});
+
+describe("napp.push.payload", () => {
+  // What both roads deliver: nostr-push2's Web Push in a browser, and Tenna
+  // waking the worker itself. Neither says which subscription matched.
+  const wrapEvent = { id: "w1", kind: 1059, pubkey: "stream", tags: [["p", "x"]], content: "ciphertext" };
+  const groupEvent = { id: "g1", kind: 9, pubkey: "alice", tags: [["h", "general"]], content: "hello channel" };
+  const prepared = {
+    tag: "c2:chan",
+    roomKey: "c2:chan",
+    eventId: "w1",
+    url: "/c/comm/chan/m/w1",
+    title: "Armada / #general",
+    line: "alex: shipped it",
+    icon: "/favicon.png",
+    badge: "/badge-96.png",
+    timestamp: 1_000_000,
+    accumulate: true,
+  };
+  const payload = (over: Record<string, unknown> = {}) => ({
+    $type: "napp.push.payload",
+    event_id: "w1",
+    relays: ["wss://relay.example"],
+    ...over,
+  });
+
+  it("presents an inlined event through the same preparation as any push", async () => {
+    const preparePush = vi.fn(async () => prepared);
+    const pushScope = vi.fn(() => "c2");
+    const worker = loadWorker({ runtime: { preparePush, pushScope }, pushConfig: { self: "me" } });
+
+    await worker.pushPayload(payload({ event: wrapEvent }));
+
+    expect(pushScope).toHaveBeenCalledWith(wrapEvent, { self: "me" });
+    const [data] = preparePush.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(data).toMatchObject({ scope: "c2", event_id: "w1", event: wrapEvent, relays: ["wss://relay.example"] });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    expect(worker.showNotification.mock.calls[0][0]).toBe("Armada / #general");
+    expect(worker.sockets).toEqual([]);
+  });
+
+  it("fetches an event too big to carry before showing anything", async () => {
+    const preparePush = vi.fn(async () => prepared);
+    const worker = loadWorker({
+      runtime: { preparePush, pushScope: () => "c2" },
+      pushConfig: { self: "me" },
+      relayEvent: wrapEvent,
+    });
+
+    await worker.pushPayload(payload());
+
+    expect(worker.sockets).toEqual(["wss://relay.example"]);
+    const [data] = preparePush.mock.calls[0] as unknown as [{ event?: { id: string } }];
+    expect(data.event?.id).toBe("w1");
+    // One notification: the real one, not a wake-up and then an update.
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    expect(worker.showNotification.mock.calls[0][0]).toBe("Armada / #general");
+  });
+
+  it("ignores an inlined event whose id is not the one announced", async () => {
+    const preparePush = vi.fn(async () => prepared);
+    const worker = loadWorker({
+      runtime: { preparePush, pushScope: () => "c2" },
+      pushConfig: { self: "me" },
+      relayEvent: wrapEvent,
+    });
+
+    await worker.pushPayload(payload({ event: { ...wrapEvent, id: "other" } }));
+
+    expect(worker.sockets).toEqual(["wss://relay.example"]);
+    const [data] = preparePush.mock.calls[0] as unknown as [{ event?: { id: string } }];
+    expect(data.event?.id).toBe("w1");
+  });
+
+  it("shows one generic notification when the event cannot be found, and asks once", async () => {
+    const worker = loadWorker({ runtime: { preparePush: vi.fn(), pushScope: () => undefined } });
+
+    await worker.pushPayload(payload());
+
+    expect(worker.sockets).toHaveLength(1);
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [
+      string,
+      { body: string; tag: string },
+    ];
+    expect(title).toBe("Armada");
+    expect(opts.body).toBe("New message");
+    expect(opts.tag).toBe("w1");
+  });
+
+  it("names the plane in the fallback when the bundle can't open the event", async () => {
+    const worker = loadWorker({
+      runtime: { preparePush: vi.fn(async () => undefined), pushScope: () => "dm" },
+      pushConfig: { self: "me" },
+    });
+
+    await worker.pushPayload(payload({ event: wrapEvent }));
+
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [
+      string,
+      { body: string; data: { url: string; event?: unknown } },
+    ];
+    expect(title).toBe("New message");
+    expect(opts.body).toBe("New direct message");
+    expect(opts.data.url).toBe("/dm");
+    expect(opts.data.event).toBeUndefined();
+    // Already failed to open; a refetch would fail the same way.
+    expect(worker.sockets).toEqual([]);
+  });
+
+  it("shows a group message's text from the event in hand without the bundle", async () => {
+    const worker = loadWorker();
+
+    await worker.pushPayload(payload({ event_id: "g1", event: groupEvent }));
+
+    expect(worker.sockets).toEqual([]);
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    const [, first] = worker.showNotification.mock.calls[0] as unknown as [
+      string,
+      { body: string; data: { url: string } },
+    ];
+    expect(first.body).toBe("New message in a channel");
+    expect(first.data.url).toBe("/s/relay.example/general/m/g1");
+    const [, update] = worker.showNotification.mock.calls[1] as unknown as [
+      string,
+      { body: string; silent: boolean },
+    ];
+    expect(update.body).toBe("hello channel");
+    expect(update.silent).toBe(true);
+  });
+
+  it("asks no relay anything while push is switched off", async () => {
+    const worker = loadWorker({
+      runtime: { preparePush: vi.fn(), pushScope: () => "c2" },
+      pushDisabled: true,
+      pushEndpoint: "https://push.example/sub",
+    });
+
+    await worker.pushPayload(payload());
+
+    expect(worker.sockets).toEqual([]);
+    expect(worker.showNotification).not.toHaveBeenCalled();
+    expect(worker.unsubscribe).toHaveBeenCalled();
   });
 });
