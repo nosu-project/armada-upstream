@@ -125,10 +125,12 @@ describe("verify throughput: main thread vs. worker pool", () => {
   let events: NostrEvent[];
   let triples: Triple[];
 
+  // Signing the corpus is setup, not the measurement, and beside the other
+  // benchmarks it outruns the default 10s hook timeout; the test's own budget.
   beforeAll(() => {
     events = buildCorpus(N);
     triples = events.map((e) => ({ sig: e.sig, id: e.id, pubkey: e.pubkey }));
-  });
+  }, 120_000);
 
   it(`quantifies one boot's unique verifies (N=${N}) and the parallel ceiling`, async () => {
     // ── 1. The real path, cold: hash recompute + memo miss + EC verify. ──
