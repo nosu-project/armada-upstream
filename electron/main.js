@@ -900,13 +900,11 @@ function autoUpdatesSupported() {
 // bundle rather than replacing itself. The shell (and major versions) update
 // through `flatpak update` from whichever remote it was installed from —
 // pkg.soapbox.pub for the published build — the same way Vesktop does it.
-// Mutually exclusive with supportsSelfUpdate().
+// Mutually exclusive with supportsSelfUpdate(). ARMADA_DEV_WEB_UPDATE=1 under
+// `npm run electron:dev` runs the same path against the dev profile's userData.
 function flatpakUpdatesSupported() {
-  return (
-    app.isPackaged &&
-    process.platform === "linux" &&
-    Boolean(process.env.FLATPAK_ID)
-  );
+  if (!app.isPackaged) return Boolean(DEV_URL) && process.env.ARMADA_DEV_WEB_UPDATE === "1";
+  return process.platform === "linux" && Boolean(process.env.FLATPAK_ID);
 }
 
 async function showUpdateMessage(options) {
