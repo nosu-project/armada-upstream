@@ -1,5 +1,5 @@
 /**
- * Cross-context state shared by the page and `public/sw.js` through Cache
+ * Cross-context state shared by the page and `src/sw/worker.ts` through Cache
  * Storage. It contains no plaintext or keys: only event ids created on this
  * device that may be echoed back through Web Push.
  */

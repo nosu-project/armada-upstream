@@ -85,7 +85,7 @@ export function getArmadaDB(): ArmadaDB {
 /**
  * Fix the adapter to IndexedDB, before anything reads.
  *
- * Called at load by the Web Push service worker's runtime bundle
+ * Called at load by the Web Push service worker's runtime
  * (`src/sw/pushRuntime.ts`), which shares this store with the page so an event
  * it receives while no tab is open is simply THERE on the next open — the same
  * arrangement the Android service has, one layer down.

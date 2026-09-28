@@ -41,7 +41,7 @@ import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { DmRequestLevel } from "@/lib/pushPrefs";
 import { clearVault, sealConfig } from "@/lib/swSecretVault";
 
-/** Must match `PUSH_STATE_CACHE` / the config URL in `public/sw.js`. */
+/** Must match `PUSH_STATE_CACHE` / the config URL in `src/sw/worker.ts`. */
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_CONFIG_PATH = "/.armada-push-state/dm-config";
 

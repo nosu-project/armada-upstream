@@ -53,7 +53,7 @@ public struct PreparedPush {
 
 /// Open the event the gateway inlined, store it, and say what to show.
 ///
-/// The third port of this pipeline: `sw.js` + `pushRuntime.ts` on the web,
+/// The third port of this pipeline: `worker.ts` + `pushRuntime.ts` on the web,
 /// `Dm17.kt` + `ServiceStore.kt` on Android, this on iOS.
 ///
 /// Every step is best-effort and non-fatal. Anything that fails returns nil and

@@ -58,7 +58,7 @@ import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
  * package): the gateway inlines the matched event, the extension opens it,
  * writes it into the same ArmadaDB the WebView reads, and rewrites the
  * notification from the plaintext. That is the third port of the pipeline
- * `sw.js` + `pushRuntime.ts` are on the web and `Dm17.kt` + `ServiceStore.kt`
+ * `worker.ts` + `pushRuntime.ts` are on the web and `Dm17.kt` + `ServiceStore.kt`
  * are on Android.
  *
  * This hook's job on that front is `writeIosPushConfig`: the extension runs in

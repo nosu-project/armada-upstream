@@ -3,7 +3,7 @@
  * every surface that shows one.
  *
  * There are four notifiers in this project: the Android foreground service
- * (`NotificationRelayService.java`), the Web Push service worker (`public/sw.js`),
+ * (`NotificationRelayService.java`), the Web Push service worker (`src/sw/worker.ts`),
  * the in-app notifier that runs while a web/desktop client is open
  * (`useForegroundNotifications.ts`), and Electron by way of that same in-app
  * path. Android's is the one that reads well, and its text pipeline

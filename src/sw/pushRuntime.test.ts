@@ -775,8 +775,8 @@ describe("preparePush — showing nothing on purpose", () => {
     // subscription that lingers past the mute (the prune is gated on the watch
     // set being authoritative — see useNostrPush.ts) still wakes the device.
     // Before the fix the wrap reached the worker with NO matching stream in the
-    // config, `prepareConcord` returned `undefined`, and `public/sw.js` rendered
-    // the gateway's visible static "New message" (sw.js:661-676) — a
+    // config, `prepareConcord` returned `undefined`, and the worker rendered
+    // the gateway's visible static "New message" — a
     // notification from a muted community.
     //
     // The muted channel is now kept in the sealed config, flagged `muted`, so

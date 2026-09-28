@@ -37,6 +37,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 |--------------|-----------------------------------------------------------------|
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
 | `src/concord/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
+| `src/sw/`    | The Web Push service worker, in TypeScript: `worker.ts` (event handling), `pushRuntime.ts` (open/store/present), `sw.ts` (entry). The `serviceWorker()` plugin in `vite.config.ts` bundles it to one classic `/sw.js` in `vite build` and serves it from the dev server |
 | `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
 | `crates/webxdc-rt/` | Rust: the iroh-gossip transport for Mini App multiplayer, compiled to wasm. The only Rust in the repo |
@@ -316,7 +317,7 @@ message.
 - **The message is decrypted on the device, by the Notification Service
   Extension.** `ios/App/NotificationService` is the target; all of its work is
   in `ios/ArmadaNotify`, the THIRD port of the decrypt/store/present pipeline
-  (`sw.js`+`pushRuntime.ts` on web, `Dm17.kt`+`ServiceStore.kt` on Android).
+  (`src/sw/worker.ts`+`pushRuntime.ts` on web, `Dm17.kt`+`ServiceStore.kt` on Android).
   The gateway inlines the matched event, the extension opens it, writes it into
   the same ArmadaDB the WebView reads — which is why the database was put in
   the App Group before anything was stored in it — and rewrites the

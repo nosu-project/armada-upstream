@@ -13,7 +13,7 @@
  *
  * Either way the service worker receives the same `napp.push.payload` in a
  * `push` event — the event itself, or its id and where to fetch it — and
- * `public/sw.js` presents it through one code path. Nothing here knows which
+ * `src/sw/worker.ts` presents it through one code path. Nothing here knows which
  * transport it is feeding beyond the limits it must pack into.
  *
  * The watch set itself is `buildPushSubscriptions` (`pushSubscriptions.ts`),

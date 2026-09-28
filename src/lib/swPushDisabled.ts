@@ -13,7 +13,7 @@
  *
  * Lives in the same Cache Storage bucket as the DM config because a service
  * worker can't read localStorage. The path must match `PUSH_DISABLED_URL` in
- * `public/sw.js`.
+ * `src/sw/worker.ts`.
  */
 
 const PUSH_STATE_CACHE = "armada-push-state-v1";

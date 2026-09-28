@@ -2,16 +2,12 @@
  * The Web Push service worker's runtime — everything a push needs beyond the
  * worker APIs themselves.
  *
- * `public/sw.js` is a hand-written CLASSIC service worker (no bundler, no
- * `import`) on purpose — see its header. This module is bundled to a standalone
- * IIFE it loads with `importScripts`, so the worker stays a plain file the
- * build-stamp plugin can rewrite while the logic lives under `src/` as ordinary
- * source that tsc + eslint + vitest cover. Same arrangement as
- * `electron/db.cjs`, and for the same reason.
+ * `worker.ts` handles the worker's events and `sw.ts` hands it these
+ * functions; the build bundles all three into `/sw.js`.
  *
- * It started as NIP-17 unwrapping alone (`dmCrypto.ts`) because a classic
- * worker can't do NIP-44 — secp256k1 ECDH isn't in WebCrypto. It now does the
- * whole job, because the push payload carries the event itself
+ * It started as NIP-17 unwrapping alone (`dmCrypto.ts`), because NIP-44 needs
+ * secp256k1 ECDH, which WebCrypto lacks. It now does the whole job, because the
+ * push payload carries the event itself
  * (`inline_event`, see `pushSubscriptions.ts`) and everything worth doing with
  * an event needs code the worker can't otherwise reach:
  *
@@ -31,15 +27,8 @@
  *
  * Everything here is best-effort and non-fatal. Any step that fails returns
  * null and the worker falls back to the static wake-up the gateway sent, which
- * is why a build without this bundle, a login whose key it doesn't hold, and a
- * message too big to inline all degrade to the same safe place.
- *
- * NAMES: the emitted file is still `sw-crypto.js` and the global is still
- * `ArmadaDmCrypto`. Those are the strings an ALREADY-INSTALLED worker asks for,
- * and a worker updates only on the next navigation — renaming them would break
- * DM push for one revalidation cycle on every existing install, to no benefit.
- * Same reasoning as the `c2:`/`concord2-*` on-disk identifiers; don't "finish"
- * the rename.
+ * is why a login whose key it doesn't hold and a message too big to inline
+ * degrade to the same safe place.
  */
 
 import { getConversationKey, decrypt as nip44Decrypt } from "nostr-tools/nip44";
@@ -86,7 +75,7 @@ presetIndexedDBArmadaDB();
  * `relays` back from the registration; a `napp.push.payload` carries only the
  * event and where it came from, so `scope` is derived ({@link pushScope}).
  */
-interface PushData {
+export interface PushData {
   scope?: PushScope;
   relays?: unknown;
   url?: string;
@@ -663,20 +652,3 @@ export async function openConfig(sealed: Uint8Array | undefined): Promise<SwPush
     return null;
   }
 }
-
-// Expose to the classic service worker (which loads this bundle via
-// importScripts and can't consume ES exports). Assigned as a top-level side
-// effect so rollup keeps it in the IIFE build even though nothing imports it
-// there; the named exports above are what vitest drives.
-(
-  globalThis as unknown as { ArmadaDmCrypto?: Record<string, unknown> }
-).ArmadaDmCrypto = {
-  preparePush,
-  pushScope,
-  openDm,
-  openConcord,
-  // The config is AES-GCM sealed at rest under a non-extractable key
-  // (swSecretVault); the worker reads the bytes out of Cache Storage and opens
-  // them here, then hands the result to `preparePush`.
-  openConfig,
-};

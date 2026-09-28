@@ -1,7 +1,5 @@
 // @vitest-environment node
 
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,8 +9,8 @@ import {
   retireSeenRoomLines,
   showPageOsNotification,
 } from "@/hooks/useForegroundNotifications";
-
-const workerSource = readFileSync(new URL("../public/sw.js", import.meta.url), "utf8");
+import { pushScope as realPushScope } from "@/sw/pushRuntime";
+import { installServiceWorker, type PushRuntime } from "@/sw/worker";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -41,7 +39,7 @@ function loadWorker(options: {
   ownEventId?: string;
   badging?: boolean;
   /**
-   * The runtime bundle (`src/sw/pushRuntime.ts`), stubbed. What it decides —
+   * The runtime (`src/sw/pushRuntime.ts`), stubbed. What it decides —
    * opening the inlined event, the DM request policy, storing, composing the
    * title/body/icon — is tested against the real crypto and the real store in
    * `src/sw/pushRuntime.test.ts`. What these tests own is the worker's half:
@@ -92,7 +90,7 @@ function loadWorker(options: {
     match: vi.fn(async (request: string) => {
       if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
       if (options.pushConfig && request.endsWith("/.armada-push-state/dm-config")) {
-        // The worker reads sealed bytes and opens them via the bundle's
+        // The worker reads sealed bytes and opens them via the runtime's
         // openConfig (stubbed below); the bytes themselves are opaque here.
         return { arrayBuffer: async () => new ArrayBuffer(16) };
       }
@@ -154,12 +152,6 @@ function loadWorker(options: {
         }
         : {}),
     },
-    // The worker opens the sealed config via the bundle's openConfig; stub it
-    // to hand back the injected config directly (the vault crypto is unit-tested
-    // separately in swSecretVault.test.ts).
-    ArmadaDmCrypto: (options.runtime || options.pushConfig)
-      ? { ...(options.runtime ?? {}), openConfig: async () => options.pushConfig ?? null }
-      : undefined,
     clients: {
       matchAll: vi.fn(async () => clients),
       claim: vi.fn(async () => undefined),
@@ -201,17 +193,21 @@ function loadWorker(options: {
     close() {}
   }
 
-  runInNewContext(workerSource, {
-    self,
-    caches,
-    URL,
-    MessageChannel,
-    Response,
-    console,
-    setTimeout,
-    clearTimeout,
-    WebSocket: FakeWebSocket,
-  });
+  vi.stubGlobal("self", self);
+  vi.stubGlobal("caches", caches);
+  vi.stubGlobal("WebSocket", FakeWebSocket);
+  // Unstubbed, a push this runtime can't open falls back to the static
+  // wake-up, and its plane is read off the event by the real `pushScope`.
+  const runtime: PushRuntime = {
+    preparePush: async () => undefined,
+    pushScope: realPushScope,
+    ...(options.runtime as Partial<PushRuntime> | undefined),
+    // The worker hands the sealed config bytes to the runtime's openConfig;
+    // stub it to hand back the injected config directly (the vault crypto is
+    // unit-tested separately in swSecretVault.test.ts).
+    openConfig: async () => (options.pushConfig ?? null) as never,
+  };
+  installServiceWorker(runtime);
 
   async function push(data?: Record<string, unknown>): Promise<void> {
     let pending: Promise<unknown> | undefined;
