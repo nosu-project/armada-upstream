@@ -38,6 +38,8 @@ interface YTNamespace {
     opts: {
       videoId?: string;
       host?: string;
+      width?: number | string;
+      height?: number | string;
       playerVars?: Record<string, unknown>;
       events?: {
         onReady?: (e: { target: YTPlayer }) => void;

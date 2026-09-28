@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { WebxdcApp } from "@/components/apps/WebxdcApp";
-import { YouTubeWatchalong } from "@/components/apps/YouTubeWatchalong";
+import { Watchalong } from "@/components/apps/Watchalong";
 import { Button } from "@/components/ui/button";
 import { useConcordAppSync } from "@/concord/hooks/useConcordAppSync";
 import { useDmAppSync } from "@/hooks/useDmAppSync";
@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 /** A short human label + icon for the running app, shown in the stage header. */
 function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
   if (app.type === "youtube") {
-    return { label: "Watch together", icon: <MonitorPlay className="size-4 text-[#ff0000]" /> };
+    return { label: "Watch together", icon: <MonitorPlay className="size-4 text-primary" /> };
   }
   return { label: app.name ?? "Webxdc app", icon: <Blocks className="size-4 text-primary" /> };
 }
@@ -30,7 +30,7 @@ function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
 /** The app surface (player / iframe), given a resolved sync backend. */
 function AppSurface({ app, sessionId, sync }: { app: AppKind; sessionId: string; sync: AppSync }) {
   if (app.type === "youtube") {
-    return <YouTubeWatchalong sync={sync} />;
+    return <Watchalong sync={sync} />;
   }
   return <WebxdcApp sync={sync} url={app.url} sessionId={sessionId} name={app.name} encryption={app.encryption} />;
 }
