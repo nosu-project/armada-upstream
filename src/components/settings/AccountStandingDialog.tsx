@@ -1,7 +1,9 @@
 import { Check, Sparkles } from "lucide-react";
+import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
@@ -22,6 +24,13 @@ export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDia
       <ChromeDialogContent
         title="Account standing"
         contentClassName="overflow-hidden text-center"
+        // Land focus on the dialog itself: the punchline is its first
+        // focusable element, and focusing it would open the explanation
+        // before the joke has been read.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement | null)?.focus();
+        }}
       >
         <div className="relative flex flex-col items-center">
           {/* The boot-splash crest, redrawing itself each time this opens. */}
@@ -47,11 +56,47 @@ export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDia
           <StandingMeter />
 
           <p className="mt-6 text-sm font-medium leading-snug text-muted-foreground">
-            No score. No strikes. We can't ban you.
+            <Punchline />
           </p>
         </div>
       </ChromeDialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The punchline, with the plain reading behind it for anyone who takes the
+ * joke literally — read as "we can't ban you *because* you're EPIC". A tooltip
+ * so the joke itself stays untouched, and one a tap toggles, because Radix
+ * tooltips open on hover and focus only, which is no one on a phone.
+ */
+function Punchline() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="cursor-help underline decoration-muted-foreground/40 decoration-dotted underline-offset-4 touch:-my-3 touch:py-3"
+          // Radix closes an open tooltip on trigger pointerdown and click, and
+          // opens it on focus — which a tap also delivers. The click is the
+          // toggle here (Enter/Space included), so none of them may reach it.
+          onPointerDown={(e) => e.preventDefault()}
+          onFocus={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.preventDefault();
+            setOpen((o) => !o);
+          }}
+        >
+          No score. No strikes. We can't ban you.
+        </button>
+      </TooltipTrigger>
+      {/* Above the dialog (z-[250]), which the default tooltip layer is not. */}
+      <TooltipContent className="z-[260] max-w-64 text-left text-xs leading-snug">
+        There's no Armada account to ban: your identity is a key only you hold. A community can remove you
+        from itself, but nobody can remove you from Armada.
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
