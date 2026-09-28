@@ -155,19 +155,19 @@ export function blossomFallbackUrls(url: string, servers: readonly string[]): st
  * actually put the blob, while a mirror is only a guess that a copy exists
  * there (the BUD-04 mirroring the uploader does is best-effort).
  *
- * The declared ones are raw event data, so they are sanitized HERE rather than
- * at each of the dozen places a ref is built — a `javascript:` or LAN fallback
- * must not reach a `fetch` or an `<img src>` by any route. Pure, so the walk is
- * checkable without a renderer.
+ * The primary and the declared fallbacks are raw event data, so they are
+ * sanitized HERE rather than at each of the dozen places a ref is built — a
+ * `javascript:` or LAN URL must not reach a `fetch` or an `<img src>` by any
+ * route. Pure, so the walk is checkable without a renderer.
  */
 export function mediaCandidates(
   url: string,
   declaredFallbacks: readonly string[] | undefined,
   blossomServers: readonly string[],
 ): string[] {
-  const seen = new Set<string>([url]);
-  const out = [url];
-  for (const raw of declaredFallbacks ?? []) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [url, ...(declaredFallbacks ?? [])]) {
     const safe = sanitizeUrl(raw);
     if (!safe || isLocalNetworkUrl(safe) || seen.has(safe)) continue;
     seen.add(safe);

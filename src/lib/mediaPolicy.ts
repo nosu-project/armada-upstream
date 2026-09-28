@@ -164,8 +164,31 @@ function isInlineSource(url: string): boolean {
   return /^(?:blob|data):/i.test(url);
 }
 
-function isHttp(url: string): boolean {
-  return /^https?:\/\//i.test(url);
+/** Resolves app-relative paths so they can be told apart from remote URLs. */
+const RELATIVE_BASE = "https://relative.invalid/";
+
+/**
+ * `url` as a normalized remote http(s) URL, or undefined when it is not one
+ * (another scheme, or a path relative to the app). Parsed rather than
+ * prefix-matched, and the normalized form is what gets loaded, so the checks
+ * below always see the host that is actually requested. Parsed without a base
+ * first, so the answer does not depend on the page's own scheme; the base only
+ * catches protocol-relative `//host` forms.
+ */
+function remoteHref(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    try {
+      parsed = new URL(url, RELATIVE_BASE);
+    } catch {
+      return undefined;
+    }
+    if (parsed.origin === new URL(RELATIVE_BASE).origin) return undefined;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+  return parsed.href;
 }
 
 /**
@@ -174,12 +197,14 @@ function isHttp(url: string): boolean {
  * on the proxy's own origin (a stored proxied URL must not be wrapped twice).
  */
 export function proxyMediaUrl(url: string, proxy: string): string {
-  if (!proxy || isInlineSource(url) || !isHttp(url)) return url;
+  if (!proxy || isInlineSource(url)) return url;
+  const href = remoteHref(url);
+  if (!href) return url;
   // The template's braces are not URL characters, so the proxy's own host is
   // read off a filled probe rather than the template itself.
   const proxyHost = mediaHost(fillUriTemplate(proxy, { href: "https://example.com/x" }));
-  if (proxyHost && mediaHost(url) === proxyHost) return url;
-  return fillUriTemplate(proxy, { href: url });
+  if (proxyHost && mediaHost(href) === proxyHost) return href;
+  return fillUriTemplate(proxy, { href });
 }
 
 /**
@@ -193,9 +218,11 @@ export function proxyMediaUrl(url: string, proxy: string): string {
  */
 export function mediaSrc(url: string | undefined, policy: MediaPolicy): string | undefined {
   if (!url) return undefined;
-  if (isInlineSource(url) || !isHttp(url)) return url;
-  if (isLocalNetworkUrl(url)) return undefined;
-  return policy.proxy ? proxyMediaUrl(url, policy.proxy) : url;
+  if (isInlineSource(url)) return url;
+  const href = remoteHref(url);
+  if (!href) return url;
+  if (isLocalNetworkUrl(href)) return undefined;
+  return policy.proxy ? proxyMediaUrl(href, policy.proxy) : href;
 }
 
 /** The rotation pool a policy resolves to: the explicit pool, or the primary alone. */
@@ -255,16 +282,17 @@ export function routeMediaCandidates(
     sources.push(src);
   };
   for (const candidate of candidates) {
-    if (isInlineSource(candidate) || !isHttp(candidate)) {
+    const href = isInlineSource(candidate) ? undefined : remoteHref(candidate);
+    if (!href) {
       push(candidate);
       continue;
     }
-    if (isLocalNetworkUrl(candidate)) continue;
+    if (isLocalNetworkUrl(href)) continue;
     if (proxies.length === 0) {
-      push(candidate);
+      push(href);
       continue;
     }
-    for (const variant of proxyRotation(candidate, proxies)) push(variant);
+    for (const variant of proxyRotation(href, proxies)) push(variant);
   }
   return { sources };
 }

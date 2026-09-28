@@ -172,6 +172,13 @@ describe("mediaCandidates", () => {
     expect(candidates).toEqual([PRIMARY]);
   });
 
+  it("applies the same checks to the primary", () => {
+    for (const primary of [`http:/192.168.1.5/${HASH}`, `javascript:alert(1)//${HASH}`]) {
+      const candidates = mediaCandidates(primary, ["https://declared.example/blob"], []);
+      expect(candidates).toEqual(["https://declared.example/blob"]);
+    }
+  });
+
   it("keeps a well-formed https fallback", () => {
     expect(mediaCandidates(PRIMARY, ["https://other.example/blob"], [])).toEqual([
       PRIMARY,

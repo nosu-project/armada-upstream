@@ -85,6 +85,24 @@ describe("mediaSrc", () => {
     expect(mediaSrc("http://localhost:8080/x.png", policy({ proxy: "" }))).toBeUndefined();
   });
 
+  it("applies the rule to every spelling the browser reads as http(s)", () => {
+    for (const url of [
+      "http:/192.168.1.1/x.png",
+      "http:\\\\192.168.1.1\\x.png",
+      " http://192.168.1.1/x.png",
+      "HTTP://192.168.1.1/x.png",
+      "//192.168.1.1/x.png",
+    ]) {
+      expect(mediaSrc(url, policy({ proxy: "" })), url).toBeUndefined();
+    }
+    expect(mediaSrc("https:/henk.example/ip/ip.png", policy())).toBe(PROXIED_IMG);
+    expect(mediaSrc(" https://henk.example/ip/ip.png", policy({ proxy: "" }))).toBe(IMG);
+  });
+
+  it("leaves an app-relative path alone", () => {
+    expect(mediaSrc("/assets/logo.png", policy())).toBe("/assets/logo.png");
+  });
+
   it("passes blob and data sources through untouched", () => {
     expect(mediaSrc("blob:https://armada.buzz/abc", policy())).toBe("blob:https://armada.buzz/abc");
     expect(mediaSrc("data:image/png;base64,AAAA", policy())).toBe("data:image/png;base64,AAAA");
@@ -115,6 +133,11 @@ describe("routeMediaCandidates", () => {
       policy({ proxy: "" }),
     );
     expect(out.sources).toEqual(["https://blossom.ditto.pub/abc.png", "https://blossom.primal.net/abc.png"]);
+  });
+
+  it("drops a local-network candidate however it is spelled", () => {
+    const out = routeMediaCandidates(["http:/10.0.0.5/abc.png", "//10.0.0.5/abc.png"], policy({ proxy: "" }));
+    expect(out.sources).toEqual([]);
   });
 
   it("is empty for an empty list", () => {
