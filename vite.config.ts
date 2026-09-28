@@ -240,8 +240,10 @@ export default defineConfig({
     // APPENDS `server.watch.ignored` to chokidar's defaults (`.git`,
     // `node_modules`) rather than replacing them. CI never has these (fresh
     // checkout); this only bites a machine that has run `npm run dist:flatpak`.
+    // The electron:dev profile is excluded too: web-bundle updates unpack HTML
+    // into it, which would full-reload the page under test.
     watch: {
-      ignored: BUILD_ARTIFACT_EXCLUDES,
+      ignored: [...BUILD_ARTIFACT_EXCLUDES, "**/electron/.dev-profile/**"],
     },
   },
   plugins: [react(), buildStamp(), serveChangelog()],
