@@ -17,6 +17,7 @@ import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
 import { LocationRefProvider } from "@/components/LocationRefProvider";
 import { Nip19Route } from "@/components/Nip19Route";
 import { VersionCheck } from "@/components/VersionCheck";
+import { DesktopUpdateToast } from "@/components/DesktopUpdateToast";
 import { Toaster } from "@/components/ui/toaster";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -383,6 +384,7 @@ export function AppRouter() {
       <NotificationNavigation />
       <SignedInRouterServicesGate />
       <VersionCheck />
+      <DesktopUpdateToast />
       {/* MUST be inside <BrowserRouter>: toasts can carry router <Link> actions. */}
       <Toaster />
       <LocationRefProvider>

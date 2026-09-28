@@ -403,8 +403,9 @@ Two update paths, and they do not conflict:
   the newest manifest from the pinned release key, downloads the archive from
   the Blossom servers it names, refuses it unless its sha256 matches the
   manifest, unpacks it into the app's userData and serves that, then offers a
-  restart (`checkForWebBundleUpdate` in `electron/main.js`,
-  `electron/webBundleUpdate.js`). Most releases touch only `src/`, so this is
+  restart as an in-app toast (`checkForWebBundleUpdate` in `electron/main.js`,
+  `electron/webBundleUpdate.js`, `DesktopUpdateToast`). It checks once at
+  startup (and from the tray's "Check for Updates…"), never on a timer. Most releases touch only `src/`, so this is
   what carries them, without a `flatpak update`.
 - **The shell updates through `flatpak update`.** Electron, the native modules
   and any major version bump arrive when the soapbox remote publishes a newer

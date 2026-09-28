@@ -191,6 +191,9 @@ interface ArmadaDesktopBridge {
   encryptSecret?: (plaintext: string) => Promise<string | null>;
   decryptSecret?: (base64: string) => Promise<string | null>;
   signalWebReady?: () => void;
+  isWebUpdatePending?: () => Promise<boolean>;
+  onWebUpdateReady?: (handler: () => void) => () => void;
+  restartForWebUpdate?: () => void;
   // Renderer reports its App Links host; the shell returns router paths of caught links.
   registerDeepLinkHost?: (host: string) => void;
   onDeepLink?: (handler: (path: string) => void) => () => void;
@@ -249,6 +252,37 @@ export function onDesktopWindowHidden(handler: () => void): () => void {
   } catch {
     return () => {};
   }
+}
+
+/**
+ * Call `handler` once when the shell has installed a newer web bundle this run,
+ * whether that happened before or after subscribing. No-op on web/older shells.
+ */
+export function onDesktopWebUpdateReady(handler: () => void): () => void {
+  const bridge = desktop();
+  if (!bridge?.onWebUpdateReady) return () => {};
+  let done = false;
+  const fire = () => {
+    if (done) return;
+    done = true;
+    handler();
+  };
+  try {
+    const unsubscribe = bridge.onWebUpdateReady(fire);
+    bridge.isWebUpdatePending?.().then((pending) => {
+      if (pending) fire();
+    }, () => {});
+    return () => {
+      done = true;
+      unsubscribe();
+    };
+  } catch {
+    return () => {};
+  }
+}
+
+export function restartForDesktopWebUpdate(): void {
+  desktop()?.restartForWebUpdate?.();
 }
 
 /** Launch-at-login settings, or null on web/older shells (hide the control). */

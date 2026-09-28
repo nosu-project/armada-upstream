@@ -181,6 +181,17 @@ function installBundleIpc() {
     bundleBooted = true;
   });
 
+  // The renderer asks on mount too, since the check can finish before it
+  // subscribes to armada:web-update-ready.
+  ipcMain.handle("armada:web-update-pending", () => pendingWebBundle !== null);
+  ipcMain.on("armada:web-update-restart", (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    if (pendingWebBundle === null) return;
+    isQuitting = true;
+    app.relaunch();
+    app.exit(0);
+  });
+
   // The renderer reports its App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname)
   // at boot, so the navigation handlers can recognize a link to our own public
   // host and route it inward instead of out to the browser. Only the main
@@ -337,6 +348,8 @@ let manualUpdateCheck = false;
 let updateCheckInFlight = false;
 let macSelfUpdateEligible;
 let updateCheckTimer = null;
+// Id of a web bundle installed this run and awaiting a restart to activate.
+let pendingWebBundle = null;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
   env: process.env,
@@ -972,20 +985,12 @@ async function checkForWebBundleUpdate(manual = false) {
       return;
     }
     console.log(`[bundle] installed ${outcome.id}`);
-    const { response } = await showUpdateMessage({
-      type: "info",
-      title: "Armada update ready",
-      message: "A new version of Armada has been downloaded.",
-      detail: "Restart now to use it?",
-      buttons: ["Restart", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (response !== 0) return;
-    isQuitting = true;
-    app.relaunch();
-    app.exit(0);
+    // The renderer offers the restart as an in-app toast; no OS dialog.
+    pendingWebBundle = outcome.id;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("armada:web-update-ready");
+      if (wasManual) showWindow();
+    }
   } catch (error) {
     console.warn("[bundle] update failed", error);
     const shouldReport = manual && manualUpdateCheck;
@@ -1006,14 +1011,14 @@ async function checkForWebBundleUpdate(manual = false) {
 function installAutoUpdater() {
   const electronUpdater = autoUpdatesSupported();
   // The electron-updater path owns AppImage/NSIS/mac; the Flatpak path owns a
-  // packaged Flatpak. Either drives the same timer below; only the former needs
-  // electron-updater wired up.
+  // packaged Flatpak. Only the former needs electron-updater wired up.
   if (!electronUpdater && !flatpakUpdatesSupported()) return;
-
   if (electronUpdater) installElectronUpdater();
 
   // Let the UI and keyring finish booting before the first network request.
   setTimeout(() => void checkForDesktopUpdates(false), 10_000).unref();
+  // A web bundle is checked at startup only; its restart is offered in-app.
+  if (!electronUpdater) return;
   updateCheckTimer = setInterval(
     () => void checkForDesktopUpdates(false),
     4 * 60 * 60 * 1000,

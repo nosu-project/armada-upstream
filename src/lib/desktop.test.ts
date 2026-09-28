@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   desktopHevcScreenShareCapability,
   desktopScreenCaptureAccessStatus,
+  onDesktopWebUpdateReady,
   openDesktopScreenCaptureSettings,
   signalDesktopWebReady,
   stopDesktopHevcScreenShare,
@@ -600,5 +601,44 @@ describe("desktop H.265 frame-pump lifecycle", () => {
     await desktopModule.stopDesktopHevcScreenShare();
     expect(stalePort.close).toHaveBeenCalled();
     expect(activePort.close).toHaveBeenCalled();
+  });
+});
+
+describe("desktop web update notice", () => {
+  it("fires once whether the update landed before or after subscribing", async () => {
+    const bridge = installBridge();
+    let emit = () => {};
+    window.armadaDesktop = {
+      ...bridge,
+      isWebUpdatePending: vi.fn(async () => true),
+      onWebUpdateReady: vi.fn((handler: () => void) => {
+        emit = handler;
+        return () => {};
+      }),
+    };
+    const handler = vi.fn();
+
+    onDesktopWebUpdateReady(handler);
+    await Promise.resolve();
+    emit();
+
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("stays silent after unsubscribing and on older shells", async () => {
+    const bridge = installBridge();
+    window.armadaDesktop = {
+      ...bridge,
+      isWebUpdatePending: vi.fn(async () => true),
+      onWebUpdateReady: vi.fn(() => () => {}),
+    };
+    const handler = vi.fn();
+
+    onDesktopWebUpdateReady(handler)();
+    await Promise.resolve();
+    expect(handler).not.toHaveBeenCalled();
+
+    window.armadaDesktop = bridge;
+    expect(() => onDesktopWebUpdateReady(handler)()).not.toThrow();
   });
 });
