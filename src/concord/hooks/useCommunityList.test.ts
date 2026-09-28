@@ -25,6 +25,7 @@ import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { NUser } from "@nostrify/react/login";
+import type { NostrRelayCLOSED, NostrRelayEOSE } from "@nostrify/types";
 
 const h = vi.hoisted(() => ({
   readFolded: vi.fn(),
@@ -711,6 +712,38 @@ describe("syncCommunityList — reconcile", () => {
 
     expect(delivered).not.toContain(unavailable);
     for (const relay of STOCK_RELAYS.slice(1)) expect(delivered).toContain(relay);
+  });
+
+  it("defers seeding when a relay CLOSED the per-relay empty confirmation", async () => {
+    const { syncCommunityList } = await import("./useCommunityList");
+    const local: CommunityList = { entries: [entry("aa", "Must not seed")], tombstones: [] };
+    const run = async (refuseConfirm: boolean) => {
+      h.readFolded.mockImplementation(async (key: string) =>
+        key.startsWith("concord2-list:") ? { event: null, list: local } : undefined,
+      );
+      const delivered: string[] = [];
+      const nostr = {
+        query: vi.fn(async () => []),
+        relay: (url: string) => ({
+          query: vi.fn(async () => []),
+          // `query()` resolves [] on a CLOSED; only `req()` can tell it apart.
+          async *req(filters: Array<{ limit?: number }>): AsyncGenerator<NostrRelayEOSE | NostrRelayCLOSED> {
+            if (refuseConfirm && filters.some((f) => f.limit === 1)) {
+              yield ["CLOSED", "sub", "rate-limited: slow down"];
+              return;
+            }
+            yield ["EOSE", "sub"];
+          },
+          event: vi.fn(async () => { delivered.push(url); }),
+        }),
+      };
+      await syncCommunityList(nostr, user, new QueryClient(), undefined, ["wss://self.example.com"]);
+      return delivered;
+    };
+
+    expect(await run(true)).toEqual([]);
+    // Control: the same wire answering EOSE confirms the empty read and seeds.
+    expect(await run(false)).toContain("wss://self.example.com");
   });
 
   it("defers legacy seeding when no authoritative retired-list rescue source answers", async () => {

@@ -43,6 +43,7 @@ import { KIND_COMMUNITY_LIST_FRAG, KIND_COMMUNITY_LIST_RETIRED } from "@/concord
 import type { Community } from "@/concord/lib/types";
 import { logSync } from "@/lib/syncLog";
 import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
+import { queryRelayStrict, type ReqRelay } from "@/lib/strictRelayQuery";
 import {
   queueSignedEvent,
   recordQueuedPublishAttempt,
@@ -120,6 +121,7 @@ type NostrLike = {
   group?(relays: string[]): { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> };
   relay?(url: string): {
     query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]>;
+    req?: ReqRelay["req"];
     event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<unknown>;
   };
   event?(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<unknown>;
@@ -776,7 +778,14 @@ async function confirmedEmptyFragmentRelays(
   let sawFragments = false;
   for (const url of relays) {
     try {
-      const events = await nostr.relay(url).query(filter, { signal: AbortSignal.timeout(8000) });
+      // Strict where the relay can say so: a CLOSED read (auth-required,
+      // rate-limited) resolves empty through `query()`, and an empty answer
+      // here is what licenses the seed.
+      const relay = nostr.relay(url);
+      const signal = AbortSignal.timeout(8000);
+      const events = relay.req
+        ? await queryRelayStrict({ req: relay.req.bind(relay) }, filter, { signal })
+        : await relay.query(filter, { signal });
       answered.push(url);
       if (events.length > 0) sawFragments = true;
     } catch {
