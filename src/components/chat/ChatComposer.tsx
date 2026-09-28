@@ -68,6 +68,7 @@ import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { collectEmojiTags } from "@/lib/customEmoji";
+import { completedShortcodeAt } from "@/lib/emojiShortcode";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
 import { extForMime } from "@/lib/fileBytes";
 import { galleryItemFile, hasMediaGallery, type GalleryItem } from "@/lib/mediaGallery";
@@ -748,6 +749,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const pickerRef = useRef<HTMLDivElement>(null);
   const pickerToggleGroupRef = useRef<HTMLDivElement>(null);
   const { insertAtCursor, insertEmoji } = useInsertText(textareaRef, content, setContent);
+  // `:name:` of a custom emoji is that emoji, so auto-conversion leaves it be.
+  const customShortcodes = useMemo(() => new Set(customEmojis.map((e) => e.shortcode)), [customEmojis]);
 
   const togglePickerTab = useCallback((tab: "emoji" | "gif") => {
     if (pickerOpen && pickerTab === tab) {
@@ -2642,8 +2645,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   dir="auto"
                   value={content}
                   onChange={(e) => {
-                    setContent(e.target.value);
-                    if (e.target.value) onTyping?.();
+                    const { value, selectionStart, selectionEnd } = e.target;
+                    // Only a single `:` just typed at a collapsed caret can
+                    // close a shortcode — never a paste or a programmatic edit.
+                    const closedShortcode =
+                      selectionStart === selectionEnd &&
+                      value.length === content.length + 1 &&
+                      value[selectionStart - 1] === ":"
+                        ? completedShortcodeAt(value, selectionStart, customShortcodes)
+                        : null;
+                    if (closedShortcode) insertAtCursor(closedShortcode);
+                    else setContent(value);
+                    if (value) onTyping?.();
                   }}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}

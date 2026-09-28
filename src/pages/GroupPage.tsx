@@ -50,6 +50,7 @@ import { useGroupModeration } from "@/hooks/useGroupModeration";
 import { useRelayMembers } from "@/hooks/useRelayMembers";
 import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { useMobileMembersOverlay } from "@/hooks/useMobileMembersOverlay";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
 import { channelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNip29CalendarTransport } from "@/hooks/useCalendarEvents";
@@ -181,7 +182,6 @@ export function GroupPage() {
   const isTouchDevice = useIsTouch();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [membersOpen, setMembersOpen] = useState(false);
   /** Whether the desktop member roster is shown (toggled from the header),
    * persisted in app config (`memberListVisible`). Defaults OFF on touch devices
    * (phones/tablets — including a landscape phone that crosses the 900px sidebar
@@ -292,6 +292,12 @@ export function GroupPage() {
   useEffect(() => {
     setChannelsOpen(false);
   }, [groupId]);
+  // The mobile member overlay covers the chat; switching groups, revealing the
+  // channel list, or back closes it.
+  const [membersOpen, setMembersOpen] = useMobileMembersOverlay(
+    `${relayUrl ?? ""}|${groupId ?? ""}`,
+    channelsOpen,
+  );
   // Session activation: being navigated into makes this server "live" for
   // the rest of the session — the wire stops deferring its groups under the
   // unread-dot rule (see wire/activation.ts).

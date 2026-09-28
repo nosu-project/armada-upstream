@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useRef, useState } from "react";
 
 import { ReactionGlyph } from "@/components/chat/ReactionBar";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCustomEmojis } from "@/hooks/useCustomEmojis";
 import { recordReaction, useFrequentReactions } from "@/hooks/useFrequentReactions";
@@ -62,14 +62,14 @@ export function MessageActionSheet({
   const { emojis: customEmojis } = useCustomEmojis();
   const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_SHEET);
 
-  // Android back closes the sheet, and only the sheet — a second back leaves
-  // the chat, the same one-surface-per-back the thread panel and lightboxes
-  // follow. Without an entry of its own, SwipeReveal's handler would win and
+  // Back (Android's, or the browser's in a PWA) closes the sheet, and only
+  // the sheet — a second back leaves the chat, the same one-surface-per-back
+  // the thread panel and lightboxes follow. Without an entry of its own, SwipeReveal's handler would win and
   // slide the chat pane away with the menu still up: the pane is translated,
   // never unmounted, and the drawer portals to <body>, so nothing else takes
   // the menu down. Registered only while open, so it sits above SwipeReveal's
   // handler for exactly as long as the sheet is on screen.
-  useAndroidBack(() => {
+  useOverlayBack(() => {
     onOpenChange(false);
     return true;
   }, open);

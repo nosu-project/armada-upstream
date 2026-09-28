@@ -12,7 +12,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
@@ -82,9 +82,9 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
   const covered = (item: LightboxItem) => !!item.spoiler && !revealed.has(item.url);
   const currentCovered = media[currentIndex] ? covered(media[currentIndex]) : false;
 
-  // System back (Android gesture/button) closes the lightbox instead of
-  // navigating the underlying screen.
-  useAndroidBack(() => {
+  // System back (Android gesture/button, or the browser's) closes the
+  // lightbox instead of navigating the underlying screen.
+  useOverlayBack(() => {
     onClose();
     return true;
   });

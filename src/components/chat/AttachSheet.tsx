@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { SHEET_NO_DRAG_ATTR, SHEET_SCROLL_ATTR, SnapSheet } from "@/components/chat/SnapSheet";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
-import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useLongPress } from "@/hooks/useLongPress";
 import { formatTime } from "@/lib/formatTime";
 import {
@@ -101,7 +101,7 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
 
   // Back unwinds one layer at a time: the preview, the Apps page, the full
   // screen, and only then the sheet.
-  useAndroidBack(() => {
+  useOverlayBack(() => {
     if (preview) setPreview(null);
     else if (page === "apps") {
       setPage("main");
@@ -389,7 +389,7 @@ function TilesSheet({ open, onOpenChange, actions, apps = [], gamePicker }: Atta
   const [page, setPage] = useState<"main" | "apps">("main");
   const tiles = useTiles(actions, apps, gamePicker, () => setPage("apps"));
 
-  useAndroidBack(() => {
+  useOverlayBack(() => {
     onOpenChange(false);
     return true;
   }, open);

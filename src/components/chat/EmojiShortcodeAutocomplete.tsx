@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { getCaretCoordinates } from "@/lib/caretCoordinates";
+import { findEmojiShortcodeColon } from "@/lib/emojiShortcode";
 import { usePortalDropdown } from "@/hooks/usePortalDropdown";
 import { useCustomEmojis, type CustomEmoji } from "@/hooks/useCustomEmojis";
 import { cn } from "@/lib/utils";
@@ -112,28 +113,6 @@ function searchEmojis(query: string, customEmojis: CustomEmoji[]): EmojiResult[]
 
   results.sort((a, b) => a.score - b.score);
   return results.slice(0, MAX_RESULTS);
-}
-
-/**
- * Index of the `:` that opens an in-progress `:shortcode` query ending at
- * `cursor`, or -1 if there isn't one.
- *
- * A colon starts a shortcode when it sits at the beginning of the text or
- * after anything that is not a shortcode character (`[A-Za-z0-9_]`). That
- * keeps `http://` / `3:30` / `word:foo` from matching, while still allowing
- * back-to-back native emojis (`👍:smile`) without a required space — the
- * previous whitespace-only rule rejected those.
- */
-export function findEmojiShortcodeColon(value: string, cursor: number): number {
-  for (let i = cursor - 1; i >= 0; i--) {
-    const ch = value[i];
-    if (ch === " " || ch === "\n" || ch === "\t") break;
-    if (ch === ":" && i < cursor - 1) {
-      if (i === 0 || !/[A-Za-z0-9_]/.test(value[i - 1]!)) return i;
-      break;
-    }
-  }
-  return -1;
 }
 
 /**

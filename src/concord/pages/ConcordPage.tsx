@@ -102,6 +102,7 @@ import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { useMobileMembersOverlay } from "@/hooks/useMobileMembersOverlay";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelGitActivity } from "@/hooks/useChannelGitActivity";
 import { useGitProjects } from "@/hooks/useGitProjects";
@@ -2070,7 +2071,6 @@ export function ConcordPage() {
   const membersVisible = config.memberListVisible ?? !isTouchDevice;
   const toggleMembersVisible = () =>
     updateConfig((c) => ({ ...c, memberListVisible: !(c.memberListVisible ?? !isTouchDevice) }));
-  const [membersOpen, setMembersOpen] = useState(false);
   // Header message search: expands inline over the header, swapping the timeline
   // for community-wide (cross-channel) results while active. `searchFilters`
   // holds the structured query (text + channels + authors + media facet).
@@ -2358,6 +2358,13 @@ export function ConcordPage() {
 
   // The dialog is about ONE channel's access; switching rooms closes it.
   useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
+  // The mobile member overlay covers the chat; switching rooms or communities,
+  // revealing the channel list, or back closes it. (The desktop roster is
+  // `memberListVisible`, a persisted preference, and is left alone.)
+  const [membersOpen, setMembersOpen] = useMobileMembersOverlay(
+    `${communityId ?? ""}|${channel?.idHex ?? ""}`,
+    channelsOpen,
+  );
 
   const handleCreateTextChannel = useCallback(async (name: string, opts?: NewTextChannelOptions) => {
     const { channelIdHex: created } = await createChannel({
@@ -2723,7 +2730,7 @@ export function ConcordPage() {
   const handleUnbanMember = useCallback((pk: string) => memberOpsRef.current?.unban(pk), []);
   const memberBanLabel = useCallback((pk: string) => memberOpsRef.current?.banLabel(pk) ?? "Ban", []);
   const openAddMembers = useCallback(() => setAddMembersOpen(true), []);
-  const closeMembers = useCallback(() => setMembersOpen(false), []);
+  const closeMembers = useCallback(() => setMembersOpen(false), [setMembersOpen]);
 
   // Moderating a person from wherever they were clicked (a message author's
   // avatar, a mention, a roster row) rather than only from the member panel,
