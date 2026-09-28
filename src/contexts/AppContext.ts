@@ -410,11 +410,6 @@ export interface AppConfig {
    */
   discoverCuration: string;
   /**
-   * The relays Discover reads listings, packs and themes from. Empty = the app
-   * relays (`appRelays`). Synced across devices.
-   */
-  discoverRelays: string[];
-  /**
    * Whether tracking parameters are stripped from links — both from what this
    * client SENDS and from what it renders and fetches. ON by default.
    *
@@ -569,7 +564,6 @@ export const METADATA_CONFIG_KEYS = [
   "showRecentRailDms",
   "discoverAllContent",
   "discoverCuration",
-  "discoverRelays",
   "stripTrackingParams",
   "mediaProxies",
   "sendOnEnter",
@@ -670,7 +664,6 @@ export const defaultConfig: AppConfig = {
   showRecentRailDms: true,
   discoverAllContent: false,
   discoverCuration: "",
-  discoverRelays: [],
   stripTrackingParams: true,
   mediaProxies: [],
   meshIncognito: true,

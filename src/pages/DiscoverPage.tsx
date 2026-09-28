@@ -1,4 +1,4 @@
-import { Compass, Loader2, Palette, Plus, Search, SlidersHorizontal, Smile, Users, X } from "lucide-react";
+import { Compass, Info, Loader2, Palette, Plus, Search, SlidersHorizontal, Smile, Users, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -7,7 +7,6 @@ import {
   CommunityListingCardSkeleton,
 } from "@/components/discover/CommunityListingCard";
 import { CreateCommunityCard } from "@/components/discover/CreateCommunityCard";
-import { CurationSourceText } from "@/components/discover/CurationSource";
 import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
 import { DeferredRow } from "@/components/DeferredRow";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
@@ -15,6 +14,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DiscoverActivityTarget } from "@/concord/lib/discoverActivity";
 import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
@@ -29,6 +29,7 @@ import {
 } from "@/hooks/useDiscover";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { SettingsOverlayContext } from "@/lib/settingsOverlay";
+import { cn } from "@/lib/utils";
 
 const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
@@ -111,6 +112,7 @@ export function DiscoverPage() {
           <header className="relative h-12 touch:h-14 mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
             <Compass className="size-5 shrink-0 text-muted-foreground" />
             <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
+            <DiscoverScopeInfo signedIn={!!user} />
           </header>
 
           {/* What the current tab surfaces — desktop only, where there's room to
@@ -191,14 +193,14 @@ export function DiscoverPage() {
             </div>
           </div>
 
-          <DiscoverScopeNote tab={tab} signedIn={!!user} />
-
           {/* Results — the top spacing is a MARGIN, not scroll padding, so the
               gap under the search bar stays put as the grid scrolls beneath it. */}
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable mt-3 sm:mt-4 pb-8">
             {tab === "communities" && <CommunitiesTab query={query} />}
             {tab === "emojis" && <EmojisTab query={query} />}
             {tab === "themes" && <ThemesTab query={query} />}
+            {/* The header's info popover, for a phone, where the header is dropped. */}
+            <DiscoverScopeFooter signedIn={!!user} className="sm:hidden" />
           </div>
         </div>
       </main>
@@ -225,61 +227,82 @@ export function DiscoverPage() {
 }
 
 /**
- * What the grid below is drawn from and how it is ordered — stated plainly, so
- * a curated view never passes for the whole network. Mirrors `useDiscover.ts`:
- * the author allow-list (curated list ∪ viewer ∪ follows, or nothing at all
- * with "Show all content" on) and the Communities tab's owner-tier ordering.
- * Emoji packs and themes are newest-first with no tiers. Links to the settings
- * section that holds the source, the relays, and the show-everything switch
- * with its warning.
+ * An info button whose popover says what the grid is drawn from and links to
+ * the settings section that holds the relays and the show-everything switch.
+ * A popover rather than a tooltip because it holds a button: tooltip content
+ * can't take focus, and a tap can't reach it on touch.
  */
-function DiscoverScopeNote({ tab, signedIn }: { tab: DiscoverTab; signedIn: boolean }) {
-  const { config } = useAppContext();
-  const curation = useDiscoverCuration();
+function DiscoverScopeInfo({ signedIn, className }: { signedIn: boolean; className?: string }) {
+  const { hint, unrestricted } = useDiscoverScopeHint(signedIn);
   const settings = useContext(SettingsOverlayContext);
-  const unrestricted = config.discoverAllContent;
-  const curated = curation.type !== "none";
-  const followers = signedIn ? "you and people you follow" : "";
-
-  let source: ReactNode;
-  if (unrestricted) {
-    source = "Showing everything published to your Discover relays. It is unfiltered and not moderated.";
-  } else if (curated) {
-    source = (
-      <>
-        Showing only what members of <CurationSourceText curation={curation} />
-        {followers ? `, ${followers},` : ""} publish. Anything else on your relays is hidden.
-      </>
-    );
-  } else {
-    source = signedIn
-      ? "Showing only what you and people you follow publish. Anything else on your relays is hidden."
-      : "No curated list is set, so there is nothing to show until you sign in.";
-  }
-
-  // The tiers are by the community's verified OWNER, not whoever listed it —
-  // so a curated or followed author can share a community that still sorts
-  // into the last tier, and a card can move once its owner resolves.
-  const tiers = [
-    curated && "run by list members",
-    signedIn && "run by you or people you follow",
-  ].filter(Boolean);
-  const order =
-    tab !== "communities"
-      ? "Newest first."
-      : tiers.length === 0
-        ? "Newest listing first."
-        : `Communities ${tiers.join(", then ")} come first, then the rest; newest listing first within each. Cards can shift as each community's owner is confirmed.`;
+  const [open, setOpen] = useState(false);
 
   return (
-    <div className="mt-3 flex items-start gap-2 px-1">
-      <p className="min-w-0 flex-1 text-xs leading-snug text-muted-foreground">
-        {source} {order}
-      </p>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="What Discover shows"
+          className={cn("size-8 touch:size-11 shrink-0 text-muted-foreground", className)}
+        >
+          <Info className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 space-y-3 p-3 text-xs text-muted-foreground">
+        <p className="leading-snug">{hint}</p>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-8 touch:h-11 w-full text-xs"
+          onClick={() => {
+            setOpen(false);
+            settings.show("discover");
+          }}
+        >
+          <SlidersHorizontal className="size-3.5" />
+          {unrestricted ? "Discover settings" : "Show everything"}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** What the grid is drawn from, in words — shared by the popover and the phone footer. */
+function useDiscoverScopeHint(signedIn: boolean): { hint: string; unrestricted: boolean } {
+  const { config } = useAppContext();
+  const curation = useDiscoverCuration();
+  const unrestricted = config.discoverAllContent;
+
+  const hint = unrestricted
+    ? "Showing everything posted to your relays, by anyone. None of it is filtered or moderated, so expect spam and things you may not want to see."
+    : curation.type !== "none"
+      ? signedIn
+        ? "Showing picks from a curated list and from people you follow. Everything else on your relays is hidden."
+        : "Showing picks from a curated list. Sign in to also see what people you follow have shared."
+      : signedIn
+        ? "Showing only what you and people you follow have shared."
+        : "Sign in to see picks from people you follow.";
+
+  return { hint, unrestricted };
+}
+
+/**
+ * The popover's content laid inline at the end of the results, for a phone:
+ * the header that holds the info button is dropped there, and a button beside
+ * the search would crowd the one row of controls.
+ */
+function DiscoverScopeFooter({ signedIn, className }: { signedIn: boolean; className?: string }) {
+  const { hint, unrestricted } = useDiscoverScopeHint(signedIn);
+  const settings = useContext(SettingsOverlayContext);
+
+  return (
+    <div className={cn("mt-2 flex flex-col items-center gap-3 px-4 text-center", className)}>
+      <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
       <Button
-        variant="ghost"
+        variant="secondary"
         size="sm"
-        className="h-7 touch:h-11 shrink-0 -my-1 px-2 text-xs"
+        className="h-8 touch:h-11 text-xs"
         onClick={() => settings.show("discover")}
       >
         <SlidersHorizontal className="size-3.5" />
@@ -415,7 +438,6 @@ function CommunitiesTab({ query }: { query: string }) {
   // rest of the trusted set (list ∪ viewer ∪ follows), then everyone else —
   // an owner outside the trusted set, whose community a trusted author
   // listed, or (unrestricted mode, allow-list bypassed) anyone at all.
-  // DiscoverScopeNote states this order on the page; keep the two in step.
   // Newest-first within each tier (a stable partition preserves the hook's
   // order). The verified bundle owner ranks a card once it resolves; until
   // then the announcement's author stands in, so the first paint is already

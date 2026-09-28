@@ -15,8 +15,8 @@ import type { NostrRumor } from "@/lib/nostrRumor";
  * tags are the curated authors — plus, when logged in, the viewer and their
  * own follows. The source is a build-time default ({@link BUILD_DISCOVER_CURATION})
  * that a user can override per client (`AppConfig.discoverCuration`), and the
- * relays are the app relays unless the user names their own
- * (`AppConfig.discoverRelays`).
+ * relays are the app relays plus the user's own NIP-65 relays
+ * ({@link resolveDiscoverRelays}).
  *
  * A source is written the way a user would paste it:
  *
@@ -132,15 +132,14 @@ export function resolveDiscoverCuration(
 }
 
 /**
- * The relays Discover reads: the user's own Discover relays when they set
- * any, otherwise the app relays. Normalized and de-duplicated.
+ * The relays Discover reads: the app relays plus the user's own NIP-65
+ * relays, normalized and de-duplicated, app relays first. There is no
+ * Discover-specific relay list to curate by hand.
  */
-export function resolveDiscoverRelays(override: string[], appRelays: string[]): string[] {
-  const normalize = (urls: string[]) => [
-    ...new Set(urls.map(normalizeRelayUrl).filter((url): url is string => !!url)),
+export function resolveDiscoverRelays(appRelays: string[], ownRelays: string[] = []): string[] {
+  return [
+    ...new Set([...appRelays, ...ownRelays].map(normalizeRelayUrl).filter((url): url is string => !!url)),
   ];
-  const own = normalize(override);
-  return own.length > 0 ? own : normalize(appRelays);
 }
 
 /** A stable identity for a curation source — query keys and seed keys. */
@@ -180,23 +179,6 @@ export function isCurationEvent(curation: DiscoverCuration, event: NostrRumor): 
       return event.kind === 3 && event.pubkey === curation.pubkey;
     case "none":
       return false;
-  }
-}
-
-/**
- * What kind of list a source reads, as a noun phrase for UI copy ("a follow
- * pack"). The list's owner is named separately, since it needs a profile read.
- */
-export function describeCurationList(curation: DiscoverCuration): string {
-  switch (curation.type) {
-    case "list":
-      if (curation.kind === 39089) return "a follow pack";
-      if (curation.kind === 30000) return "a follow set";
-      return `a kind-${curation.kind} list`;
-    case "follows":
-      return "the follow list";
-    case "none":
-      return "no curated list";
   }
 }
 

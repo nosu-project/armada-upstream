@@ -27,7 +27,10 @@ const h = vi.hoisted(() => ({
   user: undefined as unknown,
   published: [] as Array<{ kind: number; tags: string[][] }>,
   pool: undefined as unknown,
-  config: { appRelays: ["wss://discover.test"] } as { appRelays: string[]; discoverRelays?: string[] },
+  config: { appRelays: ["wss://discover.test"] } as {
+    appRelays: string[];
+    relayMetadata?: { relays: { url: string; read: boolean; write: boolean }[]; updatedAt: number; pubkey?: string };
+  },
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: h.pool }) }));
@@ -248,17 +251,24 @@ describe("useUnlistAnnouncements", () => {
     expect(deleted.sort()).toEqual([a.id, b.id].sort());
   });
 
-  it("unlistLinks still finds listings on the app relays when Discover reads elsewhere", async () => {
+  it("unlistLinks also finds listings on the user's own relays", async () => {
     const me = generateSecretKey();
     h.user = { pubkey: getPublicKey(me) };
-    // Discover browses another relay, but the listing was published through
-    // the usual relays — which is where the unlisting has to find it.
-    h.config = { appRelays: ["wss://discover.test"], discoverRelays: ["wss://elsewhere.test"] };
+    // Discover reads the app relays AND the user's NIP-65 relays, so a listing
+    // that only reached the user's own relay is still found and unlisted.
+    h.config = {
+      appRelays: ["wss://discover.test"],
+      relayMetadata: {
+        relays: [{ url: "wss://mine.test", read: true, write: true }],
+        updatedAt: 1,
+        pubkey: getPublicKey(me),
+      },
+    };
     const mine = linkUrl();
     const a = announce(me, mine.url, 1);
     const held = relayOf([a]).pool.relay();
     const empty = relayOf([]).pool.relay();
-    h.pool = { relay: (url: string) => (url.includes("discover.test") ? held : empty) };
+    h.pool = { relay: (url: string) => (url.includes("mine.test") ? held : empty) };
 
     const { result } = renderHook(() => useUnlistAnnouncements(), { wrapper });
     expect(await result.current.unlistLinks([mine.signer])).toBe(1);

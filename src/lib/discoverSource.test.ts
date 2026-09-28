@@ -123,18 +123,18 @@ describe("resolveDiscoverCuration", () => {
 });
 
 describe("resolveDiscoverRelays", () => {
-  it("uses the app relays when no Discover relays are set", () => {
-    expect(resolveDiscoverRelays([], ["wss://app.example/", "wss://app.example"])).toEqual(["wss://app.example"]);
+  it("uses the app relays when the user has none of their own", () => {
+    expect(resolveDiscoverRelays(["wss://app.example/", "wss://app.example"])).toEqual(["wss://app.example"]);
   });
 
-  it("uses the Discover relays, normalized and de-duplicated, when set", () => {
+  it("adds the user's own relays after the app relays, normalized and de-duplicated", () => {
     expect(
-      resolveDiscoverRelays(["discover.example", "wss://discover.example/"], ["wss://app.example"]),
-    ).toEqual(["wss://discover.example"]);
+      resolveDiscoverRelays(["wss://app.example"], ["mine.example", "wss://mine.example/", "wss://app.example/"]),
+    ).toEqual(["wss://app.example", "wss://mine.example"]);
   });
 
-  it("falls back to the app relays when every Discover relay is invalid", () => {
-    expect(resolveDiscoverRelays(["https://nope.example"], ["wss://app.example"])).toEqual(["wss://app.example"]);
+  it("drops relays that aren't relay URLs", () => {
+    expect(resolveDiscoverRelays(["wss://app.example"], ["https://nope.example"])).toEqual(["wss://app.example"]);
   });
 });
 

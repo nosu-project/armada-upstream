@@ -276,35 +276,35 @@ async function fetchDiscoverPage(
 }
 
 /**
- * The relays Discover reads from (de-duplicated): the user's own Discover
- * relays when set, otherwise the app relays.
+ * The relays Discover reads from (de-duplicated): the app relays plus the
+ * signed-in user's own NIP-65 relays, whatever their read/write markers.
+ * Independent of `useUserRelays`, which governs the general pool — Discover is
+ * a browse of public directory events, and a user's own relays are where
+ * people they know are likeliest to have published them.
  */
 export function useDiscoverRelays(): string[] {
   const { config } = useAppContext();
-  // `?? []`: hooks far from Discover mount this through partial configs
-  // (test doubles of AppContext); an absent override means "app relays".
-  return useMemo(
-    () => resolveDiscoverRelays(config.discoverRelays ?? [], config.appRelays),
-    [config.discoverRelays, config.appRelays],
-  );
+  const { user } = useCurrentUser();
+  // `?.`: hooks far from Discover mount this through partial configs (test
+  // doubles of AppContext); absent relay metadata means "app relays only".
+  const metadata = config.relayMetadata;
+  const own = useMemo(() => {
+    if (!user || !metadata) return [];
+    // A mirror left from a previous account is not this user's list.
+    if (metadata.pubkey && metadata.pubkey !== user.pubkey) return [];
+    return metadata.relays.map((r) => r.url);
+  }, [user, metadata]);
+  return useMemo(() => resolveDiscoverRelays(config.appRelays, own), [config.appRelays, own]);
 }
 
 /**
  * Where to look for listings the viewer PUBLISHED, or one community's
- * listings: the Discover relays plus the app relays. An override changes what
- * Discover browses, not where a listing is published (`useNostrPublish` still
- * sends it through the usual relays), so a read of one's own listings — and
- * the strict re-read an unlisting deletes from — must not narrow to the
- * override, or it finds nothing and an unlisting "succeeds" with every listing
- * still standing.
+ * listings. The Discover relays include the app relays, which is where
+ * `useNostrPublish` sends a listing, so a read of one's own listings — and
+ * the strict re-read an unlisting deletes from — finds them there.
  */
 export function useListingRelays(): string[] {
-  const { config } = useAppContext();
-  const discover = useDiscoverRelays();
-  return useMemo(
-    () => [...new Set([...discover, ...resolveDiscoverRelays([], config.appRelays)])],
-    [discover, config.appRelays],
-  );
+  return useDiscoverRelays();
 }
 
 /** The react-query key of the curated-list membership read. */

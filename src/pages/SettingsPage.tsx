@@ -42,7 +42,6 @@ import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { DesktopSettings } from "@/components/settings/DesktopSettings";
 import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
-import { DiscoverSourceSettings } from "@/components/settings/DiscoverSourceSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
@@ -930,11 +929,16 @@ export function SettingsPage({
               label="Show all content"
               description={
                 <>
-                  Discover normally shows only communities, emoji packs, and themes from a curated set of authors: the members of the curated list below, plus you and the people you follow. Turn this on to browse everything published to your Discover relays instead.
+                  Show every community, emoji pack and theme posted to your relays, by
+                  anyone, instead of only picks from the curated list and people you follow.
                   {config.discoverAllContent && (
-                    <span className="mt-1 flex items-center gap-1.5 text-destructive">
-                      <AlertTriangle className="size-3.5 shrink-0" />
-                      Unfiltered and not moderated.
+                    <span className="mt-1 flex items-start gap-1.5 text-destructive">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                      <span>
+                        Nothing here is filtered or moderated. Expect spam, scams and content you
+                        may find offensive, in names and images as well as descriptions. People
+                        you've muted stay hidden.
+                      </span>
                     </span>
                   )}
                 </>
@@ -945,7 +949,6 @@ export function SettingsPage({
                 onCheckedChange={setDiscoverAllContent}
               />
             </SettingsRow>
-            <DiscoverSourceSettings />
           </>
         );
       case "voice":
