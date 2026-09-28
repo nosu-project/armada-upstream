@@ -18,17 +18,9 @@ import { logSync } from "@/lib/syncLog";
 import { useAuthor } from "./useAuthor.ts";
 
 /**
- * ONE NUser (and thus ONE signer) per (nostr instance, login id), app-wide.
- *
- * `useCurrentUser` is called from dozens of components; building the user in
- * the hook meant every call site constructed its OWN signer. For a NIP-46
- * login that was pathological: N live NConnectSigner instances, each RPC
- * opening its own response subscription on every bunker relay (the on-device
- * trace showed 9 concurrent subs each receiving every response), N AppSigner
- * decrypt caches missing in parallel, and stale instances surviving with
- * captured transports whose sends silently vanish. Keyed weakly by the nostr
- * instance so a provider remount naturally invalidates the cache instead of
- * resurrecting a signer built on a closed pool.
+ * ONE NUser (and signer) per (nostr instance, login id), app-wide. Per-call-site
+ * construction gave NIP-46 logins N signers with duplicate bunker subscriptions
+ * and caches. Weakly keyed by the nostr instance so a provider remount invalidates it.
  */
 const userCache = new WeakMap<object, Map<string, NUser>>();
 
@@ -36,12 +28,8 @@ export function useCurrentUser() {
   const { nostr } = useNostr();
   const { logins } = useNostrLogin();
 
-  // Wrap the user-facing signer in an AppSigner so `nip04`/`nip44` `decrypt` is
-  // served from the persistent content-addressed cache (huge win for
-  // remote/extension signers), then in signerWithNudge so a slow remote sign
-  // surfaces a "check your signer" toast with an approve deep-link instead of
-  // spinning silently. Wraps ONLY this signer — never the NIP-46 transport
-  // key below, nor the NIP-42 AUTH signer in NostrProvider.
+  // AppSigner serves `decrypt` from the persistent cache; signerWithNudge toasts
+  // on slow remote signs. Only this signer — not the NIP-46 transport key or AUTH signer.
   const cached = useCallback(
     (user: NUser, isBunkerConnected?: () => boolean): NUser =>
       new NUser(
@@ -72,13 +60,9 @@ export function useCurrentUser() {
           const clientSigner = new NSecSigner(clientSk.data);
           const bunkerRelays = login.data.relays;
 
-          // The NIP-46 channel rides a DEDICATED plain-WebSocket transport —
-          // not the relay pool. The pool stack (NRelay1/websocket-ts/NPool)
-          // repeatedly wedged on Android into a state where new REQs/EVENTs
-          // silently went nowhere, hanging every remote sign; plain sockets
-          // with reconnect+resub never did (see nip46Transport.ts). The
-          // signer keeps ONE persistent response subscription for the whole
-          // session (see nip46Signer.ts) instead of churning a sub per RPC.
+          // NIP-46 uses a DEDICATED plain-WebSocket transport (the pool wedged on
+          // Android; see nip46Transport.ts) and one persistent response subscription
+          // (nip46Signer.ts).
           const transport = getNip46Transport(login.data.bunkerPubkey, bunkerRelays);
           logSync("nip46", `building the app-wide bunker signer (login ${login.id.slice(0, 8)})`);
 
@@ -92,8 +76,7 @@ export function useCurrentUser() {
                 clientSigner,
               }),
             ),
-            // Lets the nudge toast say "signer relay unreachable" instead of
-            // "approve in your signer" when every bunker socket is down.
+            // Lets the nudge say "signer relay unreachable" when all bunker sockets are down.
             () => transport.isConnected(),
           );
         }
@@ -102,10 +85,8 @@ export function useCurrentUser() {
             new NUser(login.type, login.pubkey, new NBrowserSignerBtc()),
           );
         case "x-android-signer": {
-          // Native Android signer app (Amber, etc.) via NIP-55. Seed the known
-          // pubkey so the signer isn't re-prompted on boot. Wrapped in
-          // AppSigner (via `cached`) so `decrypt` is served from the persistent
-          // cache instead of an intent round-trip per ciphertext.
+          // NIP-55 Android signer (Amber…): seed the pubkey to avoid boot prompts;
+          // AppSigner caches decrypts to avoid an intent per ciphertext.
           const { packageName } = login.data as { packageName: string };
           return cached(
             new NUser(login.type, login.pubkey, new AndroidNativeSigner(packageName, login.pubkey)),

@@ -8,24 +8,18 @@ import { cn } from "@/lib/utils";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** Format a Date as a `YYYY-MM-DD` string (local). */
 function toDateString(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Format a Date as a `YYYY-MM-DDTHH:mm` (datetime-local) string (local). */
 function toDateTimeString(d: Date): string {
   return `${toDateString(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** Parse a `YYYY-MM-DD` or `YYYY-MM-DDTHH:mm` string into a local Date. */
 function parseValue(value: string): Date | undefined {
   if (!value) return undefined;
-  // A date-only `YYYY-MM-DD` is parsed by `new Date()` as UTC midnight, but we
-  // read it back with local getters (toDateString/formatLabel), so a user west
-  // of UTC would see the day before. Build a local-midnight Date from the parts
-  // instead. Datetime strings carry a `THH:mm` and are meant to be local, which
-  // `new Date()` already does.
+  // `new Date("YYYY-MM-DD")` is UTC midnight, but we read local getters, so
+  // build local midnight from parts (west of UTC would show the day before).
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (dateOnly) {
     const [, y, m, d] = dateOnly;
@@ -36,12 +30,10 @@ function parseValue(value: string): Date | undefined {
 }
 
 interface DateTimePickerProps {
-  /** "date" → date only; "datetime" → date + time. */
   mode: "date" | "datetime";
-  /** Current value as a `YYYY-MM-DD` (date) or `YYYY-MM-DDTHH:mm` (datetime) string. */
+  /** `YYYY-MM-DD` (date) or `YYYY-MM-DDTHH:mm` (datetime). */
   value: string;
   onChange: (value: string) => void;
-  /** Notifies the parent when the take-over panel opens/closes. */
   onOpenChange?: (open: boolean) => void;
   id?: string;
   placeholder?: string;
@@ -55,16 +47,8 @@ function formatLabel(date: Date | undefined, mode: "date" | "datetime", placehol
 }
 
 /**
- * Date (and optional time) picker. The trigger is a normal field button;
- * activating it expands a full-bleed panel over the enclosing dialog with a
- * terminal-style unfurl animation. The parent must be `relative` so the
- * `absolute inset-0` overlay fills it.
- *
- * Perf: the overlay keeps its own draft `Date` so picking a day/time re-renders
- * only the lightweight overlay — not the whole enclosing dialog. The value is
- * pushed up via `onChange` immediately (cheap string), but the expensive
- * Calendar is memoized so the time list and the calendar never re-render each
- * other.
+ * Date (and optional time) picker whose panel overlays the enclosing dialog;
+ * the parent must be `relative`. Keeps its own draft so picking re-renders only the overlay.
  */
 export function DateTimePicker({ mode, value, onChange, onOpenChange, id, placeholder }: DateTimePickerProps) {
   const [open, setOpen] = useState(false);
@@ -103,11 +87,7 @@ export function DateTimePicker({ mode, value, onChange, onOpenChange, id, placeh
   );
 }
 
-/**
- * Memoized calendar. `selectedDayMs` is the selected day's UTC-midnight epoch
- * (a primitive), so changing only the *time* doesn't re-render the calendar at
- * all — react-day-picker's month-grid re-render is the expensive part.
- */
+/** `selectedDayMs` is a primitive so time-only changes don't re-render the (expensive) calendar. */
 const MemoCalendar = memo(function MemoCalendar({
   selectedDayMs,
   onSelect,
@@ -132,22 +112,17 @@ function PickerOverlay({
   onChange: (value: string) => void;
   onClose: () => void;
 }) {
-  // Local draft: picking is instant and only re-renders this overlay. The
-  // value is pushed to the parent (a heavy dialog re-render) only on close, so
-  // rapidly clicking dates/times never re-renders anything but this overlay.
+  // Pushed to the parent only on close, so picking never re-renders the heavy dialog.
   const [draft, setDraft] = useState<Date | undefined>(initial);
   const listRef = useRef<HTMLDivElement>(null);
 
   const selectedH = draft?.getHours();
   const selectedM = draft?.getMinutes();
-  // Day-only key for the calendar (stable across time-only changes).
   const selectedDayMs = useMemo(
     () => (draft ? new Date(draft.getFullYear(), draft.getMonth(), draft.getDate()).getTime() : undefined),
     [draft],
   );
 
-  // Commit-on-close: keep the latest draft in a ref so the close handler is
-  // stable and always flushes the freshest value.
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const commitAndClose = useCallback(() => {
@@ -156,8 +131,7 @@ function PickerOverlay({
     onClose();
   }, [mode, onChange, onClose]);
 
-  // Stable handlers (functional updates) so MemoCalendar's props don't change
-  // when only the time changes — keeping the heavy calendar from re-rendering.
+  // Functional updates keep MemoCalendar's props stable across time changes.
   const setDay = useCallback((day: Date | undefined) => {
     if (!day) return;
     if (mode === "datetime") {
@@ -181,12 +155,10 @@ function PickerOverlay({
     });
   }, []);
 
-  // Scroll the selected time into view once on open.
   useEffect(() => {
     listRef.current?.querySelector("[data-active='true']")?.scrollIntoView({ block: "center" });
   }, []);
 
-  // Close (committing the draft) on Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") commitAndClose(); };
     window.addEventListener("keydown", onKey);

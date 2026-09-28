@@ -32,16 +32,12 @@ function randomInviteCode(): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Build the shareable join URL for a group + invite code. */
 function buildInviteUrl(relayUrl: string, groupId: string, code: string): string {
   const path = `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(groupId)}?code=${encodeURIComponent(code)}`;
   return `${shareOrigin()}${path}`;
 }
 
-/**
- * A delightfully simple invite flow: opening the dialog mints a fresh invite
- * code (kind 9009) and builds a shareable link. One click copies or shares it.
- */
+/** Opening the dialog mints an invite code (kind 9009) and builds a shareable link. */
 export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: InvitePeopleDialogProps) {
   const { user } = useCurrentUser();
   const { createInvite } = useGroupModeration(relayUrl, group.id);
@@ -49,15 +45,13 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
   const { isBuzz } = useIsBuzzRelay(relayUrl);
   const { data: relayInfo } = useRelayInfo(relayUrl);
   const [url, setUrl] = useState<string | null>(null);
-  /** The minted NIP-29 invite code (undefined on Buzz relays, which mint over HTTP). */
+  /** Undefined on Buzz relays, which mint over HTTP. */
   const [code, setCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [naddrCopied, setNaddrCopied] = useState(false);
   const [error, setError] = useState(false);
 
-  // The standardized cross-client identifier: the group's kind-39000 naddr
-  // with the `?invite=<code>` suffix. Needs the relay's `self` key (NIP-11);
-  // without it only the Armada web link is available.
+  // Cross-client identifier: kind-39000 naddr + `?invite=<code>`. Needs the relay's NIP-11 `self` key.
   const relaySelf = relayInfo?.self || relayInfo?.pubkey;
   const naddr =
     relaySelf && code
@@ -67,10 +61,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
   const generate = useCallback(async () => {
     setError(false);
     try {
-      // Buzz relays mint invites over HTTP (NIP-98-signed POST /api/invites,
-      // owner/admin only — kind 9009 is a stored no-op there). The response
-      // carries a shareable landing URL on the workspace host, which Armada's
-      // own Add dialog also understands.
+      // Buzz mints over HTTP (NIP-98 POST /api/invites; kind 9009 is a no-op there).
       if (isBuzz) {
         if (!user) throw new Error("Sign in to mint invites");
         const origin = relayToHttpUrl(relayUrl).replace(/\/$/, "");
@@ -79,18 +70,14 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
           `${origin}/api/invites`,
           {},
         );
-        // The relay returns a landing URL on its own host; rebuild it on the
-        // Armada host (armada.buzz) so the link deep-links into the app, and
-        // carry the relay in `?r=` so the claim still targets it.
+        // Rebuild the relay's landing URL on the Armada host so it deep-links into the
+        // app, with the relay in `?r=` so the claim still targets it.
         setCode(null);
         setUrl(buildBuzzInviteUrl(shareOrigin(), relayUrl, res.code));
         return;
       }
-      // On community relays that gate access at the relay level (zooid/Coracle),
-      // the invite must be a relay-issued `claim` (kind 28935) so the recipient
-      // can become a relay member. Prefer that claim when the relay issues one;
-      // fall back to a self-minted NIP-29 group invite code (kind 9009) for
-      // relays that scope invites per group (e.g. Armada's own relay).
+      // Relay-gated community relays (zooid/Coracle) need a relay-issued `claim`
+      // (kind 28935); otherwise fall back to a NIP-29 invite code (kind 9009).
       const relayClaim = await fetchRelayClaim(relayUrl);
       let inviteCode = relayClaim;
       if (!inviteCode) {
@@ -104,7 +91,6 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
     }
   }, [createInvite, fetchRelayClaim, relayUrl, group.id, isBuzz, user]);
 
-  // Mint an invite as soon as the dialog opens (the silly-easy part).
   useEffect(() => {
     if (open) {
       setUrl(null);
@@ -179,7 +165,6 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
             </div>
           ) : (
             <>
-              {/* The link, front and center. */}
               <button
                 type="button"
                 onClick={copy}
@@ -205,9 +190,7 @@ export function InvitePeopleDialog({ relayUrl, group, open, onOpenChange }: Invi
                 )}
               </div>
 
-              {/* The standardized NIP-29 group identifier — understood by other
-                  Nostr clients (they pre-fill the invite code on the kind-9021
-                  join request), unlike the Armada web link above. */}
+              {/* Other Nostr clients pre-fill the invite code on the kind-9021 join. */}
               {naddr && (
                 <button
                   type="button"

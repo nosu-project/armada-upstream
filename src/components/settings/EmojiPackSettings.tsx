@@ -16,21 +16,15 @@ import {
 } from "@/hooks/useEmojiPacks";
 import { toast } from "@/hooks/useToast";
 
-/** Shown when a pack has no icon, or its icon fails to load. */
 const packIconPlaceholder = (
   <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/5 text-primary">
     <Smile className="size-4" />
   </span>
 );
 
-/** How many emojis to preview per pack before "+N". */
 const PREVIEW_LIMIT = 8;
 
-/**
- * Settings section listing the emoji packs the user has added to their
- * kind-10030 list, each with a one-tap remove. The list re-reads (and this
- * pane refreshes) after add/remove via the shared `my-emoji-packs` cache.
- */
+/** Emoji packs in the user's kind-10030 list, each removable. */
 export function EmojiPackSettings() {
   const { data, isLoading, isError } = useMyEmojiPacks();
 
@@ -78,20 +72,17 @@ export function EmojiPackSettings() {
   );
 }
 
-/** One pack row: icon + name + emoji preview, with its own remove state. */
 function PackRow({ pack }: { pack: MyEmojiPack }) {
   const { mutateAsync: removePack, isPending } = useRemoveEmojiPack();
   const [removed, setRemoved] = useState(false);
 
-  // Fall back to the coordinate's d-tag when the pack event hasn't resolved.
   const name = pack.event ? emojiPackName(pack.event) : pack.coord.split(":")[2] || "Emoji pack";
   const picture = pack.event ? emojiPackPicture(pack.event) : undefined;
   const entries = pack.event ? emojiPackEntries(pack.event) : [];
   const visible = entries.slice(0, PREVIEW_LIMIT);
   const extra = entries.length - visible.length;
 
-  // Drop the row immediately on a successful remove; the query invalidation
-  // that follows would remove it anyway, but this avoids a flash.
+  // Avoid a flash before the query invalidation removes it.
   if (removed) return null;
 
   const onRemove = async () => {

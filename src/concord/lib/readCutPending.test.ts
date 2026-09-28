@@ -61,38 +61,7 @@ describe("readCutPending", () => {
     expect(pending.keep).toEqual([C]);
   });
 
-  it("reads an intent the startup migration moved out of localStorage", async () => {
-    // The intent moved into ArmadaDB's KV. A ban that failed its rotation
-    // before the upgrade still has to be retried after it. Nothing here reads
-    // localStorage — the gate's migration is what puts the value in KV.
-    // A community of its own: the migration will not overwrite a KV value the
-    // session already wrote, and the tests above have written to `CID`.
-    const cid = "moved".padEnd(64, "0");
-    resetKvCaches();
-    localStorage.setItem(
-      `concord2:read-cut-pending:${ME}:${cid}`,
-      JSON.stringify({ targets: [A], keep: [B, C] }),
-    );
-
-    const { SCHEMA_MIGRATIONS } = await import("@/lib/db/schema");
-    await SCHEMA_MIGRATIONS[0].run(undefined);
-    await readCutPendingReady();
-
-    expect(readCutPending(ME, cid)).toEqual({ targets: [A], keep: [B, C] });
-    expect(localStorage.getItem(`concord2:read-cut-pending:${ME}:${cid}`)).toBeNull();
-  });
-
   it("ignores a malformed stored value", async () => {
-    // The migration keeps an unparseable value as the string it is rather than
-    // dropping it, so the shape check here is what refuses it.
-    const bad = "bad".padEnd(64, "0");
-    resetKvCaches();
-    localStorage.setItem(`concord2:read-cut-pending:${ME}:${bad}`, "{ not json");
-    const { SCHEMA_MIGRATIONS } = await import("@/lib/db/schema");
-    await SCHEMA_MIGRATIONS[0].run(undefined);
-    await readCutPendingReady();
-    expect(readCutPending(ME, bad)).toBeUndefined();
-
     const wrong = "wrong".padEnd(64, "0");
     const { getArmadaDB } = await import("@/lib/db/armadaDB");
     await getArmadaDB().kv.set(`read-cut-pending:${ME}:${wrong}`, { targets: "x", keep: [] });

@@ -1,60 +1,17 @@
 /**
- * Steady-state profiler: what the app costs while it is just sitting there.
+ * Steady-state profiler: what the app costs while idle (CPU, memory growth,
+ * jank). Instruments long frames (attributed; Chromium only), relay traffic
+ * per socket (REQs grouped by filter SHAPE to spot churn), live timers by call
+ * site, React commits (optional per-component attribution), and 10s samples
+ * (heap, DOM nodes, animations, sockets). `performance.memory` is bucketed
+ * unless Chromium runs with `--enable-precise-memory-info`.
  *
- * `perf.ts` answers "why did boot take five seconds". This answers the other
- * complaint — fans spinning with the app idle, memory climbing over an
- * afternoon, a janky channel switch — and those are not boot questions. The
- * usual culprits each leave a different fingerprint, so each gets its own
- * instrument rather than one more line in the boot table:
+ * PROFILING BUILDS ONLY (`npm run build:profile`): the probes patch page
+ * globals. Installed via `perfRuntimeInstall.ts`.
  *
- *  - **Long frames** (Long Animation Frames where the engine has them, plain
- *    long tasks otherwise): main-thread time, ATTRIBUTED to the script entry
- *    point that spent it. Chromium only (Electron, Android WebView, Chrome);
- *    WebKit falls back to perf.ts's loop-lag sampler.
- *  - **Relay traffic**: every WebSocket, counted at the socket. Frames and
- *    bytes per relay, inbound events per kind, the live REQ count per relay,
- *    and REQs grouped by filter SHAPE — which is how a subscription that is
- *    torn down and re-opened on every render shows up (hundreds of REQs of one
- *    shape) next to one that is merely busy (one REQ, thousands of events).
- *  - **Timers**: live `setInterval`s by call site, and sampled `setTimeout` /
- *    `requestAnimationFrame` call sites. A polling loop or a rAF loop that
- *    never stops is the classic idle-CPU burn and costs nothing per call, so no
- *    long-frame instrument will ever see it.
- *  - **React commits**: counted always; per-component renders (and self time,
- *    in a profiling build) when switched on, because walking the committed
- *    tree is real work on a tree this size.
- *  - **Samples** every 10s: JS heap (Chromium), DOM node count, running
- *    infinite animations, open sockets and live REQs — the series a leak
- *    shows up in as a slope. The heap figure is `performance.memory`, which
- *    Chromium buckets and caches unless launched with
- *    `--enable-precise-memory-info`: without the flag a flat line is not
- *    evidence of no leak. The Memory panel's heap snapshots are the real test.
- *
- * PROFILING BUILDS ONLY: `npm run build:profile` and the perf harness
- * (`scripts/perf-profile.mjs`). Unlike perf.ts's counters, these probes patch
- * page globals, so a normal build never installs them — the `VITE_PROFILE`
- * checks fold to false and the bundler drops this module.
- *
- * Installed by `main.tsx` through `perfRuntimeInstall.ts`, a side-effect
- * import placed right after the polyfills, so the WebSocket and timer wrappers
- * are in place before any app module can create a socket or schedule
- * anything, and the React hook exists before react-dom evaluates and looks
- * for it.
- *
- * Read it in the console:
- *
- *   __armadaPerf.runtime()        // steady-state report
- *   __armadaPerf.runtime(true)    // same, then start a fresh window
- *   __armadaPerf.renders(true)    // attribute commits to components
- *   __armadaPerf.json()           // everything, as one pasteable JSON string
- *   __armadaPerf.reset()          // start a fresh window without printing
- *   await __armadaPerf.native()   // Android: the notification service's profile
- *
- * On a phone (a profiling build), Settings → Diagnostics copies the same JSON.
- *
- * The report names relay URLs (query strings stripped — LiveKit puts its token
- * there) and filter SHAPES (kinds and which keys are present, never the
- * pubkeys or ids in them). Message content is never recorded.
+ * Console: `__armadaPerf.runtime(reset?)`, `.renders(true)`, `.json()`,
+ * `.reset()`, `await .native()` (Android service). Reports strip URL queries
+ * (LiveKit tokens) and never include pubkeys, ids or message content.
  */
 
 import { Capacitor } from "@capacitor/core";
@@ -69,8 +26,6 @@ function now(): number {
     ? performance.now()
     : Date.now();
 }
-
-// ─── Aggregates ─────────────────────────────────────────────────────────────
 
 interface Agg {
   count: number;
@@ -112,7 +67,7 @@ const state = {
 
   eventsByKind: new Map<number, { count: number; bytes: number }>(),
   queries: new Map<string, { fetches: number; updates: number; observers: number; errors: number }>(),
-  /** Who STARTED each family's fetches: the app frames on the stack at the fetch action. */
+  /** Who started each family's fetches (app frames on the stack at the fetch action). */
   fetchSites: new Map<string, number>(),
   shapes: new Map<string, { reqs: number; events: number; bytes: number; eose: number }>(),
 };
@@ -143,14 +98,9 @@ function resetWindow(): void {
   // `samples` survive: a leak is a slope, and a reset should not cut it.
 }
 
-// ─── Pure helpers (exported for tests) ──────────────────────────────────────
-
 /**
- * The first `depth` caller frames of a stack, below the `skip` frames that are
- * the instrument itself, with origins and cache-busting queries stripped so a
- * dev (`/src/lib/x.ts?t=…`) and a production (`/assets/index-abc.js`) site
- * both read as a path. Handles V8 (`at fn (url:1:2)`) and WebKit
- * (`fn@url:1:2`) frames.
+ * First `depth` caller frames below `skip`, with origins and cache-busting
+ * queries stripped. Handles V8 and WebKit frame formats.
  */
 export function callSite(stack: string | undefined, skip = 1, depth = 2): string {
   if (!stack) return "?";
@@ -167,10 +117,7 @@ export function scrubUrls(text: string): string {
   return text.replace(/[a-z][a-z0-9+.-]*:\/\/[^/)\s]*/gi, "").replace(/\?[^:)\s]*/g, "");
 }
 
-/**
- * A relay URL with its query and fragment dropped: LiveKit carries its access
- * token in the query, and a report is something the user pastes elsewhere.
- */
+/** Relay URL without query/fragment (LiveKit puts its token in the query). */
 export function socketKey(url: string): string {
   try {
     const u = new URL(url);
@@ -189,12 +136,7 @@ function pathOf(url: string): string {
   }
 }
 
-/**
- * A NIP-01 filter list reduced to its SHAPE: the kinds verbatim (they are the
- * interesting part and are not identifying), every other key by name and value
- * count. Two REQs with the same shape are "the same subscription" for the
- * purposes of spotting churn; the pubkeys and ids never leave the device.
- */
+/** Filter list reduced to its SHAPE: kinds verbatim, other keys by name and value count. No ids leave the device. */
 export function filterShape(filters: unknown[]): string {
   return filters
     .map((f) => {
@@ -219,22 +161,14 @@ export interface FrameHead {
   sub?: string;
 }
 
-/**
- * Classify a relay frame without parsing it. Frames are JSON arrays whose
- * first element is the verb and, for everything subscription-scoped, whose
- * second is the subscription id — so a regex over the head is enough, and an
- * inbound EVENT (which may be megabytes) is never JSON-parsed twice.
- */
+/** Classify a relay frame by regex over its head, so large EVENTs aren't parsed twice. */
 export function frameHead(data: string): FrameHead | undefined {
   const m = /^\s*\[\s*"([A-Z]+)"\s*(?:,\s*"((?:[^"\\]|\\.)*)")?/.exec(data.slice(0, 256));
   if (!m) return undefined;
   return m[2] === undefined ? { verb: m[1] } : { verb: m[1], sub: m[2] };
 }
 
-/**
- * The `kind` of an inbound EVENT frame. The literal `"kind":` can only be the
- * event's own key — inside `content` and tag values every quote is escaped.
- */
+/** Kind of an inbound EVENT; a literal `"kind":` can only be the event's own key (quotes are escaped elsewhere). */
 export function frameKind(data: string): number | undefined {
   const m = /"kind"\s*:\s*(\d+)/.exec(data);
   return m ? Number(m[1]) : undefined;
@@ -247,8 +181,6 @@ function sizeOf(data: unknown): number {
   if (typeof Blob !== "undefined" && data instanceof Blob) return data.size;
   return 0;
 }
-
-// ─── Long frames ────────────────────────────────────────────────────────────
 
 interface LoafScript {
   invoker?: string;
@@ -296,8 +228,6 @@ function installFrameObserver(): void {
     }).observe({ type: "longtask", buffered: true });
   }
 }
-
-// ─── WebSockets ─────────────────────────────────────────────────────────────
 
 interface RelayStats {
   opened: number;
@@ -379,13 +309,10 @@ function onOutbound(ws: WebSocket, data: unknown): void {
       let shape = "?";
       try {
         shape = filterShape((JSON.parse(data) as unknown[]).slice(2));
-      } catch {
-        // unparseable REQ — still counted, as "?"
-      }
+      } catch { /* ignore */ }
       shapeAgg(shape).reqs += 1;
       if (head.sub !== undefined) {
         const subs = subsOf(ws);
-        // A REQ reusing a live id REPLACES that subscription (NIP-01).
         if (!subs.has(head.sub)) {
           stats.liveSubs += 1;
           if (stats.liveSubs > stats.peakSubs) stats.peakSubs = stats.liveSubs;
@@ -458,18 +385,12 @@ function installWebSocketProbe(): void {
   if (typeof WebSocket === "undefined") return;
   const Native = WebSocket;
   const nativeSend = Native.prototype.send;
-  // A measurement account must be able to join a real community without the
-  // community seeing it: with `armada:perf-swallow-publish` set, every EVENT
-  // this page publishes is answered with the OK a relay would send and never
-  // leaves the device (reads, AUTH and CLOSE pass through). The same thing
-  // the desktop harness does at its WebSocket route, for a device driven over
-  // DevTools, where no route can be installed.
+  // With `armada:perf-swallow-publish` set, published EVENTs get a fake OK and
+  // never leave the device, so a measurement account can join real communities unseen.
   let swallow = false;
   try {
     swallow = localStorage.getItem("armada:perf-swallow-publish") === "1";
-  } catch {
-    // no storage: publish normally
-  }
+  } catch { /* ignore */ }
   Native.prototype.send = function (this: WebSocket, data: Parameters<WebSocket["send"]>[0]) {
     try {
       onOutbound(this, data);
@@ -496,7 +417,6 @@ function installWebSocketProbe(): void {
       socketKeys.set(this, key);
       const stats = relayStats(key);
       stats.opened += 1;
-      // `open` counts sockets that got there; a failed dial never did.
       let isOpen = false;
       this.addEventListener("open", () => {
         isOpen = true;
@@ -524,8 +444,6 @@ function installWebSocketProbe(): void {
   }
   (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = ProfiledWebSocket;
 }
-
-// ─── Timers ─────────────────────────────────────────────────────────────────
 
 /** 1 in SAMPLE_EVERY setTimeout/rAF calls captures a stack. */
 const SAMPLE_EVERY = 32;
@@ -588,13 +506,7 @@ function installTimerProbe(): void {
   }
 }
 
-// ─── React Query ────────────────────────────────────────────────────────────
-
-/**
- * A query key reduced to its FAMILY: ids (anything hex-like or long) become
- * `…`, so a channel's timeline and another channel's timeline count together
- * and no id lands in a pasted report.
- */
+/** Query key reduced to its family: hex-like or long ids become `…`. */
 export function queryFamily(key: readonly unknown[]): string {
   return key
     .slice(0, 4)
@@ -616,11 +528,8 @@ interface QueryCacheLike {
 }
 
 /**
- * Count, per query family, how often it FETCHES and how often its data is
- * replaced (`success` actions — each one notifies every observer, which is a
- * render of every component reading it). A family that fetches on every
- * render, or whose data is replaced far more often than anything changes, is
- * the "idle CPU with nothing on the wire" signature.
+ * Per query family, count fetches and data replacements (each notifies every
+ * observer). Excess of either is the "idle CPU, quiet wire" signature.
  */
 export function instrumentQueryCache(cache: QueryCacheLike): () => void {
   return cache.subscribe((event) => {
@@ -632,14 +541,9 @@ export function instrumentQueryCache(cache: QueryCacheLike): () => void {
     if (event.action.type === "fetch") {
       const family = queryFamily(event.query.queryKey);
       entry(family).fetches += 1;
-      // The fetch action is dispatched synchronously inside whatever started
-      // it, so the stack names the caller: an invalidation, a refetch timer, a
-      // mount. The app frames only — the cache's own are the same every time.
-      // Bundled, this module shares a chunk with the app, so the frames are
-      // kept whole (minus the cache's own vendor frames) and resolved through
-      // the build's sourcemaps afterwards.
-      // V8 keeps 10 frames by default, and the cache's own dispatch uses most
-      // of them: without a deeper trace the caller is always cut off.
+      // The fetch is dispatched synchronously, so the stack names the caller; frames
+      // are resolved via sourcemaps later. V8's default 10 frames are mostly the
+      // cache's own, so deepen the trace.
       const limit = Error.stackTraceLimit;
       Error.stackTraceLimit = 60;
       const stack = new Error().stack ?? "";
@@ -650,8 +554,7 @@ export function instrumentQueryCache(cache: QueryCacheLike): () => void {
         .slice(1, 8)
         .map((line) => line.trim().replace(/https?:\/\/[^/]+/g, ""))
         .join(" < ");
-      // The key's shape too: a family whose key keeps CHANGING refetches as
-      // a brand-new query each time, with no app frame on the stack.
+      // A family whose key keeps changing refetches as a new query each time.
       let keyShape = "";
       try {
         keyShape = JSON.stringify(event.query.queryKey).replace(/[0-9a-f]{16,}/g, "…").slice(0, 160);
@@ -672,8 +575,6 @@ export function instrumentQueryCache(cache: QueryCacheLike): () => void {
     return e;
   }
 }
-
-// ─── React ──────────────────────────────────────────────────────────────────
 
 /** The slice of a React Fiber this reads. Internal, but stable since 16. */
 interface Fiber {
@@ -718,12 +619,7 @@ export function fiberName(f: Pick<Fiber, "tag" | "type">): string | undefined {
   }
 }
 
-/**
- * Why a component that was already mounted rendered again: the props whose
- * identity changed since its last commit. Names a memo'd row whose parent
- * hands it a fresh callback every render. Empty when no prop changed — see
- * {@link renderCause} for what it falls back to.
- */
+/** Props whose identity changed since the last commit; empty falls back to {@link renderCause}. */
 export function changedProps(prev: unknown, next: unknown): string[] {
   if (prev === next || !prev || !next || typeof prev !== "object" || typeof next !== "object") {
     return prev === next ? [] : ["(props)"];
@@ -758,12 +654,8 @@ type HookedFiber = Pick<Fiber, "tag" | "memoizedProps"> & {
 };
 
 /**
- * The hooks and contexts whose values changed between two renders of a
- * function component, by position: `ctx:<displayName>` for a context,
- * `query#n` for a stateful hook holding a React Query result (useQuery's
- * external store), `state#n` for any other useState/useReducer/store hook —
- * `n` counting stateful hooks only, in call order. Effects and memos are
- * skipped: their slots are rebuilt on every render and say nothing about why.
+ * Hooks/contexts whose values changed, by position: `ctx:<name>`, `query#n`
+ * (React Query store), `state#n` (other stateful hooks). Effects/memos are skipped.
  */
 export function changedHooks(prev: HookedFiber, next: HookedFiber): string[] {
   const out: string[] = [];
@@ -801,12 +693,7 @@ function shapeOf(value: unknown): string {
   return `{${keys.slice(0, 3).join(",")}${keys.length > 3 ? ",…" : ""}}`;
 }
 
-/**
- * Everything {@link walkCommit} can say about why a mounted component rendered:
- * changed props, else changed hooks/contexts, else `(parent)` — a new props
- * object with nothing in it changed, i.e. an unmemoized child of a component
- * that rendered — or `(unknown)`.
- */
+/** Why a mounted component rendered: changed props, else hooks/contexts, else `(parent)`, else `(unknown)`. */
 export function renderCause(prev: HookedFiber, next: HookedFiber): string[] {
   const props = changedProps(prev.memoizedProps, next.memoizedProps);
   if (props.length > 0) return props;
@@ -815,12 +702,7 @@ export function renderCause(prev: HookedFiber, next: HookedFiber): string[] {
   return [prev.memoizedProps === next.memoizedProps ? "(unknown)" : "(parent)"];
 }
 
-/**
- * Attribute one commit to the components that rendered in it. A subtree React
- * bailed out of keeps its PREVIOUS child pointer (`child === alternate.child`),
- * so it is skipped whole — the walk costs what the commit re-rendered, not the
- * size of the tree.
- */
+/** Attribute one commit to rendered components; bailed-out subtrees are skipped whole. */
 export function walkCommit(
   rootFiber: Fiber | null,
   record: (name: string, mount: boolean, selfMs: number, why?: string[]) => void,
@@ -851,8 +733,7 @@ function installReactHook(): void {
   const w = window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__?: Record<string, unknown> };
   let hook = w.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) {
-    // No DevTools extension and no React Refresh (i.e. production): stand in
-    // for the hook react-dom looks for when it first evaluates.
+    // No DevTools hook (production): provide the one react-dom looks for.
     let nextId = 1;
     hook = {
       renderers: new Map(),
@@ -886,8 +767,7 @@ function installReactHook(): void {
         });
       }
     } catch {
-      // DevTools internals are not API; a shape change must cost the report,
-      // never the commit.
+      // DevTools internals aren't API; a shape change must cost the report, never the commit.
     }
     return prev?.call(this, id, root, ...rest);
   };
@@ -901,8 +781,6 @@ export function setRenderTracking(on: boolean): void {
 export function isRenderTracking(): boolean {
   return renderTracking;
 }
-
-// ─── Samples ────────────────────────────────────────────────────────────────
 
 const SAMPLE_MS = 10_000;
 /** One hour at 10s. */
@@ -964,8 +842,6 @@ function takeSample(): void {
   });
   if (samples.length > MAX_SAMPLES) samples.splice(0, samples.length - MAX_SAMPLES);
 }
-
-// ─── Report ─────────────────────────────────────────────────────────────────
 
 function r1(n: number): number {
   return Math.round(n * 10) / 10;
@@ -1153,11 +1029,7 @@ export function fullPerfReport(): FullPerfReport {
   };
 }
 
-/**
- * The Android notification service's own profile (a separate component with
- * its own counters: ServiceProfiler.java), when this is a native build whose
- * APK was also built for profiling. Undefined anywhere else.
- */
+/** The Android notification service's profile (ServiceProfiler.java), for profiling APKs only. */
 export async function nativeServiceProfile(): Promise<Record<string, unknown> | undefined> {
   if (!hasNativeNotificationService()) return undefined;
   try {
@@ -1207,16 +1079,12 @@ function printRuntime(reset = false): RuntimeReport {
   return r;
 }
 
-// ─── Install ────────────────────────────────────────────────────────────────
-
 let installed = false;
 
 /**
- * Install every probe. Idempotent. Must run before react-dom evaluates and
- * before anything opens a socket — which is why it is called from
- * `perfRuntimeInstall.ts`, imported by `main.tsx` right after the polyfills,
- * and never as a side effect of importing THIS module (Settings imports it,
- * and so do tests, neither of which should patch the globals).
+ * Install every probe (idempotent). Must run before react-dom evaluates and
+ * before any socket opens — hence via `perfRuntimeInstall.ts`, never as a side
+ * effect of importing this module.
  */
 export function installRuntimeProfiler(): void {
   if (installed || typeof window === "undefined") return;
@@ -1243,8 +1111,7 @@ export function installRuntimeProfiler(): void {
       }
     });
   }
-  // The sampler's own timer is scheduled through the patched setInterval, so
-  // it shows in the report as one live 10s interval — a known baseline.
+  // This timer goes through the patched setInterval: a known 10s baseline in the report.
   window.setInterval(takeSample, SAMPLE_MS);
 
   const reader = (window as unknown as { __armadaPerf?: Record<string, unknown> }).__armadaPerf;

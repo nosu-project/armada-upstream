@@ -7,13 +7,8 @@ interface RelayPublisher {
 }
 
 /**
- * Publish to every relay, but resolve as soon as ONE accepts.
- *
- * The alternative — `Promise.allSettled` — makes every publish as slow as the
- * community's deadest relay, because it can't report success until the losers
- * have finished timing out (8s). The remaining attempts continue in the
- * background either way, so nothing is delivered less widely; the caller just
- * stops waiting on relays whose answer can no longer change the outcome.
+ * Publish to every relay, but resolve as soon as ONE accepts, so a dead relay's
+ * 8s timeout doesn't gate success. The rest continue in the background.
  */
 export async function publishToAnyRelay(
   nostr: RelayPublisher,

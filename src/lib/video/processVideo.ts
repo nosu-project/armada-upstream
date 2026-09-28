@@ -23,11 +23,7 @@ export interface ProcessVideoOptions {
   signal?: AbortSignal;
 }
 
-/**
- * Whether this environment can compress video. Requires WebCodecs, which
- * Android WebView and Electron have but older WebViews may not — Armada's
- * `minSdkVersion` is 24, so this really can come back false.
- */
+/** Whether WebCodecs video compression is available (minSdk 24 WebViews may lack it). */
 export function canProcessVideo(): boolean {
   return typeof Worker !== "undefined"
     && typeof OffscreenCanvas !== "undefined"
@@ -36,18 +32,15 @@ export function canProcessVideo(): boolean {
 }
 
 /**
- * Compress an attached video and extract its NIP-94 metadata.
- *
- * Never throws for media reasons: any failure degrades to uploading the
- * original file, because losing the message is worse than sending a big one.
+ * Compress an attached video and extract NIP-94 metadata. Never throws for
+ * media reasons: failures degrade to uploading the original.
  */
 export async function processVideo(
   file: File,
   options: ProcessVideoOptions = {},
 ): Promise<ProcessedVideo> {
   if (!canProcessVideo()) {
-    // No WebCodecs, but a plain <video> element still yields dimensions,
-    // duration, a poster and a blurhash — most of the user-visible win.
+    // A plain <video> still yields dim, duration, poster and blurhash.
     return extractWithVideoElement(file);
   }
 
@@ -96,11 +89,7 @@ function runWorker(file: File, options: ProcessVideoOptions): Promise<ProcessedV
   });
 }
 
-/**
- * Metadata-only fallback for environments without WebCodecs: decode a frame
- * with an ordinary `<video>` element. No compression, but the message still
- * carries `dim`, `duration`, `blurhash` and a poster.
- */
+/** Metadata-only fallback without WebCodecs, via an ordinary `<video>` element. */
 async function extractWithVideoElement(file: File): Promise<ProcessedVideo> {
   const passthrough: ProcessedVideo = { file, action: "passthrough" };
   if (typeof document === "undefined") return passthrough;

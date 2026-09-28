@@ -1,29 +1,18 @@
 /**
  * Concord Rekeys & Refoundings — CORD-06.
  *
- * Post-removal secrecy without ratchets: a rotation mints a fresh key at the
- * next epoch and delivers it as per-recipient "rekey blobs" (kind 3303, up to
- * 120 per event, chunked) at an address derived from the PRIOR secret — so
- * every current holder can find it, and a removed member finding no blob for
- * their locator across ALL chunks knows they're out.
+ * A rotation mints a fresh key at the next epoch and delivers per-recipient
+ * blobs (kind 3303, ≤120 per event, chunked) at an address derived from the
+ * PRIOR secret; a removed member finding no blob across ALL chunks knows they're out.
  *
- * The wrapped plaintext is fixed-width PER FORM, the width declaring the form
- * (CORD-06 §1), NIP-44-encrypted under the Rotator↔recipient pairwise key
- * (one ECDH either side can compute, so a NIP-46 bunker opens its blob with a
- * single nip44_decrypt):
- *
- *   - a Channel rotation's blob is 72 bytes:
- *     `scope_id[32] ‖ epoch_be[8] ‖ new_key[32]`;
- *   - a base rotation's member blob is 104, appending the next epoch's
- *     `new_control_pk[32]` (CORD-02 §2);
- *   - a staff recipient's is 136, appending `new_control_root[32]`;
- *   - a 72-byte BASE blob is the legacy pre-split form — honored when reading
- *     old rotations, never minted anew (CORD-06 §3).
- *
- * Any other width is malformed and the blob is dropped. NOTE: signer nip44
- * interfaces carry STRINGS, so this implementation transports the raw bytes as
- * base64 inside the NIP-44 plaintext (the spec doesn't pin a byte-transport
- * for string-only signers — flagged as spec feedback).
+ * Blob plaintext is fixed-width per form (CORD-06 §1), NIP-44 under the
+ * Rotator↔recipient pairwise key:
+ *   - channel rotation: 72 = `scope_id[32] ‖ epoch_be[8] ‖ new_key[32]`;
+ *   - base rotation member: 104, + `new_control_pk[32]` (CORD-02 §2);
+ *   - staff: 136, + `new_control_root[32]`;
+ *   - 72-byte BASE blob: legacy pre-split, read-only (CORD-06 §3).
+ * Other widths are dropped. Signer nip44 APIs take strings, so bytes travel as
+ * base64 inside the plaintext (unpinned by the spec — flagged as feedback).
  */
 
 import { bytesToHex, channelRekeyGroupKey, controlSignerGroupKey, epochKeyCommitment, random32, recipientLocator } from "@/concord/lib/derive";
@@ -37,46 +26,19 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 export const REKEY_BLOBS_PER_EVENT = 120;
 
 /**
- * Byte ceiling on one rekey rumor's serialized JSON, applied alongside the
- * count cap.
- *
- * CORD-06 §1's 120 counts blobs, but a blob's width is set by its FORM: 72
- * bytes for a channel rotation, 104 for a base member, 136 for staff. Chunking
- * on the count alone therefore sizes an event by who is in it. 120 base blobs
- * serialize past the point where the WRAP layer's NIP-44 plaintext —
- * `JSON.stringify(seal)`, which already carries the seal layer's base64
- * ciphertext — clears the 65,535-byte cap, so `wrapSeal` threw
- * `StreamError("oversize")` and the Refounding failed at publish. Channel
- * rotations stayed under it at any count, which is why only Refoundings (a
- * ban, a staff key rotation) hit it.
- *
- * 40,960 is not a round number, it is the NIP-44 padding bucket the cap sits
- * in: a plaintext this size pads up to a multiple of 8,192, so a rumor at or
- * below it seals to 55,050 bytes and wraps to a 76,965-byte event — the
- * largest event this path already publishes today, so nothing gets bigger
- * than what relays already take from it. One byte more tips the rumor into
- * the next bucket, the seal jumps to 65,974 and the wrap refuses it; there is
- * no useful value between the two. Capacity is 126 blobs at 72 bytes (so the
- * count cap still binds and channel rotations are unchanged), 99 at 104, 90
- * at 136.
- *
- * Chunking finer is always wire-legal: a receiver correlates by holding all
- * `n` chunks and only checks `1 <= i <= n` (see {@link parseRekey}), so the
- * 120 is an upper bound rather than a shape peers agree on.
+ * Byte ceiling on one rekey rumor's JSON, alongside the 120-blob count cap.
+ * Base blobs are wider, and 120 of them pushed the wrap's NIP-44 plaintext past
+ * 65,535 bytes. 40,960 is the top of the NIP-44 padding bucket that still wraps
+ * (76,965-byte event); one byte more and the wrap refuses. Capacity: 126 blobs
+ * at 72 bytes (count cap still binds), 99 at 104, 90 at 136. Finer chunking is
+ * always wire-legal (see {@link parseRekey}).
  */
 export const REKEY_RUMOR_MAX_BYTES = 40_960;
 
 /**
- * How many channel epochs past the one I hold to watch for rotations.
- *
- * Watching only `held + 1` strands anyone who MISSES a rotation — offline
- * through it, behind an auth-gating relay, or holding a key a stale list
- * merge resurrected: the channel moves on without them and the address they
- * poll is never published again. They keep a key that decrypts nothing while
- * the channel still sits in their sidebar, and no later rotation can tell
- * them they were removed. A window lets the client catch up (or learn it is
- * out) across any gap up to this depth; the cost is one extra author per
- * epoch per held root on a filter that is already author-scoped.
+ * How many channel epochs past the held one to watch. Watching only `held + 1`
+ * strands anyone who missed a rotation (offline, auth-gated, stale key), who'd
+ * never learn they were removed.
  */
 export const CHANNEL_REKEY_LOOKAHEAD = 8;
 
@@ -91,8 +53,7 @@ export function rekeyScopeId(scope: RekeyScope): Uint8Array {
   return scope.kind === "channel" ? scope.channelId : ZERO32;
 }
 
-// ── The wrapped plaintext (fixed-width per form, CORD-06 §1) ─────────────────
-
+// The wrapped plaintext (fixed-width per form, CORD-06 §1)
 /** `scope_id[32] ‖ epoch_be[8] ‖ new_key[32]` — scope and epoch live INSIDE the ciphertext. */
 export function encodeWrappedKey(scopeId: Uint8Array, newEpoch: bigint, newKey: Uint8Array): Uint8Array {
   const out = new Uint8Array(72);
@@ -141,24 +102,17 @@ export function decodeWrappedKey(
 /** A parsed base-rotation blob (CORD-06 §1); the width declared the form. */
 export interface WrappedBaseKey {
   newRoot: Uint8Array;
-  /**
-   * The next epoch's Control Plane address (hex) — absent on a legacy 72-byte
-   * blob, whose acceptor folds that epoch's Control at the legacy
-   * member-derivable address instead (CORD-06 §3).
-   */
+  /** Next epoch's Control Plane address (hex); absent on a legacy 72-byte blob (CORD-06 §3). */
   controlPk?: string;
   /** The staff write secret (136-byte form only), already verified to derive to `controlPk`. */
   controlRoot?: Uint8Array;
 }
 
 /**
- * Parse + verify a decrypted BASE blob (CORD-06 §1). Accepts the three fixed
- * widths — 72 (legacy pre-split), 104 (member), 136 (staff) — and drops any
- * other as malformed. The scope must be the all-zero base scope and the epoch
- * must match the event's tags (unspliceable), and a 136-byte blob's
- * `new_control_root` must derive to exactly its `new_control_pk`
- * (CORD-02 §5) — a mismatched pair is refused whole rather than adopting a
- * plane split from its readers.
+ * Parse + verify a decrypted BASE blob (CORD-06 §1): widths 72 (legacy), 104
+ * (member), 136 (staff). Scope must be all-zero and epoch match the tags; a
+ * 136-byte blob's `new_control_root` must derive to its `new_control_pk`
+ * (CORD-02 §5) or it's refused whole.
  */
 export function decodeWrappedBaseKey(
   plain: Uint8Array,
@@ -196,8 +150,7 @@ export function base64ToBytes(s: string): Uint8Array {
   return out;
 }
 
-// ── The 3303 rumor ───────────────────────────────────────────────────────────
-
+// The 3303 rumor
 /** One located, wrapped key. */
 export interface RekeyBlob {
   /** Where its recipient finds it (hex of {@link recipientLocator}). */
@@ -221,9 +174,8 @@ export function buildRekeyRumors(
   blobs: RekeyBlob[],
   ms: number,
   /**
-   * The Grant the rotator acts under (CORD-04 §5 / CORD-06 §Authority). Rides
-   * on EVERY chunk, like the continuity fields, so a receiver that only has
-   * some chunks can still judge the authority. Absent when the owner rotates.
+   * The Grant the rotator acts under (CORD-04 §5). On EVERY chunk so a partial
+   * holder can judge authority. Absent when the owner rotates.
    */
   authority?: AuthorityCitation,
 ): NostrRumor[] {
@@ -237,12 +189,8 @@ export function buildRekeyRumors(
     ...(authority ? [citationToTag(authority)] : []),
   ];
 
-  // What a chunk's blobs may spend, measured against the rumor they land in.
-  // The envelope is content-independent (the id is 64 hex characters however
-  // long the content is), so it is measured ONCE — at the widest ["chunk", i,
-  // n] this rotation could mint, since a chunk carries at least one blob and
-  // the count therefore never exceeds the blob count. Over-reserving a few
-  // digits only ever makes a chunk smaller.
+  // Chunk budget vs. the rumor envelope, measured once at the widest possible
+  // ["chunk", i, n] (over-reserving only makes chunks smaller).
   const widest = Math.max(1, blobs.length).toString();
   const envelope = utf8Len(JSON.stringify(
     buildRumor({ kind: KIND_REKEY, content: "", tags: tagsFor(widest, widest), pubkey: rotatorPubkey, ms }),
@@ -254,8 +202,7 @@ export function buildRekeyRumors(
   let used = 2; // the content's own "[]"
   for (const blob of blobs) {
     const cost = escapedJsonLen(blob);
-    // `+ 1` for the separating comma. A lone blob over budget is kept rather
-    // than split — a blob is indivisible, and the fixed forms are ~440 bytes.
+    // `+ 1` for the comma. A lone over-budget blob is kept (blobs are indivisible).
     if (current.length > 0 && (current.length >= REKEY_BLOBS_PER_EVENT || used + 1 + cost > budget)) {
       chunks.push(current);
       current = [];
@@ -285,11 +232,7 @@ function utf8Len(s: string): number {
   return UTF8.encode(s).length;
 }
 
-/**
- * A blob's cost inside the rumor's JSON-escaped `content` string — its own
- * JSON, then escaped as it will be re-serialized one level up (the two
- * surrounding quotes `JSON.stringify` adds to a string are not part of it).
- */
+/** A blob's length inside the rumor's JSON-escaped `content` string (sans outer quotes). */
 function escapedJsonLen(blob: RekeyBlob): number {
   return utf8Len(JSON.stringify(JSON.stringify(blob))) - 2;
 }
@@ -313,8 +256,7 @@ export interface ParsedRekey {
 /** Parse an opened rekey stream event into its rotation fields. */
 export function parseRekey(opened: OpenedEvent): ParsedRekey {
   if (opened.kind !== KIND_REKEY) throw new Error("not a rekey rumor");
-  // Checked while the seal form is known (an event still holding its wrap); a
-  // stored rumor has no envelope and passed this at ingest — see parseEdition.
+  // Checked while the seal form is known; stored rumors passed this at ingest (see parseEdition).
   if (opened.sealKind !== undefined && opened.sealKind !== KIND_SEAL_ENCRYPTED) {
     throw new Error("rekey seals must be encrypted (CORD-02 §5)");
   }
@@ -328,8 +270,7 @@ export function parseRekey(opened: OpenedEvent): ParsedRekey {
   if (!isTagDecimal(newEpoch)) throw new Error("bad newepoch tag");
   if (!isTagDecimal(prevEpoch)) throw new Error("bad prevepoch tag");
   if (!prevCommit || !/^[0-9a-f]{64}$/i.test(prevCommit)) throw new Error("bad prevcommit tag");
-  // Spec-shaped decimals, not `Number()` — that would take "1e2", "0x2" and
-  // " 2 " as chunk coordinates a stricter peer refuses.
+  // Strict decimals, not `Number()` ("1e2", "0x2", " 2 " would be accepted).
   if (chunk && (!isTagDecimal(chunk[1]) || !isTagDecimal(chunk[2]))) throw new Error("bad chunk tag");
   const chunkIndex = chunk ? Number(chunk[1]) : 1;
   const chunkCount = chunk ? Number(chunk[2]) : 1;
@@ -376,10 +317,8 @@ export interface RekeyRotationSet {
   chunks: Map<number, ParsedRekey>;
   complete: boolean;
   /**
-   * The rotation's authority citation, taken from its first chunk. Every chunk
-   * of one rotation carries identical authority fields (CORD-06 §2), so a
-   * disagreeing chunk is the caller's cue to distrust the set — mirrored on the
-   * continuity fields, which are already part of the correlation key.
+   * Authority citation from the first chunk. All chunks must carry identical
+   * authority (CORD-06 §2); a disagreeing chunk means distrust the set.
    */
   authority?: AuthorityCitation;
 }
@@ -439,10 +378,8 @@ export function findBlob(set: RekeyRotationSet, locatorHex: string): RekeyBlob |
 }
 
 /**
- * When did this rotation publish? The newest of its chunks' rumor ms.
- * Used to tell a removal apart from community history: a rotation that
- * entirely predates a member's join happened before they existed in the
- * community, so its lack of a blob for them is not an exclusion.
+ * When this rotation published (newest chunk ms). A rotation predating a
+ * member's join isn't an exclusion.
  */
 export function rotationPublishedAtMs(set: RekeyRotationSet): number {
   let newest = 0;
@@ -451,19 +388,10 @@ export function rotationPublishedAtMs(set: RekeyRotationSet): number {
 }
 
 /**
- * Does a complete rotation carrying no blob for me actually EXCLUDE me, or is
- * it community history that predates my membership? A member who joins via a
- * stale public invite (bundle epoch N) lands ON a historical `N→N+1`
- * Refounding they were never part of. It is continuity-valid and complete, yet
- * has no blob at their locator — but it was published before they joined, so it
- * must not be read as a removal (else the community's rail icon vanishes
- * seconds after every join, while chat stays fully usable — a liveness-only
- * bug). Only a rotation published at/after the join can exclude me (CORD-06).
- *
- * `joinedAtMs` is the member's own Community-List `added_at`; `rotatedAtMs` is
- * {@link rotationPublishedAtMs}. Clock skew only ever fails toward KEEPING the
- * icon (a slightly-early real exclusion), which is safe: key rotation, not the
- * rail, enforces post-removal secrecy.
+ * Whether a complete rotation with no blob for me actually EXCLUDES me. A member
+ * joining via a stale invite lands on historical Refoundings they were never
+ * part of; only one published at/after `joinedAtMs` (List `added_at`) excludes.
+ * Skew errs toward keeping the rail icon, which is safe: rotation enforces secrecy.
  */
 export function rotationExcludesMe(rotatedAtMs: number, joinedAtMs: number): boolean {
   return rotatedAtMs >= joinedAtMs;
@@ -471,11 +399,8 @@ export function rotationExcludesMe(rotatedAtMs: number, joinedAtMs: number): boo
 
 
 /**
- * Race convergence (CORD-06 §3): among authorized candidates at the same
- * continuity point, the lexicographically lowest NEW KEY wins. Callers holding
- * multiple adopted candidates keep both keys but converge the chain on the
- * winner; the heal is DOWN-ONLY (a held epoch re-converges solely to a
- * strictly lower sibling).
+ * Race convergence (CORD-06 §3): among authorized candidates at one continuity
+ * point, the lowest NEW KEY wins. The heal is DOWN-ONLY.
  */
 export function lowerKeyWins(a: Uint8Array, b: Uint8Array): Uint8Array {
   return bytesToHex(a) <= bytesToHex(b) ? a : b;
@@ -487,28 +412,12 @@ export function mintRotationKey(): Uint8Array {
 }
 
 /**
- * Mint the key for a rotation ONCE and hand the SAME one back to every retry.
- *
- * A rotation publishes in stages — compaction, then the root roll, then each
- * private channel — and any stage can lose its relays. Retrying is the
- * expected recovery. But {@link groupRotations} keys a rotation set by
- * `(rotator, scope, newEpoch, prevCommit)`, and a retry matches on all four,
- * so a second attempt carrying a FRESHLY minted key merges into the first
- * attempt's set chunk-for-chunk. Members then adopt whichever key happened to
- * ride the chunk carrying their locator: the community splits in half at the
- * same epoch, both halves continuity-valid, with nothing to signal it.
- *
- * Reserving the key under those same four inputs makes a retry byte-identical
- * to the attempt it resumes. A reservation that can't be persisted (private
- * mode, no IndexedDB) falls back to a fresh key — no worse than before, and
- * the caller is a human clicking retry, not a loop.
- *
- * DEVICE-LOCAL. Two devices signed in as the same rotator, both rotating the
- * same continuity point, still mint two keys into one correlated set. Closing
- * that needs a deterministic derivation from a rotator-only secret, which a
- * NIP-46 bunker will not hand over. What keeps it rare is that the rotation
- * path advances the local epoch the instant the roll lands, so the second
- * device's next rotation starts from a different tuple.
+ * Mint a rotation key ONCE per `(rotator, scope, newEpoch, prevCommit)` and
+ * return it on every retry. {@link groupRotations} keys on those four, so a
+ * retry with a fresh key would merge into the first attempt's set and split
+ * members across two keys at one epoch. Falls back to a fresh key if the
+ * reservation can't persist. DEVICE-LOCAL: two devices of one rotator can
+ * still collide (bunkers can't provide a deterministic secret).
  */
 export async function mintOrReuseRotationKey(
   communityIdHex: string,
@@ -525,12 +434,8 @@ export async function mintOrReuseRotationKey(
 }
 
 /**
- * The fresh `control_root` minted BESIDE a base rotation's new root
- * (CORD-06 §3: every compliant base rotation mints the split), reserved under
- * the same four inputs as {@link mintOrReuseRotationKey} and for the same
- * reason: a retried rotation merges into the first attempt's set, so both
- * attempts must carry ONE pair or staff adopt whichever secret rode the chunk
- * with their locator.
+ * The `control_root` minted beside a base rotation's new root (CORD-06 §3),
+ * reserved like {@link mintOrReuseRotationKey} for the same reason.
  */
 export async function mintOrReuseControlRoot(
   communityIdHex: string,
@@ -545,12 +450,10 @@ export async function mintOrReuseControlRoot(
   return minted;
 }
 
-// ── The Grant's control_wrap plaintext (CORD-04 §3) ──────────────────────────
-
+// The Grant's control_wrap plaintext (CORD-04 §3)
 /**
- * `epoch_be[8] ‖ control_root[32]` — the staff write key as delivered inside a
- * staff-making Grant, NIP-44-encrypted under the granter↔member pairwise key
- * (the rekey-blob discipline: fixed width, the epoch INSIDE the ciphertext).
+ * `epoch_be[8] ‖ control_root[32]` — the staff write key inside a staff-making
+ * Grant, NIP-44 under the granter↔member pairwise key.
  */
 export function encodeControlWrap(epoch: bigint, controlRoot: Uint8Array): Uint8Array {
   const out = new Uint8Array(40);
@@ -583,18 +486,10 @@ export function myLocator(rotatorHex: string, myHex: string, scopeIdHex: string,
 export { ZERO32_HEX as ROOT_SCOPE_HEX };
 
 /**
- * Every rekey address a channel could have published a rotation to, from
- * epoch 1 up to `maxEpoch`, under each of the roots this client holds.
- *
- * The point is that this needs no channel key. CORD-06 §2 derives a channel's
- * rekey address from the `community_root` and the `channel_id` alone, both of
- * which every member has, so a member who never held a single generation of a
- * channel can still see where its rotations went — and therefore how far its
- * epoch counter has climbed. That is what makes CORD-03 §2's "monotonic,
- * never resetting" checkable by whoever is about to privatise a public
- * channel, rather than a promise resting on which keys they happen to keep.
- *
- * Returns address pubkey → the epoch it stands for.
+ * Every rekey address a channel could have used, epochs 1..`maxEpoch`, under each
+ * held root. Needs no channel key (CORD-06 §2: root + channel_id), so anyone
+ * privatising a channel can check CORD-03 §2's monotonic epoch counter.
+ * Returns address pubkey → epoch.
  */
 export function channelRekeyAddressWindow(
   roots: ReadonlyArray<{ key: Uint8Array }>,
@@ -628,16 +523,9 @@ export function highestRotatedEpoch(
 }
 
 /**
- * {@link highestRotatedEpoch}, but refusing an INCONCLUSIVE read.
- *
- * The probe covers epochs 1..`maxEpoch`, so a rotation found at `maxEpoch`
- * itself proves only that the channel reached the edge of what was looked at —
- * there may be more above it. Returning the ceiling anyway would mint the next
- * generation at an epoch the channel has already used, and CORD-03 §2's
- * counter is "monotonic, never resetting" precisely so that cannot happen: it
- * is what lets the list merge (epoch-max) and a `channel_cuts` floor
- * (epoch-min) tell two generations apart at all. A collision is silent at
- * mint time and unrecoverable afterwards, so a saturated probe throws.
+ * {@link highestRotatedEpoch}, but throws on an INCONCLUSIVE read: a rotation at
+ * `maxEpoch` may have more above it, and minting a reused epoch (CORD-03 §2) is
+ * silent and unrecoverable.
  */
 export function channelEpochFloor(
   window: ReadonlyMap<string, bigint>,

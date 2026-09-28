@@ -1,15 +1,9 @@
 /**
- * Concord Chat Plane — CORD-03.
- *
- * A Channel's messages, reactions, edits, and deletes are ordinary rumors
- * inside encrypted seals at the Channel's stream address (one per held epoch,
- * so history spanning a rekey stays continuous). Each rumor MUST commit
- * `["channel", id]` + `["epoch", n]`, checked strict-equal against the
- * coordinate whose key decrypted the wrap (CORD-03 §3).
- *
- * Decoding (two NIP-44 opens + a Schnorr verify per wrap) is memoized per wrap
- * id and chunked off the main thread, so re-reading the append-only local
- * store costs near-nothing after the first pass.
+ * Concord Chat Plane — CORD-03. Messages, reactions, edits, and deletes are rumors
+ * in encrypted seals at the Channel's stream address (one per held epoch). Each
+ * rumor MUST commit `["channel", id]` + `["epoch", n]`, checked strict-equal
+ * against the coordinate whose key decrypted it (CORD-03 §3). Decoding is
+ * memoized per wrap id and time-sliced / partly off-thread.
  */
 
 import { perfCount } from "@/lib/perf";
@@ -36,15 +30,13 @@ export interface OpenedChat extends OpenedEvent {
   epoch: bigint;
 }
 
-// The future-hold grace lives with the `ms` semantics in stream.ts (a leaf the
-// service-worker bundle already carries); re-exported here where the fold and
-// the tests consume it.
+// Lives in stream.ts (a leaf the service worker bundles); re-exported here.
 export { FUTURE_HOLD_MS };
 
-// ── Decode-once cache ────────────────────────────────────────────────────────
-
-/** `wrapId|channelIdHex` → opened (or null = remembered failure). Session-scoped.
- *  Keyed per channel so one channel's "not my key" can't poison another's decode. */
+/**
+ * `wrapId|channelIdHex` → opened (null = remembered failure). Session-scoped; keyed
+ * per channel so one channel's "not my key" can't poison another's.
+ */
 const decodeMemo = new Map<string, OpenedChat | null>();
 /** Memo keys that failed as "no held stream key" — retryable after a rekey catch-up. */
 const skippedNoKey = new Set<string>();
@@ -82,11 +74,8 @@ export function _chatDecodeMemoSizeForTests(): number {
 }
 
 /**
- * A wrap decoded up to its seal (phase 1), carrying the seal to verify and
- * everything {@link finishChat} needs to complete it once the seal's signature
- * is proven — the epoch and its retirement cutoff, which the batch verify
- * cannot see. The seal-signature verify is what {@link openChatBatch} lifts off
- * the main thread, so it happens BETWEEN the two.
+ * A wrap decoded up to its seal (phase 1), with what {@link finishChat} needs once
+ * the seal's signature is verified (possibly off-thread) in between.
  */
 interface PendingChat {
   memoKey: string;
@@ -97,15 +86,9 @@ interface PendingChat {
 }
 
 /**
- * Phase 1: consult the memo, and (on a miss) decrypt the wrap up to its seal
- * WITHOUT the seal-signature check. Returns `{ done }` for anything already
- * resolved — a memo hit, a wrap for a stream key we don't hold, or a pre-verify
- * failure (all memoized exactly as {@link openChatBatch} used to) — or
- * `{ pending }` for a seal that still needs its signature verified.
- *
- * The chat seal-form check (CORD-02 §5: chat seals MUST be encrypted) runs
- * here, BEFORE the verify: a plaintext seal is refused whether or not its
- * signature is valid, so there is no point paying the EC verify to reject it.
+ * Phase 1: memo lookup, else decrypt up to the seal WITHOUT verifying it. Returns
+ * `{ done }` for memo hits, no-key skips and failures, or `{ pending }` for a seal
+ * to verify. The seal-form check (CORD-02 §5) runs first, skipping a wasted verify.
  */
 function openChatToSeal(
   wrap: NostrRumor,
@@ -123,8 +106,8 @@ function openChatToSeal(
   }
   try {
     const { seal, finish } = openWrapToSeal(wrap, stream.group);
-    // Chat seals MUST be encrypted (CORD-02 §5) — a plaintext seal would make
-    // the message a standalone signed artifact any relay could display.
+    // Chat seals MUST be encrypted (CORD-02 §5), or the message is a standalone
+    // signed artifact any relay could display.
     if (seal.kind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
     return { pending: { memoKey, epoch: stream.epoch, retiredAt: stream.retiredAt, seal, finish } };
   } catch {
@@ -133,21 +116,14 @@ function openChatToSeal(
   }
 }
 
-/**
- * Phase 3: recover and bind the rumor of a seal whose signature has now been
- * verified, and memoize the result. This is the tail of the old single-decode:
- * the channel/epoch binding and the retired-epoch cutoff.
- */
+/** Phase 3: recover and bind the rumor of a verified seal (channel/epoch binding, retirement cutoff) and memoize. */
 function finishChat(pending: PendingChat, channel: Channel): OpenedChat | null {
   let opened: OpenedChat | null = null;
   try {
     const ev = pending.finish();
     checkChannelBinding(ev, channel.idHex, pending.epoch);
-    // A retired epoch is sealed history, not a live channel: the superseding
-    // rotation's publish time is a hard cutoff, and anything sealed under the
-    // old key but dated after it is refused. Key possession alone must not
-    // keep an ejected member writing into epochs the community rotated away
-    // from — the roster/banlist can't drop what it can't attribute in time.
+    // A retired epoch's rotation time is a hard cutoff: key possession alone must
+    // not let an ejected member keep writing into it.
     if (pending.retiredAt !== undefined && ev.createdAt > pending.retiredAt) {
       throw new Error("sealed under a retired epoch after its rotation");
     }
@@ -160,11 +136,8 @@ function finishChat(pending: PendingChat, channel: Channel): OpenedChat | null {
 }
 
 /**
- * Drop stored events that violate their epoch's retirement cutoff. The decode
- * path ({@link finishChat}) refuses these at ingest, but rows written before the
- * rotation was adopted locally (or by a client that predates cutoffs) are
- * already in the store — the read side applies the same rule so a retired
- * epoch is history everywhere, not just for freshly-arriving wraps.
+ * Drop stored events violating their epoch's retirement cutoff — rows stored
+ * before the rotation was adopted locally.
  */
 export function filterEpochCutoff(events: OpenedChat[], channel: Channel): OpenedChat[] {
   let cutoffs: Map<string, number> | undefined;
@@ -180,37 +153,22 @@ export function filterEpochCutoff(events: OpenedChat[], channel: Channel): Opene
   });
 }
 
-/** Max unbroken main-thread time (ms) to spend decoding before yielding.
- *  Time-based (not a fixed wrap count) so a slow phone yields sooner than a
- *  fast desktop instead of both blocking for a fixed number of Schnorr verifies
- *  — long synchronous tasks are what trip WebKit/Gecko "page unresponsive"
- *  kills and jank. Keep well below 16ms so Android WebView's input pipeline
- *  (swipe-type composition events) has room to run between slices. */
+/**
+ * Max unbroken main-thread decode time (ms) before yielding. Time-based so slow
+ * phones yield sooner; kept well under 16ms so Android WebView input can run.
+ */
 const DECODE_SLICE_MS = 5;
 
 /**
- * Open a batch of sealed wraps for one channel, memoized and time-sliced off
- * the main thread so a large first decode never freezes the UI. Decoding is
- * three phases, because the seal-signature verify — the dominant per-wrap cost
- * (~1.8ms of secp256k1 point math on desktop, more on a phone) — is the one
- * step worth running off the main thread:
+ * Open a batch of sealed wraps for one channel, memoized and time-sliced:
  *
- *   1. decrypt each wrap up to its seal (synchronous NIP-44; memo hits, no-key
- *      skips and malformed wraps all resolve here). Time-sliced.
- *   2. verify every pending seal's signature in ONE batch, off the main thread
- *      when the batch is large enough to be worth it (`verifyPool`). The
- *      hash-bind + memo stay main-thread (`verifyCache`), so a worker only ever
- *      sees a pre-hashed triple it cannot be tricked by.
- *   3. recover + bind the rumors of the seals that verified (a second
- *      synchronous NIP-44 decrypt). Time-sliced.
+ *   1. decrypt each wrap to its seal (sync NIP-44). Time-sliced.
+ *   2. verify all pending seal signatures in ONE batch, off-thread when large
+ *      (`verifyPool`); hash-bind + memo stay main-thread (`verifyCache`).
+ *   3. recover + bind the verified rumors. Time-sliced.
  *
- * `cryptoMs` counts the SYNCHRONOUS decrypt work only (phases 1 + 3); the
- * verify's own main-thread cost (hash-bind + memo) is `verifyCache`'s
- * `crypto.verifyEvents` counter, and the EC math itself may run off-thread,
- * where it is no longer main-thread CPU at all — the point of the split. The yields
- * between slices are deliberately NOT counted, so this stays "main thread spent
- * decrypting" rather than wall clock. Skips (foreign epochs, malformed,
- * spliced, bad signature) are silent, as in Vector's read path.
+ * `cryptoMs` counts only the synchronous decrypt work (phases 1 + 3), excluding
+ * yields. Skips (foreign epochs, malformed, bad signature) are silent.
  */
 export async function openChatBatch(
   wraps: NostrRumor[],
@@ -220,18 +178,14 @@ export async function openChatBatch(
   let cryptoMs = 0;
   let sliceStart = performance.now();
 
-  // One decode per wrap id. A history page is asked of every relay the
-  // community names, and each serves largely the same wraps; the decode memo
-  // only learns a wrap once it FINISHES, so copies within one batch were each
-  // decrypted in full. The output never carried duplicates usefully — every
-  // caller stores by rumor id.
+  // One decode per wrap id: every relay serves largely the same page, and the memo
+  // only learns a wrap once it finishes.
   if (wraps.length > 1) {
     const seen = new Set<string>();
     wraps = wraps.filter((w) => !seen.has(w.id) && Boolean(seen.add(w.id)));
   }
 
-  // ── Phase 1: decrypt each wrap to its seal. `resolved` keeps a slot per wrap
-  // so the output stays in input order across the async verify below.
+  // Phase 1. `resolved` keeps input order across the async verify.
   const resolved: Array<OpenedChat | null> = new Array(wraps.length).fill(null);
   const pending: Array<{ slot: number; chat: PendingChat }> = [];
   for (let i = 0; i < wraps.length; i++) {
@@ -241,29 +195,20 @@ export async function openChatBatch(
     cryptoMs += performance.now() - openStart;
     if ("done" in step) resolved[i] = step.done;
     else pending.push({ slot: i, chat: step.pending });
-    // Yield once this slice has run long enough (and more work remains), so the
-    // main thread stays responsive during a large backfill decode.
     if (i + 1 < wraps.length && performance.now() - sliceStart >= DECODE_SLICE_MS) {
       await new Promise((resolve) => setTimeout(resolve, 0));
       sliceStart = performance.now();
     }
   }
 
-  // An abort during phase 1 leaves seals collected but nothing to do with
-  // them: skip the verify round rather than pay it for a result phase 3 would
-  // only discard.
+  // Skip the verify if aborted during phase 1.
   if (pending.length > 0 && !opts?.signal?.aborted) {
-    // ── Phase 2: batch-verify every pending seal (off-thread when it pays).
+    // Phase 2: batch-verify every pending seal (off-thread when it pays).
     const oks = await verifyEventsOnce(pending.map((p) => p.chat.seal), ecVerifyBatch);
 
-    // ── Phase 3: finish the rumors of the seals that verified; memoize the
-    // rest as failures (a bad signature won't become good). That memo is only
-    // sound because `ecVerifyBatch` answers "unverified" for NO reason other
-    // than the signature itself — a worker that dies, throws or stalls has its
-    // chunk re-verified inline rather than reported false (see verifyPool.ts).
-    // A verifier that could fail transiently would turn this into session-long
-    // suppression of good messages. The rumor recover is a synchronous NIP-44
-    // decrypt, so slice it like phase 1.
+    // Phase 3: finish verified seals; memoize the rest as failures. Sound only
+    // because `ecVerifyBatch` reports "unverified" solely for a bad signature
+    // (worker failures are re-verified inline; see verifyPool.ts).
     sliceStart = performance.now();
     for (let j = 0; j < pending.length; j++) {
       if (opts?.signal?.aborted) break;
@@ -288,19 +233,11 @@ export async function openChatBatch(
   return out;
 }
 
-// ── Tag helpers ──────────────────────────────────────────────────────────────
-
 /**
- * Build the NIP-22 tags for a kind-1111 threaded reply to `parent`. The
- * uppercase `K`/`E`/`P` tags pin the immutable *thread root*; the lowercase
- * `k`/`e`/`p` tags point at the *immediate parent*. When the parent is itself a
- * comment, its uppercase root tags are inherited so the root is stable at any
- * nesting depth (matching the NIP-29 side, `buildCommentTags`). All ids are
- * RUMOR ids (the NIP-01 hash of the inner unsigned event), so a reply cites
- * exactly the decrypted message the user replied to.
- *
- * This is deliberately distinct from a kind-9 `q` tag: NIP-C7 reserves `q` for
- * inline quote-replies, while threads are NIP-22 comments.
+ * NIP-22 tags for a kind-1111 threaded reply to `parent`: uppercase `K`/`E`/`P`
+ * pin the thread root (inherited when the parent is itself a comment), lowercase
+ * point at the immediate parent. All ids are RUMOR ids. Distinct from the kind-9
+ * `q` tag (NIP-C7 inline quote-replies).
  *
  * https://github.com/nostr-protocol/nips/blob/master/22.md
  */
@@ -309,16 +246,13 @@ export function buildConcordCommentTags(parent: { id: string; kind: number; pubk
 
   const rootTags = parent.tags.filter(([n]) => n === "K" || n === "E" || n === "P");
   if (rootTags.length > 0) {
-    // Parent is itself a comment: inherit its root pointer verbatim.
     for (const t of rootTags) tags.push([...t]);
   } else {
-    // Parent is the root of this thread.
     tags.push(["K", String(parent.kind)]);
     tags.push(["E", parent.id, "", parent.pubkey]);
     tags.push(["P", parent.pubkey]);
   }
 
-  // Immediate-parent pointer (always the event being replied to).
   tags.push(["k", String(parent.kind)]);
   tags.push(["e", parent.id, "", parent.pubkey]);
   tags.push(["p", parent.pubkey]);
@@ -327,10 +261,8 @@ export function buildConcordCommentTags(parent: { id: string; kind: number; pubk
 }
 
 /**
- * The thread-root rumor id a message belongs to, or undefined for a top-level
- * message. Threaded replies are NIP-22 kind-1111 comments carrying the root in
- * their uppercase `E` tag. A kind-9 `q` tag is an INLINE reply (timeline, not a
- * thread), so it is deliberately NOT treated as a thread root.
+ * The thread-root rumor id (NIP-22 kind-1111 uppercase `E`), or undefined. A
+ * kind-9 `q` is an INLINE reply, not a thread root.
  */
 export function replyTargetOf(ev: { kind: number; tags: string[][] }): string | undefined {
   return ev.kind === KIND_COMMENT ? ev.tags.find((t) => t[0] === "E")?.[1] : undefined;
@@ -342,59 +274,40 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
 }
 
 /**
- * The rumor a kind-9 message *inline*-replies to via its NIP-C7 `q` tag (the
- * Signal/Discord-style quote that renders in the timeline), or undefined. NOT
- * `replyTargetOf`, which is the kind-1111 THREAD root (rendered in a panel, not
- * the timeline). Only kind-9 carries a timeline-level parent; a reaction/edit's
- * `e` tag names a target it folds INTO, not a row it must sort after.
+ * The rumor a kind-9 message inline-replies to via its NIP-C7 `q` tag (not the
+ * thread root; see `replyTargetOf`). Only kind-9 has a timeline-level parent.
  */
 function inlineReplyParentOf(ev: { kind: number; tags: string[][] }): string | undefined {
   return ev.kind === KIND_MESSAGE ? ev.tags.find((t) => t[0] === "q")?.[1] : undefined;
 }
 
 /**
- * Reorder an already-(ms,id)-sorted timeline so a reply never precedes the
- * message it replies to. A reply is causally after its parent — there is no
- * other correct order — but its `ms` is the sender's clock, and a reply from a
- * device running behind can carry an earlier stamp than the message it answers,
- * which the raw ms sort would then place ABOVE it. (The future-hold handles the
- * inverse — a parent stamped ahead of now — by hiding it until its time comes;
- * this handles a reply stamped behind its visible parent.)
- *
- * The rule is a stable topological nudge: each message's EFFECTIVE position is
- * its own (ms, id) unless it inline-replies (`q`) to a message present in this
- * set, in which case it takes a position strictly after that parent's effective
- * one. Resolved over the reply chain (a reply to a reply), memoized, and
- * cycle-safe — a forged `q` pointing into a loop falls back to the row's own
- * key rather than looping. In place, and a no-op for the common case (no
- * out-of-order reply), so it costs a single pass when nothing needs moving.
+ * Reorder an (ms,id)-sorted timeline so an inline reply never precedes its parent
+ * (a sender clock running behind can stamp it earlier). Each reply takes a
+ * position strictly after its in-set parent's effective one; resolved over chains,
+ * memoized, cycle-safe (a forged `q` loop falls back to the row's own key). In
+ * place; a single pass when nothing moves.
  */
 function orderRepliesAfterParents(messages: OpenedChat[]): void {
   const byId = new Map<string, OpenedChat>();
   for (const m of messages) byId.set(m.rumorId, m);
 
-  // Effective ordering key per rumor id: [effMs, depth, rumorId]. `depth` is
-  // the distance down the reply chain, so when a reply's own ms is at or below
-  // its parent's effective ms the two share effMs and the child still sorts
-  // after by its greater depth — the tie-break the arbitrary rumorId can't give.
+  // [effMs, depth, rumorId]: `depth` keeps a child after its parent when their
+  // effective ms tie.
   type Key = { ms: number; depth: number; id: string };
   const keys = new Map<string, Key>();
 
   const keyOf = (m: OpenedChat): Key => {
     const cached = keys.get(m.rumorId);
     if (cached) return cached;
-    // Seed the row's OWN key before recursing. A reply chain that loops back
-    // (a forged `q` cycle) then reads this provisional key on re-entry and
-    // stops, rather than recursing forever; and a row with no in-window parent
-    // keeps it.
+    // Seed the row's own key before recursing, so a `q` cycle stops on re-entry.
     const own: Key = { ms: m.ms, depth: 0, id: m.rumorId };
     keys.set(m.rumorId, own);
     const parentId = inlineReplyParentOf(m);
     const parent = parentId ? byId.get(parentId) : undefined;
     if (!parent) return own;
     const pk = keyOf(parent);
-    // Strictly after the parent: never earlier in ms, and one deeper so an equal
-    // ms can't let the child float above the parent on a rumorId tie-break.
+    // Strictly after the parent (one deeper on an ms tie).
     const key: Key = { ms: Math.max(m.ms, pk.ms), depth: pk.depth + 1, id: m.rumorId };
     keys.set(m.rumorId, key);
     return key;
@@ -411,46 +324,27 @@ function orderRepliesAfterParents(messages: OpenedChat[]): void {
   });
 }
 
-// ── Timeline fold ────────────────────────────────────────────────────────────
-
 /** Moderation context the read path applies while folding. */
 export interface ChatModeration {
   /**
-   * Banned author pubkeys — every event from them is dropped (CORD-04 §4).
-   *
-   * This is the ONLY author-identity drop an honest client performs. Nothing
-   * here filters on epoch: a retired epoch's key is held by everyone who ever
-   * had it, but CORD-02 §5 makes an author seen publishing *observably
-   * present* and a self-signed Join unsuppressable, and CORD-04 §6 makes the
-   * Banlist (plus its Refounding) the removal that enforces. An allow-list
-   * gate over retired-epoch history would invert both — and would hide real
-   * history from exactly the clients whose local anchors are thinnest.
+   * Banned author pubkeys — every event from them is dropped (CORD-04 §4). The ONLY
+   * author-identity drop; nothing filters on epoch (CORD-02 §5, CORD-04 §6).
    */
   banned: Set<string>;
   /**
-   * Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES).
-   *
-   * `citation` is the delete rumor's `vac` (CORD-04 §5) — the Grant the deleter
-   * claims their rank under. A non-owner moderation delete without a resolvable
-   * one PARKS: the permission check alone would honor an actor whose demotion
-   * this client has not synced yet. A self-delete is not an authority action and
-   * never carries one.
+   * Whether `deleter` may delete `author`'s message (MANAGE_MESSAGES). `citation` is
+   * the delete's `vac` (CORD-04 §5); a non-owner moderation delete without a
+   * resolvable one PARKS. Self-deletes carry none.
    */
   canDelete: (deleter: string, author: string, action?: { citation?: AuthorityCitation; ms: number }) => boolean;
   /**
-   * Whether `author` may be believed about a disappearing-messages timer
-   * change (CORD-08 §4): holds MANAGE_METADATA in the fold. A kind-1740 notice
-   * is informational — the metadata fold is the authority — but display is
-   * gated like an authority claim, or anyone could spell the tag. Optional so
-   * bare lib folds (tests) keep notices; the app path always supplies it.
+   * Whether `author` holds MANAGE_METADATA, gating display of timer notices
+   * (CORD-08 §4). Optional so bare lib folds keep notices.
    */
   canSetTimer?: (author: string) => boolean;
   /**
-   * Whether `author` is community staff (owner or a holder of a staff
-   * permission). The flood heuristic never folds staff — moderation authority
-   * is the community's own strongest statement of trust and a muzzled moderator
-   * is worse than a visible flood. Optional so bare lib folds skip it; the app
-   * path supplies it from the control fold.
+   * Whether `author` is staff; the flood heuristic never folds staff. Optional for
+   * bare lib folds.
    */
   isStaff?: (author: string) => boolean;
   /** Whether an author holds MENTION_EVERYONE in a target channel. */
@@ -467,30 +361,19 @@ export interface FoldedTimeline {
   /** Surviving messages, sorted by ms ascending. */
   messages: OpenedChat[];
   /**
-   * The earliest `ms` of a message HELD out of {@link messages} for being dated
-   * more than {@link FUTURE_HOLD_MS} ahead of the fold's clock, or undefined if
-   * none was. The app schedules a re-fold at this instant so the held message
-   * reappears the moment its timestamp is no longer in the future — without it
-   * a future-dated message stays hidden until some unrelated event re-folds the
-   * timeline, the same wake `useActivePause` arms for a bounded pause.
+   * Earliest `ms` of a message HELD for being > {@link FUTURE_HOLD_MS} ahead of the
+   * fold's clock; the app schedules a re-fold then so it reappears on time.
    */
   nextRevealMs?: number;
   /**
-   * Rumor ids belonging to a visual flood (`floodCluster.ts`) — a DISPLAY hint
-   * only, and deliberately not applied to {@link messages}.
-   *
-   * Nothing is removed: the renderer folds these into one expandable row, so
-   * being wrong costs a click rather than a lost message. Keeping the set
-   * beside the timeline rather than filtering it is what stops a heuristic from
-   * becoming a second author-identity drop alongside the Banlist.
+   * Rumor ids in a visual flood (`floodCluster.ts`) — a DISPLAY hint, not applied to
+   * {@link messages}. Rendered as one expandable row, so the heuristic never becomes
+   * a second author drop.
    */
   quarantined: Set<string>;
   /**
-   * The subset of {@link quarantined} collapsed by a community PAUSE (CORD-04
-   * §8) rather than by the flood heuristic. Same suppression, different reason,
-   * and the reader is owed the difference: the flood row's copy accuses its
-   * messages of being near-identical spam from many accounts, which about a
-   * paused room's ordinary traffic is simply false.
+   * The subset of {@link quarantined} collapsed by a community PAUSE (CORD-04 §8),
+   * so the row doesn't wrongly call paused traffic spam.
    */
   paused: Set<string>;
   /** target rumor id → emoji → tally. */
@@ -504,38 +387,25 @@ export interface FoldedTimeline {
   /** event rumor id → its raw RSVPs (tallied per event by the transport). */
   rsvps: Map<string, RsvpVote[]>;
   /**
-   * Authorized disappearing-messages timer notices (kind 1740, CORD-08 §4),
-   * sorted by ms ascending. Not messages — the transport interleaves them as
-   * centered notice rows, like the DM timer entries.
+   * Authorized timer notices (kind 1740, CORD-08 §4), ms ascending; interleaved as
+   * notice rows by the transport.
    */
   timerNotices: OpenedChat[];
 }
 
-/**
- * Per-rumor CORD.md verdict cache (payment hash when valid, null when not).
- * A rumor's tags never change, so each zap is hashed/decoded once per session
- * no matter how many folds re-run over it. Capped to bound memory.
- */
+/** Per-rumor CORD.md zap verdict cache (payment hash when valid, else null). Capped. */
 const zapVerdicts = new Map<string, string | null>();
 const ZAP_VERDICT_CAP = 8192;
 
 /**
- * Session-scoped set of reaction rumor ids that have been deleted by a kind-5.
- * The rumor store's NIP-09 only processes deletes within the same write
- * batch — a reaction re-delivered by a relay echo (in a later batch) gets
- * re-added to the store. This set lets the fold skip such re-delivered
- * reactions across fold invocations, so a removed reaction stays removed
- * even when the store forgets the deletion. Capped to bound memory.
+ * Reaction rumor ids deleted by a kind-5, session-scoped. The store's NIP-09 only
+ * applies within one write batch, so a relay-echoed reaction can come back; this
+ * keeps it removed. Capped.
  */
 const deletedReactionIds = new Set<string>();
 const DELETED_REACTION_CAP = 8192;
 
-/**
- * Mark a reaction rumor id as deleted NOW, before the kind-5 delete rumor is
- * sealed and inserted into the cache. The fold skips any reaction whose id is
- * in this set, so the removal is immediate (no waiting for the async send to
- * complete and the fold to re-run with the delete event).
- */
+/** Mark a reaction deleted NOW (optimistic), before the kind-5 is even sealed. */
 export function markReactionDeleted(rumorId: string): void {
   if (deletedReactionIds.size >= DELETED_REACTION_CAP) {
     deletedReactionIds.delete(deletedReactionIds.values().next().value as string);
@@ -544,81 +414,46 @@ export function markReactionDeleted(rumorId: string): void {
 }
 
 /**
- * Fold a batch of opened chat events into the channel timeline: drop banned
- * authors, apply edits (author-only, latest by ms), and tally reactions per
- * target.
+ * Fold opened chat events into the channel timeline: drop banned authors, apply
+ * edits (author-only, latest by ms), tally reactions per target.
  *
- * Deletes are DELETES, not hides: a kind-5 rumor physically removes its target
- * from the rumor cache on write (self-delete via the store's NIP-09; a
- * moderator delete is authorized against the roster at the write site before it
- * reaches the store). So a folded set read back from the cache never contains a
- * deleted message. The delete pass here is only a belt-and-suspenders for
- * IN-BATCH deletes — an optimistic or just-arrived kind-5 folded alongside its
- * target before the store's async removal has committed — and applies the same
- * authorization (self, or a `canDelete` moderator) so the two paths agree.
+ * Deletes physically remove targets from the store at write time, so the delete
+ * pass here only covers IN-BATCH deletes (folded alongside the target before the
+ * store commits), with the same authorization (self, or `canDelete`).
  */
 export function foldTimeline(
   opened: OpenedChat[],
   moderation?: ChatModeration,
   opts?: {
-    /**
-     * The reading user's pubkey, so the flood heuristic can leave their own
-     * messages alone (`floodCluster.ts`). Optional everywhere: a fold without
-     * it is only more eager, never wrong.
-     */
+    /** The reader's pubkey, so the flood heuristic spares their own messages. Optional. */
     self?: string;
-    /**
-     * The CHANNEL's author history (`queryChannelFirstSeen`). Without it the
-     * flood detector can only see the rendered window, which a flood large
-     * enough to matter has already filled — see `FloodOptions.firstSeen`.
-     */
+    /** The channel's author history (`queryChannelFirstSeen`); see `FloodOptions.firstSeen`. */
     firstSeen?: ReadonlyMap<string, number>;
-    /**
-     * Whether an author is community staff, so the flood heuristic never folds
-     * a moderator (`FloodOptions.staff`). Optional: a fold without it is only
-     * more eager, never wrong.
-     */
+    /** Staff predicate, so floods never fold a moderator (`FloodOptions.staff`). Optional. */
     staff?: (author: string) => boolean;
-    /**
-     * An unforgeable lower bound (ms) on the room's age, letting the drown rule
-     * fold a total nuke of an established community that leaves no in-channel
-     * precedent (`FloodOptions.establishedSinceMs`). Optional.
-     */
+    /** Unforgeable lower bound (ms) on the room's age (`FloodOptions.establishedSinceMs`). Optional. */
     establishedSinceMs?: number;
     /**
-     * An active community pause's enactment time in SECONDS (`activePause`,
-     * CORD-04 §8). When set, non-staff messages timestamped at or after it fold
-     * into the flood row — a reader-side quiet, never a drop. Undefined = no
-     * pause. The `staff` predicate (or the moderation context) exempts staff.
+     * Active pause enactment time in SECONDS (CORD-04 §8): non-staff messages at or
+     * after it fold into the flood row (never dropped).
      */
     pauseSince?: number;
   },
 ): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
-  // target rumor id → (deleter → their citation + the delete's own ms). Both
-  // have to survive the fold: collapsing to a bare author set is what made the
-  // authority check permission-only, and the ms is what lets the check tell a
-  // pre-flag-day delete (honored uncited) from a fresh one, and a delete that
-  // predates a tombstone from one published after it.
+  // target → (deleter → citation + the delete's ms): both are needed for the
+  // authority check (flag-day and tombstone timing).
   const deletes = new Map<string, Map<string, { citation?: AuthorityCitation; ms: number }>>();
-  // ALL edits per target (author validity is judged against the message in the
-  // apply phase — otherwise a non-author's later "edit" would suppress the
-  // author's legitimate one).
+  // ALL edits per target; authorship is judged at apply time so a non-author's
+  // later "edit" can't suppress the author's.
   const edits = new Map<string, Array<{ author: string; content: string; ms: number }>>();
   const reactions = new Map<string, Map<string, ReactionEntry>>();
-  // Raw votes bucketed by their poll's rumor id. Left untallied here (the
-  // transport folds them against each poll's declared options + endsAt), and
-  // kept even when the poll itself isn't in this window — an orphan vote resolves
-  // automatically once its poll decodes and the next fold re-runs.
+  // Raw votes per poll id, tallied downstream; orphans resolve once the poll decodes.
   const pollVotes = new Map<string, PollVote[]>();
-  // Calendar events (kinds 31922/31923), addressably folded downstream, and
-  // their RSVPs bucketed by the event rumor id they `e`-reference.
   const calendarById = new Map<string, OpenedChat>();
   const rsvps = new Map<string, RsvpVote[]>();
-  // Verified zap candidates, deduped by payment hash (Lightning) or txid
-  // (on-chain) after the loop: an announced proof or txid is visible to every
-  // member, so without this anyone could replay someone else's and inflate
-  // tallies (CORD.md §4).
+  // Deduped by payment hash / txid after the loop, since any member could replay a
+  // visible proof (CORD.md §4).
   const zapCandidates: Array<{ target: string; hash: string; ms: number; entry: ZapEntry }> = [];
   const timerNotices: OpenedChat[] = [];
   // One clock per fold: a rumor expiring mid-loop must not split the batch.
@@ -626,35 +461,27 @@ export function foldTimeline(
 
   for (const ev of opened) {
     if (moderation?.banned.has(ev.author)) continue;
-    // Expired rumors are refused at ingest and swept from the store
-    // (CORD-08 §3), but rows stored before their deadline passed — and
-    // freshly-decrypted events folded in ahead of the store round-trip —
-    // reach here, so the read side applies the same rule.
+    // Expired rumors (CORD-08 §3) may still reach here from pre-deadline rows or
+    // fresh decrypts.
     if (isExpired(ev.tags, nowSecs)) continue;
 
     if (ev.kind === KIND_TIMER_NOTICE) {
-      // A notice with no readable timer value is malformed, not "off"; an
-      // author the roster doesn't trust with MANAGE_METADATA is dropped
-      // (CORD-08 §4) — anyone can spell the tag, only staff are believed.
+      // Malformed timer is not "off"; only MANAGE_METADATA holders are believed (CORD-08 §4).
       if (dmTimerSeconds(ev) === undefined) continue;
       if (moderation?.canSetTimer && !moderation.canSetTimer(ev.author)) continue;
       timerNotices.push(ev);
       continue;
     }
     if (ev.kind === KIND_DELETE) {
-      // NIP-09 shape: possibly several `e` targets.
       for (const t of ev.tags) {
         if (t[0] !== "e" || !t[1]) continue;
         const target = t[1];
         let authors = deletes.get(target);
         if (!authors) deletes.set(target, (authors = new Map()));
-        // Prefer a cited delete when the same actor published both — an uncited
-        // duplicate must never mask the one that carries authority.
+        // Prefer a cited delete over an uncited duplicate from the same actor.
         const cite = citationFromTags(ev.tags);
         if (cite || !authors.has(ev.author)) authors.set(ev.author, { citation: cite, ms: ev.ms });
-        // Track deleted reaction rumor ids across fold invocations so a
-        // relay-echoed reaction (re-added to the store in a later write
-        // batch) stays removed. The `k` tag identifies the target kind.
+        // Remember deleted reaction ids across folds (see deletedReactionIds).
         const kTag = ev.tags.find(([n]) => n === "k")?.[1];
         if (kTag === String(KIND_REACTION)) {
           if (deletedReactionIds.size >= DELETED_REACTION_CAP) {
@@ -676,8 +503,6 @@ export function foldTimeline(
     if (ev.kind === KIND_REACTION) {
       const target = eTargetOf(ev);
       if (!target || !ev.content) continue;
-      // Skip reactions whose kind-5 delete we've seen in a previous fold
-      // invocation (the store may have re-added them via a relay echo).
       if (deletedReactionIds.has(ev.rumorId)) continue;
       const key = reactionContentKey(ev.content);
       const url = ev.tags.find((t) => t[0] === "emoji")?.[2];
@@ -719,8 +544,7 @@ export function foldTimeline(
     if (ev.kind === KIND_ONCHAIN_ZAP) {
       const target = eTargetOf(ev);
       if (!target) continue;
-      // On-chain zaps have no preimage — the txid on a public ledger is the
-      // proof. Dedup by txid so one tx counts once per channel.
+      // On-chain: the txid is the proof; dedup so one tx counts once.
       const txid = verifyOnchainZapRumor({ kind: ev.kind, tags: ev.tags });
       if (!txid) continue;
       const sats = Number(ev.tags.find((t) => t[0] === "amount")?.[1]);
@@ -739,8 +563,7 @@ export function foldTimeline(
       continue;
     }
     if (ev.kind === KIND_POLL_VOTE) {
-      // A vote is an `e`-referencing side event (like a reaction): bucket it
-      // under its poll, latest-per-pubkey resolved by the tally downstream.
+      // Bucket under its poll; latest per pubkey resolved downstream.
       const target = eTargetOf(ev);
       if (!target) continue;
       const optionIds = ev.tags.filter(([n, v]) => n === "response" && v).map(([, v]) => v);
@@ -751,8 +574,7 @@ export function foldTimeline(
       continue;
     }
     if (ev.kind === KIND_CALENDAR_RSVP) {
-      // An RSVP `e`-references its event's rumor id (Concord has no `a`-coordinate);
-      // bucket it like a poll vote, latest-per-pubkey resolved by the tally.
+      // RSVPs `e`-reference the event's rumor id (no `a`-coordinate in Concord).
       const target = eTargetOf(ev);
       if (!target) continue;
       const status = ev.tags.find((t) => t[0] === "status")?.[1];
@@ -763,16 +585,13 @@ export function foldTimeline(
       continue;
     }
     if (ev.kind === KIND_CALENDAR_DATE || ev.kind === KIND_CALENDAR_TIME) {
-      // A calendar event is NOT a timeline message — it surfaces in the events
-      // bar. Deletes/moderation are applied below, then parsing + addressable
-      // dedup happen in the transport (shared with the NIP-29 path).
+      // Calendar events surface in the events bar, not the timeline; parsing and
+      // addressable dedup happen in the transport.
       calendarById.set(ev.rumorId, ev);
       continue;
     }
     if (ev.kind === KIND_MESSAGE || ev.kind === KIND_COMMENT || ev.kind === KIND_POLL) {
-      // kind-9 top-level messages, kind-1111 threaded replies, and kind-1068
-      // polls all land in the timeline pool; the reader splits them by their
-      // NIP-22 root pointer (a poll has none, so it's always top-level).
+      // Kind 9, 1111 and 1068 share the pool; the reader splits by NIP-22 root.
       byId.set(ev.rumorId, ev);
     }
   }
@@ -803,9 +622,7 @@ export function foldTimeline(
     if (deleted) byId.delete(id);
   }
 
-  // Calendar deletes: same authorization as messages (self, or a moderator with
-  // MANAGE_MESSAGES). The store's NIP-09 covers the durable case; this handles a
-  // delete folded alongside its target before the async removal commits.
+  // Calendar deletes: same authorization as messages.
   for (const [id, ev] of calendarById) {
     const deleters = deletes.get(id);
     if (!deleters) continue;
@@ -815,10 +632,7 @@ export function foldTimeline(
     if (deleted) calendarById.delete(id);
   }
 
-  // In-batch reaction deletes: a kind-5 targeting a reaction rumor removes
-  // that reactor from the tally (the store's NIP-09 handles the persistent
-  // case; this covers a delete folded alongside its target before the store
-  // async-removes it).
+  // In-batch reaction deletes remove the reactor from the tally.
   for (const [targetId, byEmoji] of reactions) {
     for (const [emoji, entry] of byEmoji) {
       for (const [pubkey, rumorId] of entry.reactors) {
@@ -832,8 +646,7 @@ export function foldTimeline(
     if (byEmoji.size === 0) reactions.delete(targetId);
   }
 
-  // Zaps: one payment counts once, earliest rumor (ms, then id) winning
-  // deterministically so every member folds the same tally.
+  // One payment counts once; earliest (ms, then id) wins deterministically.
   const zaps = new Map<string, ZapEntry[]>();
   const claimedHashes = new Set<string>();
   zapCandidates.sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.entry.id < b.entry.id ? -1 : 1));
@@ -845,12 +658,8 @@ export function foldTimeline(
     list.push(entry);
   }
 
-  // Hold messages dated ahead of the local clock out of the rendered timeline
-  // until their time passes (see FUTURE_HOLD_MS). Derived from the SAME
-  // one-clock-per-fold instant as the expiry gate above (`nowSecs`), so a
-  // message can't be both expired and future within one pass. `nextRevealMs`
-  // is the earliest held `ms`, which the app arms a re-fold for so the message
-  // reappears in its rightful place the instant it is no longer in the future.
+  // Hold future-dated messages (FUTURE_HOLD_MS) using the same clock as the expiry
+  // gate; `nextRevealMs` lets the app re-fold on time.
   const holdCeilingMs = nowSecs * 1000 + 999 + FUTURE_HOLD_MS;
   let nextRevealMs: number | undefined;
   const visible: OpenedChat[] = [];
@@ -865,8 +674,6 @@ export function foldTimeline(
     a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1,
   );
 
-  // Staff-immunity source, in preference order: an explicit override, else the
-  // moderation context the app already resolves for the delete checks.
   const isStaff = opts?.staff ?? moderation?.isStaff;
   const quarantined = floodClusters(messages, {
     ...(opts?.self !== undefined ? { self: opts.self } : {}),
@@ -874,16 +681,9 @@ export function foldTimeline(
     ...(isStaff !== undefined ? { staff: isStaff } : {}),
     ...(opts?.establishedSinceMs !== undefined ? { establishedSinceMs: opts.establishedSinceMs } : {}),
   });
-  // A community pause (CORD-04 §8) collapses non-staff messages posted at/after
-  // the pause into the SAME expandable row a flood gets — a reader-side quiet,
-  // not an author drop: the events still fold, staff and pre-pause history are
-  // untouched. The author's own created_at gates it (forgeable), so it's a
-  // cooperative measure that composes with the flood rules, never replaces them.
-  //
-  // The reader's OWN messages are exempt, as they are from the flood rules: a
-  // message this device sent moments before the pause edition landed — or one
-  // still in flight when it did — would otherwise vanish into a collapsed row
-  // with no explanation, which reads as the client having eaten it.
+  // A community pause (CORD-04 §8) collapses non-staff messages at/after it into the
+  // flood row — reader-side, never a drop, gated on (forgeable) created_at. The
+  // reader's own messages are exempt, as with floods.
   const paused = new Set<string>();
   if (opts?.pauseSince !== undefined) {
     const floorMs = opts.pauseSince * 1000;
@@ -896,10 +696,7 @@ export function foldTimeline(
     }
   }
 
-  // Last, so every rule above reads a strict ms order (the flood heuristic's
-  // sliding windows assume it): nudge any inline reply that its sender's clock
-  // stamped behind its parent to sit after it. A reply is causally after the
-  // message it answers — there is no other correct order.
+  // Last, so the rules above see strict ms order: nudge inline replies after their parents.
   orderRepliesAfterParents(messages);
 
   return {

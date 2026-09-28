@@ -20,9 +20,7 @@ import {
   type PaymentTargetType,
 } from '@/lib/paymentTargets';
 
-/** A draft row in the editor. The method type is fixed at add time. */
 interface DraftTarget {
-  /** Stable key for React list rendering. */
   key: string;
   type: PaymentTargetType;
   authority: string;
@@ -33,28 +31,15 @@ function newDraft(type: PaymentTargetType, authority = ''): DraftTarget {
   return { key: `pt-${draftSeq++}`, type, authority };
 }
 
-/** Imperative handle the parent profile form uses to persist on submit. */
 export interface PaymentTargetsEditorHandle {
-  /**
-   * Validate and publish the current payment targets (kind 10133). Returns
-   * `true` on success, `false` if validation failed or the publish errored —
-   * letting the parent abort its "saved" confirmation. Surfaces its own
-   * error toasts.
-   */
+  /** Validate and publish kind 10133. `false` on validation/publish failure; toasts its own errors. */
   save: () => Promise<boolean>;
 }
 
 /**
- * "Accept Donations" editor for NIP-A3 payment targets (kind 10133).
- *
- * Users add at most one entry per recognized payment method (Bitcoin,
- * Lightning, Monero, …). Bitcoin and Lightning entries override the values
- * Armada would otherwise derive when zapping this user (a Taproot address from
- * the pubkey, and the kind-0 `lud16` respectively).
- *
- * The editor has no save button of its own — it's persisted alongside the
- * profile via the parent form's single "Save" button, through the imperative
- * {@link PaymentTargetsEditorHandle.save} handle.
+ * "Accept Donations" editor for NIP-A3 payment targets (kind 10133), one per
+ * method. Bitcoin/Lightning entries override the pubkey-derived Taproot
+ * address and kind-0 `lud16`. Saved via the parent form through the handle.
  */
 export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
   function PaymentTargetsEditor(_props, ref) {
@@ -65,9 +50,7 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
 
     const [drafts, setDrafts] = useState<DraftTarget[]>([]);
 
-    // Seed drafts from the loaded targets once they arrive. We only reset when
-    // the stored set changes identity (e.g. after a successful save / reload),
-    // not on every keystroke.
+    // Reset only when the stored set changes identity, not per keystroke.
     const seed = useMemo(
       () => targets.map((t) => newDraft(t.type, t.authority)),
       [targets],
@@ -76,7 +59,6 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
       setDrafts(seed);
     }, [seed]);
 
-    // Methods not yet added — offered in the "Add method" dropdown.
     const usedTypes = useMemo(() => new Set(drafts.map((d) => d.type)), [drafts]);
     const availableMethods = useMemo(
       () => PAYMENT_METHOD_LIST.filter((m) => !usedTypes.has(m.type)),
@@ -102,7 +84,6 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
         const cleaned: PaymentTarget[] = [];
         for (const d of drafts) {
           const authority = d.authority.trim();
-          // Skip fully-empty rows silently; they're just unfinished drafts.
           if (!authority) continue;
           const method = PAYMENT_METHODS[d.type];
           if (!method.validate(authority)) {
@@ -118,10 +99,7 @@ export const PaymentTargetsEditor = forwardRef<PaymentTargetsEditorHandle>(
           cleaned.push({ type: d.type, authority });
         }
 
-        // Skip publishing when nothing changed — otherwise every profile save
-        // re-publishes a kind 10133 event. There's at most one target per type
-        // (dedup guarantees it), so a per-type signature is an order-insensitive
-        // equality check.
+        // Skip unchanged publishes; one target per type makes a per-type signature order-insensitive.
         const signature = (list: PaymentTarget[]) =>
           list
             .map((t) => `${t.type}:${t.authority}`)

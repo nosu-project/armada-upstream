@@ -10,26 +10,11 @@ export interface DecryptTarget {
 }
 
 /**
- * Decide whether a batch of signer decrypts may proceed, WITHOUT flooding the
- * signer to find out.
- *
- * The rule, in order:
- *
- *   0. The signer can't prompt (a local nsec decrypts instantly, no approval) →
- *      proceed. There is nothing to gate: the consent prompt only exists to
- *      spare remote (NIP-46 bunker) / extension (NIP-07) signers a storm of
- *      per-decrypt approvals.
- *   1. Already allowed → proceed (the common steady state).
- *   2. Every target is already cached → proceed silently. A cached decrypt
- *      never touches the signer, so there's nothing to prompt about; this is
- *      what lets a warm client (re-entering a thread, a reconnect) skip the
- *      gate entirely.
- *   3. Otherwise consult the one-time consent gate (`ensureDecryptConsent`),
- *      which opens at most ONE app-wide prompt and remembers the answer.
- *
- * Returns true iff the caller should perform the (uncached) decrypts. When it
- * returns false the caller must leave the content as encrypted placeholders and
- * expose the manual "Decrypt" / "Decrypt all" affordances.
+ * Decide whether a batch of signer decrypts may proceed without flooding the
+ * signer: yes if the signer can't prompt (local nsec), consent is already
+ * allowed, or every target is cached; otherwise ask the one-time app-wide
+ * consent gate. On false, callers leave encrypted placeholders with manual
+ * "Decrypt" affordances.
  */
 export async function mayBulkDecrypt(
   signer: NostrSigner,
@@ -58,15 +43,7 @@ async function allCached(signer: NostrSigner, method: "nip04" | "nip44", targets
   return true;
 }
 
-/**
- * Whether a login's signer can surface an approval prompt per decrypt.
- *
- * Only remote (NIP-46 `bunker`) and extension (NIP-07 `extension`) signers hand
- * each decrypt to something outside the app that may ask the user. A local
- * `nsec` decrypts inline with the in-memory key — instant, silent, no approval
- * — so gating it would prompt about a cost that doesn't exist. Anything unknown
- * is treated conservatively as "can prompt".
- */
+/** Whether a login's signer may prompt per decrypt (bunker/extension/unknown; not local nsec). */
 export function signerNeedsApproval(method: string | undefined): boolean {
   return method !== "nsec";
 }

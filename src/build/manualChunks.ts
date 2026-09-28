@@ -1,7 +1,6 @@
 /**
- * Rollup `manualChunks` router — build-time only (imported by vite.config.ts,
- * ships in no bundle). Extracted so the chunk assignment is unit-testable.
- * Returns a chunk name, or undefined to let Rollup co-locate with the importer.
+ * Rollup `manualChunks` router (build-time only; separate for unit tests).
+ * Returns a chunk name, or undefined to co-locate with the importer.
  */
 export function manualChunks(id: string): string | undefined {
   if (id.includes("node_modules/lucide-react")) {
@@ -11,15 +10,12 @@ export function manualChunks(id: string): string | undefined {
     if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
       return "vendor-react";
     }
-    // Code-block grammars: only ever reached through the dynamic import
-    // in src/lib/codeHighlight.ts, so this chunk loads on demand.
+    // Only reached via the dynamic import in src/lib/codeHighlight.ts.
     if (id.includes("node_modules/highlight.js") || id.includes("node_modules/lowlight")) {
       return "vendor-highlight";
     }
-    // Lazy (WalletDialog → @/lib/bitcoin), so keep it and its nested @noble
-    // copies out of vendor-nostr. Left unnamed on purpose: rolldown pulls a
-    // named chunk's dependencies in with it, which moved the shared
-    // @scure/base out of vendor-nostr.
+    // Lazy (WalletDialog → @/lib/bitcoin). Unnamed on purpose: rolldown pulls a
+    // named chunk's dependencies in, which moved @scure/base out of vendor-nostr.
     if (id.includes("node_modules/@scure/btc-signer")) {
       return undefined;
     }

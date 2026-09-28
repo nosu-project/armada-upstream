@@ -18,7 +18,6 @@ function mesh(geometry: THREE.BufferGeometry, surface: THREE.Material, parent: T
   return object;
 }
 
-/** The ship is built entirely from low-poly geometry. */
 function buildShip() {
   const ship = new THREE.Group();
   const wood = material(0x392336);
@@ -28,7 +27,6 @@ function buildShip() {
   const cream = material(0xffd9c2);
   rose.side = cream.side = THREE.DoubleSide;
 
-  // A pointed keel, flared gunwales and a real flat deck, rather than a box.
   const outline = [[0, -6.5], [-1.9, -3.3], [-2.1, 2.8], [-1.3, 4.6], [1.3, 4.6], [2.1, 2.8], [1.9, -3.3]];
   const positions: number[] = [];
   for (let i = 0; i < outline.length; i++) {
@@ -52,7 +50,6 @@ function buildShip() {
   const boom = mesh(new THREE.CylinderGeometry(0.08, 0.08, 7.8, 5), brass, ship, 0, 3.3, 0);
   boom.rotation.z = Math.PI / 2;
 
-  // A billowed triangular rose sail: the silhouette of the advancing A.
   const sailGeometry = new THREE.PlaneGeometry(1, 1, 12, 12);
   const p = sailGeometry.attributes.position;
   for (let i = 0; i < p.count; i++) {
@@ -109,7 +106,6 @@ function buildIsland(island: Island) {
   geometry.computeVertexNormals();
   mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }), group);
 
-  // Thin turquoise shallows follow the same irregular shore.
   const shore: number[] = [];
   for (let s = 0; s < segments; s++) {
     const vertices = [s, s + 1].flatMap((i) => {
@@ -123,7 +119,6 @@ function buildIsland(island: Island) {
   shoreGeometry.setAttribute("position", new THREE.Float32BufferAttribute(shore, 3));
   mesh(shoreGeometry, new THREE.MeshBasicMaterial({ color: 0x53b8b6, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }), group);
 
-  // Low-poly cypress groves; two instanced draws per island.
   const count = island.radius > 200 ? 50 : 14;
   const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.6, 0.9, 7, 5), material(0x6d5261), count);
   const crowns = new THREE.InstancedMesh(new THREE.ConeGeometry(4, 15, 5), material(0x284c50), count);
@@ -168,8 +163,6 @@ export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
   } catch {
     return null;
   }
-  // A deliberately restrained render resolution gives distant silhouettes and
-  // facets their console-era character, without an expensive postprocess pass.
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.setClearColor(SKY, 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -193,8 +186,6 @@ export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
   const { ship, mainsail, flag } = buildShip();
   scene.add(ship);
 
-  // World-space wave pattern follows the boat without swimming with the mesh.
-  // Stepped lighting and fine broken crests evoke painted JRPG water.
   const water = new THREE.ShaderMaterial({
     uniforms: { time: { value: 0 }, fogColor: { value: new THREE.Color(SKY) } },
     vertexShader: `
@@ -277,8 +268,7 @@ export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let engaged = false, visible = false, lost = false;
   let pointer: { id: number; x: number; y: number; rudder: number; throttle: number } | undefined;
-  // Horizontal touch drags steer and catch the wind. Vertical gestures remain
-  // native page scrolling; no invisible full-screen joystick traps the reader.
+  // Only horizontal drags steer; vertical gestures stay native scrolling.
   const pointerDown = (event: PointerEvent) => {
     if (!event.isPrimary || event.button !== 0) return;
     canvas.focus({ preventScroll: true });
@@ -333,8 +323,7 @@ export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
     ship.position.set(vessel.x, Math.sin(time * 1.3) * 0.22, vessel.z);
     ship.rotation.set(Math.sin(time * 0.9) * 0.025, h, Math.sin(time * 1.2) * 0.035 + rudder * vessel.speed * 0.002, "YXZ");
     mainsail.scale.z = 1 + Math.sin(time * 2) * 0.06;
-    // Travelling ripples keep the hoist attached to the mast while the free
-    // edge snaps in the wind. Integrate phase so speed changes stay continuous.
+    // Integrate phase so speed changes stay continuous.
     const wind = Math.min(1, Math.abs(vessel.speed) / 12);
     flagPhase += dt * (5 + wind * 25);
     const flagPositions = flag.geometry.attributes.position;
@@ -348,8 +337,6 @@ export function mountSailingScene(host: HTMLDivElement): (() => void) | null {
     }
     flagPositions.needsUpdate = true;
     flag.geometry.computeVertexNormals();
-    // Broad swings of the whole flag read from the chase camera: roughly
-    // 90 degrees side-to-side and 25 degrees vertically at sailing speed.
     flag.rotation.y = Math.sin(flagPhase * 0.6) * (0.06 + wind * 0.72);
     flag.rotation.z = Math.sin(flagPhase * 0.5 + 0.6) * (0.02 + wind * 0.2);
     const distance = camera.aspect < 1 ? 42 : 34;

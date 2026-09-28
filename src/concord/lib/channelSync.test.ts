@@ -141,7 +141,7 @@ describe("channelSync — the c2: topic handler", () => {
 
     const rumors = await m.queryChannelRumors(CID, channel.idHex, { limit: 10 });
     expect(rumors.map((r) => r.content).sort()).toEqual(["msg-0", "msg-1", "msg-2"]);
-    const cursor = await m.readChannelCursor(channel.idHex);
+    const cursor = await m.readStreamCursor(channel.idHex);
     // Pass 1 read everything (short page, no failures), so `newest` sealed at
     // the top; the older pass came back empty, which is inconclusive — never
     // recorded as exhaustion.
@@ -255,7 +255,7 @@ describe("channelSync — the c2: topic handler", () => {
     const release = m.want(topic);
     try {
       // The first older page has landed and been accounted for.
-      await vi.waitFor(async () => expect((await m.readChannelCursor(channel.idHex))?.oldest).toBe(at(20)), { timeout: 30_000 });
+      await vi.waitFor(async () => expect((await m.readStreamCursor(channel.idHex))?.oldest).toBe(at(20)), { timeout: 30_000 });
       release();
       expect(m.syncState(topic).lastSyncedAt).toBeUndefined();
       const stored = await m.queryChannelRumors(CID, channel.idHex, { limit: 200 });

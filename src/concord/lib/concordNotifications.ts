@@ -9,11 +9,9 @@ import type { Community } from "@/concord/lib/types";
 import { everyoneMentionAuthors } from "@/concord/lib/everyoneMention";
 
 /**
- * One stream address of a Concord channel (one per held epoch): the wrap author to
- * filter on and the NIP-44 self-ECDH conversation key that opens its wraps.
- * The stream SECRET key is deliberately NOT shipped to native code — the
- * conversation key decrypts (all the notification needs); NIP-42 stream auth
- * stays in the WebView (see streamAuth.ts).
+ * One stream address of a Concord channel (one per held epoch). The stream
+ * SECRET is deliberately not shipped to native code — the conversation key
+ * decrypts; NIP-42 stream auth stays in the WebView (see streamAuth.ts).
  */
 export interface ConcordStream {
   /** Stream address (x-only pubkey hex) — the kind-1059 `authors` filter entry. */
@@ -25,16 +23,13 @@ export interface ConcordStream {
 }
 
 /**
- * A native-notification subscription for one Concord channel: the relays
- * its wraps live on, the per-epoch stream addresses + decrypt keys, and the
- * display names / ids for the notification and its deep link
- * (/c/<communityId>/<channelId>). The native service filters
- * `{kinds:[1059], authors:[…pk]}` and opens wrap → seal → rumor with the
- * supplied conversation key to show "<sender>: <preview>".
+ * A native-notification subscription for one channel: relays, per-epoch stream
+ * addresses + decrypt keys, and names/ids for the notification and deep link
+ * (/c/<communityId>/<channelId>). The service filters `{kinds:[1059], authors}`
+ * and opens wrap → seal → rumor.
  */
 export interface ConcordSub {
   relays: string[];
-  /** Community id (hex) for the deep link. */
   communityId: string;
   communityName: string;
   /** Channel id (hex): deep-link segment + the rumor's `channel` binding tag. */
@@ -43,32 +38,21 @@ export interface ConcordSub {
   /** The CURRENT epoch's stream only — retired epochs are read-cutoff history and never notify. */
   streams: ConcordStream[];
   /**
-   * The community's folded set of banned authors (CORD-04), as sorted hex
-   * pubkeys. A community-level fact carried on every channel's sub so each
-   * background notifier (the Android service, the web-push worker, the iOS
-   * extension) can drop a banned member's message BEFORE it becomes a
-   * notification — the same suppression `foldTimeline` applies on read. Sorted
-   * for a stable config signature, so a mere refetch doesn't churn the native
-   * config. Optional so a synthetic sub without it is read as "no bans" rather
-   * than failing to type-check.
+   * The community's banned authors (CORD-04), sorted hex, so background notifiers
+   * drop them before notifying (as `foldTimeline` does). Sorted for a stable
+   * config signature.
    */
   banned?: string[];
   /** Authors currently allowed to issue @everyone in this channel. */
   mentionEveryoneAuthors?: string[];
   /**
-   * The community's encrypted icon pointer (CORD-02 §6), for the native
-   * per-community notification group summary. The service fetches the blob,
-   * AES-GCM decrypts with `key`/`nonce`, and verifies `hash`. Omitted when the
-   * community has no icon.
+   * Encrypted icon pointer (CORD-02 §6) for the notification group summary;
+   * AES-GCM with `key`/`nonce`, verified against `hash`.
    */
   communityImage?: { url: string; key: string; nonce: string; hash: string };
   /**
-   * The community's CORD-08 disappearing-message timer (seconds; 0 = off),
-   * read from the control fold's metadata. The native quick reply stamps its
-   * rumor + wrap with `sendTime + timerSecs` so a reply sent from the
-   * notification shade disappears like any other message. A snapshot, like
-   * every other field here: a timer changed while the app is dead applies
-   * from the next reconfigure.
+   * CORD-08 disappearing timer (seconds; 0 = off), so native quick replies expire
+   * like any message. A snapshot until the next reconfigure.
    */
   timerSecs: number;
   /** Public repository attachments folded from this channel's local metadata. */
@@ -76,11 +60,9 @@ export interface ConcordSub {
 }
 
 /**
- * Build the per-channel Concord notification subscriptions for one community from
- * its rehydrated runtime shape + its (possibly cached) Control fold. Also
- * returns the channels' stream GroupKeys so the caller can register them for
- * NIP-42 stream auth (an auth-gating relay requires every `authors` entry to
- * be authenticated; the signing happens in the WebView).
+ * Build one community's per-channel notification subscriptions. Also returns the
+ * stream GroupKeys for NIP-42 registration (auth-gating relays require every
+ * `authors` entry authenticated).
  */
 export function buildConcordSubs(
   community: Community,
@@ -91,20 +73,16 @@ export function buildConcordSubs(
   if (community.relays.length === 0) return { subs, streamKeys };
 
   const communityName = folded?.metadata?.name || community.name || "Community";
-  // The community icon (if any) is the same for every channel — decrypted
-  // natively for the group summary's large icon.
   const icon = folded?.metadata?.icon;
   const communityImage = icon
     ? { url: icon.url, key: icon.key, nonce: icon.nonce, hash: icon.hash }
     : undefined;
   const timerSecs = messageExpirationOf(folded?.metadata);
-  // Community-wide, so the same set brands every channel's sub. Sorted so the
-  // config signature is stable across refetches.
+  // Sorted for a stable config signature.
   const banned = folded ? [...folded.banned].sort() : [];
   for (const channel of channelsView(community, folded)) {
     if (channel.streams.length === 0) continue;
-    // EVERY held epoch registers for NIP-42 stream auth (backfill still reads
-    // retired epochs from auth-gating relays)…
+    // EVERY held epoch registers for NIP-42 (backfill reads retired epochs)…
     streamKeys.push(...channel.streams.map((s) => s.group));
     const mentionEveryoneAuthors = folded
       ? everyoneMentionAuthors(folded.roster, folded.ownerHex, [channel.idHex])
@@ -115,9 +93,7 @@ export function buildConcordSubs(
       communityName,
       channelId: channel.idHex,
       channelName: channel.name,
-      // …but the native service only ever LISTENS on the current epoch: a
-      // retired epoch is read-cutoff history — nothing on it may notify, and
-      // its address must not stay open as a live socket filter.
+      // …but only the current epoch is listened on: retired epochs never notify.
       streams: [
         {
           pk: channel.current.group.pk,
@@ -132,8 +108,7 @@ export function buildConcordSubs(
       gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
     });
   }
-  // Deterministic order (ids, not display names) so a mere refetch/rename
-  // doesn't churn the native config and tear down live connections.
+  // Deterministic order so a refetch/rename doesn't churn the native config.
   subs.sort((a, b) =>
     a.communityId !== b.communityId
       ? a.communityId < b.communityId ? -1 : 1

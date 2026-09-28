@@ -15,22 +15,15 @@ export interface KickResult {
 }
 
 interface KickMembersDialogProps {
-  /** The pubkeys queued for kicking; null keeps the dialog closed. */
   targets: string[] | null;
-  /** Selected members the actor can't act on — shown as skipped, never sent. */
+  /** Members the actor can't act on — shown as skipped, never sent. */
   ineligible?: string[];
   onClose: () => void;
-  /** Runs the batch; reports progress per member. Throws only if nothing landed. */
+  /** Throws only if nothing landed. */
   onConfirm: (targets: string[], onProgress: (done: number, total: number) => void) => Promise<KickResult>;
 }
 
-/**
- * Kick confirmation + per-member progress. A kick is per-target on the wire
- * (strip, then the Guestbook directive — no batch form exists), so a mass kick
- * runs sequentially and the dialog reports how far it got. Partial success is
- * shown, not hidden: 9 of 10 landing beats aborting at #2, and the failures
- * are listed for a retry.
- */
+/** Kick confirmation. Kicks are per-target on the wire, so they run sequentially and partial success is shown. */
 export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: KickMembersDialogProps) {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [failures, setFailures] = useState<{ target: string; message: string }[]>([]);
@@ -45,7 +38,7 @@ export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: K
   }, [targets]);
 
   const run = async () => {
-    // A retry resends ONLY what failed — the rest already left the guestbook.
+    // Retry resends ONLY failures.
     const batch = failures.length > 0 ? failures.map((f) => f.target) : targets;
     if (!batch || batch.length === 0) return;
     setError(null);
@@ -55,7 +48,6 @@ export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: K
       const result = await onConfirm(batch, (done, total) => setProgress({ done, total }));
       setProgress(null);
       if (result.failed.length > 0) {
-        // Stay open: the partial outcome is the information.
         setFailures(result.failed);
       } else {
         onClose();
@@ -80,10 +72,7 @@ export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: K
         title={count > 1 ? "Kick members" : "Kick member"}
         className="sm:max-w-sm focus:outline-none"
         onOpenAutoFocus={(e) => {
-          // Keep initial focus off Cancel: a programmatic focus reads as
-          // keyboard focus and paints a ring around the cut-corner button on
-          // open. Focus the dialog surface instead — focus stays trapped and
-          // Escape still works; the first Tab moves to the buttons.
+          // Keep initial focus off Cancel (paints a ring on open); focus stays trapped.
           e.preventDefault();
           (e.currentTarget as HTMLElement | null)?.focus();
         }}

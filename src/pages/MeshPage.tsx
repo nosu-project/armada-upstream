@@ -45,20 +45,16 @@ import { cn } from "@/lib/utils";
 import type { ChatTransport } from "@/components/chat/transport";
 import type { MeshPeer } from "@/lib/bluetoothMesh";
 
-/**
- * What the chat pane is currently showing. `null` is the "nothing selected"
- * landing state (mobile: the sidebar is revealed; desktop: a prompt).
- */
+/** What the chat pane shows; `null` is the nothing-selected landing state. */
 type MeshView =
   | { type: "broadcast" }
   | { type: "dm"; peerID: string }
   | null;
 
 /**
- * Bluetooth mesh chat for nearby bitchat-compatible devices. Mirrors the
- * server/channel shape (`ChannelSidebarView` + `SwipeReveal`) so it reads as a
- * "Mesh" server: a `# nearby mesh` channel for the broadcast room, and a
- * Members roster of nearby peers whose rows open native Noise XX DMs.
+ * Bluetooth mesh chat with nearby bitchat-compatible devices, shaped like a
+ * "Mesh" server: a `# nearby mesh` broadcast channel and a Members roster whose
+ * rows open native Noise XX DMs.
  */
 export function MeshPage() {
   const { user } = useCurrentUser();
@@ -67,15 +63,13 @@ export function MeshPage() {
   const { transport, mesh, send, sendPrivate } = useMeshTransport();
   const [view, setView] = useState<MeshView>(null);
   const [draft, setDraft] = useState("");
-  // Nearby-members panel beside the broadcast room (mirrors Concord's member
-  // pane): desktop shows/hides it inline; mobile slides it over.
+  // Nearby-members panel beside the broadcast room (like Concord's member pane).
   const [membersVisible, setMembersVisible] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { insertAtCursor } = useInsertText(textareaRef, draft, setDraft);
 
-  // A peer that drops off the roster (left Bluetooth range) shouldn't leave the
-  // DM pane pointing at a dead peer — fall back to the landing state.
+  // A peer that left range shouldn't leave the DM pane pointing at it.
   useEffect(() => {
     if (view?.type === "dm" && !mesh.peers.some((p) => p.peerID === view.peerID)) {
       setView(null);
@@ -96,10 +90,8 @@ export function MeshPage() {
     [mesh.directMessages, mesh.started, selectedPeer, transport.isLoading],
   );
 
-  // Resolve a mesh message author (its `pubkey` is the sender's peer id) to a
-  // display identity: our own messages get the reserved self color; known peers
-  // use their announced nickname; everyone gets a deterministic color + a
-  // `#abcd` suffix from the peer id so same-named/anon peers stay distinct.
+  // Mesh author (peer id) → identity: reserved self color, announced nickname,
+  // and a deterministic color + `#abcd` suffix so same-named peers stay distinct.
   const nicknameByPeer = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of mesh.peers) map.set(p.peerID, p.nickname);
@@ -115,9 +107,7 @@ export function MeshPage() {
     [mesh.myPeerID, mesh.myNickname, nicknameByPeer],
   );
 
-  // Insert an @-mention of a peer (by id) at the composer cursor — the same
-  // `@name#suffix` token the mention autocomplete inserts, so it chips and
-  // routes identically. Used by the message author popover's "Mention" action.
+  // Insert the same `@name#suffix` token the mention autocomplete does.
   const mentionPeer = useCallback(
     (peerID: string) => {
       const token = `${meshMentionToken(resolveIdentity(peerID))} `;
@@ -130,7 +120,6 @@ export function MeshPage() {
     [resolveIdentity, insertAtCursor, draft],
   );
 
-  // Open the Noise XX DM with a peer — the author popover's "Message" action.
   const openDM = useCallback((peerID: string) => setView({ type: "dm", peerID }), []);
 
   if (!user) {
@@ -139,7 +128,6 @@ export function MeshPage() {
 
   const activeTransport = view?.type === "dm" ? directTransport : transport;
 
-  // Send already-resolved text over the active channel (broadcast or this DM).
   const sendText = async (content: string) => {
     if (!content || !mesh.started || !view) return;
     if (view.type === "dm") {
@@ -154,22 +142,19 @@ export function MeshPage() {
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  // Open the `@` picker, optionally seeding the draft (e.g. "/slap @").
   const openMentionPicker = (prefix?: string) => {
     setDraft(`${prefix ?? ""}@`);
     focusComposer();
   };
 
-  // How the mesh dispatches a slash command's result. The mesh supports only
-  // text rewrites + `/mention` (gated by `isMeshSlashCommand`), so it provides
-  // no `onAction`; the shared runner reports any other action as unavailable.
+  // Mesh supports only text rewrites + `/mention` (`isMeshSlashCommand`), so no `onAction`.
   const slashHandlers: SlashCommandHandlers = {
     send: async (text) => {
       setDraft("");
       try {
         await sendText(text);
       } catch {
-        // Surface failures by restoring the draft so the user can retry.
+        // Restore the draft so the user can retry.
         setDraft(text);
       }
     },
@@ -183,8 +168,6 @@ export function MeshPage() {
   const runSlash = (command: SlashCommand, arg: string) =>
     executeSlashCommand(command, arg, { canModerate: false, resolvePubkey: () => undefined }, slashHandlers);
 
-  // Run a slash command picked from the menu (Tab/Enter/tap). Argument-less
-  // ones run on select; the typed command word is the only arg context.
   const runCommandFromMenu = (command: SlashCommand) => {
     const parsed = parseSlashCommand(draft);
     void runSlash(command, parsed?.command === command ? parsed.arg : "");
@@ -194,22 +177,21 @@ export function MeshPage() {
     const content = draft.trim();
     if (!content || !mesh.started || !view) return;
 
-    // Slash commands: rewrite/redirect before sending. A bare command word is
-    // also handled here (e.g. "/me" with no text → error, not a literal send).
+    // A bare command word is handled too ("/me" alone → error, not a literal send).
     if (content.startsWith("/")) {
       const parsed = parseSlashCommand(content);
       if (parsed) {
         await runSlash(parsed.command, parsed.arg);
         return;
       }
-      // Unknown /command: fall through and send it literally.
+      // Unknown /command: sent literally.
     }
 
     setDraft("");
     try {
       await sendText(content);
     } catch {
-      // Surface failures by restoring the draft so the user can retry.
+      // Restore the draft so the user can retry.
       setDraft(content);
     }
   };
@@ -267,9 +249,7 @@ export function MeshPage() {
             <div className="relative flex flex-1 min-h-0">
               <div className="flex-1 min-w-0 flex flex-col">
                 <MessageTimeline
-                  // Remount per conversation so the timeline's "had messages"
-                  // skeleton guard resets on switch — otherwise leaving the
-                  // populated broadcast for an empty DM looks perpetually loading.
+                  // Remount per conversation to reset the "had messages" skeleton guard.
                   key={view.type === "dm" ? `dm:${view.peerID}` : "broadcast"}
                   transport={activeTransport}
                   className="flex-1 min-h-0"
@@ -282,7 +262,6 @@ export function MeshPage() {
                       peers={mesh.peers}
                       myPeerID={mesh.myPeerID}
                       continuation={continuation}
-                      // Don't offer "Message" for a peer whose DM is already open.
                       onMessage={
                         view.type === "dm" && view.peerID === msg.pubkey ? undefined : openDM
                       }
@@ -292,8 +271,6 @@ export function MeshPage() {
                 />
 
                 <div className="relative px-3 pb-safe pt-1 shrink-0">
-                  {/* Autocompletes anchor to the composer textarea. Mentions suggest
-                      nearby peers; slash commands offer the mesh-appropriate set. */}
                   <MeshMentionAutocomplete
                     textareaRef={textareaRef}
                     content={draft}
@@ -314,8 +291,7 @@ export function MeshPage() {
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
-                        // When send-on-Enter is off, Enter is a newline and
-                        // Ctrl/Cmd+Enter sends.
+                        // With send-on-Enter off, Ctrl/Cmd+Enter sends.
                         const sendKey = sendsOnEnter(config.sendOnEnter, isTouch)
                           ? e.key === "Enter" && !e.shiftKey
                           : e.key === "Enter" && (e.ctrlKey || e.metaKey);
@@ -342,8 +318,6 @@ export function MeshPage() {
                 </div>
               </div>
 
-              {/* Nearby-members panel (broadcast room only). Width-animated on
-                  desktop, slide overlay on mobile — mirrors Concord. */}
               {view.type === "broadcast" && (
                 <MeshMemberPanel
                   peers={mesh.peers}
@@ -370,12 +344,7 @@ export function MeshPage() {
   );
 }
 
-/**
- * The mesh "server" sidebar: a Mesh title, a `# nearby mesh` channel for the
- * broadcast room, and a Members roster of nearby peers (rows open Noise XX
- * DMs). Built on the shared {@link ChannelSidebarView} so it renders the same
- * frame as the NIP-29 channel list and Concord.
- */
+/** The mesh "server" sidebar, on the shared {@link ChannelSidebarView}. */
 function MeshSidebar({
   view,
   available,
@@ -436,7 +405,6 @@ function MeshSidebar({
         </div>
       }
     >
-      {/* Channels: the single broadcast room. */}
       <ChannelRow
         icon={<Hash className="size-4 shrink-0" />}
         label="nearby mesh"
@@ -459,7 +427,6 @@ function MeshSidebar({
         </div>
       )}
 
-      {/* Members: nearby peers. Tapping one opens a native Noise XX DM. */}
       <h3 className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         Nearby{peers.length > 0 ? ` · ${peers.length}` : ""}
       </h3>
@@ -487,7 +454,6 @@ function MeshSidebar({
   );
 }
 
-/** A channel-list row matching `ChannelSidebar`'s `ChannelLink` styling. */
 function ChannelRow({
   icon,
   label,
@@ -518,7 +484,6 @@ function ChannelRow({
   );
 }
 
-/** A member roster row (a nearby mesh peer) styled like a channel row. */
 function MemberRow({
   peer,
   active,
@@ -551,7 +516,6 @@ function MemberRow({
   );
 }
 
-/** Chat-pane header (broadcast room or a peer DM). */
 function ChatHeader({
   view,
   peer,
@@ -582,7 +546,6 @@ function ChatHeader({
 
   return (
     <header className="relative h-12 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
-      {/* Mobile back → slides the chat away to reveal the mesh sidebar. */}
       <Button
         variant="ghost"
         size="icon"
@@ -607,8 +570,6 @@ function ChatHeader({
         <span className="text-[11px] text-muted-foreground/60 shrink-0">#{dmIdentity.suffix}</span>
       )}
       <span className="flex-1" />
-      {/* Nearby-members toggle (broadcast room only) — shows/hides the peer
-          roster panel, mirroring Concord's members button. */}
       {!isDm && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -629,8 +590,7 @@ function ChatHeader({
           <TooltipContent>{membersShown ? "Hide nearby" : `Nearby · ${peerCount}`}</TooltipContent>
         </Tooltip>
       )}
-      {/* Incognito toggle: ON (default) announces an anon name; OFF reveals the
-          Armada display name to nearby devices. */}
+      {/* Incognito ON (default) announces an anon name; OFF reveals the display name. */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -660,11 +620,7 @@ function ChatHeader({
   );
 }
 
-/**
- * The nearby-peers roster shown beside the broadcast room. Mirrors Concord's
- * member panel: a width-animated in-flow pane on desktop and a slide-over
- * overlay on mobile. Rows open a Noise XX DM with the peer.
- */
+/** Nearby-peers roster beside the broadcast room (inline on desktop, slide-over on mobile). */
 function MeshMemberPanel({
   peers,
   activePeerID,
@@ -694,7 +650,6 @@ function MeshMemberPanel({
         visible && "sidebar:w-[16.5rem]",
       )}
     >
-      {/* Mobile backdrop: fades in/out in sync with the panel slide. */}
       <div
         className={cn(
           "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
@@ -709,7 +664,6 @@ function MeshMemberPanel({
         )}
       >
         <aside className="flex flex-col h-full w-full sidebar:w-[16.5rem] mx-2 mt-3 mb-2 clip-corner-lg bg-chrome overflow-hidden">
-          {/* Mobile-only header with a close button. */}
           <div className="flex items-center justify-between px-4 h-12 shrink-0 sidebar:hidden">
             <span className="text-sm font-semibold">Nearby</span>
             <Button variant="ghost" size="icon" aria-label="Close nearby" className="size-8 touch:size-11" onClick={onClose}>
@@ -777,9 +731,8 @@ function UnavailableState() {
 }
 
 /**
- * The opt-in landing state: mesh is supported on this device but the user
- * hasn't turned it on. Nothing Bluetooth-related happens (no permission
- * prompt, no foreground service) until they do.
+ * Opt-in landing: nothing Bluetooth-related (permission prompt, foreground
+ * service) happens until the user enables mesh.
  */
 function DisabledState({ onEnable }: { onEnable: () => void }) {
   return (

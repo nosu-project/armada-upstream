@@ -24,19 +24,13 @@ import { cn } from "@/lib/utils";
 
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 
-/** One gallery entry: an image, or a video with an optional poster frame. */
 export interface LightboxItem extends EncryptedRef {
   /** Video poster frame (NIP-94 `image`/`thumb`); ignored for images. */
   poster?: string;
-  /**
-   * Behind a spoiler (imeta `content-warning`). Swiping onto one shows a
-   * cover, not the media: a message's other images being open is not consent
-   * to this one.
-   */
+  /** imeta `content-warning`: swiping onto it shows a cover (other images open isn't consent). */
   spoiler?: boolean;
 }
 
-/** Videos get a player slot instead of a zoomable image one. */
 function isVideoItem(item: LightboxItem): boolean {
   return item.mime?.startsWith("video/") ?? false;
 }
@@ -53,56 +47,35 @@ const EASING = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
 const DURATION = 280;
 
 /**
- * A slot's place in the strip: `delta` whole strip-widths from the current
- * one, plus the live drag. In percent of the slot's own width (which is the
- * strip's) rather than pixels of `window.innerWidth`, so a rotation or a
- * resized window moves the neighbours with it — a pixel offset captured in
- * portrait leaves the next slot, which paints above the current one, covering
- * the right half of a landscape screen.
+ * In percent of the slot's width, not pixels, so rotation/resizes move the
+ * neighbours too (a stale pixel offset let the next slot cover the screen).
  */
 function slotTransform(delta: number, offsetPx: number): string {
   return offsetPx === 0 ? `translateX(${delta * 100}%)` : `translateX(calc(${delta * 100}% + ${offsetPx}px))`;
 }
 
 /**
- * Fullscreen media lightbox — cinematic gallery ported from Ditto.
- *
- * Features: horizontal swipe between items (a slot strip that keeps decoded
- * images in memory so neighbours don't reload), pinch / wheel / double-tap zoom
- * and pan per image, vertical swipe-to-dismiss (disabled while zoomed), keyboard
- * navigation (arrows + Escape), dot indicators, and a download / open-original
- * button.
- *
- * Each slot is rendered at a stable key and positioned absolutely at
- * `translateX((index - currentIndex) * 100% + dragOffset)`; only the current
- * item and its immediate neighbours are mounted to cap DOM size.
- *
- * A video slot plays in place with native controls, which is why every gesture
- * here — the strip drag, swipe-to-dismiss, the backdrop click and the arrow
- * keys — bows out when the interaction starts on a `<video>`: the scrubber and
- * the volume slider are drags too, and losing them to a slide or a dismiss
- * makes the controls unusable.
+ * Fullscreen media lightbox ported from Ditto: swipe strip (neighbours stay
+ * decoded), zoom/pan, swipe-to-dismiss, keyboard nav. Only current ± 1 slots
+ * mount. Every gesture stands down when started on a `<video>`, whose native
+ * controls are drags too.
  */
 export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: LightboxProps) {
   const hasMultiple = media.length > 1;
   const canGoNext = currentIndex < media.length - 1;
   const canGoPrev = currentIndex > 0;
 
-  // Spoilers revealed in THIS viewing, by URL. The item it opened on was
-  // chosen by the viewer, so it starts revealed; every other spoiler is
-  // covered until tapped.
+  // Spoilers revealed in this viewing, by URL; the opened item starts revealed.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set([media[currentIndex]?.url ?? ""]));
   const covered = (item: LightboxItem) => !!item.spoiler && !revealed.has(item.url);
   const currentCovered = media[currentIndex] ? covered(media[currentIndex]) : false;
 
-  // System back (Android gesture/button, or the browser's) closes the
-  // lightbox instead of navigating the underlying screen.
+  // System back closes the lightbox instead of navigating.
   useOverlayBack(() => {
     onClose();
     return true;
   });
 
-  // Lock body scroll while open.
   useEffect(() => {
     const original = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -111,11 +84,10 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     };
   }, []);
 
-  // Keyboard navigation.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      // Arrows seek a focused video; only navigate when one isn't handling them.
+      // Arrows seek a focused video.
       else if ((e.target as HTMLElement | null)?.closest?.("video")) return;
       else if (e.key === "ArrowRight" && canGoNext) onNext();
       else if (e.key === "ArrowLeft" && canGoPrev) onPrev();
@@ -124,7 +96,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     return () => window.removeEventListener("keydown", handler);
   }, [onClose, onNext, onPrev, canGoNext, canGoPrev]);
 
-  // ── Gesture state (refs → direct DOM mutation for 60fps, no re-render) ──────
+  // Gesture state lives in refs with direct DOM mutation (60fps, no re-render).
   const containerRef = useRef<HTMLDivElement>(null);
   const dragOffsetRef = useRef(0);
   const verticalOffsetRef = useRef(0);
@@ -132,10 +104,8 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
   const dragY = useRef<number | null>(null);
   const axis = useRef<"h" | "v" | null>(null);
   const animating = useRef(false);
-  /** Whether the current image is zoomed (blocks strip + dismiss gestures). */
   const childZoomedRef = useRef(false);
 
-  // One DOM node per rendered slot, keyed by image index.
   const slotRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const setSlotTransform = useCallback(
@@ -155,7 +125,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     [setSlotTransform],
   );
 
-  /** Vertical swipe-to-dismiss: fade backdrop in place, translate content. */
   const applyVerticalDismiss = useCallback((offsetY: number, transition: string) => {
     const el = containerRef.current;
     if (!el) return;
@@ -171,25 +140,20 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
 
   const currentIsVideo = media[currentIndex] ? isVideoItem(media[currentIndex]) : false;
 
-  // Snap all slots into place when the index changes (keyboard/button nav).
   useEffect(() => {
     dragOffsetRef.current = 0;
     snapAll(0);
-    // Only an image slot reports its zoom, so arriving at a video would inherit
-    // whatever the last image left behind — and a stale lock freezes the strip
-    // and dismiss gestures on a slot that can't clear it.
+    // Only image slots report zoom; clear it on a video or a stale lock freezes gestures.
     if (currentIsVideo) childZoomedRef.current = false;
   }, [currentIndex, currentIsVideo, snapAll]);
 
-  // Clear the animating lock on unmount so stale refs can't block controls.
   useEffect(() => () => {
     animating.current = false;
   }, []);
 
   const onTouchStart = (e: React.TouchEvent) => {
     if (animating.current) return;
-    // A touch that lands on the video player belongs to its controls (scrubber,
-    // volume, the ⋯ menu), not to the strip or the swipe-to-dismiss.
+    // Touches on the video player belong to its controls.
     if ((e.target as HTMLElement).closest("video, [data-video-player]")) {
       dragX.current = null;
       dragY.current = null;
@@ -208,7 +172,7 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     verticalOffsetRef.current = 0;
   };
 
-  // touchmove is registered non-passively so we can preventDefault().
+  // Registered non-passively so we can preventDefault().
   const onTouchMoveRef = useRef((_e: TouchEvent) => {});
   onTouchMoveRef.current = (e: TouchEvent) => {
     if (dragX.current === null || dragY.current === null || animating.current) return;
@@ -242,7 +206,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
   }, []);
 
   const onTouchEnd = (e: React.TouchEvent) => {
-    // Vertical swipe-to-dismiss.
     if (axis.current === "v" && dragY.current !== null && !childZoomedRef.current) {
       const dy = e.changedTouches[0].clientY - dragY.current;
       dragX.current = null;
@@ -304,7 +267,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     const target = e.target as HTMLElement;
     if (
       target.tagName === "IMG" ||
-      // Tapping a video toggles playback / works its controls; it never closes.
       target.closest("video") ||
       target.closest("button") ||
       target.closest("[data-gallery-topbar]")
@@ -316,7 +278,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
     onClose();
   };
 
-  // Only the current item and its immediate neighbours are mounted.
   const visibleIndices = [currentIndex - 1, currentIndex, currentIndex + 1].filter(
     (i) => i >= 0 && i < media.length,
   );
@@ -331,12 +292,9 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
       role="dialog"
       aria-modal="true"
     >
-      {/* Backdrop — fades in place, never translates. */}
       <div className="absolute inset-0 bg-black/90 backdrop-blur-md" />
 
-      {/* Content layer — translates together during swipe-to-dismiss. */}
       <div data-lightbox-content className="absolute inset-0">
-        {/* Top bar */}
         <div
           data-gallery-topbar
           className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between px-4 py-3 safe-area-top"
@@ -371,7 +329,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
           </div>
         </div>
 
-        {/* Prev / next buttons (desktop) */}
         {canGoPrev && (
           <button
             type="button"
@@ -401,7 +358,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
           </button>
         )}
 
-        {/* Per-image slots — each absolutely positioned by index offset. */}
         <div data-lightbox-strip className="absolute inset-0 overflow-hidden">
           {visibleIndices.map((i) => {
             return (
@@ -449,7 +405,6 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
           })}
         </div>
 
-        {/* Dot indicators (mobile) */}
         {hasMultiple && media.length <= 10 && (
           <div className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 bottom-6 sm:hidden">
             {media.map((_, i) => (
@@ -470,13 +425,9 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
 }
 
 /**
- * Top-bar button that saves the current item to the device.
- *
- * The bytes are fetched from the *resolved* source (a local `blob:` URL for
- * encrypted / Buzz media, the original `https:` URL otherwise) and written to
- * disk — Downloads on the web, the app's Documents directory on native, where
- * a `blob:` anchor download silently fails. Cross-origin hosts without CORS
- * can't be read, so `downloadUrl` falls back to opening the file instead.
+ * Save the current item from its *resolved* source (blob: for encrypted/Buzz
+ * media). Native writes to Documents (blob: anchors fail in the WebView);
+ * non-CORS hosts fall back to opening the file.
  */
 function LightboxDownloadButton({ item }: { item: LightboxItem }) {
   const noun = isVideoItem(item) ? "video" : "image";
@@ -532,14 +483,8 @@ function LightboxDownloadButton({ item }: { item: LightboxItem }) {
 }
 
 /**
- * Top-bar button that hands the current item to the system share sheet.
- *
- * Shares the FILE, never the URL: an encrypted attachment's `url` points at
- * ciphertext whose key never leaves this client, and the resolved `blob:` src
- * means nothing outside this document — either way a link would give the
- * recipient something they can't open. Hidden entirely where the platform's
- * share sheet can't carry a file (desktop Firefox, older Safari), since the
- * download button already covers that case.
+ * Share the FILE, never the URL (ciphertext or a document-local blob: is
+ * useless to recipients). Hidden where the share sheet can't carry files.
  */
 function LightboxShareButton({ item }: { item: LightboxItem }) {
   const noun = isVideoItem(item) ? "video" : "image";
@@ -588,14 +533,8 @@ function LightboxShareButton({ item }: { item: LightboxItem }) {
 }
 
 /**
- * A single lightbox video — the same {@link VideoPlayer} the message list uses,
- * scaled to the slot.
- *
- * No zoom or pan: the native controls own this surface, and the parent's
- * gestures already stand down for touches that start on a `<video>`. Playback
- * starts paused (a slide is not consent to make noise) and a slot that stops
- * being current is paused, so swiping on won't leave audio playing behind the
- * item you're looking at.
+ * A lightbox video via {@link VideoPlayer}. No zoom/pan; starts paused and
+ * pauses when no longer current.
  */
 function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -604,11 +543,8 @@ function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boo
     if (!isActive) videoRef.current?.pause();
   }, [isActive]);
 
-  // Context crosses the portal: a lightbox opened from a message still sits
-  // under that row's image menu, and a long-press here would open the
-  // message's action sheet behind the lightbox (or behind a fullscreen
-  // video), locking the page's pointer events. The top bar carries this
-  // video's actions instead.
+  // Context crosses the portal: without a fresh provider a long-press would open
+  // the message's action sheet behind the lightbox, locking pointer events.
   return (
     <ChatImageMenuContext.Provider value={null}>
       <div className="w-full h-full flex items-center justify-center">
@@ -621,12 +557,9 @@ function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boo
           blurhash={video.blurhash}
           encryption={video.encryption}
           fallbacks={video.fallbacks}
-          // The lightbox top bar already carries Download and Share, so the
-          // in-player ⋯ menu would only duplicate them here.
+          // The top bar already has Download and Share.
           hideActionsMenu
-          // The player's inline chrome (framed black card, capped at max-w-md)
-          // is wrong at full screen: let it fill the slot and drop the frame, so
-          // any letterboxing is just the backdrop showing through.
+          // Fill the slot without the inline player's framed card.
           className="my-0 w-full max-w-4xl max-h-full border-0 rounded-none bg-transparent"
         />
       </div>
@@ -635,13 +568,8 @@ function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boo
 }
 
 /**
- * The image's own actions — the same ones the chat image menu offers, minus
- * "Open" (the lightbox IS open). Save and Share also live in the top bar; the
- * menu carries them too so a right-click / long-press on the image is the same
- * menu as in the message list rather than a different, shorter one.
- *
- * Each is gated the same way its chat counterpart is: Save works everywhere,
- * Share needs a file-capable share sheet, Copy needs a real image clipboard.
+ * The image's own menu actions (chat image menu minus "Open"), each gated like
+ * its chat counterpart.
  */
 async function saveLightboxImage(src: string, image: EncryptedRef): Promise<void> {
   try {
@@ -696,7 +624,6 @@ async function copyLightboxImage(src: string): Promise<void> {
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
 
-/** A single lightbox image with pinch / wheel / double-tap zoom and pan. */
 function LightboxImage({
   image,
   isActive,
@@ -714,7 +641,6 @@ function LightboxImage({
   const wrapRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Zoom/pan state (mutated directly on the DOM for 60fps).
   const scale = useRef(1);
   const panX = useRef(0);
   const panY = useRef(0);
@@ -751,7 +677,6 @@ function LightboxImage({
     panY.current = Math.max(-maxY, Math.min(maxY, panY.current));
   }, []);
 
-  // Reset zoom when the underlying image changes.
   useEffect(() => {
     scale.current = 1;
     panX.current = 0;
@@ -913,9 +838,7 @@ function LightboxImage({
     };
   }, [handleTouchMove, handleWheel]);
 
-  // The image's own menu — the same actions the chat image menu offers, minus
-  // "Open" (the lightbox already is open). Built only once the source has
-  // resolved, and each entry gated exactly as its chat counterpart is.
+  // Built once the source resolves.
   const resolvedSrc = resolved.status === "ready" ? resolved.src : null;
   const actions: { id: string; label: string; icon: typeof Copy; onSelect: () => void }[] = [];
   if (resolvedSrc) {
@@ -955,14 +878,12 @@ function LightboxImage({
       onMouseLeave={handleMouseUp}
       style={{ cursor: scale.current > 1 ? "grab" : "default" }}
     >
-      {/* Every mirror failed: a centered placeholder + manual retry. */}
       {failed && (
         <div className="absolute inset-0 flex items-center justify-center p-4">
           <MediaFallback url={image.url} onRetry={reset} label="Image" className="bg-muted" />
         </div>
       )}
 
-      {/* Loading spinner / blurhash while the current image resolves. */}
       {isActive && !failed && (resolved.status === "loading" || !loaded) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           {image.blurhash ? (
@@ -1008,7 +929,6 @@ function LightboxImage({
     </div>
   );
 
-  // No resolved bytes yet (or nothing the platform can do with them) → no menu.
   if (actions.length === 0) return inner;
 
   return (

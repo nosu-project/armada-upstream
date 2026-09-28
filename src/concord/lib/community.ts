@@ -17,21 +17,15 @@ import {
 import { channelCategory } from "@/concord/lib/channelCategory";
 import { channelPosition, compareChannelOrder } from "@/concord/lib/channelOrder";
 import { channelView } from "@/concord/lib/channelView";
-import { parseInviteLink, type ParsedInviteLink } from "@/concord/lib/invite";
 import type { FoldedControl } from "@/concord/lib/control";
 import { capRelays, type Channel, type Community, type VoiceKeys } from "@/concord/lib/types";
 
 /**
- * Mint a brand-new community: a random `owner_salt` commits the owner into the
- * self-certifying `community_id`, an independent random `community_root` is
- * the access key (deliberately NOT derived from the id, so access can rotate
- * while identity stays fixed), and a random `control_root` — held by the
- * owner alone until staff are promoted — write-gates the Control Plane
- * (CORD-02 §2), every member reading it by the derived `control_pk`.
- *
- * Genesis publishes exactly two owner-signed editions — the metadata and one
- * public `#general` Channel — which the caller builds; this mints the secrets
- * and the runtime shape.
+ * Mint a new community: a random `owner_salt` commits the owner into the
+ * self-certifying `community_id`; an independent random `community_root` is the
+ * access key (so access can rotate while identity stays fixed); a random
+ * `control_root` write-gates the Control Plane (CORD-02 §2), read via the
+ * derived `control_pk`. The caller builds the genesis editions.
  */
 export function mintCommunity(name: string, ownerPubkeyHex: string, relays: string[]): {
   community: Community;
@@ -64,17 +58,11 @@ export function mintCommunity(name: string, ownerPubkeyHex: string, relays: stri
 }
 
 /**
- * Assemble the channels the member can actually read from the Control fold +
- * held keys:
+ * The channels the member can read, from the Control fold + held keys:
  *
- *   - a PUBLIC channel derives its stream from the community_root per held
- *     root epoch (readable by every member, rotates with the base for free);
- *   - a PRIVATE channel needs its independent key from the member's bundle —
- *     lacking it, the channel is omitted (its ciphertext is unreadable anyway);
- *   - deleted channels are dropped from display (history stays decryptable to
- *     anyone who held the keys, but that's a future "archive" view).
- *
- * Ordered by name for a stable sidebar.
+ *   - PUBLIC: streams derive from the community_root per held root epoch;
+ *   - PRIVATE: needs its independent key from the bundle, else omitted;
+ *   - deleted channels are dropped.
  */
 export function channelsView(community: Community, folded: FoldedControl | undefined): Channel[] {
   const out: Channel[] = [];
@@ -82,31 +70,23 @@ export function channelsView(community: Community, folded: FoldedControl | undef
 
   const privateKeysById = new Map(community.privateChannels.map((ch) => [bytesToHex(ch.id), ch]));
 
-  // Every Channel is callable: its call coordinates derive from the same
-  // (secret, epoch) that addresses its CURRENT Chat Plane (CORD-07 §1), so the
-  // room name and media root roll with the Channel's key on a rekey. Each
-  // channel's `voice` property is a LAZY memoized getter over this: the room
-  // keypair costs a secp256k1 point multiplication, and nothing reads voice
-  // keys until a call is joined or resolved for that channel — deriving them
-  // eagerly here priced every channelsView at a point-mul per channel.
+  // Call coordinates derive from the same (secret, epoch) as the CURRENT Chat
+  // Plane (CORD-07 §1), so they roll on rekey. Lazy: the room keypair costs a
+  // point multiplication per channel.
   const voiceKeys = (secret: Uint8Array, id: Uint8Array, epoch: bigint): VoiceKeys => ({
     room: voiceGroupKey(secret, id, epoch),
     mediaKey: voiceMediaKey(secret, id, epoch),
   });
 
   for (const def of folded?.channels.values() ?? []) {
-    // A folded definition is authoritative even when it is a tombstone. Mark
-    // it seen before dropping deleted channels so the held-key fallback below
-    // cannot resurrect a deleted Private Channel as merely "not yet folded".
+    // Mark tombstones seen too, so the held-key fallback can't resurrect a deleted
+    // Private Channel.
     seen.add(def.channelIdHex);
     if (def.deleted) continue;
     const id = hex32(def.channelIdHex);
 
-    // History is not one key. A channel accumulates streams: one per held
-    // ROOT epoch (what it wrote while public) and one per held CHANNEL key,
-    // current and retained priors (what it wrote under each private epoch).
-    // Rendering only the current one is why converting a channel — or simply
-    // rotating its key — appeared to erase the conversation before it.
+    // History spans streams: one per held ROOT epoch (public era) and one per held
+    // CHANNEL key (private eras), so conversions and rotations don't hide history.
     const rootStreams = community.heldRoots.map((r) => ({
       epoch: r.epoch,
       group: channelGroupKey(r.key, id, r.epoch),
@@ -157,26 +137,15 @@ export function channelsView(community: Community, folded: FoldedControl | undef
       get voice() {
         return (voiceMemo ??= voiceKeys(held.key, id, held.epoch));
       },
-      // A Private Channel reads ONLY its channel-key streams — the current key
-      // and every retained prior (a CORD-06 rekey's private-era history), so a
-      // rotation never erases the conversation. It deliberately does NOT fold
-      // in the root-derived (community_root) stream every public channel
-      // shares: those messages are world-readable to the whole membership, so
-      // surfacing them inside a private channel would present public content as
-      // private — whether they are a converted channel's genuine pre-privatise
-      // history (CORD-03 §2 keeps that readable to all, but it is not private)
-      // or, for a born-private channel, whatever a non-conformant client wrote
-      // to that shared address. Publicising re-folds the root stream via the
-      // public branch above; the pre-conversion history is never lost, only
-      // absent from the private view.
+      // A Private Channel reads ONLY its channel-key streams (current + priors). The
+      // shared root stream is world-readable to members, so showing it here would
+      // present public content as private; publicising re-folds it via the public branch.
       streams: channelStreams,
       current: channelStreams[0],
     });
   }
 
-  // Private channels held in the bundle but not (yet) folded from the Control
-  // Plane still render (the fold may lag a fresh join); the fold's name wins
-  // once it lands.
+  // Held-but-not-yet-folded private channels still render (the fold may lag a join).
   for (const held of community.privateChannels) {
     const idHex = bytesToHex(held.id);
     if (seen.has(idHex)) continue;
@@ -192,8 +161,7 @@ export function channelsView(community: Community, folded: FoldedControl | undef
       idHex,
       name: held.name || idHex.slice(0, 8),
       isPrivate: true,
-      // No fold yet, so no metadata to read a view from (it opens as chat);
-      // the fold's wins once it lands, exactly as the name does.
+      // No fold yet: opens as chat until the fold lands.
       get voice() {
         return (voiceMemo ??= voiceKeys(held.key, held.id, held.epoch));
       },
@@ -202,18 +170,6 @@ export function channelsView(community: Community, folded: FoldedControl | undef
     });
   }
 
-  // Position first, then name: one order on every client (channelOrder.ts).
   out.sort(compareChannelOrder);
   return out;
-}
-
-// ── Add-wizard classification ────────────────────────────────────────────────
-
-/** What a pasted "add" input classifies to, Concord-aware. */
-export type AddInput = { kind: "concord"; invite: ParsedInviteLink } | { kind: "other" };
-
-/** Classify a pasted string as a Concord invite, or leave it for other classifiers. */
-export function classifyInvite(input: string): AddInput {
-  const invite = parseInviteLink(input);
-  return invite ? { kind: "concord", invite } : { kind: "other" };
 }

@@ -1,43 +1,15 @@
 /**
- * Client-side send rate limit for Concord communities.
+ * Client-side send rate limit for Concord communities — a speed bump against
+ * paste-and-enter floods, not a defense (any patched client bypasses it).
  *
- * A speed bump, not a defense. Concord has no host to enforce a posting rate,
- * so a member holding the channel's stream key can wrap and broadcast as fast
- * as they can sign — the observed abuse being literally Ctrl+V, Enter, repeat.
- * The real fix belongs in the protocol; this only makes the lazy version of it
- * annoying enough to stop, and any patched client bypasses it trivially.
+ *  1. A token bucket ({@link SEND_BURST}, one back per {@link SEND_REFILL_MS}).
+ *  2. An escalating lockout ({@link LOCKOUT_TIERS}) per fresh violation (sending
+ *     with an empty bucket after the last lockout expired), so pacing to the
+ *     refill doesn't work. Decays one tier per {@link TIER_DECAY_MS} of clean time.
  *
- * Two layers, because a plain bucket sets a spam RATE rather than stopping
- * spam: whoever wants to flood simply paces to the refill and keeps going.
- *
- *  1. A token bucket ({@link SEND_BURST} messages, one back per
- *     {@link SEND_REFILL_MS}) — the part a normal fast conversation lives
- *     inside and never notices.
- *  2. An escalating lockout on top. Sending with an empty bucket is a
- *     violation, and each fresh one moves the community up
- *     {@link LOCKOUT_TIERS}: seconds the first time, minutes if it keeps
- *     happening. Hammering DURING a lockout doesn't escalate — only a
- *     violation after the last one expired does — so the penalty tracks
- *     repeated bouts of flooding, not how hard the key is being held down.
- *
- * The tier decays one step per {@link TIER_DECAY_MS} of clean time after the
- * lockout ends, so someone who trips it once in a lively argument is back to
- * a clean slate rather than permanently on a short fuse.
- *
- * Scoped PER COMMUNITY, not per channel: the unit a person spams is the place,
- * and hopping channels to reset the budget would defeat the point.
- *
- * Lockouts persist to localStorage, and only lockouts (see {@link STORAGE_KEY})
- * — a penalty measured in minutes that a page reload erased would just teach
- * the flooder to reload. localStorage rather than the ArmadaDB KV because the
- * check is on the send path and synchronous, where the KV is async; the state
- * is a few bytes of throwaway bookkeeping, not user data, so losing it costs
- * nothing and none of the migration machinery in `db/schema.ts` applies.
- *
- * Only the kinds a reader sees as a post count ({@link RATE_LIMITED_KINDS}):
- * messages, thread replies and polls. Reactions, edits and deletes are exempt —
- * a fast pass of emoji over a backlog is ordinary behavior, and a delete must
- * never be the thing the budget refuses.
+ * Scoped PER COMMUNITY so channel-hopping doesn't reset it. Only lockouts persist,
+ * in localStorage (the check is synchronous; throwaway state, no migrations).
+ * Only posts count ({@link RATE_LIMITED_KINDS}); reactions/edits/deletes are exempt.
  */
 
 import { KIND_COMMENT, KIND_MESSAGE, KIND_POLL } from "@/concord/lib/kinds";
@@ -50,12 +22,7 @@ export const SEND_REFILL_MS = 3_000;
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 
-/**
- * How long a send is refused for, by how many times the flooding has recurred.
- * The last entry is the ceiling. Tier 1 is a nuisance a fast talker shrugs off;
- * reaching the end takes five separate bouts, each after serving the previous
- * penalty, which no ordinary conversation does by accident.
- */
+/** Lockout length by recurrence count; the last entry is the ceiling. */
 export const LOCKOUT_TIERS: readonly number[] = [15 * SECOND, MINUTE, 5 * MINUTE, 15 * MINUTE, 60 * MINUTE];
 
 /** Clean time (measured from the end of a lockout) that walks the tier back one step. */
@@ -82,12 +49,8 @@ interface Bucket {
 const buckets = new Map<string, Bucket>();
 
 /**
- * Where the penalties survive a reload. Only the PENALTY is persisted — tier
- * and lockout — never the token bucket: it refills inside the shortest tier, so
- * carrying it across a reload would buy nothing, and keeping it out means an
- * ordinary send never touches storage. A reload during a lockout therefore
- * costs the flooder five messages before the restored tier bites again, and
- * escalates them a tier for the trouble.
+ * Where penalties survive a reload. Only tier and lockout persist, never tokens
+ * (they refill within the shortest tier), so ordinary sends never touch storage.
  */
 const STORAGE_KEY = "concord2:send-limit";
 
@@ -108,7 +71,7 @@ function readStored(): Record<string, unknown> {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return parsed as Record<string, unknown>;
   } catch {
-    // Unparseable, or storage denied outright (private mode, blocked cookies).
+    // Unparseable, or storage denied (private mode).
     return {};
   }
 }
@@ -119,9 +82,7 @@ function parsePenalty(value: unknown, now: number): StoredPenalty | undefined {
   const { tier, lockedUntil } = value as Partial<StoredPenalty>;
   if (typeof tier !== "number" || !Number.isInteger(tier) || tier < 1) return undefined;
   if (typeof lockedUntil !== "number" || !Number.isFinite(lockedUntil) || lockedUntil <= 0) return undefined;
-  // A lockout written while the clock was running fast (or edited by hand)
-  // could otherwise hold someone out for years. Nothing legitimate exceeds the
-  // longest tier, so that's the ceiling a restored penalty is clamped to.
+  // Clamp to the longest tier, so a fast clock or hand edit can't lock out for years.
   const ceiling = now + LOCKOUT_TIERS[LOCKOUT_TIERS.length - 1];
   return {
     tier: Math.min(tier, LOCKOUT_TIERS.length),
@@ -130,10 +91,8 @@ function parsePenalty(value: unknown, now: number): StoredPenalty | undefined {
 }
 
 /**
- * Fold the stored penalties into memory, taking the STRICTER of the two so it
- * is safe to run more than once — which is what makes it a fix for a second tab
- * as well as for a reload: a tab that was already open re-reads on the
- * `storage` event and adopts the lockout the other one earned.
+ * Fold stored penalties into memory, keeping the STRICTER — idempotent, so it
+ * also syncs other tabs via the `storage` event.
  */
 function hydrate(now: number): void {
   hydrated = true;
@@ -165,8 +124,7 @@ function persist(): void {
   }
 }
 
-// Another tab's penalty is this tab's penalty — otherwise opening a second one
-// is the whole bypass.
+// Another tab's penalty is this tab's, or a second tab is the bypass.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === STORAGE_KEY) hydrated = false;
@@ -182,21 +140,18 @@ function sync(id: string, now: number): Bucket {
     buckets.set(id, fresh);
     return fresh;
   }
-  // A clock that jumped backwards (NTP correction, sleep/wake) must not mint
-  // tokens or freeze the bucket: treat it as no elapsed time and re-anchor.
+  // A backwards clock jump must not mint tokens or freeze the bucket.
   const elapsed = Math.max(0, now - bucket.refilledAt);
   bucket.tokens = Math.min(SEND_BURST, bucket.tokens + elapsed / SEND_REFILL_MS);
   bucket.refilledAt = now;
-  // Behaving costs tiers, but only once the penalty has actually been served —
-  // time spent locked out is not credit toward forgiveness.
+  // Decay only after the penalty has been served.
   if (bucket.tier > 0 && bucket.lockedUntil > 0 && now > bucket.lockedUntil) {
     const steps = Math.floor((now - bucket.lockedUntil) / TIER_DECAY_MS);
     if (steps > 0) {
       bucket.tier = Math.max(0, bucket.tier - steps);
       // Re-anchor so the leftover remainder doesn't decay a second step early.
       bucket.lockedUntil = bucket.tier === 0 ? 0 : bucket.lockedUntil + steps * TIER_DECAY_MS;
-      // Forgiveness has to reach storage too, or a reload restores the tier
-      // that was just walked back.
+      // Persist forgiveness too, or a reload restores the old tier.
       persist();
     }
   }
@@ -212,32 +167,24 @@ function waitFor(bucket: Bucket, now: number): number {
 }
 
 /**
- * Record that a send was attempted with nothing left to spend, and return the
- * resulting wait. A violation while already locked out serves the existing
- * penalty rather than compounding it — mashing the key during a lockout is one
- * bout, not fifty.
+ * Record an empty-bucket send and return the wait. During a lockout it serves
+ * the existing penalty rather than compounding it.
  */
 function violate(bucket: Bucket, now: number): number {
   if (bucket.lockedUntil > now) return bucket.lockedUntil - now;
   const lockMs = LOCKOUT_TIERS[Math.min(bucket.tier, LOCKOUT_TIERS.length - 1)];
   bucket.tier = Math.min(bucket.tier + 1, LOCKOUT_TIERS.length);
   bucket.lockedUntil = now + lockMs;
-  // The lockout supersedes the bucket's own wait, and refill runs through it —
-  // every tier outlasts a full refill, so serving one hands back a whole burst.
-  // The penalty is the wait, not a crippled bucket afterwards.
+  // The lockout supersedes the bucket's wait; refill runs through it.
   bucket.tokens = 0;
   persist();
   return lockMs;
 }
 
 /**
- * Register one send attempt WITHOUT spending a token: 0 when it may proceed,
- * else the wait (escalating the lockout if this is a fresh violation).
- *
- * This is the composer's pre-flight — it has to run before the composer clears
- * itself, or a refusal costs the user the text they typed — and it must be
- * called exactly once per attempt, since a refusal counts against the sender.
- * The publish path then spends the token via {@link consumeSend}.
+ * Register one send attempt WITHOUT spending a token: 0 if allowed, else the
+ * wait. The composer's pre-flight (before it clears the text); call exactly once
+ * per attempt. {@link consumeSend} spends on publish.
  */
 export function attemptSend(communityId: string, now: number = Date.now()): number {
   const bucket = sync(communityId, now);
@@ -245,11 +192,7 @@ export function attemptSend(communityId: string, now: number = Date.now()): numb
   return wait === 0 ? 0 : violate(bucket, now);
 }
 
-/**
- * Spend one token: 0 on success, else the wait (escalating the lockout if this
- * is a fresh violation). Nothing is spent on a refusal. The publish path is the
- * only caller that should spend.
- */
+/** Spend one token: 0 on success, else the wait. Only the publish path spends. */
 export function consumeSend(communityId: string, now: number = Date.now()): number {
   const bucket = sync(communityId, now);
   const wait = waitFor(bucket, now);
@@ -272,10 +215,7 @@ export function resetSendLimits(): void {
   }
 }
 
-/**
- * A wait in the largest whole unit that reads naturally, rounded up so it never
- * says "0" and never asks someone to count out "900 seconds".
- */
+/** A wait in the largest natural whole unit, rounded up (never "0"). */
 export function formatRetryAfter(ms: number): string {
   const secs = Math.max(1, Math.ceil(ms / SECOND));
   if (secs < 60) return `${secs} second${secs === 1 ? "" : "s"}`;
@@ -285,11 +225,7 @@ export function formatRetryAfter(ms: number): string {
   return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
-/**
- * The refusal, thrown from the publish path and shown verbatim to the user
- * (`relayRejectionMessage` passes a plain message through, so no caller needs
- * to special-case the type to render it).
- */
+/** The refusal, thrown from the publish path; its message is shown verbatim. */
 export class SendRateLimitError extends Error {
   readonly retryAfterMs: number;
 
@@ -301,9 +237,8 @@ export class SendRateLimitError extends Error {
 }
 
 /**
- * The composer's pre-flight: the refusal message to show, or null when the send
- * may proceed. Counts the attempt ({@link attemptSend}), so call it once per
- * send the user actually asked for — never to decide whether to render a button.
+ * Composer pre-flight: the refusal message, or null. Counts the attempt, so call
+ * once per real send — never for rendering.
  */
 export function sendRefusal(communityId: string, now: number = Date.now()): string | null {
   const wait = attemptSend(communityId, now);

@@ -38,21 +38,15 @@ const PAGE_SIZE = 100;
 const MAX_ROOT_PAGES = 5;
 const PULL_TIMEOUT_MS = 8_000;
 
-/** One repository the Projects view covers, folded across every channel that attached it. */
 export interface GitProjectSource {
   address: GitRepositoryAddress;
   relayHints: string[];
-  /** Names of the channels holding an active attachment, for the repo subtitle. */
   channels: string[];
-  /** Earliest active attach time; a display fallback when no announcement is known. */
+  /** Display fallback when no announcement is known. */
   attachedAt: number;
 }
 
-/**
- * Fold the community's per-channel attachments into one source per repository.
- * Only active attachments count: the Projects view browses what the community
- * is currently connected to, full history included.
- */
+/** Only active attachments count (full history included). */
 export function gitProjectSources(
   attachmentsByChannel: ReadonlyMap<string, readonly GitRepositoryAttachment[]>,
   channelNameById: ReadonlyMap<string, string>,
@@ -83,17 +77,13 @@ export function gitProjectSources(
 export interface GitProjects {
   repos: ProjectRepo[];
   items: ProjectWorkItem[];
-  /** Ungated activities (full history) for the ticket conversation panel. */
   activities: GitTimelineActivity[];
   ticketsById: Map<string, GitTicket>;
 }
 
 /**
- * Assemble the Projects data from raw store events. Unlike the channel
- * timeline this is deliberately NOT gated on attachment intervals — the
- * Projects view is where a repository's complete history lives. `activities`
- * are built by the shared timeline builder, so author-published NIP-09
- * retractions in `events` remove their comments here too.
+ * Deliberately NOT gated on attachment intervals: Projects shows full history. Author NIP-09
+ * retractions still apply via the shared timeline builder.
  */
 export function assembleGitProjects(sources: readonly GitProjectSource[], events: readonly NostrRumor[]): GitProjects {
   const coordinates = new Set(sources.map((source) => source.address.coordinate));
@@ -149,8 +139,7 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
     };
   });
 
-  // All-time pseudo-attachments turn the timeline builder's interval gate into
-  // a no-op while keeping its trust rules for status changes.
+  // All-time pseudo-attachments disable the interval gate but keep its trust rules.
   const allTime = sources.map((source) => ({ address: source.address, relayHints: [], attachedAt: 0 }));
   const activities = buildGitTimelineActivities(
     events,
@@ -158,13 +147,11 @@ export function assembleGitProjects(sources: readonly GitProjectSource[], events
     [...announcements.values()].filter((a): a is NonNullable<typeof a> => Boolean(a)),
   );
 
-  // Discussion sizes and last-activity times from the built activities, so a
-  // retracted comment stops counting and stops holding a ticket at the top.
+  // From built activities, so retracted comments stop counting.
   const commentCounts = new Map<string, number>();
   const lastActivity = new Map<string, number>();
   for (const activity of activities) {
-    // A CI run belongs to a repository, not a work item, so it neither counts
-    // as discussion nor bumps a ticket's last-activity ordering.
+    // A CI run belongs to the repository, not a work item.
     if (activity.type === "ci-run") continue;
     if (activity.type === "comment") {
       commentCounts.set(activity.ticket.id, (commentCounts.get(activity.ticket.id) ?? 0) + 1);
@@ -208,19 +195,13 @@ function sourceRelays(source: GitProjectSource): string[] {
 }
 
 /**
- * Deep-sync attempts per account and coordinate this app session (module scope
- * survives view unmounts). A repository is done once a relay actually answered;
- * total failures retry up to the cap so an offline first open isn't final,
- * without looping while offline. Manual refresh clears the slate.
+ * Per account + coordinate this session. Done once a relay actually answered; failures retry
+ * up to the cap. Manual refresh clears it.
  */
 const deepSyncAttempts = new Map<string, number>();
 const MAX_SYNC_ATTEMPTS = 2;
 
-/**
- * Marks are per account: relays are AUTH-gated, so what one account managed to
- * read says nothing about what the next one can, and a switch must re-sync
- * rather than inherit the previous account's "done".
- */
+/** Per account: relays are AUTH-gated, so one account's read says nothing about another's. */
 function syncKey(pubkey: string | undefined, coordinate: string): string {
   return `${pubkey ?? "anon"}:${coordinate}`;
 }
@@ -238,10 +219,8 @@ function chunked<T>(values: readonly T[], size: number): T[][] {
 }
 
 /**
- * Store-first Projects data for a community's attached repositories, with a
- * one-time deep history sync per repository from its activity relays. The wire
- * keeps activity live from its cursors forward; this hook backfills everything
- * older, so browsing does not depend on when the repository was attached.
+ * Store-first Projects data plus a one-time deep history backfill per repository; the wire
+ * keeps activity live going forward.
  */
 export function useGitProjects(
   attachmentsByChannel: ReadonlyMap<string, readonly GitRepositoryAttachment[]>,
@@ -290,17 +269,13 @@ export function useGitProjects(
     },
   });
 
-  // One-time deep history sync per repository. Roots are paged oldest-ward
-  // with `until` cursors; children are then fetched for every known root so
-  // pre-attachment discussion threads become readable too.
   const syncing = useRef(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncNonce, setSyncNonce] = useState(0);
   useEffect(() => {
     void syncNonce;
     if (!enabled || syncing.current) return;
-    // A bounded batch per run; the finally-nonce re-fires the effect until no
-    // source is pending (sources attached mid-sync included).
+    // Bounded batch per run; the nonce re-fires the effect until nothing is pending.
     const pending = sources
       .filter((source) => (deepSyncAttempts.get(syncKey(user?.pubkey, source.address.coordinate)) ?? 0) < MAX_SYNC_ATTEMPTS && sourceRelays(source).length > 0)
       .slice(0, SYNC_SOURCES_PER_RUN);
@@ -314,8 +289,7 @@ export function useGitProjects(
         await Promise.all(pending.map(async (source) => {
           const relays = sourceRelays(source).slice(0, MAX_SYNC_RELAYS);
           const coordinate = source.address.coordinate;
-          // "Done" requires a relay to have actually answered — a fully
-          // offline run must stay retryable, not read as an empty repo.
+          // An offline run must stay retryable, not read as an empty repo.
           let answered = false;
           const query = async (relay: string, filter: NostrFilter): Promise<NostrEvent[]> => {
             try {
@@ -327,7 +301,6 @@ export function useGitProjects(
             }
           };
 
-          // Freshest announcement (name/description/maintainers may have moved).
           const announced = (await Promise.all(relays.map((relay) => query(relay, {
             kinds: [GIT_REPOSITORY_ANNOUNCEMENT_KIND], authors: [source.address.owner], "#d": [source.address.identifier], limit: 1,
           })))).flat();
@@ -337,10 +310,8 @@ export function useGitProjects(
             }
           }
 
-          // Full root history, paged oldest-ward. The cursor steps TO the
-          // oldest seen second (`seen` dedupes the overlap) so a page cut
-          // mid-second doesn't skip its remaining siblings; it only steps
-          // past a second once a page yields nothing new.
+          // The cursor steps TO the oldest seen second (`seen` dedupes) so a page cut mid-second
+          // doesn't skip siblings; it steps past only when a page yields nothing new.
           const seen = new Set<string>();
           let until: number | undefined;
           for (let page = 0; page < MAX_ROOT_PAGES; page++) {
@@ -365,8 +336,6 @@ export function useGitProjects(
             until = fresh.length > 0 ? oldest : oldest - 1;
           }
 
-          // Children for every root now known for this repository, in
-          // relay-safe id chunks.
           const roots = await store.query([{ kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": [coordinate], limit: 5_000 }]);
           const rootIds = [...new Set(roots.map((root) => root.id))].sort();
           const rootIdSet = new Set(rootIds);
@@ -406,19 +375,16 @@ export function useGitProjects(
         setIsSyncing(false);
         if (touched.size > 0) emitWireScopes(touched);
         void queryClient.invalidateQueries({ queryKey });
-        // Continue with whatever is still pending (or no-op when done).
         setSyncNonce((nonce) => nonce + 1);
       }
     })();
   }, [enabled, sources, eventStore, nostr, queryClient, queryKey, syncNonce, user?.pubkey]);
 
-  // Forget this session's sync marks so the next effect run re-pulls everything.
   const refresh = useCallback(() => {
     for (const source of sources) deepSyncAttempts.delete(syncKey(user?.pubkey, source.address.coordinate));
     setSyncNonce((nonce) => nonce + 1);
   }, [sources, user?.pubkey]);
 
-  // Pull one ticket's full thread from the repository relays on demand.
   const refreshTicket = useCallback(async (ticket: GitTicket): Promise<number> => {
     const ticketCoordinates = new Set(ticket.repositoryAddresses.map((address) => address.coordinate));
     const relays = [...new Set(sources
@@ -447,8 +413,7 @@ export function useGitProjects(
         // The thread remains readable from the shared store if a relay is unavailable.
       }
     }));
-    // Retractions for every comment the store now holds for this ticket, so a
-    // comment deleted or edited from another device disappears here too.
+    // So a comment deleted or edited on another device disappears here too.
     const stored = await store.query([{ kinds: [NIP22_COMMENT_KIND], "#E": [ticket.id], limit: 4_000 }]);
     const commentIds = new Set(stored.map((event) => event.id));
     if (commentIds.size > 0) {
@@ -479,7 +444,6 @@ export function useGitProjects(
     }
   });
 
-  // Activity relays for a set of repository coordinates (write targets).
   const relaysForCoordinates = useCallback((coordinates: readonly string[]): string[] => {
     const wanted = new Set(coordinates);
     return [...new Set(sources.filter((source) => wanted.has(source.address.coordinate)).flatMap(sourceRelays))];

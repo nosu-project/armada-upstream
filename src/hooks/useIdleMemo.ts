@@ -3,12 +3,9 @@ import { useEffect, useRef, useState } from "react";
 const DEFAULT_DEADLINE_MS = 250;
 
 /**
- * A `useMemo` whose compute runs after paint, in an idle callback, no later
- * than `deadlineMs` after it became due (a burst of dep changes does not push
- * the deadline back). Returns `undefined` until the first compute for `key`
- * lands and resets to `undefined` synchronously when `key` changes.
- *
- * eslint's exhaustive-deps does not check `deps`.
+ * A `useMemo` computed after paint in an idle callback, at most `deadlineMs` after it became
+ * due (bursts don't push the deadline back). `undefined` until the first compute for `key`, and
+ * reset synchronously on key change. eslint's exhaustive-deps does not check `deps`.
  */
 export function useIdleMemo<T>(
   key: string | null,

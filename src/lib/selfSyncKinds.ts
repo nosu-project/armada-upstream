@@ -1,33 +1,9 @@
 /**
- * The catalogue of the current user's own replaceable / addressable events that
- * the client keeps CONTINUOUSLY in sync — synced into the local cache and kept
- * fresh with a standing REQ (see {@link ../components/SelfSync}).
- *
- * These are the events that describe WHO YOU ARE and WHAT YOU'VE JOINED across
- * devices: follow list, mute list, the NIP-29 server/channel list, the Concord
- * membership vaults, DM/Blossom relay lists, and Armada's own NIP-78 settings.
- * A change on device B (join a server, add a Concord community, mute someone)
- * must reach device A without a manual refetch — otherwise the community rail
- * "struggles to sync between devices", which is exactly what this fixes.
- *
- * The sync discipline (matching the wire's, but for self-state rather than
- * conversation timelines):
- *
- *   1. A standing REQ `{ authors:[me], kinds:[…] }` (plus scoped filters for
- *      Armada's addressable kind-30078 documents) streams every new version.
- *   2. Each event lands in the `armada-events` IndexedDB cache first — the
- *      NostrBatcher mirrors everything that flows out of `.req()`.
- *   3. Then the matching TanStack query key(s) are invalidated so the owning
- *      hook re-reads (relay + cache) and reconciles through its OWN merge /
- *      decrypt-failed guards. We deliberately invalidate rather than
- *      setQueryData: the list hooks carry delicate merge-never-clobber and
- *      "never overwrite a populated vault with a bad decrypt" logic, and
- *      re-running their queryFns reuses that safety instead of duplicating it.
- *
- * Query keys here are the PREFIXES the hooks invalidate on their own mutations
- * (e.g. `["nip29","user-groups"]`, `["concord","list"]`) — invalidating the
- * prefix matches every pubkey/relayKey-suffixed variant, so we don't need to
- * know the exact suffix (relayKey, etc.) a given mounted hook used.
+ * The current user's own replaceable/addressable events kept continuously in
+ * sync across devices (see {@link ../components/SelfSync}): a standing REQ
+ * streams new versions into the IndexedDB cache, then the owning query-key
+ * PREFIXES are invalidated (not setQueryData) so each hook's own
+ * merge-never-clobber / bad-decrypt guards reconcile the change.
  */
 
 import { KIND_RELAY_LIST } from "@/lib/nip65";
@@ -49,9 +25,8 @@ export const KIND_BLOSSOM_SERVERS = 10063;
 /** NIP-51 user custom emoji list (10030). */
 export const KIND_USER_EMOJIS = 10030;
 /**
- * Concord community list — the membership vault (CORD-02 §8, 33302).
- * Addressable, one event per FRAGMENT (`d` = the fragment index), so the
- * standing REQ streams every fragment and the echo-dedup must key per `d`.
+ * Concord community list vault fragments (CORD-02 §8, 33302). One addressable
+ * event per fragment `d`, so echo-dedup must key per `d`.
  */
 export const KIND_COMMUNITY_LIST_FRAG = 33302;
 /** Concord invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
@@ -65,10 +40,8 @@ export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
 export const T_ARMADA_DM_CONVERSATIONS = DM_CONVERSATIONS_EVENT_TAG;
 
 /**
- * Topic-scoped kind-30078 documents Armada keeps in the standing self-state
- * subscription. Unlike the fixed settings documents, these have dynamic `d`
- * tags (one coordinate per installation), so their public `t` marker is the
- * bounded subscription/admission boundary.
+ * Topic-scoped kind-30078 documents with dynamic per-installation `d` tags;
+ * their public `t` marker bounds the subscription.
  */
 export const SELF_SYNC_TOPIC_TAGS: string[] = [
   T_ARMADA_GIF_FAVORITES,
@@ -92,10 +65,8 @@ export interface SelfSyncEventVersion {
 }
 
 /**
- * Admit a replaceable event into a standing self-state stream's echo guard.
- * NIP-01 resolves an equal-second collision by retaining the lexicographically
- * LOWER event id; timestamp-only guards can therefore freeze on the wrong
- * device's copy until a later edit happens.
+ * Admit a replaceable event into a standing stream's echo guard. NIP-01 breaks
+ * equal-second ties by the LOWER id; timestamp-only guards can freeze on the wrong copy.
  */
 export function admitSelfSyncEvent(
   seen: Map<string, SelfSyncEventVersion>,
@@ -119,19 +90,11 @@ export function isNewerSelfSyncVersion(
 }
 
 /**
- * Stage `event` as the pending version of `coordinate` for one coalescing
- * window, keeping only the NIP-01 winner per coordinate. A coordinate not yet
- * pending is refused once `maxCoordinates` are, so a flood of distinct
- * coordinates is bounded too; the next full read picks up what was refused.
- * Returns whether the event is now the pending version.
- *
- * The first version of a piece in a window is staged unverified (the flush
- * verifies it). Every decision that DROPS a version is made against a
- * verified one, because a relay can serve an unsigned event under the user's
- * pubkey: a forged newer version must not displace the real one, a forged
- * pending one must not make the real one lose, and forged pieces holding the
- * cap are evicted before a new piece is refused. `verify` is called only on
- * those contested paths, and is expected to memoize.
+ * Stage `event` as the pending version of `coordinate`, keeping the NIP-01
+ * winner; new coordinates are refused past `maxCoordinates`. Returns whether it
+ * is now pending. The first version is staged unverified, but every decision
+ * that DROPS a version is made against a verified one (relays can serve forged
+ * events under the user's pubkey). `verify` should memoize.
  */
 export function stageNewestPerCoordinate<T extends SelfSyncEventVersion>(
   pending: Map<string, T>,
@@ -162,12 +125,9 @@ export function stageNewestPerCoordinate<T extends SelfSyncEventVersion>(
 }
 
 /**
- * The kinds synced with a simple `{ authors:[me], kinds:[…] }` filter — the
- * bare replaceables (10000–19999 band + kind 3) plus the addressable Community
- * List fragments (33302, where EVERY `d` belongs to the account and all of
- * them are wanted). Addressable kind 30078 is handled separately by fixed `#d`
- * filters ({@link SELF_SYNC_DTAGS}) and dynamic `#t` filters
- * ({@link SELF_SYNC_TOPIC_TAGS}).
+ * Kinds synced with a plain `{ authors:[me], kinds }` filter: kind 3, the
+ * 10000–19999 replaceables, and every 33302 fragment. Kind 30078 uses
+ * {@link SELF_SYNC_DTAGS} / {@link SELF_SYNC_TOPIC_TAGS} filters instead.
  */
 export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_FOLLOW_LIST,
@@ -182,17 +142,10 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_INVITE_LIST,
 ];
 
-/**
- * The `d` tags to sync on the addressable kind-30078 documents (distinguished
- * from other apps' kind-30078 data by `d`) — Armada's six settings documents.
- */
+/** Armada's settings-document `d` tags on kind 30078. */
 export const SELF_SYNC_DTAGS: string[] = SETTINGS_DTAGS;
 
-/**
- * Resolve the query-key prefix(es) to invalidate for an incoming self event.
- * Returns an empty array for anything we don't recognise (never invalidate
- * blindly). For kind 30078 the `d` tag selects the Armada settings document.
- */
+/** Query-key prefixes to invalidate for an incoming self event; empty if unrecognised. */
 export function queryKeysForSelfEvent(
   kind: number,
   dTag: string | undefined,
@@ -206,8 +159,6 @@ export function queryKeysForSelfEvent(
     case KIND_SEARCH_RELAYS:
       return [["search-relay-list"]];
     case KIND_USER_GROUPS:
-      // The rail's servers (`r` tags) + joined channels. This list IS the
-      // source the rail renders, so re-reading it is the whole update.
       return [["nip29", "user-groups"]];
     case KIND_DM_RELAYS:
       return [["dm-relay-list"]];
@@ -220,8 +171,6 @@ export function queryKeysForSelfEvent(
     case KIND_INVITE_LIST:
       return [["concord", "invite-list"]];
     case KIND_APP_SPECIFIC: {
-      // Each settings document has its own query, so only the one that
-      // actually changed re-reads and re-applies.
       const doc = dTag !== undefined ? settingsDocForDTag(dTag) : undefined;
       if (doc) return [["settings-doc", doc]];
       if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];
@@ -234,9 +183,8 @@ export function queryKeysForSelfEvent(
 }
 
 /**
- * Every query owner that must re-read when the NIP-65 pointer moves to a new
- * relay set. Derived from the same routing table as live event invalidation so
- * adding a self-state kind/document cannot silently miss relay migration.
+ * Query owners to re-read when the NIP-65 relay set moves; derived from the
+ * same routing table so new kinds can't miss relay migration.
  */
 export const SELF_SYNC_OWNER_QUERY_KEYS: readonly (readonly string[])[] = (() => {
   const keys = [

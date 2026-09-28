@@ -14,17 +14,16 @@ import {
   type LegacyDmSwitcherSource,
 } from "@/lib/switcher";
 
-/** One known DM conversation, reduced to what account-level activity UIs need. */
 export interface DmActivityItem {
   /** Canonical participant-set key (a pubkey for 1:1, comma-joined for a group). */
   key: string;
-  /** Everyone in the conversation except the viewer (`[self]` for Note to Self). */
+  /** Everyone except the viewer (`[self]` for Note to Self). */
   peers: string[];
   route: string;
   createdAt: number;
   eventId: string;
   author: string;
-  /** Exact incoming-message count when loaded (one-message floor meanwhile). */
+  /** Exact incoming count when loaded (one-message floor meanwhile). */
   unreadCount: number;
   unread: boolean;
 }
@@ -38,12 +37,8 @@ export interface DmActivityNip17Source extends Dm17SwitcherSource {
 }
 
 /**
- * Merge legacy and NIP-17 conversation heads into newest-first activity rows.
- *
- * Identity/order deliberately comes from `buildDmSwitcherEntries`, the same
- * reducer used by the quick switcher. This layer only attaches the winning
- * message's author and the shared per-conversation read stamp. Legacy wins an
- * exact timestamp tie, matching the DMs page and switcher.
+ * Identity/order comes from `buildDmSwitcherEntries` (same as the quick switcher).
+ * Legacy wins an exact timestamp tie.
  */
 export function buildDmActivityItems(
   legacy: readonly DmActivityLegacySource[],
@@ -73,8 +68,7 @@ export function buildDmActivityItems(
     if (!createdAt || !eventId || !author) return [];
     const latestUnread =
       author !== opts.self && createdAt > opts.getLastRead(dmReadKey(entry.key));
-    // The latest incoming head proves at least one unread message even while
-    // the indexed count is loading (or if a store count transiently fails).
+    // An incoming head proves at least one unread while the count loads.
     const unreadCount = latestUnread
       ? Math.max(1, opts.unreadCounts?.[entry.key] ?? 1)
       : 0;
@@ -93,9 +87,8 @@ export function buildDmActivityItems(
 }
 
 /**
- * Known, real-message DM conversations for the always-mounted recent rail.
- * This never decrypts preview text or opens the NIP-17 consent flow: avatars,
- * recency and indexed unread counts need no signer interaction.
+ * Known DM conversations for the recent rail. Never decrypts previews or opens the
+ * NIP-17 consent flow.
  */
 export function useDmActivity(): {
   items: DmActivityItem[];
@@ -124,9 +117,7 @@ export function useDmActivity(): {
     getLastRead,
   ]);
 
-  // Exact badge counts are count-only indexed reads. Key them by each unread
-  // head and its current read stamp: a new message or a read immediately swaps
-  // cache entries, while ordinary re-renders do no database work.
+  // Keyed by each unread head and read stamp so re-renders do no database work.
   const unreadSignature = heads
     .filter((item) => item.unread)
     .map((item) => `${item.key}:${item.eventId}:${getLastRead(dmReadKey(item.key))}`)

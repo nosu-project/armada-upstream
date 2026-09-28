@@ -1,17 +1,8 @@
 /**
- * Lazy access to the iroh gossip transport (`crates/webxdc-rt`).
- *
- * Two constraints shape this. The wasm is ~2.8 MB, which nobody who never
- * opens a Mini App should pay for, so it is imported on first use and never
- * from module scope. And it is built by a Rust toolchain that CI does not
- * have, so its absence has to be an ordinary answer rather than a build
- * failure.
- *
- * When it is missing there is no realtime, by design. Mini Apps still open and
- * their durable state still syncs over the channel; only `joinRealtimeChannel`
- * goes quiet. A Nostr-carried substitute would be worse than nothing: it
- * reaches Armada members and no Vector member, so one game becomes two, each
- * side watching a player who appears to have stopped moving.
+ * Lazy access to the iroh gossip transport (`crates/webxdc-rt`): ~2.8 MB wasm,
+ * imported on first use and optional (CI can't build it). Without it Mini Apps
+ * still sync durable state but have no realtime — a Nostr substitute would split
+ * games between Armada and Vector players.
  */
 
 /** The slice of the wasm class this app uses. */
@@ -38,28 +29,17 @@ interface WasmModule {
 const MODULE_PATH = "/src/wasm/webxdc-rt/webxdc_rt.js";
 
 /**
- * Resolved through `import.meta.glob` rather than a bare dynamic import, which
- * is what makes the same code work in dev and in a production bundle while
- * still tolerating the package being absent.
- *
- * Vite reads the pattern at build time: when the crate has been built it emits
- * a lazy chunk and rewrites the wasm URL to a hashed asset; when it has not,
- * the map is simply empty and the app builds and runs without it. A plain
- * `import(path)` cannot do both — Vite either fails to resolve it at build
- * time, or (with `@vite-ignore`) emits a raw runtime URL that 404s once the
- * app is served from `dist`.
+ * `import.meta.glob` so the package may be absent: Vite emits a lazy chunk when
+ * built and an empty map otherwise. A plain `import(path)` either fails the
+ * build or (with `@vite-ignore`) 404s from `dist`.
  */
 const CANDIDATES = import.meta.glob("/src/wasm/webxdc-rt/webxdc_rt.js");
 
 let pending: Promise<RealtimeTransport | undefined> | undefined;
 
 /**
- * The process-wide node, created once.
- *
- * Binding costs a relay handshake of a few seconds, so a second Mini App must
- * reuse the first one's node rather than pay it again — and two endpoints on
- * one relay would advertise two addresses for one person, which reads to
- * everyone else as two players.
+ * The process-wide node, created once: binding takes seconds, and two endpoints
+ * would look like two players to everyone else.
  */
 export function realtimeTransport(): Promise<RealtimeTransport | undefined> {
   pending ??= load();
@@ -77,8 +57,7 @@ async function load(): Promise<RealtimeTransport | undefined> {
     await mod.default();
     return await new mod.RealtimeNode();
   } catch (e) {
-    // Built but unusable here — an old browser, or a blocked relay. Mini Apps
-    // still open and still sync their durable state; multiplayer does not.
+    // Built but unusable (old browser, blocked relay): multiplayer is off, durable sync still works.
     console.warn("[webxdc] realtime transport unavailable — Mini App multiplayer is off", e);
     return undefined;
   }

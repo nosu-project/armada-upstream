@@ -13,32 +13,23 @@ interface AccountStandingDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/**
- * A joke rendition of Discord's "Account Standing" page. The meter is pegged
- * past its last milestone and visibly snapped, because there is no other state
- * it could report: no score, no strikes, and no account for anyone to revoke.
- */
+/** A joke rendition of Discord's "Account Standing": the meter is pegged and snapped. */
 export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
         title="Account standing"
         contentClassName="overflow-hidden text-center"
-        // Land focus on the dialog itself: the punchline is its first
-        // focusable element, and focusing it would open the explanation
-        // before the joke has been read.
+        // Focusing the punchline would open its explanation before the joke is read.
         onOpenAutoFocus={(e) => {
           e.preventDefault();
           (e.currentTarget as HTMLElement | null)?.focus();
         }}
       >
         <div className="relative flex flex-col items-center">
-          {/* The boot-splash crest, redrawing itself each time this opens. */}
           <ArmadaCrest size={104} />
           <ArmadaCrestKeyframes />
 
-          {/* The green halo belongs to the verdict, not the mark — it sits
-              behind the wordmark so the crest keeps its own brand colour. */}
           <div className="relative mt-4 w-full">
             <div
               aria-hidden
@@ -64,12 +55,7 @@ export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDia
   );
 }
 
-/**
- * The punchline, with the plain reading behind it for anyone who takes the
- * joke literally — read as "we can't ban you *because* you're EPIC". A tooltip
- * so the joke itself stays untouched, and one a tap toggles, because Radix
- * tooltips open on hover and focus only, which is no one on a phone.
- */
+/** The punchline with a tap-toggled tooltip (Radix tooltips don't open on tap). */
 function Punchline() {
   const [open, setOpen] = useState(false);
   return (
@@ -78,9 +64,7 @@ function Punchline() {
         <button
           type="button"
           className="cursor-help underline decoration-muted-foreground/40 decoration-dotted underline-offset-4 touch:-my-3 touch:py-3"
-          // Radix closes an open tooltip on trigger pointerdown and click, and
-          // opens it on focus — which a tap also delivers. The click is the
-          // toggle here (Enter/Space included), so none of them may reach it.
+          // Radix toggles on pointerdown and focus, which a tap also delivers; the click is the toggle.
           onPointerDown={(e) => e.preventDefault()}
           onFocus={(e) => e.preventDefault()}
           onClick={(e) => {
@@ -100,15 +84,7 @@ function Punchline() {
   );
 }
 
-/**
- * The verdict's heartbeat: the wordmark swells and its halo flares with it.
- *
- * Scoped here rather than in tailwind.config because nothing else wants a
- * throb this loud. The `armada-` prefix is load-bearing —
- * {@link ArmadaCrestKeyframes}, already rendered above, kills every
- * `animate-[armada-…]` class under `prefers-reduced-motion`, so this opts into
- * that guard for free.
- */
+/** The `armada-` prefix opts into ArmadaCrestKeyframes' reduced-motion guard. */
 function EpicPulseKeyframes() {
   return (
     <style>{`
@@ -134,15 +110,9 @@ function EpicPulseKeyframes() {
   );
 }
 
-/**
- * Every segment green, every milestone reached, and the track fractured near
- * the end where the last node tore loose and blew off the side of the card.
- */
 function StandingMeter() {
   return (
     <div className="mt-8 w-full select-none">
-      {/* Bleeds past the card's padding so the blown-out end is clipped by the
-          dialog's chrome rather than tidily contained. */}
       <div className="relative -mr-9 flex items-center pr-8 sm:-mr-11">
         <Node>
           <Check className="size-4" strokeWidth={3} />
@@ -163,7 +133,6 @@ function StandingMeter() {
         <Node className="size-10 -translate-y-2 rotate-12 shadow-[0_0_28px_rgba(16,185,129,0.9)]">
           <Sparkles className="size-5" />
         </Node>
-        {/* The fill kept going past the last milestone and off the card. */}
         <span
           aria-hidden
           className="absolute inset-y-0 -right-6 my-auto h-1.5 w-16 -translate-y-2 rotate-12 bg-gradient-to-r from-emerald-500 to-emerald-500/50"
@@ -178,7 +147,6 @@ function StandingMeter() {
   );
 }
 
-/** A reached milestone. There is no unreached variant. */
 function Node({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
@@ -192,12 +160,10 @@ function Node({ children, className }: { children: ReactNode; className?: string
   );
 }
 
-/** A filled segment between two milestones. */
 function Track() {
   return <span aria-hidden className="h-1.5 flex-1 bg-emerald-500" />;
 }
 
-/** The segment that gave out: snapped in two, with shards. */
 function BrokenTrack() {
   return (
     <span aria-hidden className="relative h-1.5 flex-1">

@@ -2,7 +2,7 @@ import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import { appScopeKey, type AppScope } from "@/contexts/AppsContext";
-import { dmConvKey, dmConvPeers } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
 
 const alice = getPublicKey(generateSecretKey());
 const bob = getPublicKey(generateSecretKey());

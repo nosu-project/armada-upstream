@@ -29,7 +29,6 @@ export interface AttachAction {
   label: string;
   icon: LucideIcon;
   onSelect: () => void;
-  /** Shown highlighted (an armed poll). */
   active?: boolean;
   disabled?: boolean;
 }
@@ -37,7 +36,6 @@ export interface AttachAction {
 /** See MessageActionSheet: the opening tap's trailing event reads as an outside tap. */
 const OPEN_GUARD_MS = 400;
 
-/** How many gallery items one page fetches. */
 const PAGE = 60;
 
 /** How long a page may take before the grid offers a retry instead. */
@@ -50,35 +48,23 @@ interface AttachSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   actions: AttachAction[];
-  /**
-   * In-chat apps (Watch together, …), gathered behind one "Apps" tile as
-   * Discord does, on a page of their own with the game picker beneath them.
-   */
+  /** In-chat apps, gathered behind one "Apps" tile as Discord does. */
   apps?: AttachAction[];
-  /** The Mini App picker, shown on the Apps page. */
   gamePicker?: ReactNode;
-  /**
-   * The user picked these from the recent-media grid, in the order they
-   * tapped them — all behind a spoiler when they asked for one.
-   */
+  /** Picks from the recent-media grid, in tap order. */
   onPickGalleryItems: (items: GalleryItem[], options: { spoiler: boolean }) => void;
 }
 
 /**
- * The touch "+" menu: a bottom sheet in the shape Signal and Discord use — the
- * camera roll first, multi-select with numbered picks, and a row of round
- * action tiles (gallery, camera, file, poll, …) beneath it.
- *
- * With the camera roll (Android, MediaGalleryPlugin) it is Discord's picker:
- * a sheet resting at keyboard height that a pull on the handle or the grid
- * expands to the full screen. Elsewhere the sheet is just the tiles, and
- * "Photos" opens the system picker, which on iOS is the photo library itself.
+ * The touch "+" menu: a bottom sheet with the camera roll (Android,
+ * MediaGalleryPlugin) and numbered multi-select above round action tiles. The
+ * sheet rests at keyboard height and expands to full screen. Without the
+ * camera roll it's just the tiles.
  */
 export function AttachSheet(props: AttachSheetProps) {
   return hasMediaGallery() ? <GallerySheet {...props} /> : <TilesSheet {...props} />;
 }
 
-/** The action tiles plus, when there are apps, the tile that turns to them. */
 function useTiles(actions: AttachAction[], apps: AttachAction[], gamePicker: ReactNode, openApps: () => void) {
   const hasApps = apps.length > 0 || gamePicker !== undefined;
   return hasApps
@@ -99,8 +85,7 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
   }, []);
   const tiles = useTiles(actions, apps, gamePicker, openApps);
 
-  // Back unwinds one layer at a time: the preview, the Apps page, the full
-  // screen, and only then the sheet.
+  // Back unwinds one layer at a time: preview, Apps page, full screen, sheet.
   useOverlayBack(() => {
     if (preview) setPreview(null);
     else if (page === "apps") {
@@ -114,7 +99,6 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
-    // Always reopen at peek, on the main page, with nothing picked.
     if (!open) {
       setPage("main");
       setExpanded(false);
@@ -130,13 +114,12 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
     );
   }, []);
 
-  // Pulled down off the Apps page: that page only exists at full height.
+  // The Apps page only exists at full height.
   const onExpandedChange = useCallback((next: boolean) => {
     setExpanded(next);
     if (!next) setPage("main");
   }, []);
 
-  // A preview is a full-screen view, so it takes the sheet there with it.
   const openPreview = useCallback((item: GalleryItem) => {
     setPreview(item);
     setExpanded(true);
@@ -147,12 +130,8 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
     onPickGalleryItems(selected, { spoiler });
   }, [onOpenChange, onPickGalleryItems, selected, spoiler]);
 
-  // The footer floats pinned to the SCREEN bottom while the sheet moves: it
-  // is counter-translated by the sheet's offset, and stays put at every
-  // height. Its height is measured into a variable so the grid can scroll
-  // its last row clear of it. The nodes are STATE, as in SnapSheet: the
-  // sheet's Portal renders nothing on its first commit, so refs read by an
-  // effect would still be null then and the effect would never run again.
+  // The footer is counter-translated to stay pinned to the SCREEN bottom. Nodes
+  // are STATE, not refs: the Portal renders nothing on its first commit.
   const [body, setBody] = useState<HTMLDivElement | null>(null);
   const [footer, setFooter] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -221,12 +200,8 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
                 </Button>
               </div>
             )}
-            {/* A floating cut-corner panel over the grid, not a band glued
-                to the sheet's bottom edge. clip-path cuts off a box-shadow,
-                so the shadow is an unclipped box behind the panel — not a
-                drop-shadow filter, which the Android WebView drops for a
-                frame whenever the grid under it re-layers (a tile's
-                selection transition). */}
+            {/* The shadow is an unclipped box behind the clip-path panel, not a
+                drop-shadow filter (Android WebView drops it for a frame on re-layer). */}
             <div className="relative">
               <div aria-hidden className="absolute inset-0 rounded-[0.55rem] shadow-[0_6px_18px_rgba(0,0,0,0.5)]" />
               <div className="pointer-events-auto relative clip-corner-lg bg-chrome p-2">
@@ -249,10 +224,8 @@ function GallerySheet({ open, onOpenChange, actions, apps = [], gamePicker, onPi
 }
 
 /**
- * The library moves under the pager: a photo taken while the sheet is open
- * pushes every item one place down, so the next offset-based page starts with
- * an item the grid already has. Keeping the first copy keeps the tile keys
- * unique and the grid from showing it twice.
+ * A photo taken while open shifts offsets, so the next page can repeat an item;
+ * keep the first copy so tile keys stay unique.
  */
 function appendPage(prev: GalleryItem[], page: GalleryItem[]): GalleryItem[] {
   const seen = new Set(prev.map((i) => i.id));
@@ -273,10 +246,7 @@ function orderOf(selected: GalleryItem[], item: GalleryItem): number | undefined
   return i === -1 ? undefined : i + 1;
 }
 
-/**
- * The sheet's top edge: the grab handle at every height (a drag or Android
- * back collapses it), plus a back button on the Apps page.
- */
+/** Grab handle (drag or Android back collapses), plus a back button on the Apps page. */
 function SheetHeader({ title, onBack }: { title?: string; onBack?: () => void }) {
   return (
     <div className="shrink-0">
@@ -302,12 +272,10 @@ function Tiles({ tiles, onOpenChange, className, cut }: {
   tiles: AttachAction[];
   onOpenChange: (open: boolean) => void;
   className?: string;
-  /** Cut-corner squares, for the floating panel, instead of round tiles. */
   cut?: boolean;
 }) {
   return (
-    // The panel is always ONE row: its columns follow the tile count rather
-    // than wrapping a fifth tile (an available poll) onto a second line.
+    // Always ONE row: columns follow the tile count.
     <div className={cn("grid shrink-0", cut ? "auto-cols-fr grid-flow-col gap-1" : "grid-cols-4 gap-y-3 px-3", className)}>
       {tiles.map((action) => (
         <button
@@ -315,7 +283,6 @@ function Tiles({ tiles, onOpenChange, className, cut }: {
           type="button"
           disabled={action.disabled}
           onClick={() => {
-            // "Apps" turns the page; everything else leaves the sheet.
             if (action.id !== "apps") onOpenChange(false);
             action.onSelect();
           }}
@@ -344,7 +311,6 @@ function AppsPage({ apps, gamePicker, onOpenChange, scrollable }: {
   apps: AttachAction[];
   gamePicker?: ReactNode;
   onOpenChange: (open: boolean) => void;
-  /** Inside the snap sheet, the drag hands off to this list. */
   scrollable?: boolean;
 }) {
   return (
@@ -399,7 +365,6 @@ function TilesSheet({ open, onOpenChange, actions, apps = [], gamePicker }: Atta
   if (wasOpen !== open) {
     setWasOpen(open);
     if (open) openedAt.current = Date.now();
-    // Always reopen on the main page.
     else setPage("main");
   }
 
@@ -440,7 +405,6 @@ function TilesSheet({ open, onOpenChange, actions, apps = [], gamePicker }: Atta
   );
 }
 
-/** The camera roll, newest first, with Signal-style numbered multi-select. */
 function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelection }: {
   expanded: boolean;
   selected: GalleryItem[];
@@ -494,8 +458,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
     };
   }, [load]);
 
-  // Coming back from system settings (or a selection change made there):
-  // re-read the grant, and the list if the grant changed.
+  // Returning from system settings: re-read the grant, and the list if it changed.
   const accessRef = useRef(access);
   accessRef.current = access;
   useEffect(() => {
@@ -529,9 +492,8 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
     }
   }, [load]);
 
-  // Tiles ask for their native thumbnail only once they come within a few rows
-  // of the viewport — each one is a plugin round-trip and a decode, and a
-  // camera roll pages in by the hundred. One observer serves the whole grid.
+  // Thumbnails load only near the viewport (each is a plugin round-trip + decode).
+  // One observer serves the whole grid.
   const scrollRef = useRef<HTMLDivElement>(null);
   const nearRef = useRef<{ io: IntersectionObserver; root: Element | null; subs: Map<Element, () => void> } | null>(null);
   const observeNear = useCallback((el: Element, onNear: () => void) => {
@@ -539,8 +501,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
       onNear();
       return () => {};
     }
-    // The scroller unmounts behind a permission prompt; tiles mounted under a
-    // new one need an observer rooted there.
+    // The scroller unmounts behind a permission prompt; re-root the observer.
     if (nearRef.current && nearRef.current.root !== scrollRef.current) {
       nearRef.current.io.disconnect();
       nearRef.current = null;
@@ -579,8 +540,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
   }
 
   if (access === "prompt" || access === "denied") {
-    // Top-aligned: the sheet is full height behind the peek, so a centred
-    // prompt would sit under the tiles.
+    // Top-aligned: a centred prompt would sit under the tiles.
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center gap-2 px-8 pt-6 text-center">
         <span className="flex size-12 items-center justify-center rounded-full bg-secondary">
@@ -617,9 +577,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
       )}
       <div
         ref={scrollRef}
-        // At peek the sheet owns every vertical drag (a swipe up expands it),
-        // so the browser may not pan; at full the grid scrolls natively and
-        // the sheet takes over only when it is pulled down from the top.
+        // At peek the sheet owns vertical drags; at full the grid scrolls natively.
         className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-1", expanded ? "touch-pan-y" : "touch-none")}
         {...{ [SHEET_SCROLL_ATTR]: "" }}
         onScroll={(e) => {
@@ -641,8 +599,7 @@ function RecentMediaGrid({ expanded, selected, onToggle, onPreview, onResetSelec
             )}
           </div>
         ) : (
-          // Bottom padding clears the selection bar that floats over the
-          // grid once the sheet is full.
+          // Clears the floating selection bar.
           <div className="grid grid-cols-3 gap-0.5 pb-[calc(var(--footer-h,6rem)+0.5rem)] sm:grid-cols-4">
             {items.map((item) => (
               <GalleryTile
@@ -666,7 +623,6 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
   order?: number;
   onToggle: (item: GalleryItem) => void;
   onPreview: (item: GalleryItem) => void;
-  /** Calls `onNear` once the element nears the viewport; returns the unsubscribe. */
   observeNear: (el: Element, onNear: () => void) => () => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -677,8 +633,7 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
     return observeNear(el, () => setNear(true));
   }, [observeNear, near]);
 
-  // Keyed by what the thumbnail depends on, so a reload that hands back an
-  // equal item doesn't ask the plugin again, and an edited one does.
+  // Keyed so an equal reloaded item isn't re-requested but an edited one is.
   const thumbKey = `${item.id}-${item.modified}`;
   const [thumb, setThumb] = useState<{ key: string; src: string } | null>(null);
   const loaded = thumb?.key === thumbKey;
@@ -698,7 +653,6 @@ const GalleryTile = memo(function GalleryTile({ item, order, onToggle, onPreview
   }, [near, loaded, thumbKey]);
   const src = thumb?.src;
 
-  // Press and hold opens the full-size preview, as in Discord's picker.
   const press = useLongPress(() => onPreview(item), { allowInteractive: true });
 
   const picked = order !== undefined;
@@ -751,7 +705,6 @@ function SelectBadge({ order, className }: { order?: number; className?: string 
   );
 }
 
-/** The long-press preview: the item at full size, selectable from here too. */
 function GalleryPreview({ item, order, onToggle, onClose }: {
   item: GalleryItem;
   order?: number;

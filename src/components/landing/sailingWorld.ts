@@ -38,7 +38,7 @@ export function islandsInSector(x: number, z: number): Island[] {
   }));
 }
 
-/** The mesh and collision share this coastline, including its coves. */
+/** Mesh and collision share this coastline. */
 export function coastRadius(island: Island, angle: number) {
   return island.radius * (1 + 0.12 * Math.sin(angle * 3 + island.seed)
     + 0.07 * Math.cos(angle * 5 - island.seed) + 0.035 * Math.sin(angle * 9));
@@ -55,8 +55,7 @@ export function isLand(x: number, z: number, islands: readonly Island[]) {
 export interface Vessel { x: number; z: number; heading: number; speed: number }
 
 export function sail(vessel: Vessel, throttle: number, rudder: number, dt: number, islands: readonly Island[]) {
-  // Exponential damping is independent of frame rate. Reverse remains useful
-  // when a bow meets a beach; a little steerage at rest prevents getting stuck.
+  // Exponential damping is frame-rate independent.
   vessel.speed += (throttle * 27 - vessel.speed) * (1 - Math.exp(-dt * 0.8));
   vessel.heading -= rudder * dt * 0.75 * (0.25 + Math.min(1, Math.abs(vessel.speed) / 12))
     * (vessel.speed < -0.5 ? -1 : 1);
@@ -66,7 +65,6 @@ export function sail(vessel: Vessel, throttle: number, rudder: number, dt: numbe
     vessel.x = x;
     vessel.z = z;
   } else {
-    // Slide along the shore instead of bouncing or travelling through it.
     if (!isLand(x, vessel.z, islands)) vessel.x = x;
     if (!isLand(vessel.x, z, islands)) vessel.z = z;
     vessel.speed *= Math.exp(-dt * 5);

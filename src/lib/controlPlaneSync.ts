@@ -1,12 +1,7 @@
 /**
- * Global control-plane sync — one batched catch-up across every Concord
- * community, run on pageload and re-run on a slow poll
- * (see {@link ControlPlaneSync}). Closes the gap left by per-community
- * hooks that only fetch the community you've navigated into.
- *
- * Sweeps as ONE REQ per relay (one filter per community-plane, each with
- * its own cursor) via {@link sweepRelayScopes}. Results are invalidated
- * progressively so rail buttons paint as each relay answers.
+ * Global control-plane sync: one batched catch-up across every Concord
+ * community (pageload + slow poll), as one REQ per relay with per-community
+ * cursors. Invalidates progressively so rail buttons paint as relays answer.
  */
 
 import { controlScope, guestbookScope, sweepRelayScopes, type PlaneScope } from "@/concord/lib/planeSync";
@@ -29,11 +24,7 @@ export interface ControlPlaneSyncResult {
   concordTouched: Set<string>;
 }
 
-/**
- * Run one batched control-plane sweep across every community. Best-effort:
- * relay failures are swallowed; per-relay cursors mean a failed relay is
- * re-asked next time.
- */
+/** One batched control-plane sweep; best-effort (per-relay cursors retry failed relays next time). */
 export async function syncControlPlane(
   nostr: NostrLike,
   queryClient: QueryClient,
@@ -41,11 +32,8 @@ export async function syncControlPlane(
   opts?: {
     signal?: AbortSignal;
     /**
-     * A community to sweep FIRST, before the rest of the fan-out starts —
-     * the one the user is looking at. On a cold pageload direct to a
-     * community URL, everything the timeline is gated on (control fold →
-     * channels → stream keys) sits behind this community's sweep, so it must
-     * not queue behind every other membership's catch-up.
+     * Sweep this community first: on a cold load to its URL, the whole timeline
+     * is gated on its sweep, so it mustn't queue behind other memberships.
      */
     priorityIdHex?: string;
   },
@@ -58,7 +46,6 @@ export async function syncControlPlane(
 
   const jobs: Array<Promise<unknown>> = [];
 
-  // ── ONE batched REQ per relay, progressive paint on first data. ────────────
   /** Run `fn` once (later relays add data silently). */
   const once = (fn: () => void) => {
     let fired = false;
@@ -95,10 +82,7 @@ export async function syncControlPlane(
     return [...byRelay].map(([url, scopes]) => sweepRelayScopes(nostr, url, scopes));
   };
 
-  // The active community's sweep runs to completion BEFORE the all-membership
-  // fan-out is launched, so its REQs aren't contending with a dozen other
-  // communities' catch-up for sockets and bandwidth. Costs the rest of the
-  // sweep one community's round-trip of delay, at most.
+  // The active community completes before the fan-out so it doesn't contend for sockets.
   const priority = communities.filter((c) => c.idHex === opts?.priorityIdHex);
   const rest = opts?.priorityIdHex ? communities.filter((c) => c.idHex !== opts.priorityIdHex) : communities;
   if (priority.length > 0) {
@@ -113,7 +97,6 @@ export async function syncControlPlane(
     `control-plane sweep done in ${sinceMs(started)}: concordControlTouched=${result.concordTouched.size} guestbookTouched=${guestbookTouched}`,
   );
 
-  // Final bus ring for everything touched (first-data emits fired early).
   if (result.concordTouched.size > 0) {
     emitWireScopes([...result.concordTouched].map((idHex) => `c2ctl:${idHex}`));
   }

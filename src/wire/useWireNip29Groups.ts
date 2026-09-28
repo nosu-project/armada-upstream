@@ -10,31 +10,12 @@ import { buildRelayGroups, KIND_GROUP_METADATA } from "@/lib/nip29";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * Every NIP-29 group the user can see, as `{ id, relay }` — discovered PER
- * SERVER, not from the kind-10009 `groups` list.
- *
- * This is the crux of the wire's NIP-29 coverage. A user's 10009 list holds the
- * SERVERS they added (`r` tags) but frequently NO explicit joined-`group`
- * entries — channels are discovered per-relay from the relay-signed kind-39000
- * directory (see useRelayGroups), exactly as the channel list does. If the wire
- * subscribed only to `groupList.groups` it would open ZERO `#h` subscriptions
- * for such servers and their timelines would never ingest (empty servers).
- *
- * So we enumerate the same servers the rail shows (`useNip29Servers`) and, per
- * relay, read the group ids from:
- *   - the relay-PROVENANCE-scoped kind-39000 metadata already in the store
- *     (instant, and the common case after a first visit), and
- *   - a bounded live directory read (relay-key-authored) to pick up channels
- *     not yet cached.
- * The union feeds buildWireSpec's `groups`, so the wire holds one `#h` filter
- * per host covering every channel on it. `buzz` marks channels on a Buzz
- * relay (detected from the same NIP-11 doc), whose wire filter carries the
- * wider Buzz kind set.
- *
- * Shared (same react-query cache entry) by WireSync and the foreground
- * notifier, which uses it to resolve a groupId → relay for channels that
- * aren't in the user's kind-10009 list — e.g. Buzz channels an admin added
- * them to.
+ * Every visible NIP-29 group as `{ id, relay }`, discovered PER SERVER, since
+ * 10009 lists often hold only servers (`r` tags) with no `group` entries —
+ * subscribing only to those would leave servers empty. Per relay: cached
+ * relay-scoped kind-39000 plus a bounded live directory read. `buzz` marks
+ * Buzz relays (wider kind set). Also used by the foreground notifier to map
+ * groupId → relay.
  */
 export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: boolean }> {
   const { nostr } = useNostr();
@@ -46,10 +27,7 @@ export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: 
   const query = useQuery<Array<{ id: string; relay: string; buzz?: boolean }>>({
     queryKey: ["wire", "nip29-groups", serversKey],
     enabled: servers.length > 0,
-    // Relay-signed, rarely-changing directory data. Re-read periodically to
-    // pick up newly-created channels; the channel-list UI invalidates on real
-    // changes, but the wire keeps its own quiet refresh. Slow, and paused while
-    // the tab is hidden.
+    // Quiet periodic refresh for new channels; paused while hidden.
     staleTime: 60_000,
     refetchInterval: 15 * 60_000,
     refetchIntervalInBackground: false,
@@ -57,10 +35,8 @@ export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: 
       const store = await eventStore;
       const perRelay = await Promise.all(
         servers.map(async (relay) => {
-          // The relay's own signing key (kind-39000 is authored by it). Best
-          // effort — a broken NIP-11 endpoint must not block the others. The
-          // same doc also identifies Buzz relays, whose channels get the wider
-          // Buzz kind set in the wire filter (see buildWireSpec).
+          // The relay's signing key (kind-39000 author), best effort; the same
+          // doc detects Buzz.
           let selfKey: string | undefined;
           let buzz = false;
           try {
@@ -74,11 +50,8 @@ export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: 
             selfKey = undefined;
           }
 
-          // Cache-first from THIS relay's own tenant, so channels from same-key
-          // relays cannot bleed. The author filter stays on top of the relay
-          // scope where the key is known, so a non-relay publisher's forged
-          // metadata doesn't mint a phantom channel; without the key we still
-          // read nothing rather than trust every publisher the relay served.
+          // From THIS relay's tenant, filtered by the relay key so forged
+          // metadata can't mint phantom channels; no key → read nothing.
           const cached = selfKey
             ? await store.query([{ kinds: [KIND_GROUP_METADATA], authors: [selfKey], limit: 500 }], {
                 relay,
@@ -91,7 +64,7 @@ export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: 
               { signal: AbortSignal.any([signal, AbortSignal.timeout(8_000)]) },
             );
           } catch {
-            // Best effort; the cached metadata still yields the known channels.
+            // best effort; cached metadata still yields known channels
           }
           return buildRelayGroups([...cached, ...live], relay).map((g) => ({ id: g.id, relay, buzz }));
         }),

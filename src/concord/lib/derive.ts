@@ -1,15 +1,11 @@
 /**
- * Concord derivations — CORD-02 Appendix A (frozen).
- *
- * Everything Concord addresses on the wire derives from a Community secret
- * through one of the shapes below. Changing any labeled byte re-addresses every
- * prior event, so treat this file as wire format.
+ * Concord derivations — CORD-02 Appendix A (frozen). Changing any labeled byte
+ * re-addresses every prior event: treat this file as wire format.
  *
  * Construction (A.1): `HKDF-SHA256(ikm=secret, salt=∅, info, L=32)` where
  *   `info = utf8(label) || 0x00 || id[32] || epoch_be[8]?`
- * The id is always present (all-zeroes where a label has no meaningful id);
- * the epoch is the only omittable field. The scalar_normalize retry counter
- * (A.3) appends after whatever fields are present, starting at byte 0.
+ * The id is always present (all-zeroes where meaningless); only the epoch is
+ * omittable. The A.3 retry counter appends after the present fields, from 0.
  */
 
 import { schnorr } from "@noble/curves/secp256k1.js";
@@ -47,14 +43,10 @@ const LABEL_EPOCH_COMMITMENT = "concord/epoch-key-commitment";
 const ZERO32 = new Uint8Array(32);
 const ASCII = new TextEncoder();
 
-// ── Small helpers ────────────────────────────────────────────────────────────
-
-/** 32 cryptographically-random bytes. */
 export function random32(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
 }
 
-/** Lowercase hex of raw bytes. */
 export { bytesToHex, hexToBytes };
 
 /** Parse a 64-char hex string to 32 bytes, throwing on malformed input. */
@@ -79,8 +71,6 @@ function u64be(n: bigint): Uint8Array {
   return out;
 }
 
-// ── A.1: the frozen info layout ──────────────────────────────────────────────
-
 /** `utf8(label) || 0x00 || id[32] || epoch_be[8]?` — epoch omitted when undefined. */
 function buildInfo(label: string, id32: Uint8Array, epoch?: bigint): Uint8Array {
   assert32("id", id32);
@@ -103,13 +93,9 @@ function hkdf32(ikm: Uint8Array, info: Uint8Array): Uint8Array {
   return hkdf(sha256, ikm, new Uint8Array(0), info, 32);
 }
 
-// ── A.3: scalar_normalize ────────────────────────────────────────────────────
-
 /**
- * Reduce an hkdf seed to a valid secp256k1 secret key. If the seed is not a
- * valid scalar, append one incrementing counter byte to the info and retry,
- * the counter starting at 0 (A.3). The reject branch is ~2^-128 rare; the
- * counter keeps it deterministic across implementations.
+ * Reduce an hkdf seed to a valid secp256k1 secret key: if invalid, append an
+ * incrementing counter byte (from 0) to the info and retry (A.3; ~2^-128 rare).
  */
 function hkdfToSecretKey(ikm: Uint8Array, baseInfo: Uint8Array): Uint8Array {
   {
@@ -126,12 +112,9 @@ function hkdfToSecretKey(ikm: Uint8Array, baseInfo: Uint8Array): Uint8Array {
   throw new Error("scalar rejection 257 times running is impossible");
 }
 
-// ── A.2: group_key ───────────────────────────────────────────────────────────
-
 /**
- * A plane's stream keypair: the x-only pubkey is the on-wire Stream address
- * (the `authors` filter), the secret key signs its wraps, and the NIP-44
- * self-ECDH conversation key encrypts them.
+ * A plane's stream keypair: the x-only pk is the on-wire Stream address (the
+ * `authors` filter), sk signs its wraps, and the NIP-44 self-ECDH key encrypts them.
  */
 export interface GroupKey {
   /** secp256k1 secret key (signs the plane's wraps). */
@@ -139,28 +122,17 @@ export interface GroupKey {
   /** x-only pubkey hex — the Stream address. */
   pk: string;
   /**
-   * NIP-44 conversation key (self-ECDH of sk with its own pk).
-   *
-   * Derived LAZILY on first read: the ECDH is an arbitrary-point multiplication
-   * (~1–2ms on a phone, the expensive half of a derivation), and many keys are
-   * only ever used for their address — subscription filters, stream-auth
-   * registration, voice room names — which never touch it.
+   * NIP-44 conversation key (self-ECDH). LAZY: the ECDH is the expensive half, and
+   * many keys are only used for their address.
    */
   readonly convKey: Uint8Array;
 }
 
 /**
- * A stream as a READER holds it: the address to subscribe/verify by and the
- * conversation key that opens the wraps — with the signing secret only when
- * it is actually held.
- *
- * Every plane except the split Control Plane is a full {@link GroupKey}
- * (holding the secret IS holding the plane). A Write-Restricted Stream
- * (CORD-01) splits the two: every member holds the Control Plane's address
- * (`control_pk`, delivered rather than derived) and its community_root-derived
- * read key, but only staff hold the `control_root` the signing `sk` derives
- * from — so the read view's `sk` is optional, and everything that only READS
- * (openWrap, subscription filters, NIP-42 registration) takes this shape.
+ * A stream as a READER holds it: address + conversation key, plus the signing
+ * secret only when held. A Write-Restricted Stream (CORD-01, the split Control
+ * Plane) gives every member the address (`control_pk`) and read key, but only
+ * staff the `control_root` the signer derives from; read-only paths take this shape.
  */
 export interface StreamKeyView {
   /** x-only pubkey hex — the Stream address. */
@@ -170,27 +142,17 @@ export interface StreamKeyView {
   /** The wrap-signing secret, when held (absent for a write-restricted read view). */
   sk?: Uint8Array;
   /**
-   * Write-restricted (CORD-01): the address is a narrower writer-set's signer,
-   * so a wrap's signature actually proves something (a `control_root` holder
-   * published it) and the reader MUST verify it — where an ordinary stream's
-   * wrap signature is made with a key every reader holds and proves nothing.
+   * Write-restricted (CORD-01): the wrap signer is a narrower writer set, so readers
+   * MUST verify the wrap signature (an ordinary stream's proves nothing).
    */
   restricted?: boolean;
 }
 
 /**
- * The persistable form of one derivation — what `groupKeyPersist.ts` writes
- * into ArmadaDB's KV so a warm boot re-derives nothing.
- *
- * `h` is sha256 of the in-memory memo key, so the persisted blob never spells
- * the community secret a derivation started FROM. The derived `sk` is stored
- * (hex) — the same device-trust level as the decrypted plane data and raw
- * channel keys the event store already persists. `ck` appears only once the
- * lazy conversation key has actually been computed.
- *
- * Entries are trusted as our own prior output: `pk`/`ck` are not re-proved
- * against `sk` on import (that point-mul is exactly the cost being cached),
- * only shape-checked.
+ * The persistable form of one derivation (see `groupKeyPersist.ts`). `h` hashes
+ * the memo key so the community secret is never spelled out; `sk` is stored hex
+ * (same device-trust level as stored plaintext); `ck` appears once computed.
+ * Imports are shape-checked, not re-proved (that point-mul is what's cached).
  */
 export interface GroupKeyMemoEntry {
   /** sha256 hex of the memo key (label|secret|id|epoch). */
@@ -204,18 +166,10 @@ export interface GroupKeyMemoEntry {
 }
 
 /**
- * `groupKey` memo. A single derivation costs one HKDF plus a secp256k1
- * base-point multiplication up front (and a lazy ECDH on first `convKey`
- * read, ~ms each on a phone), and the app re-derives every community's full
- * key set on short polls (stream-auth registration each 20s, subscription and
- * wire rebuilds each 60s/2min) — uncached, that alone was seconds of
- * main-thread crypto per poll for multi-community users.
- *
- * Caching is sound because the derivation is a pure function of
- * (label, secret, id, epoch) — CORD-02 Appendix A is frozen — and every
- * consumer treats GroupKeys as read-only (no zeroization exists here).
- * FIFO-bounded: entries are tiny (~200B) and the working set is
- * O(communities × channels × held epochs), far under the cap.
+ * `groupKey` memo. Each derivation costs an HKDF + base-point multiplication (and
+ * a lazy ECDH), and the app re-derives every community's key set on short polls.
+ * Sound because derivation is a pure function of (label, secret, id, epoch)
+ * (Appendix A is frozen) and GroupKeys are read-only. FIFO-bounded.
  */
 const groupKeyMemo = new Map<string, { key: GroupKey; entry: GroupKeyMemoEntry }>();
 const GROUP_KEY_MEMO_MAX = 8192;
@@ -279,9 +233,8 @@ function groupKeyCached(label: string, secret: Uint8Array, id: Uint8Array, epoch
 const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
- * Install persisted entries, shape-checked; malformed rows are skipped rather
- * than trusted. Each is claimed (and dropped from this staging map) by the
- * first derivation that asks for it.
+ * Install persisted entries (malformed rows skipped); each is claimed by the first
+ * derivation that asks for it.
  */
 export function importGroupKeyMemo(entries: unknown[]): void {
   for (const raw of entries) {
@@ -296,11 +249,9 @@ export function importGroupKeyMemo(entries: unknown[]): void {
 }
 
 /**
- * Everything worth persisting: this session's memo PLUS the hydrated entries
- * nothing claimed yet — a community not opened this session keeps its cache
- * rather than losing it to the next write. Deduped by `h` (the live memo's
- * copy wins, it may have gained a `ck`), oldest first so a `limit` drops the
- * stalest hydrated leftovers.
+ * Everything worth persisting: this session's memo PLUS unclaimed hydrated
+ * entries (so unopened communities keep their cache). Deduped by `h` (live copy
+ * wins), oldest first so `limit` drops the stalest.
  */
 export function exportGroupKeyMemo(limit: number): GroupKeyMemoEntry[] {
   const byHash = new Map<string, GroupKeyMemoEntry>();
@@ -322,12 +273,9 @@ export function _resetGroupKeyMemoForTests(): void {
   memoDirtyListener = undefined;
 }
 
-// ── Plane keys (CORD-02 §5, CORD-03 §1, CORD-06 §2) ─────────────────────────
-
 /**
- * A Channel's group key. `secret` is the community_root for a Public Channel
- * (at the root epoch) or the Channel's independent key for a Private one (at
- * its own channel epoch) — CORD-03 §1.
+ * A Channel's group key: `secret` is the community_root (Public, at the root
+ * epoch) or the Channel's own key (Private, at its channel epoch) — CORD-03 §1.
  */
 export function channelGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("secret", secret);
@@ -336,13 +284,9 @@ export function channelGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch
 }
 
 /**
- * The Control Plane's community_root-keyed group key (CORD-02 §5).
- *
- * Post-split this is the plane's READ key: its `convKey` encrypts the wraps
- * for every member. On a LEGACY (pre-split) epoch the same derivation was the
- * whole plane — its `pk` the address and wrap signer too — and that use is
- * retained for reading such epochs; the two schemes never collide (different
- * labels, different addresses).
+ * The Control Plane's community_root-keyed group key (CORD-02 §5). Post-split it's
+ * the READ key; on a LEGACY epoch it was the whole plane (address and signer too).
+ * The schemes never collide (different labels).
  */
 export function controlGroupKey(communityRoot: Uint8Array, communityId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("communityRoot", communityRoot);
@@ -351,11 +295,9 @@ export function controlGroupKey(communityRoot: Uint8Array, communityId: Uint8Arr
 }
 
 /**
- * The Control Plane's control_root-keyed SIGNER keypair (CORD-02 §2/§5): its
- * `pk` is the plane's address and its staff-only `sk` signs the wraps. Every
- * member holds the derived `control_pk` (delivered, never derived — only the
- * owner and staff hold the `control_root` input); the wraps' content is
- * encrypted under {@link controlGroupKey}'s conv_key, not this one's.
+ * The Control Plane's control_root-keyed SIGNER (CORD-02 §2/§5): `pk` is the
+ * plane's address, the staff-only `sk` signs wraps. Content is encrypted under
+ * {@link controlGroupKey}'s conv_key, not this one's.
  */
 export function controlSignerGroupKey(controlRoot: Uint8Array, communityId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("controlRoot", controlRoot);
@@ -370,16 +312,10 @@ export function guestbookGroupKey(communityRoot: Uint8Array, communityId: Uint8A
   return groupKeyCached(LABEL_GUESTBOOK, communityRoot, communityId, toEpoch(epoch));
 }
 
-// ── Voice sub-keys (CORD-07) ─────────────────────────────────────────────────
-
 /**
- * A voice Channel's SFU room keypair (CORD-07 §1): `voice_key.pk` IS the SFU
- * room name and `voice_key.sk` signs token grants (§2). `secret`/`epoch` are
- * the same pair that addresses the Channel's Chat Plane — the community_root at
- * the root epoch for a Public Channel, the Channel's own key/epoch for a
- * Private one — so the room rolls exactly when the Channel's key does. The
- * `group_key` shape is reused only for its deterministic keypair; the pk is
- * never a stream address.
+ * A voice Channel's SFU room keypair (CORD-07 §1): pk IS the room name, sk signs
+ * token grants (§2). Same `secret`/`epoch` as the Channel's Chat Plane, so the
+ * room rolls with the key. The pk is never a stream address.
  */
 export function voiceGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): GroupKey {
   assert32("secret", secret);
@@ -387,11 +323,7 @@ export function voiceGroupKey(secret: Uint8Array, channelId: Uint8Array, epoch: 
   return groupKeyCached(LABEL_VOICE_SIGNER, secret, channelId, toEpoch(epoch));
 }
 
-/**
- * A voice Channel's raw 32-byte media-encryption root (CORD-07 §1). Never feeds
- * a cipher directly — every publisher's per-sender frame key derives from it
- * (see {@link voiceSenderKey}).
- */
+/** A voice Channel's 32-byte media root (CORD-07 §1); only feeds {@link voiceSenderKey}. */
 export function voiceMediaKey(secret: Uint8Array, channelId: Uint8Array, epoch: number | bigint): Uint8Array {
   assert32("secret", secret);
   assert32("channelId", channelId);
@@ -399,11 +331,9 @@ export function voiceMediaKey(secret: Uint8Array, channelId: Uint8Array, epoch: 
 }
 
 /**
- * A publisher's per-sender frame key material (CORD-07 §3):
- * `hkdf(voice_media_key, "concord/voice-sender", sha256(utf8(identity)))` —
- * the epoch field is omitted, `voice_media_key` already carries it. Distinct
- * keys per sender partition the AEAD nonce domains; every member computes
- * every sender's key from the identity the SFU presents, no in-band exchange.
+ * Per-sender frame key material (CORD-07 §3):
+ * `hkdf(voice_media_key, "concord/voice-sender", sha256(utf8(identity)))`, epoch
+ * omitted. Per-sender keys partition AEAD nonce domains; no in-band exchange.
  */
 export function voiceSenderKey(mediaKey: Uint8Array, identity: string): Uint8Array {
   assert32("mediaKey", mediaKey);
@@ -438,8 +368,6 @@ export function baseRekeyGroupKey(
   return groupKeyCached(LABEL_BASE_REKEY_PSEUDONYM, priorRoot, communityId, toEpoch(newEpoch));
 }
 
-// ── Coordinates (keyless 32-byte locators) ───────────────────────────────────
-
 /** A member's Grant entity coordinate (the edition `eid`). */
 export function grantLocator(communityId: Uint8Array, memberXonly: Uint8Array): Uint8Array {
   assert32("communityId", communityId);
@@ -468,11 +396,9 @@ export function inviteLinksLocator(communityId: Uint8Array, creatorXonly: Uint8A
 }
 
 /**
- * A Community Signal's coordinate (CORD-04 §8). The `signal_id` is a short
- * ASCII token; its 32-byte info slot is `sha256(utf8(signal_id))` — the same
- * "hash a variable-length name into the fixed id field" shape the voice-sender
- * key uses (A.6). Keyless and epoch-free like every locator, so it survives a
- * Refounding and a fresh joiner derives it from the community_id alone.
+ * A Community Signal's coordinate (CORD-04 §8): the id slot is
+ * `sha256(utf8(signal_id))` (as the voice-sender key does, A.6). Keyless and
+ * epoch-free, so it survives Refoundings.
  */
 export function signalLocator(communityId: Uint8Array, signalId: string): Uint8Array {
   assert32("communityId", communityId);
@@ -482,8 +408,7 @@ export function signalLocator(communityId: Uint8Array, signalId: string): Uint8A
 /**
  * A rekey blob's per-recipient locator (CORD-06 §2):
  * `hkdf(rotator_xonly || recipient_xonly, "concord/recipient-pseudonym", scope_id, epoch)`.
- * Derived from PUBLIC inputs on purpose, so a bunker account finds its blob
- * without raw-key access; it lives only inside the encrypted rekey event.
+ * From PUBLIC inputs so bunker accounts can find their blob.
  */
 export function recipientLocator(
   rotatorXonly: Uint8Array,
@@ -503,8 +428,6 @@ export function recipientLocator(
 export function inviteBundleKey(token: Uint8Array): Uint8Array {
   return hkdf32(token, buildInfo(LABEL_INVITE_KEY, ZERO32));
 }
-
-// ── A.4: community_id ────────────────────────────────────────────────────────
 
 /**
  * The self-certifying community identity:
@@ -529,8 +452,6 @@ export function verifyCommunityId(communityIdHex: string, ownerHex: string, owne
     return false;
   }
 }
-
-// ── A.5: epoch-key commitment ────────────────────────────────────────────────
 
 /** `sha256("concord/epoch-key-commitment" || prev_epoch_be || prev_key)` (CORD-06). */
 export function epochKeyCommitment(prevEpoch: number | bigint, prevKey: Uint8Array): Uint8Array {

@@ -1,23 +1,15 @@
 import 'fake-indexeddb/auto';
 import { vi } from 'vitest';
 
-// `@testing-library/jest-dom` registers DOM matchers and nothing else, so the
-// node-environment suites (most of them — see the project split in
-// vite.config.ts) have no use for it and shouldn't each pay to import it. It
-// has to land before any test runs, which a setup file's top-level await does.
-//
-// The gate is on the ENVIRONMENT rather than on which project the file is in:
-// a `.test.ts` that opts into jsdom with a docblock still runs in the `node`
-// project, and it needs the matchers and the mocks below just the same.
-// Imported by the `/vitest` subpath because the bare entry's types are a
-// global `/// <reference>` rather than a module, which `import()` can't name.
+// jest-dom matchers only where there's a DOM (gated on environment, since
+// docblock-jsdom files run in the `node` project too). The `/vitest` subpath
+// is importable; the bare entry is a global type reference.
 if (typeof window !== 'undefined') {
   await import('@testing-library/jest-dom/vitest');
 }
 
-// Node.js 22 has a built-in `localStorage` that lacks standard Web Storage API
-// methods (getItem, setItem, etc.) unless `--localstorage-file` is provided.
-// This conflicts with jsdom's proper localStorage, so we override the global.
+// Node 22's built-in `localStorage` lacks the Web Storage methods without
+// `--localstorage-file`; override it.
 const localStorageMap = new Map<string, string>();
 const localStorageMock: Storage = {
   getItem: (key: string) => localStorageMap.get(key) ?? null,
@@ -33,11 +25,8 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
 });
 
-// The DOM mocks below only apply in jsdom suites — a few pure-logic suites
-// (e.g. the SQLite store against node:sqlite) run with
-// `@vitest-environment node`, where there is no `window`.
+// DOM mocks only in jsdom suites (`@vitest-environment node` has no `window`).
 if (typeof window !== 'undefined') {
-  // Mock window.matchMedia
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query) => ({
@@ -52,18 +41,14 @@ if (typeof window !== 'undefined') {
     })),
   });
 
-  // Mock window.scrollTo
   Object.defineProperty(window, 'scrollTo', {
     writable: true,
     value: vi.fn(),
   });
 }
 
-// Mock IntersectionObserver. Like ResizeObserver below it has to be a real
-// constructor, not a `vi.fn` returning a plain object: components observe with
-// `new IntersectionObserver(...)` (the video player's scroll-to-pause, deferred
-// rows), which throws "is not a constructor" against a mock that can't be
-// `new`'d. Tests that need to drive intersection callbacks stub their own.
+// IntersectionObserver/ResizeObserver mocks must be real constructors:
+// components (and Radix `useSize`) call them with `new`.
 global.IntersectionObserver = class {
   observe = vi.fn();
   unobserve = vi.fn();
@@ -75,10 +60,6 @@ global.IntersectionObserver = class {
   constructor(_callback: IntersectionObserverCallback) {}
 } as unknown as typeof IntersectionObserver;
 
-// Mock ResizeObserver. It has to be a real constructor, not an arrow
-// function: Radix measures with `new ResizeObserver(...)` (`useSize`), so any
-// component built on it — Checkbox, Select, Tooltip — fails to render against
-// a mock that can't be `new`'d.
 global.ResizeObserver = class {
   observe = vi.fn();
   unobserve = vi.fn();

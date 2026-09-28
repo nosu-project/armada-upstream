@@ -12,14 +12,7 @@ interface ArmadaDBProviderProps {
   db?: ArmadaDB;
 }
 
-/**
- * Provides the app-wide {@link ArmadaDB} to the tree. Consumers read it with
- * `useDB()`.
- *
- * The database is a module-level singleton (`getArmadaDB`), so mounting this
- * twice, or remounting it, reuses the same connections — and non-React code
- * shares them too.
- */
+/** Provides the singleton {@link ArmadaDB} (`getArmadaDB`); read with `useDB()`. */
 export function ArmadaDBProvider({ children, db }: ArmadaDBProviderProps) {
   const value = useMemo(() => db ?? getArmadaDB(), [db]);
 

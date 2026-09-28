@@ -1,75 +1,39 @@
 import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
-import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute } from "@/lib/routes";
 
 /**
- * Foreground-notification feed.
- *
- * The wire's ingest ({@link ingestWireEvents}) is the single choke point every
- * live event flows through — once, on every transport (web socket, APK drain,
- * APK live feed). Rather than have the page's foreground notifier re-read the
- * stores and re-derive "what's new" (racing the very writes ingest just made),
- * ingest hands the notifier the events it just decoded, in-memory and fully
- * decrypted, and the notifier decides what (if anything) to surface.
- *
- * A single sink is registered by `useForegroundNotifications` (web/desktop
- * only). Native has its own background service and does not register. When no
- * sink is registered these are cheap no-ops, so ingest never branches on it.
+ * Foreground-notification feed: ingest hands its freshly decoded events to
+ * the notifier sink instead of the notifier re-reading stores (and racing
+ * ingest's writes). One sink, registered by `useForegroundNotifications`
+ * (web/desktop); no-op otherwise.
  */
 
 /** A candidate the notifier may surface, normalized across planes. */
 export interface NotifyCandidate {
-  /** Which plane the message arrived on. */
   plane: "nip29" | "dm" | "c2";
-  /** Author pubkey (hex). */
   author: string;
-  /** Unix seconds the message was created. */
   createdAt: number;
-  /**
-   * Whether this event `p`-tags the current user (a mention). DMs are always
-   * treated as directed at the user, so this is irrelevant there.
-   */
+  /** Event `p`-tags the user (always implied for DMs). */
   mention: boolean;
-  /**
-   * Whether this is a reaction (kind 7) to one of the current user's own
-   * messages. Only ever set for a reaction that `p`-tags the user; a reaction
-   * to someone else's message is never a candidate. Shapes the notification as
-   * "reacted to your message" and gates on the `reactions` pref / level.
-   */
+  /** A kind-7 reaction `p`-tagging the user's own message. */
   reaction?: boolean;
-  /**
-   * The reaction emoji / shortcode (normalized: `+`→👍, `-`→👎), for the
-   * "Reacted X to your message" body. Set only when `reaction` is true.
-   */
+  /** Normalized reaction emoji (`+`→👍, `-`→👎); only when `reaction`. */
   reactionEmoji?: string;
   /** The real event kind (NIP-29 kind, 4 for DM, decrypted rumor kind for c2). */
   kind: number;
-  /**
-   * Plaintext body when safely available (NIP-29 chat, decrypted c2 rumor).
-   * Undefined for encrypted DMs.
-   */
+  /** Plaintext when safely available; undefined for encrypted DMs. */
   body?: string;
-  /**
-   * The message's RAW content, untruncated and with its whitespace intact.
-   *
-   * `body` has already been through {@link preview}, which collapses runs of
-   * whitespace and elides — fine for a list row, lossy for the notification
-   * pipeline, which strips media URLs and resolves mentions before deciding
-   * whether anything is left to show. Present wherever `body` is.
-   */
+  /** RAW content (untruncated); `body` has been through {@link preview}. Present wherever `body` is. */
   content?: string;
   /** The first `imeta` MIME, so a media-only message can name what it carries. */
   imetaMime?: string;
   /** Whether this is a reply inside a thread rather than to the room. */
   threadReply?: boolean;
   /**
-   * The active-room key for the conversation this belongs to (matches the
-   * shapes in activeRooms.ts), so the notifier can suppress an on-screen room.
-   * Some planes leave this for the notifier hook to fill in once it resolves
-   * the relay/community the event belongs to:
-   *   - NIP-29 group: `h:<relayUrl>|<groupId>`
-   *   - Concord:   `c2:<channelIdHex>`
-   *   - DM:           `dm:<conversationKey>`
+   * Active-room key (activeRooms.ts shapes), possibly filled by the hook:
+   * `h:<relayUrl>|<groupId>`, `c2:<channelIdHex>`, `dm:<conversationKey>`.
    */
   roomKey: string;
   /** The read-state key (matches useReadState key shapes) for unread gating. */
@@ -82,10 +46,7 @@ export interface NotifyCandidate {
   groupId?: string;
   /** Concord channel id hex; set only for `plane === "c2"`. */
   channelIdHex?: string;
-  /**
-   * DM conversation key; set only for `plane === "dm"`. A bare pubkey for a
-   * 1:1 — see `dmConvKey`.
-   */
+  /** DM conversation key (`plane === "dm"`); see `dmConvKey`. */
   peer?: string;
   /** Git activity details, when this is a repository event routed into a C2 channel. */
   git?: { action: string; repository: string; ticketId?: string; ticketTitle?: string };
@@ -102,9 +63,7 @@ export type NotifySink = (candidates: NotifyCandidate[]) => void;
 export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCandidate[] {
   return opened.flatMap((dm) => {
     if (dm.author === self || (dm.kind !== KIND_DM_CHAT && dm.kind !== KIND_DM_FILE)) return [];
-    // Keyed by the CONVERSATION, not the sender: a group message must suppress
-    // against the group being on screen and mark the group read, and two
-    // members writing at once are one conversation's worth of notification.
+    // Keyed by CONVERSATION, so group messages suppress/mark read as the group.
     const conversation = dmConvKey(dm.peers);
     return [{
       plane: "dm" as const,
@@ -141,6 +100,6 @@ export function feedNotifyCandidates(candidates: NotifyCandidate[]): void {
   try {
     sink(candidates);
   } catch {
-    // The notifier must never break ingest.
+    // the notifier must never break ingest
   }
 }

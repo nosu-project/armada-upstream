@@ -87,11 +87,8 @@ function parsePreferences(raw: string | null): PushToTalkPreferences {
 }
 
 /**
- * localStorage throws rather than returning null when storage is blocked
- * (denied cookies, a sandboxed frame, some private-browsing modes). This is
- * the useSyncExternalStore getSnapshot, so it runs during render and an
- * unguarded read would take the error boundary down instead of the feature —
- * every other voice preference in this codebase guards for the same reason.
+ * localStorage can throw when blocked; this runs during render as the
+ * useSyncExternalStore snapshot, so it must be guarded.
  */
 function readStoredPreferences(): string | null {
   try {
@@ -122,9 +119,7 @@ export function setPushToTalkPreferences(preferences: PushToTalkPreferences): vo
   const raw = JSON.stringify(normalized);
   try {
     window.localStorage.setItem(STORAGE_KEY, raw);
-  } catch {
-    // Blocked or full storage: keep the choice for this session anyway.
-  }
+  } catch { /* ignore */ }
   cachedRaw = raw;
   cachedPreferences = normalized;
   window.dispatchEvent(new Event(CHANGE_EVENT));
@@ -294,15 +289,8 @@ export function onDesktopPushToTalkStatus(
 const overrideListeners = new Set<() => void>();
 
 /**
- * Force the microphone closed and stand push-to-talk down for the rest of the
- * session.
- *
- * This is the in-call escape hatch. A global shortcut's key-up can genuinely go
- * missing — another window grabs the keyboard, a portal chooser swallows the
- * release, the machine sleeps mid-press — and without a way back the user is
- * left transmitting with the call UI reporting them silent. Everything else
- * here is written to fail closed; this is what the user can reach when it
- * nonetheless fails open.
+ * Force the mic closed and disable push-to-talk for the session: the escape
+ * hatch for a missed global-shortcut key-up that would leave the user transmitting.
  */
 export function requestPushToTalkOverride(): void {
   for (const listener of overrideListeners) listener();

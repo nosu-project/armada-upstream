@@ -33,15 +33,10 @@ const CATEGORY_LABELS: Record<ThemeFontCategory, string> = {
 
 const FONT_CATEGORIES: ThemeFontCategory[] = ["sans", "serif", "mono", "display", "handwriting"];
 
-/** The `value` a Select uses for "no custom font" (Radix forbids an empty string). */
+/** Radix Select forbids an empty-string value. */
 const DEFAULT_FONT = "__default__";
 
-/**
- * Edit and publish the user's profile theme (kind 16767, Ditto-compatible):
- * the 3 core colors, body/title fonts from the shared catalog, and a
- * background image (Blossom upload, cover or tiled). Save and Remove are the
- * only publishes, both explicit.
- */
+/** Edit and publish the profile theme (kind 16767, Ditto-compatible). Save and Remove are the only publishes. */
 export function ProfileThemeEditor({
   open,
   onOpenChange,
@@ -49,7 +44,6 @@ export function ProfileThemeEditor({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The currently published theme, to seed the form. */
   current?: DittoTheme;
 }) {
   return (
@@ -94,8 +88,6 @@ function FontSelect({
                   <SelectItem
                     key={f.family}
                     value={f.family}
-                    // Each option renders in its own face — the closest thing
-                    // to a preview a dropdown can offer.
                     style={{ fontFamily: loadThemeFont({ family: f.family }) }}
                   >
                     {f.family}

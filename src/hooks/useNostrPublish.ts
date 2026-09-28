@@ -20,41 +20,23 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Event template accepted by `useNostrPublish`. */
 export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_at"> & {
   created_at?: number;
-  /**
-   * The previous version of the event being replaced (for replaceable/addressable kinds).
-   * When provided, `published_at` from the old event is preserved on the new one.
-   */
+  /** Previous version of a replaceable event; its `published_at` is preserved. */
   prev?: NostrRumor;
-  /**
-   * When set, publish only to this relay (NIP-29 group traffic must stay on
-   * the group's host server). When omitted, the event goes to all configured
-   * servers via the pool's eventRouter.
-   */
+  /** Publish only to this relay (NIP-29 traffic stays on its host). Default: all servers. */
   relay?: string;
-  /**
-   * Publish to this exact relay set. Used for the user's portable self-state so
-   * NIP-65 write relays keep receiving it even when they are disabled for
-   * general pool traffic. Mutually exclusive with `relay`.
-   */
+  /** Exact relay set (portable self-state to NIP-65 write relays). Exclusive with `relay`. */
   relays?: string[];
   /**
-   * Whether a newer explicit-relay replaceable should inherit destinations
-   * still pending on its predecessor. Disable only when the new document was
-   * merged from a partial source read and is unsafe for unanswered relays.
+   * Disable only when the document was merged from a partial read and is unsafe for
+   * unanswered relays.
    */
   inheritPendingTargets?: boolean;
-  /**
-   * Called with the fully-signed event immediately before it is sent to the
-   * network. Lets callers optimistically insert the event into a local cache
-   * (and learn its final id) before the relay round-trip completes.
-   */
+  /** Called with the signed event before sending, for optimistic inserts. */
   onSigned?: (event: NostrEvent) => void;
 };
 
-/** Returns true if the kind falls in a replaceable or addressable range. */
 function isReplaceableKind(kind: number): boolean {
   if (kind === 0 || kind === 3) return true;
   return (kind >= 10000 && kind < 20000) || (kind >= 30000 && kind < 40000);
@@ -84,9 +66,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       if (relays && exactRelays?.length === 0) {
         throw new Error("Add at least one relay before publishing this account state");
       }
-      // NIP-89 client tag: always stamp this build. Replaceable RMW (mute list,
-      // etc.) often copies prior public tags wholesale, including another app's
-      // `client` — "add if missing" would then misattribute the new version.
+      // NIP-89: always stamp this build; replaceable RMW often copies another app's `client` tag.
       const tags = [
         ...(template.tags ?? []).filter(([name]) => name !== "client"),
         ["client", APP_NAME],
@@ -117,30 +97,14 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         );
       }
 
-      // The relay's content-blind push gateway may echo this event back before
-      // the page sees it through the normal ingest path. Record it first so the
-      // service worker can identify the resulting push as locally authored.
+      // Before publishing: the push gateway may echo it before normal ingest.
       await markOwnWebPushEvent(event.id);
 
-      // Store the signed event locally before any network work. This makes
-      // offline-created profiles/settings visible immediately and gives the
-      // retry worker a durable copy if the app closes before relays recover.
-      //
-      // Filed under the relay it is being published TO, which for a NIP-29 send
-      // is the only relay the message exists on — the same tenant the timeline
-      // reads back. (The durable copy for RETRY is the publish outbox below, not
-      // this one: the store drops `sig`.)
+      // Stored locally first (offline visibility), under the relay it's published to. The retry
+      // copy is the outbox below: the store drops `sig`.
       void eventStore.then((store) => store.event(event, { relay })).catch(() => undefined);
-      // Awaited, unlike the store write: the queue and the `removeQueuedPublish`
-      // below are both async now, and a fire-and-forget queue could land AFTER
-      // the removal that a successful publish issues — leaving a delivered
-      // event queued forever.
-      //
-      // Awaited but not FATAL. The queue is the retry-after-restart safety net,
-      // and KV can genuinely fail (quota, an unavailable IndexedDB under iOS
-      // Lockdown Mode). Letting that throw here would abort a publish that was
-      // about to succeed — losing the send outright to protect its backup, and
-      // without even rendering it optimistically, since `onSigned` is below.
+      // Awaited so it can't land after a successful publish's removal; not fatal, since KV can fail
+      // (quota, iOS Lockdown Mode).
       let durablyQueued = false;
       try {
         await queueSignedEvent(event, relay, exactRelays, {
@@ -149,26 +113,19 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         durablyQueued = true;
       } catch (error) {
         if (isPublishOutboxConflictError(error)) throw error;
-        // A successful immediate delivery needs no backup. If delivery fails,
-        // however, the catch below must not claim this event was queued.
+        // If delivery fails, the catch must not claim it was queued.
       }
 
-      // Let callers optimistically render the event before the network call.
       onSigned?.(event);
 
       try {
-        // Budget scaled to the signer: an auth-gating relay can demand a
-        // NIP-42 sign inside this await, which costs a full bunker round-trip
-        // for NIP-46 logins (#51).
+        // An auth-gating relay may need a NIP-42 sign here (a bunker round-trip, #51).
         const timeout = publishTimeoutMs(user.method);
         if (relay) {
           await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });
         } else if (exactRelays) {
           const result = await publishSignedEventToRelays(nostr, event, exactRelays, timeout);
-          // Always settle only the destinations THIS attempt addressed. The
-          // queued replacement may have inherited an old NIP-65 target from a
-          // superseded event; clearing the whole entry after the new targets
-          // accept would silently abandon that migration delivery.
+          // Settle only the destinations THIS attempt addressed; inherited targets stay pending.
           await recordQueuedPublishAttempt(event.id, exactRelays, result.rejected).catch(() => undefined);
           if (result.rejected.length > 0) {
             throw new Error(
@@ -185,9 +142,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         throw error;
       }
 
-      // Outside the try: the relay has accepted the event by now, so a failure
-      // to clear its queue entry must not be reported as a queued publish. The
-      // worst case is one redundant re-delivery, which relays dedup by id.
+      // Outside the try: the relay accepted it, so a queue-clear failure isn't a failed publish.
       if (!exactRelays) await removeQueuedPublish(event.id).catch(() => undefined);
 
       return event;
@@ -199,11 +154,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
   });
 }
 
-/**
- * Re-publish an already-signed event (e.g. retrying a failed optimistic send).
- * Unlike `useNostrPublish`, this does not re-sign or mutate tags — the event id
- * is preserved so it reconciles with the original optimistic message.
- */
+/** Re-publish an already-signed event without re-signing; the id is preserved. */
 export function useRepublish(): UseMutationResult<
   NostrEvent,
   Error,
@@ -214,10 +165,7 @@ export function useRepublish(): UseMutationResult<
 
   return useMutation({
     mutationFn: async ({ event, relay }) => {
-      // The local event store drops signatures, so an event read back from it
-      // carries `sig: ""` and every relay will reject it. Fail here instead: a
-      // silent rejection looks identical to a network failure, and the retry
-      // that produced it would loop forever against a relay that is fine.
+      // Store copies have `sig: ""`, which every relay rejects; fail loudly instead of looping.
       if (!event.sig) {
         throw new Error("Cannot re-publish an unsigned event (its signature was not preserved).");
       }

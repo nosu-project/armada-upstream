@@ -1,6 +1,4 @@
-/**
- * NIP-30 custom emoji helpers.
- */
+/** NIP-30 custom emoji helpers. */
 
 /** Checks if a string is a NIP-30 custom emoji shortcode (`:shortcode:` format). */
 export function isCustomEmoji(content: string): boolean {
@@ -8,39 +6,25 @@ export function isCustomEmoji(content: string): boolean {
 }
 
 /**
- * Whether a reaction key is renderable as a pill glyph. Guards against junk
- * reactions such as a raw URL pasted as the content (which have no `:shortcode:`
- * form and no `emoji` image tag) rendering as a long line of text. A key is
- * renderable when it's either a NIP-30 custom emoji shortcode with a resolved
- * image URL, or a short unicode glyph (no whitespace, no URL, and only a couple
- * of code points long).
+ * Whether a reaction key renders as a pill glyph: a resolved `:shortcode:`, or a
+ * short unicode glyph (guards against junk like pasted URLs).
  */
 export function isRenderableReactionKey(key: string, url?: string): boolean {
   if (isCustomEmoji(key)) return Boolean(url);
   if (!key) return false;
-  // Reject anything that looks like a URL or contains whitespace/newlines.
   if (/\s/.test(key) || /^\w+:\/\//.test(key) || /^(www\.|https?:)/i.test(key)) return false;
-  // A genuine emoji is at most a few code points (e.g. flags, ZWJ sequences);
-  // anything longer is almost certainly junk text.
+  // Real emoji (flags, ZWJ sequences) are at most a few code points.
   return [...key].length <= 8;
 }
 
-/**
- * Extracts the custom emoji URL from an event's tags for a given shortcode.
- * The shortcode should include the colons (e.g., `:soapbox:`).
- */
+/** Custom emoji URL for a shortcode (with colons, e.g. `:soapbox:`) from an event's tags. */
 export function getCustomEmojiUrl(shortcode: string, tags: string[][]): string | undefined {
   const name = shortcode.slice(1, -1);
   const emojiTag = tags.find(([tagName, tagShortcode]) => tagName === "emoji" && tagShortcode === name);
   return emojiTag?.[2];
 }
 
-/**
- * Build NIP-30 `["emoji", shortcode, url]` tags for every `:shortcode:` in
- * `content` that matches one of the given custom emojis (one tag per unique
- * shortcode). Shared by the chat composer and the status dialog so anything
- * that publishes user-typed text attaches the same emoji tags.
- */
+/** NIP-30 `["emoji", shortcode, url]` tags for each unique known `:shortcode:` in `content`. */
 export function collectEmojiTags(
   content: string,
   emojis: Array<{ shortcode: string; url: string }>,
@@ -61,7 +45,6 @@ export function collectEmojiTags(
   return tags;
 }
 
-/** Builds a map of shortcode -> URL from an event's emoji tags. */
 export function buildEmojiMap(tags: string[][]): Map<string, string> {
   const map = new Map<string, string>();
   for (const tag of tags) {

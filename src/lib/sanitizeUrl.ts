@@ -1,14 +1,7 @@
 /**
- * Validate that a string is a well-formed HTTP(S) URL.
- *
- * Returns the normalised `href` when valid, or `undefined` otherwise.
- * This **must** be used whenever a URL originates from untrusted Nostr
- * event data (tags, metadata fields, etc.) and will be placed into an
- * `href`, `window.open()`, or `openUrl()` call.  Without this check a
- * malicious `javascript:` URI could execute arbitrary code.
- *
- * Armada note: plain `http:` is allowed (unlike Ditto) because internal
- * infrastructure commonly serves over private hostnames without TLS.
+ * Normalized `href` if well-formed http(s), else undefined. MUST be used for
+ * untrusted URLs going into `href`/`window.open()`/`openUrl()` (blocks
+ * `javascript:`). Unlike Ditto, plain `http:` is allowed for private infrastructure.
  */
 export function sanitizeUrl(raw: string | undefined | null): string | undefined {
   if (!raw) return undefined;
@@ -17,22 +10,14 @@ export function sanitizeUrl(raw: string | undefined | null): string | undefined 
     if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
       return parsed.href;
     }
-  } catch {
-    // not a valid URL
-  }
+  } catch { /* ignore */ }
   return undefined;
 }
 
 /**
- * Whether a URL targets a loopback / local / private-network address.
- *
- * When a public HTTPS page (armada.buzz) loads a subresource from such an
- * address, Chrome's Local Network Access gate prompts the user with
- * "… wants to access other apps and services on this device". Untrusted event
- * data (custom-emoji URLs, avatars, media) can carry a `http://localhost:…` or
- * `http://192.168.x.x/…` URL — usually a leaked dev instance — so anything that
- * turns such a URL into an `<img>`/`fetch` MUST refuse it, or every viewer who
- * renders it gets that prompt.
+ * Whether a URL targets a loopback/private address. Loading one from a public
+ * page triggers Chrome's Local Network Access prompt for every viewer, so
+ * untrusted media URLs like this MUST be refused.
  */
 export function isLocalNetworkUrl(raw: string | undefined | null): boolean {
   if (!raw) return false;
@@ -45,8 +30,7 @@ export function isLocalNetworkUrl(raw: string | undefined | null): boolean {
   let h = host.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
   if (h === '::1' || h === '0.0.0.0') return true;
-  // An IPv4-mapped address reaches the same host by another spelling, and the
-  // URL parser hands it back in hex (::ffff:7f00:1), matching no rule below.
+  // IPv4-mapped IPv6 comes back in hex (::ffff:7f00:1) and would match no rule below.
   const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
   if (mapped) {
     const n = (parseInt(mapped[1], 16) << 16) | parseInt(mapped[2], 16);
@@ -70,15 +54,9 @@ export function isLocalNetworkUrl(raw: string | undefined | null): boolean {
 }
 
 /**
- * A sanitized URL that points at another host, or `undefined` when it's
- * same-host, invalid, or an unsupported scheme.
- *
- * Used to decide whether to offer an "open the original source" affordance on
- * an embed resolved from a link on another host (e.g. an nevent card unfurled
- * from a `njump.me/nevent1…` URL): a link back into our own origin should
- * navigate in-app, not pop a new tab. Unlike Ditto's, plain `http:` is allowed
- * (see {@link sanitizeUrl}), and there is no window.location during SSR/tests,
- * where any absolute URL is treated as external.
+ * Sanitized URL on another host, else undefined — for "open original" on
+ * embeds (same-origin links navigate in-app). Without `window.location`
+ * (SSR/tests), any absolute URL counts as external.
  */
 export function externalUrl(raw: string | undefined | null): string | undefined {
   const safe = sanitizeUrl(raw);
@@ -93,10 +71,7 @@ export function externalUrl(raw: string | undefined | null): string | undefined 
   return safe;
 }
 
-/**
- * Display hostname for a URL (drops a leading `www.`). Falls back to the raw
- * string when it can't be parsed.
- */
+/** Hostname without `www.`, or the raw string if unparseable. */
 export function displayHost(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -106,22 +81,9 @@ export function displayHost(url: string): string {
 }
 
 /**
- * Validate a URL that is about to become an `<img>`/`<video>` source.
- *
- * The two checks above, in the one combination every image site wants, so the
- * pair does not have to be remembered separately at each of them. Returns the
- * normalised URL, or `undefined` when it must not be loaded.
- *
- * This is not an XSS control — `javascript:` does not execute in `src`, and
- * CSP's `img-src`/`media-src` refuse the exotic schemes anyway. It exists for
- * {@link isLocalNetworkUrl}: an avatar or icon is untrusted event data that
- * every viewer of a room renders unprompted, so one kind-0 naming
- * `http://192.168.1.1/…` is a Local Network Access prompt for all of them.
- *
- * `blob:` and `data:` pass through unchanged. A blob URL is minted by this
- * origin (`URL.createObjectURL`, e.g. a decrypted Concord icon) and resolves to
- * nothing if a stranger spells one; a data URL carries its own bytes, and
- * neither executes script in an `<img>`.
+ * Validate an `<img>`/`<video>` source: {@link sanitizeUrl} plus
+ * {@link isLocalNetworkUrl} (to avoid LAN prompts, not XSS). `blob:` and
+ * `data:` pass through (origin-minted or self-contained).
  */
 export function sanitizeImageSrc(raw: string | undefined | null): string | undefined {
   if (!raw) return undefined;

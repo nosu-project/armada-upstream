@@ -7,23 +7,12 @@ import { bridgePortalUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /**
- * Entry points into the Discord bridge portal (`armada-discord-bridge`).
- *
- * None of the work happens here. The portal is a separate service that holds
- * the Discord OAuth application and bot token; Armada's whole job is to offer
- * the door and be accurate about where it leads. Every export renders `null`
- * when `VITE_BRIDGE_PORTAL_URL` is unset, so builds with no portal to point at
- * (the APK, the desktop app, forks, `npm run dev`) carry no Discord UI at all.
- *
- * What the user gets on the other side: they sign in with Discord, pick a
- * server they administer, and the portal mints a Concord community from its
- * channels and history — signed with *their own* Nostr key, so they own it —
- * then hands back an ordinary invite link. That link comes home through the
- * same paste field as any other invite; there is no private channel between
- * Armada and the portal.
+ * Entry points into the Discord bridge portal (`armada-discord-bridge`), a
+ * separate service holding the OAuth app and bot token. Every export renders
+ * `null` when `VITE_BRIDGE_PORTAL_URL` is unset.
  */
 
-/** The Discord wordmark glyph. lucide dropped brand icons, so it's inlined. */
+/** Discord wordmark; lucide dropped brand icons. */
 export function DiscordMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
@@ -32,14 +21,7 @@ export function DiscordMark({ className }: { className?: string }) {
   );
 }
 
-/**
- * "Import a Discord server" — opens the in-app import wizard.
- *
- * Renders nothing when this build has no portal configured, so call sites can
- * drop it in unconditionally. A signed-out visitor is sent to the welcome page
- * first (the flow signs founding events, so it needs a key), matching what the
- * create-community tile does.
- */
+/** Opens the import wizard; signed-out visitors go to the welcome page first (it signs events). */
 export function ImportFromDiscordButton({
   className,
   size,
@@ -47,11 +29,7 @@ export function ImportFromDiscordButton({
 }: {
   className?: string;
   size?: "sm" | "lg";
-  /**
-   * Called when the wizard opens, so a host dialog can dismiss itself. Without
-   * it the dialog stays mounted behind the wizard and shows a second close
-   * button over it.
-   */
+  /** Lets a host dialog dismiss itself so it doesn't show a second close button over the wizard. */
   onOpen?: () => void;
 }) {
   const { user } = useCurrentUser();
@@ -69,9 +47,7 @@ export function ImportFromDiscordButton({
         className,
       )}
       onClick={() => {
-        // Navigation is the whole mechanism: it unmounts any dialog this button
-        // sits in (so no second close button), and the wizard is owned by the
-        // route, so nothing unmounting here can take it down with it.
+        // The wizard is owned by the route, so unmounting this dialog can't take it down.
         navigate(user ? "/import/discord" : "/");
         onOpen?.();
       }}
@@ -82,14 +58,7 @@ export function ImportFromDiscordButton({
   );
 }
 
-/**
- * The bridge section of a community's settings, for members who can manage it.
- *
- * Deliberately states the encryption cost up front rather than in a tooltip: a
- * bridged channel is readable in plaintext on Discord's servers, which is the
- * one thing a Concord owner must understand before setting one up. The portal
- * asks for explicit consent too — saying it twice is the right amount.
- */
+/** Community settings bridge section. States up front that bridged channels are plaintext on Discord. */
 export function DiscordBridgeSection({ canManage }: { canManage: boolean }) {
   const href = bridgePortalUrl("/");
   if (!href || !canManage) return null;

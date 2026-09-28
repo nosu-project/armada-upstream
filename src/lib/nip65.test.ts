@@ -10,7 +10,7 @@ import {
   newerRelayListUpdate,
   newestRelayList,
   parseRelayList,
-  publishRelayListEvent,
+  publishSignedEventToRelays,
   queryExplicitRelays,
   queryExplicitRelaysWithStatus,
   relayListIsNewerThanMetadata,
@@ -359,7 +359,7 @@ describe("NIP-65 relay lists", () => {
         },
       }),
     };
-    const result = await publishRelayListEvent(
+    const result = await publishSignedEventToRelays(
       nostr,
       event,
       ["home.example", "wss://reject.example", "wss://home.example/"],

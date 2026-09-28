@@ -19,10 +19,7 @@ import {
   type CoreThemeColors,
 } from "@/themes";
 
-/**
- * Per-field deserialization: each top-level key is validated individually
- * against the schema, so one corrupt/missing field doesn't reset everything.
- */
+/** Validate each key individually so one corrupt field doesn't reset everything. */
 function deserializeConfig(raw: string): AppConfig {
   let parsed: unknown;
   try {
@@ -44,10 +41,8 @@ function deserializeConfig(raw: string): AppConfig {
     }
   }
 
-  // Migration: the DM-relay model split the single `useOwnDmRelays` boolean into
-  // two independent toggles (`useAppDmRelays` + `useOwnDmRelays`). For a config
-  // predating `useAppDmRelays`, preserve the old XOR behavior: "use own" meant
-  // "own relays ONLY" (app off); anything else meant "app defaults".
+  // Migration: `useOwnDmRelays` split into `useAppDmRelays` + `useOwnDmRelays`;
+  // preserve the old XOR ("own" meant own relays ONLY).
   if (!("useAppDmRelays" in source)) {
     const storedOwn = source.useOwnDmRelays === true;
     const storedDm = Array.isArray(source.dmRelays) ? source.dmRelays : [];
@@ -59,7 +54,6 @@ function deserializeConfig(raw: string): AppConfig {
   return result as unknown as AppConfig;
 }
 
-/** Resolve the active theme's core colors from config. */
 function activeColors(config: AppConfig): CoreThemeColors {
   const resolved = resolveTheme(config.theme);
   if (resolved === "custom") {
@@ -69,9 +63,8 @@ function activeColors(config: AppConfig): CoreThemeColors {
 }
 
 /**
- * Inject the derived theme CSS variables into a `<style id="theme-vars">`
- * element and set the `<html>` class. Runs before paint to avoid flicker and
- * re-runs on OS scheme changes when theme is "system".
+ * Inject theme CSS variables and the `<html>` class before paint; re-runs on OS
+ * scheme changes when theme is "system".
  */
 function useApplyTheme(config: AppConfig) {
   useLayoutEffect(() => {
@@ -88,19 +81,17 @@ function useApplyTheme(config: AppConfig) {
       }
       el.textContent = css;
 
-      // `.dark` drives Tailwind's dark-variant styling; "custom" themes pick
-      // the variant that matches their background luminance.
+      // "custom" themes pick the dark variant from background luminance.
       const root = document.documentElement;
       const isDark = resolved === "dark"
         || (resolved === "custom" && isDarkTheme(colors.background));
       root.classList.toggle("dark", isDark);
       root.classList.toggle("custom", resolved === "custom");
 
-      // Keep the browser chrome <meta theme-color> in sync.
       const meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", hslStringToHex(colors.background));
 
-      // Keep the native status/navigation bar style in sync (no-op on web).
+      // No-op on web.
       syncNativeStatusBar(colors.background);
     };
 
@@ -120,22 +111,13 @@ interface AppProviderProps {
 }
 
 export function AppProvider({ storageKey, children }: AppProviderProps) {
-  // The config blob is PER ACCOUNT. It carries the DM peer lists
-  // (`startedDms`, `acceptedDms`, `pinnedDms`, …) and the rail's arrangement,
-  // so one shared blob meant every account on the device showed every other
-  // account's conversations — and, because `docToConfigPatch` only copies keys
-  // the incoming NIP-78 document actually has, each account then republished
-  // the others' peers as its own.
-  //
-  // The pubkey can't come from the login context: `AppProvider` is mounted
-  // ABOVE `NostrLoginProvider` (whose storage is an async keychain read on
-  // native), and this hook has to pick a key on its first render. It reads the
-  // synchronous marker instead — see `lib/activeAccount.ts`.
+  // The config blob is PER ACCOUNT (it holds DM peer lists), and the key must be
+  // picked on first render above `NostrLoginProvider`, so read the synchronous
+  // marker (see `lib/activeAccount.ts`).
   const pubkey = useSyncExternalStore(subscribeActivePubkey, getActivePubkey);
 
-  // `adoptLegacyConfig` is idempotent and synchronous, and has to run before
-  // the scoped key is read: on upgrade the one pre-scoping blob is handed to
-  // whichever account is active first, and to that account only.
+  // Must run before the scoped key is read: hands the pre-scoping blob to the
+  // first active account only.
   const scopedKey = useMemo(() => {
     if (pubkey) adoptLegacyConfig(storageKey, pubkey);
     return accountScopedKey(storageKey, pubkey);
@@ -148,20 +130,13 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
 
   useApplyTheme(config);
 
-  // Ensure first-paint <html> class matches before React hydration completes
-  // (the public/theme.js bootstrap handles the very first paint).
+  // public/theme.js handles the very first paint.
   useEffect(() => {
     document.documentElement.dataset.themeReady = "true";
   }, []);
 
-  // Memoized because this context is read by 67 files, and an object literal
-  // here re-renders every one of them on any AppProvider render — including
-  // renders where `config` did not move at all. `setConfig` is reference-stable
-  // (see `useLocalStorage`), so this changes only when the config does.
-  //
-  // It matters beyond this subtree: `NostrProvider` consumes this context, so
-  // an invalidation here re-rendered it too, and its own value then reached the
-  // ~96 files that call `useNostr()`.
+  // Memoized: dozens of files (and NostrProvider) read this context.
+  // `setConfig` is reference-stable.
   const value = useMemo(
     () => ({ config, updateConfig: setConfig }),
     [config, setConfig],

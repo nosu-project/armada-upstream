@@ -10,21 +10,12 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { REPORT_REASONS } from "@/lib/report";
 
-/** The plain-word label for a NIP-56 report type, falling back to the raw value. */
 function reasonLabel(reason: string | undefined): string {
   if (!reason) return "Reported";
   return REPORT_REASONS.find((r) => r.value === reason)?.label ?? reason;
 }
 
-/**
- * The community's report queue, for staff — the receiving end of the report
- * dialog's Concord branch.
- *
- * Read-only by design: a report is information, and every action it might lead
- * to (kick, ban, delete the message) already has its own surface with its own
- * permission checks. Duplicating them here would be a second place for those
- * rules to live.
- */
+/** Read-only report queue for staff; actions live on their own permission-checked surfaces. */
 export function ReportsView({ community }: { community: Community }) {
   const { data: reports, isLoading } = useConcordReports(community);
 
@@ -79,8 +70,7 @@ function ReportRow({ report }: { report: ReportEntry }) {
         </span>
       </div>
 
-      {/* The reported message, when this moderator's store has it. A message
-          they never received is simply not shown — the report still stands. */}
+      {/* Only when this moderator's store has the message. */}
       {report.messageText && (
         <blockquote className="border-l-2 border-border pl-2.5 text-muted-foreground line-clamp-4 whitespace-pre-wrap break-words">
           {report.messageText}

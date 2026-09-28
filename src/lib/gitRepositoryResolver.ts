@@ -29,11 +29,7 @@ type NostrClient = {
   };
 };
 
-/**
- * Turn a supported user entry into a canonical repository coordinate. NIP-05
- * lookups go through nostr-tools' verified NIP-05 resolver rather than trusting
- * a profile metadata field.
- */
+/** Resolve user input to a canonical repository coordinate. NIP-05 goes through nostr-tools' verified resolver. */
 export async function resolveGitRepositoryInput(input: string): Promise<GitRepositoryResolution> {
   const value = input.trim();
   if (!value) throw new Error("Enter a repository address.");
@@ -63,11 +59,8 @@ export async function resolveGitRepositoryInput(input: string): Promise<GitRepos
   // `username` is the NIP-05 local part in nostr://alice@example.com/repo.
   if (url.password || url.port || url.search || url.hash) throw new Error("Invalid nostr:// repository address.");
 
-  // NIP-34's remote is `nostr://<owner>/<identifier>`, optionally carrying a
-  // relay hint ahead of it (`nostr://<owner>/<relay>/<identifier>` — the form
-  // ngit writes into .git/config, so it is what a user copies from a remote).
-  // The identifier is always the LAST segment; a preceding one is a grasp host
-  // to try first, which resolution treats as a preference, not a requirement.
+  // NIP-34 remote: `nostr://<owner>[/<relay>]/<identifier>` (ngit's .git/config form).
+  // The identifier is the LAST segment; a relay hint is a preference, not a requirement.
   let segments: string[];
   try {
     segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -91,8 +84,7 @@ export async function resolveGitRepositoryInput(input: string): Promise<GitRepos
       throw new Error("Repository owner is not a valid npub.");
     }
   } else {
-    // A hostname cannot contain an @, so URL places NIP-05's local part in
-    // username. This deliberately rejects bare domains as ambiguous owners.
+    // URL puts NIP-05's local part in `username`. Bare domains are rejected as ambiguous.
     let nip05Address = "";
     try {
       nip05Address = url.username ? `${decodeURIComponent(url.username)}@${url.hostname}` : "";

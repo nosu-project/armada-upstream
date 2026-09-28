@@ -1,6 +1,4 @@
-// ---------------------------------------------------------------------------
-// JSON-RPC 2.0 message types used by the sandbox frame protocol.
-// ---------------------------------------------------------------------------
+// JSON-RPC 2.0 messages for the sandbox frame protocol.
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -29,9 +27,7 @@ export interface JsonRpcErrorResponse {
 
 export type JsonRpcResponse = JsonRpcSuccessResponse | JsonRpcErrorResponse;
 
-// ---------------------------------------------------------------------------
-// Serialised HTTP request/response shapes exchanged via the fetch RPC.
-// ---------------------------------------------------------------------------
+// Serialised HTTP request/response shapes for the fetch RPC.
 
 export interface SerialisedRequest {
   url: string;
@@ -47,27 +43,15 @@ export interface SerialisedResponse {
   body: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// File resolution types used by SandboxFrame consumers.
-// ---------------------------------------------------------------------------
-
 /** The result of resolving a file request inside the sandbox. */
 export interface FileResponse {
-  /** HTTP status code. */
   status: number;
-  /** MIME content type (e.g. "text/html"). */
   contentType: string;
-  /** Raw file bytes. */
   body: Uint8Array;
 }
 
-/**
- * A virtual script that the sandbox frame should serve at a given path
- * and inject into HTML responses via a `<script>` tag.
- */
+/** A virtual script served at `path` and injected into HTML responses. */
 export interface InjectedScript {
-  /** The virtual path to serve this script at (e.g. "/__injected__/preview.js"). */
   path: string;
-  /** The script source code as a string. */
   content: string;
 }

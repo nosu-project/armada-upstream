@@ -15,7 +15,6 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 
-/** One control-plane offender: who they are, what they tried, and the remedy. */
 function ActorRow({
   actor,
   onBan,
@@ -55,13 +54,7 @@ function ActorRow({
   );
 }
 
-/**
- * One "time traveler": a member whose messages are dated well ahead of the
- * local clock. Usually an innocent wrong device clock, but a future stamp is
- * also a spam/griefing vector (a held message that jumps to the top the instant
- * its time arrives), so a moderator gets the real kick/ban remedy here too,
- * framed as "if this is abuse" rather than an accusation.
- */
+/** A member with future-dated messages: usually a wrong clock, but also a spam vector, so the remedy is offered. */
 function TravelerRow({
   traveler,
   onKick,
@@ -143,17 +136,8 @@ function TravelerRow({
 }
 
 /**
- * The control-plane watchdog as a full pane (the `suspicious` route), replacing
- * the old cramped dialog. Two surfaces share it: the control-plane abuse rows
- * (a member with no standing writing editions) and the "time traveler" flag (a
- * member whose messages are dated in the future). Both are actionable with the
- * real kick/ban remedy; a future stamp is an innocent wrong clock most of the
- * time but also a spam vector, so the moderator decides. Reached from the red
- * sidebar alert, which only shows when there is something here to see.
- *
- * `ban`/`kick` are the page's existing moderation mutations (banning already
- * rotates the keys when the community is private); `canBan`/`canKick` gate the
- * per-traveler remedy against the roster.
+ * The `suspicious` pane: control-plane abuse rows and time travelers, both
+ * with the real kick/ban remedy. `canBan`/`canKick` gate the traveler remedy.
  */
 export function SuspiciousActivityView({
   community,
@@ -178,9 +162,7 @@ export function SuspiciousActivityView({
 
   const onBan = (target: string) => {
     setBusy(target);
-    // Always rotate from here, public community or not: against control-plane
-    // abuse the rotation is the remedy, not a side effect. A banlist alone
-    // leaves the flooder holding the root they mint junk with.
+    // Always rotate: a banlist alone leaves the flooder holding the root.
     ban({ target, forceRotate: true })
       .then((r) => {
         toast({
@@ -236,10 +218,7 @@ export function SuspiciousActivityView({
           {alert ? (
             <section className="space-y-3">
               {flooded ? (
-                // The read stopped on our own limit with history still unread.
-                // In a healthy community that never happens, so it is worth
-                // stating ahead of everything else: it is the one symptom that
-                // also explains why nobody below is named.
+                // The read hit our own limit with history unread; this also explains why nobody is named.
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <p>
                     This community's history has grown so large we can no longer read all of it. That
@@ -255,9 +234,7 @@ export function SuspiciousActivityView({
                   </p>
                 </div>
               ) : actors.length === 0 ? (
-                // Junk names nobody by construction: it is signed with the key
-                // every member shares. Say that plainly, because "we can't tell
-                // who" is the whole reason the advice is prune-and-rotate.
+                // Junk is signed with the shared key, so it names nobody; hence prune-and-rotate.
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <p>
                     Someone inside this community is flooding it with junk. They can only do that

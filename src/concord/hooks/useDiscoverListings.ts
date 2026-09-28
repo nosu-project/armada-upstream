@@ -19,19 +19,16 @@ import type { Community } from "@/concord/lib/types";
 import type { NostrFilter } from "@nostrify/nostrify";
 
 /**
- * Discover listings by LINK rather than by community. A kind-3314
- * announcement carries nothing but an invite URL, so the only thing that ties
- * it to a community is the link signer inside it — and a community's link
- * signers are exactly what its invite registry (vsk 8) and the creator's own
- * Invite List name. These helpers find the announcements carrying a given set
- * of links, and delete the viewer's own.
+ * Discover listings by LINK. A kind-3314 announcement carries only an invite
+ * URL, so it ties to a community through the link signer, whose set is named by
+ * the invite registry (vsk 8) and the creator's Invite List.
  */
 
 /** How many announcements one read asks each relay for, per filter. */
 const LISTING_READ_LIMIT = 500;
 /** Announcement ids per deletion filter (`#e`), to keep each REQ a sane size. */
 const DELETION_ID_CHUNK = 200;
-/** Each read's own deadline — the deletions read never inherits what the listings read left. */
+/** Each read's own deadline; the deletions read doesn't inherit the listings read's leftover. */
 const READ_TIMEOUT_MS = 8000;
 
 /** No Discover relay answered a read, so an empty result would be a guess. */
@@ -44,34 +41,16 @@ function readSignal(outer: AbortSignal | undefined): AbortSignal {
 
 /**
  * Every standing announcement on the Discover relays whose link is one of
- * `linkSigners`, newest first, deletions by each announcement's own author
- * honored.
+ * `linkSigners`, newest first, honoring deletions by each announcement's author.
  *
- * An announcement carries nothing but its URL — no tag names its link or its
- * community — so the only thing a relay can narrow a listing read by is its
- * AUTHOR. `authors` does that: the people who can hold these links (the
- * viewer's own listings, or a community's link creators), read deep rather
- * than as whatever of theirs survives in the network-wide newest page.
- * `includeRecent` adds that newest page back beside it, for listings shared by
- * someone outside `authors`; without `authors` it is the only read.
+ * Relays can only narrow by AUTHOR, so `authors` are read deep; `includeRecent`
+ * adds the network-wide newest page for anyone else. Deletions are read in a
+ * second round by `#e` of exactly the found announcements, so old deletes aren't missed.
  *
- * Deletions are read in a SECOND round, by `#e` of exactly the announcements
- * found (and by their authors, since only an author's delete counts), so an
- * old delete of an old listing is never missed for being older than the
- * newest page of every Discover deletion.
- *
- * Each read has its own deadline, and each reports whether any relay answered
- * (EOSE) — a pool read turns an outage or an abort into an empty answer, which
- * here would mean "not listed". So:
- *
- * - The LISTINGS read throws {@link DiscoverUnansweredError} when no relay
- *   answered: "no listing" must never be concluded from silence.
- * - The DELETIONS read throws too under `strict` (the unlist path, which must
- *   not report a take-down it could not check). Otherwise the listings are
- *   returned as standing: for a display, over-reporting a listing that may
- *   already be deleted is the safe direction — hiding a live one would tell an
- *   owner their community is off Discover while it isn't — and the next
- *   refetch corrects it.
+ * A pool read turns an outage into an empty answer, so: the listings read throws
+ * {@link DiscoverUnansweredError} when no relay answered; the deletions read
+ * throws only under `strict` (unlisting), otherwise over-reporting is the safe
+ * direction for display.
  */
 export async function fetchLinkAnnouncements(
   nostr: Parameters<typeof queryExplicitRelaysWithStatus>[0],
@@ -110,10 +89,8 @@ export async function fetchLinkAnnouncements(
 }
 
 /**
- * The Discover listings carrying any of `linkSigners`: read deep for
- * `authors` (who can hold the links), plus the recent page for anyone else.
- * Empty signers answer empty without a read — a private community has no
- * links, so nothing can list it.
+ * Discover listings carrying any of `linkSigners` (deep for `authors`, plus the
+ * recent page). Empty signers answer empty without a read.
  */
 export function useLinkAnnouncements(linkSigners: readonly string[], authors: readonly string[] = []) {
   const { nostr } = useNostr();
@@ -135,12 +112,9 @@ export function useLinkAnnouncements(linkSigners: readonly string[], authors: re
 }
 
 /**
- * This community's Discover listings: every standing announcement carrying one
- * of its live links. The links are the community's invite registry — every
- * creator's live link signers, the same set its Public flag is folded from —
- * plus `extraSigners` (the viewer's own links, which their Invite List knows
- * about before a registry edition lands). `creatorOf` names the member whose
- * link each listing carries: only they can revoke it.
+ * This community's Discover listings: announcements carrying any live link in
+ * its invite registry, plus `extraSigners` (the viewer's own links not yet in a
+ * registry edition). `creatorOf` names who can revoke each listing.
  */
 export function useCommunityDiscoverListings(
   community: Community | undefined,
@@ -156,9 +130,7 @@ export function useCommunityDiscoverListings(
     }
     const signers = new Set(creatorOf.keys());
     for (const signer of extra ? extra.split(",") : []) signers.add(signer);
-    // The link creators (and the viewer, whose extra links the registry may
-    // not name yet) are who most plausibly announced them: read their
-    // listings deep rather than only what the network-wide page still holds.
+    // Link creators (and the viewer) are the likely announcers; read them deep.
     const authors = new Set(creatorOf.values());
     if (user) authors.add(user.pubkey);
     return { signers: [...signers], creatorOf, authors: [...authors] };
@@ -168,16 +140,10 @@ export function useCommunityDiscoverListings(
 }
 
 /**
- * Take the viewer's OWN Discover listings down (NIP-09). A deletion only
- * counts from an announcement's own author, so anything else passed in is
- * dropped rather than published as a delete that nobody would honor.
- *
- * `unlistLinks` is the by-link form: it re-reads every copy of those links the
- * viewer ever announced before deleting, because Discover keeps the NEWEST
- * announcement per link — delete only the copy on screen and an older one of
- * the same link takes its place. That read is strict: it throws unless a
- * Discover relay answered both rounds, so an offline take-down fails (and a
- * pending retirement stays recorded) instead of resolving 0.
+ * Take the viewer's OWN Discover listings down (NIP-09); others' are dropped,
+ * since only an author's delete counts. `unlistLinks` re-reads every copy of the
+ * links first (Discover shows the NEWEST per link, so an older copy would take
+ * over) and is strict: it throws unless a relay answered both rounds.
  */
 export function useUnlistAnnouncements() {
   const { nostr } = useNostr();

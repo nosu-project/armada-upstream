@@ -1,20 +1,11 @@
 import { renderBadgedFavicon } from "@/lib/faviconBadge";
 
 /**
- * The inactive-tab unread cue: a dot drawn ON the favicon.
- *
- * Deliberately not a character prefixed to `document.title` — that spells the
- * marker into text the user reads (and that bookmarks, history entries and
- * window titles then carry), where the whole convention for "there is
- * something waiting" is a badge on the icon.
- *
- * While badged, the document's own icon links are DETACHED and a single
- * `data:` URL link stands in their place. Leaving them in would let the
- * browser go on picking among them — the choice is per-browser and per-DPI,
- * so the badge would appear only sometimes.
+ * Inactive-tab unread cue: a dot badge on the favicon (not a title prefix).
+ * While badged, the real icon links are DETACHED and one `data:` link stands
+ * in, since browsers pick among multiple icons inconsistently.
  */
 
-/** Identifies the stand-in link, so a re-entrant call can find its own work. */
 const BADGE_LINK_ID = "armada-favicon-badge";
 
 /** Whether a cue is outstanding. Cleared when the user comes back to the tab. */
@@ -25,11 +16,7 @@ let badgedHref: string | null = null;
 let rendering: Promise<string | null> | null = null;
 /** Set when rendering has proven impossible here; stops per-message retries. */
 let unsupported = false;
-/**
- * When a FAILED render (the icon didn't load) may be tried again. Not a
- * permanent `unsupported`: one network blip in a tab left open for days would
- * otherwise switch the badge off for the rest of its life, silently.
- */
+/** When a failed render may retry (a network blip shouldn't disable the badge forever). */
 let retryAt = 0;
 const RETRY_DELAY_MS = 60_000;
 /** The document's real icon links, held while the badge stands in for them. */
@@ -44,10 +31,7 @@ function iconLinks(): HTMLLinkElement[] {
     .filter((link) => link.id !== BADGE_LINK_ID);
 }
 
-/**
- * The icon to badge: the SVG one by preference (it rasterizes cleanly at any
- * size), else whatever else is declared, else the build's own default.
- */
+/** The icon to badge: SVG preferred, else any declared icon, else the default. */
 function baseIconHref(): string {
   const links = iconLinks();
   const svg = links.find((link) => link.type === "image/svg+xml");
@@ -72,9 +56,7 @@ function badgedIcon(): Promise<string | null> {
 
 function showBadge(href: string): void {
   if (document.getElementById(BADGE_LINK_ID)) return;
-  // Detach FIRST, then append. Brave keeps showing the old icon when the
-  // stand-in is appended while the real links are still in the head, even
-  // once they are removed a moment later; removed-then-appended, it switches.
+  // Detach FIRST, then append: Brave keeps the old icon otherwise.
   const icons = iconLinks();
   for (const icon of icons) icon.remove();
   detachedIcons = icons;
@@ -88,16 +70,13 @@ function showBadge(href: string): void {
 
 function hideBadge(): void {
   document.getElementById(BADGE_LINK_ID)?.remove();
-  // Re-appended in their original order; only their order relative to each
-  // other decides anything.
   for (const icon of detachedIcons) document.head.appendChild(icon);
   detachedIcons = [];
 }
 
 /**
- * Badge the favicon when Armada is away. Returns whether the tab was inactive,
- * i.e. whether a cue was called for at all — the badge itself is applied on the
- * next tick, once the icon has been rasterized.
+ * Badge the favicon when the tab is inactive. Returns whether a cue was called
+ * for; the badge lands after rasterizing.
  */
 export function markTabAttention(): boolean {
   if (typeof document === "undefined" || isTabActive()) return false;

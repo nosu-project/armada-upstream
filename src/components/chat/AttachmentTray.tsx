@@ -19,12 +19,10 @@ import type { ImetaEncryption } from "@/lib/imeta";
 /** The longest description the edit dialog accepts. */
 export const MAX_ALT_CHARS = 1000;
 
-/** An uploaded attachment, ready to send. */
 export interface TrayAttachment {
   kind: "attachment";
   url: string;
   mime: string;
-  /** The file's name where known — the card's tooltip and accessible name. */
   label: string;
   /** A webxdc icon, or a video's poster frame. */
   icon?: string;
@@ -37,12 +35,10 @@ export interface TrayAttachment {
   spoiler: boolean;
 }
 
-/** An attachment still being processed or uploaded. */
 export interface TrayPending {
   kind: "pending";
   id: string;
   label: string;
-  /** A local object URL of the picked image, shown while it uploads. */
   previewUrl?: string;
   phase: "processing" | "uploading";
   /** 0..1 while a video transcodes; absent when the work can't be measured. */
@@ -62,12 +58,8 @@ interface AttachmentTrayProps {
 }
 
 /**
- * The attachments staged above the composer: a row of thumbnails that scrolls
- * sideways, uploads spinning in place, and every card carrying its own
- * actions — spoiler, description, remove. The spoiler toggle sits on every
- * image and video card at all times, on touch and desktop alike: it is the one
- * action a sender needs BEFORE sending, and one hidden behind hover or an
- * unmarked tap is one nobody finds.
+ * Attachments staged above the composer. The spoiler toggle is always visible
+ * on image/video cards: it's needed BEFORE sending, so it can't hide behind hover.
  */
 export function AttachmentTray({ items, isTouch, onPreview, onRemove, onCancel, onUpdate }: AttachmentTrayProps) {
   const [editing, setEditing] = useState<string | null>(null);
@@ -108,10 +100,7 @@ export function AttachmentTray({ items, isTouch, onPreview, onRemove, onCancel, 
   );
 }
 
-/**
- * A bare thumbnail, Signal-style: the picture is the identification, so no
- * caption. (A document, which has no picture, names itself inside the square.)
- */
+/** A bare thumbnail, Signal-style: no caption (documents name themselves inside). */
 const cardClass = "group/att relative size-24 shrink-0 md:size-28";
 const squareClass = "relative size-full overflow-hidden rounded-lg bg-secondary/60";
 
@@ -155,7 +144,6 @@ function AttachmentCard({
         {item.alt && (
           <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[9px] font-bold text-white">ALT</span>
         )}
-        {/* The tap opens the editor on touch; say so on the card itself. */}
         {isTouch && (
           <span aria-hidden className="absolute bottom-1 left-1 flex size-6 items-center justify-center rounded-full bg-black/60 text-white">
             <Pencil className="size-3" />
@@ -187,11 +175,7 @@ function AttachmentCard({
   );
 }
 
-/**
- * The always-visible spoiler switch in a card's bottom-right corner: a small
- * disc, inside a 44px target on touch. Filled with the accent while on, so the
- * state reads at a glance as well as from the SPOILER veil.
- */
+/** Always-visible spoiler switch; a 44px target on touch. */
 function SpoilerToggle({ label, spoiler, onToggle }: { label: string; spoiler: boolean; onToggle: () => void }) {
   const action = spoiler ? "Remove spoiler" : "Mark as spoiler";
   return (
@@ -249,7 +233,6 @@ function PendingCard({ item, onCancel }: { item: TrayPending; onCancel: (id: str
   );
 }
 
-/** A determinate ring around the pending card's percentage. */
 function ProgressRing({ fraction }: { fraction: number }) {
   const r = 19;
   const c = 2 * Math.PI * r;
@@ -321,7 +304,6 @@ function ToolbarButton({
   );
 }
 
-/** What fills a card's square: the image, the video's poster, or a file glyph. */
 function CardPreview({ item }: { item: TrayAttachment }) {
   if (item.isImage) {
     return <AttachmentPreviewImage url={item.url} mime={item.mime} encryption={item.encryption} alt={item.alt} />;
@@ -362,11 +344,7 @@ function CardPreview({ item }: { item: TrayAttachment }) {
   );
 }
 
-/**
- * A track's card: the cover art and title the file itself carries, read when
- * it was picked. A restored draft's track was never read this session and
- * shows its name over a music glyph.
- */
+/** Cover art/title read at pick time; a restored draft shows its name over a glyph. */
 function AudioCardPreview({ item }: { item: TrayAttachment }) {
   const meta = useAudioMetadata(item.url);
   return (
@@ -387,11 +365,9 @@ function AudioCardPreview({ item }: { item: TrayAttachment }) {
 }
 
 /**
- * Composer attachment thumbnail, resolved exactly like the message render path
- * ({@link useMediaWithFallback}): encrypted (Concord) uploads are fetched and
- * decrypted to an object URL, and a plain URL loads under the media policy. A
- * forwarded message's chips name the ORIGINAL sender's host, so loading them
- * directly would hand that host the forwarder's address.
+ * Resolved like the message render path ({@link useMediaWithFallback}): Concord
+ * uploads are decrypted, plain URLs load under the media policy (a forwarded
+ * chip would otherwise leak the forwarder's address to the original host).
  */
 function AttachmentPreviewImage({
   url,
@@ -419,11 +395,7 @@ function AttachmentPreviewImage({
   return <img src={resolved.src} alt={alt ?? "attachment"} onError={onError} className="size-full object-cover" />;
 }
 
-/**
- * Discord's attachment editor: a description (alt text, sent as the imeta
- * `alt`) and the spoiler switch, plus remove — the one place all of a card's
- * actions live on touch, where there is no hover toolbar.
- */
+/** Alt text (imeta `alt`), spoiler and remove; the touch home for a card's actions. */
 function AttachmentEditDialog({
   item,
   onClose,

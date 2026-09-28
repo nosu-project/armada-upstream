@@ -119,47 +119,10 @@ class SqliteArmadaDb(
 
     // ── Schema ────────────────────────────────────────────────────────────────
 
-    /**
-     * Create the tables, indexes and triggers, if they don't already exist —
-     * upgrading a file laid out by an older schema version first.
-     */
+    /** Create the tables, indexes and triggers, if they don't already exist. */
     fun migrate() {
         lock.withLock {
-            val version = db.query("PRAGMA user_version") { it.long(0) }.firstOrNull() ?: 0L
-
-            if (version < ArmadaDbSchema.VERSION) {
-                // v0 predates versioning, so it is recognized by its layout:
-                // only v0 has the `json` column. A fresh file has no `rumors`
-                // table at all and needs no rebuild.
-                val legacy = db.query(
-                    "SELECT 1 FROM pragma_table_info('rumors') WHERE name = 'json'",
-                ) { it.long(0) }.isNotEmpty()
-
-                if (legacy) {
-                    transaction {
-                        for (statement in ArmadaDbSchema.REBUILD_V1) {
-                            db.run(statement.collapseWhitespace())
-                        }
-                    }
-                    // Give the freed pages back to the filesystem. Outside the
-                    // rebuild's transaction — VACUUM can't run inside one — and
-                    // advisory: the rebuild is already durable.
-                    runCatching { db.run("VACUUM") }
-                }
-            }
-
             val schema = if (search) ArmadaDbSchema.BASE + ArmadaDbSchema.SEARCH else ArmadaDbSchema.BASE
-
-            // A development term index whose marker table has no `generation`
-            // column is dropped before the schema recreates it — by LAYOUT,
-            // since such a file already claims the current version or newer. See
-            // [ArmadaDbSchema.DROP_TERM_INDEX]; no released file can match.
-            val marker = db.query(
-                "SELECT name FROM pragma_table_info('rumor_term_tenants')",
-            ) { it.text(0) }
-            if (marker.isNotEmpty() && "generation" !in marker) {
-                for (statement in ArmadaDbSchema.DROP_TERM_INDEX) db.run(statement)
-            }
 
             for (statement in schema) db.run(statement.collapseWhitespace())
 

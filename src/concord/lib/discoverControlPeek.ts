@@ -1,13 +1,8 @@
 /**
- * Discover Control peek — background, in-memory fold of a listing's Control
- * Plane so cards can show channel count (and enrich last-active with public
- * chat stream authors) without joining.
- *
- * This is NOT a member sync: wraps are not written to ArmadaDB, stream-auth is
- * not registered, and peeks are serialized ({@link enqueueDiscoverControlPeek})
- * so a full Discover grid does not fan out N Control reads at once. Name/icon
- * on the card still come from the invite bundle preview; this path only adds
- * fold-derived structure (channels).
+ * Discover Control peek — a background, in-memory fold of a listing's Control
+ * Plane so cards can show channel count (and probe public chat streams) without
+ * joining. Not a member sync: nothing written to ArmadaDB, no stream-auth, and
+ * peeks are serialized ({@link enqueueDiscoverControlPeek}).
  */
 
 import { foldControlState, openControlEditions } from "@/concord/lib/control";
@@ -28,10 +23,8 @@ const PEEK_MAX_WRAPS = 2_000;
 const PEEK_TIMEOUT_MS = 12_000;
 
 /**
- * Persisted Control peek per community — same shape as the Discover directory
- * / bundle-floor seeds: KV accelerates the next session's first paint, and the
- * live query still runs (seeded STALE into react-query) so a channel create
- * isn't stuck behind a forever cache.
+ * Persisted peek per community: seeds the next session's first paint (STALE), and
+ * the live query still runs.
  */
 const CONTROL_PEEK_KV = "discover:control-peek:";
 
@@ -41,7 +34,6 @@ export interface DiscoverControlPeek {
   publicChannelIdHexes: string[];
 }
 
-/** Warm-load a prior peek for `communityId`, if any. */
 export async function readCachedControlPeek(
   communityId: string,
 ): Promise<DiscoverControlPeek | undefined> {
@@ -60,7 +52,6 @@ export async function readCachedControlPeek(
   }
 }
 
-/** Persist a successful peek for the next session (best-effort). */
 export function writeCachedControlPeek(communityId: string, peek: DiscoverControlPeek): void {
   getArmadaDB()
     .kv.set(CONTROL_PEEK_KV + communityId, peek)
@@ -94,7 +85,6 @@ export function controlViewFromBundle(bundle: InviteBundle): StreamKeyView | nul
   }
 }
 
-/** Summarize a folded channel map into the peek payload. */
 export function summarizeDiscoverChannels(
   channels: Iterable<{ channelIdHex: string; isPrivate: boolean; deleted: boolean }>,
 ): DiscoverControlPeek {
@@ -108,10 +98,7 @@ export function summarizeDiscoverChannels(
   return { channelCount, publicChannelIdHexes };
 }
 
-/**
- * Serial peek queue: each Discover card enqueues its Control read so only one
- * runs at a time (cards still paint from the bundle immediately).
- */
+/** Serial peek queue: one Control read at a time (cards paint from the bundle meanwhile). */
 let peekTail: Promise<unknown> = Promise.resolve();
 
 export function enqueueDiscoverControlPeek<T>(fn: () => Promise<T>): Promise<T> {
@@ -129,12 +116,9 @@ export function _resetDiscoverControlPeekQueueForTests(): void {
 }
 
 /**
- * Fetch + decrypt + fold Control for one invite bundle. Best-effort: a miss or
- * a truncated plane still returns whatever channels the served editions
- * contain, so the card can paint something — but a read that did not reach the
- * end of every relay (a dropped REQ, or a flood past {@link PEEK_MAX_WRAPS})
- * is returned WITHOUT being cached, since an under-count that gets persisted
- * outlives the condition that caused it.
+ * Fetch + decrypt + fold Control for one invite bundle. Best-effort: partial reads
+ * still return what they found, but are NOT cached (a persisted under-count
+ * outlives its cause).
  */
 export async function peekDiscoverControl(
   nostr: PeekNostr,
@@ -166,8 +150,7 @@ export async function peekDiscoverControl(
 
   const read = await fetchControlWraps(nostr, relays, view.pk, timeout);
   if (read.wraps.length === 0) {
-    // An empty plane and a relay that never answered look identical from here,
-    // so report the empty shape but never persist it as this community's.
+    // Empty plane and silent relay look identical: report, never persist.
     return { channelCount: 0, publicChannelIdHexes: [] };
   }
 
@@ -175,17 +158,9 @@ export async function peekDiscoverControl(
   const editions = openControlEditions(opened);
   const folded = foldControlState(editions, communityId, bundle.owner);
   const peek = summarizeDiscoverChannels(folded.channels.values());
-  // Only a COMPLETE read describes the community. A channel create lives in
-  // exactly one edition, so a truncated plane under-counts — and caching that
-  // would paint the wrong number from the warm seed in every later session,
-  // long after the relay that timed out came back.
-  //
-  // A missing metadata head is the other way this read can be complete and
-  // still partial: reading one epoch is sound because a Refounding compacts
-  // every head forward under the new address (CORD-06 §3), but it re-wraps
-  // them one at a time, so an epoch caught mid-roll answers with only the
-  // heads that have landed. Every community has metadata — its absence means
-  // the compaction is still in flight, not that there is nothing here.
+  // Cache only a COMPLETE read with a metadata head: a truncated plane under-counts,
+  // and a missing metadata head means a Refounding's compaction (CORD-06 §3) is
+  // still mid-roll.
   if (read.complete && folded.metadata) writeCachedControlPeek(bundle.community_id, peek);
   return peek;
 }
@@ -197,13 +172,8 @@ interface ControlWrapRead {
 }
 
 /**
- * Page each relay INDEPENDENTLY and merge by wrap id.
- *
- * One cursor across a merged group read loses editions: each relay applies the
- * page limit on its own, so the group's oldest event comes from whichever relay
- * reaches deepest, and advancing every relay to that floor skips the window a
- * shallower relay has not been asked for yet. `channelSync` keeps a cursor per
- * relay for the same reason.
+ * Page each relay INDEPENDENTLY and merge by wrap id: one cursor across relays
+ * skips windows a shallower relay wasn't asked for (as in `channelSync`).
  */
 async function fetchControlWraps(
   nostr: PeekNostr,
@@ -260,19 +230,12 @@ async function pageControlWraps(
       fresh += 1;
     }
 
-    // A short page is the end of this relay's plane.
     if (page.length < PEEK_PAGE) return { wraps, complete: true };
     if (oldest === Infinity || oldest <= 0) return { wraps, complete: true };
 
-    // `until` is INCLUSIVE, so consecutive pages overlap by one second on
-    // purpose: the overlap steps over a same-second burst instead of skipping
-    // it, and the id dedupe makes it free. Control editions arrive in bursts
-    // (founding a community writes metadata plus every channel in one second),
-    // which is exactly what an exclusive `oldest - 1` would drop.
-    //
-    // A page that is ALL duplicates means the burst is wider than one page and
-    // there is no cursor that advances without stepping over the rest of it.
-    // Stop and say so, rather than under-count in silence.
+    // `until` is INCLUSIVE: pages overlap by a second on purpose so same-second bursts
+    // (a community founding) aren't skipped; dedupe makes it free. An all-duplicate
+    // page means the burst is wider than a page — stop and report incomplete.
     if (fresh === 0) return { wraps, complete: false };
     until = oldest;
   }

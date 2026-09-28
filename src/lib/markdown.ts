@@ -1,22 +1,7 @@
 /**
- * Minimal Discord-flavored markdown parsing for chat messages.
- *
- * Pure parsing only (no React) — rendering lives in
- * `components/chat/Markdown.tsx`. The dialect is the chat-safe subset Discord
- * uses:
- *
- * - Blocks: fenced code (```lang … ```), quotes (lines starting with `> `),
- *   headings (`# `, `## `, `### ` — three levels, as in Discord), and flat
- *   ordered/unordered lists (`- item`, `1. item`).
- * - Inline: `**bold**`, `*italic*` / `_italic_`, `__underline__`,
- *   `~~strikethrough~~`, `||spoiler||`, and `` `inline code` ``.
- *
- * Document mode (long-form git content) widens this to GitHub's dialect:
- * heading levels 4–6 and `[text](url)` links.
- *
- * Block splitting runs BEFORE the URL/nostr tokenizer so nothing inside code
- * is linkified; inline formatting is applied at render time to plain-text
- * tokens only, so links/mentions/custom-emoji keep their existing handling.
+ * Discord-flavored markdown parsing for chat (rendering: `components/chat/Markdown.tsx`).
+ * Document mode (git content) adds heading levels 4–6 and `[text](url)` links.
+ * Blocks are split BEFORE the URL/nostr tokenizer so code isn't linkified.
  */
 
 /** A top-level block of message content. */
@@ -27,10 +12,8 @@ export type MdBlock =
   | { type: "list"; ordered: boolean; start: number; items: string[] }
   | { type: "text"; text: string };
 
-/** A segment of a text run, either plain or inline code. */
 export type InlineCodeSegment = { code: boolean; value: string };
 
-/** An inline formatting AST node. */
 export type InlineNode =
   | { type: "text"; value: string }
   | { type: "strong" | "em" | "u" | "s" | "spoiler"; children: InlineNode[] };
@@ -42,11 +25,8 @@ const FENCE_RE = /```([\w+-]*)\n?([\s\S]*?)```/g;
 const QUOTE_LINE_RE = /^>\s?/;
 
 /**
- * Split message text into top-level blocks: fenced code, quote runs
- * (consecutive `> ` lines merged into one block, markers stripped), ATX
- * headings, flat ordered/unordered list runs, and plain text (newlines
- * preserved). Chat recognizes heading levels 1–3 like Discord; with `document`
- * set, levels 4–6 also split out for long-form GitHub-flavored git content.
+ * Split text into top-level blocks: fenced code, merged quote runs, ATX headings,
+ * flat lists, and plain text. Chat headings stop at level 3; `document` allows 4–6.
  */
 export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
   const blocks: MdBlock[] = [];
@@ -68,7 +48,6 @@ export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
   return blocks;
 }
 
-/** Split a non-code chunk into quote blocks (runs of `> ` lines) and text. */
 function splitQuoteBlocks(src: string, document = false): MdBlock[] {
   const blocks: MdBlock[] = [];
   const lines = src.split("\n");
@@ -113,12 +92,8 @@ const UNORDERED_ITEM_RE = /^\s{0,3}[-*+]\s+(.+)$/;
 const ORDERED_ITEM_RE = /^\s{0,3}(\d{1,9})[.)]\s+(.+)$/;
 
 /**
- * Split a text chunk into headings, flat list runs and remaining text.
- *
- * Chat stops at heading level 3 (`####` stays literal, as in Discord); document
- * mode takes all six. Boundary newlines next to an extracted block fold into
- * that block's margin — in chat only when something was actually extracted, so
- * a chunk without headings or lists passes through byte-for-byte as before.
+ * Split into headings, flat list runs and remaining text. Boundary newlines fold
+ * into the extracted block's margin; chunks without blocks pass through unchanged.
  */
 function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
   const blocks: MdBlock[] = [];
@@ -128,7 +103,6 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
 
   const flushText = () => {
     if (textLines.length > 0) {
-      // One boundary newline each side folds into the neighbor block's margin.
       const text = textLines.join("\n").replace(/^\n/, "").replace(/\n$/, "");
       if (text !== "") blocks.push({ type: "text", text });
       textLines = [];
@@ -170,7 +144,6 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
   return blocks;
 }
 
-/** A segment of a text run, either plain or a `[text](url)` markdown link. */
 export type MdLinkSegment =
   | { type: "text"; value: string }
   | { type: "link"; text: string; url: string };
@@ -178,10 +151,7 @@ export type MdLinkSegment =
 /** `[text](url)` / `![alt](url)`, http(s) only so pseudo-scheme URLs stay literal. */
 const MD_LINK_RE = /(!?)\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
 
-/**
- * Split a text run on markdown links. Image syntax (`![alt](url)`) yields the
- * bare URL as text so the media tokenizer embeds it like any pasted image URL.
- */
+/** Split on markdown links. `![alt](url)` yields the bare URL so it embeds like a pasted image. */
 export function splitMarkdownLinks(src: string): MdLinkSegment[] {
   const out: MdLinkSegment[] = [];
   let last = 0;
@@ -197,13 +167,9 @@ export function splitMarkdownLinks(src: string): MdLinkSegment[] {
   return out;
 }
 
-/** Inline code span: `code` (no newlines, non-empty). */
 const INLINE_CODE_RE = /`([^`\n]+)`/g;
 
-/**
- * Split a text run into plain segments and `` `inline code` `` segments so the
- * URL/nostr tokenizer can skip code.
- */
+/** Split out `` `inline code` `` so the URL/nostr tokenizer can skip it. */
 export function splitInlineCode(src: string): InlineCodeSegment[] {
   const out: InlineCodeSegment[] = [];
   let last = 0;
@@ -218,16 +184,12 @@ export function splitInlineCode(src: string): InlineCodeSegment[] {
   return out;
 }
 
-/**
- * Inline formatting patterns, in tie-break priority order (longer delimiters
- * first so `**bold**` beats `*italic*` at the same index).
- */
+/** Inline patterns in tie-break priority order (longer delimiters first). */
 const INLINE_PATTERNS: ReadonlyArray<{
   type: Exclude<InlineNode["type"], "text">;
   re: RegExp;
 }> = [
-  // Closing delimiters carry a negative lookahead so `**bold *and italic***`
-  // closes at the LAST `**` (the lazy match would otherwise strand a `*`).
+  // Negative lookahead so `**bold *and italic***` closes at the LAST `**`.
   { type: "strong", re: /\*\*([\s\S]+?)\*\*(?!\*)/ },
   { type: "u", re: /__([\s\S]+?)__(?!_)/ },
   { type: "s", re: /~~([\s\S]+?)~~(?!~)/ },
@@ -237,11 +199,7 @@ const INLINE_PATTERNS: ReadonlyArray<{
   { type: "em", re: /(?<![\w])_([^_\n]+)_(?![\w])/ },
 ];
 
-/**
- * Parse inline formatting into an AST. Unmatched/degenerate delimiters (e.g.
- * whitespace-only content) stay literal text. Nesting is supported
- * (`**bold *and italic***` → strong > em).
- */
+/** Parse inline formatting into an AST; degenerate delimiters stay literal. */
 export function parseInline(text: string): InlineNode[] {
   const out: InlineNode[] = [];
   let rest = text;
@@ -266,9 +224,4 @@ export function parseInline(text: string): InlineNode[] {
   }
 
   return out;
-}
-
-/** Whether a text run contains any inline formatting worth parsing. */
-export function hasInlineMarkdown(text: string): boolean {
-  return /\*|__|~~|\|\|/.test(text) || /(?<![\w])_[^_\n]+_(?![\w])/.test(text);
 }

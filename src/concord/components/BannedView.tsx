@@ -10,13 +10,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 
-/**
- * The community's banlist as a management surface — CORD-04 §4.
- *
- * This is the ONLY unban surface: the roster fold subtracts banned members,
- * so they have no member-list row to act on. Rendered as a full-column view
- * (community menu), sibling to the audit log and invite links.
- */
+/** CORD-04 §4 banlist; the ONLY unban surface since the roster fold hides banned members. */
 export function BannedView({ community }: { community: Community }) {
   const { banned, unban, canBan } = useModeration(community, []);
   const [pending, setPending] = useState<string | null>(null);

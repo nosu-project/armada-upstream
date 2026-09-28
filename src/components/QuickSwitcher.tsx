@@ -49,11 +49,7 @@ const EMPTY_ENTRIES: SwitcherEntries = { spaces: [], channels: [] };
 const EAGER_DM_RESULTS = 12;
 const DM_RESULT_HEIGHT = 52;
 
-/**
- * Which result categories the palette shows. `all` shows everything; the rest
- * narrow to one category so a common word ("yo") isn't buried under every kind
- * of hit at once. `messages` is channel/community chat, `dms` direct messages.
- */
+/** Result categories; `messages` is channel/community chat, `dms` direct messages. */
 type Scope = "all" | "channels" | "servers" | "messages" | "dms";
 
 const SCOPE_TABS: Array<{ value: Scope; label: string }> = [
@@ -64,12 +60,7 @@ const SCOPE_TABS: Array<{ value: Scope; label: string }> = [
   { value: "servers", label: "Servers" },
 ];
 
-/**
- * The message corpus a scope searches, or null when it shows no messages. With
- * DMs turned off (`config.dmsDisabled`) the DM corpus is excluded entirely: the
- * `all` scope searches channels only, and the `dms` scope — whose tab is hidden
- * anyway — searches nothing.
- */
+/** Message corpus for a scope, or null. `dmsDisabled` excludes DMs entirely. */
 function messageScopeFor(scope: Scope, dmsDisabled: boolean): MessageScope | null {
   switch (scope) {
     case "all":
@@ -83,14 +74,7 @@ function messageScopeFor(scope: Scope, dmsDisabled: boolean): MessageScope | nul
   }
 }
 
-/**
- * One message search result. The author's avatar + name (and a DM partner's
- * name) resolve through the shared `useAuthor`/{@link DisplayName}, so a palette
- * row shows the same cached, emoji-aware, per-server-nicknamed identity as the
- * rest of the app. The cmdk `value` embeds the query (via the snippet) so its
- * own filter — a superset of the substring search that found the hit — always
- * keeps it, and the key makes an otherwise-identical snippet a distinct item.
- */
+/** Message hit. The cmdk `value` embeds the snippet so cmdk's own filter keeps it. */
 function MessageResult({ message, onSelect }: { message: MessageEntry; onSelect: () => void }) {
   const author = useAuthor(message.authorPubkey);
   const name = useScopedDisplayName(message.authorPubkey, author.data?.metadata);
@@ -120,14 +104,12 @@ function MessageResult({ message, onSelect }: { message: MessageEntry; onSelect:
   );
 }
 
-/** The canonical 1:1/group title under a DM message-search hit. */
 function DmMessageSource({ peers }: { peers: readonly string[] }) {
   const { user } = useCurrentUser();
   const { name } = useDmConversationName(peers, user?.pubkey);
   return <>{name}</>;
 }
 
-/** One existing DM conversation, searchable by every participant alias. */
 function DmResult({
   conversation,
   self,
@@ -162,14 +144,8 @@ function DmResult({
 }
 
 /**
- * Discord-style quick switcher (Ctrl/Cmd+K): jump to any server or community,
- * any channel the app has loaded, DMs or settings from one fuzzy-searchable
- * palette. Also owns Alt+↑/↓ — hop to the previous/next channel of the current
- * space. Both NIP-29 servers and Concord communities are surfaced through the
- * shared {@link buildSwitcherEntries} model, so nothing is transport-specific
- * here.
- *
- * Mounted once in {@link MainLayout} so the shortcuts work everywhere.
+ * Quick switcher (Ctrl/Cmd+K) across servers, communities, channels, DMs and
+ * settings; also Alt+↑/↓ channel hopping. Mounted once in {@link MainLayout}.
  */
 export function QuickSwitcher() {
   const [open, setOpen] = useState(false);
@@ -182,9 +158,7 @@ export function QuickSwitcher() {
 
   const liveServers = useNip29Servers();
   const communities = useLiveCommunities();
-  // The launcher is globally mounted, so NIP-17 stays non-interactive here:
-  // opening Ctrl+K must never summon a signer/decrypt-consent prompt. These
-  // query keys are already kept warm by the persistent rail/share shortcuts.
+  // Globally mounted, so NIP-17 stays non-interactive: Ctrl+K must never prompt a signer.
   const { conversations: legacyDms, isLoading: legacyDmsLoading } = useDMConversations();
   const { conversations: dm17Dms, isLoading: dm17DmsLoading } = useDm17Conversations();
   const { isKnown, isLoading: dmTrustLoading } = useKnownDmPeers();
@@ -193,7 +167,6 @@ export function QuickSwitcher() {
     Boolean(user) && (legacyDmsLoading || dm17DmsLoading || dmTrustLoading);
 
   const dmEntries = useMemo(() => {
-    // With DMs off, the palette surfaces no conversation rows at all.
     if (!user || config.dmsDisabled || dmEntriesLoading) return [];
     return buildDmSwitcherEntries(legacyDms, dm17Dms, {
       self: user.pubkey,
@@ -213,11 +186,7 @@ export function QuickSwitcher() {
   ]);
   const allowedDmKeys = useMemo(() => new Set(dmEntries.map((entry) => entry.key)), [dmEntries]);
 
-  // Rail-ordered keys across both transports: the same construction the
-  // ServerRail uses (NIP-29 relay URLs + `c2:<id>` community keys, arranged by
-  // the saved layout with folders flattened in place), so the palette lists
-  // spaces in the order the rail shows them. `mergeLayout` appends any live key
-  // the layout doesn't know; the filter drops keys for spaces since removed.
+  // Same ordering as the ServerRail (layout with folders flattened).
   const orderedKeys = useMemo(() => {
     const liveKeys = switcherLiveKeys(liveServers, communities);
     const live = new Set(liveKeys);
@@ -233,13 +202,10 @@ export function QuickSwitcher() {
     }),
     [queryClient, eventStore, communities, user?.pubkey],
   );
-  // Keep the keydown listener stable while always seeing the freshest context.
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
-  // Snapshot the palette entries when it opens (local reads aren't reactive,
-  // and they don't need to be for the lifetime of one palette). Async only
-  // because Concord channels come from the IndexedDB fold.
+  // Snapshot entries on open; async because Concord channels come from IndexedDB.
   const [entries, setEntries] = useState<SwitcherEntries>(EMPTY_ENTRIES);
   useEffect(() => {
     if (!open) {
@@ -255,9 +221,7 @@ export function QuickSwitcher() {
     };
   }, [open, orderedKeys, ctx]);
 
-  // Message search is query-DRIVEN (there are too many messages to preload like
-  // spaces/channels): debounce the typed query and scan the on-device stores.
-  // Reset when the palette closes so a reopen starts clean.
+  // Message search is query-driven (too many to preload): debounced scan of on-device stores.
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("all");
   const [messages, setMessages] = useState<MessageEntry[]>([]);
@@ -281,9 +245,7 @@ export function QuickSwitcher() {
     const handle = setTimeout(() => {
       void searchSwitcherMessages(needle, entries.channels, ctx, {
         scope: searchScope,
-        // Raw DM history also contains request-tier conversations. Filter them
-        // inside the search layer before its per-corpus and merged result caps,
-        // so scanned request hits cannot crowd a legitimate hit out of them.
+        // Filter request-tier DMs before the result caps so they can't crowd out real hits.
         allowedDmConversationKeys: allowedDmKeys,
       }).then((m) => {
         if (live) {
@@ -298,13 +260,10 @@ export function QuickSwitcher() {
     };
   }, [open, query, scope, entries.channels, ctx, allowedDmKeys, config.dmsDisabled]);
 
-  // The DM scope tab is hidden entirely when the account has opted out of DMs.
   const scopeTabs = useMemo(
     () => (config.dmsDisabled ? SCOPE_TABS.filter((t) => t.value !== "dms") : SCOPE_TABS),
     [config.dmsDisabled],
   );
-  // The DM section — its conversation rows, its loading spinner, and its slice
-  // of the empty-state suppression — only exists when DMs are on.
   const dmSectionActive = !config.dmsDisabled && (scope === "all" || scope === "dms");
 
   const go = (to: string) => {
@@ -317,8 +276,6 @@ export function QuickSwitcher() {
     settings.show();
   };
 
-  // Global shortcuts: Ctrl/Cmd+K toggles the palette; Alt+↑/↓ hops channels
-  // within the current space (wrapping, Discord-style).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
@@ -343,8 +300,7 @@ export function QuickSwitcher() {
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput placeholder="Where would you like to go?" onValueChange={setQuery} />
-      {/* Scope tabs. Keep the input focused on click (mousedown default is what
-          moves focus) so the user can keep typing after narrowing. */}
+      {/* Prevent mousedown so the input keeps focus. */}
       <div
         className="flex flex-wrap gap-1 border-b px-2 py-1.5"
         onMouseDown={(e) => e.preventDefault()}
@@ -367,8 +323,7 @@ export function QuickSwitcher() {
         </ToggleGroup>
       </div>
       <CommandList>
-        {/* While a message search is in flight, hold the empty state back (an
-            in-flight search isn't "no results") and show a spinner instead. */}
+        {/* An in-flight search isn't "no results". */}
         {!searching && !(dmEntriesLoading && dmSectionActive) && (
           <CommandEmpty>No results found.</CommandEmpty>
         )}
@@ -388,9 +343,7 @@ export function QuickSwitcher() {
           <CommandGroup heading="Direct messages">
             {dmEntries.map((conversation, index) => (
               <DeferredRow
-                // A search intentionally mounts every name resolver. Reset the
-                // latch when it clears so the blank launcher returns to its
-                // cheap viewport-sized window instead of loading every avatar.
+                // Reset the latch when the search clears so the blank launcher stays cheap.
                 key={`${conversation.key}:${query.trim() ? "search" : "idle"}`}
                 active={!query.trim() && index >= EAGER_DM_RESULTS}
                 minHeight={DM_RESULT_HEIGHT}
@@ -399,9 +352,7 @@ export function QuickSwitcher() {
                   conversation={conversation}
                   self={user?.pubkey}
                   onSelect={() => {
-                    // Choosing a previously closed conversation is an explicit
-                    // reopen; otherwise it would vanish again after navigating
-                    // away from the focused thread.
+                    // Explicit reopen, or it'd vanish again after navigating away.
                     reopenDm(conversation.key);
                     go(conversation.route);
                   }}

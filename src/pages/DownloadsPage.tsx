@@ -26,17 +26,9 @@ import { APP_NAME } from "@/lib/platform";
 import { featuredRelease, type Release, type ReleaseArtifact } from "@/lib/releases";
 
 /**
- * The downloads deck: a headless page in the landing's visual language — the
- * crest and a mono heading over the {@link AsciiSea}, with the platform cards
- * floating on the water below. No command-bar header; the only chrome is a
- * ghost back arrow that scrolls away with the hero, the same way the landing
- * itself carries no bars.
- *
- * Every file offered here comes from a kind-30622 release event
- * (`docs/releases.md`), so there is nothing to render until the relays answer.
- * That is the trade this page makes: the links are content-addressed and
- * verifiable, and in exchange a cold pool means a spinner rather than a stale
- * button pointing at a file that may not exist.
+ * The downloads deck, in the landing's visual language over the
+ * {@link AsciiSea}. Every file comes from a kind-30622 release event
+ * (`docs/releases.md`): verifiable links, at the cost of a spinner on a cold pool.
  */
 
 const OS_ICON: Record<DownloadOs, LucideIcon> = {
@@ -59,12 +51,9 @@ function prefersReducedMotion() {
 }
 
 /**
- * The release's artifacts, filed under the platform card each belongs on.
- *
- * The `.deb` and `.flatpak` are dropped: they are served through the
- * pkg.soapbox.pub package repositories ({@link PACKAGE_MANAGERS}), not offered
- * as a raw download. They remain in the release event — npkg reads them from
- * there — so this only affects what the page renders, not what is published.
+ * The release's artifacts by platform card. `.deb`/`.flatpak` are omitted:
+ * they're served via pkg.soapbox.pub ({@link PACKAGE_MANAGERS}) but stay in
+ * the release event for npkg.
  */
 function groupByOs(release: Release | undefined): Map<DownloadOs, ReleaseArtifact[]> {
   const grouped = new Map<DownloadOs, ReleaseArtifact[]>();
@@ -110,11 +99,7 @@ function PackageManagers({ os }: { os: DownloadOs }) {
   );
 }
 
-/**
- * A copyable command for the CLI-installed builds: the shell line in a mono box
- * with a clear copy button that flips to a check for a moment. The command can
- * scroll horizontally if it's long, so the button stays put and always visible.
- */
+/** A copyable CLI command; the command scrolls so the copy button stays visible. */
 function CommandLine({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -164,10 +149,7 @@ function ArtifactButton({ artifact, primary }: { artifact: ReleaseArtifact; prim
         variant={primary ? "default" : "secondary"}
         className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
       >
-        {/* Cross-origin to Blossom, so `download` is ignored by the browser and
-            the link simply opens — which for these content types means a save
-            either way. The attribute stays for the same-origin case a
-            self-hosted mirror could create. */}
+        {/* Cross-origin `download` is ignored (Blossom); kept for same-origin mirrors. */}
         <a href={artifact.url} download={artifact.filename}>
           <Download className="size-4 shrink-0" />
           <span className="flex flex-col gap-0.5 min-w-0">
@@ -198,9 +180,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
   const hasPackageManagers = PACKAGE_MANAGERS.some((manager) => manager.os === platform.os);
 
   return (
-    // A borderless translucent panel, so the swell stays faintly visible
-    // underneath instead of being walled off. The featured card is simply a
-    // shade more solid.
+    // Translucent so the swell shows through; the featured card is more solid.
     <section
       className={`clip-corner-lg p-4 space-y-3 ${featured ? "bg-background/60" : "bg-background/40"}`}
     >
@@ -212,9 +192,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
         )}
         {artifacts.length > 0 && version && (
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
-            {/* Only reachable when nothing stable has ever been tagged, since
-                `featuredRelease` prefers the stable channel. Say so rather than
-                presenting a candidate as the release. */}
+            {/* Only shown when nothing stable was ever tagged (`featuredRelease` prefers stable). */}
             {channel && channel !== "main" && (
               <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">{channel}</span>
             )}
@@ -223,9 +201,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
         )}
       </header>
 
-      {/* The package repositories lead: they are the recommended path and the
-          only one that keeps updating after install. The direct downloads below
-          are the fallback for anyone without a package manager (AppImage). */}
+      {/* Package repos lead: recommended, and the only path that auto-updates. */}
       <PackageManagers os={platform.os} />
 
       {artifacts.length > 0 || platform.os === "android" ? (
@@ -246,8 +222,6 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
                 className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
               >
                 <a href={store.url} target="_blank" rel="noreferrer">
-                  {/* The store's own mark, not a generic link glyph: it is
-                      what the user is scanning for. */}
                   <img src={store.icon} alt="" className="size-4 shrink-0" />
                   <span className="flex flex-col gap-0.5 min-w-0">
                     <span className="font-medium leading-tight">{store.label}</span>
@@ -259,10 +233,7 @@ function TargetCard({ platform, artifacts, version, channel, featured }: {
           </div>
         </div>
       ) : (
-        // iOS: no App Store build ships through this pipeline, so tease it. The
-        // web app is presented as a good install in its own right, not a
-        // stopgap: Safari's Add to Home Screen gives a full-screen app on the
-        // Home Screen today.
+        // iOS: no App Store build yet; the web app (Add to Home Screen) is presented as a real install.
         <div className="space-y-2">
           {platform.empty && (
             <p className="font-mono text-xs lowercase tracking-wide text-primary/80">{platform.empty}</p>
@@ -328,33 +299,25 @@ function OlderRelease({ release }: { release: Release }) {
 
 export function DownloadsPage() {
   const back = useBackOrHome();
-  // The page's own scroll container: the sea reads its scrollTop imperatively,
-  // so it is a ref handed down, never state.
+  // The sea reads scrollTop imperatively, so a ref, never state.
   const scrollRef = useRef<HTMLElement>(null);
   const targetsRef = useRef<HTMLElement>(null);
-  // Detected once: re-running per render can't change, and a featured card that
-  // moved between renders would be worse than a wrong guess.
+  // Detected once: a featured card moving between renders is worse than a wrong guess.
   const detected = useMemo(() => detectCurrentOs(), []);
 
   const releases = useReleases();
-  // The newest STABLE release leads, not the newest outright — a tagged
-  // release candidate sorts above the stable version it precedes, and would
-  // otherwise become everyone's download. It still appears below, labelled.
+  // Newest STABLE leads, so a release candidate doesn't become everyone's download.
   const latest = useMemo(() => featuredRelease(releases.data ?? []), [releases.data]);
   const older = (releases.data ?? []).filter((release) => release !== latest);
   const byOs = useMemo(() => groupByOs(latest), [latest]);
 
-  // The visitor's platform first, everything else in declaration order. An
-  // unrecognized agent simply gets the flat list.
   const platforms = useMemo(() => {
     const ordered = [...DOWNLOAD_PLATFORMS];
     ordered.sort((a, b) => Number(b.os === detected) - Number(a.os === detected));
     return ordered;
   }, [detected]);
 
-  // The hero's one-click answer: the detected platform's first artifact. On iOS
-  // (nothing published here) the honest primary action is the web app itself,
-  // and with no detection at all the hero just cues the list below.
+  // On iOS the primary action is the web app; with no detection, the hero cues the list.
   const featured = platforms.find((platform) => platform.os === detected);
   const heroArtifact = featured ? byOs.get(featured.os)?.[0] : undefined;
 
@@ -367,15 +330,11 @@ export function DownloadsPage() {
 
   return (
     <main ref={scrollRef} className="relative flex-1 min-w-0 overflow-y-auto">
-      {/* Viewport-locked sea, exactly as the landing mounts it: `sticky` pins
-          it while `-mb-[100svh]` cancels its scroll height, so the content
-          scrolls straight over the water. */}
+      {/* Viewport-locked sea: `sticky` pins it, `-mb-[100svh]` cancels its scroll height. */}
       <div className="pointer-events-none sticky top-0 z-0 -mb-[100svh] h-[100svh]">
         <AsciiSea scrollRef={scrollRef} />
       </div>
 
-      {/* The one piece of chrome: a way back that scrolls away with the hero
-          rather than riding a bar across the page. */}
       <Button
         variant="ghost"
         size="icon"
@@ -387,7 +346,6 @@ export function DownloadsPage() {
       </Button>
 
       <div className="relative z-10">
-        {/* ── Hero ────────────────────────────────────────────────────── */}
         <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-top">
           <ArmadaCrest size={130} />
           <div className="space-y-2.5">
@@ -419,16 +377,13 @@ export function DownloadsPage() {
             ) : releases.isPending ? (
               <div className="h-12 w-full animate-pulse clip-corner-lg bg-muted-foreground/15" />
             ) : null}
-            {/* Cue and scroll target are one control, the landing's pattern:
-                the list below IS the answer. */}
             <button
               type="button"
               onClick={scrollToTargets}
               className="group mt-5 flex w-full flex-col items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
               All platforms
-              {/* U+2193 (↓) for the same reason the landing's cue is: WGL4
-                  core, so every system font has a real glyph instead of tofu. */}
+              {/* U+2193: WGL4 core, so every system font has a glyph. */}
               <span
                 aria-hidden="true"
                 className="animate-[armada-bob_2.4s_ease-in-out_infinite] text-base leading-none text-[hsl(var(--accent2)/0.75)] group-hover:text-[hsl(var(--accent2))]"
@@ -439,7 +394,6 @@ export function DownloadsPage() {
           </div>
         </section>
 
-        {/* ── Every platform ───────────────────────────────────────────── */}
         <section ref={targetsRef} className="mx-auto max-w-2xl scroll-mt-6 space-y-4 px-6 pb-12 pt-4">
           {releases.isPending ? (
             <>
@@ -480,9 +434,7 @@ export function DownloadsPage() {
               </p>
             </>
           ) : (
-            // No compiled-in list to fall back on, so say what happened rather
-            // than rendering an empty page that looks like there is nothing to
-            // download.
+            // No compiled-in fallback list; explain rather than render an empty page.
             <section className="clip-corner-lg bg-background/50 p-6 text-center space-y-3">
               <p className="font-mono text-sm lowercase tracking-tight text-foreground">
                 no releases found
@@ -505,11 +457,7 @@ export function DownloadsPage() {
           )}
         </section>
 
-        {/* ── The sign-off ─────────────────────────────────────────────────
-            The landing's terminal prompt, so this page ends where that one
-            does. `armada-caret` comes from the crest's keyframes below. */}
-        {/* Tall enough that the prompt floats clear of the gradient floor
-            below, rather than sitting inside its darkest band. */}
+        {/* Sign-off: the landing's terminal prompt (`armada-caret` from the crest's keyframes). */}
         <section className="mx-auto flex min-h-[50svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
           <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
             <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
@@ -517,8 +465,6 @@ export function DownloadsPage() {
             <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
           </p>
 
-          {/* The reader who scrolled the whole way gets a clear way home,
-              the same shape as the landing's bottom CTA. */}
           <div className="w-full max-w-sm">
             <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
               <Link to="/">Return home</Link>
@@ -526,8 +472,6 @@ export function DownloadsPage() {
           </div>
         </section>
 
-        {/* The floor of the page, as on the landing: darken the last stretch
-            of sea so reaching the bottom reads as arriving somewhere. */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-b from-transparent via-black/45 to-black/90"

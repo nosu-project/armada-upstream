@@ -15,10 +15,9 @@ export function replaceableVersionIsNewer(
 }
 
 /**
- * Resolve one account-owned canonical singleton across relay and ArmadaDB
- * copies. Native background services can write a newer unsigned rumor while
- * the WebView is stopped, so the database is a first-class source rather than
- * merely a fallback for an empty relay response.
+ * Resolve an account-owned canonical singleton across relay and ArmadaDB copies.
+ * Native background services can write newer rumors while the WebView is
+ * stopped, so the DB is a first-class source, not a fallback.
  */
 export function newestCanonicalSelfList(
   events: Iterable<NostrRumor>,

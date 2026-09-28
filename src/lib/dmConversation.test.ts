@@ -9,7 +9,7 @@ import {
   dmRouteParam,
   parseDmRouteParam,
 } from "@/lib/dmConversation";
-import { dmConvKey } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 const alice = getPublicKey(generateSecretKey());

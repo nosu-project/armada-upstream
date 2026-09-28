@@ -99,22 +99,9 @@ import {
 import { SCREEN_SHARE_RESOLUTIONS, type ScreenShareQuality } from "@/lib/screenShareQuality";
 import { nip19 } from "nostr-tools";
 
-/**
- * The LiveKit half of the voice-call stack, split out of CallProvider and
- * loaded LAZILY on the first call join. The LiveKit SDK (~0.5MB of JS) was the
- * single largest contributor to the boot bundle; nothing here is needed until
- * the user actually joins voice, so it must never cost the cold start a byte.
- * CallProvider (the state/context shell) stays eager and mounts this module
- * behind `React.lazy` only while a call is active.
- */
+/** LiveKit half of the call stack, lazy-loaded on first join so the SDK (~0.5MB) never costs cold start. */
 
-/**
- * Reports the room's live speaker set (resolved to pubkeys) up to the call
- * context, so UI outside the LiveKit room — the sidebar's nested voice
- * roster — can show voice activity. Must render inside `LiveKitRoom` (and, for
- * Concord, inside the identity-resolver provider). Unverified identities are
- * skipped: their media never renders, so they can't meaningfully "speak".
- */
+/** Reports live speakers (as pubkeys) to call context. Unverified identities are skipped. */
 function SpeakingReporter() {
   const { setSpeakingPubkeys } = useCall();
   const resolveIdentity = useVoiceIdentity();
@@ -130,22 +117,12 @@ function SpeakingReporter() {
     setSpeakingPubkeys(pubkeys);
   }, [speakingParticipants, resolveIdentity, setSpeakingPubkeys]);
 
-  // Clear on room teardown (room switch or leave) so no stale rings linger.
   useEffect(() => () => setSpeakingPubkeys(new Set()), [setSpeakingPubkeys]);
 
   return null;
 }
 
-/**
- * Reports the room's muted participants (mic disabled, resolved to pubkeys) up
- * to the call context, so the sidebar's nested voice roster can show who has
- * their mic off — only while the viewer is connected to that call (mute state
- * is only available from the LiveKit room we're in). `useParticipants`
- * re-renders on the room's `TrackMuted`/`TrackUnmuted` events, so this effect
- * re-runs as mute state changes. Must render inside `LiveKitRoom` (and, for
- * Concord, inside the identity-resolver provider). Unverified identities are
- * skipped, matching the roster/speaking reporters.
- */
+/** Reports muted participants (as pubkeys) to call context. Unverified identities are skipped. */
 function MutedReporter() {
   const { setMutedPubkeys } = useCall();
   const resolveIdentity = useVoiceIdentity();
@@ -165,22 +142,15 @@ function MutedReporter() {
     setMutedPubkeys(pubkeys);
   }, [participants, resolveIdentity, setMutedPubkeys]);
 
-  // Clear on room teardown (room switch or leave) so no stale icons linger.
   useEffect(() => () => setMutedPubkeys(new Set()), [setMutedPubkeys]);
 
   return null;
 }
 
 /**
- * Reports the room's live participant roster (resolved to pubkeys) up to the
- * call context, so the active call's occupancy renders from LiveKit truth
- * everywhere — sidebar rosters, DM headers — instead of relay presence events
- * (kind 39004), which ride webhooks + a relay's in-memory map and desync far
- * too easily (missed webhooks, dropped subscriptions, relay restarts). The
- * SFU's participant list can't drift while we're connected: it IS the call.
- * Must render inside `LiveKitRoom` (and, for Concord, inside the
- * identity-resolver provider). Multiple sessions of one pubkey are deduped;
- * unverified Concord identities are skipped, matching the call stage.
+ * Reports the live roster (as pubkeys) to call context, so occupancy comes
+ * from the SFU rather than kind-39004 presence, which desyncs easily.
+ * Deduped per pubkey; unverified Concord identities skipped.
  */
 function RosterReporter() {
   const { setVoiceRoomPubkeys } = useCall();
@@ -191,8 +161,7 @@ function RosterReporter() {
     const pubkeys: string[] = [];
     const seen = new Set<string>();
     for (const p of participants) {
-      // The local participant exists before the connection completes, with an
-      // empty identity — skip until it's real.
+      // The local participant has an empty identity until connected.
       if (!p.identity || isHevcScreenShareParticipant(p, resolveIdentity)) continue;
       const { pubkey, verified } = resolveIdentity(p.identity);
       if (!verified || seen.has(pubkey)) continue;
@@ -202,21 +171,13 @@ function RosterReporter() {
     setVoiceRoomPubkeys(pubkeys);
   }, [participants, resolveIdentity, setVoiceRoomPubkeys]);
 
-  // Clear on room teardown (room switch or leave) so consumers fall back to
-  // relay presence instead of showing a stale roster.
+  // Null on teardown so consumers fall back to relay presence.
   useEffect(() => () => setVoiceRoomPubkeys(null), [setVoiceRoomPubkeys]);
 
   return null;
 }
 
-/**
- * Keeps every remote participant's microphone and screen-share playback gains
- * in sync with their independent persisted stores for the whole call. The
- * stage also re-applies on (re)subscribe, but this remains mounted while the
- * stage is closed so changes from the audio menu or sidebar take effect live.
- * Must render inside `LiveKitRoom` (and, for Concord, inside the identity
- * resolver provider).
- */
+/** Keeps remote mic/screen-share gains in sync with stored volumes while the stage is closed. */
 function PlaybackVolumeApplier() {
   const resolveIdentity = useVoiceIdentity();
   const participants = useParticipants();
@@ -236,17 +197,13 @@ function PlaybackVolumeApplier() {
       }
     };
     apply();
-    // Re-apply whenever any stored volume changes (from any surface).
     return subscribeUserVolumes(apply);
   }, [participants, resolveIdentity]);
 
   return null;
 }
 
-/**
- * Plays a short chirp when you join the call, when another participant joins,
- * and when someone leaves. Must render inside a `LiveKitRoom`.
- */
+/** Join/leave chirps. Must render inside a `LiveKitRoom`. */
 function CallSoundEffects() {
   const room = useRoomContext();
   const resolveIdentity = useVoiceIdentity();
@@ -282,15 +239,12 @@ function CallSoundEffects() {
     const onJoin = (participant: RemoteParticipant) => schedule(participant, "join");
     const onLeave = (participant: RemoteParticipant) => schedule(participant, "leave");
     const onConnected = () => playJoinSound();
-    // Your own join: RoomEvent.Connected fires once the local participant has
-    // joined. If the room is already connected by the time this mounts (e.g. a
-    // fast reconnect), play it immediately so you always get audible feedback.
+    // Already connected on mount (fast reconnect): play now.
     if (room.state === ConnectionState.Connected) {
       playJoinSound();
     } else {
       room.on(RoomEvent.Connected, onConnected);
     }
-    // Other participants joining/leaving after you're in.
     room.on(RoomEvent.ParticipantConnected, onJoin);
     room.on(RoomEvent.ParticipantDisconnected, onLeave);
     return () => {
@@ -305,11 +259,8 @@ function CallSoundEffects() {
 }
 
 /**
- * Applies the user's RNNoise noise-cancellation preference to the published mic
- * track. Mounted inside the `LiveKitRoom`. The processor must be attached to the
- * `LocalAudioTrack` after it's published — `audioCaptureDefaults` only carries
- * browser constraints, not track processors — and re-attached whenever the mic
- * track is (re)published (initial join, unmute, device switch via restartTrack).
+ * Applies RNNoise to the published mic track. `audioCaptureDefaults` carries
+ * only constraints, so the processor is re-attached on every (re)publish.
  */
 function MicNoiseProcessor() {
   const { localParticipant } = useLocalParticipant();
@@ -321,7 +272,6 @@ function MicNoiseProcessor() {
       const track = pub?.audioTrack;
       if (track instanceof LocalAudioTrack) void syncRnnoise(track, enabled);
     };
-    // Apply now (mic may already be published) and on every (re)publish.
     apply();
     localParticipant.on(ParticipantEvent.LocalTrackPublished, apply);
     return () => {
@@ -332,14 +282,7 @@ function MicNoiseProcessor() {
   return null;
 }
 
-/**
- * Audio encoding defaults. LiveKit already defaults to
- * the `music` preset (48 kbps) with RED + DTX for mono; we bump to
- * `musicHighQuality` (96 kbps) for noticeably crisper voice and assert RED
- * (redundant audio, resilient to packet loss) + DTX (don't transmit silence)
- * explicitly so intent survives any future default change. Kept mono — stereo
- * doubles bandwidth for no benefit on voice.
- */
+/** `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case defaults change. */
 const audioPublishDefaults = {
   audioPreset: AudioPresets.musicHighQuality,
   red: true,
@@ -347,22 +290,11 @@ const audioPublishDefaults = {
 } as const;
 
 /**
- * On the native APK, backgrounding the WebView (opening the system share sheet
- * for a link, or handing off to an external browser) fires the page-lifecycle
- * `freeze`/`pagehide` events on the document. LiveKit's `disconnectOnPageLeave`
- * default (true) treats those as the tab unloading and tears the room down —
- * which on Android kicks you out of an active call the moment you tap a link.
- * A Capacitor app's backgrounding is transient, not a page unload, and the call
- * is meant to persist across it (the room stays mounted in CallProvider), so we
- * disable that teardown on native. On the web (a real browser tab) it stays on,
- * so navigating away / closing the tab still cleanly leaves the call.
+ * Backgrounding the native WebView fires `freeze`/`pagehide`, which LiveKit's
+ * `disconnectOnPageLeave` treats as unload and drops the call. Web keeps it on.
  */
 const disconnectOnPageLeave = !Capacitor.isNativePlatform();
 
-/**
- * Shared capture/encoding room options (mic device + audio processing + video
- * presets). Read per mount; rooms remount on room switch.
- */
 function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
   return useMemo<RoomOptions>(() => {
     const cameraId = getPreferredCameraId();
@@ -381,17 +313,14 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
         videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
       },
       ...extra,
-      // Route remote tracks through Web Audio GainNodes. Unlike media-element
-      // volume, this supports real gain above 100% and source-specific mic and
-      // screen-share controls. Keep this after `extra` so callers cannot
-      // accidentally disable the required gain path.
+      // Web Audio GainNodes allow >100% gain and per-source control. Keep after
+      // `extra` so callers can't disable it.
       webAudioMix: true,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
 
-/** Loading bar shown while a token is being requested. */
 function LoadingBar({ placeBar, label }: { placeBar: PlaceBar; label: string }) {
   return placeBar(
     <div className="flex items-center justify-center gap-2 px-3 py-2 clip-corner-lg bg-chrome-deep min-h-12 shadow-lg">
@@ -401,7 +330,6 @@ function LoadingBar({ placeBar, label }: { placeBar: PlaceBar; label: string }) 
   );
 }
 
-/** Error bar shown when a token request fails. */
 function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unknown; onLeave: () => void }) {
   return placeBar(
     <div className="flex items-center gap-2 px-3 py-2 clip-corner-lg bg-chrome-deep min-h-12 shadow-lg">
@@ -417,13 +345,7 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
 
 type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode) => React.ReactNode;
 
-/**
- * The fixed mobile call bar. Measures its own rendered height and writes it to
- * `--call-bar-h` on the shell, so the shell reserves *exactly* the bar's height
- * as bottom padding (the bar grows/shrinks with participant count). A fixed
- * estimate was wrong both ways — too short (covered the DM composer) and too
- * tall (left a big gap below the group composer).
- */
+/** Fixed mobile call bar; writes its measured height to `--call-bar-h` so the shell reserves exactly that. */
 function MobileCallBar({
   shellRef,
   exiting,
@@ -443,9 +365,7 @@ function MobileCallBar({
     const apply = () => {
       const h = bar.offsetHeight;
       shell.style.setProperty("--call-bar-h", `${h}px`);
-      // Also publish to call context: the mobile preview positions above the
-      // bar off this shared value (a guaranteed source, unlike CSS-variable
-      // inheritance), and re-evaluates whenever the bar resizes.
+      // Shared via context: the mobile preview positions off this (CSS var inheritance isn't guaranteed).
       setCallBarHeight(h);
     };
     apply();
@@ -453,7 +373,6 @@ function MobileCallBar({
     ro.observe(bar);
     return () => {
       ro.disconnect();
-      // Release the reservation when the bar unmounts.
       shell.style.removeProperty("--call-bar-h");
       setCallBarHeight(0);
     };
@@ -474,7 +393,6 @@ function MobileCallBar({
   );
 }
 
-/** Build the place-bar renderer (fixed mobile bar + portaled desktop slots). */
 function makePlaceBar(
   slots: HTMLElement[],
   exiting: boolean,
@@ -486,12 +404,8 @@ function makePlaceBar(
         {mobile}
       </MobileCallBar>
       {slots.length === 0 && (
-        // Desktop fallback: the current route registered no call-bar slot
-        // (home, settings, or a route transition's slot gap), so float the
-        // panel bottom-left — the call must keep visible presence + controls
-        // everywhere, not just on pages with a channel sidebar. The entry
-        // delay (with fill-mode-backwards holding it invisible) swallows the
-        // one-frame gap while switching between two slot-owning pages.
+        // No call-bar slot on this route: float bottom-left so the call stays visible.
+        // The entry delay hides the one-frame slot gap between slot-owning pages.
         <div
           className={cn(
             "fixed bottom-3 left-3 z-40 w-80 max-w-[calc(100vw-1.5rem)] max-sidebar:hidden",
@@ -507,9 +421,7 @@ function makePlaceBar(
         createPortal(
           <div
             className={cn(
-              // Hidden below the sidebar breakpoint: on mobile the fixed
-              // MobileCallBar is the voice UI; showing this copy too (e.g. in
-              // the channel-list drawer) would duplicate it.
+              // On mobile the fixed MobileCallBar is the voice UI; avoid duplicating it.
               "px-1 pb-1 max-sidebar:hidden",
               exiting
                 ? "animate-out fade-out-0 slide-out-to-bottom-2 duration-200 fill-mode-forwards"
@@ -529,23 +441,14 @@ function makePlaceBar(
 type PlaceStage = (stage: React.ReactNode) => React.ReactNode;
 
 /**
- * Build the place-stage renderer: portal the call stage into the stable host
- * element owned by CallProvider. The host is reparented into whichever
- * top-of-chat slot is registered (or parked detached when none is), so the
- * stage stays MOUNTED for the whole call — unmounting it on navigation used to
- * pause every remote video via adaptiveStream and lose screenshares outright
- * on the E2EE Concord path, along with the focus/theater state.
+ * Portal the stage into CallProvider's stable host so it stays MOUNTED all call:
+ * unmounting paused remote video (adaptiveStream) and lost E2EE screenshares.
  */
 function makePlaceStage(host: HTMLElement): PlaceStage {
   return (stage) => createPortal(stage, host, "call-stage");
 }
 
-/**
- * The connected LiveKit room + its UI bars. Given a token, server url, room
- * options, and labels, renders the room context and the mobile/desktop bars.
- * Shared by the NIP-29 and Concord voice paths; only the token source, E2EE,
- * and labeling differ (computed by the wrappers).
- */
+/** Connected LiveKit room + bars, shared by the NIP-29, Concord and DM paths. */
 function VoiceRoomShell({
   serverUrl,
   token,
@@ -561,14 +464,13 @@ function VoiceRoomShell({
   serverUrl: string;
   token: string;
   options: RoomOptions;
-  /** Pre-constructed Room (used for the E2EE-enabled Concord path). */
+  /** Pre-constructed Room (E2EE paths). */
   room?: Room;
   onDisconnected: (reason?: DisconnectReason) => void;
   placeBar: PlaceBar;
   placeStage: PlaceStage;
   stageOpen: boolean;
   label: React.ReactNode;
-  /** Server scope for display names (NIP-29 relay url; undefined for DM/Concord). */
   scopeRelayUrl?: string;
 }) {
   const mobileBar = (
@@ -592,15 +494,11 @@ function VoiceRoomShell({
       token={token}
       room={room}
       connect
-      // Join muted by default: don't auto-publish the mic track on connect.
-      // Users opt in via the mic button (setMicrophoneEnabled), which also
-      // covers the permission prompt explicitly instead of surprising anyone
-      // with live audio the instant they land in a call.
+      // Join muted: the mic button publishes and handles the permission prompt explicitly.
       audio={false}
       video={false}
       options={options}
       onDisconnected={onDisconnected}
-      // `display: contents` so the room container generates no box of its own.
       style={{ display: "contents" }}
     >
       <RoomAudioRenderer />
@@ -621,13 +519,7 @@ function VoiceRoomShell({
   );
 }
 
-/**
- * NIP-29 group voice room: token from the relay's NIP-29 LiveKit endpoint,
- * authorized by group membership. No media E2EE — the relay-trusted SFU is
- * part of the trust model here. (DM calls used to share this path via the
- * relay's `livekit-dm` endpoint; they now ride the blind-broker DmVoiceRoom
- * below.)
- */
+/** NIP-29 voice room: token from the relay's LiveKit endpoint; no media E2EE (relay-trusted SFU). */
 function Nip29VoiceRoom({
   call,
   onLeave,
@@ -663,17 +555,13 @@ function Nip29VoiceRoom({
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);
   }, [navigate, call.relayUrl, call.groupId]);
 
-  // Register the navigate-to-call handler so the floating video window's
-  // "return to call" action lands on this room's channel.
   const { registerFocusActiveCall, registerCallSummary } = useCall();
   useEffect(() => {
     registerFocusActiveCall(goToChannel);
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToChannel]);
 
-  // How the call reads in the Android ongoing-call notification. Plain text,
-  // so unlike the bar's `label` it can carry no custom-emoji images — and it
-  // re-registers as the group metadata resolves.
+  // Android ongoing-call notification label (plain text, no emoji images).
   useEffect(() => {
     registerCallSummary({ title: `#${channelName}`, subtitle: serverName });
     return () => registerCallSummary(null);
@@ -684,8 +572,6 @@ function Nip29VoiceRoom({
 
   const label = (
     <button type="button" onClick={goToChannel} className="hover:underline text-left">
-      {/* The server name is desktop-only; on the compact mobile bar we show just
-          the channel (e.g. "#general"). */}
       <span className="hidden sidebar:inline text-muted-foreground/70">{serverName} </span>#{channelName}
     </button>
   );
@@ -706,16 +592,9 @@ function Nip29VoiceRoom({
 }
 
 /**
- * A per-sender key provider for Concord AV (CORD-07 §3): every publisher
- * encrypts under its own key, derived from the channel's media root and the
- * publisher's broker-assigned identity — so members never share one AEAD
- * nonce domain. Configured to CORD-07's profile:
- *
- *   - `sharedKey: false`   — keys are per participant identity;
- *   - `keySize: 256`       — AES-256-GCM frame keys (LiveKit defaults to 128);
- *   - `ratchetWindowSize: 0`, `failureTolerance: -1` — keys are EXTERNALLY
- *     derived; LiveKit's auto-ratchet-on-failure would silently diverge every
- *     receiver from the deterministic derivation, so it must never fire.
+ * Per-sender key provider for Concord AV (CORD-07 §3): keys per participant
+ * identity, AES-256-GCM. Ratcheting disabled (`ratchetWindowSize: 0`,
+ * `failureTolerance: -1`): keys are externally derived, and auto-ratchet would diverge.
  */
 class SenderKeyProvider extends BaseKeyProvider {
   constructor() {
@@ -733,20 +612,14 @@ class SenderKeyProvider extends BaseKeyProvider {
 }
 
 /**
- * A single shared frame key for every publisher — the profile DM calls use.
- * A 1:1 call has exactly two senders and a fresh random per-call secret, so
- * the nonce-domain-partitioning rationale behind Concord's per-sender keys
- * (many members, one derivation root per epoch) doesn't apply, and a shared
- * key needs no in-band identity exchange — which a DM call, having no
- * presence plane, could not carry anyway. Ratchet/failure knobs match
- * SenderKeyProvider: the key is externally derived and must never drift.
+ * One shared frame key for DM calls: two senders with a fresh per-call secret,
+ * and no presence plane to exchange identities. Same ratchet settings as SenderKeyProvider.
  */
 class SharedKeyProvider extends BaseKeyProvider {
   constructor() {
     super({ sharedKey: true, ratchetWindowSize: 0, failureTolerance: -1, keySize: 256 });
   }
 
-  /** Install the call-wide frame-key material (HKDF input). */
   async setSharedMaterial(material: Uint8Array): Promise<void> {
     const key = await crypto.subtle.importKey("raw", material.slice().buffer, "HKDF", false, [
       "deriveBits",
@@ -757,14 +630,9 @@ class SharedKeyProvider extends BaseKeyProvider {
 }
 
 /**
- * Construct the E2EE worker + Room for a blind-broker call (Concord or DM).
- * Runs during render (inside a useMemo), so the worker construction is
- * guarded: a stale tab after a deploy whose hashed e2ee-worker chunk now 404s
- * (answered by the SPA fallback as HTML), a browser that rejects the module
- * worker, or a CSP that blocks it would otherwise take down the whole tree as
- * an opaque hard join error. E2EE-required rooms must never fall back to
- * plaintext, so the failure is captured and rendered as a clean, leavable
- * error by the caller instead.
+ * Build the E2EE worker + Room. Worker construction is guarded (404'd chunk
+ * after deploy, CSP, unsupported module workers) so the caller renders a
+ * leavable error; E2EE rooms must never fall back to plaintext.
  */
 function buildE2eeRoom(keyProvider: BaseKeyProvider): {
   room: Room | null;
@@ -788,7 +656,6 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
     webAudioMix: true,
     disconnectOnPageLeave,
     e2ee: { keyProvider, worker },
-    // Mono capture and the user's processing prefs — see micCaptureConstraints.
     audioCaptureDefaults: micCaptureConstraints(),
     videoCaptureDefaults: {
       ...(cameraId ? { deviceId: cameraId } : {}),
@@ -803,12 +670,7 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
   return { room: new Room(opts), worker };
 }
 
-/**
- * The Concord call bar's title. A button — like the NIP-29 and DM titles — so
- * clicking the call's name returns to its voice channel, running the same
- * handler the room registers as `focusActiveCall`. Exported so the regression
- * test can render it without standing up a LiveKit room.
- */
+/** Concord call bar title; a button back to the voice channel. Exported for tests. */
 export function ConcordCallLabel({
   community,
   channel,
@@ -831,10 +693,8 @@ export function ConcordCallLabel({
 }
 
 /**
- * Concord (CORD-07, serverless, E2E) voice room: token from a blind broker
- * (authorized by channel-key-possession proof, not membership), media
- * encrypted end-to-end under per-sender keys the SFU never sees, and presence
- * announced over the channel itself so relays and brokers stay blind.
+ * Concord (CORD-07) voice room: token from a blind broker via channel-key
+ * proof, per-sender E2EE, presence over the channel itself.
  */
 interface ActiveHevcCapture {
   stream: MediaStream;
@@ -860,19 +720,12 @@ function ConcordVoiceRoom({
   const { joinConcordCall, registerFocusActiveCall, registerCallSummary, setRaisedHands } =
     useCall();
   const navigate = useNavigate();
-  // Live presence (§4): the identity→member verification input, the rendezvous
-  // hint stream (§5), and the input to our own heartbeat below. Resolved before
-  // the token so a failed mint has somewhere to fall through to.
+  // Presence (§4) resolved before the token so a failed mint has a fallback.
   const fold = useVoicePresence(community, channel);
-  // Followed live rather than snapshotted into `ctx`: a staff edit to the
-  // community's brokers reaches a mounted call, like a relay change does.
+  // Live, so a staff edit to the community's brokers reaches a mounted call.
   const communityBrokers = useCommunityAvBrokers(community);
 
-  // The remaining candidates behind `ctx.broker`. `resolveVoiceBroker` already
-  // probed one at join time, but a probe only proves the broker answered a
-  // moment ago — it can still fail to mint, and without these that is a dead
-  // end. Same config-only set, so a fall-through can't leave the community's
-  // brokers either.
+  // A probe only proves the broker answered; it can still fail to mint.
   const fallbackBrokers = useMemo(
     () =>
       channel.voice.room.pk
@@ -883,47 +736,29 @@ function ConcordVoiceRoom({
 
   const { data: tokenData, error, isLoading } = useAvToken(channel, broker, true, fallbackBrokers);
 
-  // Raise-hand + emoji reactions (Armada client feature; Concord calls only —
-  // they ride additive tags on the encrypted presence rumor, so brokers stay
-  // blind). Own hand state is local; it feeds the heartbeat (below) and renders
-  // our own tile instantly without waiting for the presence echo.
+  // Raise-hand/reactions ride additive tags on the encrypted presence rumor (Armada extension).
   const [handRaised, setHandRaised] = useState(false);
 
-  // Live enforcement (CORD-07 §7): `ctx` is a join-time snapshot, so follow
-  // the vault + Control fold while connected — rejoin the freshly-derived room
-  // when the channel's key rolls (the rotation that severs a removed member
-  // from chat must move the call too), and hang up on a ban verdict, vault
-  // removal, or channel deletion.
+  // CORD-07 §7: rejoin on key roll; hang up on ban, vault removal or channel deletion.
   useCallSync(ctx, onLeave);
 
-  // Navigate back to this Concord voice channel. The route params are the
-  // community + channel idHex (matching /c/:communityId/:channelId).
   const goToChannel = useCallback(() => {
     navigate(`/c/${encodeURIComponent(community.idHex)}/${encodeURIComponent(channel.idHex)}`);
   }, [navigate, community.idHex, channel.idHex]);
 
-  // Register the navigate-to-call handler so the floating video window's
-  // "return to call" action lands on this Concord voice channel; the call bar's
-  // title (ConcordCallLabel) runs the same handler.
   useEffect(() => {
     registerFocusActiveCall(goToChannel);
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToChannel]);
 
-  // How the call reads in the Android ongoing-call notification. The names are
-  // the decrypted Concord ones — they never leave the device, and the
-  // notification is drawn locally by a service in this same process.
+  // Decrypted names are fine here: the notification is drawn locally in-process.
   useEffect(() => {
     registerCallSummary({ title: `#${channel.name}`, subtitle: community.name });
     return () => registerCallSummary(null);
   }, [registerCallSummary, channel.name, community.name]);
 
-  // Our own heartbeat (§4): `joined` every 30s, `left` on leave — also carrying
-  // the sticky raised-hand state and, via `sendReaction`, transient emoji (both
-  // Armada client extensions on the same rumor). The broker announced is the one
-  // that actually minted the token, not the one the rendezvous nominated: after
-  // a fall-through those differ, and advertising the unreachable origin would
-  // steer everyone else at a broker that is not hosting this call.
+  // Heartbeat (§4) announces the broker that actually minted the token, not the
+  // nominated one, so others aren't steered to an unreachable origin.
   const [hevcIdentities, setHevcIdentities] = useState<string[]>([]);
   const { sendReaction, announceAdditionalIdentities } = useVoiceHeartbeat(
     community,
@@ -933,12 +768,9 @@ function ConcordVoiceRoom({
     handRaised,
     hevcIdentities,
   );
-  // Live in-call emoji reactions from every member (own reactions echo back).
   const reactions = useVoiceReactions(community, channel);
 
-  // Who has a hand up: the fresh presence fold, plus ourselves the instant we
-  // raise (before our own heartbeat echoes back). Pushed to the app-level call
-  // context so the sidebar voice roster can show it alongside muted/speaking.
+  // Includes our own raised hand before the heartbeat echoes back.
   const raisedHands = useMemo(() => {
     const set = new Set<string>();
     for (const p of fold.present) if (p.hand) set.add(p.author);
@@ -950,10 +782,7 @@ function ConcordVoiceRoom({
   }, [raisedHands, setRaisedHands]);
   useEffect(() => () => setRaisedHands(new Set()), [setRaisedHands]);
 
-  // Build the E2EE-enabled Room once (the component remounts per
-  // room/epoch/broker). Concord media MUST be end-to-end encrypted — the
-  // broker/SFU are blind and untrusted — so a failed worker construction is
-  // captured and rendered as a leavable error below (see buildE2eeRoom).
+  // Concord media MUST be E2EE; a failed worker renders a leavable error.
   const e2ee = useMemo((): {
     room: Room | null;
     keyProvider: SenderKeyProvider;
@@ -964,12 +793,8 @@ function ConcordVoiceRoom({
     return { keyProvider, ...buildE2eeRoom(keyProvider) };
   }, []);
 
-  // Key management (§3 + §7): every VERIFIED participant's frame key derives
-  // from the media root + their identity; an unverified identity (unclaimed,
-  // or contested by more than one fresh presence claim) gets a random key
-  // instead, so its tracks fail to decode and are never rendered — the §7
-  // SHOULD. Own identity is always keyed (we don't wait for our own heartbeat
-  // to echo back). `applied` makes key writes idempotent across fold changes.
+  // Verified identities get keys derived from the media root; unverified ones
+  // get a random key so their tracks never decode (§7). `applied` keeps writes idempotent.
   const applied = useRef(new Map<string, string>());
   useEffect(() => {
     if (!tokenData) return;
@@ -981,8 +806,7 @@ function ConcordVoiceRoom({
     const syncKeys = () => {
       const identities = new Set<string>([tokenData.identity]);
       for (const p of room.remoteParticipants.values()) identities.add(p.identity);
-      // Pre-warm keys for identities presence already claims, so audio decodes
-      // from the first frame after their tracks subscribe.
+      // Pre-warm keys so audio decodes from the first frame.
       for (const identity of fold.claims.keys()) identities.add(identity);
       for (const identity of hevcIdentities) identities.add(identity);
       for (const identity of identities) {
@@ -996,9 +820,7 @@ function ConcordVoiceRoom({
         const material = verified ? voiceSenderKey(mediaKey, identity) : random32();
         void e2ee.keyProvider
           .setSenderMaterial(material, identity)
-          // A failed key install means this identity's frames won't decrypt —
-          // for our OWN identity that is exactly the "joined but Unverified to
-          // peers" symptom — so make it observable rather than a silent no-op.
+          // A failed install for our own identity shows up as "Unverified" to peers; make it observable.
           .catch((err) =>
             console.error("Concord voice: failed to install frame key", {
               own: identity === tokenData.identity,
@@ -1015,7 +837,6 @@ function ConcordVoiceRoom({
     };
   }, [e2ee, tokenData, fold, channel, hevcIdentities]);
 
-  // Enable E2EE once our own key is installed; terminate the worker on unmount.
   useEffect(() => {
     if (!tokenData || !e2ee.room) return;
     const room = e2ee.room;
@@ -1024,10 +845,7 @@ function ConcordVoiceRoom({
       try {
         if (!cancelled) await room.setE2EEEnabled(true);
       } catch (err) {
-        // Media won't encrypt if this throws (e.g. the browser lacks the
-        // insertable-streams / RTCRtpScriptTransform path LiveKit needs), which
-        // leaves us undecodable to peers. Surface it loudly; the render guard
-        // below already refuses to join without a live E2EE worker.
+        // Without E2EE we'd be undecodable to peers; the render guard refuses to join anyway.
         console.error("Concord voice: failed to enable E2EE", err);
       }
     })();
@@ -1037,10 +855,8 @@ function ConcordVoiceRoom({
   }, [e2ee, tokenData]);
   useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
 
-  // Chromium does not expose H.265 encoding through WebRTC on Linux. The
-  // desktop shell's FFmpeg/VA-API path publishes a pre-encoded encrypted track
-  // as a second LiveKit identity. This controller keeps that identity bound to
-  // the real member, owns capture/audio cleanup, and rejects stale async starts.
+  // Chromium on Linux lacks WebRTC H.265 encoding: the desktop shell's
+  // FFmpeg/VA-API path publishes a pre-encoded encrypted track as a second identity.
   const [hevcCapability, setHevcCapability] =
     useState<DesktopHevcScreenShareCapability | null>(null);
   const [hevcStatus, setHevcStatus] = useState<DesktopHevcScreenShareStatus>({
@@ -1072,16 +888,11 @@ function ConcordVoiceRoom({
       ? hevcIdentitiesRef.current.filter((identity) => identity !== active.identity)
       : hevcIdentitiesRef.current;
     if (active) {
-      // Retiring the session id above means the shell's own "stopped" event is
-      // refused from here on, so nothing else will clear this. Leaving it set
-      // keeps the whole UI — the active dropdown, the diagnostics panel, the
-      // quality path — acting on a share that has already ended, which is what
-      // stopping from the OS affordance does.
+      // The shell's "stopped" event is now refused, so clear status here.
       setHevcStatus({ state: "stopped", active: false });
       hevcIdentitiesRef.current = remainingIdentities;
       setHevcIdentities(remainingIdentities);
-      // End trusted capture immediately. Shell IPC and relay delivery are
-      // asynchronous and must never keep local screen/audio capture alive.
+      // End capture immediately; async IPC/relay work must not keep it alive.
       stopHevcCapturedMedia(active.stream);
     }
     cancelDesktopHevcScreenShareFrames();
@@ -1102,9 +913,7 @@ function ConcordVoiceRoom({
       }
     })();
 
-    // Shell and LiveKit audio cleanup are isolated: either one rejecting must
-    // not prevent the other. Presence withdrawal happens last and is only a
-    // best-effort state update after all local media has already ended.
+    // Isolated so one rejecting doesn't block the other; presence withdrawal last.
     await Promise.all([shellCleanup, audioCleanup]);
     if (active) {
       try {
@@ -1115,12 +924,8 @@ function ConcordVoiceRoom({
     }
   }, [announceAdditionalIdentities, e2ee.room]);
 
-  // `stopHevc` is rebuilt whenever the Concord fold hands down a new channel
-  // object, so nothing whose *cleanup* stops the share may depend on it: React
-  // runs a cleanup on every dependency change, not only on unmount, and that
-  // would retire a live screen share with no user action and no error. Reach
-  // for the latest callback through a ref instead — the same idiom the
-  // heartbeat effect uses for the identical reason.
+  // `stopHevc` changes with each new channel object, and cleanups run on every
+  // dep change, so read it via a ref or a live share gets stopped.
   const stopHevcRef = useRef(stopHevc);
   stopHevcRef.current = stopHevc;
 
@@ -1179,11 +984,8 @@ function ConcordVoiceRoom({
       if (!initialCurrent()) throw new Error("The H.265 screen share was cancelled.");
     };
 
-    // Everything below awaits at least a capability probe, an AV-broker mint
-    // and a relay round-trip, and DOM events are not buffered: a listener
-    // attached after those awaits never hears a capture the user cancelled
-    // during them, and the publisher then starts on a dead track. `stop()`
-    // does not fire this event, so a programmatic teardown cannot trip it.
+    // Listen before the awaits: DOM events aren't buffered, so a cancel during
+    // them would be missed. `stop()` doesn't fire this event.
     let adopted: ActiveHevcCapture | null = null;
     video.addEventListener(
       "ended",
@@ -1193,8 +995,6 @@ function ConcordVoiceRoom({
           if (activeHevc.current === adopted) void stopHevcRef.current(true);
           return;
         }
-        // Cancel the start still in flight; its next generation check refuses
-        // and releases the capture down the ordinary failure path.
         hevcStartGeneration.current += 1;
       },
       { once: true },
@@ -1324,9 +1124,7 @@ function ConcordVoiceRoom({
     });
 
     try {
-      // Publish signed role metadata before the auxiliary participant connects.
-      // This prevents a transient extra caller in remote rosters and ensures a
-      // named track alone can never make an ordinary participant disappear.
+      // Publish role metadata before connecting, so the auxiliary identity never shows as an extra caller.
       await announceAdditionalIdentities([publisherToken.identity]);
       assertCurrent();
       const status = await startDesktopHevcScreenShare(video, {
@@ -1399,7 +1197,6 @@ function ConcordVoiceRoom({
     [hevcCapability, hevcPreview, hevcStatus, startHevc, stopHevc],
   );
 
-  // The raise-hand/reaction and custom media surface for portaled call UI.
   const signals = useMemo<CallSignals>(
     () => ({
       enabled: Boolean(tokenData),
@@ -1412,22 +1209,13 @@ function ConcordVoiceRoom({
     [tokenData, handRaised, sendReaction, reactions, hevcScreenShare],
   );
 
-  // No split healing: §5's heal is a migration TO whichever broker presence
-  // says is winning, which is the same untrusted hint this client declines to
-  // route on — one member announcing a broker could otherwise pull a whole
-  // call off the community's list mid-flight, which is the migration working
-  // exactly as designed. Candidates come from config, so members converge
-  // before anyone joins instead of after; what's left is a member whose fold
-  // is stale or whose network reached a different candidate, and that is
-  // reported (`occupantsElsewhere`) rather than chased.
-  //
-  // Compared against `tokenData.origin`, the origin we ACTUALLY minted
-  // through: after a fall-through it differs from the one `ctx` nominated.
+  // No automatic split healing: presence broker hints are untrusted, and one
+  // member could pull the call off the configured list. Report instead.
+  // Compared against the origin we actually minted through.
   const strandedFrom = useMemo(
     () => (tokenData ? occupantsElsewhere(fold, tokenData.origin) : []),
     [fold, tokenData],
   );
-  // Where most of them are, so the offer names one server rather than a set.
   const elsewhereOrigin = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of strandedFrom) {
@@ -1442,11 +1230,7 @@ function ConcordVoiceRoom({
     return best;
   }, [strandedFrom]);
 
-  // Offered, never taken automatically. Following the crowd is what turns an
-  // untrusted hint into routing; a member choosing to follow it, told plainly
-  // that the server is in nobody's settings, is a decision rather than a
-  // redirect — and the one case (a stale fold either side) where the crowd is
-  // simply right is the one where they'd want to.
+  // Offered, never automatic: following the crowd would turn an untrusted hint into routing.
   const warnedSplit = useRef(false);
   useEffect(() => {
     if (warnedSplit.current || strandedFrom.length === 0 || !elsewhereOrigin) return;
@@ -1466,9 +1250,7 @@ function ConcordVoiceRoom({
     });
   }, [strandedFrom, elsewhereOrigin, communityBrokers, ctx, joinConcordCall]);
 
-  // Identity → member resolution for the call UI (§4): our own identity is
-  // ourselves; anyone else's renders as a member only under a sole fresh
-  // presence claim, and contested/unclaimed identities show as unverified.
+  // Others render as members only under a sole fresh presence claim (§4).
   const resolveIdentity = useCallback<VoiceIdentityResolver>(
     (identity) => {
       if (
@@ -1506,9 +1288,7 @@ function ConcordVoiceRoom({
 
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
-  // E2EE couldn't come up (worker failed to construct above). Never join a
-  // Concord room without it — the SFU is blind and untrusted — so surface a
-  // clear, leavable error instead of connecting as an undecodable ghost.
+  // Never join Concord without E2EE; show a leavable error instead.
   const room = e2ee.room;
   if (e2ee.error || !room) {
     const e2eeError =
@@ -1542,13 +1322,8 @@ function ConcordVoiceRoom({
 }
 
 /**
- * DM (1:1) voice room: the blind-broker path applied to a direct conversation
- * (see src/lib/dmCall.ts). Token from a Concord AV broker, authorized by
- * possession of the per-call room key both sides derive from the offer's
- * secret; media end-to-end encrypted under one shared per-call key. The
- * broker only coordinates — it never learns who is calling whom and never
- * sees plaintext media. Ring/answer/decline signaling lives in
- * DmCallProvider, not here; this component is only the connected room.
+ * DM voice room (see src/lib/dmCall.ts): blind-broker token authorized by the
+ * per-call room key, media E2EE under one shared key. Signaling lives in DmCallProvider.
  */
 function DmVoiceRoom({
   ctx,
@@ -1567,9 +1342,8 @@ function DmVoiceRoom({
   const navigate = useNavigate();
   const keys = useMemo(() => dmCallKeys(ctx.secretHex), [ctx.secretHex]);
 
-  // Mint from the call's broker first, falling through to our own defaults —
-  // the same fall-through shape as Concord's §5 (a reachable broker can still
-  // fail to mint). Never refetch while mounted: the token embeds our identity.
+  // Fall through to our defaults if the call's broker fails to mint. Never
+  // refetch while mounted: the token embeds our identity.
   const { data: tokenData, error, isLoading } = useQuery<AvToken>({
     queryKey: ["dm", "av-token", ctx.callId, ctx.broker],
     queryFn: () =>
@@ -1588,9 +1362,7 @@ function DmVoiceRoom({
   const peerAuthor = useAuthor(ctx.peer);
   const peerName = getDisplayName(peerAuthor.data?.metadata, ctx.peer);
 
-  // DM media MUST be end-to-end encrypted (the broker/SFU only coordinate and
-  // are never trusted with plaintext), so a failed worker construction renders
-  // a leavable error below rather than ever joining plaintext.
+  // DM media MUST be E2EE; a failed worker renders a leavable error.
   const e2ee = useMemo((): {
     room: Room | null;
     keyProvider: SharedKeyProvider;
@@ -1601,8 +1373,7 @@ function DmVoiceRoom({
     return { keyProvider, ...buildE2eeRoom(keyProvider) };
   }, []);
 
-  // Install the shared frame key. Both sides derive it from the call secret,
-  // so there is nothing to exchange and nothing to sync per participant.
+  // Both sides derive the key from the call secret; nothing to exchange.
   useEffect(() => {
     if (!e2ee.room) return;
     void e2ee.keyProvider
@@ -1610,8 +1381,6 @@ function DmVoiceRoom({
       .catch((err) => console.error("DM voice: failed to install frame key", err));
   }, [e2ee, keys]);
 
-  // Enable E2EE once connected material is in place; terminate the worker on
-  // unmount (mirrors ConcordVoiceRoom).
   useEffect(() => {
     if (!tokenData || !e2ee.room) return;
     const room = e2ee.room;
@@ -1629,17 +1398,8 @@ function DmVoiceRoom({
   }, [e2ee, tokenData]);
   useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
 
-  // End the call when the peer leaves the SFU room. A 1:1 room with nobody else
-  // in it is over (the same reasoning the "end" signal applies in
-  // DmCallProvider), and LiveKit's ParticipantDisconnected is a RELIABLE
-  // teardown where the ephemeral "end" wrap is not: that wrap rides a 21059
-  // relays neither store nor retry, so a peer's hangup that misses this socket
-  // would otherwise leave us alone in the room with activeCall stuck non-null —
-  // permanently "busy", dropping every future incoming offer and hiding the
-  // call button, i.e. never able to rejoin. The SFU reports the peer gone
-  // (clean hangup or connection timeout) regardless, so this recovers either
-  // way. Fires only on a transition to empty, so it can't trip before the peer
-  // has joined.
+  // End when the peer leaves the SFU: the ephemeral "end" wrap may be lost,
+  // which would leave activeCall stuck (permanently "busy"). Fires only on transition to empty.
   useEffect(() => {
     const room = e2ee.room;
     if (!room) return;
@@ -1652,15 +1412,11 @@ function DmVoiceRoom({
     };
   }, [e2ee.room, onLeave]);
 
-  // Identity → member resolution: our broker-assigned identity is ourselves;
-  // anyone else in a 1:1 room is the peer. Only the two secret-holders can
-  // sign this room's token grant, and a party without the media key (a
-  // hostile broker seating itself) produces no decodable media — at worst a
-  // silent tile, never impersonated audio or video.
+  // Anyone else in a 1:1 room is the peer; without the media key an intruder
+  // produces only a silent tile.
   const resolveIdentity = useCallback<VoiceIdentityResolver>(
     (identity) => {
-      // A 1:1 room has no auxiliary publisher identities: the custom H.265
-      // sidecar is a Concord-only path, so both parties are ordinary members.
+      // H.265 sidecars are Concord-only.
       if (tokenData && identity === tokenData.identity && user) {
         return { pubkey: user.pubkey, verified: true, role: "member" };
       }
@@ -1679,7 +1435,6 @@ function DmVoiceRoom({
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToConversation]);
 
-  // The Android ongoing-call notification label: the peer's name, plain text.
   useEffect(() => {
     registerCallSummary({ title: peerName });
     return () => registerCallSummary(null);
@@ -1730,12 +1485,8 @@ function DmVoiceRoom({
 }
 
 /**
- * The persistent voice room. Mounted (lazily) by `CallProvider` — which lives
- * in the never-unmounting MainLayout — so the LiveKit connection survives
- * navigation between channels and servers.
- *
- * The call UI renders in two places: a fixed bottom bar on mobile, and — when a
- * channel sidebar registers a slot — portaled above the account pill on desktop.
+ * The persistent voice room, mounted lazily by CallProvider (in MainLayout) so
+ * the connection survives navigation. UI: fixed mobile bar, or portaled desktop slot.
  */
 export default function PersistentVoiceRoom({
   call,
@@ -1749,7 +1500,6 @@ export default function PersistentVoiceRoom({
   call: ActiveCall;
   onLeave: () => void;
   slots: HTMLElement[];
-  /** Stable stage host element (owned + reparented by CallProvider). */
   stageHost: HTMLElement;
   stageOpen: boolean;
   exiting: boolean;

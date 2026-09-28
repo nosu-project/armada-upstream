@@ -1,35 +1,13 @@
 /**
- * The single, app-wide consent gate for bulk signer decryption.
+ * The single app-wide consent gate for bulk signer decryption, preventing a
+ * "decrypt storm" of per-decrypt bunker/extension prompts on cold load.
  *
- * A cold client with a remote (NIP-46 bunker) or extension (NIP-07) signer is
- * one screen-load away from a "decrypt storm": opening a DM thread wants up to a
- * screenful of `nip04.decrypt` round-trips, the conversation list wants one per
- * peer, and the direct-invite inbox wants two `nip44.decrypt` per gift wrap —
- * each of which a bunker/extension may surface as its own approval prompt. Fired
- * eagerly on entry, that floods the signer before the user has asked for
- * anything.
+ *   - unset    → the first uncached decrypt opens ONE prompt all callers share.
+ *   - allowed  → decrypts proceed everywhere.
+ *   - declined → bulk decrypts refused; UI offers manual "Decrypt" affordances.
  *
- * This module gates all of that behind ONE decision, made ONCE, remembered
- * globally:
- *
- *   - unset    → the first surface that needs a real (uncached) decrypt opens a
- *                single prompt; every concurrent caller awaits the SAME prompt
- *                (never a second dialog, never a second signer poke).
- *   - allowed  → decrypts proceed as normal, everywhere, forever.
- *   - declined → bulk decrypts are refused; the UI falls back to manual
- *                affordances ("Decrypt", "Decrypt all") so the user drives when
- *                the signer is touched.
- *
- * The decision is persisted in localStorage and shared across every surface and
- * tab. It is deliberately NOT per-conversation: the question ("do you want this
- * app decrypting with your signer?") is about the signer relationship, not any
- * one room, so it's asked once for the whole app.
- *
- * Cache interplay: a decrypt whose plaintext is already in the AppSigner
- * persistent cache never touches the signer, so callers should gate ONLY the
- * uncached remainder (see `useDirectMessages` / `useDirectInvites`). When
- * everything is cached there is nothing to prompt about and the gate is skipped
- * entirely.
+ * Persisted in localStorage, app-wide (it's about the signer, not a room).
+ * Callers gate only the uncached remainder; fully cached sets skip the gate.
  */
 
 const STORAGE_KEY = "armada:decrypt-consent";
@@ -42,18 +20,13 @@ type Listener = () => void;
 
 const listeners = new Set<Listener>();
 
-/** In-memory mirror of the persisted value (source of truth for `getSnapshot`). */
 let current: DecryptConsentState = readPersisted();
 
-/** The in-flight prompt, shared by every caller while the decision is pending. */
 let pending: Promise<DecryptConsent> | null = null;
 
 /**
- * The app-wide dialog registers an opener here. When a caller needs a decision
- * and none is stored, the opener is invoked to surface the ONE prompt. It must
- * eventually call `resolveConsentPrompt`. Until an opener is registered (or if
- * none ever is), an unset gate resolves conservatively to "declined" so a
- * headless/early caller never blocks forever or silently storms the signer.
+ * The app-wide dialog's opener; it must eventually call `resolveConsentPrompt`.
+ * Without one, an unset gate resolves to "declined" (never blocks or storms).
  */
 let openPrompt: (() => void) | null = null;
 
@@ -99,12 +72,8 @@ export function resetDecryptConsent(): void {
 }
 
 /**
- * Resolve to the standing decision, opening the one-time prompt when undecided.
- *
- * Every concurrent caller shares a single pending promise, so N surfaces racing
- * to decrypt on entry produce exactly ONE dialog. If no dialog opener is
- * registered (headless/tests/early boot), an undecided gate resolves to
- * "declined" — never storming the signer without an explicit yes.
+ * The standing decision, opening the one-time prompt when undecided; concurrent
+ * callers share one promise. No opener → "declined".
  */
 export function ensureDecryptConsent(): Promise<DecryptConsent> {
   if (current) return Promise.resolve(current);
@@ -118,21 +87,17 @@ export function ensureDecryptConsent(): Promise<DecryptConsent> {
   if (openPrompt) {
     openPrompt();
   } else {
-    // No UI to ask with: decline rather than block or silently decrypt. This
-    // resolves (and clears) `pending`, so return the captured promise.
+    // No UI: decline. This clears `pending`, so return the captured promise.
     resolveConsentPrompt("declined");
   }
   return promise;
 }
 
-/** The resolver for the current pending prompt, if any. */
 let resolvePending: ((value: DecryptConsent) => void) | null = null;
 
 /**
- * Resolve the in-flight prompt (called by the dialog on the user's choice, or
- * internally when there's no dialog). Persisting a decision goes through
- * `setDecryptConsent`, which calls this; a bare "declined" fallback does NOT
- * persist, so the user is asked again next time a dialog is available.
+ * Resolve the in-flight prompt. Only `setDecryptConsent` persists; a bare
+ * "declined" fallback doesn't, so the user is asked when a dialog exists.
  */
 export function resolveConsentPrompt(value: DecryptConsent): void {
   resolvePending?.(value);
@@ -145,10 +110,7 @@ export function isConsentPromptPending(): boolean {
   return pending !== null;
 }
 
-/**
- * Register the app-wide dialog's opener. Returns an unsubscribe. If a prompt is
- * already pending when the dialog mounts, it's opened immediately.
- */
+/** Register the dialog's opener (opens immediately if a prompt is pending). Returns an unsubscribe. */
 export function registerConsentPromptOpener(opener: () => void): () => void {
   openPrompt = opener;
   if (pending) opener();
@@ -156,8 +118,6 @@ export function registerConsentPromptOpener(opener: () => void): () => void {
     if (openPrompt === opener) openPrompt = null;
   };
 }
-
-// ── React store glue (useSyncExternalStore) ──────────────────────────────────
 
 export function subscribeDecryptConsent(listener: Listener): () => void {
   listeners.add(listener);

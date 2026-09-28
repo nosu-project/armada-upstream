@@ -12,17 +12,9 @@ import {
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 
 /**
- * Headless mount that applies the Android background service's "Mark read"
- * markers to the in-app read state. When the user taps a notification's "Mark
- * read" action, the service dismisses it and records a durable marker; this
- * drains those markers on open/resume and advances the matching conversation's
- * read state so the badge clears.
- *
- * Every room type routes into the one shared ReadStateProvider map (which
- * persists locally and syncs via the encrypted NIP-78 settings event), keyed
- * by `c2:<channelId>` / `relayUrl::groupId` / `dm:<peer>`.
- * All stamps are monotonic, so a lost or replayed marker is harmless. Inert
- * off Android (the plugin call no-ops). Must sit under ReadStateProvider.
+ * Applies the Android service's "Mark read" markers to in-app read state on
+ * open/resume. Keys: `c2:<channelId>` / `relayUrl::groupId` / `dm:<peer>`.
+ * Stamps are monotonic, so replays are harmless. Must sit under ReadStateProvider.
  */
 export function NativeReadMarkerSync() {
   const { user } = useCurrentUser();
@@ -49,16 +41,14 @@ export function NativeReadMarkerSync() {
           if (room.startsWith("c2:")) {
             markRead(concordReadKey(room.slice(3)), ts);
           } else if (room.startsWith("h:")) {
-            // `h:<relayUrl>|<groupId>` — split on the last `|` (relay URLs and
-            // group ids don't contain it) and rebuild the `relayUrl::groupId` key.
+            // `h:<relayUrl>|<groupId>`: split on the last `|` (neither contains it).
             const rest = room.slice(2);
             const i = rest.lastIndexOf("|");
             if (i > 0) markRead(channelReadKey(rest.slice(0, i), rest.slice(i + 1)), ts);
           } else if (room.startsWith("dm:")) {
             markRead(dmReadKey(room.slice(3)), ts);
           }
-          // dm17:opaque and anything unattributable: dismissed natively, no
-          // conversation to advance.
+          // dm17:opaque and unattributable markers: nothing to advance.
         } catch {
           // A single bad marker mustn't abort the rest.
         }
@@ -87,11 +77,8 @@ export function NativeReadMarkerSync() {
 }
 
 /**
- * Read-state keys the Android service can attribute to a posted notification:
- * DMs, Concord channels, and NIP-29 channels (`<relayUrl>::<groupId>`).
- * The Concord mention (`c2m:`) and thread (`c2t:`) sub-keys never key a
- * notification room, so they're dropped (a channel's notifications clear on its
- * channel-level `c2:` read). `c2:`.startsWith excludes both by construction.
+ * Read keys that can match a notification room: DMs, `c2:` channels, and
+ * `<relayUrl>::<groupId>`. `c2m:`/`c2t:` sub-keys are excluded.
  */
 function dismissibleReadKey(key: string): boolean {
   return (
@@ -102,14 +89,9 @@ function dismissibleReadKey(key: string): boolean {
 }
 
 /**
- * Headless mount (reverse of {@link NativeReadMarkerSync}): pushes the in-app
- * read state down to the Android background service so it dismisses tray
- * notifications for conversations already read — whether read here or synced in
- * from another device (the read state mirrors through the encrypted NIP-78
- * settings). The service cancels a room's notification once its newest notified
- * message is at/older than the read stamp, leaving rooms with newer unread
- * messages up. Inert off Android (the plugin call no-ops). Must sit under
- * ReadStateProvider.
+ * Reverse of {@link NativeReadMarkerSync}: pushes read state to the Android
+ * service so it dismisses notifications for read conversations (including
+ * ones read on other devices). Must sit under ReadStateProvider.
  */
 export function NativeReadDismiss() {
   const { readState } = useReadState();
@@ -123,22 +105,17 @@ export function NativeReadDismiss() {
       .filter((m) => Number.isFinite(m.ts) && m.ts > 0);
     if (markers.length === 0) return;
     ArmadaNotification.dismissRead({ markers }).catch(() => {
-      // Bridge unavailable / older native binary — the notification just stays
-      // until the user swipes or taps it. Read state is unaffected.
+      // Bridge unavailable / older native binary.
     });
   }, []);
 
-  // Debounced push on every read-state advance (opening a conversation, or a
-  // hydrate merge from synced settings settles into one bridge call).
   useEffect(() => {
     if (Capacitor.getPlatform() !== "android") return;
     const t = setTimeout(send, 400);
     return () => clearTimeout(t);
   }, [readState, send]);
 
-  // Re-push on resume: a notification may have been posted while backgrounded
-  // for a conversation that's already read (e.g. read on another device and
-  // synced in), which no in-session read-state change would otherwise clear.
+  // Re-push on resume: notifications posted while backgrounded may already be read.
   useEffect(() => {
     if (Capacitor.getPlatform() !== "android") return;
     let cancelled = false;

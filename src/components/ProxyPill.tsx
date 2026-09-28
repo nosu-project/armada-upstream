@@ -3,28 +3,18 @@ import { cn } from '@/lib/utils';
 
 import type { ProxyInfo } from '@/lib/nip48';
 
-/**
- * Brand colors for bridges worth recognizing on sight, keyed by the proxy
- * URL's hostname. Everything else gets the neutral pill.
- */
+/** Brand colors keyed by proxy hostname; others get the neutral pill. */
 const BRAND_CLASSES: Record<string, string> = {
-  // Discord "blurple".
   'discord.com': 'bg-[#5865F2]/15 text-[#5865F2]',
   'discordapp.com': 'bg-[#5865F2]/15 text-[#5865F2]',
 };
 
 interface ProxyPillProps {
-  /** Parsed NIP-48 proxy tag; renders nothing when absent. */
   proxy?: ProxyInfo | null;
   className?: string;
 }
 
-/**
- * A small pill shown next to a display name when the message was bridged in
- * from another network (NIP-48 `proxy` tag) — "Discord", "ActivityPub", or the
- * source hostname. Clicking it opens a popover naming the origin, linking to
- * the original message when the proxy id is a URL we can open.
- */
+/** Pill for messages bridged from another network (NIP-48 `proxy` tag); opens origin details. */
 export function ProxyPill({ proxy, className }: ProxyPillProps) {
   if (!proxy) return null;
 

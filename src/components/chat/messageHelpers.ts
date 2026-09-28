@@ -7,11 +7,8 @@ import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ImetaEntry } from "@/lib/imeta";
 
 /**
- * Extract the id of the message this event *inline*-replies to via NIP-10
- * marked `e` tags (Signal/Discord style — quoted in the timeline). Used by
- * NIP-29, whose inline replies are NIP-10. Concord inline replies use a NIP-C7
- * `q` tag instead (see the per-page reply-context resolvers); thread replies
- * are a separate mechanism that never renders in the timeline.
+ * Inline-reply target via NIP-10 marked `e` tags (NIP-29). Concord uses a
+ * NIP-C7 `q` tag (see getQuoteReplyToId).
  */
 export function getReplyToId(event: ChatMsg): string | undefined {
   const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
@@ -21,38 +18,19 @@ export function getReplyToId(event: ChatMsg): string | undefined {
 }
 
 /**
- * The id of the message a Concord event *inline*-replies to (a NIP-C7 `q` tag).
- * Concord threads are kind-1111 comments (never in the timeline) and Concord
- * inline replies are kind-9 with a `q`, so on a rendered top-level Concord row a
- * `q` means "inline reply to this rumor".
+ * Concord inline-reply target (NIP-C7 `q`). Concord threads are kind 1111 and
+ * never in the timeline, so a `q` on a top-level row is an inline reply.
  */
 export function getQuoteReplyToId(event: ChatMsg): string | undefined {
   return event.tags.find(([name]) => name === "q")?.[1];
 }
 
 /**
- * A one-line preview of a message's body for the reply-context line: URLs are
- * collapsed to 📎 (they'd blow out the line), and an all-URL/empty body falls
- * back to 📎. Shared so NIP-29 and Concord previews read identically.
- *
- * Prefer {@link ReplyPreview} (a node) where mentions should resolve to
- * `@name`; this plain-string form is the fallback for contexts that need a
- * bare string.
- */
-export function replyPreviewText(content: string): string {
-  return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
-}
-
-/**
- * The first image attachment of a message, as a media ref for a preview
- * thumbnail — or undefined if the message has no image. Prefers an imeta entry
- * declaring an image MIME (carries the decryption params for Concord's
- * encrypted Blossom blobs), else the first inline image URL by extension.
+ * First image attachment as a thumbnail ref. Prefers imeta (carries Concord
+ * decryption params), else the first inline image URL.
  */
 export function firstImageRef(event: ChatMsg): EncryptedRef | undefined {
-  // NIP-17 kind-15 file messages carry the blob URL in content and the
-  // file/encryption metadata in top-level tags (no imeta) — synthesize the
-  // entry so its decryption key rides into the thumbnail ref.
+  // NIP-17 kind-15 has no imeta; synthesize one from top-level tags.
   if (event.kind === KIND_DM_FILE) {
     const fileEntry = parseFileMessageTags(event.content.trim(), event.tags);
     if (fileEntry && (fileEntry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(fileEntry.url))) {
@@ -62,19 +40,14 @@ export function firstImageRef(event: ChatMsg): EncryptedRef | undefined {
   const imeta = parseImetaMap(event.tags);
   for (const entry of imeta.values()) {
     const isImage = entry.mime?.startsWith("image/") || IMAGE_URL_REGEX.test(entry.url);
-    // A spoilered image gets no thumbnail: a preview would show at a glance
-    // what the sender covered up. Returned outright, since the inline match
-    // below would find the same URL.
+    // A spoilered image gets no thumbnail.
     if (isImage) return entry.spoiler ? undefined : refOf(entry);
   }
   const inline = event.content.match(IMAGE_URL_REGEX)?.[0];
   return inline ? { url: inline } : undefined;
 }
 
-/**
- * Narrow an imeta entry to a display ref, keeping the `dim`/`blurhash` hints so
- * preview thumbnails get a sized blur-up placeholder instead of popping in.
- */
+/** Keeps `dim`/`blurhash` so thumbnails get a sized blur-up placeholder. */
 function refOf(entry: ImetaEntry): EncryptedRef {
   return {
     url: entry.url,

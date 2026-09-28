@@ -1,55 +1,24 @@
 /**
- * Hands the Web Push service worker the state it needs to OPEN an encrypted
- * event the push payload inlined: the DM request policy, the known-peer set,
- * the user's own pubkey, the identity key that unseals a NIP-17 gift wrap (nsec
- * logins only), and the per-channel Concord stream keys.
+ * Hands the Web Push service worker what it needs to OPEN inlined encrypted
+ * events: DM policy, known peers, own pubkey, the nsec (nsec logins only, while
+ * push is enabled) and per-channel Concord stream keys. Written to Cache
+ * Storage (workers can't read localStorage); missing/stale entries degrade to a
+ * generic wake-up. Display data is read from ArmadaDB at push time instead.
  *
- * A service worker can't read localStorage, so this writes into the same Cache
- * Storage the worker already reads (`sw.js`'s PUSH_STATE_CACHE). The worker
- * opens it per push; a stale or missing entry just degrades that scope to the
- * generic wake-up, which is safe.
- *
- * It does NOT carry display data. An earlier version sealed a name and avatar
- * per known peer, on the premise — stated here, and wrong — that a worker
- * cannot reach the app's IndexedDB. It can: ArmadaDB is IndexedDB on the web,
- * and `pushRuntime.ts` opens the same database the page does. Names, avatars,
- * community icons and channel titles are therefore READ at push time, for any
- * author rather than a pre-sealed few, and the snapshot (with the timed
- * re-seals it needed to catch profiles that landed late) is gone.
- *
- * SECURITY: the config is AES-GCM sealed at rest under a NON-EXTRACTABLE
- * WebCrypto key (swSecretVault), not written in the clear — so it never adds a
- * second plaintext copy of the nsec to disk, and a stolen profile/backup yields
- * ciphertext plus a key JS can't export. `sk` is present ONLY for nsec logins
- * and ONLY while web push is enabled, and both the blob and its key are wiped
- * by {@link clearSwPushConfig} on disable/logout. Bunker (NIP-46) / extension
- * (NIP-07) logins never pass a key — their DMs can't be decrypted in the worker
- * and web push stays generic for them.
- *
- * The Concord keys are a strictly smaller secret than the `sk` beside them, and
- * the same one the Android service already gets: a stream's NIP-44 conversation
- * key READS one channel at one epoch. The wrap-SIGNING key is deliberately not
- * here, so nothing in this blob can write to a community. Being per-epoch, the
- * set also goes stale by itself at the next rekey rather than granting
- * anything onward.
- *
- * This does NOT defend against XSS (same hazard as the localStorage nsec);
- * hardware isolation exists only on native.
+ * SECURITY: AES-GCM sealed under a non-extractable WebCrypto key
+ * (swSecretVault), wiped by {@link clearSwPushConfig}. Concord keys are
+ * per-epoch READ keys only — never the wrap-signing key. No XSS defense.
  */
 
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { DmRequestLevel } from "@/lib/pushPrefs";
 import { clearVault, sealConfig } from "@/lib/swSecretVault";
 
-/** Must match `PUSH_STATE_CACHE` / the config URL in `public/sw.js`. */
+/** Must match `PUSH_STATE_CACHE` / the config URL in `src/sw/worker.ts`. */
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_CONFIG_PATH = "/.armada-push-state/dm-config";
 
-/**
- * One Concord channel's current stream, as the worker needs it: the wrap author
- * to recognise, the key that opens it, and the binding the rumor inside must
- * match. Mirrors `ConcordStream` plus the ids the deep link and the store need.
- */
+/** One Concord channel's current stream as the worker needs it (mirrors `ConcordStream`). */
 export interface SwConcordStream {
   /** Stream address (x-only pubkey hex) — equals the wrap's `pubkey`. */
   pk: string;
@@ -62,10 +31,8 @@ export interface SwConcordStream {
   /** Channel id (hex) — the deep link and the rumor's `channel` binding tag. */
   channelId: string;
   /**
-   * The community's banned authors (CORD-04), hex pubkeys. A banned member's
-   * message is still stored — the timeline folds it away on read — but must not
-   * raise a notification, so the worker drops it after decrypt. Community-wide,
-   * carried per stream because that is the flat shape the config already uses.
+   * Community's banned authors (CORD-04). Their messages are stored but must
+   * not notify, so the worker drops them after decrypt.
    */
   banned?: string[];
   /** Authors allowed to issue a literal @everyone in this channel. */
@@ -73,14 +40,9 @@ export interface SwConcordStream {
   /** Drop non-mention messages after decrypting this encrypted stream. */
   mentionOnly?: boolean;
   /**
-   * The channel/community is muted (notification level `nothing`). It carries
-   * NO gateway subscription — but a subscription that lingers past the mute
-   * (the gateway prune is gated on the watch set being authoritative) can still
-   * wake the device, and the wrap then reaches the worker. Kept here, with its
-   * decrypt key, precisely so the worker can OPEN it and DROP it rather than
-   * fall back to the gateway's visible "New message". Defense-in-depth, the
-   * same shape as `banned`/`mentionOnly`: the gateway is content-blind and the
-   * only enforcement point is after decrypt.
+   * Muted channel/community. A lingering gateway subscription can still wake the
+   * device, so the key stays here for the worker to open and DROP the wrap
+   * (the gateway is content-blind).
    */
   muted?: boolean;
 }
@@ -100,31 +62,15 @@ export interface SwPushConfig {
   directMessages?: boolean;
   /** Explicit per-conversation notification levels, keyed by canonical DM key. */
   dmLevels?: Record<string, "all" | "mentions" | "nothing">;
-  /**
-   * Whether the DM policy, peer roster and decrypt key in this snapshot were
-   * authoritative. Explicit `false` suppresses that plane; omission keeps
-   * configs sealed by older clients backward-compatible.
-   */
+  /** Whether the DM plane was authoritative; explicit `false` suppresses it, omission = legacy ready. */
   dmReady?: boolean;
-  /**
-   * Whether the Concord stream set in this snapshot was authoritative.
-   * Explicit `false` suppresses that plane; omission means ready for legacy
-   * configs written before per-plane readiness existed.
-   */
+  /** Same as `dmReady`, for the Concord stream set. */
   concordReady?: boolean;
   /** Decrypt key (hex). Present for nsec logins only. */
   sk?: string;
-  /**
-   * The current epoch's stream for every watched Concord channel. Only the
-   * current one: a retired epoch is read-cutoff history and must not notify.
-   */
+  /** Current-epoch stream per watched channel (retired epochs must not notify). */
   concord?: SwConcordStream[];
-  /**
-   * The viewer's media policy (`lib/mediaPolicy.ts`), so the worker fetches a
-   * sender's avatar and a community's icon from where the page would — a
-   * stranger's host through the proxy, or not at all. Absent in a config
-   * sealed by an older page, which the worker reads as the default policy.
-   */
+  /** Media policy for avatar/icon fetches; absent = default policy. */
   mediaPolicy?: MediaPolicyConfig;
 }
 
@@ -133,18 +79,14 @@ function pushConfigUrl(): string {
 }
 
 /**
- * Write (replace) the worker's push config, sealed at rest.
- *
- * The boolean is load-bearing for endpoint activation: the page must not lift
- * its worker kill switch after a Cache/WebCrypto failure left no enforceable
- * current-account policy behind.
+ * Write the worker's push config, sealed at rest. The result gates lifting the
+ * worker kill switch: no enforceable policy, no activation.
  */
 export async function writeSwPushConfig(config: SwPushConfig): Promise<boolean> {
   if (typeof caches === "undefined" || typeof location === "undefined") return false;
   try {
     const sealed = await sealConfig(config);
     const cache = await caches.open(PUSH_STATE_CACHE);
-    // Store the raw ciphertext bytes; the worker reads them back via arrayBuffer.
     await cache.put(pushConfigUrl(), new Response(sealed));
     return true;
   } catch {
@@ -161,7 +103,6 @@ export async function clearSwPushConfig(): Promise<void> {
   } catch {
     // ignore
   }
-  // Destroy the vault key even if the Cache delete failed, so the sealed blob
-  // (if any) is left permanently unreadable.
+  // Destroy the key even if the delete failed, leaving any blob unreadable.
   await clearVault();
 }

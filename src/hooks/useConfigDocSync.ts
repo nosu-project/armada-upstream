@@ -13,61 +13,32 @@ import type { AppConfig } from "@/contexts/AppContext";
 const PUBLISH_DEBOUNCE_MS = 800;
 /** Retry a durable local settings edit whose relay delivery failed. */
 const PUBLISH_RETRY_MS = 5_000;
-/** Cap for the doubling retry delay: delivery keeps trying, but a device that
- * is offline (or whose signer keeps refusing) must not re-sign every 5 s
- * forever — each attempt is a fresh event and, on NIP-46, bunker traffic. */
+/** Cap for the doubling retry delay (each attempt is a fresh signed event). */
 const PUBLISH_RETRY_MAX_MS = 5 * 60_000;
 
 /**
- * Publish baselines of the mounted {@link useConfigDocSync} instances, keyed
- * by document.
- *
- * A config change is published because it differs from the baseline, which
- * means "what the remote document already says". Some config changes aren't
- * user edits at all: hydrating the user's canonical kind-10002/10050/10063
- * lists updates their local mirrors, and must not be broadcast as though the
- * user edited an Armada preference. {@link markConfigSynced} lets those
- * hydrating effects move the baselines with them.
- *
- * Module-scoped because the effects that do the hydrating (in NostrSync) are
- * siblings of these hooks, not children — there is nothing to pass a ref
- * through. Instances deregister on unmount, so this holds only live ones.
+ * Publish baselines of mounted {@link useConfigDocSync} instances, by document.
+ * {@link markConfigSynced} lets NostrSync's list hydration (10002/10050/10063
+ * mirrors) move baselines so it isn't broadcast as a user edit. Module-scoped
+ * because those effects are siblings, not children.
  */
 const publishBaselines = new Map<ConfigDocName, (config: AppConfig) => void>();
 
-/**
- * Record `config` as already-synced, so the next diff doesn't treat it as a
- * user edit. A no-op for a document whose baseline hasn't been established
- * yet: it will adopt whatever it first observes anyway.
- */
+/** Record `config` as synced so the next diff doesn't treat it as a user edit (no-op before a baseline). */
 export function markConfigSynced(config: AppConfig): void {
   for (const bump of publishBaselines.values()) bump(config);
 }
 
 /**
- * Keep one AppConfig slice and its encrypted NIP-78 document in sync, both
- * ways. Instantiated once per document that mirrors config — metadata, rail,
- * notifications, dms (see `lib/syncedConfig.ts`).
+ * Keep one AppConfig slice and its encrypted NIP-78 document in sync both ways
+ * (see `lib/syncedConfig.ts`). One instance per document, each with its own
+ * applied-id guard, baseline and debounce.
  *
- * One instance per document rather than one for all of them is the whole point
- * of the split: each carries its OWN applied-id guard, publish baseline and
- * debounce timer, so a rail drag diffs and republishes two dozen bytes of
- * layout instead of every preference the user has, and a notification-level
- * change can't lose a race with it.
+ * IN: apply each version once by event id; the store already keeps only the
+ * newest (the legacy metadata document is handled by `resolveLegacy`).
  *
- * IN (document → config). Apply each version once, identified by the event it
- * came in. Which version that is has already been decided — by the store,
- * which keeps only the newest version of the NIP-01 coordinate — so there is
- * no timestamp arbitration to do here. A stale copy arriving late from a slow
- * relay is refused by the store and never reaches this hook. (The exception is
- * the legacy metadata document, where there genuinely are two coordinates in
- * play; `resolveLegacy` owns that comparison.)
- *
- * OUT (config → document). A DIRECT user config edit is pushed back so it
- * syncs across devices. This is the ONLY place Armada broadcasts a settings
- * event automatically, and it must fire only for a real user mutation — never
- * off boot-time or sync-driven config changes, which keep `lastPublished` in
- * lockstep so the diff can only reflect a user edit.
+ * OUT: push only DIRECT user edits — the only automatic settings broadcast.
+ * Boot/sync-driven changes keep `lastPublished` in lockstep.
  */
 export function useConfigDocSync(name: ConfigDocName): void {
   const { user } = useCurrentUser();
@@ -81,43 +52,23 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
   // The version we've most recently folded into local config.
   const appliedId = useRef<string | undefined>(undefined);
-  // Its created_at, so the apply effect can refuse a version OLDER than one it
-  // already applied. The store never regresses, but the query cache between
-  // the store and this hook can: a refetch that read the store before a write
-  // landed can resolve after it and put the previous version back in the
-  // cache. Applying that would revert the user's newest edit — and set
-  // `lastPublished` to the old layout, so the publish watcher would never
-  // re-publish the lost one.
+  // Its created_at, to refuse OLDER versions: the query cache can regress (a stale
+  // refetch), and applying one would revert the newest edit for good.
   const appliedCreatedAt = useRef<number | undefined>(undefined);
-  // Serialized slice last known to match the remote document, so the publish
-  // watcher can skip no-op writes (including the config change caused by
-  // applying an incoming pull).
+  // Slice last known to match the remote document (skips no-op publishes).
   const lastPublished = useRef<string | undefined>(undefined);
-  // A pending debounced publish. Non-null means "a local edit is newer than
-  // anything on disk", which the apply effect reads to know not to write over
-  // it — so clearing the timeout must also clear the ref, or a cancelled
-  // publish would look like a permanently in-flight one.
+  // Pending debounced publish: non-null means a local edit is newer than disk.
+  // Clearing the timeout must clear the ref too.
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Publishes past their debounce but not yet settled. The timer ref alone
-  // left a hole: it was cleared at fire time, while the write itself — a store
-  // read plus two signer round-trips, seconds on a NIP-46 signer — was still
-  // in flight, and during that window the apply effect would happily fold a
-  // stale cache version over the edit being written. Counted, not boolean:
-  // never reset, because every increment has exactly one decrement in
-  // `finally`, and zeroing it on account switch would unbalance a write that
-  // settles after the switch — stale completions are instead ignored via
-  // `accountGeneration`.
+  // Publishes past debounce but unsettled (seconds on NIP-46), during which a stale
+  // version must not be applied. A counter balanced in `finally`, never reset;
+  // stale completions are ignored via `accountGeneration`.
   const publishesInFlight = useRef(0);
-  // The notification document must be folded into AppConfig before its
-  // persisted event becomes authority for background delivery. Holding the
-  // event id until the next config render closes the "document found, defaults
-  // still visible" activation window.
+  // Hold the notification document's event id until config has rendered it, so
+  // background delivery never sees defaults as authority.
   const notificationApplyPending = useRef<string | undefined>(undefined);
   const accountGeneration = useRef(0);
-  // Consecutive failed attempts, for exponential retry backoff. Reset only on
-  // a success (or a fresh account/toggle state): a config-churn effect re-run
-  // may schedule an early attempt, but while delivery keeps failing the timer
-  // path's delay keeps growing toward the cap.
+  // Consecutive failures for exponential backoff; reset only on success or a fresh account/toggle.
   const retryCount = useRef(0);
   const cancelPublish = useCallback(() => {
     if (publishTimer.current) clearTimeout(publishTimer.current);
@@ -131,27 +82,20 @@ export function useConfigDocSync(name: ConfigDocName): void {
     appliedCreatedAt.current = undefined;
     lastPublished.current = undefined;
     notificationApplyPending.current = undefined;
-    // A debounced publish belongs to the account that made the edit; letting
-    // one fire after a switch would write that config into the new account's
-    // settings document. An already-signed request in flight cannot be
-    // cancelled here; the generation check in `attempt` ignores its
-    // completion instead.
+    // A debounced publish belongs to its account; cancel on switch (in-flight
+    // completions are ignored via the generation).
     cancelPublish();
   }, [user?.pubkey, cancelPublish]);
 
   useEffect(() => {
     if (automaticSettingsSync) return;
-    // Stop every future automatic action on this installation. A request that
-    // has already reached the signer/network cannot be recalled, but changing
-    // the generation prevents its completion from scheduling another write.
-    // (`publishesInFlight` is deliberately left to drain on its own.)
+    // Stop future automatic actions; the generation change neutralizes in-flight
+    // completions (`publishesInFlight` drains on its own).
     accountGeneration.current += 1;
     retryCount.current = 0;
     cancelPublish();
   }, [automaticSettingsSync, cancelPublish]);
 
-  // Let a sync-driven config change (see `markConfigSynced`) move this
-  // document's baseline instead of looking like a user edit.
   useEffect(() => {
     publishBaselines.set(name, (synced) => {
       if (lastPublished.current === undefined) return;
@@ -162,7 +106,6 @@ export function useConfigDocSync(name: ConfigDocName): void {
     };
   }, [name]);
 
-  // ─── Document → config ────────────────────────────────────────────────
   const split = doc && event ? { doc, event } : null;
   const legacy = metadata.doc && metadata.event
     ? { doc: metadata.doc, event: metadata.event }
@@ -173,18 +116,11 @@ export function useConfigDocSync(name: ConfigDocName): void {
     if (!automaticSettingsSync || !user?.pubkey || !resolved) return;
     if (appliedId.current === resolved.event.id) return;
 
-    // …with one exception: a local edit inside its publish debounce, or whose
-    // publish is still being written, is newer than anything on disk and isn't
-    // on disk yet. Applying over it would revert what the user just did, and
-    // the publish watcher would then see no diff and never publish it. The
-    // publish itself supersedes this version, so skipping is not a deferral —
-    // there is nothing left to apply, and the publish landing re-renders this
-    // hook with its own (newer) event anyway.
+    // …except while a local edit is debouncing or being written: applying over it
+    // would revert it and suppress its publish (which supersedes this version).
     if (publishTimer.current || publishesInFlight.current > 0) return;
 
-    // Never fold a version older than one already applied. Only a cache
-    // regression can present one (see `appliedCreatedAt`); the newest version
-    // is already in config.
+    // Never fold a version older than one already applied (cache regression).
     if (appliedCreatedAt.current !== undefined
       && resolved.event.created_at < appliedCreatedAt.current) return;
 
@@ -195,13 +131,10 @@ export function useConfigDocSync(name: ConfigDocName): void {
     }
 
     updateConfig((current: AppConfig) => {
-      // Compute the patch INSIDE the updater: the `dms` merge unions the
-      // incoming per-peer maps against `current`, so a hide this device holds
-      // isn't dropped by a doc another device published from a stale copy.
+      // Patch INSIDE the updater: the `dms` merge unions against `current`.
       const patch = docToConfigPatch(name, resolved.doc as Record<string, unknown>, current);
       const next = { ...current, ...patch };
-      // Record what we just applied so the publish watcher treats it as
-      // already-synced and doesn't echo it straight back out.
+      // Mark as synced so it isn't echoed back out.
       lastPublished.current = JSON.stringify(configSnapshot(next, name));
       return next;
     });
@@ -210,23 +143,15 @@ export function useConfigDocSync(name: ConfigDocName): void {
   useEffect(() => {
     if (name !== "notifications" || !user?.pubkey || !resolved) return;
     if (notificationApplyPending.current !== resolved.event.id) return;
-    // `lastPublished` is stamped from the exact post-apply config inside the
-    // updater above. Only publish authority once React exposes that same
-    // snapshot to consumers such as the push controllers.
+    // Publish authority only once React has rendered the applied snapshot.
     if (lastPublished.current !== JSON.stringify(configSnapshot(config, name))) return;
     notificationApplyPending.current = undefined;
     markNotificationSettingsReady(user.pubkey);
   }, [config, name, resolved, user?.pubkey]);
 
-  // ─── Config → document ────────────────────────────────────────────────
-  //
-  // `metadata.doc === null` means the store holds no metadata document, i.e.
-  // this user has no Armada settings at all. Publishing then would merge the
-  // local slice over `{}` and REPLACE the user's real settings on every device
-  // with it — so we don't, and a user who genuinely has none simply runs on
-  // app defaults until they create some explicitly. The METADATA document is
-  // the signal for every slice: a split document is legitimately absent until
-  // its domain is first touched, so its own null says nothing.
+  // `metadata.doc === null` means the user has no Armada settings: publishing would
+  // REPLACE real settings everywhere with a merge over `{}`, so don't. The metadata
+  // document gates every slice (split documents are legitimately absent).
   useEffect(() => {
     if (!automaticSettingsSync || !user?.pubkey || !hasNip44Support || metadata.doc === null) {
       return;
@@ -234,8 +159,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
     const snapshot = JSON.stringify(configSnapshot(config, name));
     if (lastPublished.current === undefined) {
-      // First observation: adopt current state as the baseline (matches what
-      // the apply effect wrote, or the local defaults if it hasn't run).
+      // First observation: adopt current state as the baseline.
       lastPublished.current = snapshot;
       return;
     }
@@ -268,13 +192,10 @@ export function useConfigDocSync(name: ConfigDocName): void {
           publishTimer.current = setTimeout(attempt, delay);
         })
         .finally(() => {
-          // Decrement unconditionally to keep the counter balanced; only the
-          // side effects below belong to the account that scheduled the write.
+          // Always decrement; the side effects below belong to the scheduling account.
           publishesInFlight.current -= 1;
           if (accountGeneration.current !== generation) return;
-          // The config (or an incoming relay version) may have changed while
-          // delivery was in flight. Re-run both directions now that the gate
-          // is open so that latest state cannot wait for an unrelated edit.
+          // State may have changed mid-delivery; re-run both directions now.
           if (succeeded) recheckAfterPublish();
         });
     };

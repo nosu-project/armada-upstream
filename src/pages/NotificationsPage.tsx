@@ -217,10 +217,8 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
 
 /**
  * Account-level Notification Center: cross-community mentions and pending
- * Concord invites in one newest-first list. DMs stay in their dedicated rail
- * queue and inbox. Every row reuses the underlying mention/invite read key, so
- * opening or clearing it updates existing badges instead of creating a second
- * read system.
+ * Concord invites, newest first. Rows reuse the existing mention/invite read
+ * keys so badges stay in sync.
  */
 export function NotificationsPage() {
   const navigate = useNavigate();

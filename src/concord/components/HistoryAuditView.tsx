@@ -12,7 +12,6 @@ import type { HistoryReport } from "@/concord/lib/historyAudit";
 import { exportFileName, exportHtmlParts, type ExportModel } from "@/concord/lib/historyExport";
 import type { Community } from "@/concord/lib/types";
 
-/** Export time windows. `hours: null` is all history. */
 const RANGES: { label: string; hours: number | null }[] = [
   { label: "1d", hours: 24 },
   { label: "3d", hours: 24 * 3 },
@@ -31,11 +30,7 @@ const PHASE_LABEL: Record<AuditPhase, string> = {
   error: "Failed",
 };
 
-/**
- * Force a save of the export via an object-URL anchor. The HTML is built as an
- * array of Blob parts, never one concatenated string, so a large community's
- * tens-of-megabytes of embedded media can't overflow the max string size.
- */
+/** Built as Blob parts, never one string, so large exports can't overflow max string size. */
 function download(model: ExportModel): void {
   const blob = new Blob(exportHtmlParts(model), { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -48,12 +43,7 @@ function download(model: ExportModel): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/**
- * A relay that actually FAILED (errored or timed out) during the run, as
- * opposed to the soft "didn't reach the floor" heuristics. This is the only
- * thing worth warning about before download, and the only thing that warrants
- * offering a re-run.
- */
+/** A relay that actually errored or timed out; the only reason to warn or offer a re-run. */
 function hadRelayFailure(report: HistoryReport): boolean {
   return report.control.relays.some((r) => r.failed) || report.channels.some((c) => c.relays.some((r) => r.failed));
 }
@@ -63,12 +53,7 @@ interface HistoryAuditViewProps {
   onClose: () => void;
 }
 
-/**
- * The full-screen "verify and export history" surface: a routed wizard (like the
- * Discord import) rather than a dialog, so it outlives the settings dialog its
- * entry point sits in. Runs the exhaustive sweep, populates the local store, and
- * offers the self-contained HTML export built from those rumors.
- */
+/** Routed full-screen history verify/export (outlives the settings dialog). */
 export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) {
   const { run, cancel, canRun, progress, result, error, channels } = useHistoryAudit(community);
   const [embed, setEmbed] = useState(true);
@@ -90,8 +75,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
       return next;
     });
 
-  // Counts reflect what will actually be written — the model, after disappearing
-  // messages and any unpicked channels are dropped — not the raw audit tally.
+  // Counts reflect what's written (after disappearing and unpicked channels are dropped).
   const exportChannelCount = result?.model.channels.length ?? 0;
   const exportMessageCount = result
     ? result.model.channels.reduce((n, c) => n + c.messages.length, 0)

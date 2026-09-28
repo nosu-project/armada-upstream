@@ -8,21 +8,9 @@ interface InstagramEmbedProps {
 }
 
 /**
- * Renders an Instagram post/reel with a direct iframe to Instagram's own embed
- * page — `instagram.com/p/<shortcode>/embed/captioned/`, no third-party
- * `embed.js`. The `captioned` variant carries the caption text below the media,
- * so a post reads as a rich card even before the media loads.
- *
- * Instagram's embed measures itself and posts a `{"type":"MEASURE"}` message
- * (as a JSON string) from `https://www.instagram.com`; we grow the iframe to
- * that height so a tall caption isn't clipped or scrolled. A minimum height
- * keeps the card from collapsing before the first measurement arrives.
- *
- * Note this is NOT inline video playback: for a reel/video, Instagram's embed
- * shows the poster frame and caption, and its in-frame play button bounces out
- * to instagram.com. True inline playback is gated behind their login/consent
- * walls, so the embed surface itself is the limit — image posts render in full,
- * video renders as a rich preview.
+ * Direct iframe to `instagram.com/p/<shortcode>/embed/captioned/` (no embed.js),
+ * resized from its `{"type":"MEASURE"}` postMessage. Videos show only a poster:
+ * inline playback is behind Instagram's login wall.
  */
 export function InstagramEmbed({ shortcode, className }: InstagramEmbedProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);

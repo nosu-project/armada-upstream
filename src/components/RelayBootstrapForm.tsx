@@ -69,8 +69,7 @@ export function RelayBootstrapForm({
       if (read.discovery) {
         restore(read.discovery);
       } else if (relayListAbsenceConfirmed(read.answered, [normalized, ...config.appRelays])) {
-        // "Use this relay" would write there and to the app relays, so all of
-        // them must have answered before "not found" means "none exists".
+        // "Use this relay" writes there and to the app relays, so all must answer before "not found".
         setCheckedRelay(normalized);
       } else {
         setError(
@@ -108,10 +107,8 @@ export function RelayBootstrapForm({
     }
   };
 
-  // The app's relays are a new list only once the wire affirmatively has none:
-  // look for an existing one first (the app relays plus the discovery
-  // indexes), adopt it if found, and refuse to publish on a read too thin to
-  // tell "no list" from "couldn't reach the relays that hold it".
+  // Adopt an existing list if found; refuse to publish when the read is too thin
+  // to tell "no list" from "unreachable".
   const chooseAppRelays = async () => {
     const urls = config.appRelays;
     if (urls.length === 0) return;

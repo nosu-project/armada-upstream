@@ -1,18 +1,8 @@
 /**
- * Channel ordering — an Armada client convention (see CORD.md).
- *
- * CORD-03 gives a Channel no ordering field, so sidebar order is the client's
- * to decide; plain alphabetical ignores what a community actually wants
- * (#announcements above #random). A Channel MAY carry
- * `custom["armada.order"] = { position }` — the same shape CORD-04 already
- * uses for Roles, kept per-entity rather than as one ordered list so two
- * moderators reordering at once collide on individual channels instead of
- * clobbering the whole arrangement.
- *
- * Position is advisory display data: a client that ignores it loses the
- * arrangement, never a channel. An unpositioned channel sorts after the
- * positioned ones by name, so a community that never orders anything keeps
- * the alphabetical behavior and a newly created channel lands at the end.
+ * Channel ordering — an Armada client convention (see CORD.md). CORD-03 has no
+ * ordering field, so a Channel MAY carry `custom["armada.order"] = { position }`
+ * (per-entity, like CORD-04 Roles, so concurrent reorders collide per channel).
+ * Advisory: unpositioned channels sort after positioned ones by name.
  */
 
 import type { ChannelMetadata } from "@/concord/lib/types";
@@ -57,12 +47,9 @@ export function compareChannelOrder(
 }
 
 /**
- * The positions to publish so `channels` (already in display order) reads as
- * `from` moved to `to`. Sequential 0..n-1 is assigned across the result and
- * only genuinely-changed channels are returned, so an ordinary neighbour swap
- * publishes two editions — while the FIRST reorder in a never-ordered
- * community necessarily stamps them all (an order is not expressible until
- * every channel carries one).
+ * Positions to publish so `channels` (in display order) reads as `from` moved to
+ * `to`: sequential 0..n-1, returning only changed channels. The first reorder in
+ * a never-ordered community stamps them all.
  */
 export function reorderPositions(
   channels: Array<{ idHex: string; position?: number }>,

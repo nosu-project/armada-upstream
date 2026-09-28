@@ -9,10 +9,8 @@ import {
 } from "@/lib/decryptConsent";
 
 /**
- * Subscribe to the app-wide bulk-decrypt consent decision (see
- * `@/lib/decryptConsent`). Re-renders when the decision changes — including
- * from another surface or tab — so timelines can flip between "decrypting" and
- * the manual "Decrypt" / "Decrypt all" affordances without a reload.
+ * The app-wide bulk-decrypt consent decision (`@/lib/decryptConsent`), reactive
+ * across surfaces and tabs.
  */
 export function useDecryptConsent(): {
   /** `"allowed" | "declined"`, or `null` when the user hasn't decided yet. */

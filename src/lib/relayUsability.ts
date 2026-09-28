@@ -1,14 +1,7 @@
 /**
- * Which relay URLs this runtime can actually open a WebSocket to (#47).
- *
- * A Concord community minted against a dev/LAN relay embeds `ws://` URLs in
- * its invites verbatim (the CORD-05 wire format carries them, and must — the
- * relay list IS the community's home). But a `ws://` socket is mixed content
- * on any secure origin: the Android APK's WebView runs at `https://localhost`
- * with `allowMixedContent: false`, so every non-loopback `ws://` connection is
- * silently blocked and the community is dead on arrival — no receive, no
- * send, no error. These helpers let the mint and join paths surface that
- * instead of failing silently.
+ * Which relay URLs this runtime can open (#47). `ws://` is mixed content on
+ * secure origins (the APK runs at `https://localhost` with mixed content off),
+ * so non-loopback `ws://` relays fail silently there.
  */
 
 /** The page protocol governing mixed-content rules (injectable for tests). */
@@ -20,8 +13,7 @@ function pageProtocol(): string {
 export function relayUsableHere(url: string, protocol: string = pageProtocol()): boolean {
   if (/^wss:\/\//i.test(url)) return true;
   if (!/^ws:\/\//i.test(url)) return false;
-  // ws:// is fine from an insecure page (the localhost/LAN quickstart), and
-  // loopback is exempt from mixed-content blocking even on secure origins.
+  // ws:// is fine from insecure pages; loopback is exempt from mixed-content blocking.
   if (protocol === "") return true; // SSR/tests: nothing to judge
   if (protocol === "http:") return true;
   try {
@@ -32,11 +24,7 @@ export function relayUsableHere(url: string, protocol: string = pageProtocol()):
   }
 }
 
-/**
- * A human-readable reason why NONE of `relays` are usable on this platform,
- * or null when at least one is. Meant for join/preview flows so a dead-on-
- * arrival community produces an actionable error instead of silence.
- */
+/** Why NONE of `relays` are usable here, or null — so join flows fail loudly. */
 export function unusableRelaysReason(relays: string[], protocol: string = pageProtocol()): string | null {
   if (relays.length === 0) return "This community lists no relays.";
   if (relays.some((url) => relayUsableHere(url, protocol))) return null;
@@ -54,14 +42,8 @@ export function unusableRelaysHere(relays: string[], protocol: string = pageProt
 }
 
 /**
- * Relay pick for a NEW community: prefer the `wss://` subset so no member is
- * locked out, regardless of where the CREATOR happens to be running. Usability
- * here is about every future member's platform, not this page's protocol — a
- * creator on plain-http dev can open `ws://localhost:5577` just fine, but a
- * community minted with it is dead on arrival for every APK/https member
- * (#47). Falls back to the full list only when it contains no `wss://` relay
- * at all (a deliberate all-local deployment) — creating must not be blocked by
- * a stray dev relay, just cleaned of it.
+ * Relays for a NEW community: the `wss://` subset, since `ws://` locks out every
+ * APK/https member (#47). Falls back to the full list when it has no `wss://`.
  */
 export function preferPortableRelays(relays: string[]): string[] {
   const wss = relays.filter((url) => /^wss:\/\//i.test(url));

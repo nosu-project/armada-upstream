@@ -6,35 +6,26 @@ import { cn } from "@/lib/utils"
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl"
 import { type AvatarShape, isEmoji, getAvatarMaskUrl, isValidAvatarShape } from "@/lib/avatarShape"
 
-/**
- * Shared ref so AvatarFallback can check if a sibling AvatarImage
- * has a src without needing state or effects. Mutating a ref during
- * render is safe — it doesn't trigger re-renders.
- */
+/** Lets AvatarFallback see a sibling AvatarImage's src without state; mutating a ref in render is safe. */
 const AvatarHasSrcContext = React.createContext<React.MutableRefObject<boolean>>({ current: false })
 
-/** Context so children can inherit the shape for their own styling. */
 const AvatarShapeContext = React.createContext<AvatarShape | undefined>(undefined)
 
 export interface AvatarProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** Avatar mask shape. Defaults to "circle" (the standard rounded-full). */
+  /** Avatar mask shape. Defaults to "circle". */
   shape?: AvatarShape;
 }
 
 const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
   ({ className, children, shape, style, ...props }, ref) => {
     const hasSrcRef = React.useRef(false)
-    // Reset per render so stale values don't persist
     hasSrcRef.current = false
 
-    // Check if shape is valid (emoji)
     const hasValidShape = !!shape && isValidAvatarShape(shape)
     const isEmojiShape = hasValidShape && isEmoji(shape)
     const hasCustomShape = isEmojiShape
 
-    // Compute mask URL synchronously — getAvatarMaskUrl renders the emoji
-    // to a canvas and caches the data-URL, so subsequent calls are instant.
-    // This avoids a flash of the unmasked square avatar on first paint.
+    // Synchronous (cached canvas data-URL) to avoid a flash of the unmasked avatar.
     const maskUrl = hasCustomShape && shape ? getAvatarMaskUrl(shape) : ''
 
     const mergedStyle = React.useMemo<React.CSSProperties>(() => {
@@ -76,12 +67,7 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
 )
 Avatar.displayName = "Avatar"
 
-/**
- * Rewrite a plain-http image URL to https. The APK's WebView (secure
- * https://localhost origin, MIXED_CONTENT_NEVER_ALLOW + the platform
- * cleartext block) silently drops http:// images that Chrome on the web
- * auto-upgrades, so old kind-0 pictures never rendered on native.
- */
+/** The APK WebView silently drops http:// images that web Chrome auto-upgrades. */
 function upgradeToHttps(src: string | undefined): string | undefined {
   if (src && /^http:\/\//i.test(src)) return "https://" + src.slice(7)
   return src
@@ -91,39 +77,22 @@ function upgradeToHttps(src: string | undefined): string | undefined {
 const RETRY_BASE_MS = 3000
 const MAX_TIMED_RETRIES = 4
 
-/**
- * Renders the <img> immediately with absolute positioning so it covers
- * the fallback. No hidden Image() verification — the browser renders
- * the image progressively as it downloads.
- */
+/** Covers the fallback immediately; the browser renders progressively. */
 const AvatarImage = React.forwardRef<
   HTMLImageElement,
   React.ImgHTMLAttributes<HTMLImageElement>
 >(({ className, onError, src: rawSrc, ...props }, ref) => {
   const hasSrcRef = React.useContext(AvatarHasSrcContext)
-  // Avatars are untrusted event data (a kind-0 `picture`, a relay icon, a
-  // community's decrypted blob URL), and this is the one place all of them
-  // pass through — so the scheme and local-network checks live here rather
-  // than at each of the ~20 call sites. Checked BEFORE useBuzzMediaSrc, whose
-  // own object URL is ours and must not be re-judged.
+  // The one chokepoint for untrusted avatar URLs, so scheme/local-network
+  // checks live here. Must run BEFORE useBuzzMediaSrc (its object URL is ours).
   const src0 = sanitizeImageSrc(typeof rawSrc === "string" ? rawSrc : undefined)
-  // Buzz-hosted avatars require a signed BUD-11 GET header a plain `<img src>`
-  // can't send; useBuzzMediaSrc fetches them into an object URL and passes any
-  // other URL straight through unchanged.
+  // Buzz avatars need a signed BUD-11 GET header, so they're fetched into an object URL.
   const { src: resolvedSrc } = useBuzzMediaSrc(src0)
   const primary = upgradeToHttps(resolvedSrc)
-  // A picture uploaded through the app is a content-addressed Blossom URL
-  // naming whichever server won the upload race, and the same bytes were
-  // mirrored to the others (BUD-04). Walk those before showing the initial:
-  // one server going down must not blank every avatar it happened to win.
-  //
-  // Under the viewer's media policy (`lib/mediaPolicy.ts`): a picture on a
-  // stranger's host is loaded through the proxy, and one the policy gates has
-  // no `src` and shows the initial — a kind-0 is set by whoever it names, so
-  // every avatar on screen is a request to a host of THEIR choosing.
+  // Walk Blossom mirrors (BUD-04) before the initial so one dead server doesn't
+  // blank its avatars. Loaded under the media policy (`lib/mediaPolicy.ts`).
   const { src, onError: advance, failed, reset } = useImageFallback(primary)
 
-  // Reset the backoff when the picture changes (the walk resets itself).
   const prevSrc = React.useRef(primary)
   const attemptsRef = React.useRef(0)
   if (primary !== prevSrc.current) {
@@ -131,12 +100,8 @@ const AvatarImage = React.forwardRef<
     attemptsRef.current = 0
   }
 
-  // An exhausted walk must NOT latch the fallback forever: transient fetch
-  // failures are routine on mobile (radio not up at cold start, Doze, the
-  // WebView freezing in-flight loads on background→foreground), and this
-  // component stays mounted across them. Retry from the first server with
-  // backoff, and whenever the network or the app comes back — remounting the
-  // <img> re-issues the fetch.
+  // Don't latch the fallback: mobile fetch failures are routine. Retry with
+  // backoff and on online/visible; remounting the <img> re-fetches.
   React.useEffect(() => {
     if (!failed) return
     attemptsRef.current += 1
@@ -158,7 +123,6 @@ const AvatarImage = React.forwardRef<
 
   const showImage = !failed && !!src
 
-  // Signal to AvatarFallback synchronously during this render frame
   if (showImage) {
     hasSrcRef.current = true
   }
@@ -171,9 +135,7 @@ const AvatarImage = React.forwardRef<
       src={src}
       ref={ref}
       alt=""
-      // Avatars come from arbitrary third-party hosts; a `Referer:
-      // https://localhost/` from the APK's WebView trips some hotlink
-      // protections that never see it from the web origin.
+      // The APK's `https://localhost` Referer trips some hotlink protections.
       referrerPolicy="no-referrer"
       className={cn("absolute inset-0 h-full w-full object-cover", className)}
       onError={(e) => {
@@ -185,11 +147,7 @@ const AvatarImage = React.forwardRef<
 })
 AvatarImage.displayName = "AvatarImage"
 
-/**
- * Fallback content (letter initial). Hidden when AvatarImage has a src,
- * so there's no flash of the letter while the image downloads. The
- * Avatar's bg-muted background provides the placeholder color instead.
- */
+/** Letter initial, hidden while AvatarImage has a src (no flash during download). */
 const AvatarFallback = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
@@ -199,8 +157,7 @@ const AvatarFallback = React.forwardRef<
 
   const hasCustomShape = !!shape && isValidAvatarShape(shape)
 
-  // AvatarImage renders before AvatarFallback (DOM order), so hasSrcRef
-  // is already set by the time we read it here in the same render frame.
+  // AvatarImage renders first, so hasSrcRef is set by now.
   if (hasSrcRef.current) return null
 
   return (

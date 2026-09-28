@@ -8,26 +8,18 @@ import type { RefObject } from "react";
 export interface TimelineFocus {
   /** Hand to `MessageTimeline`'s `handleRef`. */
   timelineRef: RefObject<MessageTimelineHandle | null>;
-  /** Scroll to a loaded message — what a reply-context line's click does. */
   jumpToMessage: (id: string) => void;
-  /** Drop the `/m/` segment: "I am no longer looking at that". */
   clearMessageFocus: () => void;
   /** Follow the newest message AND drop the `/m/` segment. What a send means. */
   pinToPresent: () => void;
-  /** The row whose tap-to-reveal toolbar is open (touch only). */
+  /** Touch only. */
   activeId: string | undefined;
   toggleActive: (id: string) => void;
 }
 
 /**
- * The timeline handle and everything aimed through it: jump-to-message,
- * `/m/<id>` permalink consumption, and the single row whose action toolbar is
- * revealed on touch.
- *
- * These travel together because they share the one ref — and every chat surface
- * had assembled the same four pieces around it. The touch `activeId` in
- * particular is not optional decoration: without it the action toolbar stays
- * `touch:pointer-events-none` and react/reply/delete are untappable on the APK.
+ * The timeline handle plus jump-to-message, `/m/<id>` permalinks and the touch-revealed row.
+ * Without `activeId` the toolbar stays `touch:pointer-events-none` and is untappable on the APK.
  */
 export function useTimelineFocus(opts: {
   messages: readonly { id: string }[];
@@ -37,9 +29,8 @@ export function useTimelineFocus(opts: {
   /** Gate for pages that reuse one route for several views (default true). */
   enabled?: boolean;
   /**
-   * Changing this closes the revealed row. Pass the conversation's identity
-   * where one component serves several (DMs switch peers without remounting),
-   * so a row left open doesn't reappear open in the next conversation.
+   * Closes the revealed row on change; pass the conversation identity where one component serves
+   * several (DMs switch peers without remounting).
    */
   resetKey?: string;
 }): TimelineFocus {
@@ -50,9 +41,6 @@ export function useTimelineFocus(opts: {
     timelineRef.current?.scrollToMessage(id);
   }, []);
 
-  // Permalinks (`/m/<id>` — notification taps, copied links): scroll to the
-  // target with the focus indicator once it's loaded, pulling older pages when
-  // it's further back than the loaded history.
   const permalinkScroll = useCallback(
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
     [],
@@ -66,9 +54,7 @@ export function useTimelineFocus(opts: {
     enabled,
   });
 
-  // Sending is an explicit "I'm at the present": follow the new message, and
-  // drop any `/m/` focus so the location stops claiming the reader is parked at
-  // an older one (a remount would otherwise snap them back to it).
+  // Drop `/m/` focus too, or a remount would snap the reader back to it.
   const pinToPresent = useCallback(() => {
     timelineRef.current?.pinToBottom();
     clearMessageFocus();

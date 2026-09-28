@@ -47,7 +47,6 @@ function InboxRow({
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
-  // Strip URLs to a paperclip so a link-only mention still reads as something.
   const preview = event.content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
 
   return (
@@ -94,11 +93,8 @@ function InboxRow({
 }
 
 /**
- * The detail pane: the mention's conversation, rendered inline via the shared
- * {@link ThreadPanel}. A plain message is its own thread root; a NIP-22 reply
- * (kind 1111) hangs off the root in its uppercase `E` tag, which we fetch. The
- * NIP-29 transport is assembled from the same hooks GroupChat uses, so replies,
- * reactions, and the reply composer all work here.
+ * The mention's conversation via the shared {@link ThreadPanel}. A NIP-22 reply
+ * (kind 1111) hangs off the root in its uppercase `E` tag.
  */
 function InboxThreadDetail({
   mention,
@@ -113,8 +109,6 @@ function InboxThreadDetail({
 }) {
   const { user } = useCurrentUser();
 
-  // A threaded reply carries its root in the uppercase `E` tag; a top-level
-  // message is its own root.
   const rootId =
     mention.kind === KIND_COMMENT
       ? mention.tags.find(([n]) => n === "E")?.[1] ?? mention.id
@@ -131,8 +125,7 @@ function InboxThreadDetail({
     [root, replyIdsSig],
   );
   const { reactionsFor } = useGroupReactions(relayUrl, groupId, tallyIds);
-  // One object per room: every message row reads this context, and an inline
-  // value re-rendered all of them on every render of this page.
+  // Memoized: every message row reads this context.
   const chatScope = useMemo(() => ({ kind: "nip29" as const, relayUrl, groupId }), [relayUrl, groupId]);
   const sendThreadReply = useSendThreadReply(relayUrl, groupId);
 
@@ -175,11 +168,8 @@ function InboxThreadDetail({
 }
 
 /**
- * A server's Inbox: every message across its channels that @-mentions you,
- * newest first (mail-client style). Selecting a mention opens its conversation
- * inline in a detail pane — a two-pane master/detail on desktop, and a
- * list→detail push on mobile. Mirrors the Projects drill-down for the channel
- * list underneath. Works on any NIP-29 server, not just Buzz.
+ * A server's Inbox: messages across its channels that @-mention you, newest
+ * first, with a master/detail pane. Works on any NIP-29 server.
  */
 export function InboxPage() {
   const { server } = useParams<{ server: string }>();
@@ -204,7 +194,6 @@ export function InboxPage() {
     [items, selectedId],
   );
 
-  // Drop a stale selection when its item leaves the inbox (e.g. list refresh).
   useEffect(() => {
     if (selectedId && !items.some((it) => it.event.id === selectedId)) {
       setSelectedId(undefined);
@@ -216,7 +205,6 @@ export function InboxPage() {
   }
 
   const selectItem = (item: InboxItem) => {
-    // Clear the badge immediately; the channel's own on-view read also fires.
     markRead(channelReadKey(relayUrl, item.groupId), item.event.created_at);
     setSelectedId(item.event.id);
   };
@@ -230,7 +218,6 @@ export function InboxPage() {
   };
 
   const markAllRead = () => {
-    // Advance each channel's read marker to its newest unread mention.
     const latestByGroup = new Map<string, number>();
     for (const item of items) {
       if (!item.unread) continue;
@@ -262,7 +249,6 @@ export function InboxPage() {
         }
       >
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-          {/* Header — matches GroupPage / ProjectsPage's floating command bar. */}
           <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
             <Button
               variant="ghost"
@@ -307,9 +293,6 @@ export function InboxPage() {
           </header>
 
           <div className="flex-1 min-h-0 flex">
-            {/* Master: the mention list. Full-width until a mention is selected,
-                then a fixed column beside the detail on desktop / hidden on
-                mobile (the detail takes over). */}
             <div
               className={cn(
                 "min-h-0 min-w-0 flex-col overflow-y-auto px-2 py-2",
@@ -345,7 +328,6 @@ export function InboxPage() {
               )}
             </div>
 
-            {/* Detail: the selected mention's thread, inline. */}
             {selected && (
               <div className="flex flex-1 min-h-0 min-w-0">
                 <InboxThreadDetail

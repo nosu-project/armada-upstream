@@ -1,48 +1,17 @@
 /**
- * The Web Push service worker's runtime — everything a push needs beyond the
- * worker APIs themselves.
- *
- * `public/sw.js` is a hand-written CLASSIC service worker (no bundler, no
- * `import`) on purpose — see its header. This module is bundled to a standalone
- * IIFE it loads with `importScripts`, so the worker stays a plain file the
- * build-stamp plugin can rewrite while the logic lives under `src/` as ordinary
- * source that tsc + eslint + vitest cover. Same arrangement as
- * `electron/db.cjs`, and for the same reason.
- *
- * It started as NIP-17 unwrapping alone (`dmCrypto.ts`) because a classic
- * worker can't do NIP-44 — secp256k1 ECDH isn't in WebCrypto. It now does the
- * whole job, because the push payload carries the event itself
- * (`inline_event`, see `pushSubscriptions.ts`) and everything worth doing with
- * an event needs code the worker can't otherwise reach:
- *
- *   - OPEN it. NIP-17 gift wraps and Concord stream wraps, through the SAME
- *     functions the app uses (`openDmWrap`, `openWrap`), so the worker cannot
- *     end up applying a laxer rule than the page — the anti-spoof check, the
- *     seal-form check, the NIP-40 expiry refusal at all three levels.
- *   - STORE it. ArmadaDB is IndexedDB on the web and a worker can open it, so a
- *     message that arrives while no tab exists is written to the tenant the app
- *     reads it from and is simply THERE on open. This is what the Android
- *     background service does with the shared SQLite file; the web now does it
- *     one layer down, through the same rule-bearing writers
- *     (`writeDm17Rumors`, `writeRumors`).
- *   - PRESENT it. The room's title and image and the sender's name and avatar
- *     come out of that same database, for any author — not from a snapshot the
- *     page had to seal ahead of time and re-seal when a profile landed late.
- *
- * Everything here is best-effort and non-fatal. Any step that fails returns
- * null and the worker falls back to the static wake-up the gateway sent, which
- * is why a build without this bundle, a login whose key it doesn't hold, and a
- * message too big to inline all degrade to the same safe place.
- *
- * NAMES: the emitted file is still `sw-crypto.js` and the global is still
- * `ArmadaDmCrypto`. Those are the strings an ALREADY-INSTALLED worker asks for,
- * and a worker updates only on the next navigation — renaming them would break
- * DM push for one revalidation cycle on every existing install, to no benefit.
- * Same reasoning as the `c2:`/`concord2-*` on-disk identifiers; don't "finish"
- * the rename.
+ * The Web Push service worker's runtime. `worker.ts` handles the worker's
+ * events and `sw.ts` hands it these functions; the build bundles all three
+ * into `/sw.js`. For the inlined push event (`inline_event`, see
+ * `pushSubscriptions.ts`) it:
+ *   - OPENS it via the app's own `openDmWrap`/`openWrap`, so the worker can't
+ *     apply laxer anti-spoof/seal/NIP-40 rules than the page;
+ *   - STORES it in ArmadaDB (IndexedDB) via `writeDm17Rumors`/`writeRumors`;
+ *   - PRESENTS it with names/images read from that same database.
+ * Every step is best-effort; failure falls back to the gateway's static wake-up.
  */
 
 import { getConversationKey, decrypt as nip44Decrypt } from "nostr-tools/nip44";
+import { verifyEvent } from "nostr-tools/pure";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { checkChannelBinding, FUTURE_HOLD_MS, openWrap } from "@/concord/lib/stream";
@@ -56,7 +25,8 @@ import { appEventStore } from "@/lib/db/mainEventStore";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaPolicyFromConfig, mediaSrc, type MediaPolicy } from "@/lib/mediaPolicy";
 import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
-import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
+import { KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import {
   attributedLine,
   firstImetaMime,
@@ -74,14 +44,19 @@ import type { OpenedChat } from "@/concord/lib/chat";
 import type { ImagePointer } from "@/concord/lib/types";
 import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import type { PushScope } from "@/lib/pushSubscriptions";
 import type { SwConcordStream, SwPushConfig } from "@/lib/swPushConfig";
 
 // The worker shares the page's store; fix the adapter before anything reads.
 presetIndexedDBArmadaDB();
 
-/** The routing hints the gateway echoes back in `data` (see pushSubscriptions). */
-interface PushData {
-  scope?: string;
+/**
+ * What the worker knows about one push. A legacy gateway echoed `scope` and
+ * `relays` back from the registration; a `napp.push.payload` carries only the
+ * event and where it came from, so `scope` is derived ({@link pushScope}).
+ */
+export interface PushData {
+  scope?: PushScope;
   relays?: unknown;
   url?: string;
   event?: NostrEvent;
@@ -89,25 +64,14 @@ interface PushData {
 }
 
 /**
- * What the worker needs to show one notification, once the event is open.
- *
- * `line` is handed back separately from `title`/`icon` because accumulating a
- * room's recent lines needs `registration.getNotifications`, a worker API this
- * bundle has no business reaching for.
+ * What the worker needs to show one notification. `line` is separate because
+ * accumulating lines needs `registration.getNotifications` (worker-side).
  */
 export interface PreparedPush {
   /**
-   * Show NOTHING for this push, and mean it — as distinct from returning
-   * undefined, which means "I couldn't decide, use your fallback".
-   *
-   * The difference matters because the fallback is a visible notification. A
-   * message the user sent from another device, or a reaction to somebody
-   * else's message, would otherwise announce itself as "New message in a
-   * community": the worker can only tell either from the DECRYPTED rumor, so
-   * by the time it knows, silence has to be something it can ask for.
-   *
-   * The worker still spends its Apple keep-alive here, exactly as it does for
-   * any other suppressed push.
+   * Show NOTHING (vs undefined = "use your fallback", which is visible). Only
+   * the decrypted rumor reveals own-device sends or others' reactions, so
+   * silence must be requestable.
    */
   drop?: true;
   /** Collapse tag — one entry per conversation. */
@@ -125,18 +89,11 @@ export interface PreparedPush {
   badge: string;
   /** The message's own `created_at`, in ms. */
   timestamp: number;
-  /**
-   * Show this as quietly as the platform allows: an unknown sender under the
-   * `off` request policy. Never truly silent — iOS revokes a subscription that
-   * displays nothing.
-   */
+  /** Unknown sender under the `off` policy: as quiet as possible, never silent (iOS revokes those). */
   quiet?: boolean;
-  /** Whether the room's earlier lines may be shown beside this one. A
-   *  content-blind request ping must not accumulate. */
+  /** Whether earlier room lines may show; content-blind request pings must not accumulate. */
   accumulate: boolean;
 }
-
-// ── DM ───────────────────────────────────────────────────────────────────────
 
 /** A raw-key NIP-44 signer, so the worker can drive the app's own `openDmWrap`. */
 function rawSigner(skHex: string) {
@@ -151,19 +108,9 @@ function rawSigner(skHex: string) {
 }
 
 /**
- * Open an inlined NIP-17 gift wrap, or null for anything this key can't open,
- * that's malformed, that has already expired (NIP-40), or that is the user's own
- * sent copy.
- *
- * Delegates to `openDmWrap` rather than reimplementing the envelope: that is
- * where the kind-13 seal check, the NIP-59 anti-spoof (`rumor.pubkey ===
- * seal.pubkey`), the id-is-its-own-hash check and the three-level expiry
- * refusal live, and a notification path that checked fewer of them would be a
- * second, laxer reader of the same bytes.
- *
- * Whether the sender turns out to be the user themselves is NOT decided here —
- * that is a presentation policy, and `prepareDm` needs to tell it apart from a
- * wrap that simply wouldn't open.
+ * Open an inlined NIP-17 wrap, or null (can't open, malformed, expired). Uses
+ * `openDmWrap` so seal, anti-spoof, id-hash and expiry checks are identical to
+ * the app's. Own-sent copies are handled by `prepareDm`.
  */
 export async function openDm(
   wrap: NostrEvent,
@@ -177,21 +124,10 @@ export async function openDm(
   }
 }
 
-// ── Concord ──────────────────────────────────────────────────────────────────
-
 /**
- * Open an inlined Concord chat wrap with the stream key that claims it, or null.
- *
- * Routing is by `wrap.pubkey` — the stream address is the wrap's author, in the
- * clear — so this is one map lookup and one decrypt, never trial decryption.
- * `openWrap` verifies the seal's signature and the author binding; the channel
- * and epoch bindings are checked here against the stream that actually opened
- * it, which is what stops a keyholder splicing a rumor from one channel into
- * another.
- *
- * The seal MUST be encrypted (CORD-02 §5), matching `chat.ts`'s rule and NOT
- * the Android service's laxer one: a plaintext seal would make the message a
- * standalone signed artifact any relay could display.
+ * Open an inlined Concord chat wrap via the stream keyed by `wrap.pubkey` (no
+ * trial decryption). Channel/epoch bindings are checked against the opening
+ * stream to stop cross-channel splices. The seal MUST be encrypted (CORD-02 §5).
  */
 export function openConcord(
   wrap: NostrEvent,
@@ -206,12 +142,11 @@ export function openConcord(
     });
     if (ev.sealKind !== KIND_SEAL_ENCRYPTED) return undefined;
     const epoch = BigInt(stream.epoch);
-    // Throws on a splice — the app's own check, not a second spelling of it.
     checkChannelBinding(ev, stream.channelId, epoch);
     if (ev.kind !== KIND_MESSAGE && ev.kind !== KIND_REACTION) return undefined;
     return { opened: { ...ev, channelIdHex: stream.channelId, epoch }, stream };
   } catch {
-    // Not ours, spliced, or malformed — silent.
+    // not ours, spliced, or malformed
     return undefined;
   }
 }
@@ -222,21 +157,14 @@ function uniqueTag(tags: string[][], name: string): string | undefined {
   return found.length === 1 ? found[0][1] : undefined;
 }
 
-// ── Local lookups ────────────────────────────────────────────────────────────
-
-/**
- * The viewer's media policy, from the sealed config. A config sealed before
- * the field existed gets the default — proxying off, as on the page.
- */
+/** The viewer's media policy from the sealed config (older configs get the default). */
 function policyOf(cfg: SwPushConfig | null): MediaPolicy {
   return mediaPolicyFromConfig(cfg?.mediaPolicy);
 }
 
 /**
- * A sender's display name and avatar from the local kind-0, never the network
- * — and the avatar as the media policy would load it: the browser fetches a
- * notification icon from this device the moment it is shown, which is the
- * request the policy exists to route.
+ * Sender name and avatar from the local kind-0 only, the avatar routed per
+ * media policy (the OS fetches notification icons from this device).
  */
 async function profileFor(pubkey: string, policy: MediaPolicy): Promise<{ name: string; avatar?: string }> {
   try {
@@ -249,13 +177,10 @@ async function profileFor(pubkey: string, policy: MediaPolicy): Promise<{ name: 
         ? metadata.picture
         : undefined;
       const avatar = mediaSrc(picture, policy);
-      // A profile with no name reads "Anonymous", which is a fact this worker
-      // established by looking — unlike the old sealed snapshot, where a
-      // missing entry only ever meant the page hadn't sealed one yet.
       return { name, avatar };
     }
   } catch {
-    // Store unreadable — fall through.
+    // store unreadable
   }
   return { name: "Anonymous" };
 }
@@ -273,14 +198,8 @@ async function mentionNamesFor(content: string, policy: MediaPolicy): Promise<Ma
 }
 
 /**
- * A community icon as a `data:` URL.
- *
- * `URL.createObjectURL` is Window-only, so a worker cannot hand
- * `showNotification` a blob. Inlining the bytes is the one route left — and it
- * costs nothing on the common path, because `decryptImageBytes` answers from
- * the content-addressed `concord-images` cache the app already filled.
- * Oversized icons are skipped rather than embedded: a multi-megabyte string in
- * a push handler is not worth an avatar.
+ * A community icon as a `data:` URL (workers lack `URL.createObjectURL`).
+ * Usually served from the `concord-images` cache; oversized icons are skipped.
  */
 async function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<string | undefined> {
   try {
@@ -293,8 +212,6 @@ async function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise
     return undefined;
   }
 }
-
-// ── Preparation ──────────────────────────────────────────────────────────────
 
 /** Deep link to a message in a NIP-29 group (mirrors `routes.ts`). */
 function groupUrl(relayUrl: string, groupId: string, eventId: string): string {
@@ -373,14 +290,37 @@ async function present(
   };
 }
 
+/** NIP-29 kinds the group subscriptions watch (`buildPushSubscriptions`). */
+const GROUP_KINDS = new Set([9, 1111, 7]);
+
 /**
- * Open the event the gateway inlined, store it, and return what to show — or
- * undefined to fall back to the static wake-up.
+ * Which plane an event belongs to, from the event alone.
  *
- * Storing happens BEFORE presenting, and deliberately: the notification is a
- * side effect of a message arriving, and the message arriving is the part that
- * has to survive. A store that failed still shows the notification; a
- * presentation that failed has still persisted the message.
+ * A `napp.push.payload` says nothing about which subscription matched: both
+ * transports send the event and the relay it came from, and nostr-push2 merges
+ * every subscription into one list. The event is enough. A kind-1059 is a
+ * Concord wrap when its author is one of our stream addresses — routing is by
+ * `pubkey` there, as in {@link openConcord} — and a NIP-17 wrap when it is
+ * addressed to us; an `h`-tagged group kind is NIP-29. Undefined for anything
+ * this install cannot place, which then gets the generic fallback.
+ */
+export function pushScope(event: NostrEvent, cfg: SwPushConfig | null): PushScope | undefined {
+  const addressedToSelf = Boolean(cfg?.self)
+    && event.tags.some(([name, value]) => name === "p" && value === cfg?.self);
+  if (event.kind === 1059) {
+    if (cfg?.concord?.some((stream) => stream.pk === event.pubkey)) return "c2";
+    return addressedToSelf ? "dm" : undefined;
+  }
+  if (event.kind === 4) return "dm";
+  if (GROUP_KINDS.has(event.kind) && uniqueTag(event.tags, "h") !== undefined) {
+    return addressedToSelf ? "group-mention" : "group";
+  }
+  return undefined;
+}
+
+/**
+ * Open the inlined event, store it, and return what to show (undefined = static
+ * fallback). Storing comes FIRST: the message must survive even if presentation fails.
  */
 export async function preparePush(
   data: PushData,
@@ -389,20 +329,24 @@ export async function preparePush(
   const wrapOrEvent = data.event;
   if (!wrapOrEvent || typeof wrapOrEvent !== "object") return undefined;
 
-  const relays = Array.isArray(data.relays) ? (data.relays as string[]) : [];
+  // Tenna delivers what its relays sent without checking it, and a fetched
+  // event is only as good as the relay that answered. A forged event is not a
+  // message; say nothing about it.
+  if (!verifyEvent(wrapOrEvent)) return DROP;
 
-  // A partial page snapshot must fail closed for only the encrypted plane that
-  // is not authoritative. `undefined` deliberately means ready so a config
-  // sealed by an older client keeps its pre-readiness behavior.
-  if (data.scope === "dm") {
+  const relays = Array.isArray(data.relays) ? (data.relays as string[]) : [];
+  const scope = data.scope ?? pushScope(wrapOrEvent, cfg);
+
+  // Fail closed only for the non-authoritative plane; `undefined` = ready (older configs).
+  if (scope === "dm") {
     if (cfg?.dmReady === false) return DROP;
     return prepareDm(wrapOrEvent, cfg);
   }
-  if (data.scope === "c2") {
+  if (scope === "c2") {
     if (cfg?.concordReady === false) return DROP;
     return prepareConcord(wrapOrEvent, cfg);
   }
-  if (data.scope === "group" || data.scope === "group-mention") {
+  if (scope === "group" || scope === "group-mention") {
     return prepareGroup(wrapOrEvent, relays, cfg);
   }
   return undefined;
@@ -416,31 +360,23 @@ async function prepareDm(
   const opened = await openDm(wrap, cfg.sk, cfg.self);
   if (!opened) return undefined;
 
-  // Persist first: a DM exists nowhere else once it is read off the relay.
-  // This includes the user's own sent copy, which is how the other device's
-  // half of a conversation reaches this one at all.
+  // Persist first (including own sent copies from other devices).
   await writeDm17Rumors(cfg.self, [opened]).catch(() => undefined);
 
   const conversation = dmConvKey(opened.peers);
   const roomKey = `dm:${conversation}`;
 
-  // Our own sent copy is addressed to us too, and is not news.
   if (opened.author === cfg.self) return DROP;
 
-  // Match the DM list's existing semantics: a group containing any muted
-  // participant is hidden as a whole, even when this message's author is not
-  // the muted member. This wins even under the `full` request policy.
+  // Like the DM list: any muted participant hides the conversation, even under `full`.
   if (opened.peers.some((peer) => cfg.mutedPeers?.includes(peer))) return DROP;
 
-  // Per-conversation notification levels are encrypted-device policy: the
-  // gateway cannot see which DM a gift wrap belongs to. An explicit level wins
-  // over the global DM fallback; DMs are intrinsically directed at recipients,
-  // so both `all` and `mentions` admit them.
+  // Per-conversation levels are device policy (the gateway can't see the
+  // conversation); both `all` and `mentions` admit DMs.
   const dmLevel = cfg.dmLevels?.[conversation];
   if (dmLevel === "nothing" || (!dmLevel && cfg.directMessages === false)) return DROP;
 
-  // Reactions/deletes/timer changes aren't messages, but the push must still
-  // show something on iOS — the content-blind request ping.
+  // Non-message rumors still need something shown on iOS: the request ping.
   if (opened.kind !== KIND_DM_CHAT && opened.kind !== KIND_DM_FILE) {
     return requestPing(true, opened.rumorId, roomKey);
   }
@@ -448,8 +384,7 @@ async function prepareDm(
   const known = cfg.knownConversations?.includes(conversation)
     || opened.peers.every((peer) => cfg.knownPeers.includes(peer));
   if (!known && cfg.policy !== "full") {
-    // A stranger picks the text, the name and the avatar alike — gate all three
-    // BEFORE any of it reaches the screen.
+    // A stranger controls text, name and avatar: gate all three.
     return requestPing(cfg.policy === "off", opened.rumorId, roomKey);
   }
 
@@ -484,32 +419,19 @@ async function prepareConcord(
   if (!result) return undefined;
   const { opened, stream } = result;
 
-  // Store it either way: a message we won't announce is still a message, and
-  // the timeline it belongs to has no other copy.
+  // Store it regardless: the timeline has no other copy.
   await writeRumors(stream.communityId, [opened]).catch(() => undefined);
 
-  // A message dated ahead of the local clock is HELD, not announced: the
-  // timeline hides it until its time passes (`foldTimeline` / FUTURE_HOLD_MS),
-  // so buzzing for it now — with the OS rendering its future `created_at` as
-  // "in 5m" — would be a notification about a message the reader can't yet see.
-  // Stored above, so it surfaces normally the moment its time comes.
+  // Future-dated messages are held by the timeline (FUTURE_HOLD_MS); don't announce yet.
   if (opened.ms > Date.now() + FUTURE_HOLD_MS) return DROP;
 
-  // Our own message, sent from another device. The local send marks its own
-  // event id, but nothing marks one made elsewhere — only the decrypted author
-  // tells us, and that is here.
+  // Own message from another device (only the decrypted author reveals it).
   if (cfg?.self && opened.author === cfg.self) return DROP;
 
-  // A muted channel/community (level `nothing`): stored above like every other
-  // message so its timeline stays complete, and — here — never announced. The
-  // mute normally means no gateway subscription at all, but a lingering one can
-  // still wake the device, and this is where a leaked wrap is silenced rather
-  // than shown as the gateway's static wake-up.
+  // Muted (level `nothing`): stored, never announced — silences a lingering gateway sub.
   if (stream.muted) return DROP;
 
-  // A banned member (CORD-04): stored above like every other message, folded
-  // off the timeline on read, and — here — never announced. The author is on
-  // the encrypted rumor, so this is the first place it can be checked.
+  // Banned (CORD-04): stored, never announced.
   if (stream.banned?.includes(opened.author)) return DROP;
 
   const mention = Boolean(cfg?.self) && (
@@ -520,12 +442,10 @@ async function prepareConcord(
     )
   );
   const reaction = opened.kind === KIND_REACTION;
-  // A reaction notifies only when it points at one of YOUR messages; the `p`
-  // tag is on the encrypted rumor, so this is the first place it can be read.
+  // Reactions only notify when pointing at YOUR message (`p` on the encrypted rumor).
   if (reaction && !mention) return DROP;
 
-  // The gateway sees only the stream wrap author, so mentions-only can be
-  // enforced only here, after the encrypted rumor's `p` tags are legible.
+  // Mentions-only can only be enforced here, after decryption.
   if (stream.mentionOnly && !mention) return DROP;
 
   const policy = policyOf(cfg);
@@ -549,8 +469,7 @@ async function prepareConcord(
       tag: `c2:${stream.channelId}`,
       roomKey: `c2:${stream.channelId}`,
       eventId: opened.rumorId,
-      // A reaction points at the message it reacted to — the thing the reader
-      // is being told about, and the only one of the two the timeline can show.
+      // Link to the reacted-to message.
       url: `${base}/m/${encodeURIComponent(uniqueTag(opened.tags, "e") ?? opened.rumorId)}`,
       timestamp: opened.createdAt * 1000,
     },
@@ -559,12 +478,9 @@ async function prepareConcord(
 }
 
 /**
- * A NIP-29 group message, which arrives in the clear.
- *
- * Deliberately NOT stored. New gateway specs are one-relay-per-filter, so they
- * provide exact room identity for presentation, but a legacy multi-relay
- * registration can still deliver during migration and remains unfit for a
- * tenant write. Nothing is lost by declining: plaintext is refetched on open.
+ * A NIP-29 group message (plaintext). NOT stored: legacy multi-relay
+ * registrations lack exact room identity for a tenant write, and plaintext is
+ * refetched on open.
  */
 async function prepareGroup(
   ev: NostrEvent,
@@ -575,10 +491,7 @@ async function prepareGroup(
   if (!groupId || typeof ev.content !== "string") return undefined;
   if (cfg?.self && ev.pubkey === cfg.self) return DROP; // our own, from another device
 
-  // Ask each candidate relay's tenant for the group's metadata and accept a
-  // name only if exactly ONE of them knows this group — with several relays
-  // configured, a hit on two would be two different groups that merely share an
-  // id, and naming the notification after either is a coin toss.
+  // Name the room only if exactly ONE relay tenant knows this group id.
   const identities = await Promise.all(
     relays.map(async (relay) => ({ relay, room: await nip29RoomIdentity(relay, groupId) })),
   );
@@ -598,13 +511,11 @@ async function prepareGroup(
       threadReply: isThreadReply(ev.kind, ev.tags),
     },
     ev.pubkey,
-    // A kind-39000 `picture` is the relay operator's URL: policed like an avatar.
+    // A kind-39000 `picture` is operator-controlled: policed like an avatar.
     { title: only?.room.title, image: mediaSrc(only?.room.iconUrl, policy) },
     {
       tag: `h:${groupId}`,
-      // A one-relay spec is source attribution even when this fresh install
-      // has no room metadata yet. Legacy multi-relay specs remain unresolved
-      // unless exactly one tenant can identify the group.
+      // Unresolved unless exactly one tenant identifies the group.
       roomKey: only ? `h:${only.relay}|${groupId}` : undefined,
       eventId: ev.id,
       url: only ? groupUrl(only.relay, groupId, ev.id) : (relays[0] ? groupUrl(relays[0], groupId, ev.id) : "/"),
@@ -623,19 +534,3 @@ export async function openConfig(sealed: Uint8Array | undefined): Promise<SwPush
     return null;
   }
 }
-
-// Expose to the classic service worker (which loads this bundle via
-// importScripts and can't consume ES exports). Assigned as a top-level side
-// effect so rollup keeps it in the IIFE build even though nothing imports it
-// there; the named exports above are what vitest drives.
-(
-  globalThis as unknown as { ArmadaDmCrypto?: Record<string, unknown> }
-).ArmadaDmCrypto = {
-  preparePush,
-  openDm,
-  openConcord,
-  // The config is AES-GCM sealed at rest under a non-extractable key
-  // (swSecretVault); the worker reads the bytes out of Cache Storage and opens
-  // them here, then hands the result to `preparePush`.
-  openConfig,
-};

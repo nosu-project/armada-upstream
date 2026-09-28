@@ -6,16 +6,9 @@ import type { CallSummary } from "@/contexts/CallContext";
 import { ArmadaCall, hasNativeCallService } from "@/lib/nativeCall";
 
 /**
- * Mirror the active call into the Android ongoing-call notification.
- *
- * Two effects rather than one, deliberately: the labels change several times
- * during a call (the group's metadata lands, a DM peer's kind-0 resolves), and
- * a single effect keyed on them would run its cleanup — the `stop()` — on every
- * relabel, blinking the notification away and back. So the lifecycle effect
- * depends only on `active`, and the label effect only ever calls `start()`,
- * which the native side treats as an idempotent refresh.
- *
- * No-ops everywhere but Android; see `hasNativeCallService`.
+ * Mirror the active call into the Android ongoing-call notification. Two effects:
+ * labels change mid-call, and one keyed on them would `stop()` on each relabel;
+ * `start()` is an idempotent refresh natively. Android only.
  */
 export function useCallForegroundService(
   active: boolean,
@@ -25,9 +18,7 @@ export function useCallForegroundService(
   const title = summary?.title;
   const subtitle = summary?.subtitle;
 
-  // Post/refresh. The fallback label covers the window between joining and the
-  // connected room registering its summary, which is where a user backgrounding
-  // the app immediately would otherwise see nothing.
+  // The fallback label covers the gap before the room registers its summary.
   useEffect(() => {
     if (!active || !hasNativeCallService()) return;
     ArmadaCall.start({ title: title ?? "Voice call", text: subtitle ?? "" }).catch((err) => {
@@ -35,7 +26,6 @@ export function useCallForegroundService(
     });
   }, [active, title, subtitle]);
 
-  // Teardown, on the call ending (or the provider unmounting) and nothing else.
   useEffect(() => {
     if (!active || !hasNativeCallService()) return;
     return () => {
@@ -45,10 +35,8 @@ export function useCallForegroundService(
     };
   }, [active]);
 
-  // The notification's "Leave" button. Registered once and dispatched through a
-  // ref so a new `onHangup` identity (leaveCall is stable, but callers needn't
-  // guarantee that) never costs a listener re-registration — during which a tap
-  // would land on nothing.
+  // The "Leave" button, registered once and dispatched via a ref so no tap lands
+  // during a re-registration.
   const hangupRef = useRef(onHangup);
   hangupRef.current = onHangup;
   useEffect(() => {

@@ -17,10 +17,7 @@ import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
 
-/**
- * Older pages the end-of-list sentinel pulls unprompted before handing over
- * to its button — the same bound the permalink hunt uses.
- */
+/** Pages the sentinel auto-loads before handing over to its button. */
 const MAX_AUTO_PAGES = 8;
 
 const SORT_TABS: readonly PillTab<ForumSort>[] = [
@@ -28,7 +25,6 @@ const SORT_TABS: readonly PillTab<ForumSort>[] = [
   { id: "newest", label: "Newest", icon: Clock },
 ];
 
-/** A small round author avatar, resolved from the profile cache. */
 function AuthorAvatar({ pubkey, className }: { pubkey: string; className?: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -41,7 +37,6 @@ function AuthorAvatar({ pubkey, className }: { pubkey: string; className?: strin
   );
 }
 
-/** Up to three commenter avatars, overlapping, newest first. */
 function ParticipantStack({ pubkeys }: { pubkeys: readonly string[] }) {
   const shown = pubkeys.slice(0, 3);
   if (shown.length === 0) return null;
@@ -54,12 +49,7 @@ function ParticipantStack({ pubkeys }: { pubkeys: readonly string[] }) {
   );
 }
 
-/**
- * One post as a row on the shared surface — the work-item row's shape
- * (`ProjectsView`): the author's face, the title as the line, one line of
- * meta under it, the comment count on the right. Unseen activity is the
- * app's new-dot plus a bolder title and a faint primary wash, never a border.
- */
+/** One post row in the work-item row shape (`ProjectsView`). */
 const ForumPostRow = memo(function ForumPostRow({
   post,
   isNew,
@@ -116,12 +106,7 @@ const ForumPostRow = memo(function ForumPostRow({
   );
 });
 
-/**
- * The post's images under its title, Reddit-style: one image shown whole over
- * a blurred fill of itself (art isn't cropped to fit the frame), two side by
- * side, three or more as a mosaic with a `+N` on the last tile. Aligned with
- * the title on wider screens, full-width on a phone.
- */
+/** Reddit-style gallery: one whole over a blurred fill, two side by side, three+ as a mosaic. */
 function ForumGallery({ images }: { images: readonly ForumImage[] }) {
   const frame = "mt-2 w-full max-w-md aspect-video overflow-hidden rounded-lg sm:ml-11 sm:w-[calc(100%-2.75rem)]";
   if (images.length === 1) {
@@ -150,7 +135,7 @@ function ForumGallery({ images }: { images: readonly ForumImage[] }) {
   );
 }
 
-/** A preview tile. A spoilered image is never fetched — the post page reveals it. */
+/** A spoilered image is never fetched — the post page reveals it. */
 function ForumImageTile(props: {
   image: ForumImage;
   fit?: "cover" | "contain";
@@ -180,7 +165,7 @@ function ForumImageTile(props: {
   );
 }
 
-/** The image itself, under the media policy and decrypted when encrypted. */
+/** Under the media policy and decrypted when encrypted. */
 function ResolvedImage({ image, fit }: { image: ForumImage; fit: "cover" | "contain" }) {
   const [loaded, setLoaded] = useState(false);
   const { resolved, onError, failed } = useMediaWithFallback(image);
@@ -193,9 +178,7 @@ function ResolvedImage({ image, fit }: { image: ForumImage; fit: "cover" | "cont
   }
   return (
     <>
-      {/* A letterboxed image sits on a blur of itself: its blurhash, which is
-          already blurred and costs nothing per frame, or failing that a
-          blurred, cropped copy — a full-size filter on every such row. */}
+      {/* Prefer the blurhash (free per frame) over a full-size blur filter. */}
       {image.blurhash && (!loaded || fit === "contain") && (
         <BlurhashCanvas hash={image.blurhash} className={cn("absolute inset-0", loaded && "opacity-50")} />
       )}
@@ -230,7 +213,6 @@ function ResolvedImage({ image, fit }: { image: ForumImage; fit: "cover" | "cont
   );
 }
 
-/** A titled group of rows: the eyebrow, then one surface holding them. */
 function PostGroup({
   eyebrow,
   icon: Icon,
@@ -253,16 +235,7 @@ function PostGroup({
   );
 }
 
-/**
- * A forum channel (CORD-03 §2 `view: "forum"`): every titled post in the
- * loaded window as a row, pinned ones grouped first, the rest by activity or
- * by age. A row opens the post as a page in this same pane; "New post" opens
- * the composer there too.
- *
- * Purely presentational over `forumPosts()`: the same folded timeline a chat
- * channel shows, arranged differently. Paging older history is the
- * transport's `loadOlder`, reached from a sentinel at the end of the list.
- */
+/** Forum channel (CORD-03 §2 `view: "forum"`): titled posts as rows over `forumPosts()`. */
 export function ForumFeed({
   posts,
   sort,
@@ -282,7 +255,6 @@ export function ForumFeed({
   posts: readonly ForumPost[];
   sort: ForumSort;
   onSortChange: (sort: ForumSort) => void;
-  /** The initial store read is still in flight (drives the skeleton). */
   isLoading: boolean;
   /** A background catch-up is running: an empty feed is not yet a verdict. */
   syncing?: boolean;
@@ -290,23 +262,14 @@ export function ForumFeed({
   isLoadingOlder?: boolean;
   onLoadOlder?: () => Promise<number>;
   onOpen: (post: ForumPost) => void;
-  /** Whether a post has activity the reader hasn't seen. */
   isNew: (post: ForumPost) => boolean;
-  /** Opens the new-post composer; undefined when the reader may not write. */
+  /** Undefined when the reader may not write. */
   onNewPost?: () => void;
-  /** Rendered above the list (a pause banner, an access notice). */
   banner?: ReactNode;
   className?: string;
 }) {
-  // Page older history as the reader nears the end, the way the timeline
-  // pages as they scroll up. A button stays for keyboards and for when the
-  // observer can't fire (a first page that doesn't overflow).
-  //
-  // The sentinel pulls a bounded number of pages on its own. A page of
-  // history that adds no titled post leaves the sentinel where it was, still
-  // in view, so an unbounded observer would walk a chatty channel's entire
-  // history the moment it was flipped to a forum. Past the cap the button
-  // remains, and a press on it grants another run.
+  // Auto-page older history with a bounded sentinel: a page with no titled post
+  // leaves it in view, so unbounded it'd walk a chatty channel's whole history.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadOlderRef = useRef(onLoadOlder);
   loadOlderRef.current = onLoadOlder;

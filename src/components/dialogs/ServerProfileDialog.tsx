@@ -24,21 +24,14 @@ interface ServerProfileDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/** Default swatch used by the color input when no color is set yet. */
 const DEFAULT_COLOR = "#7c5cff";
 
-/** A few quick-pick swatches shown next to the custom color input. */
 const PRESET_COLORS = [
   "#f87171", "#fb923c", "#facc15", "#4ade80",
   "#22d3ee", "#60a5fa", "#a78bfa", "#f472b6",
 ];
 
-/**
- * Edit the current user's per-server identity: a nickname (how you appear to
- * others on this server), a label (a short tag you set for yourself here), and
- * a username color. All three are NIP-32 self-labels scoped to this relay only
- * — they never appear on other servers or in your global profile.
- */
+/** Per-server nickname, label and username color: NIP-32 self-labels scoped to this relay only. */
 export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProfileDialogProps) {
   const { user, metadata } = useCurrentUserProfile();
   const { data: profile, isLoading } = useServerProfile(relayUrl, user?.pubkey);
@@ -49,7 +42,6 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
   const [color, setColor] = useState("");
   const [colorEnabled, setColorEnabled] = useState(false);
 
-  // Hydrate the form whenever the dialog opens or the loaded profile changes.
   useEffect(() => {
     if (open) {
       setNickname(profile?.nickname ?? "");
@@ -82,7 +74,6 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
     setColorEnabled(true);
   };
 
-  // What the preview should show: nickname if set, else the global name.
   const previewName = nickname.trim() || getDisplayName(metadata, user?.pubkey);
   const previewColor = colorEnabled && isHexColor(color || DEFAULT_COLOR)
     ? (color || DEFAULT_COLOR)
@@ -105,7 +96,6 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
           </p>
         </div>
 
-        {/* Live preview — mirrors a real chat message row. */}
         <div className="mt-6">
           <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 mb-2">
             Preview
@@ -124,9 +114,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
                     className="text-[15px] font-semibold text-primary truncate"
                     style={previewColor ? { color: previewColor } : undefined}
                   >
-                    {/* A real message row emojifies the scoped name against
-                        your kind-0 `emoji` tags, so the preview has to as
-                        well or a nickname with a shortcode previews wrong. */}
+                    {/* Emojify like a real message row, or shortcode nicknames preview wrong. */}
                     <DisplayName pubkey={user?.pubkey} name={previewName} />
                   </span>
                   {label.trim() && (
@@ -198,7 +186,6 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
               )}
             </div>
             <div className="flex items-center gap-2">
-              {/* Custom color well. */}
               <label
                 className="relative size-9 shrink-0 cursor-pointer clip-corner-lg overflow-hidden"
                 style={{ backgroundColor: colorEnabled ? swatch : "hsl(var(--background) / 0.4)" }}
@@ -213,7 +200,6 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
                   className="absolute inset-0 size-full cursor-pointer opacity-0"
                 />
               </label>
-              {/* Preset swatches. */}
               <div className="flex flex-wrap items-center gap-1.5">
                 {PRESET_COLORS.map((c) => {
                   const active = colorEnabled && color.toLowerCase() === c.toLowerCase();

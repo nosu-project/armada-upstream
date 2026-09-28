@@ -1,19 +1,8 @@
 /**
- * The catalogue of the user's encrypted NIP-78 settings documents.
- *
- * Armada's private, cross-device settings are not one blob but SIX kind-30078
- * documents, each NIP-44-encrypted to self and named `${APP_ID}/<name>`. The
- * long-form rationale, the migration story and the rules a writer has to keep
- * are in `docs/settings-documents.md`; the short version is that a kind-30078
- * event is REPLACEABLE, so everything sharing one `d` tag is rewritten,
- * re-encrypted and re-published every time any single field changes — and
- * three subsystems on three different debounces were doing exactly that to one
- * document, racing each other's read-modify-write and dragging an unbounded
- * read-state map along with every theme change.
- *
- * Splitting by write pattern rather than by topic is the point: the rail is
- * its own document because a drag rewrites it, not because it is conceptually
- * separate.
+ * The user's six encrypted NIP-78 settings documents (kind 30078, NIP-44 to
+ * self, `d` = `${APP_ID}/<name>`). Split by write pattern, not topic, because
+ * a replaceable event is rewritten whole on every field change. See
+ * `docs/settings-documents.md`.
  *
  * @see ../hooks/useSettingsDoc — the read/write hook these describe
  * @see ../contexts/AppContext — METADATA/RAIL/NOTIF/DM_CONFIG_KEYS
@@ -38,10 +27,8 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 export const SETTINGS_KIND = 30078;
 
 /**
- * The documents, in no significant order. Adding one means: a name here, a
- * schema in `schemas.ts`, a key list in `AppContext.ts` if it mirrors
- * AppConfig, and the Android service's default set (see
- * {@link SETTINGS_DTAGS}).
+ * Adding one needs: a name here, a schema in `schemas.ts`, a key list in
+ * `AppContext.ts` if it mirrors AppConfig, and the Android service's default set.
  */
 export const SETTINGS_DOC_NAMES = [
   "metadata",
@@ -54,14 +41,7 @@ export const SETTINGS_DOC_NAMES = [
 
 export type SettingsDocName = (typeof SETTINGS_DOC_NAMES)[number];
 
-/**
- * The `d` tag of a settings document.
- *
- * The `${APP_ID}/<name>` shape is what lets a fork or a custom build own its
- * own documents on the same identity without colliding — and, read the other
- * way, is what keeps Armada's documents out of every other NIP-78 client's
- * way on a kind the whole ecosystem shares.
- */
+/** `${APP_ID}/<name>` keeps forks and other NIP-78 clients from colliding. */
 export function settingsDTag(name: SettingsDocName): string {
   return `${APP_ID}/${name}`;
 }
@@ -89,15 +69,8 @@ export type ParsedSettingsDoc<N extends SettingsDocName> = z.infer<(typeof SETTI
 
 /**
  * Validate a decrypted settings document, dropping only the top-level fields
- * that fail rather than the whole document.
- *
- * A strict parse turns one out-of-range value into "no document at all": a
- * `defaultZapMethod` or `currencyDisplay` written by a build with a wider enum
- * took the user's theme and relay settings down with it, on every device that
- * read it, and a writer that then merged a patch over `{}` would have
- * republished that emptiness. Same rule as `AppConfigSchema`: a single bad key
- * never wipes the rest. Returns null only when the value isn't an object at
- * all, or is still invalid once the offending fields are gone.
+ * that fail (e.g. an enum value from a newer build) rather than the whole doc.
+ * Null if not an object or still invalid after dropping.
  */
 export function parseSettingsDoc<N extends SettingsDocName>(
   name: N,
@@ -125,11 +98,8 @@ export function parseSettingsDoc<N extends SettingsDocName>(
 }
 
 /**
- * The fields each split document took out of `armada/metadata`.
- *
- * `metadata` is absent on purpose — it took nothing from itself, and this map
- * doubles as the strip list the metadata writer applies (see
- * {@link stripMigratedKeys}).
+ * Fields each split document took out of `armada/metadata`; doubles as the
+ * metadata writer's strip list ({@link stripMigratedKeys}).
  */
 export const MIGRATED_KEYS = {
   "rail": ["railLayout", "railOrder"],
@@ -143,13 +113,9 @@ export const MIGRATED_KEYS = {
 const ALL_MIGRATED_KEYS: readonly string[] = Object.values(MIGRATED_KEYS).flat();
 
 /**
- * Drop the split fields from a metadata document about to be written.
- *
- * This is the half of the migration that makes the other half sound. A legacy
- * field is only meaningful evidence if its presence proves an OLD build wrote
- * the document; if this build carried them forward, an unrelated theme change
- * would bump metadata's `created_at` past the rail document's and
- * {@link resolveLegacy} would happily restore a stale rail.
+ * Drop the split fields from a metadata document about to be written. Legacy
+ * fields must only appear when an OLD build wrote them, otherwise
+ * {@link resolveLegacy} could restore a stale rail after a theme change.
  */
 export function stripMigratedKeys(doc: MetadataDoc): MetadataDoc {
   const out: Record<string, unknown> = { ...doc };
@@ -167,22 +133,9 @@ export function hasMigratedKeys(
 }
 
 /**
- * Choose between a split document and the legacy fields still sitting in
- * `armada/metadata`, for the migration window.
- *
- * A device running an older build writes the rail (or the mutes, or the read
- * state) into metadata, because that is the only document it knows. A device
- * running this one writes the split document. Both are legitimate, so the
- * newer `created_at` wins — which self-heals in both directions rather than
- * letting either build permanently shadow the other.
- *
- * Convergence: this build strips the legacy fields from every metadata write,
- * so once the user's last old install is upgraded `hasMigratedKeys` goes false
- * forever and this function becomes an identity on the split document.
- *
- * NOT used for `read-state` or `reactions`: their merges are commutative
- * (max timestamp / max count), so those two simply hydrate from both sources
- * and let the merge sort it out.
+ * During migration, pick between a split document and legacy fields in
+ * `armada/metadata` (written by older builds): newer `created_at` wins. Not
+ * used for `read-state`/`reactions`, whose merges are commutative.
  */
 export function resolveLegacy<T>(
   name: Exclude<SettingsDocName, "metadata">,
@@ -196,21 +149,12 @@ export function resolveLegacy<T>(
   for (const key of MIGRATED_KEYS[name]) {
     if (metadata.doc[key] !== undefined) legacy[key] = metadata.doc[key];
   }
-  // Carries the METADATA event as its identity on purpose: an "have I applied
-  // this?" guard has to re-fire when the legacy source is superseded, and the
-  // split document's id (or its absence) says nothing about that.
+  // Uses the METADATA event as identity so "already applied?" guards re-fire
+  // when the legacy source is superseded.
   return { doc: legacy as T, event: metadata.event };
 }
 
-/**
- * The rail layout a document holds, seeding from the flat `railOrder` when
- * only that is present.
- *
- * `railOrder` predates folders and was written alongside `railLayout` for a
- * while; it is a plain list of rail keys, i.e. exactly what a layout of
- * top-level items with no folders flattens to. This is the only place it is
- * still understood, and nothing writes it.
- */
+/** The rail layout a document holds, seeding from the legacy flat `railOrder` (read-only). */
 export function railLayoutOf(
   doc: { railLayout?: RailLayoutNode[]; railOrder?: string[] } | null | undefined,
 ): RailLayoutNode[] | undefined {

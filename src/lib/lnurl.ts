@@ -1,10 +1,7 @@
 /**
- * LNURL-pay (LUD-06/LUD-16) resolution and invoice fetching — the HTTP half of
- * both zap flows. Deliberately hand-rolled instead of nostr-tools'
- * `getZapEndpoint`: we need the full pay params (min/max, commentAllowed,
- * allowsNostr) and, for CORD.md private zaps, the ability to fetch an invoice
- * WITHOUT a `nostr` zap request — the `nostr` param's presence is exactly what
- * makes a provider mint a public kind-9735 receipt (CORD.md §2).
+ * LNURL-pay (LUD-06/LUD-16) resolution and invoice fetching. Hand-rolled rather
+ * than nostr-tools' `getZapEndpoint` because CORD.md private zaps must fetch an
+ * invoice WITHOUT `nostr`, whose presence makes providers publish a kind-9735 receipt.
  */
 
 import { bech32 } from "@scure/base";
@@ -21,8 +18,7 @@ export interface LnurlPayParams {
   allowsNostr: boolean;
 }
 
-/** Require https (LUD-06 does too): a profile field must not be able to point
- * payment traffic at plain http or, worse, probe intranet hosts over it. */
+/** https only (as LUD-06 requires), so profile fields can't probe intranet hosts over http. */
 function httpsOnly(url: string): string | null {
   try {
     return new URL(url).protocol === "https:" ? url : null;
@@ -49,10 +45,7 @@ function lud06Url(lnurl: string): string | null {
   }
 }
 
-/**
- * Resolve a recipient's LNURL-pay parameters from their kind-0 lightning
- * fields. Throws with a user-facing message when unset/unreachable/invalid.
- */
+/** Resolve LNURL-pay params from kind-0 lightning fields. Throws a user-facing message on failure. */
 export async function resolveLnurlPay(
   metadata: { lud16?: string; lud06?: string },
   fetchFn: typeof fetch = fetch,
@@ -83,12 +76,8 @@ export async function resolveLnurlPay(
 }
 
 /**
- * Fetch a bolt11 invoice from a resolved LNURL-pay endpoint.
- *
- * `zapRequest` (a SIGNED kind-9734, JSON) makes this a NIP-57 zap: the
- * provider commits it into the invoice's description hash and later publishes
- * a public kind-9735 receipt to the request's relays. Omit it for a plain
- * payment that leaves no Nostr trace (CORD.md).
+ * Fetch a bolt11 invoice. `zapRequest` (signed kind-9734 JSON) makes it a
+ * NIP-57 zap with a public receipt; omit it for a traceless payment (CORD.md).
  */
 export async function fetchLnurlInvoice(
   params: LnurlPayParams,

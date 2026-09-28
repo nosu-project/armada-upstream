@@ -3,11 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 interface UsePlayerControlsOptions {
-  /** The media element (audio or video) to observe and pause when offscreen. */
   mediaRef: RefObject<HTMLMediaElement | null>;
-  /** The container element to observe for IntersectionObserver and mouse events. */
+  /** Observed for IntersectionObserver and mouse events. */
   containerRef: RefObject<HTMLElement | null>;
-  /** Whether the media is currently playing. */
   isPlaying: boolean;
 }
 
@@ -22,12 +20,8 @@ interface UsePlayerControlsReturn {
 }
 
 /**
- * Shared player control behaviour for the custom video player:
- * - Auto-hides controls 2.5 s after the last mouse movement while playing.
- * - Pauses playback when the container scrolls out of view (only one inline
- *   video in a chat plays at a time, and nothing keeps playing above the fold).
- * - Manages volume state and mute toggling, kept in sync with the element's own
- *   `volumechange` so programmatic muting (e.g. muted autoplay) is reflected.
+ * Custom video player behaviour: auto-hide controls 2.5s after mouse movement, pause when
+ * scrolled out of view, and track volume/mute via `volumechange` (e.g. muted autoplay).
  */
 export function usePlayerControls({
   mediaRef,
@@ -61,7 +55,6 @@ export function usePlayerControls({
     };
   }, [isPlaying, scheduleHide]);
 
-  // Pause when scrolled out of view.
   useEffect(() => {
     const media = mediaRef.current;
     const container = containerRef.current;
@@ -76,14 +69,11 @@ export function usePlayerControls({
     return () => observer.disconnect();
   }, [mediaRef, containerRef]);
 
-  // ── Volume ─────────────────────────────────────────────────────────────
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const prevVolumeRef = useRef(1);
 
-  // Keep React state in sync with the media element's muted/volume. Covers the
-  // initial state, programmatic changes (e.g. autoplay muting), and any
-  // external modifications.
+  // Covers programmatic changes (e.g. autoplay muting).
   useEffect(() => {
     const media = mediaRef.current;
     if (!media) return;
@@ -93,7 +83,7 @@ export function usePlayerControls({
       setVolume(media.muted ? 0 : media.volume);
     };
 
-    sync(); // initial read
+    sync();
     media.addEventListener("volumechange", sync);
     return () => media.removeEventListener("volumechange", sync);
   }, [mediaRef]);

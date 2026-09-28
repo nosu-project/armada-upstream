@@ -6,11 +6,8 @@ import { CustomEmojisProvider } from "@/hooks/useCustomEmojis";
 import type { AppScope } from "@/contexts/AppsContext";
 
 /**
- * The frame every chat surface shares: the mobile drill-down (`SwipeReveal`
- * with the rail and the surface's own left list underneath), the main column,
- * and the coordination scope for in-message app launches. A community and a
- * DM are the same surface in two shapes; this is the shape, and everything
- * that differs between them renders as `children`.
+ * The frame every chat surface shares: mobile drill-down (`SwipeReveal`), main
+ * column and app-launch scope. Differences render as `children`.
  */
 export function ChatShell({
   reveal,
@@ -22,9 +19,8 @@ export function ChatShell({
   scope: AppScope | undefined;
   children: ReactNode;
 }) {
-  // Callers build `scope` inline, and a context value that changes identity
-  // re-renders every consumer — every message row reads it — so hold one
-  // object per distinct scope.
+  // Callers build `scope` inline; hold one object per distinct scope so every
+  // consumer (each message row) doesn't re-render.
   const held = useRef(scope);
   if (!sameScope(held.current, scope)) held.current = scope;
   const stableScope = held.current;
@@ -39,11 +35,7 @@ export function ChatShell({
   );
 }
 
-/**
- * Two scopes naming the same room. A Concord scope compares its community and
- * channel by IDENTITY rather than id, so a changed community (new metadata, a
- * rekey) still reaches the consumers.
- */
+/** Concord compares community/channel by IDENTITY, so metadata changes or rekeys propagate. */
 function sameScope(a: AppScope | undefined, b: AppScope | undefined): boolean {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;

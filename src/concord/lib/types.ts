@@ -94,21 +94,17 @@ export interface CommunityMetadata {
   /** The Community's evolving relay set (the fold is the authority). */
   relays: string[];
   /**
-   * The Community's own AV brokers (CORD-02 §6), as https origins — where its
-   * calls rendezvous when a room is empty (CORD-07 §5). Absent or empty means
-   * every member falls back to their own configured broker, which is both the
-   * pre-field behavior and the DM-call path. Read through `communityAvBrokers`
-   * rather than directly: these are another client's strings, and only §5's
-   * canonical origin form hashes the same on every client.
+   * The Community's AV brokers (CORD-02 §6) as https origins, where calls
+   * rendezvous in an empty room (CORD-07 §5). Empty = members' own brokers. Read
+   * via `communityAvBrokers` (canonical origin form).
    */
   av_brokers?: string[];
   icon?: ImagePointer;
   banner?: ImagePointer;
   /**
-   * Disappearing-messages timer in seconds (CORD-08): while set, every durable
-   * chat-plane rumor (except deletes and timer notices) carries a NIP-40
-   * `expiration` of its send time plus this. Absent, 0, or malformed = off;
-   * read through `messageExpirationOf`, never directly.
+   * Disappearing-messages timer in seconds (CORD-08): durable chat rumors (except
+   * deletes and timer notices) get a NIP-40 `expiration`. Absent/0/malformed =
+   * off; read via `messageExpirationOf`.
    */
   message_expiration?: number;
   /** Client-extensible opaque fields; editors MUST round-trip what they don't understand. */
@@ -118,9 +114,8 @@ export interface CommunityMetadata {
 }
 
 /**
- * How a client should OPEN a Channel (CORD-03 §2 `view`): `chat` is the flat
- * timeline; `forum` opens thread-first, listing titled posts as a feed. A
- * presentation hint only — the Chat Plane is identical either way.
+ * How to OPEN a Channel (CORD-03 §2 `view`): `chat` timeline or thread-first
+ * `forum`. Presentation only.
  */
 export type ChannelView = "chat" | "forum";
 
@@ -130,11 +125,7 @@ export interface ChannelMetadata {
   private: boolean;
   /** Terminal: the id is never reused; clients drop the Channel from display. */
   deleted?: boolean;
-  /**
-   * The presentation the Channel opens to (CORD-03 §2). Typed loosely on
-   * purpose: an unknown value reads as `"chat"` and is round-tripped
-   * verbatim. Read through `channelView()`, never directly.
-   */
+  /** Presentation (CORD-03 §2). Loosely typed: unknown values read as `"chat"` and round-trip; use `channelView()`. */
   view?: unknown;
   custom?: Record<string, unknown>;
   [k: string]: unknown;
@@ -180,7 +171,6 @@ export function normalizeChannelMetadata(metadata: ChannelMetadata): ChannelMeta
   if (!isRecord(metadata.custom)) return metadata;
   const extension = metadata.custom[ARMADA_GIT_CHANNEL_METADATA_KEY];
   if (!isRecord(extension)) {
-    // A malformed known extension is ignored; unrelated custom members survive.
     const { [ARMADA_GIT_CHANNEL_METADATA_KEY]: _ignored, ...custom } = metadata.custom;
     const { custom: _oldCustom, ...rest } = metadata;
     return { ...rest, ...(Object.keys(custom).length ? { custom } : {}) };
@@ -240,17 +230,9 @@ export interface PrivateChannelKey {
   /** Join-time preview name; the ChannelMetadata fold is the authority. */
   name: string;
   /**
-   * Superseded keys for this channel, retained so HISTORY stays readable
-   * across rotations. A rotation re-keys the channel forward; without the
-   * priors, every message sealed under an earlier epoch becomes undecryptable
-   * to a member who is still fully entitled — the conversation would appear
-   * to start over on every revoke. Read-only: never used to write.
-   *
-   * `retiredAt` is the epoch-seconds the superseding rotation published: the
-   * hard read cutoff for the retired key. Anything sealed under it with a
-   * later `created_at` is refused — a retired epoch is history, never a live
-   * channel an ejected keyholder can keep writing into. Absent for keys
-   * retired before this client recorded cutoffs (those decode uncapped).
+   * Superseded keys, kept so HISTORY stays readable across rotations. Read-only.
+   * `retiredAt` (epoch-s of the superseding rotation) is a hard read cutoff:
+   * anything later under a retired key is refused. Absent on old records (uncapped).
    */
   priors?: Array<{ key: Uint8Array; epoch: bigint; retiredAt?: number }>;
 }
@@ -260,37 +242,24 @@ export interface HeldRoot {
   epoch: bigint;
   key: Uint8Array;
   /**
-   * The epoch's Control Plane signer pubkey (`control_pk`, x-only hex) —
-   * HELD, never derived: it derives from a `control_root` only the owner and
-   * staff hold (CORD-02 §2), and arrives in invites, base rekey blobs, and the
-   * Community List. Present = a split epoch (subscribe/verify by this address,
-   * decrypt under the community_root-derived read key); absent = a LEGACY
-   * pre-split epoch, whose Control Plane folds at the member-derivable
-   * `concord/control` address (CORD-02 §5).
+   * The epoch's Control Plane signer pubkey (`control_pk`, x-only hex) — HELD,
+   * never derived (its `control_root` is staff-only, CORD-02 §2). Absent = LEGACY
+   * pre-split epoch, folded at the member-derivable `concord/control` address.
    */
   controlPk?: string;
-  /**
-   * Epoch-seconds the rotation that superseded this root published — the hard
-   * read cutoff for everything derived from it (see the priors doc above).
-   * Absent on the current root, and on roots retired before cutoffs existed.
-   */
+  /** Epoch-seconds of the superseding rotation — the hard read cutoff. Absent on the current root. */
   retiredAt?: number;
   /**
-   * The npub whose Refounding minted this epoch (x-only hex) — the snapshot
-   * authority for ITS Guestbook (CORD-02 §5: a snapshot "is honored only from
-   * the npub whose Refounding minted that epoch"). Recorded so historical
-   * epochs' snapshots stay verifiable after the rotator's rank (or the
-   * `refounder` field, which only names the CURRENT epoch's) has moved on.
-   * Absent at genesis (the owner) and on epochs adopted before this existed.
+   * The npub whose Refounding minted this epoch — the snapshot authority for its
+   * Guestbook (CORD-02 §5), recorded so historical snapshots stay verifiable.
+   * Absent at genesis.
    */
   refounder?: string;
 }
 
 /**
- * A Concord community as the client holds it — rehydrated from the
- * Community List entry (join material) with the deployment's app relays
- * unioned in. Channel DEFINITIONS live on the Control Plane; this carries only
- * identity, access keys, and the private-channel keys the member holds.
+ * A Concord community as the client holds it: rehydrated from the Community List
+ * entry plus app relays. Channel definitions live on the Control Plane.
  */
 export interface Community {
   id: Uint8Array;
@@ -301,18 +270,12 @@ export interface Community {
   /** The current community_root at `rootEpoch`. */
   root: Uint8Array;
   rootEpoch: bigint;
-  /**
-   * The CURRENT epoch's Control Plane signer pubkey (see
-   * {@link HeldRoot.controlPk}); absent on a legacy pre-split epoch. Mirrors
-   * the current entry in `heldRoots`, the way `root`/`rootEpoch` do.
-   */
+  /** The CURRENT epoch's `control_pk` (see {@link HeldRoot.controlPk}); absent on legacy epochs. */
   controlPk?: string;
   /**
-   * The CURRENT epoch's staff write secret (`control_root`, CORD-02 §2) —
-   * held only by the owner and staff, delivered on promotion inside the
-   * staff-making Grant (CORD-04 §3) or in a 136-byte base rekey blob
-   * (CORD-06 §1). Absent for regular members and on legacy epochs. Possession
-   * gates publishing to the Control Plane, never authority.
+   * The CURRENT epoch's staff write secret (`control_root`, CORD-02 §2), delivered
+   * via the staff Grant (CORD-04 §3) or a 136-byte rekey blob (CORD-06 §1). Gates
+   * publishing, never authority.
    */
   controlRoot?: Uint8Array;
   /** Every held root epoch (current + retained priors), newest first. */
@@ -327,9 +290,8 @@ export interface Community {
 }
 
 /**
- * A Channel's call coordinates (CORD-07 §1), derived from the same
- * (secret, epoch) that addresses its Chat Plane — so they rotate exactly when
- * the Channel's key does. Every Channel is callable.
+ * A Channel's call coordinates (CORD-07 §1), derived from the same (secret, epoch)
+ * as its Chat Plane, so they rotate with it.
  */
 export interface VoiceKeys {
   /** The SFU room keypair: `pk` IS the room name, `sk` signs token grants. */
@@ -350,17 +312,11 @@ export interface Channel {
   position?: number;
   /** The presentation the channel opens to (channelView.ts); undefined reads as `chat`. */
   view?: ChannelView;
-  /**
-   * The current epoch's call coordinates — every Channel is callable
-   * (CORD-07 §1). A lazy memoized getter on the objects `channelsView`
-   * builds: the room keypair costs a point multiplication, so it derives on
-   * first read (joining or resolving a call), not on every sidebar rebuild.
-   */
+  /** Current-epoch call coordinates (CORD-07 §1), lazily derived (costs a point multiplication). */
   readonly voice: VoiceKeys;
   /**
-   * Stream keys across every held epoch, newest first (reads span rekeys).
-   * A retired epoch carries its rotation's publish time as `retiredAt` — the
-   * decode path refuses anything sealed under it with a later `created_at`.
+   * Stream keys across held epochs, newest first. `retiredAt` = the rotation's
+   * publish time; later rumors under that key are refused.
    */
   streams: Array<{ epoch: bigint; group: GroupKey; retiredAt?: number }>;
   /** The current write coordinate. */

@@ -1,12 +1,7 @@
 /**
- * Multi-select for the Members tab — pure reducer, Gmail model.
- *
- * The anchor is a PUBKEY, not an index, so a re-sort re-ranges from the same
- * member rather than from whichever row now sits at the old index. A plain
- * click toggles the row and re-anchors there; a Shift-click applies the
- * anchor's CURRENT state (i.e. the state its own click produced) across the
- * whole visual range, and keeps the anchor so repeated Shift-clicks re-range
- * from the same origin.
+ * Members-tab multi-select (pure reducer, Gmail model). The anchor is a PUBKEY
+ * so re-sorts keep it. Click toggles and re-anchors; Shift-click applies the
+ * anchor's current state across the range and keeps the anchor.
  */
 
 export interface SelectionState {
@@ -46,10 +41,7 @@ export function clickRow(
   return { selected, anchor: state.anchor };
 }
 
-/**
- * Drop selected rows that are no longer visible — a member who left or was
- * removed mid-view must not ride invisibly into the next mass action.
- */
+/** Drop selected rows no longer visible, so they don't ride into the next mass action. */
 export function pruneSelection(state: SelectionState, visible: ReadonlySet<string>): SelectionState {
   let changed = false;
   const selected = new Set<string>();

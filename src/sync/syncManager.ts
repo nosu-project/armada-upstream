@@ -1,37 +1,16 @@
 /**
- * The sync scheduler: hooks declare interest in a TOPIC and read the local
- * store; this manager is the only place that decides when a topic's pull
- * actually touches the network.
+ * Sync scheduler: hooks declare interest in a TOPIC (a wire-bus scope string
+ * like `c2:<channelIdHex>`) and read the local store; this alone decides when
+ * a topic's handler (registered per key prefix) hits the network. Results
+ * reach readers via the wire bus.
  *
- * Topics are the wire bus's scope strings (`c2:<channelIdHex>`,
- * `nip29:<relay>|<groupId>`, `dm`, ...): the same key a hook re-reads the
- * store on is the key it declares interest in. A topic's handler — registered
- * per key prefix by the module that owns that data — fetches and writes into
- * ArmadaDB; results reach readers the way every store write does (the wire
- * bus), so a completed run needs no return channel.
+ * Centralizes throttles (`minIntervalMs` floor, `staleAfterMs` re-run age),
+ * durable freshness stamps in KV (`sync-fresh:<topic>`, surviving remounts and
+ * relaunches), and scheduling (single-flight, lane capacity, paused while
+ * hidden or boot-gated).
  *
- * What this centralizes, replacing the per-hook copies it will absorb:
- *
- *  - **Throttles.** `minIntervalMs` is the hard floor between two runs of one
- *    topic; `staleAfterMs` is how old the freshness stamp may get before a
- *    standing interest re-runs it (the `refetchInterval` replacement).
- *  - **Freshness is durable.** Stamps persist in KV (`sync-fresh:<topic>`),
- *    so "synced this channel 20s ago" survives a remount, a channel switch,
- *    and a relaunch — the per-mount refs that reset on every switch (and
- *    re-page every relay) are what this exists to delete.
- *  - **Scheduling.** Single-flight per topic; a few `visible` runs and one
- *    `background`/`prefetch` run at a time; paused while the document is
- *    hidden or the boot paint gate is closed; nudged on focus / online /
- *    visibility, where staleness decides whether anything actually runs.
- *
- * Skeleton semantics for readers: skeleton iff the local read was empty AND
- * `syncState(topic)` has never settled. `"settled"` means a run completed, or
- * the stamp was fresh enough that none was needed — either way an empty store
- * is then an answer, not a not-yet.
- *
- * Registration order is forgiving: a `want` for a topic with no registered
- * policy sits idle, and `registerSyncTopic` re-schedules, so a hook that
- * mounts before the owning module registers is picked up then.
+ * Readers: skeleton iff the local read was empty AND the topic never settled.
+ * A want for an unregistered topic idles until `registerSyncTopic` re-schedules.
  */
 import { isBackgroundQuiet, onBackgroundQuiet } from "@/lib/backgroundQuiet";
 import { isBootGateOpen, onBootGateOpen } from "@/lib/bootGate";
@@ -57,10 +36,7 @@ export interface SyncCtx {
 export interface TopicPolicy {
   /** Hard floor between two runs of one topic, however demanded. */
   minIntervalMs: number;
-  /**
-   * Age the stamp may reach before a standing interest re-runs the topic.
-   * While any component holds a want, the topic re-syncs roughly this often.
-   */
+  /** Stamp age before a standing interest re-runs the topic. */
   staleAfterMs: number;
   /** Fetch and write into ArmadaDB. Results reach readers via the wire bus. */
   handler: (ctx: SyncCtx) => Promise<void>;
@@ -107,25 +83,16 @@ const policies = new Map<string, TopicPolicy>();
 const topics = new Map<string, TopicRuntime>();
 
 /**
- * Durable freshness stamps. In KV rather than memory so throttling survives
- * remounts and relaunches; cleared with the rest of KV on logout/purge.
- *
- * NOT scoped by account, deliberately: a stamp says "this TOPIC's data was
- * pulled from its relays at T", and a topic names data that is itself
- * account-independent (a channel on its community's relays, a group on its
- * relay), stored in the same tenant whoever is logged in. An account switch
- * therefore inherits the other account's stamps — which costs at most a
- * skipped round on data already present. Anything whose FRESHNESS differs per
- * account (a per-account read set, a DM inbox) must put the account in its
- * topic key rather than rely on this.
+ * Durable freshness stamps. NOT account-scoped: topics name
+ * account-independent data, so a switch inherits stamps at most skipping a
+ * round. Per-account freshness (read sets, DM inbox) must put the account in
+ * the topic key.
  */
 const stamps = new KvPrefixCache<number>({ prefix: "sync-fresh:" });
 
 /**
- * Whether the stamp warm has SETTLED (not necessarily succeeded). Scheduling
- * waits for it so a fresh stamp can answer a boot-time want without a run; if
- * the warm failed, every topic just looks never-synced, which degrades to
- * syncing — never to wrongly skipping.
+ * Whether the stamp warm has SETTLED; a failed warm degrades to syncing, never
+ * to wrongly skipping.
  */
 let stampsSettled = false;
 
@@ -135,12 +102,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let timerAt = Infinity;
 let scheduleQueued = false;
 
-/**
- * Coalesce scheduler passes: every nudge (a want, a release, a finished run,
- * a focus event) marks the scheduler dirty and one pass runs per microtask.
- * A member list is hundreds of per-row wants mounting and releasing in a
- * single flush — a synchronous full pass per call was where the CPU went.
- */
+/** Coalesce scheduler passes to one per microtask (per-row wants mount in bursts). */
 function requestSchedule(): void {
   if (scheduleQueued) return;
   scheduleQueued = true;
@@ -156,28 +118,20 @@ export function registerSyncTopic(prefix: string, policy: TopicPolicy): void {
   requestSchedule();
 }
 
-/**
- * Declare interest in a topic. Returns a release; when the last interest
- * releases, an in-flight run is aborted and nothing further is scheduled.
- */
+/** Declare interest in a topic; the last release aborts any in-flight run. */
 export function want(topic: string, priority: SyncPriority = "visible", opts?: WantOpts): () => void {
   ensureWired();
   const rt = runtime(topic);
   const token: Want = { priority };
   rt.wants.add(token);
   if (opts?.force) rt.forced = true;
-  // A higher-priority want upgrades an in-flight run's lane, so capacity
-  // accounting follows the demand (a prefetch a viewer is now waiting on
-  // stops occupying the deferred lane).
+  // A higher-priority want upgrades an in-flight run's lane.
   if (rt.run && PRIORITY_RANK[priority] > PRIORITY_RANK[rt.run.priority]) {
     rt.run.priority = priority;
   }
-  // Publish `pending` SYNCHRONOUSLY for a topic that may yet run — before the
-  // stamp warm, the boot gate, the lane queue. This is the reader's coverage
-  // guarantee: from the moment a view declares interest until the topic
-  // settles, an empty store read renders as "catching up", never as an
-  // authoritative empty. Skipped when a policy hasn't registered (the topic
-  // truly is idle) and when a fresh stamp / error verdict already stands.
+  // Publish `pending` SYNCHRONOUSLY so an empty read renders as "catching up"
+  // (never authoritative empty) until the topic settles. Skipped with no policy
+  // or when a fresh stamp/error already stands.
   if (rt.state.status === "idle" && policyFor(topic) !== undefined) {
     publish(topic, rt, "pending");
   }
@@ -188,8 +142,7 @@ export function want(topic: string, priority: SyncPriority = "visible", opts?: W
       if (rt.run) {
         rt.run.controller.abort();
       } else if (rt.state.status === "pending") {
-        // Nothing was in flight: resolve the optimistic pending so a
-        // read-only observer of this topic doesn't see it "syncing" forever.
+        // Nothing in flight: resolve the optimistic pending.
         publish(topic, rt, stamps.get(topic) === undefined ? "idle" : "settled");
       }
       rt.forced = false;
@@ -198,11 +151,7 @@ export function want(topic: string, priority: SyncPriority = "visible", opts?: W
   };
 }
 
-/**
- * Mark a topic stale NOW (e.g. a rekey landed new stream keys that may unlock
- * history): the next scheduler pass re-runs it regardless of stamp age,
- * respecting only the min-interval floor. No-op for a topic never wanted.
- */
+/** Mark a topic stale NOW (only the min-interval floor applies); no-op if never wanted. */
 export function invalidateSyncTopic(topic: string): void {
   const rt = topics.get(topic);
   if (!rt) return;
@@ -249,7 +198,7 @@ function publish(topic: string, rt: TopicRuntime, status: SyncStatus): void {
     try {
       listener();
     } catch {
-      // A listener must never break the scheduler for the others.
+      // a listener must never break the scheduler
     }
   }
 }
@@ -273,8 +222,7 @@ function ensureWired(): void {
     stampsSettled = true;
     requestSchedule();
   });
-  // The warm (and any stamp write) changes lastSyncedAt under published
-  // snapshots; refresh them and let staleness re-evaluate.
+  // Stamp changes update published snapshots and re-evaluate staleness.
   stamps.subscribe(() => {
     for (const [topic, rt] of topics) publish(topic, rt, rt.state.status);
     requestSchedule();
@@ -294,9 +242,7 @@ function paused(): boolean {
   if (!isBootGateOpen()) return true;
   if (!stampsSettled) return true;
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return true;
-  // Android, backgrounded, with the native service watching: the WebView's
-  // `visibilityState` is not reliable there, so this is the signal that it is
-  // off screen (see backgroundQuiet.ts).
+  // Android WebView `visibilityState` is unreliable when backgrounded (see backgroundQuiet.ts).
   if (isBackgroundQuiet()) return true;
   return false;
 }
@@ -316,11 +262,7 @@ function dueAt(topic: string, rt: TopicRuntime, policy: TopicPolicy): number {
   return Math.max(rt.nextEligibleAt, stamp + policy.staleAfterMs);
 }
 
-/**
- * The scheduler pass: start every due topic there is capacity for, answer
- * fresh-enough wants without a run, and arm one timer for the next deadline.
- * Idempotent; called on every state change and environment nudge.
- */
+/** Scheduler pass: start due topics within capacity, answer fresh wants, arm one timer. Idempotent. */
 function schedule(): void {
   if (paused()) return; // re-nudged by the gate / warm / visibility listeners
 
@@ -353,9 +295,7 @@ function schedule(): void {
   for (const c of candidates) {
     if (c.at > now) {
       nextWake = Math.min(nextWake, c.at);
-      // Fresh enough that no run is needed: that ANSWERS the want (an empty
-      // store read is authoritative now). Leave error states standing until
-      // the backoff deadline actually re-runs.
+      // Fresh enough: that ANSWERS the want. Error states wait for the backoff.
       if (c.rt.state.status === "idle" || c.rt.state.status === "pending") {
         if (stamps.get(c.topic) !== undefined) publish(c.topic, c.rt, "settled");
       }
@@ -372,10 +312,7 @@ function schedule(): void {
     startRun(c.topic, c.rt, c.policy, c.priority);
   }
 
-  // Re-arm only when the next deadline moved EARLIER than the armed timer.
-  // A timer left targeting a deadline that vanished or moved later fires a
-  // harmless no-op pass and re-arms then — cheaper than a clearTimeout +
-  // setTimeout pair on every pass, which profiling showed dominating.
+  // Re-arm only when the deadline moved EARLIER (clear/set per pass dominated profiles).
   if (nextWake < Infinity) {
     const fireAt = now + Math.max(MIN_WAKE_MS, nextWake - now);
     if (fireAt < timerAt) {
@@ -411,9 +348,7 @@ function finishRun(
   const aborted = rt.run?.controller.signal.aborted ?? false;
   rt.run = undefined;
   if (aborted) {
-    // Torn down mid-flight (last want released): neither an answer nor a
-    // failure, and no stamp — the run may have stopped partway. The floor is
-    // left alone so a remount's re-want isn't penalized a whole interval.
+    // Torn down: no verdict, no stamp, and no floor penalty for a remount.
     publish(topic, rt, stamps.get(topic) === undefined ? "idle" : "settled");
   } else if (ok) {
     rt.failures = 0;
@@ -422,30 +357,20 @@ function finishRun(
     publish(topic, rt, "settled");
   } else {
     rt.failures++;
-    // Trace the reason. Without it a handler-contract bug (a missing context
-    // registration, a malformed topic key — the throws the handlers make
-    // deliberately) is indistinguishable from a dead relay: both just show as
-    // `error` and retry into the backoff ceiling forever.
+    // Trace it, or handler-contract bugs look like dead relays.
     logSync(
       "sync",
       `topic ${topic} failed (attempt ${rt.failures}): ${err instanceof Error ? err.message : String(err)}`,
       err,
     );
-    // Deliberately NOT scaled by `minIntervalMs`: a failed round left the
-    // reader with nothing, so the first retry should come in seconds (a
-    // wedged relay REQ, a mid-flight NIP-42 handshake) — the min-interval
-    // floor is a success-spacing rule, not a failure-penalty one.
+    // Not scaled by `minIntervalMs` (a success-spacing rule): retry in seconds.
     rt.nextEligibleAt = Date.now() + Math.min(1000 * 2 ** rt.failures, MAX_BACKOFF_MS);
     publish(topic, rt, "error");
   }
   requestSchedule();
 }
 
-/**
- * Test seam: abort every run and drop all scheduler state, including
- * registered policies. Durable stamps live in KV and are cleared by the DB
- * purge / `resetKvCaches`, not here.
- */
+/** Test seam: drop all scheduler state (KV stamps are cleared by purge / `resetKvCaches`). */
 export function _resetSyncManagerForTests(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;

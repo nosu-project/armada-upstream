@@ -5,41 +5,25 @@ import type { GifResult } from "@/hooks/useGifSearch";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { KIND_APP_SPECIFIC, T_ARMADA_GIF_FAVORITES } from "@/lib/selfSyncKinds";
 
-/** Legacy, device-wide favorites written by Armada before account sync existed. */
+/** Legacy device-wide favorites from before account sync. */
 export const LEGACY_FAVORITE_GIFS_KEY = "armada:favorite-gifs";
 export const FAVORITE_GIFS_EVENT_KIND = KIND_APP_SPECIFIC;
 export const FAVORITE_GIFS_EVENT_TAG = T_ARMADA_GIF_FAVORITES;
 export const FAVORITE_GIFS_D_PREFIX = "armada/gif-favorites/";
 
 /**
- * The device id stays in localStorage, deliberately, unlike the shards below.
- * It is 36 bytes, and it has to be readable SYNCHRONOUSLY: `ownShardKey`
- * embeds it, so an async read that came back empty would mint a second id and
- * fork this installation's shard in two.
+ * Stays in localStorage: `ownShardKey` embeds it and needs a SYNCHRONOUS read, or an empty
+ * async read would mint a second id and fork the shard.
  */
 const DEVICE_ID_PREFIX = "armada:favorite-gifs:device-id:";
 
-/**
- * The shards themselves are in ArmadaDB's KV — unbounded with the number of
- * favorites, tens of KB each, and both writes swallowed quota failures.
- *
- * Two caches rather than one over `armada:favorite-gifs:`, so the localStorage
- * move (`LOCALSTORAGE_MOVES`) names the shard and merge spaces exactly and
- * cannot reach `device-id:`, whose localStorage copy must stay put — a shard
- * key embeds it, so an async miss would fork the shard.
- */
+/** Shards live in ArmadaDB KV; `device-id:` must stay in localStorage. */
 const shardStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-shard:" });
 const mergedStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-merged:" });
 
 /**
- * Load both stores, then drop the derived memos below and re-render: they may
- * hold results computed while the stores still read empty.
- *
- * The drop-and-notify fires once, on the cold→warm transition only. This is
- * called from every `loadMerged`/`loadOwnFavoriteGifShard` miss — which the
- * notify itself causes, via the re-render recomputing its snapshot — so
- * re-arming it per call would clear the memos that re-render just refilled
- * and loop forever, pinning the main thread.
+ * Load both stores, then drop the derived memos and re-render. Fires on the cold→warm
+ * transition only: re-arming per miss would loop forever (the notify causes the misses).
  */
 let warmDrop: Promise<void> | undefined;
 
@@ -54,12 +38,10 @@ function warmFavoriteGifStores(): Promise<void> {
   return warmDrop;
 }
 
-/** Resolve persisted shards before a relay migration makes a loss decision. */
 export function readyFavoriteGifShards(): Promise<void> {
   return warmFavoriteGifStores();
 }
 
-/** Whether both stores have loaded, i.e. whether a miss means "nothing". */
 function storesWarm(): boolean {
   return shardStore.warmed && mergedStore.warmed;
 }
@@ -69,15 +51,10 @@ export interface FavoriteGifRecord {
   favorite: boolean;
   /** Lamport-style millisecond clock. Highest operation wins for this GIF. */
   updatedAt: number;
-  /** Deterministic tie-breaker for two devices updating in the same millisecond. */
   operationId: string;
 }
 
-/**
- * One encrypted NIP-78 document per Armada installation. Devices only rewrite
- * their own shard, so an offline device can never replace another device's
- * legacy favorites before the two sets have been merged.
- */
+/** One encrypted NIP-78 document per installation. Devices only rewrite their own shard. */
 export interface FavoriteGifShard {
   version: 1;
   deviceId: string;
@@ -131,7 +108,6 @@ function isRecord(value: unknown): value is FavoriteGifRecord {
     && typeof record.operationId === "string";
 }
 
-/** Validate decrypted network/local data before it reaches the favorites UI. */
 export function parseFavoriteGifShard(value: unknown): FavoriteGifShard | null {
   if (!value || typeof value !== "object") return null;
   const shard = value as Partial<FavoriteGifShard>;
@@ -172,7 +148,6 @@ function mergeRecords(...sets: readonly FavoriteGifRecord[][]): FavoriteGifRecor
   return [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt || b.operationId.localeCompare(a.operationId));
 }
 
-/** Canonical CRDT union, exported for explicit relay-migration consolidation. */
 export function mergeFavoriteGifRecords(
   ...sets: readonly FavoriteGifRecord[][]
 ): FavoriteGifRecord[] {
@@ -191,18 +166,14 @@ function loadMerged(pubkey: string): FavoriteGifRecord[] {
   const parsed = mergedStore.get(pubkey);
   if (Array.isArray(parsed)) records = mergeRecords(parsed.filter(isRecord));
   records = mergeRecords(records, loadOwnFavoriteGifShard(pubkey).records);
-  // Only memoise a result the stores could actually answer. Caching an empty
-  // read taken before they loaded would outlive the load.
+  // Only memoise once the stores are warm; an earlier empty read would outlive the load.
   if (storesWarm()) mergedCache.set(pubkey, records);
   return records;
 }
 
 /**
- * Persist the union. MERGES with what is already stored rather than replacing
- * it: a toggle taken before the stores loaded computed its `records` from an
- * empty read, and a straight replace would drop every favorite still on disk.
- * Merging is free of that hazard by construction — the CRDT keeps the highest
- * `updatedAt` per GIF, so no stale record can win and no tombstone is lost.
+ * MERGES with what is stored: a toggle taken before the stores loaded computed from an
+ * empty read. The CRDT keeps the highest `updatedAt`, so merging is safe.
  */
 function saveMerged(pubkey: string, records: FavoriteGifRecord[]): void {
   const stored = mergedStore.get(pubkey);
@@ -223,13 +194,11 @@ export function loadOwnFavoriteGifShard(pubkey: string): FavoriteGifShard {
   const empty: FavoriteGifShard = { version: 1, deviceId: favoriteGifsDeviceId(pubkey), records: [] };
   const parsed = parseFavoriteGifShard(shardStore.get(ownShardId(pubkey)));
   const shard = parsed?.deviceId === empty.deviceId ? parsed : empty;
-  // As in `loadMerged`: an empty read taken before the stores loaded is not an
-  // answer worth remembering.
+  // As in `loadMerged`: don't remember a pre-load empty read.
   if (storesWarm()) ownShardCache.set(pubkey, shard);
   return shard;
 }
 
-/** Persist this device's shard, merging with what is stored — see `saveMerged`. */
 function saveOwnShard(pubkey: string, shard: FavoriteGifShard): void {
   const stored = parseFavoriteGifShard(shardStore.get(ownShardId(pubkey)));
   const next: FavoriteGifShard = {
@@ -240,7 +209,6 @@ function saveOwnShard(pubkey: string, shard: FavoriteGifShard): void {
   shardStore.set(ownShardId(pubkey), next);
 }
 
-/** Fold decrypted shards into the durable local union. Tombstones are retained. */
 export function hydrateFavoriteGifShards(pubkey: string, shards: FavoriteGifShard[]): void {
   const previous = loadMerged(pubkey);
   const own = loadOwnFavoriteGifShard(pubkey);
@@ -258,9 +226,8 @@ export function hydrateFavoriteGifShards(pubkey: string, shards: FavoriteGifShar
 }
 
 /**
- * Copy the pre-sync device-wide list into this installation's private shard.
- * Existing remote operations (including unfavorite tombstones) take priority;
- * legacy entries only fill GIF ids for which no synced decision exists yet.
+ * Remote operations (including tombstones) take priority; legacy entries only fill GIF ids
+ * with no synced decision.
  */
 export function claimLegacyFavoriteGifs(pubkey: string): { hadLegacy: boolean; changed: boolean } {
   const legacy = parseLegacyFavorites();
@@ -271,15 +238,12 @@ export function claimLegacyFavoriteGifs(pubkey: string): { hadLegacy: boolean; c
   const ownById = new Map(own.records.map((record) => [record.gif.id, record]));
   let changed = false;
 
-  // The old array is oldest-first. Preserve that ordering in the migration.
   for (const [index, gif] of legacy.entries()) {
     if (known.has(gif.id)) continue;
     const record: FavoriteGifRecord = {
       gif,
       favorite: true,
-      // Legacy imports are baseline facts, not actions happening right now.
-      // Keeping their clocks low means a phone migrating late cannot outvote
-      // an unfavorite performed in a sync-aware client while it was offline.
+      // Low clocks: a late migration can't outvote an unfavorite made elsewhere.
       updatedAt: index + 1,
       operationId: randomId(),
     };
@@ -297,7 +261,6 @@ export function claimLegacyFavoriteGifs(pubkey: string): { hadLegacy: boolean; c
   return { hadLegacy: true, changed };
 }
 
-/** Remove the old device-wide copy only after its encrypted shard was signed and queued. */
 export function completeLegacyFavoriteGifMigration(): void {
   try {
     localStorage.removeItem(LEGACY_FAVORITE_GIFS_KEY);
@@ -315,12 +278,10 @@ export function subscribeFavoriteGifChanges(listener: (pubkey: string) => void):
   return () => dirtyListeners.delete(listener);
 }
 
-/** Current winning records, including unfavorite tombstones. */
 export function getFavoriteGifRecords(pubkey: string): FavoriteGifRecord[] {
   return loadMerged(pubkey);
 }
 
-/** Optimistically apply an explicit favorite/unfavorite action on this device. */
 export function toggleFavoriteGif(pubkey: string, gif: GifResult): void {
   const merged = loadMerged(pubkey);
   const current = merged.find((record) => record.gif.id === gif.id);
@@ -398,7 +359,7 @@ function subscribe(pubkey: string | undefined, listener: () => void): () => void
   };
 }
 
-/** Account-scoped GIF favorites, optimistically local and relay-synced in NostrSync. */
+/** Account-scoped GIF favorites; relay sync lives in NostrSync. */
 export function useFavoriteGifs() {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
@@ -427,11 +388,11 @@ export function useFavoriteGifs() {
   return { isFavorite, toggleFavorite, favoriteList, count: favorites.length };
 }
 
-/** Test seam for independent localStorage scenarios. */
+/** Test seam. */
 export async function resetFavoriteGifsCache(): Promise<void> {
   mergedCache.clear();
   ownShardCache.clear();
   snapshotCache.clear();
-  // The shards outlive `localStorage.clear()` now — they are in KV.
+  // The shards are in KV, so they outlive `localStorage.clear()`.
   await Promise.all([shardStore.clear(), mergedStore.clear()]);
 }

@@ -9,7 +9,7 @@ export interface RelayInfoDocument {
   icon?: string;
   banner?: string;
   pubkey?: string;
-  /** NIP-29: the relay's own keypair pubkey, which signs group metadata events. */
+  /** NIP-29: the relay's own pubkey, which signs group metadata. */
   self?: string;
   contact?: string;
   software?: string;
@@ -18,9 +18,7 @@ export interface RelayInfoDocument {
   /** Buzz relays: custom protocol extensions (e.g. "nip-er", "nip-pl"). */
   supported_extensions?: string[];
   /**
-   * NIP-AB device-pairing rendezvous URL. newlay serves this only under its
-   * `[buzz]` compatibility mode (the drop-in for Buzz's `buzz-pair-relay`), so
-   * on a `software: "newlay"` relay its presence marks Buzz mode — see
+   * NIP-AB pairing rendezvous. On `software: "newlay"` it marks Buzz compatibility mode — see
    * `isBuzzRelayInfo`.
    */
   pairing_relay_url?: string;
@@ -37,7 +35,6 @@ export interface RelayInfoDocument {
   };
 }
 
-/** Convert relay websocket URL to HTTP URL for NIP-11 requests. */
 function relayToHttpUrl(relayUrl: string): string | null {
   try {
     const parsed = new URL(relayUrl);
@@ -53,18 +50,8 @@ function relayToHttpUrl(relayUrl: string): string | null {
   }
 }
 
-// A relay's NIP-11 doc (name, icon, banner, self key) is one of the most STABLE
-// things about a server — it changes almost never. So we persist the last
-// known-good doc, keyed by relay URL, and seed the query with it. That way a
-// reload over a shaky/offline connection still shows the real server name and
-// avatar instead of collapsing to the bare host + a placeholder logo while the
-// NIP-11 fetch fails. (react-query's cache is memory-only and vanishes on
-// reload; this is the disk-backed last-known-good.)
-//
-// Held in ArmadaDB's KV: one entry per relay ever contacted, 1–3 KB each, never
-// evicted — an unbounded claim on a ~5 MB localStorage budget, and the write
-// already swallowed quota failures. The synchronous cache in front of it is
-// what lets `initialData` stay synchronous, which react-query requires.
+// Disk-backed last-known-good NIP-11 docs so an offline reload still shows the real server
+// name/avatar. In ArmadaDB KV (unbounded entries); the sync cache in front keeps `initialData` sync.
 export const relayInfoCache = new KvPrefixCache<RelayInfoDocument>({ prefix: 'relay-info:' });
 
 function readCachedInfo(relayUrl: string | undefined): RelayInfoDocument | undefined {
@@ -76,10 +63,8 @@ function writeCachedInfo(relayUrl: string, info: RelayInfoDocument): void {
 }
 
 /**
- * Fetch a relay's NIP-11 document directly (no react-query). Exported so
- * useRelayGroups can resolve the relay's signing key WITHOUT gating its
- * channel-list query on this hook's query lifecycle. Persists the last
- * known-good doc to the same localStorage seed the hook reads.
+ * Direct NIP-11 fetch, so useRelayGroups can get the signing key without gating on this
+ * hook's query. Persists the last-known-good doc.
  */
 export async function fetchRelayInfoDoc(
   relayUrl: string,
@@ -114,10 +99,7 @@ export function useRelayInfo(relayUrl: string | undefined) {
   const httpUrl = relayUrl ? relayToHttpUrl(relayUrl) : null;
   const queryClient = useQueryClient();
 
-  // The seed comes off disk asynchronously now, so a query mounted during boot
-  // reads an empty cache. Once the warm lands, hand the last-known-good doc to
-  // any query still without data — that is the offline reload this whole cache
-  // exists for, and `initialData` has already had its one chance to run.
+  // The seed loads asynchronously; hand it to queries still without data once warm.
   useEffect(() => {
     if (!relayUrl || !httpUrl) return;
     let cancelled = false;
@@ -139,12 +121,8 @@ export function useRelayInfo(relayUrl: string | undefined) {
     queryKey: ['relay-info', relayUrl],
     queryFn: ({ signal }) => fetchRelayInfoDoc(relayUrl!, signal),
     enabled: !!httpUrl,
-    // Seed from the persisted last-known-good doc so name/avatar render
-    // instantly and survive a reload on a flaky connection. `initialData` puts
-    // it straight into the cache (treated as a real success), so a subsequent
-    // fetch failure never blanks back to undefined. `initialDataUpdatedAt: 0`
-    // marks the seed as already-stale so we still background-refresh once on
-    // mount (picking up the rare real change) while showing last-known-good.
+    // Seed as a real success so a fetch failure never blanks it; `initialDataUpdatedAt: 0` still
+    // triggers one background refresh.
     initialData: () => readCachedInfo(relayUrl),
     initialDataUpdatedAt: 0,
     staleTime: 12 * 60 * 60 * 1000,

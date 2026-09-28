@@ -1,17 +1,12 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-/**
- * The device's recent photos and videos, for the attach sheet's grid
- * (MediaGalleryPlugin.java). Android only: iOS and the web have no equivalent
- * here and keep the system picker, which on iOS already is the photo library.
- */
+// The device's recent photos/videos for the attach sheet (MediaGalleryPlugin.java). Android only.
 
 /** `limited` is Android 14+'s "Select photos": only the user's picks are listed. */
 export type MediaAccess = "full" | "limited" | "denied" | "prompt";
 
 export interface GalleryItem {
   id: number;
-  /** content:// URI of the item. */
   uri: string;
   video: boolean;
   mime: string | null;
@@ -30,13 +25,11 @@ interface MediaGalleryPlugin {
   requestAccess(): Promise<{ access: MediaAccess }>;
   openSettings(): Promise<void>;
   list(opts: { limit: number; offset: number }): Promise<{ items: GalleryItem[]; more: boolean }>;
-  /** The item is named by its MediaStore id; the plugin rebuilds its URI. */
   thumbnail(opts: { id: number; video: boolean; modified: number }): Promise<{ path: string }>;
 }
 
 const MediaGallery = registerPlugin<MediaGalleryPlugin>("MediaGallery");
 
-/** Whether this build has the native gallery (an Android build that ships the plugin). */
 export function hasMediaGallery(): boolean {
   return Capacitor.getPlatform() === "android" && Capacitor.isPluginAvailable("MediaGallery");
 }
@@ -57,11 +50,7 @@ export function listRecentMedia(offset: number, limit = 60): Promise<{ items: Ga
   return MediaGallery.list({ limit, offset });
 }
 
-/**
- * A loadable URL for an item's thumbnail. Memoized per item for the session,
- * since the grid re-renders tiles far more often than thumbnails change — and
- * each miss is a bridge call plus, the first time, a decode.
- */
+/** Thumbnail URLs memoized per item; each miss is a bridge call plus a decode. */
 const thumbs = new Map<string, Promise<string>>();
 
 export function galleryThumbnailSrc(item: GalleryItem): Promise<string> {
@@ -70,7 +59,6 @@ export function galleryThumbnailSrc(item: GalleryItem): Promise<string> {
   if (!src) {
     src = MediaGallery.thumbnail({ id: item.id, video: item.video, modified: item.modified })
       .then(({ path }) => Capacitor.convertFileSrc(path));
-    // A failure is not remembered: the next render may ask again.
     src.catch(() => thumbs.delete(key));
     thumbs.set(key, src);
   }
@@ -83,13 +71,9 @@ export function galleryItemSrc(item: GalleryItem): string {
 }
 
 /**
- * The item's bytes as a File for the upload pipeline, read by the WebView
- * straight from the content:// URI through Capacitor's local server — not
- * through a plugin result, which would re-serialize every byte.
- *
- * The whole item is read into a Blob, so the caller gates on `item.size`
- * (MediaStore's figure) BEFORE calling this — reading first and refusing after
- * would already have paid for a multi-hundred-megabyte video.
+ * The item as a File, fetched from the content:// URI via Capacitor's local
+ * server (not a plugin result, which would re-serialize every byte). Reads the
+ * whole item, so callers must check `item.size` first.
  */
 export async function galleryItemFile(item: GalleryItem): Promise<File> {
   const res = await fetch(Capacitor.convertFileSrc(item.uri));

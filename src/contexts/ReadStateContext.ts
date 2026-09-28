@@ -4,15 +4,10 @@ import { createContext } from "react";
 export type ReadStateMap = Record<string, number>;
 
 export interface ReadStateContextType {
-  /** The whole read-state map (reactive). */
   readState: ReadStateMap;
   /** Last-read unix timestamp for a conversation, or 0 if never read. */
   getLastRead: (key: string) => number;
-  /**
-   * Mark a conversation read up to `timestamp` (unix seconds). No-ops if the
-   * stored value is already >= timestamp. Persists locally and syncs to the
-   * user's encrypted settings (debounced).
-   */
+  /** Mark read up to `timestamp` (unix s); monotonic. Persists and syncs (debounced). */
   markRead: (key: string, timestamp: number) => void;
   /** Replace the entire map (used when hydrating from synced settings). */
   hydrate: (map: ReadStateMap) => void;
@@ -44,11 +39,8 @@ export function concordThreadReadKey(rootId: string): string {
 }
 
 /**
- * Stable key for the direct-invite inbox's last-seen stamp. A single
- * high-water mark for the whole inbox (not per-invite): opening the inbox marks
- * every received invite as seen, so the rail badge clears. The read-state map
- * is synced to the account's own encrypted settings, so this needs no pubkey in
- * the key — a different account reads a different map.
+ * Key for the direct-invite inbox's single last-seen stamp. No pubkey needed:
+ * the read-state map is per-account.
  */
 export function concordInviteReadKey(): string {
   return "c2inv";

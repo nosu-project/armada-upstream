@@ -2,41 +2,30 @@ import { useNostr } from '@nostrify/react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 
-import { type AuthorResult, authorQueryOptions } from '@/hooks/useAuthor';
+import { authorQueryOptions } from '@/hooks/useAuthor';
+import type { AuthorResult } from '@/lib/authorCache';
 import { useEventStore } from '@/hooks/useEventStore';
 import { demandProfiles } from '@/sync/profileSync';
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Lowercase 64-char hex pubkey. */
 const HEX64 = /^[0-9a-f]{64}$/i;
 
-/**
- * Non-notifying mention tag (mirrors Buzz's reference-only mention). Treated
- * the same as a `p` tag for resolving `@name` text back to a pubkey.
- */
+/** Non-notifying mention tag (Buzz's reference-only mention); treated like `p` here. */
 const MENTION_REFERENCE_TAG = 'mention';
 
-/** Resolved `@name` → pubkey mapping for an event, plus a matcher regex. */
 export interface MentionNameMap {
-  /** Lowercased profile alias → hex pubkey. */
   byName: Map<string, string>;
-  /** Regex matching any known `@alias` in text, or null when there are none. */
   regex: RegExp | null;
 }
 
 const EMPTY: MentionNameMap = { byName: new Map(), regex: null };
 
-/** Escape a string for literal use inside a RegExp. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Every name a profile could be `@`-mentioned by: kind-0 `display_name`,
- * `name`, and the local part of a NIP-05 identifier. Mirrors Buzz, which
- * emits all aliases so a rendered chip always resolves to a pubkey.
- */
+/** `display_name`, `name`, and the NIP-05 local part — mirrors Buzz's alias set. */
 function aliasesFor(data: AuthorResult | undefined): string[] {
   const md = data?.metadata;
   if (!md) return [];
@@ -49,18 +38,14 @@ function aliasesFor(data: AuthorResult | undefined): string[] {
   push(md.name);
   const nip05 = md.nip05?.trim();
   if (nip05) {
-    // "_@domain" → root; else the local part before "@".
     push(nip05.startsWith('_@') ? nip05.slice(2) : nip05.split('@')[0]);
   }
   return out;
 }
 
 /**
- * Build a regex that matches a known `@alias` in body text. Aliases are sorted
- * longest-first so a multi-word / longer name wins over a shorter prefix, then
- * escaped and joined as alternatives. The `@` must not be preceded by a word
- * char, `@`, `.` or `/` (so emails / handles / paths don't match), and the
- * alias must be followed by a boundary. Returns null when there are no aliases.
+ * Longest-first so longer names beat prefixes. The `@` must not follow a word char, `@`, `.`
+ * or `/` (emails, handles, paths).
  */
 function buildMentionRegex(names: string[]): RegExp | null {
   const valid = names.filter((n) => n.length > 0).sort((a, b) => b.length - a.length);
@@ -70,31 +55,8 @@ function buildMentionRegex(names: string[]): RegExp | null {
 }
 
 /**
- * Resolve the profiles an event `p`-tags (or non-notifying `mention`-tags) into
- * a `@name` → pubkey map so plain-text mentions can be linkified.
- *
- * Clients like Buzz store a mention as literal `@displayName` text in the body
- * with the identity binding living only in a `["p", <hex>]` tag — the two
- * halves must be re-married at render time. This hook resolves each tagged
- * pubkey's kind-0 profile (sharing {@link useAuthor}'s cache), collects its
- * aliases, and returns a matcher restricted to those known names, so an
- * arbitrary `@word` without a corresponding tag is never linkified.
- */
-/**
- * The tagged pubkeys whose profiles this event could actually need.
- *
- * A `p` tag alone is not a mention: this map exists ONLY to turn literal
- * `@alias` text in the body back into a pubkey, and {@link buildMentionRegex}
- * requires an `@` that the body must contain for any alias to match. So a
- * message with no `@` in its content has nothing to resolve, whatever it tags.
- *
- * Skipping those is a real saving rather than a micro-optimization, because
- * each tagged pubkey otherwise costs a kind-0 fetch (a REQ, a Schnorr verify,
- * a zod parse, a store write and a render) through the profile sync topic. A
- * live client measured 952 distinct profiles fetched in nine minutes, and
- * kind 0 was 46% of all signature verification — and messages that `p`-tag
- * many pubkeys while carrying no mention text at all are exactly the shape
- * spam takes.
+ * Tagged pubkeys worth resolving: only if the content contains `@`, since each costs a kind-0
+ * fetch and verify, and `p`-tag-heavy messages without mention text are typical spam.
  */
 export function mentionTagPubkeys(event: NostrRumor): string[] {
   if (!event.content.includes('@')) return [];
@@ -114,9 +76,8 @@ export function useMentionNameMap(event: NostrRumor): MentionNameMap {
 
   const pubkeys = useMemo(() => mentionTagPubkeys(event), [event.tags, event.content]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The store-first author queries below only READ; the profile sync topic
-  // owns fetching. Declare the tagged pubkeys for the life of the mount so
-  // never-seen mention targets resolve too.
+  // The author queries only READ; declare the pubkeys to the profile sync topic so unseen
+  // targets resolve.
   const pubkeysKey = pubkeys.join(' ');
   useEffect(() => {
     if (pubkeys.length === 0) return;
@@ -129,9 +90,7 @@ export function useMentionNameMap(event: NostrRumor): MentionNameMap {
     queries: pubkeys.map((pk) => authorQueryOptions(queryClient, eventStore, pk)),
   });
 
-  // Stable serialization of resolved aliases: the returned map/regex identity
-  // only changes when the resolved names actually change, keeping downstream
-  // token memos from re-running on every render as query objects churn.
+  // Stable serialization so the map/regex identity only changes when names change.
   const aliasKey = pubkeys
     .map((pk, i) => `${pk}:${aliasesFor(results[i]?.data).join('\u0000')}`)
     .join('|');
@@ -142,7 +101,7 @@ export function useMentionNameMap(event: NostrRumor): MentionNameMap {
     pubkeys.forEach((pk, i) => {
       for (const alias of aliasesFor(results[i]?.data)) {
         const key = alias.toLowerCase();
-        // First writer wins so a name shared by two members stays deterministic.
+        // First writer wins so a shared name stays deterministic.
         if (!byName.has(key)) byName.set(key, pk);
       }
     });

@@ -28,10 +28,8 @@ export interface ProfileThemeInput {
 }
 
 /**
- * Publish / clear the user's active profile theme (kind 16767, the same event
- * Ditto writes). Only ever called from an explicit user action — the profile
- * theme editor's Save and Remove buttons. Optimistically seeds the
- * `useProfileTheme` cache so the page re-tints before the relay round-trip.
+ * Publish/clear the user's profile theme (kind 16767, as Ditto writes). Only from explicit
+ * Save/Remove. Optimistically seeds the `useProfileTheme` cache.
  */
 export function usePublishProfileTheme() {
   const { user } = useCurrentUser();
@@ -42,10 +40,7 @@ export function usePublishProfileTheme() {
     async (input: ProfileThemeInput) => {
       if (!user) throw new Error("Not signed in");
 
-      // Fonts publish with resolvable URLs: catalog families get their CDN
-      // URL so clients without the catalog can load them; the title font
-      // falls back to the body font so both tags are present whenever a body
-      // font is (matching Ditto's resolveThemeForPublishing).
+      // Publish resolvable font URLs; title falls back to body (like Ditto's resolveThemeForPublishing).
       const withUrl = (f: ThemeFont | undefined): ThemeFont | undefined =>
         f?.family ? { family: f.family, url: resolveThemeFontUrl(f.family, f.url) } : undefined;
       const font = withUrl(input.font);
@@ -80,8 +75,7 @@ export function usePublishProfileTheme() {
           prev: prev?.event,
         });
       } catch (e) {
-        // A queued publish is signed and durable; the retry worker lands it,
-        // so the optimistic tint stands.
+        // A queued publish is signed and durable, so the optimistic tint stands.
         if (!isPublishQueuedError(e)) {
           queryClient.setQueryData(profileThemeQueryKey(user.pubkey), prev);
           throw e;

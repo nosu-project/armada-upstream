@@ -1,18 +1,13 @@
 import type { ComponentType, ReactNode } from "react";
 
-/** A grantable role in a per-member "Roles" picker (Concord custom roles). */
 export interface RolePickerOption {
   id: string;
   name: string;
-  /** Cosmetic badge tint (low 24 bits an #rrggbb); 0 = theme default. */
+  /** Low 24 bits as #rrggbb; 0 = theme default. */
   color: number;
-  /**
-   * Set when the role is channel-scoped — rendered as a "# channel" hint.
-   * `null` when that channel has since been deleted: still channel-scoped, but
-   * a picker names no channel that no longer exists.
-   */
+  /** Channel-scoped hint; `null` when that channel was deleted. */
   channelName?: string | null;
-  /** Whether the viewer outranks this role's position (may grant/revoke it). */
+  /** Viewer outranks this role's position (may grant/revoke it). */
   assignable: boolean;
 }
 
@@ -28,11 +23,7 @@ export type RoleCheckboxItem = ComponentType<{
 
 const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
 
-/**
- * The checkbox rows of a member's role picker, rendered through whichever menu
- * family hosts them — the member row's ⋮ and right-click submenus, and the
- * profile card's Roles menu — so the gating and the toggle guard live once.
- */
+/** Role checkbox rows for any menu family, so gating and the toggle guard live once. */
 export function RolePickerItems({
   CheckboxItem,
   pubkey,
@@ -55,9 +46,7 @@ export function RolePickerItems({
           key={role.id}
           className="py-2"
           checked={heldRoleIds?.includes(role.id) ?? false}
-          // A Grant replaces the member's whole role list, so a
-          // second click before the first lands would publish from a
-          // stale set and re-trigger any gated-channel rotation.
+          // A Grant replaces the whole role list, so a second click would publish a stale set.
           disabled={!role.assignable || Boolean(isToggling?.(pubkey, role.id))}
           onCheckedChange={(on) => onToggle(pubkey, role.id, on)}
           // Keep the menu open so several roles can be toggled in one visit.

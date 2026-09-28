@@ -12,13 +12,7 @@ interface BlurhashCanvasProps {
   style?: React.CSSProperties;
 }
 
-/**
- * Renders a NIP-94 `blurhash` string as a blurred placeholder on a `<canvas>`.
- *
- * A tiny (default 32×32) bitmap is decoded and stretched to fill the element
- * via CSS, giving the classic blur-up placeholder without pulling in a React
- * blurhash wrapper — it decodes with the already-bundled `blurhash` package.
- */
+/** Renders a NIP-94 `blurhash` as a small decoded bitmap stretched by CSS. */
 export function BlurhashCanvas({
   hash,
   resolution = 32,

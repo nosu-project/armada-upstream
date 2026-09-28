@@ -1,37 +1,18 @@
 import { useEffect, type RefObject } from "react";
 
-/**
- * The deck's looping CSS animations (status LEDs, carets, the drifting answer
- * cards…), matched by the `_infinite` in their Tailwind arbitrary class.
- */
+/** Looping CSS animations, matched by `_infinite` in their Tailwind arbitrary class. */
 const LOOPING = '[class*="_infinite"]';
-/** Resume a little before an element scrolls in, so it is never seen paused. */
 const MARGIN = "200px 0px";
-/** Coalesces a burst of DOM changes (a typing demo, a quiz step) into one scan. */
 const RESCAN_MS = 250;
 
 /**
- * Pause every looping CSS animation under `rootRef` while it is off screen.
- *
- * Chromium keeps ticking an infinite animation whose element is scrolled out
- * of view, and a `steps()` or `step-end` one restyles the element on every
- * step — the relay LEDs far down the deck alone cost ~12 style recalcs a
- * second on an idle landing page. Nobody can see an off-screen blink, so
- * pausing it changes nothing on screen; `TvDrum` and `EncryptionQuiz` already
- * gate their own this way, and this covers the rest without each component
- * having to.
- *
- * The pause is an inline `animation-play-state`, cleared (not set to
- * `running`) on the way back in, so a component's own class-based gating is
- * what applies while its element is visible.
+ * Pause looping CSS animations under `rootRef` while off screen: Chromium keeps
+ * restyling off-screen infinite `steps()` animations. The inline pause is
+ * cleared (not set to `running`) on return so component-level gating applies.
  */
 export function usePauseOffscreenAnimations(
   rootRef: RefObject<HTMLElement | null>,
-  /**
-   * The container the deck scrolls in. The observer is rooted on it because a
-   * scroller clips a viewport-rooted observer at its own edge, which would
-   * make the resume margin a no-op.
-   */
+  /** Observer root: a scroller clips a viewport-rooted observer, defeating the margin. */
   scrollRef: RefObject<HTMLElement | null>,
 ): void {
   useEffect(() => {

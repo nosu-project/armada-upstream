@@ -1,14 +1,6 @@
 /**
- * Esplora REST data plane — balances, transactions, UTXOs, fee estimates,
- * and broadcast, plus the pure fee-math and BIP-21 URI helpers.
- *
- * Everything here is plain `fetch` (via the failover client in
- * `./esplora`) and arithmetic — deliberately free of `@scure/btc-signer`
- * so initial-load callers (feed cards verifying on-chain zaps, campaign
- * donation totals, bitcoin: URI previews) don't pull the ~150 kB
- * transaction-signing stack in `@/lib/bitcoin` into the entry bundle.
- * `@/lib/bitcoin` re-exports everything here, so wallet code can keep
- * importing from one place.
+ * Esplora REST data plane and fee/BIP-21 helpers. Kept free of `@scure/btc-signer`
+ * so initial-load callers don't pull the signing stack; `@/lib/bitcoin` re-exports this.
  */
 import { esploraFetch } from './esplora';
 
@@ -24,10 +16,6 @@ export const VBYTES_PER_OUTPUT = 43;
 /** Estimated vBytes for transaction overhead (version, locktime, etc.). */
 export const VBYTES_OVERHEAD = 10.5;
 
-// ---------------------------------------------------------------------------
-// Balance / Address data (wallet page)
-// ---------------------------------------------------------------------------
-
 /** Balance data returned by the Esplora API. */
 export interface AddressData {
   /** Confirmed on-chain balance in satoshis. */
@@ -40,20 +28,10 @@ export interface AddressData {
   totalReceived: number;
   /** Total satoshis ever sent (confirmed). */
   totalSent: number;
-  /** Confirmed transaction count. */
   txCount: number;
-  /** Pending (mempool) transaction count. */
   pendingTxCount: number;
 }
 
-/**
- * Fetch balance and transaction stats for a Bitcoin address from an
- * Esplora-compatible REST API (e.g. mempool.space, Blockstream).
- *
- * @param address    The Bitcoin address to look up.
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
 export async function fetchAddressData(
   address: string,
   baseUrls: string[],
@@ -81,32 +59,18 @@ export async function fetchAddressData(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Wallet-page transaction list (simplified per-address view)
-// ---------------------------------------------------------------------------
-
 /** A simplified transaction relevant to a specific address. */
 export interface Transaction {
-  /** Transaction ID (hex). */
   txid: string;
   /** Net satoshi change for the address (positive = received, negative = sent). */
   amount: number;
-  /** Whether this is a receive or send relative to the address. */
   type: 'receive' | 'send';
-  /** Whether the transaction is confirmed. */
   confirmed: boolean;
   /** Unix timestamp of the block (undefined if unconfirmed). */
   timestamp?: number;
 }
 
-/**
- * Fetch transactions for a Bitcoin address from an Esplora-compatible API.
- * Returns simplified transactions with net amount relative to the address.
- *
- * @param address    The Bitcoin address to look up.
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
+/** Transactions for an address, with net amount relative to that address. */
 export async function fetchTransactions(
   address: string,
   baseUrls: string[],
@@ -125,7 +89,6 @@ export async function fetchTransactions(
     const vout = tx.vout as Array<{ scriptpubkey_address?: string; value: number }>;
     const status = tx.status as { confirmed: boolean; block_time?: number };
 
-    // Sum sats flowing out of this address (inputs we owned)
     const totalIn = vin.reduce((sum, input) => {
       if (input.prevout?.scriptpubkey_address === address) {
         return sum + input.prevout.value;
@@ -133,7 +96,6 @@ export async function fetchTransactions(
       return sum;
     }, 0);
 
-    // Sum sats flowing into this address (outputs we own)
     const totalOut = vout.reduce((sum, output) => {
       if (output.scriptpubkey_address === address) {
         return sum + output.value;
@@ -153,11 +115,6 @@ export async function fetchTransactions(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Full transaction detail (NIP-73 /i/bitcoin:tx:... page)
-// ---------------------------------------------------------------------------
-
-/** A single input in a full transaction. */
 export interface TxInput {
   txid: string;
   vout: number;
@@ -166,16 +123,13 @@ export interface TxInput {
   isCoinbase: boolean;
 }
 
-/** A single output in a full transaction. */
 export interface TxOutput {
   address?: string;
   value: number;
   scriptpubkeyType: string;
-  /** True if the output has been spent. */
   spent: boolean;
 }
 
-/** Full transaction detail returned by the Esplora API. */
 export interface TxDetail {
   txid: string;
   version: number;
@@ -195,13 +149,6 @@ export interface TxDetail {
   totalOutput: number;
 }
 
-/**
- * Fetch full transaction details from an Esplora-compatible API.
- *
- * @param txid       The transaction ID (hex).
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
 export async function fetchTxDetail(
   txid: string,
   baseUrls: string[],
@@ -261,11 +208,6 @@ export async function fetchTxDetail(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Full address detail (NIP-73 /i/bitcoin:address:... page)
-// ---------------------------------------------------------------------------
-
-/** Full address detail combining balance stats + recent transactions. */
 export interface AddressDetail {
   address: string;
   balance: number;
@@ -279,13 +221,6 @@ export interface AddressDetail {
   recentTxs: Transaction[];
 }
 
-/**
- * Fetch full address details (balance + recent txs) from an Esplora-compatible API.
- *
- * @param address    The Bitcoin address to look up.
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
 export async function fetchAddressDetail(
   address: string,
   baseUrls: string[],
@@ -303,11 +238,6 @@ export async function fetchAddressDetail(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Sending: UTXOs, fee estimation, transaction construction, broadcast
-// ---------------------------------------------------------------------------
-
-/** An unspent transaction output. */
 export interface UTXO {
   txid: string;
   vout: number;
@@ -321,13 +251,6 @@ export interface UTXO {
   };
 }
 
-/**
- * Fetch UTXOs for a Bitcoin address from an Esplora-compatible API.
- *
- * @param address    The Bitcoin address to look up.
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
 export async function fetchUTXOs(
   address: string,
   baseUrls: string[],
@@ -338,7 +261,7 @@ export async function fetchUTXOs(
   return response.json();
 }
 
-/** Fee rate estimates keyed by confirmation speed. */
+/** Fee rates in sat/vB. */
 export interface FeeRates {
   /** ~10 min / next block (target 1). */
   fastestFee: number;
@@ -352,18 +275,9 @@ export interface FeeRates {
   minimumFee: number;
 }
 
-/**
- * Fetch recommended fee rates (sat/vB) from an Esplora-compatible API.
- *
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
 export async function getFeeRates(baseUrls: string[], signal?: AbortSignal): Promise<FeeRates> {
-  // `/fee-estimates` is always present on a healthy Esplora backend, so a 404
-  // never means "not found" — it means the endpoint is misbehaving (notably
-  // mempool.space serving 404 instead of 429 to rate-limited mobile clients).
-  // Treat it as a retryable failure so we fail over to the next endpoint
-  // instead of trusting the 404 and giving up.
+  // `/fee-estimates` always exists on a healthy backend, so a 404 means misbehaving
+  // (mempool.space sends 404 instead of 429 to rate-limited mobile clients) — fail over.
   const response = await esploraFetch(baseUrls, `/fee-estimates`, { signal, retryStatuses: [404] });
   if (!response.ok) throw new Error('Failed to fetch fee estimates');
 
@@ -378,26 +292,13 @@ export async function getFeeRates(baseUrls: string[], signal?: AbortSignal): Pro
   };
 }
 
-/**
- * Highest fee rate we accept from a remote endpoint, in sat/vB. Well above any
- * real congestion (mainnet peaks have not passed ~2000 sat/vB) and far below
- * anything that could quietly consume a wallet.
- */
+/** Highest accepted remote fee rate (sat/vB): above any real peak, below wallet-draining. */
 const MAX_PLAUSIBLE_FEE_RATE = 5_000;
 
 /**
- * Coerce a fee rate from an Esplora `/fee-estimates` response to a usable
- * sat/vB number, falling back to 1 for anything implausible.
- *
- * The endpoint is operator-chosen and user-editable, and this used to be
- * `Math.ceil(data['1'] || 1)`. `||` only catches *falsy* values, so a missing
- * key was safe but a truthy non-number — `{"1": "5"}`, `{"1": {"fee": 5}}`,
- * the sort of thing an API-version mismatch produces — yielded `NaN`. NaN then
- * passes every downstream guard, because they are all `<` / `>=` comparisons
- * and every comparison with NaN is false: no change output is added, nothing
- * throws, the balance check passes, and the UI renders "Fee ≈ …" because
- * `estimatedFeeSats > 0` is false. The result is a valid, broadcastable
- * transaction that pays the wallet's entire remaining balance to miners.
+ * Coerce an Esplora fee rate to a finite sat/vB number, falling back to 1.
+ * A NaN rate slips past every `<`/`>=` guard downstream and yields a valid tx
+ * that pays the whole remaining balance to miners.
  */
 function sanitizeFeeRate(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 1;
@@ -406,18 +307,9 @@ function sanitizeFeeRate(value: unknown): number {
   return Math.ceil(value);
 }
 
-/**
- * Estimate the fee for a P2TR transaction in satoshis.
- *
- * @param numInputs  Number of Taproot inputs.
- * @param numOutputs Number of outputs (recipient + optional change).
- * @param feeRate    Fee rate in sat/vB.
- */
+/** Estimated fee in sats for a P2TR transaction; `feeRate` in sat/vB. */
 export function estimateFee(numInputs: number, numOutputs: number, feeRate: number): number {
-  // Assert rather than infer. A non-finite rate produces a NaN fee, and every
-  // guard downstream of this is a `<` or `>=` comparison, all of which are
-  // false for NaN — so the failure surfaces as a transaction that hands the
-  // wallet's balance to miners rather than as an error.
+  // Assert: a NaN fee passes every downstream comparison guard and drains the wallet to miners.
   if (!Number.isFinite(feeRate) || feeRate < 1) {
     throw new Error(`Invalid fee rate: ${feeRate} sat/vB.`);
   }
@@ -425,37 +317,17 @@ export function estimateFee(numInputs: number, numOutputs: number, feeRate: numb
   return Math.ceil(vBytes * feeRate);
 }
 
-/**
- * Parsed BIP-21 payment URI.
- *
- * `address` is the on-chain fallback (the URI's path); `sp` is the BIP-352
- * silent payment recipient if the URI included a valid `sp=` parameter;
- * `amountSats` is the BIP-21 `amount=` parameter converted from BTC to
- * satoshis. Other BIP-21 parameters (`label`, `message`, `lightning`, …) are
- * not surfaced — we have no lightning support to fall back to.
- */
+/** Parsed BIP-21 URI. Only address, BIP-352 `sp=`, and `amount=` are surfaced. */
 export interface ParsedBitcoinUri {
   /** On-chain address from the URI path. May be empty for sp-only URIs. */
   address: string;
   /** BIP-352 silent payment address from the `sp=` parameter, if present. */
   sp?: string;
-  /**
-   * Amount in satoshis, parsed from the BIP-21 `amount=` parameter (which is
-   * specified in BTC). Undefined when the URI has no amount or the value is
-   * malformed / non-positive / non-finite. Rounded down to whole sats so we
-   * never overstate the requester's intent.
-   */
+  /** From BTC `amount=`; floored to whole sats, undefined if malformed or non-positive. */
   amountSats?: number;
 }
 
-/**
- * Parse a `bitcoin:` BIP-21 URI without committing to any particular address
- * format. Returns `null` for anything that isn't `bitcoin:…`.
- *
- * The scheme check is case-insensitive (`bitcoin:` and `BITCOIN:` both parse).
- * Validation of the address/sp values is left to the caller — this helper
- * just splits the URI into its parts.
- */
+/** Split a `bitcoin:` URI (case-insensitive scheme) into parts; null otherwise. Values are not validated. */
 export function parseBitcoinUri(input: string): ParsedBitcoinUri | null {
   const trimmed = input.trim();
   if (!/^bitcoin:/i.test(trimmed)) return null;
@@ -467,7 +339,6 @@ export function parseBitcoinUri(input: string): ParsedBitcoinUri | null {
   let sp: string | undefined;
   let amountSats: number | undefined;
   if (qIdx !== -1) {
-    // URLSearchParams handles percent-decoding and repeated keys.
     const params = new URLSearchParams(payload.slice(qIdx + 1));
     sp = params.get('sp')?.trim() || undefined;
 
@@ -484,19 +355,7 @@ export function parseBitcoinUri(input: string): ParsedBitcoinUri | null {
   return { address, sp, amountSats };
 }
 
-/**
- * Broadcast a signed transaction hex to the Bitcoin network via an
- * Esplora-compatible API. Returns the txid.
- *
- * Broadcast is idempotent at the Bitcoin protocol layer — re-broadcasting a
- * tx that's already in mempool is harmless — so we let the failover client
- * retry across endpoints normally. The first endpoint that accepts the tx
- * wins.
- *
- * @param txHex      The signed transaction hex.
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
- */
+/** Broadcast signed tx hex; returns the txid. Re-broadcast is harmless, so normal failover applies. */
 export async function broadcastTransaction(
   txHex: string,
   baseUrls: string[],
@@ -518,16 +377,8 @@ export async function broadcastTransaction(
   return response.text();
 }
 
-/**
- * Compute the maximum sendable amount (in sats) after fees.
- *
- * @param totalBalance Total spendable sats across all UTXOs.
- * @param numInputs    Number of UTXOs that will be consumed.
- * @param feeRate      Fee rate in sat/vB.
- * @returns The max amount in sats, or 0 if the balance cannot cover fees.
- */
+/** Max sendable sats after fees (0 if the balance can't cover them). */
 export function maxSendable(totalBalance: number, numInputs: number, feeRate: number): number {
-  // When sending max there is no change output, so only 1 output.
   const fee = estimateFee(numInputs, 1, feeRate);
   return Math.max(0, totalBalance - fee);
 }

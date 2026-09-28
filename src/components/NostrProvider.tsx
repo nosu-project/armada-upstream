@@ -40,65 +40,35 @@ interface NostrProviderProps {
 }
 
 /**
- * Per-relay cooldown between signing NEW NIP-42 challenges. A burst of retried
- * REQs (each re-challenged) arrives within milliseconds, so a short window
- * collapses the flood onto one bunker sign while still letting a genuine
- * reconnect re-authenticate quickly. (Challenges are nonces, so we never reuse a
- * signature across challenges — we just refuse the extra ones during the window.)
+ * Per-relay cooldown between signing NEW NIP-42 challenges, collapsing
+ * retry bursts onto one bunker sign. Signatures are never reused across challenges.
  */
 const AUTH_MIN_INTERVAL_MS = 5_000;
 
 /**
- * Head start the user signer gets on a NIP-42 challenge before NRelay1's
- * awaited AUTH falls back to a locally-signed stream key. Local/extension
- * signers answer in well under this; only a genuinely slow NIP-46 bunker
- * round-trip exceeds it (and its AUTH is then delivered out-of-band).
+ * Head start for the user signer on a NIP-42 challenge before falling back to
+ * a locally-signed stream key; only slow NIP-46 bunkers exceed it (their AUTH is sent out-of-band).
  */
 const USER_AUTH_HEADSTART_MS = 1_200;
 
-/**
- * NIP-59 gift-wrap kinds (Concord wraps + ephemeral variant). See
- * `wire/ingest.ts` WRAP_KINDS.
- */
+/** NIP-59 gift-wrap kinds. See `wire/ingest.ts` WRAP_KINDS. */
 const WRAP_KINDS = new Set([1059, 21059]);
 
 /**
- * Skip Schnorr signature verification for gift-wraps; everything else is
- * verified by the relay's inbox (`VerifiedRelay`), once per id and in batches
- * that reach the worker pool.
- *
- * A 1059/21059 wrap's outer signature is cryptographically meaningless to the
- * client: NIP-59 wraps are signed either by a single-use ephemeral key (direct
- * invites) or, in Concord, by a group-shared *derived* stream key that every
- * member can sign with. Neither establishes a sender identity. Authenticity and
- * integrity of the payload come from NIP-44 (authenticated encryption) plus the
- * inner seal's signature check (`stream.ts` `verifyEvent(seal)`) and the
- * `rumor.pubkey === seal.pubkey` + rumor-id-hash bindings — all re-checked in
- * the decrypt path regardless of the outer sig. Verifying the wrap here is pure
- * redundant work, and wraps are the highest-volume kind on the auth'd stream
- * relays, so skipping the Schnorr verify for just these kinds is a real ingest
- * win. Every other kind (NIP-29 group events, DMs, profiles, …) still relies on
- * its outer signature for identity, so those keep full verification.
+ * Skip Schnorr verification for gift-wraps. Their outer sig is from an
+ * ephemeral or group-shared stream key, so it proves nothing; authenticity
+ * comes from NIP-44 plus the seal signature and rumor bindings checked in the
+ * decrypt path. All other kinds keep full verification.
  */
 function isWrap(event: NostrEvent): boolean {
   return WRAP_KINDS.has(event.kind);
 }
 
 /**
- * Provides the relay pool for the whole app.
- *
- * Ported from Ditto's NostrProvider:
- * - NIP-42 AUTH: every relay opened through the pool (including targeted
- *   `nostr.relay(url)` handles) signs kind 22242 challenges with the active
- *   login's signer.
- * - Queries are batched (NostrBatcher) and cached in IndexedDB.
- *
- * Routing is Armada-specific: generic pool traffic (kind 0 profiles, statuses,
- * anything not group-scoped) goes to the GENERAL relays — the configurable app
- * relays (Ditto-style), platform pins, and the user's NIP-65 set — and NOT to
- * every joined server; see `poolReqTargets` for the rule and its exceptions.
- * Group-scoped traffic should use `nostr.relay(serverUrl)` directly so it
- * stays on that server.
+ * App-wide relay pool (ported from Ditto): NIP-42 AUTH on every relay,
+ * batched queries cached in IndexedDB. Generic traffic goes to the GENERAL
+ * relays, not every joined server (see `poolReqTargets`); group traffic
+ * should use `nostr.relay(serverUrl)`.
  */
 const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   const { children } = props;
@@ -107,39 +77,23 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   const pool = useRef<NPool | undefined>(undefined);
 
-  // Shared event cache (batcher writes results into it): the app-wide store,
-  // one ArmadaDB tenant (`main`) like every other subsystem. See
-  // src/lib/db/mainEventStore.ts.
+  // App-wide event store, the `main` ArmadaDB tenant (src/lib/db/mainEventStore.ts).
   const eventStore = useRef<EventStoreContextType | undefined>(undefined);
   if (eventStore.current === undefined) {
     const store = appEventStore();
-    // Warm up the connection immediately: the first query after launch pays
-    // the backend's one-time cold-open penalty (on Android, a ~2.5s IndexedDB
-    // stall); a throwaway query now means the first channel open reads a warm
-    // store instead.
+    // Pay the backend's cold-open penalty (~2.5s IndexedDB stall on Android) now.
     void store.then((s) => s.query([{ kinds: [0], limit: 1 }])).catch(() => undefined);
     eventStore.current = store;
-    // The Concord rumor cache is NOT warmed here: it is one ArmadaDB tenant
-    // per community, and no community is known at provider mount. Each tenant's
-    // connection opens when its community is first read.
+    // Concord rumor tenants open per community on first read.
   }
 
-  // Pool routes: app relays (non-NIP-29 traffic) + the user's servers. The
-  // servers stay in the set so a fully air-gapped deployment keeps working
-  // with zero app relays.
-  //
-  // The user's servers come from the folded kind 10009 snapshot rather than a
-  // config field: this component provides the Nostrify context, so it can't
-  // call `useUserGroupList`. The fold needs no relay and no signer, and it
-  // re-reads on every snapshot write, so the pool follows adds AND removals.
+  // Servers stay in the pool so an air-gapped deployment works with zero app
+  // relays. They come from the folded 10009 snapshot because this provider
+  // can't call `useUserGroupList`.
   const cachedServers = useCachedNip29Servers(logins[0]?.pubkey);
   const activePubkey = logins[0]?.pubkey;
 
-  // The base pool, shared by reads and writes: app relays (unless the user has
-  // switched them off) + joined NIP-29 servers. The servers are never gated, so
-  // an air-gapped deployment keeps working even with app relays off — but a
-  // user who empties everything is left with an empty pool, by their own
-  // choice.
+  // App relays (unless off) + joined servers, which are never gated.
   const basePoolRelays = useMemo(() => {
     const urls = new Set<string>();
     if (config.useAppRelays) {
@@ -155,18 +109,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     return urls;
   }, [config.useAppRelays, config.appRelays, cachedServers]);
 
-  // Read (REQ) and write (EVENT) routing sets. Both start from the base pool
-  // and, when `useUserRelays` is on, fold in the user's own NIP-65 read/write
-  // relays (Ditto's getEffectiveRelays, adapted: app relays are always
-  // included, so this only ever ADDS the user's declared relays). With the
-  // toggle off the two sets equal the base pool — identical to the previous
-  // single-set behavior, so the default path is unchanged.
+  // With `useUserRelays` on, fold in the user's NIP-65 read/write relays (only ever adds).
   const poolReadRelays = useMemo(() => {
     const urls = new Set(basePoolRelays);
-    // NIP-65 write relays hold the user's authored events (profile and lists),
-    // while read relays receive events mentioning them. The general pool is
-    // not yet author-routed, so include both for reads; writes below still go
-    // only to the declared write set.
+    // The general pool isn't author-routed yet, so reads include NIP-65 write relays too.
     for (const url of userReadRelays(config, activePubkey)) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
@@ -184,12 +130,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
-    // Write-only relays: reach for what this client publishes, without joining
-    // any read set. This is the ONLY set they appear in, so they are never
-    // subscribed to, never queried, and never a place account data has to come
-    // back from. Gated with the app relays — turning those off means "don't put
-    // my account data on the app's relays", which this would otherwise quietly
-    // keep doing.
+    // Write-only relays appear ONLY here: never subscribed or queried. Gated with
+    // app relays, since turning those off means "keep my data off app relays".
     for (const url of broadcastWriteRelays(config)) urls.add(url);
     return [...urls];
   }, [basePoolRelays, config, activePubkey]);
@@ -204,11 +146,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     poolWriteRelaysRef.current = poolWriteRelays;
   }, [poolWriteRelays]);
 
-  // The GENERAL read set: the base pool WITHOUT the joined servers. Generic
-  // pool REQs route here (see reqRouter / poolReqTargets); group-scoped
-  // traffic reaches a server through `nostr.relay(url)` and never needed the
-  // pool-wide fan-out that was multiplying every generic event into a copy
-  // per relay.
+  // The base pool WITHOUT joined servers; generic REQs route here (see poolReqTargets).
   const poolGeneralRelays = useMemo(() => {
     const urls = new Set<string>();
     if (config.useAppRelays) {
@@ -233,8 +171,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     poolGeneralRelaysRef.current = poolGeneralRelays;
   }, [poolGeneralRelays]);
 
-  // Search relays (NIP-50). `search` filters route here instead of fanning
-  // out to every server. Falls back to the pool relays when none configured.
+  // NIP-50 search relays; falls back to the pool when none configured.
   const searchRelays = useMemo(() => {
     const urls = new Set<string>();
     for (const url of config.searchRelays) {
@@ -249,37 +186,23 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     searchRelaysRef.current = searchRelays;
   }, [searchRelays]);
 
-  // Stable ref to the current user's signer for NIP-42 AUTH. The `open()`
-  // callback reads from this ref when a relay sends an AUTH challenge, so it
-  // always uses the latest signer without recreating the pool.
+  // Read lazily by the pool's AUTH callback so it always uses the latest signer.
   const signerRef = useRef<NostrSigner | undefined>(undefined);
-  // Per-relay cache of the most recent signed AUTH event, so a REQ retry that
-  // re-triggers the same challenge — or a burst of fresh challenges from a
-  // relay that keeps closing our subs — reuses the signature instead of queuing
-  // another bunker round-trip.
+  // Reuse a signature when a relay re-issues the identical challenge.
   const authCacheRef = useRef<Map<string, { challenge: string; event: NostrEvent; signedAt: number }>>(new Map());
-  // Per-relay in-flight AUTH sign, so a burst of concurrent challenges for the
-  // same relay collapses onto one bunker round-trip instead of N (the cache
-  // timestamp is only set AFTER signing, so without this the whole burst slips
-  // past the rate-limit check before any of them completes).
+  // Collapse concurrent challenges onto one sign (the cache is only set after signing).
   const authInFlightRef = useRef<Map<string, Promise<NostrEvent>>>(new Map());
-  // Per-relay cooldown: timestamp until which we refuse to sign a NEW challenge
-  // for this relay, so a relay that re-challenges on every retried REQ can't
-  // flood the bunker. Set after each successful sign.
+  // Refuse to sign new challenges until this time, so re-challenging relays can't flood the bunker.
   const authCooldownRef = useRef<Map<string, number>>(new Map());
 
-  // Per-relay NIP-42 challenge + auth bookkeeping. Concord authenticates
-  // as derived stream keys: a kind-1059 REQ passes an auth-gating relay
-  // only once every `authors` entry is authenticated on the socket.
+  // Concord auths as derived stream keys: a kind-1059 REQ passes a gating relay
+  // only once every `authors` entry is authenticated.
   const openRelaysRef = useRef<Map<string, { relay: NRelay1; challenge?: string }>>(new Map());
 
   /**
-   * Send NIP-42 AUTH frames for the stream pubkeys scoped to this relay.
-   * Signing runs in the EC worker pool, a batch at a time, each batch sent as
-   * it returns; aborts if the socket reopens mid-flight (the challenge is
-   * then a dead nonce). Each frame is recorded
-   * so the relay's `["OK", id, true]` ack marks the key authenticated
-   * (streamAuth ack state — plane sweeps gate on it).
+   * Send NIP-42 AUTH frames for this relay's stream pubkeys, signed in batches
+   * in the EC worker pool. Aborts if the socket reopens (dead nonce). The
+   * relay's OK marks keys authenticated (streamAuth ack state).
    */
   const sendStreamAuths = async (
     entry: { relay: NRelay1; challenge?: string },
@@ -293,35 +216,22 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       for (const ev of chunk) {
         try {
           entry.relay.socket.send(JSON.stringify(["AUTH", ev]));
-          // Record as pending ONLY after the frame actually left the socket.
-          // A half-open socket (readyState OPEN, TCP dead) throws or silently
-          // drops here; marking it pending first would pin the key unacked
-          // forever (its OK never comes), wedging streamAuthsSettled until a
-          // socket reopen — which a half-open socket never fires. The next
-          // auth-required round re-sends.
+          // Mark pending ONLY after send: a half-open socket drops the frame, and a
+          // pending key whose OK never comes wedges streamAuthsSettled.
           noteStreamAuthSent(url, ev.id, ev.pubkey);
         } catch {
-          // socket not open yet / closing — the next auth-required round re-sends.
+          // Socket not open; the next auth-required round re-sends.
         }
       }
     }
   };
 
   /**
-   * Reset a relay's NIP-42 state on socket reopen (#45): a reconnected socket
-   * is a fresh unauthenticated session, but NRelay1 carries stale auth
-   * bookkeeping across reconnects. Clearing everything on open makes a
-   * reconnect behave like a first connection. Also watches incoming `OK`
-   * frames to ack the raw stream AUTHs we send outside NRelay1's own flow.
-   *
-   * Additionally re-sends NRelay1's PENDING EVENTS on open: NRelay1 re-issues
-   * its subscriptions when a socket reconnects but never retransmits an EVENT
-   * that is still awaiting its OK. An EVENT written into a half-open socket
-   * (backgrounded Android: readyState OPEN, TCP dead) is silently lost, and
-   * its `event()` promise burns the full publish timeout — for a NIP-46 login
-   * that black-holes the sign request itself, so "send" does nothing for 60s
-   * and then fails. Retransmitting on open makes the reconnect lossless
-   * (duplicate EVENTs are idempotent — relays dedup by id).
+   * On socket reopen (#45), reset NIP-42 state (NRelay1 carries stale auth
+   * across reconnects) and ack our raw stream AUTHs from `OK` frames.
+   * Also retransmits NRelay1's pending EVENTs: it re-issues subs on reconnect
+   * but not unacked EVENTs, so a write into a half-open socket was lost (60s
+   * hang for NIP-46). Duplicates are idempotent.
    */
   const watchSocketReopen = (relay: NRelay1, url: string) => {
     const internals = relay as unknown as {
@@ -341,10 +251,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       resetRelayAuth(url); // the old session's AUTH acks died with the socket
       const entry = openRelaysRef.current.get(url);
       if (entry) entry.challenge = undefined; // the old socket's nonce is dead
-      // Retransmit publishes still awaiting an OK (see docstring). NRelay1
-      // removes an event from pendingEvents once its OK arrives, so anything
-      // still here either never reached the relay or its OK was lost — both
-      // healed by a re-send on the fresh socket.
+      // Anything still pending never reached the relay or lost its OK.
       const pending = internals.pendingEvents;
       if (pending?.size) {
         logSync("auth", `socket reopened for ${url} — retransmitting ${pending.size} pending EVENT(s)`);
@@ -352,18 +259,14 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           try {
             relay.socket.send(JSON.stringify(["EVENT", ev]));
           } catch {
-            // Socket flapped again — the next reopen retransmits.
+            // Socket flapped again; the next reopen retransmits.
           }
         }
       }
-      // Tell long-lived consumers (the wire's standing ingestion) that this is
-      // a fresh socket session: their re-issued subscriptions may have raced
-      // the NIP-42 handshake, so they should re-REQ rather than trust the old
-      // round (see relayReopen.ts).
+      // Standing consumers should re-REQ: their re-issued subs may have raced AUTH (see relayReopen.ts).
       emitRelayReopened(url);
     };
-    // Ack our raw AUTH frames: the relay replies ["OK", <auth event id>, bool].
-    // Cheap prefix check first so the wrap firehose isn't double-parsed.
+    // Prefix check first so the wrap firehose isn't double-parsed.
     const onMessage = (...args: unknown[]) => {
       const data = args
         .map((a) => (a as { data?: unknown } | undefined)?.data)
@@ -372,9 +275,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       try {
         const [, id, ok] = JSON.parse(data) as [string, string, boolean];
         if (typeof id === "string") noteAuthResult(url, id, ok === true);
-      } catch {
-        // not JSON / not ours
-      }
+      } catch { /* ignore */ }
     };
     const attach = (socket: NRelay1["socket"]) => {
       try {
@@ -383,12 +284,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         };
         s.addEventListener("open", onOpen);
         s.addEventListener("message", onMessage);
-      } catch {
-        // No listener support — reconnects fall back to nostrify's behavior.
-      }
+      } catch { /* ignore */ }
     };
-    // websocket-ts re-emits "open" on reconnect, but NRelay1.wake() REPLACES
-    // relay.socket — intercept the assignment so the replacement is watched too.
+    // NRelay1.wake() REPLACES relay.socket; intercept the assignment to watch the new one.
     let currentSocket = relay.socket;
     attach(currentSocket);
     try {
@@ -402,18 +300,12 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         },
       });
     } catch {
-      // Non-configurable in some exotic runtime — reconnects of the ORIGINAL
-      // socket are still covered by the listener above.
+      // Non-configurable in some runtime; the original socket is still watched.
     }
   };
 
-  // Force every live pool socket to reconnect. websocket-ts treats close() as
-  // final (closedByUser) and NRelay1 only builds a replacement on its next
-  // send — which a relay carrying only standing subscriptions may never issue —
-  // so wake() immediately. The socket swap is watched (watchSocketReopen), so
-  // the reopen resets each relay's NIP-42 auth state like any other reconnect.
-  // An idle-closed socket carries no session; waking it here would open a
-  // connection nothing asked for (its next wake re-authenticates anyway).
+  // websocket-ts treats close() as final and NRelay1 only rebuilds on next
+  // send, so wake() immediately. Idle-closed sockets are skipped.
   const reconnectAllRelays = (reason: string) => {
     for (const [url, entry] of openRelaysRef.current) {
       const internals = entry.relay as unknown as { closedByUser: boolean; wake(): void };
@@ -424,43 +316,29 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         entry.relay.socket.close();
         internals.wake();
       } catch {
-        // Socket already dead — its next reconnect re-authenticates anyway.
+        // Socket already dead; its reconnect re-authenticates.
       }
     }
   };
 
 
-  // The pool is constructed before the signer memo below. The `open()`
-  // callback only reads the refs lazily (when a relay sends an AUTH
-  // challenge), so building it here — before relays/signer are finalized —
-  // is safe.
+  // `open()` reads refs lazily, so building before signer/relays finalize is safe.
   if (!pool.current) {
     pool.current = new NPool({
       open(url: string) {
-        // Every pool connection passes through here. Since the WHATWG change,
-        // `new WebSocket("/")` resolves against the page URL instead of
-        // throwing, so an empty/relative relay string (e.g. a junk hint from
-        // an nevent TLV) would silently open a socket to the app's own origin.
+        // `new WebSocket("/")` resolves against the page URL, so junk relay strings
+        // would open a socket to our own origin.
         if (!/^wss?:\/\/[^/]/i.test(url)) {
           throw new TypeError(`Refusing to open non-relay URL: ${JSON.stringify(url)}`);
         }
         logRelayOpen(url);
         const relay: NRelay1 = new VerifiedRelay(url, {
-          // Gift-wrap (1059/21059) outer signatures are redundant on the client
-          // (see isWrap); skip them. Everything else is verified by the relay's
-          // inbox — once per id, in batches, through the worker pool — instead
-          // of one synchronous Schnorr verify per message on this thread.
+          // Other kinds are verified by the relay inbox in batches on the worker pool.
           skipVerify: isWrap,
-          // NIP-42: respond to relay AUTH challenges by signing a kind 22242
-          // ephemeral event. The user's signer answers when it's fast (local
-          // nsec / extension, or a healthy bunker); a slow NIP-46 bunker is
-          // kept off the critical path by falling back to a locally-signed
-          // stream key (see the head-start race below).
+          // NIP-42: sign kind 22242. A slow NIP-46 bunker is kept off the critical path
+          // by the stream-key head-start race below.
           auth: async (challenge: string) => {
-            // Remember the challenge so newly-registered Concord stream keys
-            // can be authenticated on this same connection later, and
-            // authenticate the streams we already hold right now (the stream
-            // signatures are local, so they don't wait on the user signer).
+            // Remember the challenge for later stream keys and authenticate held ones now.
             const entry = openRelaysRef.current.get(url) ?? { relay };
             entry.challenge = challenge;
             openRelaysRef.current.set(url, entry);
@@ -473,16 +351,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             void sendStreamAuths(entry, url);
 
             /**
-             * Sign the user's kind-22242 for this relay, guarded against a
-             * slow/remote NIP-46 bunker: reuse a cached signature when the
-             * relay re-issues the IDENTICAL challenge (challenges are
-             * single-use nonces, so never across a fresh one); collapse a
-             * concurrent burst onto one in-flight sign; and rate-limit per
-             * relay — within the window, DELAY the sign until the window ends
-             * rather than refusing it (NRelay1's doAuth swallows a rejection
-             * and each sub/publish gets ONE auth-retry per socket, so a
-             * dropped challenge could kill a gated sub until reconnect). A
-             * delayed sign uses the relay's LATEST challenge at fire time.
+             * Sign the user's kind-22242, guarded for slow bunkers: reuse on an identical
+             * challenge, collapse concurrent bursts, and within the cooldown DELAY (not
+             * refuse) — NRelay1 gives each sub one auth-retry per socket, so a dropped
+             * challenge would kill a gated sub. A delayed sign uses the latest challenge.
              */
             const signUserAuth = (): Promise<NostrEvent> => {
               const signer = signerRef.current;
@@ -526,23 +398,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             };
 
             const userSign = signUserAuth();
-            userSign.catch(() => undefined); // the stream path below may abandon it
+            userSign.catch(() => undefined);
             if (streamPks.length === 0) {
-              // No stream keys scoped here (e.g. a NIP-29 relay): the USER
-              // identity is what's being authenticated — nothing else can
-              // satisfy the gate, so the bunker round-trip is unavoidable.
+              // No stream keys here (e.g. NIP-29): only the user identity can satisfy the gate.
               return userSign;
             }
 
-            // Keep the bunker OFF the reconnect critical path: NRelay1 holds
-            // every auth-retried sub/publish behind this promise, and for a
-            // NIP-46 login the sign is a relay round-trip that may itself be
-            // traveling over the socket that just reconnected. Give the user
-            // sign a short head start; if it hasn't answered, resolve NRelay1
-            // with a locally-signed STREAM-key 22242 (~4ms) so gated REQs
-            // unblock now, and deliver the user's AUTH out-of-band whenever
-            // the bunker responds (ditto-relay accepts AUTH frames for the
-            // socket's whole lifetime and its authed set only grows).
+            // Keep the bunker off the reconnect path: after a short head start, resolve
+            // with a local stream-key 22242 and deliver the user's AUTH out-of-band
+            // (ditto-relay accepts AUTH for the socket's lifetime).
             const fast = await Promise.race([
               userSign.then((ev) => ev, () => undefined),
               new Promise<undefined>((r) => setTimeout(() => r(undefined), USER_AUTH_HEADSTART_MS)),
@@ -553,7 +417,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
               try {
                 live?.relay.socket.send(JSON.stringify(["AUTH", ev]));
               } catch {
-                // Socket flapped — the next challenge re-signs.
+                // Socket flapped; the next challenge re-signs.
               }
             }).catch(() => undefined);
             logSync("auth", `user sign is slow for ${url} — answering the challenge with a stream key, user AUTH to follow`);
@@ -567,8 +431,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         return relay;
       },
       reqRouter(filters: NostrFilter[]): Map<string, NostrFilter[]> {
-        // NIP-50 search: route to dedicated search relays (Ditto pattern),
-        // falling back to the pool relays when none are configured.
         if (filters.some((f) => "search" in f)) {
           const targets = searchRelaysRef.current.length > 0
             ? searchRelaysRef.current
@@ -577,11 +439,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           logNostrReq([...routed.keys()], filters, "search");
           return routed;
         }
-        // Generic traffic prefers the general relays. Fanning every
-        // profile/status/DM REQ to the joined servers too multiplied every
-        // event into a copy per relay — a measured boot received ~11k copies
-        // for a store that gained no rows — so servers now see a pool-wide
-        // REQ only when the filter genuinely concerns them (poolReqTargets).
+        // Servers see pool-wide REQs only when the filter concerns them
+        // (poolReqTargets); fanning to all servers multiplied every event per relay.
         const targets = poolReqTargets(
           filters,
           poolGeneralRelaysRef.current,
@@ -596,12 +455,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         logNostrEvent(relays, event);
         return relays;
       },
-      // Resolve queries quickly once any relay sends EOSE.
       eoseTimeout: 300,
     });
   }
 
-  // Derive the NIP-42 AUTH signer for the current login.
   const currentLogin = logins[0];
   const currentSigner = useMemo(() => {
     if (!currentLogin) return undefined;
@@ -610,10 +467,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         case "nsec":
           return NUser.fromNsecLogin(currentLogin).signer;
         case "bunker": {
-          // Same DEDICATED plain-WebSocket NIP-46 transport + persistent-sub
-          // signer as the user-facing signer (useCurrentUser) — never the
-          // relay pool, whose socket machinery wedged remote signs on
-          // Android (see nip46Transport.ts / nip46Signer.ts).
+          // Dedicated plain-WebSocket NIP-46 transport, never the relay pool, whose
+          // sockets wedged remote signs on Android (see nip46Transport.ts).
           const clientSk = nip19.decode(currentLogin.data.clientNsec) as { type: "nsec"; data: Uint8Array };
           return new Nip46Signer({
             transport: getNip46Transport(
@@ -627,17 +482,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         case "extension":
           return NUser.fromExtensionLogin(currentLogin).signer;
         case "x-android-signer": {
-          // Native Android signer app (Amber, etc.) via NIP-55. Seeded with the
-          // login's known pubkey so answering a challenge never triggers a
-          // getPublicKey round-trip. NOT wrapped in AppSigner/signerWithNudge —
-          // like every other branch here, this is the AUTH-only signer.
-          //
-          // Each sign is an intent round-trip to the signer app, so it is a
-          // "slow signer" in the same sense as a remote bunker: the per-relay
-          // cache + in-flight collapse + cooldown above keep a challenge burst
-          // down to one round-trip, and the USER_AUTH_HEADSTART_MS race lets a
-          // stream key answer the challenge while the user's AUTH follows
-          // out-of-band.
+          // NIP-55 (Amber etc.), seeded with the known pubkey to skip getPublicKey.
+          // AUTH-only signer; each sign is an intent round-trip, so treated as slow.
           const { packageName } = currentLogin.data as { packageName: string };
           return new AndroidNativeSigner(packageName, currentLogin.pubkey);
         }
@@ -651,16 +497,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   signerRef.current = currentSigner;
 
-  // Switching accounts must not inherit the previous account's relay sessions.
-  // NIP-42 has no un-auth: a socket authenticated as account A keeps answering
-  // account B's REQs with A's read grants (and A's identity) until it happens
-  // to reconnect — on a membership-gating relay that reads as missing or wrong
-  // content right after a switch. So when the ACTIVE pubkey changes between
-  // two logged-in accounts, bounce every live socket: the fresh socket
-  // re-issues NRelay1's standing subscriptions, the relay re-challenges, and
-  // signerRef already holds the new account's signer. First login and final
-  // logout are skipped — there is no prior session to shed (logout also purges
-  // and hard-redirects).
+  // NIP-42 has no un-auth: a socket authed as account A keeps A's grants after
+  // switching to B. Bounce every socket on an account-to-account switch.
   const prevPubkeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const pubkey = currentLogin?.pubkey;
@@ -670,29 +508,16 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     reconnectAllRelays("account switched");
   }, [currentLogin?.pubkey]);
 
-  // Across a suspend/resume the OS freezes the process and the relay sockets'
-  // TCP connections die, but Chromium typically fires no `close` for the frozen
-  // WebSocket — it reads OPEN while carrying no traffic, so the wire's re-REQ
-  // self-heal writes into a dead pipe and messages stall until a restart. The
-  // desktop shell relays an OS resume/unlock signal (there is none inside the
-  // sandboxed renderer); rebuild every socket so a fresh connection re-issues
-  // the standing subscriptions. No-op on the web and in older shells.
+  // After suspend, Chromium often keeps frozen sockets OPEN with dead TCP. The
+  // desktop shell relays an OS resume signal; rebuild every socket.
   useEffect(() => {
     return onDesktopResume(() => reconnectAllRelays("resumed from suspend"));
     // Reads only refs and a stable render-body closure; provider-lifetime.
   }, []);
 
-  // Sandbox-independent backstop for the same suspend/resume socket death.
-  // `onDesktopResume` above depends on an OS resume signal the shell relays,
-  // and that signal can be unavailable — the Flatpak sandbox exposes no system
-  // bus, so Electron's `powerMonitor` never sees logind's PrepareForSleep and
-  // fires no `resume`. A wall-clock heartbeat needs nothing from the OS: while
-  // the process is frozen (suspend) this interval cannot fire, so the first
-  // tick after waking observes a gap far larger than its period. That jump is
-  // the wake, wherever it runs (web, AppImage, Flatpak, any desktop). A bounce
-  // is cheap and idempotent — a live socket is skipped, a dead one re-issues
-  // its standing subscriptions — so the threshold only needs to clear a hidden
-  // tab's throttled timers (~1/min), not to be exact.
+  // Backstop for resume detection: Flatpak has no system bus so `powerMonitor`
+  // never fires. A wall-clock jump across an interval tick means we woke.
+  // Bouncing is idempotent; the threshold only needs to beat hidden-tab throttling.
   useEffect(() => {
     const PERIOD_MS = 30_000;
     const WAKE_GAP_MS = 90_000;
@@ -709,7 +534,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // Reads only refs and a stable render-body closure; provider-lifetime.
   }, []);
 
-  // Wrap the pool in the batching proxy (combines profile/id lookups into single REQs).
   const batcher = useRef<NostrBatcher | undefined>(undefined);
   if (!batcher.current && pool.current) {
     batcher.current = new NostrBatcher(pool.current, eventStore.current);
@@ -717,19 +541,13 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   useEffect(() => {
     return () => {
-      // Closing the pool poisons every captured relay handle (websocket-ts
-      // silently drops all sends on a closedByUser socket) — nothing outside
-      // this provider may hold a pool reference past unmount.
+      // Closing poisons every captured relay handle, so nothing outside may hold a pool reference.
       pool.current?.close();
     };
   }, []);
 
-  // When Concord registers new stream keys, authenticate them on
-  // already-open sockets right away. ditto-relay's challenge stays valid for
-  // the socket's lifetime and its authenticated-pubkey set only grows, so a
-  // late key just signs the stored challenge and sends another AUTH frame —
-  // the relay acks it and subsequent REQs for that author pass. (Verified
-  // against the real relay implementation; no socket swap needed.)
+  // Authenticate newly registered stream keys on open sockets: ditto-relay's
+  // challenge is valid for the socket's lifetime and its authed set only grows.
   useEffect(() => {
     return onStreamKeysAdded((added) => {
       for (const [url, entry] of openRelaysRef.current) {
@@ -744,20 +562,13 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // Reads only refs; stable for the provider's lifetime.
   }, []);
 
-  // Self-heal a wedged NIP-42 auth: streamAuthsSettled fires this when a relay
-  // was challenged but some stream key stayed unacked past the stale window (a
-  // dropped AUTH frame, a lost OK, an ack that raced the listener attach). The
-  // old code could only recover via a socket reopen — which a half-open socket
-  // never fires — so sync stayed dead until an app restart. Re-sign and re-send
-  // the relay's stream AUTHs on the LIVE socket; the relay's challenge is valid
-  // for the socket's lifetime, so a fresh AUTH frame still authenticates.
+  // Self-heal: streamAuthsSettled fires this when a stream key stays unacked
+  // past the stale window. Re-send AUTHs on the live socket (half-open sockets never reopen).
   useEffect(() => {
     return onStreamAuthStale((url) => {
       const entry = openRelaysRef.current.get(url);
       if (!entry?.challenge) return;
-      // Only what this socket hasn't acked: the wave repeats every
-      // AUTH_STALE_MS while any key stays unacked, so re-signing the full scoped
-      // set here cost a few hundred signatures per wave, forever.
+      // Only unacked keys; the wave repeats every AUTH_STALE_MS.
       const pks = unackedStreamPubkeys(url);
       if (pks.length === 0) return;
       logSync("auth", `stream auth went stale for ${url} — re-sending ${pks.length} AUTH frame(s)`);
@@ -766,32 +577,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // Reads only refs; stable for the provider's lifetime.
   }, []);
 
-  // (NIP-46 liveness is handled inside the dedicated transport — see
-  // nip46Transport.ts. The pool no longer carries any bunker traffic, so
-  // there is nothing to recycle here on resume.)
-
-  // The wrapped pool is a ref and never changes identity, so the only thing
-  // that moved here was the literal — but `useNostr()` is the most-read context
-  // in the app (~96 files, and `useCurrentUser` reaches it transitively), so
-  // that literal alone re-rendered nearly everything whenever this provider
-  // rendered. It renders whenever `useAppContext()` above it invalidates.
-  //
-  // What is handed out is a plain object of BOUND functions rather than the
-  // batcher itself: `nostr` is consumed structurally everywhere (minimal
-  // `NostrLike` interfaces, object-literal test doubles), so a consumer lifting
-  // a method off it is a natural thing to write and silently loses `this` on a
-  // class instance. See `detachableClient` — this provider is the one place a
-  // client escapes into the app, so it is the one place to make that guarantee.
+  // Memoized: `useNostr()` is the most-read context, so a fresh literal
+  // re-rendered nearly everything. Bound functions (see `detachableClient`)
+  // so consumers can lift methods off `nostr` without losing `this`.
   const nostrValue = useMemo(
     () => {
       const client = (batcher.current ?? pool.current) as unknown as NPool;
       return { nostr: detachableClient(client) };
     },
-    // Empty deps are safe because both refs are lazily initialized in the
-    // RENDER BODY above (`pool` at the `if (!pool.current)` block, `batcher`
-    // just after it), so both are populated before this memo first runs, and
-    // neither is ever reassigned afterwards — the assignments are guarded on
-    // the ref being unset.
+    // Safe: both refs are lazily set in the render body above and never reassigned.
     [],
   );
 

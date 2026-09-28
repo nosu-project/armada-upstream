@@ -22,7 +22,6 @@ import {
   inviteInboxSince,
   queryStoredInvites,
   rebufferLiveInviteWraps,
-  warmInviteInbox,
   writeStoredInvites,
 } from "@/concord/lib/inviteInbox";
 import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
@@ -41,46 +40,36 @@ type InviteUser = NonNullable<ReturnType<typeof useCurrentUser>["user"]>;
 
 /** A direct invite received over a gift wrap, awaiting the user's consent. */
 export interface ParkedInvite {
-  /** Gift-wrap event id (stable key + dedup). */
+  /** Gift-wrap event id. */
   wrapId: string;
-  /** The inviter's pubkey (the seal author, verified). */
+  /** Seal author, verified. */
   sender: string;
-  /** The decrypted, validated invite bundle. */
   bundle: InviteBundle;
   communityId: string;
   name: string;
   /**
-   * When the invite was sent — the inner rumor's `created_at` (unix seconds).
-   * The sender's word, which is fine here: it drives the inbox's newest-first
-   * order and its seen/unread mark, both anti-nag rather than authority (the
-   * same basis on which the decline tombstone compares against rumor time).
+   * The rumor's `created_at` (unix seconds). The sender's word, fine here: it only
+   * drives ordering and the unread mark.
    */
   receivedAt: number;
   /**
-   * True when this invite is for a community I'm ALREADY in, but carries a
-   * higher `root_epoch` than I currently hold — an admin healing me forward
-   * after I was stranded on an old epoch (CORD-05/06). The accept path merges
-   * it forward only; a lower/equal epoch never parks as a catch-up.
+   * An invite for a community I'm ALREADY in with a strictly higher `root_epoch`:
+   * an admin healing me forward (CORD-05/06). Accepting merges forward only.
    */
   catchUp?: boolean;
 }
 
 /**
- * May this signer decrypt in the BACKGROUND — without popping the one-time
- * consent prompt? A local nsec has no approval to gate, so it always decrypts;
- * a prompting signer (bunker/extension) holds off until consent is granted by
- * an interactive surface. Both the network sweep and the live wire wake are
- * background paths and must never open the prompt themselves.
+ * May this signer decrypt in the background without popping the consent prompt?
+ * A local nsec always may; prompting signers wait for interactive consent.
  */
 function mayDecryptInvites(method: string | undefined): boolean {
   return !signerNeedsApproval(method) || getDecryptConsent() === "allowed";
 }
 
 /**
- * Unwrap the invite wraps not already stored and persist them (two nip-44
- * decrypts per fresh wrap — the caller gates consent first). Returns how many
- * fresh records were written and the newest wrap `created_at` seen (the cursor
- * floor). Writes are keyed by wrap id, so re-seeing a wrap costs nothing.
+ * Unwrap and persist invite wraps not already stored (caller gates consent).
+ * Returns the fresh count and the newest wrap `created_at` (the cursor floor).
  */
 async function storeFreshInviteWraps(
   user: InviteUser,
@@ -102,11 +91,9 @@ async function storeFreshInviteWraps(
 }
 
 /**
- * The background NETWORK sweep (CORD-05 §6): fetch invite wraps newer than the
- * cursor from the recipient's own inbox relays, decrypt the consent-permitted
- * ones, persist them, advance the cursor. Returns true when it wrote something
- * new (the caller re-reads the parked set). Run un-awaited off a store read —
- * it must never block a render, the whole point of the store-first refactor.
+ * The background network sweep (CORD-05 §6): fetch wraps newer than the cursor
+ * from my inbox relays, decrypt, persist, advance. Returns true if it wrote
+ * something. Always run un-awaited; it must never block a render.
  */
 async function sweepInviteInbox(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -114,8 +101,7 @@ async function sweepInviteInbox(
   signal?: AbortSignal,
 ): Promise<boolean> {
   const pubkey = user.pubkey;
-  // Fetch only wraps newer than the cursor (rewound by NIP-59's backdate window
-  // — direct-invite wraps DO tweak their timestamps into the past).
+  // The cursor is rewound by NIP-59's backdate window (these wraps backdate).
   const since = await inviteInboxSince(pubkey);
   const filter: { kinds: number[]; "#p": string[]; "#k": string[]; limit: number; since?: number } = {
     kinds: [KIND_WRAP],
@@ -124,11 +110,9 @@ async function sweepInviteInbox(
     limit: 200,
   };
   if (since > 0) filter.since = since;
-  // Scan exactly where senders deliver (CORD-05 §6): my own published inbox, or
-  // the stock interop floor when I've published none — the same set the sender
-  // resolves for me. A FAILED lookup of my OWN inbox is not "no list": scanning
-  // stock on uncertainty would leak my `#p` REQ to the public stock relays.
-  // Skip this round (parked invites still render); the poll retries.
+  // Scan where senders deliver (CORD-05 §6): my published inbox, else the stock
+  // floor. A FAILED lookup is not "no list" — scanning stock then would leak my
+  // `#p` REQ — so skip this round.
   const myInbox = await recipientInboxRelays(nostr, pubkey);
   if (myInbox === null) return false;
   const scanRelays = inviteDeliveryRelays(myInbox);
@@ -144,8 +128,7 @@ async function sweepInviteInbox(
   const seenWrap = new Set<string>();
   const wraps = perRelay.flat().filter((e) => (seenWrap.has(e.id) ? false : seenWrap.add(e.id)));
   if (wraps.length === 0) return false;
-  // Consent gate AND cursor advance are both deferred for a prompting signer
-  // without consent, so a later "allow" re-scans these wraps.
+  // No consent: don't decrypt or advance the cursor, so a later "allow" re-scans.
   if (!mayDecryptInvites(user.method)) return false;
   const { stored, newestWrap } = await storeFreshInviteWraps(user, wraps, signal);
   if (newestWrap > 0) await advanceInviteInboxCursor(pubkey, newestWrap);
@@ -153,11 +136,8 @@ async function sweepInviteInbox(
 }
 
 /**
- * Decrypt the invite wraps the wire buffered from its live subscription — the
- * fast live path, NO relay round-trip (the wraps are already in hand). Consent-
- * gated exactly like the sweep: a prompting signer without consent re-buffers
- * for the poll rather than popping the prompt. Returns "changed" when a new
- * invite was stored, "deferred" on a consent decline, "nochange" otherwise.
+ * Decrypt the invite wraps the wire buffered live (no relay round-trip).
+ * Consent-gated like the sweep: without consent, wraps re-buffer for the poll.
  */
 async function openLiveInviteWraps(user: InviteUser): Promise<"changed" | "nochange" | "deferred"> {
   if (!user.signer.nip44) return "nochange";
@@ -174,9 +154,7 @@ async function openLiveInviteWraps(user: InviteUser): Promise<"changed" | "nocha
 
 /**
  * In-flight live drain, so the many mounted copies of {@link useDirectInvites}
- * (the notifier, the rail, the page) COALESCE onto one destructive drain rather
- * than racing it — one would win the buffer and the rest would drain empty.
- * Mirrors useDm17's `openLiveDm17Wraps`.
+ * coalesce onto one destructive drain. Mirrors useDm17's `openLiveDm17Wraps`.
  */
 let liveInvitePass: Promise<"changed" | "nochange" | "deferred"> | undefined;
 
@@ -184,8 +162,7 @@ async function drainLiveInvitesOnce(user: InviteUser): Promise<"changed" | "noch
   const prior = liveInvitePass;
   if (prior) {
     const result = await prior;
-    // A wrap buffered while the shared pass ran still needs a drain — go again.
-    // Never loop on "deferred": the decline re-buffered the wraps.
+    // Drain again if wraps arrived meanwhile; never loop on "deferred" (it re-buffered).
     if (result === "deferred" || !hasBufferedLiveInviteWraps()) return result;
     return drainLiveInvitesOnce(user);
   }
@@ -198,10 +175,7 @@ async function drainLiveInvitesOnce(user: InviteUser): Promise<"changed" | "noch
   }
 }
 
-/**
- * The membership context the store read filters against: what each already-
- * joined community currently holds, plus the join/tombstone sets.
- */
+/** Membership context the store read filters against. */
 interface ParkFilter {
   /** Communities I'm already a live member of (a non-catch-up invite skips). */
   known: ReadonlySet<string>;
@@ -212,15 +186,9 @@ interface ParkFilter {
 }
 
 /**
- * Collapse the parked set to one invite per community: a re-invite, or a second
- * admin inviting you to the same community, is not a second inbox row. Within a
- * group the NEWEST wrap wins (ties broken by wrap id, for a stable order).
- *
- * A catch-up is keyed by its channel set as well as its community, never by the
- * community alone: distinct catch-ups each vend a private-channel key the member
- * still lacks ({@link isCatchUpBundle} only parks those), so collapsing them by
- * community would hide a key that exists in no other wrap. Two catch-ups
- * carrying the same channels are still redundant and do collapse.
+ * Collapse the parked set to one invite per community (newest wrap wins, ties by
+ * wrap id). Catch-ups are keyed by channel set too: each vends a private-channel
+ * key that may exist in no other wrap.
  */
 export function dedupeParkedInvites(invites: ParkedInvite[]): ParkedInvite[] {
   const byKey = new Map<string, ParkedInvite>();
@@ -241,12 +209,8 @@ export function dedupeParkedInvites(invites: ParkedInvite[]): ParkedInvite[] {
 }
 
 /**
- * Read the parked invite set back from the store (no re-decrypt) and apply the
- * consent filters against the current membership list. The PURE store read the
- * hook's query, its background sweep and its live wire wake all resolve to —
- * the one place a stored record becomes a rendered {@link ParkedInvite}.
- * Deduplicated by community ({@link dedupeParkedInvites}), so the same community
- * invited more than once is one row.
+ * Read parked invites from the store (no re-decrypt), apply consent filters, and
+ * dedupe — the one place a stored record becomes a {@link ParkedInvite}.
  */
 async function readParkedInvites(
   pubkey: string,
@@ -255,20 +219,15 @@ async function readParkedInvites(
 ): Promise<ParkedInvite[]> {
   const parked = new Map<string, ParkedInvite>();
   for (const record of await queryStoredInvites(pubkey, { signal })) {
-    // The outer `k` tag was a hint; the rumor's kind + validation are the
-    // authority (bounds, self-certifying owner — a forged bundle drops).
+    // The `k` tag was a hint; the rumor's kind + validation are the authority.
     const bundle = parseDirectInviteRumor(record.rumor.kind, record.rumor.content);
     if (!bundle) continue;
-    // A dead handoff isn't worth a prompt: expired invites never park.
     if (directInviteExpired(bundle)) continue;
-    // A left/declined community suppresses only the invites that predate the
-    // tombstone (rumor time is the sender's word, which is fine: the gate is
-    // anti-nag, not authority).
+    // A tombstone suppresses only invites predating it (anti-nag, not authority).
     const buriedAt = filter.tombstonedAt.get(bundle.community_id);
     if (buriedAt !== undefined && record.rumor.created_at * 1000 <= buriedAt) continue;
-    // A role-gate key vend (a channel key we lack, on the base we already hold)
-    // parks as a catch-up; anything else for an already-joined community is
-    // noise — or a base swap — and skips.
+    // A role-gate key vend on the base we hold parks as a catch-up; anything else
+    // for a joined community (incl. a base swap) skips.
     const catchUp = isCatchUpBundle(filter.heldByCommunity.get(bundle.community_id), bundle);
     if (filter.known.has(bundle.community_id) && !catchUp) continue;
     parked.set(record.wrapId, {
@@ -285,22 +244,13 @@ async function readParkedInvites(
 }
 
 /**
- * Scan the direct-invite inbox: the indexed CORD-05 §6 lookup
- * `{ kinds: [1059], "#p": [me], "#k": ["3313"] }` — exactly this user's
- * invites, never the whole giftwrap backlog. Each wrap is decrypted once,
- * persisted (inviteInbox), and **parked** — consent comes first: a received
- * invite never auto-joins, no relay connection or Join happens until the user
- * accepts. Already-joined or tombstoned communities are filtered out so the
- * prompt doesn't re-nag.
+ * The direct-invite inbox: `{ kinds: [1059], "#p": [me], "#k": ["3313"] }`
+ * (CORD-05 §6). Invites are decrypted once, persisted, and **parked** — never
+ * auto-joined. Joined or tombstoned communities are filtered out.
  *
- * The query itself is a PURE STORE READ ({@link readParkedInvites}): it reads
- * the parked set and applies the consent filters, and never blocks on the
- * network. Wraps reach the store two ways, both of which re-read into the cache
- * via setQueryData: the background {@link sweepInviteInbox} the queryFn fires
- * un-awaited, and the live `c2inv:wrap` wire wake below. This mirrors the kick
- * fix (useGuestbook): awaiting the relay round-trip here stranded every read
- * behind the recipient-inbox lookup and the 8s scan, which is why a received
- * invite only showed up after a manual refresh.
+ * The query is a PURE STORE READ ({@link readParkedInvites}); wraps arrive via
+ * the un-awaited {@link sweepInviteInbox} and the live `c2inv:wrap` wake, both
+ * re-reading into the cache via setQueryData.
  */
 export function useDirectInvites() {
   const { nostr } = useNostr();
@@ -310,19 +260,15 @@ export function useDirectInvites() {
   const queryClient = useQueryClient();
 
   const known = new Set(list ? liveEntries(list.list).map((e) => e.community_id) : []);
-  // Newest tombstone time (ms) per community. A tombstone suppresses only
-  // invites SENT BEFORE it — a leave/decline/ban buries the invites it knew
-  // about, never a fresh re-invite (someone chose to ask again).
+  // A tombstone suppresses only invites SENT BEFORE it, never a fresh re-invite.
   const tombstonedAt = new Map<string, number>();
   for (const t of list?.list.tombstones ?? []) {
     const prev = tombstonedAt.get(t.community_id);
     if (prev === undefined || t.removed_at > prev) tombstonedAt.set(t.community_id, t.removed_at);
   }
 
-  // What each already-joined community currently holds (the base, its epoch and
-  // the private-channel keys), so a role-gate key vend carrying a channel key we
-  // lack (CORD.md) is recognised as a CATCH-UP rather than skipped as "already a
-  // member" — and a bundle proposing a DIFFERENT base is neither, and dropped.
+  // What each joined community holds, so a key vend for a channel we lack is a
+  // CATCH-UP, and a bundle proposing a DIFFERENT base is dropped.
   const heldByCommunity = useMemo(() => {
     const m = new Map<string, HeldMembership>();
     if (list) {
@@ -331,10 +277,8 @@ export function useDirectInvites() {
     return m;
   }, [list]);
 
-  // Don't scan until the membership list is trustworthy: an UNDECRYPTABLE read
-  // (remote/bunker signer not ready) yields an untrusted empty list — treating
-  // it as ready would re-park invites for communities we're already in and
-  // spam the prompt on launch. A decrypt-failed list is explicitly NOT ready.
+  // An undecryptable list is an untrusted empty one; treating it as ready would
+  // re-park invites for joined communities on launch.
   const decryptFailed = Boolean(list?.decryptFailed);
   const listReady = !decryptFailed && (list !== undefined || listFetched);
 
@@ -348,12 +292,8 @@ export function useDirectInvites() {
     [...tombstonedAt.entries()].map(([id, at]) => `${id}@${at}`).sort().join(","),
   ];
 
-  // Live wake: the wire buffered a direct-invite gift wrap it can't decrypt and
-  // rang `c2inv:wrap`. Drain and decrypt the IN-HAND wrap (no relay round-trip),
-  // then re-read the parked set into the cache — the same store-read-into-cache
-  // the kick fix uses, NOT an invalidate (which would re-run the background
-  // sweep). Gated exactly like the query's `enabled`: a not-yet-ready list would
-  // otherwise re-park invites for communities we're already in.
+  // Live wake: drain the buffered wrap and re-read into the cache (NOT an
+  // invalidate, which would re-run the sweep). Gated like the query's `enabled`.
   useWireScopes((scopes) => {
     if (!user?.signer.nip44 || !listReady || !scopes.has("c2inv:wrap")) return;
     const pubkey = user.pubkey;
@@ -363,7 +303,6 @@ export function useDirectInvites() {
         if (rows) queryClient.setQueryData<ParkedInvite[]>(queryKey, rows);
       })
       .catch(() => {
-        // Best-effort: the poll's network sweep re-fetches the same wrap.
       });
   });
 
@@ -371,30 +310,19 @@ export function useDirectInvites() {
     queryKey,
     enabled: Boolean(user?.signer.nip44) && listReady,
     staleTime: 30_000,
-    // Invites aren't latency-critical (the user consents whenever they get to
-    // it) and the cursor means a longer gap just delays discovery, never drops
-    // one. Poll slowly and only while the tab is visible.
+    // Not latency-critical, and the cursor means a gap only delays discovery.
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
 
-      // Open this account's invite tenant now, so its cold-open (and the
-      // one-time drain of the pre-tenant database) overlaps the store read.
-      warmInviteInbox(pubkey);
-
-      // The background NETWORK sweep runs UN-AWAITED (the kick-fix pattern): it
-      // must never block this read behind the recipient-inbox lookup and the 8s
-      // relay scan. When it writes something new, re-read the parked set into
-      // the cache. Live delivery is the `c2inv:wrap` wake above; this catches
-      // invites that arrived while the wire was deaf.
+      // Un-awaited network sweep; catches invites that arrived while the wire was deaf.
       void sweepInviteInbox(nostr, user!, signal)
         .then((changed) => (changed ? readParkedInvites(pubkey, filter) : undefined))
         .then((rows) => {
           if (rows) queryClient.setQueryData<ParkedInvite[]>(queryKey, rows);
         })
         .catch(() => {
-          // Best-effort: the live wake and the next poll cover a miss.
         });
 
       return readParkedInvites(pubkey, filter, signal);
@@ -405,24 +333,18 @@ export function useDirectInvites() {
 /** One row of the invite inbox: a parked invite and whether it's still unseen. */
 export interface InviteInboxItem {
   invite: ParkedInvite;
-  /** True until the user has opened the inbox past this invite's arrival. */
   unread: boolean;
 }
 
 export interface InviteInbox {
-  /** Parked invites, newest first. */
   items: InviteInboxItem[];
   /** How many haven't been seen yet (drives the rail badge / toast). */
   unreadCount: number;
 }
 
 /**
- * The direct-invite inbox as a mail-client-style list: {@link useDirectInvites}'
- * parked invites, sorted newest-first and tagged unread against the inbox's
- * single last-seen high-water mark ({@link concordInviteReadKey}). Both the
- * routed inbox page and the rail badge read this, sharing the one underlying
- * scan query. Opening the page advances the mark, which clears every row's
- * unread flag at once.
+ * The invite inbox as a mail-style list: parked invites, newest first, tagged
+ * unread against a single last-seen mark ({@link concordInviteReadKey}).
  */
 export function useInviteInbox(): InviteInbox {
   const { data: invites } = useDirectInvites();
@@ -439,20 +361,9 @@ export function useInviteInbox(): InviteInbox {
 }
 
 /**
- * Accept a parked direct invite: keep the keys — record the entry in the
- * Community List vault — then announce with a self-signed Guestbook Join
- * echoing the invite's attribution (CORD-05 §6 accepts exactly like a §1
- * link acceptance).
- *
- * A CATCH-UP invite (`invite.catchUp`) is for a community I'm already in that
- * arrived on a HIGHER epoch than I hold — an admin healing me forward after I
- * was stranded on a stale epoch. It routes through the same `add`, whose
- * deterministic list merge (`mergeEntry`/`freshest`) is epoch-monotonic: the
- * higher-epoch bundle becomes `current` while `seed` keeps my earliest root, so
- * the merge only ever moves me FORWARD — a lower/equal epoch could never reach
- * here (the scan only parks a strictly-fresher catch-up) and could not lower
- * `current` even if it did. No Guestbook Join is re-sent for a catch-up (I'm
- * already a member); only a fresh join announces.
+ * Accept a parked direct invite: record it in the Community List vault, then
+ * send a self-signed Guestbook Join attributed to the inviter (CORD-05 §6).
+ * A catch-up goes through the same epoch-monotonic `add` merge and sends no Join.
  */
 export function useAcceptDirectInvite() {
   const { nostr } = useNostr();
@@ -466,33 +377,19 @@ export function useAcceptDirectInvite() {
       const { bundle } = invite;
       if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
 
-      // Nor may anyone accept into a dissolved community — the same check a
-      // link join makes (`completeJoin`): a direct invite is a bundle too, and
-      // one sent before the grave would otherwise re-add a read-only husk.
+      // No accepting into a dissolved community, as with link joins (`completeJoin`).
       await assertNotDissolved(nostr, bundle);
       const entry = bundleToEntry(bundle);
-      // A banned npub must not accept an invite (CORD-04 §4). This runs for a
-      // catch-up too: the check is cheap, and the reasoning that once excused it
-      // ("a still-valid member folding a fresher bundle isn't joining") rested on
-      // the bundle being from an admin, which nothing here proves — the sender is
-      // seal-verified but never rank-checked. A catch-up now rides the base the
-      // member already holds (isCatchUpBundle), so this folds a Control Plane
-      // under a root that is theirs rather than one the bundle chose.
+      // A banned npub must not accept (CORD-04 §4) — catch-ups included, since the
+      // sender is seal-verified but never rank-checked.
       const community = rehydrateCommunity(entry);
       if (community) await assertNotBanned(nostr, community, user.pubkey);
-      // `add` → mergeCommunityLists → mergeEntry → freshest (CORD-02 §8). That
-      // merge reconciles a member's own devices and takes the higher epoch's
-      // whole snapshot wholesale, base included — which is safe here only
-      // because a catch-up is pinned to the base already held, so the sole
-      // thing this can contribute for a known community is channel keys.
+      // The merge takes the higher epoch's whole snapshot, base included; safe only
+      // because a catch-up is pinned to the held base (so it adds channel keys only).
       await updateList({ type: "add", entry });
 
-      // A catch-up is not a new membership: I'm already announced. Re-sending a
-      // Guestbook Join would be noise. Only a genuine first join announces.
       if (!invite.catchUp) {
-        // Best-effort Join, attributed to the inviter (the seal-verified sender
-        // beats an unverified creator_npub claim) — coalesce self-heals if it
-        // never lands.
+        // Best-effort Join attributed to the seal-verified sender; coalesce self-heals.
         void (async () => {
           if (!community) return;
           const rumor = buildJoinRumor(user.pubkey, Date.now(), { creator: invite.sender, label: bundle.label });

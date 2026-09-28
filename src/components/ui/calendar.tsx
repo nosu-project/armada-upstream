@@ -8,11 +8,7 @@ import { buttonVariants } from "@/components/ui/button-variants";
 
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 
-/**
- * A self-contained month header: ◀  Month Year  ▶, laid out inline so the nav
- * arrows sit beside the label (react-day-picker v9's default `nav` floats in
- * the corner, which we hide).
- */
+/** Inline ◀ Month Year ▶ header; react-day-picker v9's default `nav` is hidden. */
 function MonthCaption({ calendarMonth }: MonthCaptionProps) {
   const { previousMonth, nextMonth, goToMonth } = useDayPicker();
   const navBtn = cn(
@@ -57,7 +53,6 @@ function Calendar({
       classNames={{
         months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
         month: "space-y-2",
-        // Default nav floats in the corner — hide it; MonthCaption owns nav.
         nav: "hidden",
         month_caption: "",
         month_grid: "w-full border-collapse",

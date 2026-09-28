@@ -37,6 +37,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 |--------------|-----------------------------------------------------------------|
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
 | `src/concord/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
+| `src/sw/`    | The Web Push service worker, in TypeScript: `worker.ts` (event handling), `pushRuntime.ts` (open/store/present), `sw.ts` (entry). The `serviceWorker()` plugin in `vite.config.ts` bundles it to one classic `/sw.js` in `vite build` and serves it from the dev server |
 | `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
 | `crates/webxdc-rt/` | Rust: the iroh-gossip transport for Mini App multiplayer, compiled to wasm. The only Rust in the repo |
@@ -298,14 +299,15 @@ surface dead UI or throw: the `ArmadaNotification` background relay service
 touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export (itself Android 14+ only — see Conventions).
 
-### Notifications: APNs through the same nostr-push gateway
+### Notifications: APNs through the legacy nostr-push gateway
 
 iOS is the one platform that cannot listen for its own events in the
 background — no equivalent of Android's foreground service, and no Web Push in
 WKWebView — so it takes an APNs device token (`ios/App/App/ArmadaPushPlugin.swift`,
-`src/lib/nativePush.ts`) and registers it with the SAME content-blind
-nostr-push gateway the web client uses, as NIP-PUSH's `type: "apns"`
-subscription. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
+`src/lib/nativePush.ts`) and registers it with the content-blind nostr-push
+gateway, as NIP-PUSH's `type: "apns"` subscription. The web client has moved to
+nostr-push2 (next section); this path has not, so `nostrPush.ts`,
+`VITE_NOSTR_PUSH_*` and the per-record id bookkeeping below are iOS-only now. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
 register one watch set (`usePushWatchSet.ts`) and expose one
 `UsePushNotificationsReturn`, so the settings UI never learns which it has.
 Apple is unavoidably in the delivery path; what survives is that the GATEWAY
@@ -315,7 +317,7 @@ message.
 - **The message is decrypted on the device, by the Notification Service
   Extension.** `ios/App/NotificationService` is the target; all of its work is
   in `ios/ArmadaNotify`, the THIRD port of the decrypt/store/present pipeline
-  (`sw.js`+`pushRuntime.ts` on web, `Dm17.kt`+`ServiceStore.kt` on Android).
+  (`src/sw/worker.ts`+`pushRuntime.ts` on web, `Dm17.kt`+`ServiceStore.kt` on Android).
   The gateway inlines the matched event, the extension opens it, writes it into
   the same ArmadaDB the WebView reads — which is why the database was put in
   the App Group before anything was stored in it — and rewrites the
@@ -405,9 +407,7 @@ message.
   `domain` with the hosted client. Without the extra dimension
   (`pushInstallationId`), signing in on an iPhone would silently take over the
   same account's browser records and the browser's next sync would take them
-  back. Two BROWSERS on one origin still collide this way; that is pre-existing
-  and left alone, because changing web ids would make every install prune and
-  re-register.
+  back. (Browsers no longer register here at all.)
 - **The gateway is build-time config, and iOS has no CI to set it.**
   `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` must be in the
   environment of the `npm run build` that precedes `npx cap sync ios`, or the
@@ -439,6 +439,44 @@ ONLY by the Android notification service's PendingIntents, and iOS push taps
 reach the router through the plugin rather than through a URL, so nothing on
 iOS can produce one.
 
+### Web notifications: nostr-push2 and `window.napp.push`
+
+The web build has two ways to be woken while closed, and `useNostrPush.ts`
+drives both: Tenna's `window.napp.push` when Armada runs there as an nsite
+(`~/Projects/tenna/NAPP.md`), and Web Push through a
+nostr-push2 (`nostr://npub1q3sle0kvfsehgsuexttt3ugjd8xdklxfwwkh559wxckmzddywnws6cd26p/git.shakespeare.diy/nostr-push2`)
+gateway everywhere else (`nostrPush2.ts`; the public service is hardcoded in
+`platform.ts`, and `VITE_NOSTR_PUSH2_*` only overrides it). They differ
+ONLY in the `PushTarget` the list is handed to. Both take the same
+`NappSubscription[]` (`nappPush.ts` packs the shared watch set into them) and
+both deliver the same `napp.push.payload` to `sw.js`, which normalizes it and
+presents it through the one path the legacy payloads also use. Don't give
+either transport a presentation path of its own.
+
+- **`set` replaces the whole list.** A snapshot with a plane still loading
+  would unsubscribe that plane, so `carryForwardWatches` keeps the last-set
+  watches of every plane that is not ready. This is the prune rule, and the
+  only one — there are no per-record ids to reconcile any more.
+- **The gateway client is an ephemeral per-install key, never the account's.**
+  So bunker and extension logins get Web Push too, and account exit can always
+  clear the list with no signer. The install also mints its OWN VAPID key and
+  hands the private half to the gateway in `create`; a browser subscription
+  made against any other key is dropped at preparation. Both keys live in
+  localStorage and go with logout's purge.
+- **The payload names no subscription.** The worker reads the plane off the
+  event (`pushScope` in `pushRuntime.ts`: a 1059 authored by one of our stream
+  addresses is Concord, one addressed to us is NIP-17, an `h`-tagged group kind
+  is NIP-29) and takes a NIP-29 room's relay from `relays`, the relay the event
+  arrived from. An event too big for the ~4 KB transport arrives as `event_id`
+  and is fetched BEFORE anything is shown, because its plane is unknowable
+  without it.
+- **Verify the event in the worker.** Tenna delivers what its relays sent
+  unchecked; `preparePush` drops anything whose signature does not hold.
+- **nostr-push2 ignores `relays`**: it matches against the firehose of its own
+  relays only. Tenna on Android does honour them (and cannot answer NIP-42).
+- The page must not show its own OS notification while either path is live —
+  `backgroundPushActive` is the one check, used by the foreground notifier.
+
 ## Local storage: ArmadaDB
 
 One interface (`src/lib/db/types.ts`) — tenants of rumors plus a KV — with a
@@ -457,6 +495,11 @@ ordering are written once. A new platform adds a bridge, not an adapter — thou
 one whose background writer needs the query engine in-process (Android's
 service, iOS's future notification extension) does add an engine port below the
 bridge.
+
+Upgrades are supported from **v0.50.0**. The pre-ArmadaDB databases
+(`RETIRED_DATABASES` in `purgeClientStorage.ts`) are never read or migrated —
+only deleted on logout — and format changes go through `SCHEMA_MIGRATIONS` in
+`db/schema.ts`.
 
 On Android the query engine is native and there is exactly one database file.
 The background notification service writes an event into the same tenant the
@@ -589,12 +632,9 @@ Things to know before touching it:
   reads that file on every DOWNLOAD (`updaterCacheDirName`, plus `publisherName`
   on Windows), so deleting it leaves the update check succeeding and the download
   throwing ENOENT — visible only on a manual check. Its `url:` is never fetched.
-- **The adapter is chosen before anything reads.** The legacy drains in
-  `migrations.ts` write through `getArmadaDB()`, so on Android and desktop they
-  land in the native store directly — there is no IndexedDB ArmadaDB to move
-  (the desktop shell had no released build storing data), and adding a
-  second hop would be a second chance to strand decrypted Concord and NIP-17
-  history that exists nowhere else.
+- **The adapter is chosen before anything reads.** Migrations write through
+  `getArmadaDB()`, so on Android and desktop they land in the native store
+  directly; don't add an IndexedDB hop there.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
   ports NIP-17's kind filter and NIP-40 expiry refusal;
   `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule;
@@ -684,22 +724,14 @@ Things to know before touching it:
   conversation" is not a deletion anyone should be able to ask for), never
   matched row-wise, and refused outright rather than approximated — two of them,
   or a namespace that isn't one, fail closed.
-- **A drain converts to the CURRENT shape; it does not copy rows across.** The
-  pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
-  event's tags and told the planes apart by the `stream` tag at read time, so
-  it enforced no kind or seal-form rule at write. Planes read back by kind now,
-  and that is sound only because `writeOpened` refuses, at ingest, a rumor whose
-  kind does not belong to the plane whose keys opened its wrap — so
-  `rumorMigration.ts` applies those same three refusals to every row it copies,
-  using the `stream` tag it is about to strip as proof of the arrival plane.
-  Copying verbatim would mint a control edition out of any guestbook
-  keyholder's rumor.
-- **The localStorage→KV move happens in the gate, and nowhere else.**
-  `LOCALSTORAGE_MOVES` in `db/schema.ts` is the only place the old key
-  spellings are written down; `KvPrefixCache` knows nothing about localStorage
-  and reads KV only. Don't put a "check localStorage on miss" fallback in a
-  cache or a hook — that is the drift the single table exists to prevent, and
-  it would re-run on every warm forever.
+- **A migration converts to the CURRENT shape; it does not copy rows across.**
+  Planes read back by kind, which is sound only because `writeOpened` refuses a
+  rumor whose kind doesn't belong to the plane that opened its wrap — a
+  migration touching Concord rows must apply the same refusals, or it can mint a
+  control edition out of any guestbook keyholder's rumor.
+- **Old key spellings are converted once, in a schema migration.** Don't put a
+  "check the old key on miss" fallback in a cache or hook: it drifts and re-runs
+  on every warm forever.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.
@@ -739,6 +771,12 @@ to fail a run:
 
 ## Conventions
 
+- **Comments say why, briefly.** Keep invariants, ordering/race constraints,
+  security rationale, spec references (CORD-xx, NIP-xx) and named platform-bug
+  workarounds, in 1–3 lines. Don't restate the code, and don't narrate bug
+  history, earlier behavior or what a change removed — that belongs in the
+  commit message. Keep a lone comment in an intentionally empty block
+  (`catch { /* ignore */ }`) so `no-empty` stays quiet.
 - **Never publish a user's Nostr lists without an explicit user action.** This
   covers every user-owned replaceable/list event: kind 10050 DM relays, kind
   10009 servers/groups, follow/mute lists, NIP-65, Concord membership lists.

@@ -9,12 +9,10 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { parseAddrPinRef, type PinAddr } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
-/** Strip URLs to a paperclip for a compact one-line-ish preview. */
 function previewText(content: string): string {
   return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
 }
 
-/** One row in the pinned-messages bar: a clickable preview + optional unpin. */
 function PinnedRow({
   eventId,
   relayUrl,
@@ -83,7 +81,6 @@ function PinnedRow({
   );
 }
 
-/** Human-readable label for an addressable pin's kind. */
 function addrPinLabel(kind: number): string {
   switch (kind) {
     case 30023:
@@ -98,11 +95,7 @@ function addrPinLabel(kind: number): string {
   }
 }
 
-/**
- * One row for an addressable (`a`-tag) pin — e.g. a long-form post or wiki
- * page pinned by another client. Not a timeline message, so there's no jump;
- * it's a labeled preview with an optional unpin.
- */
+/** An addressable (`a`-tag) pin, e.g. a long-form post; not a timeline message, so no jump. */
 function PinnedAddrRow({
   pinRef,
   addr,
@@ -161,22 +154,15 @@ function PinnedAddrRow({
 
 interface PinnedMessagesBarProps {
   open: boolean;
-  /** Pin references in display order: event ids and address coordinates. */
   pinnedRefs: string[];
   relayUrl: string;
   canModerate: boolean;
-  /** Scroll a message into view in the timeline (provided by GroupChat). */
   onJump: (id: string) => void;
   onUnpin: (ref: string) => void;
   onClose: () => void;
 }
 
-/**
- * A bar that slides open below the channel header to browse the group's pinned
- * messages. Each message row links to jump to the message; admins/mods can
- * unpin. Animates its height open/closed; collapses to zero when there's
- * nothing to show.
- */
+/** Bar below the channel header listing pinned messages; collapses to zero when empty. */
 export function PinnedMessagesBar({
   open,
   pinnedRefs,

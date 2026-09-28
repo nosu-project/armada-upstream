@@ -22,20 +22,14 @@ interface BotCommandComposerProps {
   entry: BotCommandEntry;
   /** Candidates for a `user` argument. */
   memberPubkeys: string[];
-  /** Names and faces for those candidates (already resolved by the bot sweep). */
+  /** Already resolved by the bot sweep. */
   profiles: Record<string, BotRosterProfile>;
-  /**
-   * Members who have spoken in this channel, most recent first. A `user`
-   * argument's picker surfaces them ahead of the rest, so the people you're
-   * likely to name are at the top. Empty ⇒ no activity known ⇒ roster order.
-   */
+  /** Members who spoke here, most recent first; `user` pickers surface them first. */
   recentAuthors?: string[];
-  /** Canonical invocation text, ready to send. */
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }
 
-/** An option in a field's drop-up. */
 interface Option {
   value: string;
   label: string;
@@ -47,11 +41,6 @@ const MAX_USER_OPTIONS = 6;
 const displayName = (pubkey: string, profiles: Record<string, BotRosterProfile>): string =>
   profiles[pubkey]?.name || `${pubkey.slice(0, 8)}…`;
 
-/**
- * Members who spoke most recently first, everyone else after in the order given.
- * `recent` is most-recent-first; with no activity this is a stable no-op, so the
- * picker falls back to plain roster order.
- */
 function orderByRecency(pubkeys: string[], recent: string[]): string[] {
   if (recent.length === 0) return pubkeys;
   const rank = new Map(recent.map((pk, i) => [pk, i] as const));
@@ -63,18 +52,11 @@ function orderByRecency(pubkeys: string[], recent: string[]): string[] {
 const MENU_TYPES = new Set<string>(["choice", "bool", "user"]);
 
 /**
- * Collects a bot command's arguments in typed fields instead of making the user
- * type a command line.
- *
- * Picking a command from the `/` menu swaps the message box for one field per
- * declared argument: a drop-up for a `choice` or `bool`, a member picker for a
- * `user`, digits-only entry for `int`/`number`, and a growing box for the
- * free-text tail. Quoting and escaping are then the code's job, never the
- * user's — on submit the fields are assembled into canonical invocation text
- * that re-parses to exactly these values on the bot's side.
- *
- * Enter walks forward and sends on the last field; Escape and backspacing out of
- * the first field abandon the command.
+ * Collects a bot command's arguments in typed fields (drop-ups for
+ * `choice`/`bool`, member picker for `user`, digits for `int`/`number`, a box for
+ * free text), assembling canonical invocation text on submit so quoting is never
+ * the user's job. Enter advances/sends; Escape or backspacing out of the first
+ * field abandons.
  */
 export function BotCommandComposer({
   entry,
@@ -88,7 +70,6 @@ export function BotCommandComposer({
   const args = command.args;
 
   const [values, setValues] = useState<string[]>(() => args.map(() => ""));
-  /** For a `user` field: the canonical npub behind the displayed name. */
   const [npubs, setNpubs] = useState<(string | undefined)[]>(() => args.map(() => undefined));
   const [invalid, setInvalid] = useState<boolean[]>(() => args.map(() => false));
   const [focused, setFocused] = useState(0);
@@ -121,8 +102,7 @@ export function BotCommandComposer({
       const pos = caret === "end" ? el.value.length : 0;
       el.setSelectionRange(pos, pos);
     }
-    // Moving onto a field that has a drop-up opens it, so finishing one argument
-    // lands you inside the next one's picker rather than on a closed trigger.
+    // Landing on a field with a drop-up opens it.
     const type = args[i]?.type;
     if (type && MENU_TYPES.has(type)) {
       setMenuFor(i);
@@ -130,14 +110,13 @@ export function BotCommandComposer({
     }
   }, [args]);
 
-  /** Options for a field's drop-up, or none when the field has no menu. */
   const optionsFor = useCallback(
     (i: number, query: string): Option[] => {
       const arg = args[i];
       if (arg.type === "choice" || arg.type === "bool") {
         const base = arg.type === "bool" ? ["true", "false"] : arg.choices;
         const opts: Option[] = base.map((c) => ({ value: c, label: c }));
-        // An optional argument can be left out; the wire format just stops early.
+        // Optional arguments can be left out; the wire format just stops early.
         if (!arg.required) opts.unshift({ value: "", label: "(skip)" });
         return opts;
       }
@@ -146,8 +125,6 @@ export function BotCommandComposer({
         const matched = memberPubkeys.filter(
           (pk) => !q || displayName(pk, profiles).toLowerCase().includes(q) || pk.includes(q),
         );
-        // Recently-active members first; the picker shows the top few, so the
-        // person you mean is usually already there before you finish typing.
         return orderByRecency(matched, recentAuthors)
           .slice(0, MAX_USER_OPTIONS)
           .map((pk) => ({
@@ -176,8 +153,7 @@ export function BotCommandComposer({
     (i: number, option: Option) => {
       const arg = args[i];
       if (arg.type === "user") {
-        // Display the member's name; the canonical npub rides alongside and is
-        // what actually goes on the wire.
+        // The npub, not the displayed name, goes on the wire.
         setValue(i, option.label);
         const npub = (() => {
           try {
@@ -198,7 +174,6 @@ export function BotCommandComposer({
   );
 
   const submit = useCallback(() => {
-    // A picked member's npub always beats the name shown in the box.
     const raw = args.map((a, i) => (a.type === "user" && npubs[i] ? npubs[i]! : values[i] ?? "").trim());
 
     let lastFilled = -1;
@@ -213,21 +188,16 @@ export function BotCommandComposer({
 
     for (let i = 0; i < args.length; i++) {
       const empty = raw[i] === "";
-      // Positional text cannot express a hole: an empty argument before a filled
-      // one would silently shift every later value into the wrong slot.
+      // Positional text can't express a hole: later values would shift slots.
       if (empty && (args[i].required || i < lastFilled)) return reject(i);
       if (!empty && argReason(args[i], raw[i])) return reject(i);
-      // The wire caps a value in BYTES. A field's maxLength counts UTF-16 units,
-      // which emoji clear long before this — and an over-cap value is not an
-      // invocation at all, so the bot would silently ignore a command the user
-      // believes they sent, having already published the routing tag.
+      // The wire caps values in BYTES (maxLength counts UTF-16); an over-cap value
+      // is silently ignored by the bot after the routing tag is published.
       if (byteLength(raw[i]) > MAX_ARG_VALUE_BYTES) return reject(i);
     }
 
     const text = buildInvocationText(command.name, raw.slice(0, lastFilled + 1));
-    // The bot parses this text with the same grammar we just wrote it in. If we
-    // cannot read back exactly what we produced, neither can it, so refuse
-    // rather than publish a routing tag for a command that will never run.
+    // Round-trip check: if we can't parse what we produced, neither can the bot.
     const back = parseInvocation(text, [entry], bot);
     if (!back || validateInvocation(back.command, back.args)) {
       return reject(Math.max(lastFilled, 0));
@@ -264,7 +234,7 @@ export function BotCommandComposer({
         }
       }
 
-      // A trigger has no caret, so the keys that would move one instead open it.
+      // A trigger has no caret, so caret keys open it.
       if (isTrigger && (e.key === " " || e.key === "ArrowDown" || e.key === "ArrowUp")) {
         e.preventDefault();
         e.stopPropagation();
@@ -273,7 +243,6 @@ export function BotCommandComposer({
       }
 
       if (e.key === "Enter") {
-        // A free-text argument may legitimately contain newlines.
         if (e.shiftKey && el instanceof HTMLTextAreaElement) return;
         e.preventDefault();
         e.stopPropagation();
@@ -291,8 +260,7 @@ export function BotCommandComposer({
 
       const value = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el.value : values[i];
       if ((e.key === "Backspace" || e.key === "Delete") && !value) {
-        // Deleting back through an empty field walks to the previous one, and
-        // out of the first field abandons the command — the keyboard-only exit.
+        // Backspacing out of the first field abandons the command.
         e.preventDefault();
         if (i === 0) onCancel();
         else focusField(i - 1, "end");
@@ -314,7 +282,6 @@ export function BotCommandComposer({
         }
       }
 
-      // `arg` is read above for the trigger branches; nothing else needs it.
       void arg;
     },
     [args, menuFor, menuOptions, menuIndex, values, pickOption, closeMenu, openMenu, submit, onCancel, focusField],
@@ -324,7 +291,6 @@ export function BotCommandComposer({
 
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-secondary/40 px-3 py-2">
-      {/* Which command is being built, and which bot will run it. */}
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span>Using</span>
         <span className="font-mono font-semibold text-foreground">/{command.name}</span>
@@ -377,9 +343,7 @@ export function BotCommandComposer({
                   !values[i] && "text-muted-foreground",
                 )}
                 onFocus={() => setFocused(i)}
-                // A menu row is picked on pointer-down with preventDefault, so
-                // focus never leaves for a pick — a blur here is always a real
-                // move to another field, and the menu must not outlive it.
+                // Rows pick on pointer-down with preventDefault, so any blur is a real move.
                 onBlur={() => { if (menuFor === i) closeMenu(); }}
                 onKeyDown={(e) => onFieldKeyDown(e, i)}
                 onPointerDown={(e) => {
@@ -420,22 +384,18 @@ export function BotCommandComposer({
                   setFocused(i);
                   if (arg.type === "user") openMenu(i);
                 }}
-                // Rows are picked on pointer-down with preventDefault, so focus
-                // never leaves for a pick — a blur here is always a real move to
-                // another field, and the menu must not outlive it.
+                // Rows pick on pointer-down with preventDefault, so any blur is a real move.
                 onBlur={() => { if (menuFor === i) closeMenu(); }}
                 onChange={(e) => {
                   let next = e.target.value;
                   if (arg.type === "int" || arg.type === "number") {
-                    // inputMode only picks the mobile keypad; a desktop keyboard
-                    // can still type anything, so filter as they go.
+                    // inputMode only picks the mobile keypad; filter desktop input too.
                     next = next.replace(arg.type === "int" ? /[^\d-]/g : /[^\d.-]/g, "").replace(/(?!^)-/g, "");
                     const dot = next.indexOf(".");
                     if (dot !== -1) next = next.slice(0, dot + 1) + next.slice(dot + 1).replace(/\./g, "");
                   }
                   setValue(i, next);
                   if (arg.type === "user") {
-                    // Typing dissolves a picked member back to raw text.
                     setNpubs((prev) => prev.map((v, j) => (j === i ? undefined : v)));
                     openMenu(i);
                   }
@@ -455,7 +415,6 @@ export function BotCommandComposer({
                       oi === menuIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
                       option.value === "" && "text-muted-foreground italic",
                     )}
-                    // Pointer-down, so focus never leaves the field being filled.
                     onPointerDown={(e) => {
                       e.preventDefault();
                       pickOption(i, option);
@@ -478,8 +437,6 @@ export function BotCommandComposer({
           ))}
         </div>
 
-        {/* The same send button the message box has, in the same place. A
-            command should not be sendable only by pressing Enter. */}
         <button
           type="button"
           onClick={submit}

@@ -10,29 +10,20 @@ import { useIosPush } from "@/hooks/useIosPush";
 import { isNativeRuntime } from "@/lib/platform";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
+import { hasNappPush } from "@/lib/nappPush";
 import { hasIosPush } from "@/lib/nativePush";
 import { DEFAULT_PUSH_PREFS, type UsePushNotificationsReturn } from "@/lib/pushPrefs";
 import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
 
 /**
- * Provider that keeps one gateway push controller alive app-wide.
- *
- * Before this, the push hook was only mounted by the notification settings
- * page — so its auto-(re)enable and server-record syncs (prefs and per-channel
- * mutes) only ran when the user happened to visit Settings. Keeping the hook
- * here also prevents Settings from mounting a second controller and racing two
- * VAPID/server syncs.
- *
- * Which controller depends on how this build can be reached, and exactly one is
- * ever mounted: Web Push in a browser, APNs in the iOS app. The Android APK has
- * neither — it runs its own background relay service instead (see
- * NativeNotifications), which needs no third party in the delivery path — so it
- * gets the inert value below. Both real controllers self-gate on `supported`,
- * so this is also inert when no nostr-push gateway is configured for the build.
+ * One app-wide push controller: `useNostrPush` in a browser (Web Push, or
+ * `window.napp.push` under Tenna), APNs in the iOS app, inert on Android
+ * (NativeNotifications) or without a push gateway. Keeps auto-(re)enable
+ * running outside Settings without racing a second controller.
  */
 export function WebPushNotifications({ children }: { children: ReactNode }) {
-  // Platform is fixed for the life of the process, so branching on it before
-  // the hooks is stable — each branch mounts one component with its own hooks.
+  // Platform is fixed per process, so branching before hooks is stable.
+  if (hasNappPush()) return <WebPushBridge>{children}</WebPushBridge>;
   if (hasIosPush()) return <IosPushBridge>{children}</IosPushBridge>;
   if (isNativeRuntime()) {
     const unavailable: UsePushNotificationsReturn = {
@@ -69,15 +60,9 @@ function PushBridge(
   const { user } = useCurrentUser();
   const onboarding = useOnboardingActive();
 
-  // Keep the post-login opt-in step's action pointed at the live hook, so the
-  // step's tap runs the current `enable` (fresh prefs/watch set), not a stale
-  // closure captured when the step was queued.
-  //
-  // Where Web Push is unavailable the step still has a job: it offers the
-  // in-page notifier's permission instead. That notifier's intent defaults to
-  // ON, so without this ask it reads "enabled" from the very first launch while
-  // permission sits at "default" and it can never fire — and on desktop, where
-  // it is the ONLY notifier, that is every notification.
+  // Point the opt-in step at the live `enable`, not a stale closure. Without
+  // Web Push the step asks for the in-page notifier's permission, whose intent
+  // defaults ON and would otherwise never fire (desktop's only notifier).
   useEffect(() => {
     if (active.supported) {
       setWebPushEnable(active.enable, "push");
@@ -89,20 +74,13 @@ function PushBridge(
     return () => setWebPushEnable(null);
   }, [active.supported, active.enable]);
 
-  // Offer a one-time opt-in once a logged-in user could receive notifications
-  // but hasn't been asked at OS level yet (permission still "default"). Held
-  // while the signup wizard runs so it doesn't paint over profile creation; the
-  // onboarding dep re-fires this the moment the wizard finishes. The module
-  // guards against re-offering across loads; the wizard surfaces it after sync.
+  // One-time opt-in while permission is "default"; held during the signup wizard.
   const foregroundPending = !active.supported
     && notificationsApiAvailable()
     && Notification.permission === "default";
   useEffect(() => {
     if (onboarding || !user) return;
-    // Web Push needs its controller ready before the tap can subscribe; the
-    // foreground notifier only needs the Notifications API, so it has no such
-    // wait — and self-gates to nothing on iOS, where that API exists only for
-    // a Home-Screen PWA (see IosNotificationHint).
+    // Web Push needs its controller ready; the foreground notifier doesn't.
     const ready = active.supported
       ? active.ready && active.permission === "default"
       : foregroundPending;

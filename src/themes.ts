@@ -1,33 +1,21 @@
 import { deriveTokensFromCore } from "@/lib/colorUtils";
 
-/**
- * The 3 core colors that define a theme. All other Tailwind tokens are
- * derived automatically from these via `deriveTokensFromCore`.
- */
+/** The 3 core colors defining a theme; all other tokens derive via `deriveTokensFromCore`. */
 export interface CoreThemeColors {
-  /** Background color (HSL string, e.g. "222 18% 9%") */
+  /** HSL string, e.g. "222 18% 9%" */
   background: string;
-  /** Text/foreground color */
   text: string;
   /** Primary accent color (buttons, links, focus rings) */
   primary: string;
 }
 
-/**
- * Complete theme configuration. Wraps CoreThemeColors with an optional
- * title. Stored in `AppConfig.customTheme`.
- */
+/** A theme as stored in `AppConfig.customTheme`. */
 export interface ThemeConfig {
-  /** Theme name. */
   title?: string;
-  /** The 3 core colors. */
   colors: CoreThemeColors;
 }
 
-/**
- * Full set of CSS token values used by Tailwind. Derived from
- * CoreThemeColors via `deriveTokensFromCore`.
- */
+/** Full CSS token set, derived via `deriveTokensFromCore`. */
 export interface ThemeTokens {
   background: string;
   foreground: string;
@@ -52,12 +40,7 @@ export interface ThemeTokens {
   border: string;
   input: string;
   ring: string;
-  /**
-   * Recessed "chrome" framing surface (top bar, rails, sidebars, roster, call
-   * bar). The background darkened a few points of lightness while keeping the
-   * theme hue — a recessed, tinted plane. Replaces the old hardcoded
-   * `bg-black/30` overlay (identical on dark; no longer muddy grey on light).
-   */
+  /** Recessed chrome surface (bars, rails, sidebars): the background darkened, same hue. */
   chrome: string;
   /** The deepest chrome plane (server rail, call bar) — a bit more recessed. */
   chromeDeep: string;
@@ -65,27 +48,17 @@ export interface ThemeTokens {
   chromeDivider: string;
 }
 
-/**
- * Builtin themes whose colors are defined at build time. These mirror the
- * static values that previously lived in `index.css` so the default look
- * is unchanged. Self-hosters can customize these before building.
- */
+/** Build-time builtin themes; self-hosters can customize before building. */
 export const builtinThemes: Record<"light" | "dark", CoreThemeColors> = {
   light: {
-    // Light Corsair: the same privateer aesthetic flown by day. A cool,
-    // faintly violet parchment (background) and deep violet-ink text mirror
-    // the dark theme's violet sea, while the electric rose-magenta blade
-    // (primary) carries straight over so accents retint identically.
+    // Light Corsair: violet parchment and ink, same rose-magenta primary as dark.
     background: "260 30% 97%",
     text: "260 30% 14%",
     primary: "330 80% 52%",
   },
   dark: {
-    // Armada "Corsair": a hacker-privateer on the virtual sea. The sea is a
-    // deep, cold, near-black violet bruise — the void you sail, not rust. The
-    // light is electric: a hot rose-magenta blade (primary) answered by a
-    // phosphor-cyan wake (--accent-2) and warm gilt-cream text for the regal,
-    // gentleman authority. Three lights on black water.
+    // Armada "Corsair": near-black violet sea, rose-magenta primary, cyan
+    // accent-2 wake, gilt-cream text.
     background: "260 22% 9%",
     text: "42 38% 90%",
     primary: "330 90% 62%",
@@ -107,14 +80,10 @@ export interface ThemePreset {
   emoji: string;
   /** Whether to surface in compact pickers. All presets appear in settings. */
   featured?: boolean;
-  /** The 3 core colors. */
   colors: CoreThemeColors;
 }
 
-/**
- * Named theme presets. Selecting one sets `theme` to "custom" and applies
- * the preset's core colors to `customTheme`.
- */
+/** Named presets; selecting one sets `theme` to "custom" with the preset's colors. */
 export const themePresets: Record<string, ThemePreset> = {
   armada: {
     label: "Armada",
@@ -198,8 +167,6 @@ export const themePresets: Record<string, ThemePreset> = {
   },
 };
 
-// ─── CSS variable mapping ─────────────────────────────────────────────
-
 /** Map a ThemeTokens key to its CSS custom-property name (camelCase → kebab). */
 export function toThemeVar(key: keyof ThemeTokens): string {
   return "--" + key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
@@ -223,12 +190,7 @@ export function buildThemeCssFromCore(colors: CoreThemeColors): string {
   return buildThemeCss(coreToTokens(colors));
 }
 
-/**
- * Build a React inline-style object of the theme CSS variables from 3 core
- * colors, for scoping a theme to a single element (e.g. a profile card) rather
- * than the whole `:root`. Tailwind tokens inside the element then resolve to
- * these colors instead of the global theme.
- */
+/** Theme CSS variables as an inline style, to scope a theme to one element (e.g. a profile card). */
 export function buildThemeVarStyle(colors: CoreThemeColors): Record<string, string> {
   const tokens = coreToTokens(colors);
   const style: Record<string, string> = {};
@@ -237,8 +199,6 @@ export function buildThemeVarStyle(colors: CoreThemeColors): Record<string, stri
   }
   return style;
 }
-
-// ─── Resolution ───────────────────────────────────────────────────────
 
 /** Resolve a theme mode to a concrete light/dark/custom value. */
 export function resolveTheme(theme: "light" | "dark" | "system" | "custom"): "light" | "dark" | "custom" {

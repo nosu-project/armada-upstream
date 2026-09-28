@@ -6,12 +6,8 @@ import { useCurrentUser } from "./useCurrentUser";
 import { useNip29Servers } from "./useNip29Servers";
 
 /**
- * Hook to publish a NIP-62 Request to Vanish (kind 62) event.
- *
- * - Targeted: sends to specific relays listed in `relay` tags.
- * - Global: sends to ALL_RELAYS and broadcasts to as many relays as possible.
- *
- * After publishing, the user should be logged out since the identity is being erased.
+ * Publish a NIP-62 Request to Vanish (kind 62): targeted (`relay` tags) or global (ALL_RELAYS).
+ * The user should be logged out afterwards.
  */
 export function useRequestToVanish() {
   const { nostr } = useNostr();
@@ -35,11 +31,9 @@ export function useRequestToVanish() {
       });
 
       if (isGlobal) {
-        // For global vanish, broadcast to as many relays as possible.
-        // Send to the user's configured relays via the default pool.
         await nostr.event(event, { signal: AbortSignal.timeout(10_000) });
 
-        // Also send directly to each configured relay individually for redundancy.
+        // Also send to each configured relay directly, for redundancy.
         const relaySet = new Set<string>([
           ...servers,
           ...config.appRelays,
@@ -52,7 +46,6 @@ export function useRequestToVanish() {
         );
         await Promise.allSettled(directSends);
       } else {
-        // For targeted vanish, send to each specified relay.
         const sends = relayUrls.map((url) =>
           nostr.relay(url).event(event, { signal: AbortSignal.timeout(10_000) }).catch(() => {
             // Swallow individual relay errors — best-effort delivery.

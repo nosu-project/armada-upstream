@@ -1,57 +1,28 @@
 /**
- * Plane sweeps — the ONE fetch/decrypt/cursor discipline for a community's
- * kind-1059 planes (control, guestbook), shared by the per-community hooks
- * and the global background sweep.
+ * Plane sweeps — the one fetch/decrypt/cursor discipline for a community's
+ * kind-1059 planes (control, guestbook).
  *
- * - AUTH-GATED: holds every REQ until the scopes' stream keys are
- *   NIP-42-registered and (on a challenged socket) their AUTHs are ACKED by
- *   the relay, with a hard cap so a key that never registers can't stall
- *   sync. The ack is the relay's own `OK` — no settle-timer guesswork.
- * - BATCHED: same-relay scopes coalesce into one REQ (one filter per scope,
- *   each with its own cursor and limit — per-filter isolation prevents the
- *   issue-#19 since-skip).
- * - SINGLE-FLIGHT: overlapping sweeps of the same scope join the in-flight
- *   fetch instead of re-paying the full history.
+ * - AUTH-GATED: REQs wait until stream keys are NIP-42-registered and their
+ *   AUTHs acked by the relay (capped, so a stuck key can't stall sync).
+ * - BATCHED: same-relay scopes share one REQ, one filter per scope with its own
+ *   cursor/limit (per-filter isolation avoids the issue-#19 since-skip).
+ * - SINGLE-FLIGHT: overlapping sweeps of a scope join the in-flight fetch.
  *
- * Two completeness modes, chosen per plane:
+ * COMPLETE mode (Control): never a persisted forward cursor — it outlives
+ * leave/ban/rejoin and epoch changes and would hide editions below it forever.
+ * Instead the first sweep each session (and after floor age-out, truncation,
+ * snapshot rebuild, exhaustive reads, or {@link markControlPlaneStale}) re-reads
+ * the whole plane; sweeps between use a short-overlap `since` off a SESSION-only
+ * floor (Concord wraps aren't backdated, CORD-01). A persisted seen-wrap memo
+ * keeps repeat full sweeps decrypt-cheap.
  *
- * - COMPLETE (Control): correctness-critical and compaction-bounded. A
- *   PERSISTED forward cursor here silently starves the fold: the cursor key
- *   outlives a leave/ban/rejoin and the held-epoch set it was minted under,
- *   so any edition below the high-water mark that was never ingested (an
- *   unban published while the client was out, a compaction re-wrap under a
- *   newly-held epoch) stays invisible forever — the client then folds a STALE
- *   banlist/roster and mis-renders membership. So the cadence is TWO-TIER,
- *   with the delta floor held only in SESSION memory: the first sweep of a
- *   scope each session re-fetches the WHOLE plane — no `since`, paging past
- *   the relay's per-filter limit — as does every sweep once the floor ages
- *   out, after a truncated read, for a snapshot rebuild, for an exhaustive
- *   (Refounding) read, and after the fold reports `incomplete`
- *   ({@link markControlPlaneStale}). Sweeps between ride a short-overlap
- *   `since` off the last clean full read: wraps are immutable and Concord
- *   does NOT backdate them (CORD-01), so the overlap only has to cover
- *   publisher clock skew — and the full-plane re-fetch every 5 minutes was
- *   the client's single largest steady-state download. The "while the client
- *   was out" starvation cases are exactly what the session-start full sweep
- *   re-reads, and an epoch change renames the scope (controlScopeKey) so a
- *   rotation never inherits a floor. Repeat full sweeps stay decrypt-cheap:
- *   a persisted seen-wrap memo skips the re-decrypt (the folds re-read the
- *   opened-event store), and `onFresh` fires only for wraps not yet
- *   processed.
- * - FORWARD (Guestbook): append-mostly and unbounded, so it keeps the
- *   persisted `since` cursor — but the cursor scope is keyed by the newest
- *   held epoch, so an epoch advance (rejoin, rekey adoption) re-baselines
- *   with one full backfill instead of trusting a cursor minted under a
- *   different read scope.
+ * FORWARD mode (Guestbook): persisted `since` cursor, keyed by newest held epoch
+ * so an epoch advance re-baselines with a full backfill.
  *
- * WHAT A SWEEP DOES NOT KNOW: whether it read everything. Page size is the
- * relay's own policy, an empty answer is indistinguishable from a dropped REQ,
- * and a relay withholding the tail replies exactly like an exhausted one. So
- * nothing here asserts completeness. It reports only facts about ITSELF —
- * `controlSweepTruncated` (we stopped on our own event budget) and
- * `controlSweepQuorum` (how many relays answered at all) — and the question "is the
- * state we folded self-consistent" is answered locally by the fold instead,
- * via `FoldedControl.incomplete`.
+ * A sweep never claims it read everything (relay page sizes, dropped REQs and
+ * withheld tails are indistinguishable). It reports only facts about itself —
+ * `controlSweepTruncated`, `controlSweepQuorum` — and the fold judges its own
+ * consistency via `FoldedControl.incomplete`.
  */
 
 import { currentControlGroup } from "@/concord/lib/control";
@@ -105,15 +76,9 @@ async function whenAuthReady(url: string, groupsOf: () => StreamKeyView[]): Prom
 }
 
 /**
- * Wait until `url` has ACKED the AUTHs for every group — but only if the relay
- * actually challenged this socket (an unchallenged relay isn't auth-gating, or
- * its lazy challenge will be triggered by the REQ itself and covered by the
- * pool's auth-retry). Same cap/test seam as the sweep gate.
- *
- * This is the gate for NON-sweep reads (channel backfills, the login warm-up's
- * newest-page pulls): a kind-1059 REQ racing NIP-42 gets CLOSED by the relay
- * and reads back as a clean empty page — which is how a fresh login used to
- * "complete" with zero messages and drop the user into hollow rooms.
+ * Wait until `url` has ACKED the AUTHs for every group, only if it challenged
+ * this socket. Gate for non-sweep reads (backfills, login warm-up): a kind-1059
+ * REQ racing NIP-42 is CLOSED and reads back as an empty page.
  */
 export async function whenAuthSettled(url: string, groupsOf: () => StreamKeyView[]): Promise<void> {
   const deadline = Date.now() + authWait.maxWaitMs;
@@ -125,100 +90,60 @@ export async function whenAuthSettled(url: string, groupsOf: () => StreamKeyView
 
 /** One community-plane on one relay: a filter + its persisted cursor. */
 export interface PlaneScope {
-  /** The scope key: single-flight identity, and (forward mode) the persisted cursor key. */
+  /** Single-flight identity, and (forward mode) the persisted cursor key. */
   scope: string;
   /**
-   * The community this plane belongs to — which rumor-store tenant its opened
-   * events are written to.
-   *
-   * A structured field rather than something parsed back out of {@link scope}:
-   * `scope` is also the cursor key and the single-flight identity, so its
-   * format is free to change, and getting a tenant wrong writes one community's
-   * plane into another's database. Set by the scope factories, which each
-   * already take the community.
+   * The rumor-store tenant for this plane's events. Explicit rather than parsed
+   * from {@link scope}, whose format may change — a wrong tenant cross-writes
+   * communities.
    */
   communityIdHex: string;
-  /**
-   * Which plane this scope reads — the store's write-side check that a rumor
-   * arriving on these stream keys is one this plane may carry (see
-   * `writeOpened`). Set by the scope factories alongside `groups`, so the two
-   * cannot drift apart.
-   */
+  /** Which plane this scope reads, for `writeOpened`'s kind check. Set with `groups`. */
   plane: Plane;
   /**
-   * Whether this community has ever rotated its root. Only a Refounded one has
-   * a compaction snapshot to tell from old-root fragments, so only a Refounded
-   * one needs the store's per-address id set — see `noteControlSnapshot`.
-   * Read straight off the community by the scope factories.
+   * Whether the community has ever rotated its root; only then is the store's
+   * per-address snapshot id set needed (see `noteControlSnapshot`).
    */
   refounded: boolean;
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: StreamKeyView[];
-  /**
-   * COMPLETE mode (see the module docstring): the plane is re-fetched whole
-   * rather than trusting a persisted forward cursor — full at session start /
-   * floor age-out, short-overlap delta between. Reserved for planes that are
-   * both correctness-critical and compaction-bounded (Control).
-   */
+  /** COMPLETE mode (see module doc). Reserved for Control. */
   complete?: boolean;
   /** Called with this scope's decrypted events once they're committed. */
   onFresh?: (fresh: OpenedEvent[]) => void;
-  /**
-   * COMPLETE mode only: fired when the pager stopped on its own event budget,
-   * leaving older events unfetched this round.
-   */
+  /** COMPLETE only: the pager stopped on its own event budget. */
   onTruncated?: () => void;
   /**
-   * COMPLETE mode only: fired once this relay has ANSWERED. Lets a caller
-   * tally its OWN sweep's reach instead of reading the shared verdict map
-   * after its await — where a background sweep starting on another relay can
-   * invalidate an entry between the sweep finishing and the caller checking.
+   * COMPLETE only: fired once this relay ANSWERED, so a caller tallies its own
+   * sweep instead of reading the shared map a concurrent sweep may reset.
    */
   onReached?: () => void;
   /**
-   * COMPLETE mode only: page until the relay stops sending, ignoring the event
-   * budget. Plane depth is attacker-controlled — any member can mint wraps —
-   * so the budget exists to stop a routine sweep spending a launch on a flood.
-   * A Refounding opts in and pays whatever the depth costs, because compacting
-   * is the one operation where reading less than everything loses data.
+   * COMPLETE only: page until the relay stops, ignoring the budget. For a
+   * Refounding, where compacting a partial read loses data.
    */
   exhaustive?: boolean;
 }
 
 /**
- * The scope key for one community's Control Plane on one relay.
- *
- * EPOCH-KEYED: a Refounding changes which plane address this scope reads, so
- * carrying the same key across the rotation would let the new epoch's sweep
- * join the old epoch's in-flight fetch, and would leave the previous epoch's
- * truncation/reach verdicts standing over a plane they say nothing about.
+ * The Control Plane scope key on one relay. EPOCH-KEYED so a Refounding never
+ * joins the old epoch's fetch or inherits its verdicts.
  */
 export const controlScopeKey = (community: Community, relayUrl: string) =>
   `control:${community.idHex}@${community.rootEpoch}|${relayUrl}`;
 
 /**
- * Forget the two-tier delta floors for one community's control scopes, so its
- * NEXT sweep re-reads the whole plane. Called when the fold reports
- * `incomplete` — a floored entity the served editions can't account for is
- * exactly the "an edition below the floor never arrived" case a delta sweep
- * cannot heal.
+ * Forget one community's delta floors so its next sweep re-reads the whole plane
+ * (called when the fold reports `incomplete`).
  */
 export function markControlPlaneStale(community: Community): void {
   for (const url of community.relays) completeFloors.delete(controlScopeKey(community, url));
 }
 
 /**
- * One community's Control Plane on one relay. COMPLETE: the fold that hangs
- * off this plane (roster, banlist, channels, registries) must never run on a
- * silently-truncated edition set — see the module docstring.
- *
- * CURRENT EPOCH ONLY. Concord's control plane is compaction-bounded: a
- * Refounding re-wraps every entity's head into the new epoch, so the current
- * plane is a complete snapshot and prior ones are dead weight — history, not
- * authority. Sweeping them too would mean a plane any member can inflate
- * follows the community across every future rotation, which is exactly what
- * rotating was supposed to escape. Old roots stay held (and stream-auth
- * registered) for chat history; only this fetch narrows.
+ * One community's Control Plane on one relay, COMPLETE mode. CURRENT EPOCH ONLY:
+ * a Refounding re-wraps every head into the new epoch, so old planes are dead
+ * weight (and an inflatable plane mustn't follow the community across rotations).
  */
 export function controlScope(
   community: Community,
@@ -237,10 +162,8 @@ export function controlScope(
 }
 
 /**
- * One community's Guestbook Plane on one relay. FORWARD-cursored, but the
- * cursor scope is keyed by the newest held epoch: a rejoin or rekey adoption
- * changes what the member can read, so the first sweep at the new epoch is a
- * full backfill — a cursor minted under the old read scope must never gate it.
+ * One community's Guestbook Plane on one relay. FORWARD-cursored, keyed by
+ * newest held epoch so a new epoch starts with a full backfill.
  */
 export function guestbookScope(
   community: Community,
@@ -280,16 +203,12 @@ export function openPlaneWraps(wraps: NostrRumor[], groups: StreamKeyView[]): Op
   return out;
 }
 
-/** Max unbroken main-thread time (ms) spent decrypting before yielding
- *  (mirrors chat.ts's DECODE_SLICE_MS — see the rationale there). */
+/** Max unbroken main-thread decrypt time (ms) before yielding (mirrors chat.ts DECODE_SLICE_MS). */
 const PLANE_DECODE_SLICE_MS = 5;
 
 /**
- * Time-sliced {@link openPlaneWraps}: the same decrypt, but yields the event
- * loop whenever a slice has run past {@link PLANE_DECODE_SLICE_MS}. Each wrap
- * costs a NIP-44 open + Schnorr verify (+ a second NIP-44 open for encrypted
- * seals) — all synchronous noble crypto — so decoding a whole plane in one
- * unbroken loop freezes the UI for the duration on a phone.
+ * Time-sliced {@link openPlaneWraps}: yields every {@link PLANE_DECODE_SLICE_MS},
+ * since synchronous NIP-44 + Schnorr over a whole plane freezes a phone's UI.
  */
 export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: StreamKeyView[]): Promise<OpenedWireEvent[]> {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
@@ -318,36 +237,16 @@ const paging = {
   /** Per-filter page size, shared by the batch REQ and the complete-mode pager. */
   pageLimit: 500,
   /**
-   * Complete-mode budget: the most wraps one scope may pull in a single sweep.
-   * Plane depth is attacker-controlled, so SOMETHING has to bound a routine
-   * sweep — but the bound is a fixed event count, not a wall clock. A deadline
-   * silently gives a member on fibre a deeper read than the same member on 4G
-   * behind Tor, which turns "how much of the community do you see" into a
-   * function of connection quality. A count is the same everywhere and can be
-   * matched by other clients.
-   *
-   * Sized far above any honest compacted plane (a real one is hundreds of
-   * editions), so hitting it means a flood, not a busy community.
+   * Complete-mode budget: max wraps per scope per sweep. A fixed count (not a
+   * deadline) so read depth doesn't depend on connection quality. Far above any
+   * honest compacted plane.
    */
   maxEvents: 15_000,
-  /**
-   * Limit for the single wide ask that drains a same-second wall. Deliberately
-   * far past a normal page: the question is not "give me a page of this
-   * second", it is "hand over the whole second".
-   */
+  /** Limit for the single wide ask that drains a same-second wall. */
   wallPage: 10_000,
-  /**
-   * Hard ceiling for an EXHAUSTIVE sweep. Exhaustive exists to pay whatever a
-   * deep plane costs, but "pay anything" and "never terminate" are different
-   * promises: without this, a relay serving unique junk forever hangs a
-   * Refounding with no abort and an unbounded id set.
-   */
+  /** Hard ceiling for an EXHAUSTIVE sweep, so a relay serving endless junk can't hang a Refounding. */
   exhaustiveCeiling: 500_000,
-  /**
-   * Per-REQ deadline. Generous on purpose: a multi-hop VPN over Tor on one bar
-   * of 4G is a supported way to use this, and a tight timeout there reads as a
-   * dead relay rather than a slow one.
-   */
+  /** Per-REQ deadline; generous for Tor/VPN on poor mobile links. */
   queryTimeoutMs: 25_000,
 };
 
@@ -356,15 +255,11 @@ export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void
   Object.assign(paging, cfg);
 }
 
-/**
- * Two-tier cadence knobs for COMPLETE scopes (see the module docstring).
- * Test seam via {@link _configureSweepCadenceForTests}.
- */
+/** Two-tier cadence knobs for COMPLETE scopes (test seam: {@link _configureSweepCadenceForTests}). */
 const cadence = {
   /** How long a clean full read licenses delta sweeps before the next full one. */
   fullSweepIntervalMs: 6 * 60 * 60_000,
-  /** Overlap behind the floor's newest wrap (publisher clock skew — CORD-01
-   *  wraps are not backdated, so skew is all the overlap has to cover). */
+  /** Overlap behind the floor's newest wrap — covers publisher clock skew only (CORD-01: no backdating). */
   deltaOverlapSecs: 3600,
 };
 
@@ -374,29 +269,17 @@ export function _configureSweepCadenceForTests(cfg: Partial<typeof cadence>): vo
 }
 
 /**
- * Per-scope delta floor for COMPLETE sweeps: the time of the last CLEAN full
- * read (not truncated, relay answered) and the newest wrap `created_at` seen.
- * SESSION-ONLY on purpose — persisting it would recreate the forward-cursor
- * starvation the module docstring forbids; losing it merely costs one full
- * re-read on the next launch, which is the launch's job anyway.
+ * Per-scope delta floor for COMPLETE sweeps: time of the last CLEAN full read and
+ * newest wrap seen. SESSION-ONLY on purpose — persisting it recreates the
+ * forward-cursor starvation.
  */
 const completeFloors = new Map<string, { fullAt: number; newest: number }>();
 
 /**
- * Wrap ids a COMPLETE scope has already processed (decrypted or judged
- * garbage). Full-plane sweeps re-receive the same wraps every round — the
- * memo keeps repeat sweeps decrypt-free and `onFresh` quiet. Ids are global
- * (a wrap id is content-addressed), so the same wrap arriving from a second
- * relay is also deduped. Insertion-ordered, half-evicted at the cap.
- *
- * PERSISTED (foldedCache): an id is only noted after its decrypted rumor is
- * durably in the opened-event store (or it failed to decrypt under a held key
- * — permanent garbage, since every wrap here matched a held group's address),
- * and the folds re-read the store, so a cold launch can skip re-decrypting
- * the whole plane. A session-only memo made every relaunch re-pay the full
- * NIP-44+Schnorr pass over thousands of control wraps — the main-thread stall
- * on startup. Wiped with the rest of the fold cache on logout; an
- * evicted or lost id merely re-decrypts once.
+ * Wrap ids a COMPLETE scope has processed (decrypted or judged garbage), keeping
+ * repeat sweeps decrypt-free and `onFresh` quiet. Content-addressed, so global.
+ * Persisted: ids are noted only once the rumor is durably stored, so a cold
+ * launch skips re-decrypting the plane. Wiped on logout.
  */
 const seenCompleteWraps = new Set<string>();
 const SEEN_WRAPS_CAP = 16_384;
@@ -405,23 +288,15 @@ const SEEN_WRAPS_KEY = "plane-seen-wraps";
 const SEEN_WRAPS_PERSIST_MS = 5_000;
 
 /**
- * Wrap ids that were fetched and would NOT open. Persisted beside the memo:
- * the memo stops junk being re-decrypted, which would otherwise make the tally
- * read zero on every later sweep — blind on exactly the device that needs
- * telling, a returning admin looking at a standing flood.
+ * Wrap ids fetched that would NOT open, persisted beside the memo so the junk
+ * tally stays accurate after the memo stops re-decrypting them.
  */
 const junkWraps = new Set<string>();
 const JUNK_WRAPS_KEY = "plane-junk-wraps";
-/**
- * Capped like the seen-memo, and for a sharper reason: the set exists BECAUSE
- * someone may be pumping unlimited junk, so leaving it unbounded turns the
- * counter that detects a flood into a second, local flood.
- */
+/** Capped: the set exists because someone may pump unlimited junk. */
 const JUNK_WRAPS_CAP = 4_096;
 
-// Persisted as append-only KV logs (see IdLog), not as one value holding the
-// whole set: that value was re-encoded and rewritten — a megabyte once the memo
-// fills — every time a single live message was noted seen.
+// Append-only KV logs (see IdLog) rather than one value rewritten on every note.
 const seenWrapsLog = new IdLog(() => getArmadaDB().kv, {
   prefix: "plane-seen-wraps:",
   idChars: 64,
@@ -445,7 +320,7 @@ function loadSeenWraps(): Promise<void> {
   seenWrapsLoaded ??= Promise.all([
     seenWrapsLog.load(),
     junkWrapsLog.load(),
-    // The single-value form this replaced, carried over once and removed.
+    // Legacy single-value form, carried over once and removed.
     readFolded<string[]>(SEEN_WRAPS_KEY),
     readFolded<string[]>(JUNK_WRAPS_KEY),
   ])
@@ -485,19 +360,15 @@ function noteJunk(id: string): void {
 
 /**
  * Mark wrap ids as fetched-but-unopenable. Shared with the wire's control-wrap
- * ingest, which meets the same junk live: without this the sweep's tally reads
- * zero for anything the wire happened to see first, since the shared seen-memo
- * then stops it ever being re-attempted.
+ * ingest so junk it saw first still counts in the sweep's tally.
  */
 export function notePlaneWrapsJunk(ids: string[]): void {
   for (const id of ids) if (!junkWraps.has(id)) noteJunk(id);
 }
 
 /**
- * Mark wrap ids as processed. Call only once their rumors are durably in the
- * opened-event store (or they failed under a held key). Shared with the
- * wire's control-wrap ingest path, so a wrap decrypted by either transport is
- * never re-decrypted by the other.
+ * Mark wrap ids as processed — only once their rumors are durably stored (or
+ * failed under a held key). Shared with the wire's control-wrap ingest.
  */
 export function notePlaneWrapsSeen(ids: string[]): void {
   for (const id of ids) if (!seenCompleteWraps.has(id)) noteSeen(id);
@@ -525,28 +396,15 @@ export function _resetPlaneSweepMemoForTests(): void {
 }
 
 /**
- * Scope keys whose most recent COMPLETE sweep stopped on OUR OWN budget.
- * Module-level so a caller that JOINED an in-flight sweep can still read the
- * verdict after awaiting it — the joiner's own callbacks never fire.
- *
- * Deliberately NOT the inverse: there is no "this scope was read whole" flag,
- * because no client can establish that. A relay's page size is its own policy,
- * an empty answer is indistinguishable from a dropped REQ, and a relay
- * withholding the tail returns exactly what an exhausted one returns. Anything
- * built on inferred exhaustion is a guess wearing a proof's clothes.
+ * Scope keys whose last COMPLETE sweep stopped on OUR OWN budget. Module-level so
+ * a joiner of an in-flight sweep can read it. There's deliberately no inverse
+ * "read whole" flag: no client can establish that.
  */
 const scopeTruncated = new Map<string, boolean>();
 
 /**
- * Verdict revision, bumped whenever a sweep invalidates or publishes one.
- *
- * The verdicts live in module maps that React cannot see. Their consumers'
- * other inputs (the opened-event store, the fold) all settle within a frame of
- * mount, while a sweep takes seconds — and on a warm launch, where every wrap
- * is already memoed, the event set never changes at all. Without a change
- * signal the watchdog would compute once, pre-sweep, and stay frozen at "no
- * sweep has run" forever: silent for exactly the returning admin it exists to
- * warn.
+ * Verdict revision, bumped on every change. Verdicts live in module maps React
+ * can't see; without this the watchdog would compute once pre-sweep and freeze.
  */
 let verdictRevision = 0;
 const verdictListeners = new Set<() => void>();
@@ -574,19 +432,10 @@ export function sweepVerdictRevision(): number {
 }
 
 /**
- * Whether the last control sweep of this community stopped short on ANY relay:
- * it hit the local event budget, or it stepped over a second too wide to ask
- * for in one go. Either way we KNOW there is plane we did not read.
- *
- * This is the only completeness claim the sweep makes, and it is a claim about
- * this client, not about the relays. It gates the three places where acting on
- * a partial picture is destructive — a Refounding's compaction, persisting a
- * cold fold as the durable baseline, and naming a member as an attacker.
- * Everywhere else, members fold what arrived and converge on later sweeps: the
- * plane is procedural, and the fold has its OWN completeness signal for what
- * actually matters — `incomplete` names floored entities the served editions
- * can't account for, a locally checkable fact rather than an inference about a
- * relay.
+ * Whether the last control sweep of this community KNOWINGLY stopped short on
+ * any relay (event budget, or an undrainable same-second wall). Gates the
+ * destructive actions: Refounding compaction, persisting a cold fold as baseline,
+ * and naming an attacker. Otherwise members fold what arrived.
  */
 export function controlSweepTruncated(community: Community): boolean {
   return community.relays.some((url) => scopeTruncated.get(controlScopeKey(community, url)) === true);
@@ -606,33 +455,16 @@ export function controlSweepReach(community: Community): { reached: number; tota
   };
 }
 
-/**
- * Whether ONE specific relay answered this community's last control sweep. The
- * per-relay form of {@link controlSweepReach}, for a caller (the history audit)
- * that reports coverage relay-by-relay rather than as a count.
- */
+/** Per-relay form of {@link controlSweepReach} (for the history audit). */
 export function controlSweepRelayReached(community: Community, url: string): boolean {
   return scopeReached.has(controlScopeKey(community, url));
 }
 
 /**
- * Whether a MAJORITY of this community's relays answered the last control
- * sweep — `floor(n/2) + 1`, so 1-of-1, 2-of-2, 2-of-3, 3-of-4.
- *
- * A coverage heuristic, not a vote. Nothing here is decided by counting
- * relays: a relay that didn't answer isn't outvoted, its unique editions are
- * simply absent from the union. The real check on what we folded is
- * `FoldedControl.incomplete`, which names floored entities the served editions
- * can't account for and aborts a Refounding on its own. This sits on top of
- * that, because an entity we have NEVER seen leaves no floor to notice its
- * absence, and every publish here fans out best-effort (one ack is a success),
- * so an edition really can live on a single relay.
- *
- * Majority rather than unanimity because relays die permanently. Demanding
- * every one of them would wedge rotation on a stale list entry forever — the
- * same hostage shape as letting a flooder block it, just with a dead relay
- * holding the lever instead of an attacker. Two relays is the strict case
- * (2-of-2): with no redundancy there is none to spare.
+ * Whether a MAJORITY (`floor(n/2) + 1`) of this community's relays answered the
+ * last control sweep. A coverage heuristic on top of `FoldedControl.incomplete`,
+ * since an entity never seen leaves no floor and a publish may reach only one
+ * relay. Majority, not unanimity, so a dead relay can't wedge rotation.
  */
 export function controlSweepQuorum(community: Community): boolean {
   const { reached, total } = controlSweepReach(community);
@@ -640,39 +472,22 @@ export function controlSweepQuorum(community: Community): boolean {
 }
 
 /**
- * Whether ANY relay answered the last control sweep — i.e. whether there is a
- * sweep to reason about at all.
- *
- * Deliberately the weakest gate available, and deliberately NOT conjoined with
- * `!controlSweepTruncated`. A short read is the loudest evidence of a flood
- * there is; suppressing the watchdog under one would hand the attacker a mute
- * button for the alert that describes them. What a short read forbids is
- * NAMING someone (see `controlSweepQuorum`), not reporting that the community
- * is being buried.
+ * Whether ANY relay answered the last control sweep. Deliberately not conjoined
+ * with `!controlSweepTruncated`: a flood mustn't be able to mute the watchdog.
+ * A short read forbids NAMING someone (see `controlSweepQuorum`), not reporting.
  */
 export function controlSweepAnswered(community: Community): boolean {
   return community.relays.some((url) => scopeReached.has(controlScopeKey(community, url)));
 }
 
 /**
- * Wraps the last COMPLETE sweep fetched but could not open, per scope key.
- *
- * Undecryptable junk is the CHEAPEST way to inflate a plane — no encryption to
- * do, just a signature with a key every member holds — and it is invisible
- * downstream: it never becomes an opened event, so nothing that reads the store
- * can tell it exists. It still spends the fetch budget, so the sweep is the only
- * place that can count it.
- *
- * Counts wraps NOT already in the seen-memo, i.e. junk that ARRIVED this round,
- * which is what "someone is pumping garbage" looks like. A healthy plane is 0.
+ * Wraps the last COMPLETE sweep fetched but couldn't open, per scope key — the
+ * cheapest plane inflation, invisible downstream, so only the sweep can count
+ * it. A healthy plane is 0.
  */
 const unreadableScopes = new Map<string, number>();
 
-/**
- * The worst single relay's tally of unreadable wraps in this community's last
- * control sweep. Max, not sum: the same junk served by several relays is one
- * attack, not several.
- */
+/** Worst single relay's unreadable tally (max, not sum: the same junk everywhere is one attack). */
 export function controlSweepUnreadable(community: Community): number {
   let worst = 0;
   for (const url of community.relays) {
@@ -682,23 +497,10 @@ export function controlSweepUnreadable(community: Community): number {
 }
 
 /**
- * Page a COMPLETE scope past the relay's per-filter limit, oldest-ward, until
- * a short page says the relay has no more to give or our own event budget runs
- * out.
- *
- * Pages STREAM to `onPage` and are then dropped; only wrap ids are retained,
- * for the cross-page dedupe. Plane depth is attacker-controlled (any member
- * holds the key that mints wraps), so a deep plane must cost bandwidth and
- * time, never heap — accumulating it here is how a flood becomes an OOM
- * instead of a slow sync.
- *
- * `truncated` means ONE thing: WE stopped — on `paging.maxEvents`, or over a
- * second wider than a single ask can drain. It is never an inference about the
- * relay. A relay's page size is its own
- * policy, an empty answer is indistinguishable from a dropped REQ, and a relay
- * withholding the tail answers exactly like an exhausted one — so "did I read
- * the whole plane" has no honest answer here, and nothing downstream is
- * allowed to depend on one.
+ * Page a COMPLETE scope oldest-ward past the relay's per-filter limit until a
+ * short page or our event budget. Pages STREAM to `onPage` and are dropped (only
+ * ids kept), so a flooded plane costs time, not heap. `truncated` means only that
+ * WE stopped (budget or an undrainable same-second wall).
  */
 async function fetchCompleteScope(
   nostr: NostrLike,
@@ -709,14 +511,9 @@ async function fetchCompleteScope(
   onTruncated?: () => void,
   exhaustive = false,
 ): Promise<{ total: number; truncated: boolean }> {
-  // A relay's answer is NOT the filter we sent. Page one is demuxed by wrap
-  // author upstream; every page after it must narrow the same way, or an
-  // off-filter event can (a) drag the cursor below the rest of the plane and
-  // (b) be memoed as processed, which permanently stops the wrap from ever
-  // being decrypted — by this pager OR the live wire, since they share that
-  // memo. The created_at bound is enforced for the same reason: a
-  // legitimately-authored wrap answered outside the range we asked for would
-  // otherwise drag the cursor past everything between.
+  // A relay's answer isn't the filter sent: narrow every page by author and
+  // created_at range, or an off-filter event drags the cursor and gets memoed
+  // (never decrypted, by this pager or the wire).
   const wanted = new Set(filter.authors ?? []);
   const mine = (events: NostrEvent[], until: number) =>
     events.filter((e) => e.kind === KIND_WRAP && wanted.has(e.pubkey) && e.created_at <= until);
@@ -725,9 +522,7 @@ async function fetchCompleteScope(
   await onPage(first);
   if (first.length === 0) return { total: 0, truncated: false };
 
-  // `until` is INCLUSIVE, so consecutive pages overlap by one timestamp on
-  // purpose: the overlap is what steps over a same-second boundary instead of
-  // skipping it, and the id dedupe makes it free.
+  // `until` is INCLUSIVE: pages overlap by one timestamp on purpose (id dedupe makes it free).
   let cursor = Math.min(...first.map((e) => e.created_at));
   let full = first.length >= paging.pageLimit;
   /** We stepped over part of a second we could not page through. */
@@ -740,9 +535,7 @@ async function fetchCompleteScope(
       return { total: seen.size, truncated: true };
     }
     if (!exhaustive && seen.size >= paging.maxEvents) {
-      // Members get highest-reasonable-effort, not a guarantee: fold what
-      // arrived and converge on later sweeps. Only a Refounding (which reads
-      // exhaustively) may not proceed on a short read.
+      // Members fold what arrived; only a Refounding (exhaustive) can't proceed on a short read.
       logSync("sweep", `${url}: hit the ${paging.maxEvents}-event sweep budget; older plane left for a later round`);
       onTruncated?.();
       return { total: seen.size, truncated: true };
@@ -763,12 +556,8 @@ async function fetchCompleteScope(
     if (lowest < cursor) {
       cursor = lowest;
     } else if (full) {
-      // A full page that didn't move the cursor: every event in it sits AT
-      // `cursor`, and `until` is inclusive, so asking again returns the same
-      // block forever. That is a same-second wall — more wraps at one
-      // timestamp than a page holds, and the cheapest way to stall a pager,
-      // since a wrap's created_at is the publisher's to choose. Ask for the
-      // whole second in one go.
+      // A full page that didn't move the cursor is a same-second wall (created_at
+      // is publisher-chosen). Ask for the whole second in one go.
       const drained = mine(
         await nostr.relay(url).query([{ ...filter, since: cursor, until: cursor, limit: paging.wallPage }], {
           signal: AbortSignal.timeout(paging.queryTimeoutMs),
@@ -779,20 +568,9 @@ async function fetchCompleteScope(
       for (const e of stillNew) seen.add(e.id);
       if (stillNew.length > 0) await onPage(stillNew);
 
-      // Did that ask actually EMPTY the second? The answer is only credible in
-      // one narrow band: strictly more than a normal page (so the relay is not
-      // simply capping us at its usual limit and calling it a second) and
-      // strictly fewer than we asked for (so it stopped because it ran out,
-      // not because it hit our ceiling).
-      //
-      // Outside that band we cannot tell "the second holds exactly this" from
-      // "the relay will not serve more of it" — a relay capped at 500 answers
-      // a 10,000 request with 500 either way. Checking only against the limit
-      // we asked for reads that capped relay as a drained one and loses the
-      // remainder with NO signal, which is worse than the stall it replaced.
-      //
-      // Either way the cursor steps below the second: a repeat of the widest
-      // ask we can make cannot return more than it just did.
+      // The drain is credible only strictly between pageLimit and wallPage —
+      // otherwise a capped relay is indistinguishable from an emptied second.
+      // Either way the cursor steps below the second.
       const emptied = drained.length > paging.pageLimit && drained.length < paging.wallPage;
       if (!emptied) {
         logSync("sweep", `${url}: cannot prove second ${cursor} was read whole (${drained.length} served)`);
@@ -808,28 +586,19 @@ async function fetchCompleteScope(
 }
 
 /**
- * Run one relay's batch: one filter per scope (cursor-gated for forward
- * scopes, whole-plane for complete ones), ONE query, demuxed by wrap author.
- * Retries once on failure (cursors stay put so the next sweep re-asks). Not
- * abortable by callers — the REQ is shared.
+ * Run one relay's batch: one filter per scope, ONE query, demuxed by wrap author.
+ * Retries once. Not abortable (the REQ is shared).
  */
 async function runScopes(
   nostr: NostrLike,
   url: string,
   scopes: PlaneScope[],
 ): Promise<Map<string, OpenedEvent[]>> {
-  // The persisted seen-wrap memo must be in the session set before the
-  // complete-scope narrowing below, or a cold launch re-decrypts everything.
+  // Load the seen-memo before narrowing, or a cold launch re-decrypts everything.
   await loadSeenWraps();
-  // A Refounded control scope whose snapshot id-set has gone missing must
-  // re-ingest the plane WITHOUT the seen-memo narrowing. The set is recorded
-  // only when a wrap is fresh (`noteControlSnapshot` via writeOpened), so once
-  // every wrap is memoed a lost set can never be re-recorded by an ordinary
-  // sweep — and the fold then anchors a Refounded community on an empty
-  // snapshot, outranking nothing. The set is per-KV-key and unguarded (it can
-  // be pruned by another account's warm-up, or simply lost), while the memo is
-  // global and persisted; only re-decrypting the plane reunites them. Known
-  // junk stays skipped — it never opened, so it never fed the set.
+  // A Refounded control scope whose snapshot id-set is missing must re-ingest
+  // WITHOUT the memo narrowing: the set is only recorded for fresh wraps, so
+  // otherwise the fold anchors on an empty snapshot. Known junk stays skipped.
   const rebuildSnapshot = await Promise.all(
     scopes.map(async (s) => {
       if (!s.complete || !s.refounded || s.groups.length === 0) return false;
@@ -839,9 +608,7 @@ async function runScopes(
   const cursors = await Promise.all(
     scopes.map((s) => (s.complete ? undefined : readStreamCursor(s.scope))),
   );
-  // COMPLETE scopes: a fresh session floor licenses a short-overlap delta
-  // read; anything else — no floor, an aged floor, a snapshot rebuild, an
-  // exhaustive read — re-fetches the whole plane (see the module docstring).
+  // COMPLETE scopes: a fresh session floor licenses a delta read; otherwise full plane.
   const deltaSince = scopes.map((s, i) => {
     if (!s.complete || s.exhaustive || rebuildSnapshot[i]) return undefined;
     const floor = completeFloors.get(s.scope);
@@ -861,11 +628,8 @@ async function runScopes(
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const started = Date.now();
-    // Invalidate at the TOP of each attempt, never once per call: a sweep that
-    // throws must leave no verdict standing (or the next caller reads a stale
-    // "reached, not truncated" and acts on a picture this sweep never
-    // established), and a retry must not stack its junk tally on the partial
-    // one attempt 1 left behind, nor inherit its truncation.
+    // Invalidate at the TOP of each attempt so a throw leaves no stale verdict
+    // and a retry doesn't stack on attempt 1's tallies.
     for (const s of scopes) {
       if (!s.complete) continue;
       scopeTruncated.delete(s.scope);
@@ -877,9 +641,7 @@ async function runScopes(
       const events = await nostr.relay(url).query(filters, {
         signal: AbortSignal.timeout(paging.queryTimeoutMs),
       });
-      // A kind-1059 REQ that raced NIP-42 is CLOSED by the relay and reads back
-      // as a clean empty page. Re-ask once behind the gate rather than record
-      // that silence as an answer.
+      // A REQ that raced NIP-42 reads back empty; re-ask once behind the gate.
       const authSettled = streamAuthsSettled(url, scopes.flatMap((s) => s.groups.map((g) => g.pk)));
       if (!authSettled && events.length === 0 && attempt < 2) {
         logSync("sweep", `${url}: empty page before the AUTHs settled — re-asking`);
@@ -892,9 +654,7 @@ async function runScopes(
       scopes.forEach((s, i) => s.groups.forEach((g) => scopeByPk.set(g.pk, i)));
       const perScope: NostrEvent[][] = scopes.map(() => []);
       for (const ev of events) {
-        // Kind as well as author: a relay that ignores `kinds` could otherwise
-        // hand page one an off-kind event signed with the (member-derivable)
-        // plane key, and the pager's `until` cursor would start below it.
+        // Check kind too: an off-kind event from a relay ignoring `kinds` could drag the cursor.
         if (ev.kind !== KIND_WRAP) continue;
         const i = scopeByPk.get(ev.pubkey);
         if (i !== undefined) perScope[i].push(ev);
@@ -902,17 +662,13 @@ async function runScopes(
 
       const freshPerScope: OpenedEvent[][] = scopes.map(() => []);
       const totals: number[] = scopes.map((_, i) => perScope[i].length);
-      // Newest wrap per scope, read off page one (relays answer newest-first)
-      // BEFORE the complete-mode pager consumes it — this is what advances the
-      // session delta floor.
+      // Newest wrap per scope from page one (newest-first), before the pager
+      // consumes it — advances the session delta floor.
       const newestPerScope = perScope.map((evs) =>
         evs.length > 0 ? Math.max(...evs.map((e) => e.created_at)) : undefined,
       );
 
-      // A complete scope STREAMS: decrypt (time-sliced — a cold plane is
-      // thousands of synchronous EC ops), store and memo each page, then drop
-      // it. The folds read the opened-event store, not this sweep's result, so
-      // no page needs to outlive its own iteration.
+      // A complete scope STREAMS: decrypt (time-sliced), store and memo each page, then drop it.
       for (const [i, s] of scopes.entries()) {
         if (!s.complete) continue;
         const ingest = async (page: NostrEvent[]) => {
@@ -921,13 +677,10 @@ async function runScopes(
             ? page.filter((w) => !junkWraps.has(w.id))
             : page.filter((w) => !seenCompleteWraps.has(w.id));
           const opened = await openPlaneWrapsChunked(fresh, s.groups);
-          // Anything attempted that didn't open is junk, remembered so later
-          // sweeps can still count it without re-attempting the decrypt.
+          // Remember junk so later sweeps count it without re-decrypting.
           const openedIds = new Set(opened.map((e) => e.wrapId));
           notePlaneWrapsJunk(fresh.filter((w) => !openedIds.has(w.id)).map((w) => w.id));
-          // Tally over the WHOLE page, from what is known junk — not just this
-          // page's new arrivals, or a standing flood would count once and then
-          // read zero forever.
+          // Tally over the WHOLE page, or a standing flood reads zero after one round.
           unreadableScopes.set(
             s.scope,
             (unreadableScopes.get(s.scope) ?? 0) + page.filter((w) => junkWraps.has(w.id)).length,
@@ -940,15 +693,8 @@ async function runScopes(
             });
             for (const e of opened) freshPerScope[i].push(e);
           }
-          // Only the memo advances, and only once the rumors are durably
-          // stored — every sweep re-asks for the whole plane, so nothing
-          // received can ever become unreachable.
-          //
-          // Which is exactly why the write's outcome is checked. The memo is
-          // what stops a later sweep re-decrypting these wraps, so advancing it
-          // over a failed write would leave rumors that never reached the store
-          // and are never opened again — the one way a completely-swept plane
-          // can lose an event.
+          // Advance the memo only if the write succeeded, or unstored rumors
+          // are never opened again.
           if (stored) notePlaneWrapsSeen(page.map((w) => w.id));
         };
         const swept = await fetchCompleteScope(
@@ -965,20 +711,8 @@ async function runScopes(
         perScope[i] = [];
       }
 
-      // Forward scopes stay one batch — their `since` already narrowed them —
-      // then one store write PER COMMUNITY and parallel cursor advances.
-      //
-      // Per community, not one write for the batch: a relay batch deliberately
-      // coalesces scopes from every community that shares this relay (see
-      // `enqueue`), so `forwardFresh` is a mixed bag and each community's
-      // events have to land in their own tenant. Bucketing keeps it at one
-      // write per community rather than one per scope — and a community's
-      // guestbook scopes for different relays are different batches anyway, so
-      // in practice that is still a single write.
-      //
-      // Bucketed per (community, PLANE): the write is the plane boundary, so a
-      // batch that coalesced two planes' scopes must not hand them to one call
-      // — the wrong plane's rules would decide what may be stored.
+      // Forward scopes: one store write per (community, PLANE) — a relay batch
+      // mixes communities, and the write is the plane boundary.
       const forwardFresh = new Map<
         string,
         { communityIdHex: string; plane: Plane; refounded: boolean; fresh: OpenedWireEvent[] }
@@ -1018,16 +752,12 @@ async function runScopes(
         }),
       );
       for (const [i, s] of scopes.entries()) {
-        // An empty answer from a relay whose stream AUTHs are still unacked is
-        // a CLOSED read, not an exhausted plane — believing it would let the
-        // Refounding gate pass on a relay that gave us nothing.
+        // An empty answer with AUTHs unacked is a CLOSED read, not an exhausted plane.
         if (s.complete && (authSettled || totals[i] > 0)) {
           scopeReached.add(s.scope);
           s.onReached?.();
-          // Advance the session delta floor: a CLEAN full read (re)establishes
-          // the baseline; a truncated one establishes nothing (older plane went
-          // unread — the next sweep must re-ask whole); a delta read only
-          // raises the floor's high-water mark.
+          // Clean full read (re)establishes the floor; truncated establishes
+          // nothing; a delta read only raises the high-water mark.
           const prior = completeFloors.get(s.scope);
           const newest = Math.max(newestPerScope[i] ?? 0, prior?.newest ?? 0);
           if (deltaSince[i] === undefined) {
@@ -1050,9 +780,7 @@ async function runScopes(
         `${url} sweep FAILED in ${sinceMs(started)} (${scopes.length} scope(s), attempt ${attempt}): ${err instanceof Error ? err.message : String(err)}`,
       );
       if (attempt >= 2) break;
-      // Pause, then re-check the auth gate before the retry: a first round
-      // lost to a lazy NIP-42 challenge (REQ → CLOSED auth-required → AUTHs
-      // sent) passes once the relay has acked the stream AUTHs.
+      // Pause and re-check the auth gate (the first round may have lost to a lazy NIP-42 challenge).
       await new Promise((r) => setTimeout(r, 250));
       await whenAuthReady(url, () => scopes.flatMap((s) => s.groups));
     }
@@ -1078,8 +806,7 @@ const batches = new Map<string, RelayBatch>();
 function newBatch(nostr: NostrLike, url: string): RelayBatch {
   const b: RelayBatch = { scopes: [], closed: false, promise: Promise.resolve(new Map()) };
   b.promise = (async () => {
-    // The whole batch lifetime — enrollment window, NIP-42 auth gate, the REQ
-    // itself — counts as sync activity (the auth hold alone can be seconds).
+    // The whole batch lifetime counts as sync activity (auth hold can take seconds).
     const task = beginSyncTask("community updates");
     try {
       await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
@@ -1096,10 +823,8 @@ function newBatch(nostr: NostrLike, url: string): RelayBatch {
 }
 
 /**
- * Single-flight identity. NOT the scope key: an exhaustive sweep must never
- * JOIN a budgeted one already in flight, or a Refounding silently inherits a
- * capped read of the very plane it is about to compact — the disclosed attack,
- * arriving through the fix for it.
+ * Single-flight identity. An exhaustive sweep must never JOIN a budgeted one, or
+ * a Refounding inherits a capped read of the plane it compacts.
  */
 const flightKey = (s: PlaneScope) => (s.exhaustive ? `${s.scope}|exhaustive` : s.scope);
 
@@ -1107,10 +832,8 @@ const flightKey = (s: PlaneScope) => (s.exhaustive ? `${s.scope}|exhaustive` : s
 function enqueue(nostr: NostrLike, url: string, scope: PlaneScope): Promise<OpenedEvent[]> {
   const batch = batches.get(url);
   const b = batch && !batch.closed ? batch : newBatch(nostr, url);
-  // One entry per scope key per batch. A budgeted and an exhaustive request for
-  // the same plane land here together (they deliberately don't share a flight),
-  // and running both would have them race to publish the scope's verdict.
-  // Collapse to the stronger read and fan the callbacks out from it.
+  // A budgeted and an exhaustive request for one plane collapse to the stronger
+  // read here, fanning callbacks out, so they don't race to publish a verdict.
   const twin = b.scopes.find((s) => s.scope === scope.scope);
   if (twin) {
     twin.exhaustive = twin.exhaustive || scope.exhaustive;
@@ -1137,10 +860,8 @@ function enqueue(nostr: NostrLike, url: string, scope: PlaneScope): Promise<Open
 }
 
 /**
- * Sweep a set of scopes on ONE relay. Scopes already in flight (any caller)
- * are JOINED, not re-fetched — the joiner still gets the scope's fresh events
- * and its own `onFresh`. New scopes enroll in the relay's open batch behind
- * the auth gate and leave as one REQ (see module docstring).
+ * Sweep scopes on ONE relay. In-flight scopes are JOINED (still getting fresh
+ * events and `onFresh`); new ones enroll in the relay's batch.
  */
 export async function sweepRelayScopes(
   nostr: NostrLike,
@@ -1174,9 +895,8 @@ async function sweepCommunityPlane(
 }
 
 /**
- * Sweep one community's Control Plane (editions across held epochs).
- * `exhaustive` pages to the end of the plane however deep it is — for the
- * Refounding path, which may only compact what it has read whole.
+ * Sweep one community's Control Plane. `exhaustive` pages to the end however
+ * deep (for a Refounding, which may only compact what it read whole).
  */
 export function sweepControl(
   nostr: NostrLike,

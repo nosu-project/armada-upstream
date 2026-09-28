@@ -1,10 +1,8 @@
 import { DisplayName } from "@/components/DisplayName";
 
 /**
- * The display title of a Buzz DM channel: the OTHER participants' names,
- * comma-separated (a Buzz DM is a hidden NIP-29 channel whose 39000 carries
- * no useful name — the roster is the identity). Falls back to "Direct message"
- * while the roster resolves.
+ * A Buzz DM's title: the other participants' names (its 39000 carries no
+ * useful name). Falls back to "Direct message" while the roster resolves.
  */
 export function BuzzDmName({
   members,
@@ -16,7 +14,6 @@ export function BuzzDmName({
   max?: number;
 }) {
   const others = members.filter((m) => m !== selfPubkey);
-  // A self-DM ("notes to self") has only the viewer in it.
   const list = others.length > 0 ? others : selfPubkey ? [selfPubkey] : [];
   if (list.length === 0) return <>Direct message</>;
   const shown = list.slice(0, max);

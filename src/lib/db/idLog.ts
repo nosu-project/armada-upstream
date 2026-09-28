@@ -1,20 +1,9 @@
 /**
- * A set of fixed-width ids persisted as an append-only log of KV chunks.
- *
- * Memos that outlive a session ("this wrap was already stored", "this content
- * was already verified") were written as ONE value holding the whole set: on a
- * settled account that is ~16k ids — a megabyte of JSON — re-encoded, compared
- * and rewritten (and on Android, carried across the Capacitor bridge) every
- * time a single id was added, which is every incoming message. Here an add
- * rewrites only the open chunk, at most `chunkIds` ids, and whole chunks age
- * out from the front once `keepChunks` are full.
- *
- * Ids are stored concatenated, so every id must be exactly `idChars` long; the
- * log keeps FIFO order, which is also its eviction order, and the caller's
- * in-memory set mirrors it.
+ * A set of fixed-width ids persisted as an append-only log of KV chunks, so an
+ * add rewrites only the open chunk instead of a megabyte-sized whole-set value.
+ * Ids are concatenated (each exactly `idChars`); FIFO order is eviction order.
  */
 
-/** The slice of ArmadaKV a log needs. */
 export interface IdLogKV {
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
@@ -53,10 +42,7 @@ export class IdLog {
     return `${this.opts.prefix}${String(seq).padStart(10, "0")}`;
   }
 
-  /**
-   * Every persisted id, oldest first. Read once; later calls share it. Never
-   * rejects — a log that can't be read is an empty one.
-   */
+  /** Every persisted id, oldest first. Loaded once; never rejects. */
   load(): Promise<string[]> {
     this.loading ??= (async () => {
       const ids: string[] = [];

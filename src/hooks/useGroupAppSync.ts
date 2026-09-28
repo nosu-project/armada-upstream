@@ -9,7 +9,6 @@ import { KIND_GROUP_WEBXDC_REALTIME, KIND_GROUP_WEBXDC_UPDATE } from "@/lib/nip2
 import type { AppStateMeta, AppStateUpdate, AppSync } from "@/hooks/useWebxdcApi";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Decode a base64 string to a Uint8Array. */
 function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -17,7 +16,6 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-/** Encode a Uint8Array to base64. */
 function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -25,11 +23,9 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * In-chat app coordination plane for a NIP-29 group, scoped to one app session
- * (`uuid`). State (`sendUpdate`) is kind {@link KIND_GROUP_WEBXDC_UPDATE} and
- * realtime (`joinRealtimeChannel`) is the ephemeral kind
- * {@link KIND_GROUP_WEBXDC_REALTIME}; both carry an `i` tag = `uuid` and the
- * group `h` tag, and publish only to the group's host relay.
+ * In-chat app coordination for a NIP-29 group, scoped to one session (`uuid`). State is kind
+ * {@link KIND_GROUP_WEBXDC_UPDATE}, realtime the ephemeral {@link KIND_GROUP_WEBXDC_REALTIME}; both
+ * carry `i` = `uuid` and `h`, and publish only to the host relay.
  */
 export function useGroupAppSync(
   relayUrl: string | undefined,
@@ -50,9 +46,7 @@ export function useGroupAppSync(
   const { data: stateEvents } = useQuery<NostrEvent[]>({
     queryKey,
     enabled,
-    // Durable state arrives LIVE via the session subscription below; this poll
-    // is only a slow healing backstop for a dropped socket (was an aggressive
-    // 3s poll that ran for the whole app session).
+    // Live via the session subscription; this is a slow healing backstop.
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => {
       const events = await nostr
@@ -124,12 +118,8 @@ export function useGroupAppSync(
     [enabled, groupId, uuid, relayUrl, publish],
   );
 
-  // Session subscriptions (mounted only while an app is open): one live `req`
-  // for realtime frames (ephemeral, delivered straight to listeners, never
-  // stored) and one for durable state updates (merged into the query cache so
-  // app state arrives live instead of on a poll). Deliberately NOT on the
-  // always-on wire — a webxdc session is single, ephemeral, and latency-
-  // sensitive; the wire is for ambient timeline/control ingestion.
+  // Session-only subscriptions for realtime frames (never stored) and durable state (into the
+  // query cache). Deliberately NOT on the always-on wire: a session is ephemeral and latency-sensitive.
   const listenersRef = useRef(new Set<(data: Uint8Array) => void>());
   const selfPubkey = user?.pubkey;
 
@@ -138,7 +128,6 @@ export function useGroupAppSync(
     const controller = new AbortController();
     const since = Math.floor(Date.now() / 1000);
 
-    // Realtime frames → listeners.
     (async () => {
       try {
         for await (const msg of nostr.relay(relayUrl!).req(
@@ -163,7 +152,6 @@ export function useGroupAppSync(
       }
     })();
 
-    // Durable state updates → query cache (live, deduped by id).
     (async () => {
       try {
         for await (const msg of nostr.relay(relayUrl!).req(

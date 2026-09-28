@@ -2,16 +2,14 @@ import { useEffect, useState } from "react";
 
 import { decryptImagePointer } from "@/concord/lib/image";
 import type { ImagePointer } from "@/concord/lib/types";
-import { useBlossomServers } from "@/hooks/useBlossomCandidates";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 
 import type { MediaPolicy } from "@/lib/mediaPolicy";
 
 /**
- * Resolve an encrypted Concord {@link ImagePointer} (icon / banner) to a
- * displayable object URL. Decrypt-once cache per
- * (url, key, nonce), synchronous seeding from the resolved cache so a remount
- * paints on the first frame, object URLs never revoked (bounded cache).
+ * Decrypt-once cache per (url, key, nonce); object URLs are never revoked,
+ * so the cache is bounded.
  */
 
 const MAX_CACHED = 128;
@@ -23,18 +21,9 @@ function cacheKey(image: ImagePointer): string {
 }
 
 /**
- * The same decrypt-once resolution as {@link useDecryptedImage}, for callers
- * that aren't components — the foreground notifier needs a community's icon for
- * a notification, from a sink that runs outside the React tree.
- *
- * Shares this module's caches deliberately: a community whose icon is already
- * on screen costs the notifier nothing, and the two never mint two object URLs
- * for one image.
- *
- * `servers` are the Blossom hosts to try after the pointer's own (the hook
- * passes the viewer's effective list; a caller with no config in reach gets
- * the app defaults), and `policy` the viewer's media policy, which decides
- * whether and through what the pointer's host is fetched at all.
+ * Non-hook form of {@link useDecryptedImage} (e.g. for the notifier), sharing
+ * its caches so one image never mints two object URLs. `servers` are Blossom
+ * hosts tried after the pointer's own; `policy` is the viewer's media policy.
  */
 export function resolveDecryptedImage(
   image: ImagePointer,
@@ -103,8 +92,7 @@ export function useDecryptedImage(image: ImagePointer | undefined): string | nul
     return () => {
       cancelled = true;
     };
-    // The server list and policy are read once per resolve; a later change is
-    // picked up by the next pointer, not by re-decrypting every icon on screen.
+    // Server list and policy are read once per resolve, not re-applied to icons on screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, key, nonce]);
 

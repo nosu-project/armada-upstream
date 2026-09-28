@@ -51,16 +51,10 @@ function sameClaims(left: Map<string, string[]>, right: Map<string, string[]>): 
 }
 
 /**
- * Shared presence memory, keyed by the channel's current wrap address (one map
- * of author → latest entry per channel+epoch). Presence is ephemeral — never
- * stored on relays — so a freshly-mounted subscription starts blind and waits
- * up to a full heartbeat (30s) to re-learn who is in the call. Sharing the
- * latest-entry map across hook instances lets a new subscriber (the call room
- * mounted on join) seed instantly from what another instance (the sidebar
- * roster, which was necessarily mounted to click "join") already learned —
- * without it, every remote tile rendered "Unverified" and media keys stayed
- * withheld for the opening seconds of a call. Stale entries are pruned at
- * recompute time, so the maps stay bounded by live-ish participants.
+ * Shared presence memory per channel wrap address (author → latest entry).
+ * Presence is ephemeral, so a new subscriber (the call room) seeds from what
+ * another instance (the sidebar roster) learned rather than waiting a 30s
+ * heartbeat with tiles "Unverified". Pruned at recompute time.
  */
 const sharedLatest = new Map<string, Map<string, VoicePresenceEntry>>();
 
@@ -74,11 +68,9 @@ function latestFor(currentPk: string): Map<string, VoicePresenceEntry> {
 }
 
 /**
- * Live voice presence for one Concord channel (CORD-07 §4): ephemeral kind-23313
- * rumors in 21059 wraps at the channel's current address, sealed under the
- * channel key — relays and brokers never learn who is in a call. Presence is
- * subscription-only (never stored); a `joined` older than 90s counts as
- * absent, so a missed `left` heals by staleness.
+ * Live voice presence for one channel (CORD-07 §4): ephemeral kind-23313 rumors
+ * in 21059 wraps at the channel's current address, sealed under the channel key.
+ * Never stored; a `joined` older than 90s counts as absent.
  */
 export function useVoicePresence(
   community: Community | undefined,
@@ -97,17 +89,14 @@ export function useVoicePresence(
       latest.current = new Map();
       return;
     }
-    // Seed from the shared per-channel memory (see `sharedLatest`) so a
-    // freshly-mounted subscriber starts from everything already learned.
+    // Seed from the shared per-channel memory (see `sharedLatest`).
     latest.current = latestFor(currentPk);
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
     const recompute = () => {
       const now = Date.now();
-      // Prune long-stale entries so the shared map stays bounded. Anything a
-      // pruned entry could out-rank (latest-wins) is even older, so dropping
-      // it never lets an older presence re-assert.
+      // Prune long-stale entries; anything they could out-rank is even older.
       for (const [author, entry] of latest.current) {
         if (now - entry.ms > VOICE_STALE_MS) latest.current.delete(author);
       }
@@ -151,12 +140,10 @@ export function useVoicePresence(
       }
     };
 
-    // Publish the seeded view immediately — don't wait for the first live
-    // event to fold what the shared memory already knows.
+    // Publish the seeded view immediately.
     recompute();
 
-    // One shared 21059 REQ per relay across every mounted channel — see
-    // `ephemeralSub.ts`.
+    // One shared 21059 REQ per relay across channels (see `ephemeralSub.ts`).
     const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
 
     // Staleness decay: three missed heartbeats age a participant out.
@@ -172,18 +159,11 @@ export function useVoicePresence(
 }
 
 /**
- * Announce this member's own call presence (§4): a `joined` (carrying the
- * broker-assigned SFU identity + the broker rendezvous hint) immediately and
- * every 30s while `identity` is set, and a best-effort `left` on teardown — a
- * missed one heals by staleness. Sealed under the channel key like every Chat
- * rumor, with the channel/epoch binding.
- *
- * It also carries the two Armada client extensions (see voice.ts): the sticky
- * `hand` state on every heartbeat, republished off-cycle the instant it
- * toggles; and `sendReaction`, which fires a transient emoji on an off-cycle
- * `joined` (doubling as a heartbeat). Both ride additive tags on the same
- * kind-23313 rumor, so they inherit its blindness — brokers/relays never see
- * them — with no new frozen kind (CORD-02 §6).
+ * Announce own call presence (§4): `joined` (SFU identity + broker hint) now and
+ * every 30s while `identity` is set, best-effort `left` on teardown.
+ * Also carries Armada extensions (see voice.ts): the sticky `hand` state, and
+ * `sendReaction` on an off-cycle `joined` — additive tags on the same kind-23313
+ * rumor, so no new frozen kind (CORD-02 §6).
  */
 export function useVoiceHeartbeat(
   community: Community | undefined,
@@ -199,10 +179,8 @@ export function useVoiceHeartbeat(
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
 
-  // The interval and reaction sender read the live hand state through a ref so a
-  // toggle doesn't tear down and re-arm the heartbeat (a transient `left` would
-  // flicker every remote roster). The dedicated effect below republishes on the
-  // toggle itself for immediacy.
+  // Read hand state through a ref so a toggle doesn't re-arm the heartbeat (a
+  // transient `left` would flicker every remote roster).
   const handRef = useRef(handRaised);
   handRef.current = handRaised;
   const additionalIdentitiesRef = useRef(additionalIdentities);
@@ -244,8 +222,7 @@ export function useVoiceHeartbeat(
   useEffect(() => {
     if (!identity || !broker || !user || !community || !channel) return;
     void publish("joined", identity, broker).catch(() => undefined);
-    // Self-rescheduling rather than a fixed interval, so each hop re-jitters
-    // (see `heartbeatDelayMs` for why the spread is downward only).
+    // Self-rescheduling so each hop re-jitters (see `heartbeatDelayMs`).
     let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
       timer = setTimeout(() => {
@@ -261,9 +238,7 @@ export function useVoiceHeartbeat(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, broker, user?.pubkey, community?.idHex, channel?.idHex]);
 
-  // Republish immediately when the hand toggles (while joined) so others see it
-  // without waiting up to 30s for the next heartbeat. Skips the initial mount —
-  // the join heartbeat above already carries the starting state.
+  // Republish immediately on hand toggle; skip mount (the join heartbeat has it).
   const mounted = useRef(false);
   useEffect(() => {
     if (!identity || !broker) return;
@@ -275,9 +250,7 @@ export function useVoiceHeartbeat(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handRaised, identity, broker]);
 
-  // Republish when a sidecar publisher identity appears or disappears. Keep
-  // this separate from the main heartbeat lifecycle: tearing that effect down
-  // would emit a transient `left` and make the member flicker out of the call.
+  // Separate from the main heartbeat effect, whose teardown would emit a `left`.
   const identitiesMounted = useRef(false);
   useEffect(() => {
     if (!identity || !broker) return;
@@ -322,12 +295,9 @@ export function useVoiceHeartbeat(
 const REACTION_TTL_MS = 4000;
 
 /**
- * Live in-call emoji reactions for one Concord channel (Armada client extension,
- * see voice.ts): the `react` tag on ephemeral kind-23313 rumors. Like typing
- * and presence, this is subscription-only (relays never store the wrap); a
- * live `req()` per relay feeds a decaying list, fired once per unseen nonce.
- * Own reactions echo back through the same subscription, so they animate too
- * without a separate optimistic path.
+ * In-call emoji reactions (Armada extension, see voice.ts): the `react` tag on
+ * ephemeral kind-23313 rumors, fired once per unseen nonce. Own reactions echo
+ * back through the same subscription.
  */
 export function useVoiceReactions(
   community: Community | undefined,
@@ -376,8 +346,7 @@ export function useVoiceReactions(
       }
     };
 
-    // Shares the presence hook's per-relay 21059 REQ — same relay, same
-    // author — so reactions cost no extra subscription (see `ephemeralSub.ts`).
+    // Shares the presence hook's per-relay 21059 REQ (see `ephemeralSub.ts`).
     const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
 
     const timer = setInterval(decay, REACTION_TTL_MS / 2);
@@ -392,23 +361,17 @@ export function useVoiceReactions(
 }
 
 /**
- * The client's own default AV servers, in preference order: the user's
- * Settings → Voice server when set, otherwise the deployment's build-time
- * defaults. A synchronized custom address is a replacement, not an additive
- * hint. Consulted only where no community answers the question: a community
- * that publishes brokers uses those exclusively (§5), so this is what a
- * community publishing none falls back to — and what a DM call, which has no
- * community to publish any, uses alone.
+ * This client's default AV servers: Settings → Voice server if set (a
+ * replacement, not additive), else build-time defaults. Used only when no
+ * community publishes brokers (§5), and alone for DM calls.
  */
 export function ownAvServers(): string[] {
   return effectiveAvServers(CONCORD_AV_SERVERS);
 }
 
 /**
- * The community's own brokers (CORD-02 §6), following the Control fold rather
- * than a join-time snapshot: a staff edit reaches a mounted call the same way
- * a relay change does. Callers already holding the fold should read
- * `communityAvBrokers(folded?.metadata)` directly instead of subscribing again.
+ * The community's brokers (CORD-02 §6) from the Control fold, not a join-time
+ * snapshot. Callers holding the fold should use `communityAvBrokers` directly.
  */
 export function useCommunityAvBrokers(community: Community | undefined): string[] {
   const { data: folded } = useControlFold(community);
@@ -416,10 +379,8 @@ export function useCommunityAvBrokers(community: Community | undefined): string[
 }
 
 /**
- * Imperatively resolve a reachable broker for a room (the same rendezvous
- * `useVoiceBroker` runs, but live). Used at join time when the cached query
- * value is missing or a previous probe failed — a stale `null` must not block
- * a join that would succeed now.
+ * Imperatively resolve a reachable broker (as `useVoiceBroker` does), for join
+ * time when the cached value is missing or stale.
  */
 export async function resolveVoiceBroker(
   roomHex: string,
@@ -433,33 +394,24 @@ export async function resolveVoiceBroker(
 }
 
 /**
- * Resolve the broker to join this channel's call through: the community's own
- * when it publishes any, this client's configuration otherwise — never the
- * broker a fellow member's presence points at (see `rendezvousCandidates`).
- * Every candidate is probed (`GET /.well-known/concord/av` → 204) and the
- * first reachable one is it.
- *
- * Deliberately takes no presence fold: the answer is a property of config and
- * the room, so it is the same before anyone joins as after, and a channel's
- * idle rows don't re-resolve on every heartbeat.
+ * The broker to join through: the community's own if it publishes any, else this
+ * client's config — never one a member's presence points at (see
+ * `rendezvousCandidates`). First to answer `GET /.well-known/concord/av` → 204
+ * wins. Takes no presence fold, so idle rows don't re-resolve per heartbeat.
  */
 export function useVoiceBroker(
   channel: Channel | undefined,
   communityBrokers: string[] = [],
 ): { data: string | null | undefined; isLoading: boolean } {
   const roomHex = channel?.voice.room.pk;
-  // Keyed by CONTENT: this is called per channel row, and a caller passing a
-  // fresh array literal would otherwise re-run the rendezvous every render.
+  // Keyed by CONTENT, since callers may pass fresh array literals.
   const brokersKey = communityBrokers.join(",");
   const candidates = useMemo(
     () => (roomHex ? rendezvousCandidates(roomHex, ownAvServers(), brokersKey ? brokersKey.split(",") : []) : []),
     [roomHex, brokersKey],
   );
-  // The probe answers a question about an ORIGIN, not about a channel, and
-  // `candidatesKey` already captures everything the queryFn reads (including
-  // the room-derived ordering). Keying on the channel too would give every
-  // channel in a community its own entry for the same idle-room candidate
-  // list — N identical probes to the same broker on every mount.
+  // The probe is about an ORIGIN; keying on the channel would repeat identical
+  // probes per channel.
   const candidatesKey = candidates.join(",");
 
   return useQuery<string | null>({
@@ -476,30 +428,23 @@ export function useVoiceBroker(
 }
 
 /**
- * Mint an SFU token from the chosen blind broker (§2). The token embeds the
- * broker-assigned random identity, which keys this member's per-sender frame
- * key and rides their presence — so a refetch would change WHO we are
- * mid-call. Never auto-refetch while mounted.
+ * Mint an SFU token from the blind broker (§2). It embeds the member's
+ * broker-assigned identity, so a refetch would change who we are mid-call —
+ * never auto-refetch.
  */
 export function useAvToken(
   channel: Channel | undefined,
   broker: string | undefined,
   enabled: boolean,
   /**
-   * Further §5 candidates to try if `broker` cannot mint. Deliberately absent
-   * from the query key: presence churns the candidate list constantly, and
-   * rekeying on it would remint — handing the room a NEW identity mid-call.
+   * Further §5 candidates if `broker` can't mint. Not in the query key: presence
+   * churn would remint a new identity mid-call.
    */
   fallbacks: readonly string[] = [],
 ) {
   return useQuery<AvToken>({
-    // Key on the room pubkey, not the epoch: the room name is
-    // voiceGroupKey(secret, channelId, epoch), so its pk is the true grant
-    // identity the broker mints against. Keying on `current.epoch` would let a
-    // token minted for one room be served for a different room that happens to
-    // share (idHex, epoch) — e.g. a refounding that reuses an epoch number —
-    // which the SFU then rejects with "no permissions to access the room". This
-    // matches the rejoin test in callSync (`voice.room.pk !== snapshot.roomPk`).
+    // Key on the room pubkey, not the epoch: a refounding can reuse an epoch number,
+    // and the SFU rejects a token for another room. Matches callSync's rejoin test.
     queryKey: ["concord", "av-token", channel?.idHex ?? null, channel?.voice?.room.pk ?? null, broker],
     enabled: enabled && Boolean(channel?.voice && broker),
     queryFn: async () => fetchAvTokenFromAny([broker!, ...fallbacks], channel!.voice.room),

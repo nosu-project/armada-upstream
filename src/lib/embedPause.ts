@@ -3,20 +3,10 @@ import { useEffect, useState } from "react";
 import { onDesktopWindowHidden } from "@/lib/desktop";
 
 /**
- * Stops playing media when the desktop window is closed to the tray.
- *
- * Closing the window only hides it, and the renderer keeps running (its relay
- * subscriptions have to), so anything audible carries on with no window left
- * to stop it from. Two kinds of player need stopping:
- *
- * - `<video>`/`<audio>` elements in the page, which are paused directly. Only
- *   those playing from a `src` — a call's LiveKit tracks are attached through
- *   `srcObject` and must keep playing, since a call survives closing to the
- *   tray. Muted elements are left alone too: a looping GIF-video makes no
- *   sound, and pausing it would leave it frozen when the window comes back.
- * - Cross-origin embed iframes (YouTube, Spotify, Streamable), which expose no
- *   pause the page can call without loading each provider's player API. They
- *   subscribe with `useEmbedPauseEpoch` and remount their player instead.
+ * Stops playing media when the desktop window closes to the tray (the renderer
+ * keeps running). Pauses `src`-backed `<video>`/`<audio>` — not `srcObject`
+ * (calls survive) or muted (GIF-videos) ones — and remounts cross-origin
+ * embeds via `useEmbedPauseEpoch`.
  */
 
 const listeners = new Set<() => void>();
@@ -42,11 +32,7 @@ export function installEmbedPause(): void {
   onDesktopWindowHidden(() => pausePlayingMedia());
 }
 
-/**
- * A number that changes each time playing media is paused. An embed keys its
- * iframe on it (or resets its state when it changes) so the provider's player
- * is torn down and playback stops.
- */
+/** Changes on each pause; embeds key their iframe on it to tear the player down. */
 export function useEmbedPauseEpoch(): number {
   const [epoch, setEpoch] = useState(0);
   useEffect(() => {

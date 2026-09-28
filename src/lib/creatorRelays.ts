@@ -2,19 +2,14 @@ import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
-/** The minimal query surface of the app's relay pool that this helper needs. */
 interface PoolLike {
   query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]>;
 }
 
 /**
- * The relays a creator's new community should snapshot: their NIP-17 DM
- * relays (kind 10050). Inbox relays are curated for exactly the kind of
- * sealed, privacy-expecting traffic Concord generates — unlike NIP-65 write
- * relays, which advertise where public notes go and tend to accumulate
- * stale, general-purpose entries. Returns [] when no DM relay list is
- * published (or the lookup fails); the caller then falls back to the app
- * relays.
+ * Relays a creator's new community snapshots: their NIP-17 DM relays (kind
+ * 10050), curated for private traffic unlike NIP-65 write relays. [] if none
+ * (caller falls back to app relays).
  */
 export async function fetchCreatorDmRelays(nostr: PoolLike, pubkey: string): Promise<string[]> {
   const events = await nostr

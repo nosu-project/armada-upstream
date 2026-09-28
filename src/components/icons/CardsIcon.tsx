@@ -1,9 +1,6 @@
 import React from "react";
 
-/**
- * Stacked cards icon — used for Magic: The Gathering decks (kind 37381).
- * A filled SVG styled with currentColor. Ported from Ditto.
- */
+/** Stacked cards icon for MTG decks (kind 37381). Ported from Ditto. */
 export const CardsIcon = React.forwardRef<SVGSVGElement, React.SVGProps<SVGSVGElement>>(
   ({ className, ...props }, ref) => (
     <svg

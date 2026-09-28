@@ -12,7 +12,8 @@ vi.mock("@capacitor/core", () => ({
   registerPlugin: () => ({ takePendingOpen: () => takePendingOpen() }),
 }));
 
-const { hasIosPush, pushInstallationId, takePendingPushOpen } = await import("@/lib/nativePush");
+const { hasIosPush, takePendingPushOpen } = await import("@/lib/nativePush");
+const { pushInstallationId } = await import("@/lib/pushRegistry");
 
 beforeEach(() => {
   getPlatform.mockClear().mockReturnValue("ios");

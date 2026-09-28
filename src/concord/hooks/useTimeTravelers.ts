@@ -6,14 +6,9 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 /**
- * Members whose messages are dated well ahead of the local clock — surfaced in
- * the moderation panel as a playful "time traveler" flag (a wrong device clock,
- * almost always; see {@link timeTravelers}). Derived from the SAME shared
- * community rumor read the unread badges use, so it costs no extra store scan.
- *
- * The reader's own pubkey is excluded: a device flagging itself would just be
- * telling the user their own clock is off, which the panel row — framed as
- * "someone here" — can't act on.
+ * Members whose messages are dated well ahead of the local clock (the moderation
+ * panel's "time traveler" flag; see {@link timeTravelers}), from the shared
+ * community rumor read. Excludes the reader, who can't act on their own clock.
  */
 export function useTimeTravelers(
   community: Community | undefined,

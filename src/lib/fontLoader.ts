@@ -1,13 +1,7 @@
 /**
- * Theme font loading.
- *
- * Every theme font is loaded by URL — a `@font-face` rule injected into the
- * document head (idempotent per URL). Families from the catalog
- * (themeFonts.ts) fall back to their fontsource CDN URL when the event's `f`
- * tag carries none. Unlike Ditto there is no global font override: Armada
- * applies theme fonts SCOPED, as inline `font-family` / `--title-font-family`
- * on the themed container (the profile page), so nothing has to be restored
- * on unmount.
+ * Theme fonts are loaded by URL via injected `@font-face` rules, and applied
+ * scoped (inline on the themed container) rather than globally, so nothing
+ * needs restoring on unmount.
  */
 
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
@@ -16,10 +10,8 @@ import { findThemeFont } from "@/lib/themeFonts";
 import type { ThemeFont } from "@/lib/themeEvent";
 
 /**
- * Sanitize a string for safe interpolation into a double-quoted CSS context.
- * Allowlist: Unicode letters, numbers, spaces, hyphens, underscores,
- * apostrophes, periods. Use whenever event-sourced strings flow into a CSS
- * declaration value (e.g. `font-family`) to prevent CSS-string breakout.
+ * Sanitize an event-sourced string for a double-quoted CSS context (prevents
+ * CSS-string breakout). Allowlist: letters, numbers, space, `-`, `_`, `'`, `.`.
  */
 export function sanitizeCssString(value: string): string {
   return value.replace(/[^\p{L}\p{N} _\-'.]/gu, "");
@@ -27,14 +19,9 @@ export function sanitizeCssString(value: string): string {
 
 const FONT_FACE_STYLE_ID = "theme-font-faces";
 
-/** Remote font URLs whose @font-face is already injected. */
 const injectedUrls = new Set<string>();
 
-/**
- * Inject a `@font-face` rule registering `family` at `url`. Idempotent per
- * URL. The URL and family are event-sourced (themes come from other users'
- * events), so both are sanitized before touching CSS.
- */
+/** Inject a `@font-face` rule (idempotent per URL). Inputs are event-sourced, so both are sanitized. */
 function injectFontFace(family: string, url: string): void {
   if (injectedUrls.has(url)) return;
   const safeUrl = sanitizeUrl(url);
@@ -57,12 +44,7 @@ function injectFontFace(family: string, url: string): void {
   injectedUrls.add(url);
 }
 
-/**
- * Ensure a theme font is loadable and return the CSS `font-family` value to
- * apply for it (quoted family + fallback stack), or undefined when the font
- * can't be resolved to a loadable URL and would silently render the fallback
- * anyway.
- */
+/** CSS `font-family` value for a theme font, or undefined when it can't resolve to a loadable URL. */
 export function loadThemeFont(font: ThemeFont | undefined): string | undefined {
   if (!font?.family) return undefined;
   const url = font.url ?? findThemeFont(font.family)?.cdnUrl;

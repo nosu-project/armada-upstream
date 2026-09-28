@@ -19,12 +19,7 @@ import { builderStarterColors, type CoreThemeColors } from "@/themes";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * Create and publish a shareable theme (kind 36767) from Discover. The body is
- * the same builder Settings → Appearance uses; publishing makes the theme
- * discoverable by anyone. Only ever runs on an explicit user action, and never
- * touches the active profile theme (kind 16767) — that stays a separate action.
- */
+/** Create and publish a shareable theme (kind 36767). Never touches the active profile theme (kind 16767). */
 export function ThemeCreatorDialog({
   open,
   onOpenChange,
@@ -68,10 +63,8 @@ function ThemeCreatorForm({ onDone }: { onDone: () => void }) {
     try {
       event = await publishEvent(buildThemeDefinitionEvent(title, colors));
     } catch (e) {
-      // A queued publish is already signed and durably stored; the retry worker
-      // lands it. Reporting it as a failure would leave the dialog open, and a
-      // retry re-rolls the random `d` suffix in buildThemeDefinitionEvent —
-      // giving the user two themes for one intent.
+      // A queued publish will land via the retry worker; treating it as a failure
+      // invites a retry that re-rolls the random `d` suffix, creating two themes.
       if (!isPublishQueuedError(e)) {
         toast({
           title: "Couldn't publish theme",
@@ -84,18 +77,13 @@ function ThemeCreatorForm({ onDone }: { onDone: () => void }) {
       queued = true;
     }
 
-    // Show the new theme by seeding the cache rather than refetching. An
-    // immediate refetch races relay indexing on a 6s budget, so it can come
-    // back with LESS than is already on screen — the grid appearing to empty
-    // itself the moment you publish. The stale mark (without a refetch) lets
-    // the next natural fetch reconcile with the relays. Only the unsearched
-    // query is seeded; a search result has its own server-side criteria.
+    // Seed the cache instead of refetching: an immediate refetch races relay
+    // indexing and can return LESS than is on screen. Only the unsearched query is seeded.
     queryClient.setQueriesData<NostrRumor[]>(
       { queryKey: ["discover", "themes"], predicate: (q) => q.queryKey[4] === "" },
       (prev) => (prev ? [event, ...prev.filter((e) => e.id !== event.id)] : prev),
     );
     void queryClient.invalidateQueries({ queryKey: ["discover", "themes"], refetchType: "none" });
-    // The same theme belongs in the Settings → Appearance library.
     void queryClient.invalidateQueries({ queryKey: ["user-themes"] });
 
     if (applyToMine) applyCustomTheme({ title, colors });

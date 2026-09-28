@@ -11,7 +11,6 @@ import { getAvatarShape, shapedAvatarSpeakingStyle } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
-/** A single participant's avatar in the voice presence stack. */
 function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -29,7 +28,6 @@ function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: 
   );
 }
 
-/** A participant's display name (for the tooltip listing). */
 function ParticipantName({ pubkey }: { pubkey: string }) {
   return (
     <div className="truncate">
@@ -38,13 +36,7 @@ function ParticipantName({ pubkey }: { pubkey: string }) {
   );
 }
 
-/**
- * Discord-style nested voice roster: one indented row per participant (small
- * avatar + name), rendered directly under a channel's row in the sidebar so a
- * live call reads as a first-class voice channel. When the viewer is in this
- * channel's call, `speaking` carries the live speaker set so rows light up
- * with voice activity.
- */
+/** Nested voice roster rows under a channel in the sidebar; `speaking` lights rows when in the call. */
 export function VoiceParticipantList({
   participants,
   speaking,
@@ -53,18 +45,14 @@ export function VoiceParticipantList({
   className,
 }: {
   participants: readonly string[];
-  /** Pubkeys currently speaking (live, from the connected call), if known. */
   speaking?: ReadonlySet<string>;
-  /** Pubkeys currently muted (live, from the connected call), if known. */
   muted?: ReadonlySet<string>;
   /** Pubkeys with a raised hand (Armada client feature; Concord calls only). */
   raised?: ReadonlySet<string>;
   className?: string;
 }) {
   if (participants.length === 0) return null;
-  // Stable order: presence folds/LiveKit deliver participants in arrival (or
-  // speaking) order, which reshuffles rows as events land. Sort by pubkey so
-  // the roster holds still.
+  // Sort so rows don't reshuffle as presence/LiveKit events land.
   const sorted = [...participants].sort();
   return (
     <div className={cn("flex flex-col pb-0.5", className)} aria-label={`${participants.length} in voice`}>
@@ -81,12 +69,7 @@ export function VoiceParticipantList({
   );
 }
 
-/**
- * One row of the nested voice roster (green speaking ring while talking).
- * Right-click (desktop) or the trailing "⋮" button (tap-friendly, always
- * visible on touch) opens the voice user menu: per-user volume + local mute
- * (for others) and copy npub.
- */
+/** One roster row. Right-click or the "⋮" button opens the voice user menu. */
 function VoiceParticipantRow({
   pubkey,
   isSpeaking,
@@ -105,9 +88,7 @@ function VoiceParticipantRow({
   const hasCustomShape = !!getAvatarShape(metadata);
   const isSelf = user?.pubkey === pubkey;
 
-  // Emoji-shaped avatars carry a CSS mask that would clip a ring/box-shadow,
-  // so their speaking indicator is a drop-shadow filter hugging the silhouette;
-  // circular avatars get a plain ring (matches the call-stage treatment).
+  // Emoji-shaped avatars have a mask that clips rings, so use a drop-shadow filter.
   const wrapperStyle: CSSProperties | undefined =
     hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
 
@@ -143,9 +124,7 @@ function VoiceParticipantRow({
             aria-label="Muted"
           />
         )}
-        {/* Tap/click affordance for the participant menu. Hidden until hover on
-            pointer devices, always visible on touch (where right-click doesn't
-            exist), and pinned open while the menu is up. */}
+        {/* Hover-revealed on pointer devices, always visible on touch. */}
         <VoiceUserMenuButton
           pubkey={pubkey}
           displayName={name}
@@ -157,19 +136,13 @@ function VoiceParticipantRow({
   );
 }
 
-/**
- * Shows who is currently in a voice room: a small overlapping avatar stack
- * (capped, with a "+N" overflow) and a tooltip listing each participant by
- * name. Used in the channel list and DM list so you can see — and who is in —
- * an active call before joining.
- */
+/** Overlapping avatar stack with "+N" overflow and a names tooltip. */
 export function VoicePresence({
   participants,
   max = 3,
   className,
 }: {
   participants: readonly string[];
-  /** Max avatars to show before collapsing to a "+N" badge. */
   max?: number;
   className?: string;
 }) {

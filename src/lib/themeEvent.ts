@@ -6,12 +6,8 @@ import type { CoreThemeColors } from "@/themes";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Ditto theme events (interop). Ditto publishes a user's theme library and
- * active profile theme as public Nostr events. Armada reads them so themes
- * created in Ditto show up here, and the profile view renders the full theme:
- * the 3 core colors plus the optional body/title fonts and background image.
- *
- * See ditto/src/lib/themeEvent.ts.
+ * Ditto theme events (interop): core colors plus optional fonts and background
+ * image. See ditto/src/lib/themeEvent.ts.
  */
 
 /** Addressable: a named theme definition. Multiple per user (the library). */
@@ -146,10 +142,8 @@ export interface DittoTheme {
 export function parseDittoTheme(event: NostrRumor): DittoTheme | null {
   if (event.kind !== THEME_DEFINITION_KIND && event.kind !== ACTIVE_THEME_KIND) return null;
 
-  // Colors come only from the hex-validated `c` tags. The legacy
-  // JSON-in-content format is not read: its values reached the injected
-  // theme <style> unchecked (Ditto dropped it in bd1a3bdb for the same
-  // reason), and a genuine old theme renders again once its owner re-saves.
+  // Colors only from hex-validated `c` tags; the legacy JSON-content format
+  // reached the injected <style> unchecked (Ditto dropped it too, bd1a3bdb).
   const colors = parseColorTags(event.tags);
   if (!colors) return null;
 
@@ -180,11 +174,8 @@ function slugify(title: string): string {
 }
 
 /**
- * Build a kind-36767 theme definition event (Ditto-compatible) publishing the 3
- * core colors as role-tagged `c` hex tags, plus any fonts/background. Used by
- * the "Share to Discover" action so an Armada-authored theme shows up in the
- * theme directory (and in Ditto). Only ever published on an explicit user
- * action.
+ * Build a kind-36767 theme definition (Ditto-compatible) for "Share to
+ * Discover". Only published on explicit user action.
  */
 export function buildThemeDefinitionEvent(
   title: string,
@@ -200,10 +191,7 @@ export function buildThemeDefinitionEvent(
     ...buildColorTags(colors),
     ...buildFontTags(extras?.font, extras?.titleFont),
     ...buildBackgroundTag(extras?.background),
-    // NIP-31 fallback text and the topic tag, matching what Ditto emits
-    // (ditto/src/lib/themeEvent.ts buildThemeDefinitionTags). Neither Ditto's
-    // theme feed nor Armada's Discover filters on `t` — it is for clients and
-    // relays that index by topic.
+    // NIP-31 alt + topic tag, matching Ditto's emit.
     ["alt", `Custom theme: ${name}`],
     ["t", "theme"],
   ];
@@ -212,11 +200,8 @@ export function buildThemeDefinitionEvent(
 }
 
 /**
- * Build the kind-16767 active profile theme event (Ditto-compatible). One per
- * user, replaceable; publishing it is what makes a profile wear a theme.
- * `sourceRef` is the `a` coordinate of the kind-36767 definition it was
- * applied from, when there is one. Only ever published on an explicit user
- * action (the profile theme editor's Save / Remove).
+ * Build the kind-16767 active profile theme (Ditto-compatible). `sourceRef` is
+ * the originating 36767 `a` coordinate. Only published on explicit user action.
  */
 export function buildActiveThemeEvent(
   colors: CoreThemeColors,
@@ -234,11 +219,7 @@ export function buildActiveThemeEvent(
   return { kind: ACTIVE_THEME_KIND, content: "", tags };
 }
 
-/**
- * Build the kind-16767 that REMOVES the profile theme: an empty replacement,
- * matching Ditto's clearActiveTheme (an event with colors is "has a theme";
- * one without parses to null everywhere).
- */
+/** Kind-16767 with no colors: removes the profile theme (as Ditto's clearActiveTheme). */
 export function buildClearActiveThemeEvent(): EventTemplate {
   return { kind: ACTIVE_THEME_KIND, content: "", tags: [] };
 }

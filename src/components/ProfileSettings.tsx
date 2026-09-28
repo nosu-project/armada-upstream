@@ -45,8 +45,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { isValidAvatarShape } from '@/lib/avatarShape';
 import { isAnimatedImage, METADATA_SCAN_BYTES } from '@/lib/imageMetadata';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 const WALLET_TICKERS = [
   '$BTC', '$ETH', '$SOL', '$XMR', '$LTC', '$DOGE', '$ADA', '$DOT', '$XRP', '$MATIC',
 ] as const;
@@ -54,22 +52,15 @@ const WALLET_TICKERS = [
 /** Bare tickers used only for detection (strips leading $). */
 const BARE_TICKERS = WALLET_TICKERS.map((t) => t.slice(1));
 
-// ── Field preset templates ────────────────────────────────────────────────────
-
 interface FieldPreset {
   id: string;
   label: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
-  /** Default label to pre-fill when adding this field type. */
   defaultLabel: string;
-  /** The form field type. */
   type: 'text' | 'wallet' | 'media';
-  /** File accept attribute for the file picker (media types only). */
   accept?: string;
-  /** Human-readable format list shown in tooltips. */
   formatHint?: string;
-  /** Placeholder for the value input. */
   valuePlaceholder?: string;
 }
 
@@ -136,7 +127,6 @@ const FIELD_PRESETS: FieldPreset[] = [
   },
 ];
 
-/** The "Custom" preset — always shown last, separated by a divider. */
 const CUSTOM_PRESET: FieldPreset = {
   id: 'custom',
   label: 'Custom',
@@ -147,46 +137,34 @@ const CUSTOM_PRESET: FieldPreset = {
   valuePlaceholder: 'Value or URL',
 };
 
-/** Find a preset's format hint from its accept filter. */
 function getFormatHintForAccept(accept: string | undefined): string | undefined {
   if (!accept) return undefined;
   const preset = FIELD_PRESETS.find((p) => p.accept === accept);
   return preset?.formatHint;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Infer the field type from stored label/value when loading from existing data. */
 function inferFieldType(label: string, value: string): 'text' | 'wallet' | 'media' {
   const bare = label.replace(/^\$/, '').toUpperCase();
   if (BARE_TICKERS.includes(bare)) return 'wallet';
-  // Known media file extensions
   if (/^https?:\/\/.+\.(jpe?g|png|gif|webp|svg|avif|mp4|webm|mov|mp3|ogg|wav|flac)(\?.*)?$/i.test(value)) return 'media';
-  // Blossom-style URLs: path is a long hex hash (SHA-256), optionally with an extension
+  // Blossom-style URLs: SHA-256 hex path, optional extension.
   if (/^https?:\/\/.+\/[0-9a-f]{64}(\.\w+)?$/i.test(value)) return 'media';
   return 'text';
 }
 
-/** Extension patterns for each media accept category. */
 const AUDIO_EXT = /\.(mp3|mpga|ogg|oga|wav|flac|aac|m4a|opus|weba|webm|spx|caf)(\?.*)?$/i;
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i;
 const VIDEO_EXT = /\.(mp4|webm|mov|qt)(\?.*)?$/i;
 
-/**
- * Check whether a pasted URL matches the expected file type for a media field.
- * Returns a warning message if the URL looks wrong, or undefined if it's fine.
- * Only warns when the value looks like a URL — empty/non-URL values return undefined.
- */
+/** Warning when a pasted URL doesn't match the media field's accept type; undefined if fine or not a URL. */
 function getMediaMismatchWarning(value: string, accept: string | undefined): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  // Only check if it looks like a URL
   if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return undefined;
 
-  // Blossom-style URLs (hex hash path) are always fine — type can't be determined from URL
+  // Blossom URLs can't reveal type.
   if (/^https?:\/\/.+\/[0-9a-f]{64}(\.\w+)?$/i.test(trimmed)) return undefined;
 
-  // Check if URL has a recognizable file extension at all
   const hasAudioExt = AUDIO_EXT.test(trimmed);
   const hasImageExt = IMAGE_EXT.test(trimmed);
   const hasVideoExt = VIDEO_EXT.test(trimmed);
@@ -222,7 +200,6 @@ function getMediaMismatchWarning(value: string, accept: string | undefined): str
   return undefined;
 }
 
-/** Infer a file-accept filter from an existing field's value URL. */
 function inferAcceptFromValue(value: string): string | undefined {
   if (/\.(mp3|mpga|ogg|oga|wav|flac|aac|m4a|opus|weba|webm|spx|caf)(\?.*)?$/i.test(value)) return 'audio/*';
   if (/\.(jpe?g|png|gif|webp|svg|avif)(\?.*)?$/i.test(value)) return 'image/*';
@@ -230,16 +207,14 @@ function inferAcceptFromValue(value: string): string | undefined {
   return undefined;
 }
 
-// ── Schema ────────────────────────────────────────────────────────────────────
-
 const formSchema = n.metadata().extend({
   fields: z.array(z.object({
     label: z.string(),
     value: z.string(),
     type: z.enum(['text', 'wallet', 'media']),
-    /** Client-side only — file accept filter for the file picker (not persisted). */
+    /** Client-side only (not persisted). */
     accept: z.string().optional(),
-    /** Client-side only — placeholder text for the value input (not persisted). */
+    /** Client-side only (not persisted). */
     placeholder: z.string().optional(),
   })),
   shape: z.string().optional(),
@@ -254,8 +229,6 @@ type CropState = {
   field: 'picture' | 'banner';
   title: string;
 };
-
-// ── Field row ──────────────────────────────────────────────────────────────
 
 interface FieldRowProps {
   index: number;
@@ -281,7 +254,6 @@ function FieldRow({
 
   return (
     <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-start">
-      {/* Reorder controls */}
       <div className="flex flex-col">
         <Button
           type="button"
@@ -307,7 +279,6 @@ function FieldRow({
         </Button>
       </div>
 
-      {/* Label column — varies by type */}
       {type === 'wallet' ? (
         <FormField
           control={control}
@@ -345,7 +316,6 @@ function FieldRow({
         />
       )}
 
-      {/* Value column — media gets upload button with tooltip, others get text input */}
       {type === 'media' ? (
         <FormField
           control={control}
@@ -411,7 +381,6 @@ function FieldRow({
         />
       )}
 
-      {/* Delete button */}
       <Button
         type="button"
         variant="ghost"
@@ -425,27 +394,14 @@ function FieldRow({
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 interface ProfileSettingsProps {
-  /**
-   * Called after a successful kind-0 publish. The welcome-page onboarding uses
-   * this to advance to the next step; Settings leaves it unset.
-   */
   onSaved?: () => void;
-  /** Save-button label (defaults to "Save Profile"; onboarding uses "Continue"). */
   saveLabel?: string;
-  /** Center the save button (onboarding); defaults to left-aligned. */
   centerSave?: boolean;
-  /** Hide the NIP-05 username field on the profile card (onboarding). */
   showNip05?: boolean;
 }
 
-/**
- * WYSIWYG profile editor. Renders an interactive {@link ProfileCard} the user
- * edits in place, plus a typed custom-fields section (presets for media,
- * wallets, links, etc.). Publishes a kind-0 metadata event on save.
- */
+/** WYSIWYG kind-0 editor: an editable {@link ProfileCard} plus typed custom fields. */
 export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = true }: ProfileSettingsProps = {}) {
   const { user, metadata, event } = useCurrentUserProfile();
   const queryClient = useQueryClient();
@@ -458,7 +414,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
   const [uploadingFieldIndex, setUploadingFieldIndex] = useState<number>(-1);
   const paymentTargetsRef = useRef<PaymentTargetsEditorHandle>(null);
 
-  // Parse existing custom fields from raw event
   const parseFields = (): Array<{ label: string; value: string; type: 'text' | 'wallet' | 'media'; accept?: string }> => {
     if (!event) return [];
     try {
@@ -468,7 +423,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
           .filter((f: unknown) => Array.isArray(f) && f.length >= 2)
           .map((f: string[]) => {
             const type = inferFieldType(f[0], f[1]);
-            // Ensure wallet labels carry the $ prefix so the Select value matches (e.g. "BTC" → "$BTC")
+            // `$` prefix so the Select value matches.
             const label = type === 'wallet' && !f[0].startsWith('$')
               ? `$${f[0].toUpperCase()}`
               : f[0];
@@ -498,19 +453,15 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     },
   });
 
-  // `n.metadata()` contributes an index signature to FormValues, which defeats
-  // react-hook-form's FieldArrayPath inference for `fields` (it resolves to
-  // `never`). Cast the control to a form shape with just the array field so the
-  // field-array stays typed without an `any`.
+  // `n.metadata()` adds an index signature that breaks FieldArrayPath
+  // inference, so cast to a shape with just the array field.
   const fieldArrayControl = form.control as unknown as Control<{ fields: FieldEntry[] }>;
   const { fields, append, remove, move } = useFieldArray({ control: fieldArrayControl, name: 'fields' });
 
-  // Media field upload — dynamic accept attribute per field
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const pendingMediaIndex = useRef<number>(-1);
   const handleMediaPick = (index: number) => {
     pendingMediaIndex.current = index;
-    // Dynamically set the accept attribute based on the field's preset
     const fieldAccept = form.getValues(`fields.${index}.accept`);
     if (mediaInputRef.current) {
       mediaInputRef.current.accept = fieldAccept || 'image/*,video/*,audio/*';
@@ -554,7 +505,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metadata, event]);
 
-  // Live values for the card preview
   const watched = form.watch();
   const cardMetadata: Partial<NostrMetadata> & { shape?: string } = {
     name: watched.name,
@@ -569,14 +519,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     shape: watched.shape,
   };
 
-  // Card onChange: patch individual fields
   const handleCardChange = (patch: Partial<NostrMetadata>) => {
     for (const [k, v] of Object.entries(patch)) {
       form.setValue(k as keyof FormValues, v as string, { shouldDirty: true });
     }
   };
 
-  // Image pick: open crop dialog
   const pickInputRef = useRef<HTMLInputElement>(null);
   const pendingField = useRef<'picture' | 'banner'>('picture');
 
@@ -601,9 +549,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     e.target.value = '';
     const field = pendingField.current;
 
-    // Animated images (GIF, APNG, animated WebP) can't survive the crop
-    // dialog's canvas round-trip, which flattens them to a single frame. Upload
-    // them byte-for-byte instead of silently killing the animation.
+    // Animated images would be flattened by the crop canvas; upload them as-is.
     const head = new Uint8Array(await file.slice(0, METADATA_SCAN_BYTES).arrayBuffer());
     if (isAnimatedImage(file.type, head)) {
       await uploadImage(file, field);
@@ -632,7 +578,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     setCropState(null);
   };
 
-  // Handle adding a field from a preset
   const handleAddPreset = (preset: FieldPreset) => {
     append({
       label: preset.defaultLabel,
@@ -657,7 +602,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       const { fields: customFields, shape, ...standardMetadata } = values;
       const data: Record<string, unknown> = { ...metadata, ...standardMetadata };
 
-      // Add shape only if set (an emoji string)
       if (shape && isValidAvatarShape(shape)) {
         data.shape = shape;
       } else {
@@ -675,9 +619,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       queryClient.invalidateQueries({ queryKey: ['logins'] });
       queryClient.invalidateQueries({ queryKey: ['author', user.pubkey] });
 
-      // Persist payment targets (kind 10133) alongside the profile. If it fails
-      // or doesn't validate, the editor surfaces its own error toast; skip the
-      // success confirmation so the user knows something was off.
+      // On failure the editor toasts its own error; skip the success toast.
       const targetsSaved = (await paymentTargetsRef.current?.save()) ?? true;
       if (!targetsSaved) return;
 
@@ -700,7 +642,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
   return (
     <>
-      {/* Hidden file input for avatar/banner */}
       <input
         ref={pickInputRef}
         type="file"
@@ -708,7 +649,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
         className="hidden"
         onChange={handleFileChosen}
       />
-      {/* Hidden file input for media fields — accept is set dynamically */}
       <input
         ref={mediaInputRef}
         type="file"
@@ -717,7 +657,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
         onChange={handleMediaFileChosen}
       />
 
-      {/* Crop dialog */}
       {cropState && (
         <ImageCropDialog
           open
@@ -732,7 +671,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
 
-          {/* Interactive profile card */}
           <ProfileCard
             pubkey={user.pubkey}
             metadata={cardMetadata}
@@ -750,8 +688,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
             </div>
           )}
 
-          {/* Profile fields + account flags live behind More to keep the
-              core profile (card + save) uncluttered. */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
               <Button type="button" variant="ghost" className="w-full justify-start gap-1.5 px-0 py-1 h-auto text-muted-foreground hover:bg-transparent hover:text-foreground">
@@ -759,17 +695,13 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                 <ChevronDown className="size-3.5 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
               </Button>
             </CollapsibleTrigger>
-            {/* Padding sits on the inner wrapper, not on the animated element:
-                Radix measures the content box, so padding on the element being
-                animated shows up as a jump at the start of the collapse. */}
+            {/* Padding on the inner wrapper: Radix measures the content box, so padding here jumps on collapse. */}
             <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
               <div className="pt-3 space-y-4">
-                {/* Profile fields */}
                 <div>
                   <h2 className="text-sm font-medium py-2">Profile Fields</h2>
 
                   <div className="space-y-3 pt-1">
-                    {/* Website — always first */}
                     <FormField
                       control={form.control}
                       name="website"
@@ -785,7 +717,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                       )}
                     />
 
-                    {/* Lightning address */}
                     <FormField
                       control={form.control}
                       name="lud16"
@@ -801,7 +732,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                       )}
                     />
 
-                    {/* LNURL (lud06) */}
                     <FormField
                       control={form.control}
                       name="lud06"
@@ -836,7 +766,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                       />
                     ))}
 
-                    {/* Add field — visible pill buttons */}
                     <div className="flex flex-wrap gap-1.5 pt-1">
                       {[...FIELD_PRESETS, CUSTOM_PRESET].map((preset) => {
                         const Icon = preset.icon;
@@ -847,8 +776,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                // Opaque: onboarding renders this over the
-                              // wizard's animated ASCII background.
+                                // Opaque over the onboarding wizard's ASCII background.
                               className="h-7 rounded-full px-3 text-xs gap-1.5 bg-background"
                                 onClick={() => handleAddPreset(preset)}
                               >
@@ -883,10 +811,6 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                   )}
                 />
 
-                {/* Accept Donations — NIP-A3 payment targets (kind 10133).
-                    Self-authored donation endpoints (Monero, Ethereum, Cash
-                    App, …); persisted through its imperative handle when the
-                    profile form submits. */}
                 <PaymentTargetsEditor ref={paymentTargetsRef} />
               </div>
             </CollapsibleContent>

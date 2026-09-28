@@ -4,27 +4,12 @@ import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 /**
  * Android share-target bridge (ShareTargetPlugin.java) + the in-memory share
- * stash the rest of the app works against.
- *
- * A share reaches Armada three ways:
- *  - Android Direct Share: the user picked a conversation IN the system share
- *    sheet — the intent carries EXTRA_SHORTCUT_ID, which is the conversation's
- *    in-app route (that spelling is the contract between the two shortcut
- *    writers, ShareTargetPlugin.publishShortcuts and the notification
- *    service's pushConversationShortcut).
- *  - Android plain share ("Armada" in the sheet): no shortcut id — the user
- *    still owes us a destination, so the share flow lands on /share (the
- *    destination picker).
- *  - Web Share Target (installed PWA): a GET /share?title&text&url; SharePage
- *    reads the params itself and stashes on pick.
- *
- * In all three the handoff to the conversation is the same: the payload is
- * stashed here against a destination route, the app navigates there, and the
- * ChatComposer mounted at that path consumes it (text into the draft, files
- * into the normal attachment pipeline). Native shares split "where to go"
- * (peekShare — instant) from "the bytes" (checkShare — copies streams into the
- * app cache), so navigation never waits on a large video copy; the composer
- * subscribes to the stash and picks the payload up whenever it lands.
+ * stash. Direct Share intents carry EXTRA_SHORTCUT_ID = the conversation's
+ * in-app route (contract with publishShortcuts / pushConversationShortcut);
+ * plain shares and the PWA Web Share Target go through the /share picker.
+ * The payload is stashed against a route and consumed by the ChatComposer
+ * there. Native shares split peekShare (instant route) from checkShare (slow
+ * byte copy) so navigation never waits on a large file.
  */
 
 interface SharedFileMeta {
@@ -82,11 +67,8 @@ export function hasShareTarget(): boolean {
 }
 
 /**
- * How many Direct Share suggestions to publish on this device.
- *
- * A device property, not a constant: the per-activity shortcut cap is commonly
- * 15 but 5 on plenty of builds, and publishing past it silently evicts. The
- * fallback matches what the publisher assumed before the plugin could answer.
+ * Direct Share suggestions to publish. The per-activity cap varies (often 15,
+ * sometimes 5) and publishing past it silently evicts.
  */
 export async function maxShareShortcuts(): Promise<number> {
   try {
@@ -97,28 +79,17 @@ export async function maxShareShortcuts(): Promise<number> {
   }
 }
 
-/**
- * Drop every published Direct Share suggestion.
- *
- * Called on logout: they name the previous account's conversations, carry
- * their avatars, and deep-link into rooms the next account may not be in.
- */
+/** Drop every published Direct Share suggestion (on logout; they name the old account's rooms). */
 export async function clearShareShortcuts(): Promise<void> {
   if (!hasShareTarget()) return;
   try {
     await ShareTarget.clearShortcuts();
   } catch {
-    // Best-effort, like every other teardown step in the purge.
+    // best-effort
   }
 }
 
-/**
- * The live dynamic shortcut set, for diagnosing what the OS actually holds.
- *
- * Whether the share sheet DISPLAYS a published suggestion, and in what order,
- * is the system's decision and is not observable from here — so this answers
- * the one question that is: did what we published survive.
- */
+/** The live dynamic shortcut set (whether the sheet displays them isn't observable). */
 export async function dumpShareShortcuts(): Promise<{
   shortcuts: ShareShortcutDump[];
   max: number;
@@ -131,29 +102,17 @@ export async function dumpShareShortcuts(): Promise<{
   }
 }
 
-// ── The share stash ──────────────────────────────────────────────────────────
-
 export interface SharePayload {
   text: string;
   files: File[];
   /**
-   * Content tags to send alongside the text — NIP-92 `imeta` and NIP-30
-   * `emoji`, set by a message forward (see `forwardableTags`). They describe
-   * content the text REFERENCES but cannot carry: an attachment's MIME/dims
-   * and, for a client-encrypted blob, the only copy of its decryption key.
-   *
-   * Never persisted (drafts drop them), because an encrypted attachment's key
-   * is an ephemeral secret — same reasoning as the composer's per-upload
-   * encryption ref. Absent for OS shares, which carry files, not references.
+   * NIP-92 `imeta` / NIP-30 `emoji` tags from a message forward. Never persisted:
+   * an encrypted attachment's imeta holds its decryption key.
    */
   tags?: string[][];
 }
 
-/**
- * The one in-flight share. `route === null` means the user hasn't picked a
- * destination yet (SharePage shows it); a set route means the ChatComposer at
- * that path owns it.
- */
+/** The in-flight share; `route === null` means no destination picked yet. */
 let stash: { payload: SharePayload; route: string | null } | null = null;
 const stashListeners = new Set<() => void>();
 
@@ -188,18 +147,9 @@ export function pendingSharePreview(): SharePayload | null {
 }
 
 /**
- * Hand the payload to the composer serving `route`, so only the conversation
- * the share was routed to takes it.
- *
- * `route` is the composer's OWN room path, which the surface rendering it
- * passes down — never the ambient `window.location`. More than one composer is
- * mounted at a time (a route transition keeps the previous page alive while
- * the destination's chunk loads, and a thread panel has one of its own beside
- * the room's), and they would all read the same location: matching on it let
- * whichever composer happened to be mounted claim a payload addressed to the
- * conversation being navigated TO, pasting the share into the screen the user
- * was leaving. A composer with no route of its own (the thread panel) is not a
- * share destination and consumes nothing.
+ * Hand the payload to the composer serving `route` — its OWN room path, never
+ * `window.location`: several composers can be mounted at once (route
+ * transitions, thread panel) and the wrong one would claim the share.
  */
 export function consumeShareFor(route: string | undefined): SharePayload | null {
   if (!route || !stash || stash.route === null || stash.route !== route) return null;
@@ -216,24 +166,11 @@ export function discardShare(): void {
   emitStashChanged();
 }
 
-// ── Native share resolution ──────────────────────────────────────────────────
-
 /**
- * The destination a tapped Direct Share shortcut id names, or null when it
- * names none.
- *
- * Two jobs, deliberately in one function because the answers must agree. It
- * requires a ROOM (a peer / group / channel): community- or list-level routes
- * redirect on mount, which would strand the path-matched payload, so anything
- * else falls back to the /share picker. And it re-emits the id through
- * `chatRoute` rather than returning it verbatim, because the id was written by
- * a PREVIOUS version of this app and handed back by the OS — a shortcut
- * published before DM routes were canonicalized still carries a hex peer, and
- * would key the stash at a path no composer declares. Republishing retires
- * those ids eventually; this makes the ones already on the launcher work now.
- *
- * The same value is used as the navigation target and as the stash key, so
- * normalizing it here is what keeps those two from disagreeing again.
+ * The destination a Direct Share shortcut id names, or null. Requires a ROOM
+ * (other routes redirect on mount, stranding the payload) and re-emits via
+ * `chatRoute`, since old shortcuts may carry hex DM peers. The result is both
+ * navigation target and stash key, so they must agree.
  */
 export function shortcutShareRoute(path: string): string | null {
   const route = parseChatRoute(path);
@@ -259,10 +196,8 @@ async function sharedFileToFile(meta: SharedFileMeta): Promise<File | null> {
 }
 
 /**
- * Consume the staged native share into the stash: text merged (subject first,
- * mirroring the Web Share Target merge), streams fetched out of the app cache
- * into File objects the upload pipeline accepts. Returns the route the share
- * flow should land on, or null when nothing was staged.
+ * Consume the staged native share into the stash (subject merged first, like
+ * the Web Share Target). Returns the route to land on, or null.
  */
 export async function resolveNativeShare(): Promise<string | null> {
   const res = await ShareTarget.checkShare();
@@ -278,14 +213,9 @@ export async function resolveNativeShare(): Promise<string | null> {
   return route ?? "/share";
 }
 
-// ── Cold-launch share (mirrors coldLaunchDeepLink) ───────────────────────────
-//
-// A share intent can be the LAUNCH intent (process was dead). Like a cold
-// deep link, its destination must be known before HomeRedirect commits `/` to
-// the default server — so the destination is peeked ONCE at module load and
-// HomeRedirect waits for it. Only the peek gates the redirect: the payload
-// itself (checkShare, with its stream copies) resolves in the background and
-// reaches the composer through the stash subscription whenever it's ready.
+// Cold-launch share (mirrors coldLaunchDeepLink): the destination is peeked
+// once at module load and HomeRedirect waits for it; the payload resolves in
+// the background via the stash.
 
 let coldResolved = !hasShareTarget();
 let coldShareRoute: string | null = null;
@@ -301,10 +231,8 @@ function settleColdShare(route: string | null): void {
 }
 
 if (hasShareTarget()) {
-  // Guard so a hung bridge can't pin HomeRedirect forever (same reasoning as
-  // coldLaunchDeepLink's 1.5s guard; longer, because a share cold boot is
-  // exactly when the bridge is busiest and a late peek costs a visible
-  // default-screen flash before the late-route navigation below).
+  // Guard against a hung bridge; longer than coldLaunchDeepLink's 1.5s since
+  // the bridge is busiest on a share cold boot.
   const timeout = setTimeout(() => settleColdShare(null), 3000);
   ShareTarget.peekShare()
     .then((res) => {
@@ -317,14 +245,9 @@ if (hasShareTarget()) {
       if (!coldResolved) {
         settleColdShare(route);
       } else {
-        // The guard already fired and HomeRedirect committed to the default
-        // route — hand the destination to the late listeners
-        // (useShareTargetNavigation) instead of dropping it: the payload
-        // below would otherwise land in the stash with nothing ever
-        // navigating to the composer that consumes it.
+        // Guard already fired: hand the route to late listeners so the payload isn't orphaned.
         for (const w of lateColdWaiters) w(route);
       }
-      // Payload in the background; the stash subscribers pick it up.
       void resolveNativeShare().catch(() => undefined);
     })
     .catch(() => {
@@ -358,10 +281,8 @@ export function onColdShareResolved(cb: () => void): () => void {
 }
 
 /**
- * Run `cb` if the launch-intent peek resolves to a share AFTER the guard has
- * already released HomeRedirect (which then owns no navigation any more —
- * it's unmounted). The subscriber applies the route as an ordinary in-router
- * navigation (mirrors coldLaunchDeepLink's onLateColdLaunchDeepLink).
+ * Run `cb` if the peek resolves to a share AFTER the guard released
+ * HomeRedirect (mirrors onLateColdLaunchDeepLink).
  */
 export function onLateColdShareRoute(cb: (route: string) => void): () => void {
   lateColdWaiters.add(cb);

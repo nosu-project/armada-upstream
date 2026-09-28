@@ -6,32 +6,18 @@ import { tryNpubEncode } from "@/lib/safeNip19";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * NIP-5A root site: a replaceable manifest mapping site paths to Blossom
- * hashes. One per author; `path` tags are the file mappings, so a manifest
- * without any maps no files and serves nothing.
- */
+/** NIP-5A root site: replaceable manifest of path → Blossom hash; no `path` tags = nothing served. */
 const NSITE_ROOT_KIND = 15128;
 
-/**
- * The public gateway that serves nsites by subdomain (a root site lives at
- * `https://<npub>.<gateway>`). Runtime-configurable like every other endpoint
- * (see platform.ts); the default is the same gateway Ditto links to.
- */
+/** Root sites live at `https://<npub>.<gateway>`. Default matches Ditto. */
 const NSITE_GATEWAY: string = import.meta.env.VITE_NSITE_GATEWAY || "nsite.lol";
 
 export interface NsiteResult {
-  /** The gateway URL of the person's root site. */
   url: string;
-  /** The site's `title` tag, when it names itself. */
   title?: string;
 }
 
-/**
- * Whether a person has published an nsite (NIP-5A root site, kind 15128), and
- * where it is served. Powers the globe button beside "View profile" — absent
- * when they have no site, like Ditto's ProfileNsiteButton.
- */
+/** The person's nsite (kind 15128), for the globe button beside "View profile". */
 export function useNsite(pubkey: string | undefined) {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
@@ -61,7 +47,6 @@ export function useNsite(pubkey: string | undefined) {
       }
       if (!event) return null;
 
-      // A manifest without `path` tags maps no files — nothing to serve.
       if (!event.tags.some(([name]) => name === "path")) return null;
 
       return {

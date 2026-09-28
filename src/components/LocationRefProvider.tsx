@@ -4,10 +4,8 @@ import { useLocation, useNavigate, type Location, type NavigateFunction } from "
 import { LocationRefContext, type RouterRefs } from "@/lib/locationRef";
 
 /**
- * Publishes the router location and `navigate` through
- * {@link LocationRefContext}. This is the ONE subscriber: it re-renders on
- * navigation, but `children` is a prop, so nothing below re-renders with it.
- * Render inside the router.
+ * Publishes router location and `navigate` via {@link LocationRefContext}; the
+ * ONE subscriber, so `children` (a prop) don't re-render on navigation.
  */
 export function LocationRefProvider({ children }: { children: ReactNode }) {
   const location = useLocation();

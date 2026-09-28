@@ -1,15 +1,7 @@
 /**
- * The transport-agnostic model behind the Discord-style quick switcher
- * (Ctrl/Cmd+K) and its Alt+↑/↓ channel hop.
- *
- * NIP-29 servers and Concord communities are surfaced through one
- * {@link Transport} interface, so the palette and the keyboard cycle share a
- * single code path and gain a third transport by adding one adapter — never a
- * parallel branch in the component. The rail's flattened layout supplies the
- * ORDER (both transports already share `config.railLayout`), and each transport
- * resolves its own spaces + channels from local caches (query cache for NIP-29,
- * the decrypted IndexedDB fold for Concord) — never a network fetch, so the
- * palette opens instantly.
+ * Transport-agnostic model behind the quick switcher (Ctrl/Cmd+K) and Alt+↑/↓
+ * channel hop. Each {@link Transport} (NIP-29, Concord) resolves spaces and
+ * channels from local caches only — never the network — in rail order.
  */
 
 import { matchPath } from "react-router-dom";
@@ -22,7 +14,7 @@ import { readControlFold } from "@/concord/lib/control";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { dmRouteParam } from "@/lib/dmConversation";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
-import { dmConvKey, dmConvPeers } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 
@@ -49,17 +41,9 @@ export interface ChannelEntry {
   /** The parent space's display name, shown as a subtitle. */
   spaceName: string;
   route: string;
-  /**
-   * Concord only: the owning community's id hex — which rumor-store tenant this
-   * channel's messages are in. Undefined for NIP-29.
-   */
+  /** Concord only: owning community id hex (rumor-store tenant). */
   communityIdHex?: string;
-  /**
-   * NIP-29 only: the relay hosting this channel — which event-store tenant its
-   * messages are in. The symmetric field to {@link communityIdHex}, and needed
-   * for the same reason: a group id is only meaningful on its own relay, so
-   * NIP-29 messages are stored per relay and a search has to say which one.
-   */
+  /** NIP-29 only: hosting relay (event-store tenant; group ids are per-relay). */
   relayUrl?: string;
 }
 
@@ -112,11 +96,7 @@ export interface SwitcherContext {
 /** The event store handle carried in {@link SwitcherContext} (see useEventStore). */
 type EventStoreContextType = Promise<ArmadaEventStore>;
 
-/**
- * One backend behind the switcher. Every method reads only local caches — no
- * network — so `channels` is async solely because Concord's fold lives in
- * IndexedDB; NIP-29 resolves synchronously and just wraps its result.
- */
+/** One switcher backend; local caches only (`channels` is async for Concord's IndexedDB fold). */
 interface Transport {
   /** Whether this transport owns a given rail key. */
   owns(key: string): boolean;
@@ -128,13 +108,9 @@ interface Transport {
   match(pathname: string): { key: string; channelId?: string } | null;
 }
 
-// ── NIP-29 ───────────────────────────────────────────────────────────────────
-
 /**
- * Resolve a server's display name from whatever is already known — the NIP-11
- * query cache, then the persisted last-known-good doc — falling back to the
- * bare host. Never triggers a fetch, and never awaits the relay-info cache's
- * warm: the switcher must open instantly, and the host is a usable answer.
+ * Server display name from NIP-11 query cache, then persisted doc, else the
+ * host. Never fetches or awaits: the switcher must open instantly.
  */
 function serverName(queryClient: QueryClient, relayUrl: string): string {
   const cached = queryClient.getQueryData<RelayInfoDocument>(["relay-info", relayUrl]);
@@ -150,7 +126,6 @@ function cachedGroups(queryClient: QueryClient, relayUrl: string): Nip29Group[] 
 }
 
 const nip29Transport: Transport = {
-  // A NIP-29 rail key is a bare relay URL; the Concord prefix is not ours.
   owns: (key) => !key.startsWith("c2:"),
   space(key, { queryClient }) {
     return { key, name: serverName(queryClient, key), route: `/s/${relayToRouteParam(key)}` };
@@ -179,8 +154,6 @@ const nip29Transport: Transport = {
   },
 };
 
-// ── Concord ─────────────────────────────────────────────────────────────
-
 const concordKey = (id: string) => `c2:${id}`;
 
 const concordTransport: Transport = {
@@ -195,10 +168,7 @@ const concordTransport: Transport = {
     const id = key.slice("c2:".length);
     const entry = communities.get(id);
     if (!entry) return [];
-    // Same derivation the community page uses (`useChannels`), but sourced
-    // from the persisted fold rather than a live one: rehydrate the community
-    // from the list entry, read its decrypted control fold from IndexedDB, and
-    // assemble the readable channels in display order. No decrypt, no network.
+    // Like `useChannels`, but from the persisted fold: no decrypt, no network.
     const community = rehydrateCommunity(entry);
     if (!community) return [];
     const folded = await readControlFold(id);
@@ -226,8 +196,6 @@ function transportForKey(key: string): Transport | undefined {
   return TRANSPORTS.find((t) => t.owns(key));
 }
 
-// ── Public API ───────────────────────────────────────────────────────────────
-
 /**
  * The live rail keys for both transports — NIP-29 relay URLs plus a `c2:<id>`
  * for every joined Concord community — to seed {@link mergeLayout}/order.
@@ -239,12 +207,7 @@ export function switcherLiveKeys(
   return [...nip29Servers, ...communities.map((c) => concordKey(c.community_id))];
 }
 
-/**
- * Snapshot the palette's spaces + channels, in rail order, across all
- * transports. `keys` is the flattened rail layout (already restricted to live
- * keys); each is dispatched to its transport. Async only because Concord reads
- * its channel fold from IndexedDB.
- */
+/** Snapshot spaces + channels in rail order; `keys` is the flattened live rail layout. */
 export async function buildSwitcherEntries(
   keys: string[],
   ctx: SwitcherContext,
@@ -266,19 +229,11 @@ export async function buildSwitcherEntries(
 }
 
 /**
- * Merge the two DM transports into the conversation destinations shown by the
- * launcher.
- *
- * This mirrors the DMs page's identity rules: a legacy kind-4 row and a
- * NIP-17 1:1 with the same person are ONE conversation, `mine` is sticky
- * across transports, and the newest message decides its recency. NIP-17 group
- * keys remain participant sets and therefore never collapse into a 1:1.
- *
- * `isKnown` keeps request-tier strangers out of a global launcher. A missing
- * started conversation and Note to Self are retained without a message,
- * because they are deliberate destinations rather than requests. Pins only
- * order rows that still exist: synthesizing one from stale synced settings
- * would resurrect a muted or long-removed conversation.
+ * Merge both DM transports into launcher destinations, mirroring DMsPage: a
+ * kind-4 row and NIP-17 1:1 with the same peer are one conversation, `mine` is
+ * sticky, newest wins. `isKnown` filters request-tier strangers; started
+ * conversations and Note to Self are kept without messages. Pins only order
+ * existing rows (never resurrect from stale settings).
  */
 export function buildDmSwitcherEntries(
   legacy: readonly LegacyDmSwitcherSource[],
@@ -323,8 +278,7 @@ export function buildDmSwitcherEntries(
       continue;
     }
     current.mine ||= row.mine;
-    // Legacy wins a timestamp tie, matching the DMs page's merge. The id is
-    // irrelevant to a conversation destination; only its newest time orders it.
+    // Legacy wins a timestamp tie, matching the DMs page's merge.
     if (row.latest.createdAt > current.createdAt) {
       current.createdAt = row.latest.createdAt;
       current.peers = row.peers.slice();
@@ -345,9 +299,7 @@ export function buildDmSwitcherEntries(
 
   const out: DmSwitcherEntry[] = [];
   for (const entry of byKey.values()) {
-    // A started marker bypasses Requests only when it is the SOLE source of
-    // the row. If real message history exists, DMsPage deliberately trust-
-    // splits that conversation as usual; an old marker must not promote it.
+    // A started marker bypasses Requests only when it's the row's sole source.
     const deliberate = entry.key === opts.self || synthesized.has(entry.key);
     if (
       !deliberate &&
@@ -362,8 +314,7 @@ export function buildDmSwitcherEntries(
         route: chatRoute({ kind: "dm", peer: dmRouteParam(entry.key) }),
       });
     } catch {
-      // Synced settings are user-controlled strings. A malformed stale key
-      // should cost one launcher row, never make Ctrl+K fail to open.
+      // Malformed synced key: drop the row rather than break Ctrl+K.
     }
   }
 
@@ -373,11 +324,7 @@ export function buildDmSwitcherEntries(
   });
 }
 
-/**
- * The route for the previous/next channel (`dir` = -1/+1, wrapping) within the
- * space of the current `pathname`, or null when the path isn't a channel view
- * or the space has no loaded channels. Shared by Alt+↑/↓.
- */
+/** Route for the previous/next channel (wrapping) in the current space, or null. */
 export async function nextChannelRoute(
   pathname: string,
   dir: 1 | -1,
@@ -400,25 +347,12 @@ export async function nextChannelRoute(
   return null;
 }
 
-// ── Message search ─────────────────────────────────────────────────────────────
-//
-// The palette's spaces + channels are a query-independent snapshot (cmdk fuzzy-
-// filters them client-side). Messages can't work that way — there are far too
-// many to preload — so message search is query-DRIVEN: the component runs this
-// against the local, already-decrypted stores as the user types. Every corpus is
-// on-device (Concord chat is E2E-encrypted; NIP-29 timelines and DM rumors are
-// persisted at rest), so this never hits the network or prompts the signer. The
-// channel routes come from the same {@link SwitcherEntries} the palette already
-// built, so a hit navigates straight to its channel/DM.
+// Message search is query-driven over the local, already-decrypted stores
+// (never network or signer); hits map to routes via the palette's SwitcherEntries.
 
 /**
- * A message that matched the palette's search, resolved to its channel/DM.
- *
- * Author + DM-conversation identities are carried as PUBKEYS, not resolved names:
- * the view renders them through the shared {@link DisplayName}/`useAuthor`
- * components, so message rows get the same cached, emoji-aware, per-server
- * nicknamed identity (and network fallback) as everywhere else — no bespoke
- * profile lookup here.
+ * A matched message. Identities are PUBKEYS; the view renders them through
+ * `useAuthor`/{@link DisplayName}.
  */
 export interface MessageEntry {
   /** Unique across the palette: `msg:<rumor/event id>`. */
@@ -431,11 +365,7 @@ export interface MessageEntry {
   route: string;
   /** `created_at` (seconds) — for the "when" label and newest-first ordering. */
   createdAt: number;
-  /**
-   * Where the match lives. Channel hits carry a ready `#channel · Space` label;
-   * DM hits leave it unset and set {@link dmPeers} so the view renders the
-   * conversation's live name.
-   */
+  /** Channel hits: `#channel · Space`. DM hits leave it unset and set {@link dmPeers}. */
   source?: string;
   /** Canonical DM participant-set key, when the hit is a direct message. */
   dmConversationKey?: string;
@@ -443,11 +373,7 @@ export interface MessageEntry {
   dmPeers?: string[];
 }
 
-/**
- * Add a message focus to one of the switcher's canonical conversation routes.
- * Thread roots apply only to room transports; DMs have no thread surface.
- * Exported as a small pure seam for route-regression coverage.
- */
+/** Add a message focus to a canonical route (thread roots only for rooms). */
 export function focusMessageRoute(route: string, messageId: string, threadRoot?: string): string {
   const parsed = parseChatRoute(route);
   if (!parsed) return route;
@@ -481,11 +407,8 @@ async function searchConcordMessages(
 ): Promise<MessageEntry[]> {
   if (byId.size === 0) return [];
 
-  // One search per community: each community's messages live in their own
-  // rumor-store tenant, so this can't be a single scan across every channel id
-  // any more. `PER_CORPUS_LIMIT` therefore caps matches per COMMUNITY rather
-  // than across all of Concord — the caller's merged newest-first slice is what
-  // bounds the final list either way.
+  // One search per community (each is its own rumor-store tenant), so
+  // PER_CORPUS_LIMIT caps per community.
   const byCommunity = new Map<string, string[]>();
   for (const ch of byId.values()) {
     if (!ch.communityIdHex) continue;
@@ -528,11 +451,7 @@ async function searchNip29Messages(
   if (byId.size === 0) return [];
   const store = await eventStore;
 
-  // One scan per relay, for the same reason Concord scans per community: each
-  // relay's messages live in their own tenant, because a group id is only
-  // meaningful on the relay hosting it. `NIP29_SCAN_LIMIT` therefore caps the
-  // scan per RELAY rather than across all of NIP-29 — the caller's merged
-  // newest-first slice is what bounds the final list either way.
+  // One scan per relay (per-relay tenants), so NIP29_SCAN_LIMIT caps per relay.
   const byRelay = new Map<string, string[]>();
   for (const ch of byId.values()) {
     if (!ch.relayUrl) continue;
@@ -600,23 +519,14 @@ async function searchDmMessages(
 }
 
 /**
- * Which message corpora {@link searchSwitcherMessages} scans:
- *   - `all`      — channel/community chat AND DMs (the default);
- *   - `channels` — channel/community chat only (Concord + NIP-29);
- *   - `dms`      — direct messages only.
- * Narrowing runs FEWER corpora, so the whole `limit` goes to the wanted kind —
- * picking DMs surfaces DM matches even when channel chatter would bury them.
+ * Which corpora {@link searchSwitcherMessages} scans. Narrowing gives the whole
+ * `limit` to the wanted kind.
  */
 export type MessageScope = "all" | "channels" | "dms";
 
 /**
- * Search the on-device message corpora — Concord chat, NIP-29 timelines and DM
- * history — for `query`, newest-first, capped at `limit`. `channels` is the
- * palette's already-loaded channel list: it both scopes the scan (only channels
- * the app has loaded are searchable) and maps each hit back to a navigable
- * route. `scope` narrows which corpora run. Author/partner names + avatars are
- * left to the view (rendered via the shared `useAuthor`/{@link DisplayName}).
- * Returns [] for a blank query.
+ * Search on-device Concord, NIP-29 and DM history for `query`, newest-first,
+ * capped at `limit`. Only the palette's loaded `channels` are searchable.
  */
 export async function searchSwitcherMessages(
   query: string,
@@ -637,8 +547,6 @@ export async function searchSwitcherMessages(
   const wantChannels = scope !== "dms";
   const wantDms = scope !== "channels";
 
-  // Split loaded channels by transport (route prefix) and index by channel id,
-  // so a matched message resolves to its channel's name + route.
   const concordById = new Map<string, ChannelEntry>();
   const nip29ById = new Map<string, ChannelEntry>();
   for (const c of channels) {

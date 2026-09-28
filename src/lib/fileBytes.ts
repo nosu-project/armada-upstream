@@ -1,11 +1,4 @@
-/**
- * Byte/filename plumbing shared by the save-to-device and share-a-file paths.
- *
- * Lives apart from either so `share.ts` and `downloadFile.ts` can both use it
- * without importing each other (`downloadFile` already falls back to
- * `share.openUrl`, and a cycle back the other way is a trap waiting to spring
- * on module-init order).
- */
+// Shared by share.ts and downloadFile.ts so neither imports the other (avoids a module-init cycle).
 
 /** Human-readable byte size (1024-based). Empty string for a non-size. */
 export function formatBytes(bytes: number | undefined): string {
@@ -61,15 +54,9 @@ export function extForMime(mime: string | undefined): string {
 }
 
 /**
- * Identify a bitmap from its leading bytes.
- *
- * The DECLARED type is routinely absent here: an `imeta` often carries no `m`
- * tag, a Blossom URL is a bare hash with no extension, and a decrypted
- * attachment's Blob inherits that same nothing as `application/octet-stream`
- * (see `encryptedMedia.ts`). A file handed to a share sheet untyped and
- * extensionless previews as a generic document rather than a thumbnail, and
- * some targets refuse it outright — so where the metadata is silent, ask the
- * bytes, which are already in memory by then.
+ * Identify a bitmap from its leading bytes. The declared type is often missing
+ * (no `m` tag, extensionless Blossom URL), and untyped files preview badly or
+ * are refused by share targets.
  */
 export function sniffImageMime(bytes: Uint8Array): string | undefined {
   const ascii = (start: number, len: number) =>
@@ -87,16 +74,9 @@ export function sniffImageMime(bytes: Uint8Array): string | undefined {
 }
 
 /**
- * Reduce an untrusted string to a bare filename — never a path.
- *
- * Every name that reaches a `Filesystem.writeFile` here is attacker-controlled
- * (a sender's `imeta` `name`, or a URL segment they chose), and neither native
- * filesystem plugin normalizes or containment-checks the path it is handed:
- * both join it onto the base directory and let `open(2)` resolve any `..`. So
- * separators, control characters and leading dots are removed HERE, where the
- * name is derived, rather than trusted to a layer below. Length is capped so a
- * name cannot fail the write by exceeding the filesystem's limit. Returns a
- * safe fallback when nothing usable remains.
+ * Reduce an untrusted string to a bare, length-capped filename — never a path.
+ * Native filesystem plugins don't containment-check paths, so `..`, separators,
+ * control chars and leading dots are stripped here.
  */
 export function safeFilename(name: string | undefined): string {
   if (!name) return "download";
@@ -111,17 +91,9 @@ export function safeFilename(name: string | undefined): string {
 }
 
 /**
- * Derive a sensible filename from a URL (and optional MIME hint).
- *
- * Uses the last non-empty path segment (query string stripped). `blob:` and
- * hash-only URLs have no usable name, so fall back to a generic one and, when
- * the segment carries no extension, append one inferred from the MIME.
- *
- * The segment is run through {@link safeFilename}, because percent-decoding
- * RE-INTRODUCES separators the URL parser had left encoded: WHATWG parsing pops
- * only literal `..` segments, so `%2e%2e%2f` survives in `pathname` byte for
- * byte and `decodeURIComponent` turns it back into `../`. For media this
- * URL-derived name is the only name there is.
+ * Filename from a URL's last path segment (plus MIME-derived extension if
+ * missing). Goes through {@link safeFilename} because percent-decoding can
+ * reintroduce `../` that URL parsing left encoded.
  */
 export function filenameFromUrl(url: string, mime?: string): string {
   let base = "download";

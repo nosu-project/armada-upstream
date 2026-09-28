@@ -1,43 +1,21 @@
 /**
  * Concord stream-key NIP-42 authentication.
  *
- * Every Concord plane is kind-1059 traffic addressed to a DERIVED per-stream pubkey
- * (control, guestbook, per-channel, dissolved, rekey) — never the user's own
- * identity. Relays that gate kind 1059 behind NIP-42 (e.g. ditto-relay's
- * default `AUTH_KINDS=4,1059`) require that EVERY `authors` entry in a
- * kind-1059 REQ be an authenticated pubkey on the connection. The user's login
- * can't satisfy that: the stream address isn't their pubkey.
+ * Concord planes are kind-1059 traffic authored by DERIVED stream pubkeys, and
+ * relays gating 1059 behind NIP-42 (e.g. ditto-relay `AUTH_KINDS=4,1059`) require
+ * every `authors` entry to be authenticated. The client holds the stream secrets,
+ * so {@link NostrProvider} signs an extra kind-22242 per registered key on each
+ * challenge. ditto-relay keeps a per-connection set and a socket-lifetime
+ * challenge, so late keys can still AUTH; acks (`["OK", id, true]`) are tracked
+ * per relay so sweeps gate deterministically (frames are processed in parallel,
+ * so un-acked AUTH→REQ can race).
  *
- * The fix: the client holds the stream SECRET keys (they live in the
- * community_root / channel keys it derives), so it can NIP-42-authenticate AS
- * each stream. This module is the registry of stream keys the client currently
- * holds; {@link NostrProvider}'s AUTH handler signs an extra kind-22242 event
- * per registered key on the same challenge, so the connection ends up
- * authenticated as the user AND every stream it will query.
+ * Keys are scoped to their community's relays (unscoped = sign everywhere):
+ * each Schnorr sign costs ~4ms and unscoped registries burned 1.5-2s per
+ * challenge (see streamAuth.perf.test.ts).
  *
- * ditto-relay keeps a per-connection SET of authenticated pubkeys and its
- * challenge stays valid for the socket's whole lifetime, so a key registered
- * AFTER the challenge can still authenticate on the live socket — the client
- * just signs and sends another AUTH frame (verified empirically against the
- * real ditto-relay over a live socket). The relay acks every AUTH with
- * `["OK", id, true]`; this module also tracks those acks per relay, giving
- * sweeps a deterministic "these authors are authenticated on this socket"
- * signal instead of a timing heuristic. (The relay processes frames in
- * parallel, so an un-acked AUTH→REQ pipeline can race — hence ack-gating,
- * not send-and-hope.)
- *
- * Keys register with the RELAYS their community lives on, and a challenge
- * signs only the keys scoped to that relay (a key registered without relays is
- * unscoped and signs everywhere — the safe fallback). This matters: a Schnorr
- * signature costs ~4ms (phones 5-10x slower), a multi-community registry holds
- * hundreds of keys, and every socket (re)open earns a fresh challenge —
- * unscoped, one challenge burned 1.5-2s of main-thread signing per relay (see
- * streamAuth.perf.test.ts) for keys the relay would never see queried.
- *
- * Imported by only two shared files
- * (NostrProvider for the WebView's own sockets, useNativeNotifications for
- * the Android service's bridged AUTH challenges) so the concord tree stays
- * independently deletable.
+ * Imported only by NostrProvider and useNativeNotifications so the concord tree
+ * stays independently deletable.
  */
 
 import { finalizeEvent, getEventHash } from "nostr-tools/pure";
@@ -50,19 +28,12 @@ import type { SignJob } from "@/lib/verifyWorkerTypes";
 
 interface StreamKeyEntry {
   /**
-   * The stream secret key that authenticates this pubkey — absent for an
-   * ADDRESS-ONLY registration: a split Control Plane's `control_pk` is held
-   * by every member, but its signing secret only by staff (CORD-02 §2), so a
-   * regular member can never answer a NIP-42 challenge for it. The address is
-   * still registered so subscription builders and the auth gate know it is
-   * accounted for rather than "not yet registered".
+   * The stream secret — absent for an ADDRESS-ONLY registration (a split
+   * `control_pk`, whose secret only staff hold, CORD-02 §2). Still registered so
+   * the auth gate counts it as accounted for.
    */
   sk?: Uint8Array;
-  /**
-   * Normalized relay URLs whose challenges this key signs; `undefined` means
-   * unscoped — sign on EVERY relay (pre-scoping behavior, the safe fallback
-   * for callers that don't know their community's relays).
-   */
+  /** Normalized relay URLs whose challenges this key signs; `undefined` = unscoped (everywhere). */
   relays?: Set<string>;
 }
 
@@ -80,20 +51,14 @@ function normalizeScope(relays?: string[]): Set<string> | undefined {
     const n = normalizeRelayUrl(r);
     if (n) out.add(n);
   }
-  // An empty/garbage relay list must not silently scope a key to NOWHERE —
-  // fall back to unscoped so the stream can still authenticate.
+  // An empty/garbage relay list falls back to unscoped rather than NOWHERE.
   return out.size > 0 ? out : undefined;
 }
 
 /**
- * Register a batch of stream keys (idempotent), scoped to the relays their
- * community lives on. Returns the pubkeys that were NEWLY added or whose
- * relay scope WIDENED (a new relay, or scoped → unscoped), so the caller can
- * trigger a re-auth only when a challenged socket might be missing coverage.
- *
- * Scopes only ever widen: re-registering with fewer relays never narrows an
- * existing key (a second community sharing a channel key on other relays must
- * not lose its coverage).
+ * Register stream keys (idempotent) scoped to `relays`. Returns pubkeys newly
+ * added or whose scope WIDENED, so the caller re-auths only when needed. Scopes
+ * only widen (a shared key on another community's relays keeps its coverage).
  */
 export function registerStreamKeys(keys: StreamKeyView[], relays?: string[]): string[] {
   const scope = normalizeScope(relays);
@@ -105,8 +70,7 @@ export function registerStreamKeys(keys: StreamKeyView[], relays?: string[]): st
       changed.push(k.pk);
       continue;
     }
-    // An address registered without its secret gains one the moment a holder
-    // registers it (a staffer adopting the control_root upgrades in place).
+    // A staffer adopting the control_root upgrades an address-only entry in place.
     if (existing.sk === undefined && k.sk !== undefined) {
       existing.sk = k.sk;
       changed.push(k.pk);
@@ -151,19 +115,12 @@ export function streamPubkeysForRelay(relayUrl: string): string[] {
 }
 
 /**
- * The keys a re-auth of `relayUrl` has to send: scoped to it, holding a secret,
- * and not yet acked on the live socket.
- *
- * The self-heal below fires while ANY key is unacked, so re-signing the whole
- * scoped set to reach it priced one lost `OK` at a few hundred signatures every
- * {@link AUTH_STALE_MS} for the socket's life. An acked key is already in the
- * relay's per-connection authenticated set; re-proving it proves nothing.
- * A key whose AUTH never left the socket is unacked too, hence included.
+ * Keys a re-auth of `relayUrl` must send: scoped, holding a secret, not yet acked.
+ * Re-signing already-acked keys on each stale wave cost hundreds of signatures.
  */
 export function unackedStreamPubkeys(relayUrl: string): string[] {
   const state = relayAuth.get(normalizeRelayUrl(relayUrl) ?? relayUrl);
   return streamPubkeysForRelay(relayUrl).filter((pk) => {
-    // Address-only (no secret): unsendable rather than pending.
     if (registry.get(pk)?.sk === undefined) return false;
     return !state?.acked.has(pk);
   });
@@ -180,14 +137,9 @@ export function onStreamKeysAdded(listener: Listener): () => void {
 }
 
 /**
- * Sign the NIP-42 AUTH events for the registered stream keys scoped to
- * `relayUrl` (or an explicit subset) against `challenge`. Signing is local
- * (raw secret keys), so this never touches the user's signer / bunker.
- * Returns the kind-22242 events to send on the connection.
- *
- * Each signature is ~4ms of main-thread EC work — for anything beyond the one
- * key NostrProvider answers a slow bunker with, use
- * {@link signStreamAuthsChunked}, which signs in the worker pool.
+ * Sign NIP-42 AUTH events for the stream keys scoped to `relayUrl` (or a subset)
+ * locally — never touches the user's signer. ~4ms per signature on the main
+ * thread; for more than one key use {@link signStreamAuthsChunked}.
  */
 export function signStreamAuths(
   challenge: string,
@@ -216,32 +168,14 @@ function unsignedAuth(challenge: string, relayUrl: string, createdAt: number) {
   };
 }
 
-/**
- * Keys per pool round in {@link signStreamAuthsChunked}. Each round's events
- * are yielded (and sent) as soon as it returns, so a large registry
- * authenticates progressively rather than all at once at the end.
- */
+/** Keys per pool round in {@link signStreamAuthsChunked}; each round is yielded as it returns. */
 const SIGN_BATCH = 64;
 
 /**
- * Like {@link signStreamAuths}, but signs OFF the main thread: the event ids
- * are hashed here (microseconds), and the Schnorr signatures — each a sign
- * plus @noble's self-verify, the ~4ms — come from the EC worker pool
- * (`verifyPool.ts`, `ecSignBatch`), inline and time-sliced only where a
- * `Worker` can't run. Yields the signed events in batches; the caller sends
- * each as it arrives (a NIP-42 AUTH is valid whenever it lands on the live
- * challenge) and can stop iterating if the challenge dies mid-flight (socket
- * reopened).
- *
- * The pubkey goes into the event straight from the registry rather than being
- * recomputed from the secret (what `finalizeEvent` does): a stream key's pk is
- * derived from its sk at registration, and a mismatch could only yield a
- * signature the relay rejects, never one it wrongly accepts.
- *
- * The previous form signed in fixed chunks of 16 with an event-loop turn
- * between them, which bounded nothing: each chunk was still ~64ms of
- * uninterruptible main-thread work (several hundred on a phone), and a
- * community switch profiled at ~1.6s of it in total.
+ * Like {@link signStreamAuths}, but Schnorr-signs in the EC worker pool
+ * (`verifyPool.ts`, `ecSignBatch`), yielding batches for the caller to send as
+ * they arrive (stop iterating if the challenge dies). The pubkey comes from the
+ * registry rather than re-derived; a mismatch could only produce a rejected sig.
  */
 export async function* signStreamAuthsChunked(
   challenge: string,
@@ -278,14 +212,9 @@ export function _resetStreamAuthRegistry(): void {
   relayAuth.clear();
 }
 
-// ── Per-relay AUTH ack state ─────────────────────────────────────────────────
-//
-// ditto-relay acks every accepted kind-22242 with `["OK", <id>, true]` and adds
-// the pubkey to the connection's authenticated set. NostrProvider feeds those
-// acks in here; plane sweeps gate on them (`streamAuthsSettled`) so a REQ only
-// flies once the relay has CONFIRMED its authors — deterministic, no settle
-// timers. State is per live socket: a reopened socket is a fresh
-// unauthenticated session, so NostrProvider resets it on reconnect.
+// Per-relay AUTH ack state: NostrProvider feeds ditto-relay's `["OK", id, true]`
+// acks in here and sweeps gate on them (`streamAuthsSettled`). Per live socket;
+// reset on reconnect.
 
 interface RelayAuthState {
   /** Whether this relay has issued a NIP-42 challenge on the live socket. */
@@ -302,13 +231,10 @@ interface RelayAuthState {
 const relayAuth = new Map<string, RelayAuthState>();
 
 /**
- * How long a challenged-but-not-fully-acked relay stays "unsettled" before the
- * self-heal kicks in. Longer than plane sweeps' auth-wait cap (8s) so a merely
- * slow ack still wins the race; past it we assume an AUTH frame or its OK was
- * lost (dropped send, half-open socket, ack that raced the listener attach) and
- * stop blocking sweeps forever — instead firing a re-auth so the relay can
- * recover WITHOUT an app restart (the old failure mode: only a socket reopen
- * cleared the stuck state, and a half-open socket never reopens).
+ * How long a challenged-but-not-fully-acked relay stays "unsettled" before
+ * self-heal. Longer than the sweep auth-wait cap (8s) so slow acks win; past it
+ * we assume a lost AUTH/OK and re-auth on the live socket (half-open sockets
+ * never reopen on their own).
  */
 const AUTH_STALE_MS = 12_000;
 
@@ -317,10 +243,8 @@ type ReauthListener = (url: string) => void;
 const reauthListeners = new Set<ReauthListener>();
 
 /**
- * Subscribe to auth-stale events: fired for a relay that has been challenged
- * but hasn't fully acked its stream AUTHs within {@link AUTH_STALE_MS}. The
- * listener (NostrProvider) re-signs and re-sends the stream AUTH frames on the
- * live socket. Returns an unsubscribe.
+ * Subscribe to auth-stale events (relay challenged, AUTHs not fully acked within
+ * {@link AUTH_STALE_MS}); NostrProvider re-sends. Returns an unsubscribe.
  */
 export function onStreamAuthStale(listener: ReauthListener): () => void {
   reauthListeners.add(listener);
@@ -364,32 +288,20 @@ export function noteAuthResult(url: string, eventId: string, ok: boolean): void 
 }
 
 /**
- * Whether a REQ authored by `pubkeys` would pass `url`'s NIP-42 gate right
- * now: either the relay never challenged this socket (not auth-gating, or the
- * lazy challenge hasn't fired — the REQ itself will trigger it and NRelay1's
- * auth-retry covers that round), or every pubkey's AUTH has been acked.
+ * Whether a REQ by `pubkeys` would pass `url`'s NIP-42 gate now: the socket was
+ * never challenged (NRelay1's auth-retry covers a lazy challenge), or every AUTH
+ * is acked.
  *
- * SELF-HEAL: if the relay was challenged but some pubkey is still unacked past
- * {@link AUTH_STALE_MS}, an AUTH frame or its OK was almost certainly lost. We
- * stop reporting unsettled (so sweeps/backfills stop burning the auth-wait cap
- * on every call — the old wedge that made sync "die" until an app restart) and
- * fire a re-auth so the relay can actually recover on the LIVE socket. The
- * challenge window is re-armed so a single stale detection triggers one re-auth
- * wave, not a storm.
- *
- * The wave RECURS while the key stays unacked (a permanently lost OK looks like
- * a slow one), which is why the listener re-signs only
- * {@link unackedStreamPubkeys}: the recurrence is deliberate, the per-wave cost
- * was not.
+ * SELF-HEAL: past {@link AUTH_STALE_MS} with keys unacked, report settled (so
+ * sync doesn't wedge) and fire one re-auth wave, re-arming the window. Waves
+ * recur while unacked, hence re-signing only {@link unackedStreamPubkeys}.
  */
 export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): boolean {
   const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
   if (!state?.challenged) return true;
   let allAcked = true;
   for (const pk of pubkeys) {
-    // An address-only registration (a split control_pk without its staff
-    // secret) can never be authenticated by this client — there is no AUTH to
-    // wait for, so it must not hold every sweep at the stale-timer forever.
+    // Address-only keys can never be authenticated here, so don't wait on them.
     const entry = registry.get(pk);
     if (entry !== undefined && entry.sk === undefined) continue;
     if (!state.acked.has(pk)) {
@@ -398,12 +310,9 @@ export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): bool
     }
   }
   if (allAcked) return true;
-  // Not fully acked. If we're still inside the fresh-challenge window, keep
-  // waiting (a slow-but-live ack should win). Past the window, self-heal.
+  // Inside the fresh-challenge window, keep waiting; past it, self-heal.
   if (Date.now() - state.challengedAt < AUTH_STALE_MS) return false;
-  // Re-arm the window so the re-auth we trigger gets its own fresh grace period
-  // (and a subsequent settled check waits for the new AUTHs rather than firing
-  // another re-auth immediately).
+  // Re-arm so the triggered re-auth gets its own grace period.
   state.challengedAt = Date.now();
   const key = normalizeRelayUrl(url) ?? url;
   for (const l of reauthListeners) l(key);

@@ -4,11 +4,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 import type { ChatMsg, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
-/**
- * Lazy shell for the zap dialog: the trigger (a toolbar button) renders with
- * zero cost, and the payment machinery (@getalby/sdk, bolt11 decoding, QR)
- * loads only when a dialog actually opens.
- */
+/** Lazy shell: payment machinery (@getalby/sdk, bolt11, QR) loads only when a dialog opens. */
 const LazyZapDialogImpl = lazy(() => import("@/components/chat/ZapDialogImpl"));
 
 export interface ZapDialogProps {

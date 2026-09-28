@@ -15,8 +15,7 @@ interface WaterSample {
   strength: number;
 }
 
-/** A single swath of disturbed water following the hull's actual path. The
- * surface carries advected turbulence; there are no individual wave shapes. */
+/** Wake swath following the hull's actual path. */
 export function createSailingWake() {
   const geometry = new THREE.BufferGeometry();
   const vertices = ROWS * (COLUMNS + 1);
@@ -135,8 +134,6 @@ export function createSailingWake() {
       if (history.length > ROWS - 1) history.pop();
     }
 
-    // The live end meets the stern; older cross-sections stay in the water.
-    // A stopped ship adds nothing, leaving the entire existing trail to decay.
     const rows = history.length + (moving ? 1 : 0);
     for (let row = 0; row < rows; row++) {
       const sample = moving ? (row === 0 ? stern : history[row - 1]) : history[row];
@@ -157,6 +154,6 @@ export function createSailingWake() {
     positions.needsUpdate = waterState.needsUpdate = flow.needsUpdate = true;
   }
 
-  // The scene owns surface disposal, alongside its other meshes.
+  // The scene disposes the surface.
   return { surface, update };
 }

@@ -5,9 +5,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import type {
   ProjectRepo,
-  ProjectRepoSummary,
   ProjectWorkItem,
-  ProjectWorkKind,
   ProjectWorkStatus,
 } from "@/components/projects/projectData";
 
@@ -19,11 +17,8 @@ export const KIND_ISSUE = 1621;
 export const STATUS_KINDS = [1630, 1631, 1632, 1633];
 
 export type BuzzRepo = ProjectRepo;
-export type BuzzWorkKind = ProjectWorkKind;
 export type BuzzWorkStatus = ProjectWorkStatus;
 export type BuzzWorkItem = ProjectWorkItem;
-export type BuzzRepoSummary = ProjectRepoSummary;
-
 export { activityByDay, dayKey, projectPeople, repoSummaries } from "@/components/projects/projectData";
 
 function parseRepo(event: NostrEvent): BuzzRepo | undefined {
@@ -44,7 +39,6 @@ function parseRepo(event: NostrEvent): BuzzRepo | undefined {
   };
 }
 
-/** The relay's repo announcements (kind 30617), newest per (owner, d). */
 export function useBuzzRepos(relayUrl: string | undefined, enabled = true) {
   const { nostr } = useNostr();
   return useQuery<BuzzRepo[]>({
@@ -81,10 +75,8 @@ function toStatus(kind: number | undefined): BuzzWorkStatus {
 }
 
 /**
- * Every issue (1621), patch (1617) and PR (1618) on the relay, each resolved to
- * its latest status (1630–1633). One relay-wide scan feeds the whole Projects
- * view — overview counts, the contribution graph, the activity feed and the
- * per-tab lists — so cards and tabs don't each re-query.
+ * Every issue (1621), patch (1617) and PR (1618) on the relay with its latest
+ * status (1630–1633). One relay-wide scan feeds the whole Projects view.
  */
 export function useBuzzWorkItems(relayUrl: string | undefined, enabled = true) {
   const { nostr } = useNostr();

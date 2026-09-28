@@ -1,21 +1,10 @@
 import type { NostrEvent, NostrFilter } from "@nostrify/types";
 
 /**
- * Dev-only console logging of every outgoing Nostr REQ (subscription/query) and
- * published event, so you can audit what the site fetches on pageload and hunt
- * for redundant / over-broad queries that waste bandwidth.
- *
- * Toggle at runtime with `localStorage.debugNostr = '1'` (or `'0'` to silence);
- * defaults on in dev builds.
- *
- * Wired into two chokepoints so *all* traffic is captured:
- * - `NostrProvider` reqRouter/eventRouter — pool-routed generic traffic.
- * - `NostrBatcher.wrapCaching` — `relay(url)` / `group(urls)` handles, which
- *   bypass the pool router (NIP-29 chat, DMs, Concord — the high-volume paths).
- *
- * For a ranked overview instead of scrolling the per-REQ log, run
- * `__nostrReport()` in the console (aggregates by signature / kind / via and
- * flags duplicates + zero-relay queries).
+ * Dev-only logging of every outgoing REQ and published event, to audit
+ * redundant queries. Toggle with `localStorage.debugNostr = '1'|'0'` (on by
+ * default in dev). Hooked into `NostrProvider`'s routers and
+ * `NostrBatcher.wrapCaching`. Run `__nostrReport()` for a ranked summary.
  */
 
 let seq = 0;
@@ -32,12 +21,7 @@ interface ReqRecord {
 }
 const records: ReqRecord[] = [];
 
-/**
- * The `debugNostr` toggle, re-read at most once a second: `enabled()` runs on
- * EVERY outgoing REQ, and a synchronous `localStorage.getItem` per call showed
- * up in boot profiles. The TTL keeps the console toggle live without the
- * per-REQ storage hit.
- */
+/** `debugNostr`, re-read at most once a second (a getItem per REQ showed up in boot profiles). */
 let enabledCache: { value: boolean; at: number } | undefined;
 
 function enabled(): boolean {
@@ -87,7 +71,6 @@ function signature(relays: string[], filters: NostrFilter[]): string {
   return `${[...relays].sort().join(",")}|${norm.join("|")}`;
 }
 
-/** Log an outgoing REQ (subscription or one-shot query). */
 export function logNostrReq(relays: string[], filters: NostrFilter[], via: string): void {
   if (!enabled()) return;
   const sig = signature(relays, filters);
@@ -116,7 +99,6 @@ export function logNostrReq(relays: string[], filters: NostrFilter[], via: strin
   console.groupEnd();
 }
 
-/** Log an outgoing published event. */
 export function logNostrEvent(relays: string[], event: NostrEvent): void {
   if (!enabled()) return;
   const n = ++seq;
@@ -128,19 +110,13 @@ export function logNostrEvent(relays: string[], event: NostrEvent): void {
   );
 }
 
-/**
- * Print a ranked aggregate of every REQ seen so far. Call from the console:
- *   __nostrReport()
- * Groups by (via + filter shape) so you can see which queries fire most, which
- * are exact duplicates, which hit zero relays, and the breakdown by kind.
- */
+/** Console `__nostrReport()`: REQs grouped by via + filter shape, with duplicates, zero-relay queries and per-kind counts. */
 function nostrReport(): void {
   if (records.length === 0) {
     console.log("[nostr report] no REQs recorded yet");
     return;
   }
 
-  // 1. Total + duplicate summary.
   const dupSigs = [...seen.entries()].filter(([, v]) => v.count > 1);
   const dupTotal = dupSigs.reduce((s, [, v]) => s + (v.count - 1), 0);
   const dead = records.filter((r) => r.relays.length === 0).length;
@@ -150,7 +126,6 @@ function nostrReport(): void {
     "color:inherit",
   );
 
-  // 2. Ranked by exact-duplicate signature (relays + filters identical).
   const bySig = new Map<string, { count: number; via: string; relays: string[]; desc: string }>();
   for (const r of records) {
     const e = bySig.get(r.sig);
@@ -168,13 +143,11 @@ function nostrReport(): void {
   console.log("%cIdentical queries (relays+filters), most repeated first:", "font-weight:bold");
   console.table(dupRows);
 
-  // 3. Breakdown by via (routing scope).
   const byVia = new Map<string, number>();
   for (const r of records) byVia.set(r.via, (byVia.get(r.via) ?? 0) + 1);
   console.log("%cBy scope (via):", "font-weight:bold");
   console.table([...byVia.entries()].sort((a, b) => b[1] - a[1]).map(([via, count]) => ({ via, count })));
 
-  // 4. Breakdown by kind requested (a REQ counts once per kind it asks for).
   const byKind = new Map<number, number>();
   for (const r of records) {
     const kinds = new Set<number>();
@@ -193,7 +166,6 @@ function nostrReportReset(): void {
   console.log("[nostr report] reset");
 }
 
-// Expose on window for interactive use in dev.
 if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__nostrReport = nostrReport;
   (window as unknown as Record<string, unknown>).__nostrReportReset = nostrReportReset;

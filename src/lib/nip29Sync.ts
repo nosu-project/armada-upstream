@@ -1,23 +1,11 @@
 /**
- * NIP-29 group timeline pull — the `nip29:` sync-topic handler.
+ * NIP-29 group timeline pull — the `nip29:` sync-topic handler. The wire
+ * delivers live messages; this fills history outside its `since` window and
+ * heals dead sockets. The scheduler decides WHEN; this module only knows HOW.
  *
- * The wire delivers LIVE messages to the store; this pull exists for history
- * the wire's `since` window never covered (first visit, deep offline gaps)
- * and to heal a dead socket. It used to run inside `useGroupMessages`'
- * queryFn behind a per-mount 30s ref — the sync scheduler now owns WHEN
- * (durable freshness stamp, min-interval, focus/online nudges); this module
- * only knows HOW.
- *
- * A round is one newest-page query against the group's relay. The results are
- * mirrored into the relay-scoped tenant HERE, awaited, before the bus rings —
- * the batcher's write-through cache mirrors them too, but fire-and-forget,
- * and a bus ring racing that write would re-read the store before the new
- * rows landed. The store de-duplicates by id, so the double write costs
- * nothing.
- *
- * Topics are `nip29:<relayUrl>|<groupId>` — the relay is part of the topic
- * (a group id means nothing without its relay; see `relayScope.ts`) — while
- * the bus scope stays `nip29:<groupId>`, matching what wire ingest emits.
+ * Results are written to the relay-scoped tenant and awaited BEFORE ringing
+ * the bus, so the re-read sees them (the batcher's mirror is fire-and-forget).
+ * Topics are `nip29:<relayUrl>|<groupId>`; the bus scope is `nip29:<groupId>`.
  */
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -36,18 +24,16 @@ interface NostrLike {
 /** NIP-88 poll kind — polls posted to the group render in the timeline. */
 const KIND_POLL = 1068;
 
-/** Event kinds shown in a group timeline. */
 export const NIP29_TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
 
 /** How many messages to fetch per page (newest-page pull and each backfill). */
 export const NIP29_PAGE_SIZE = 30;
 
-/** The sync-topic key for one group on one relay. */
 export function nip29SyncTopic(relayUrl: string, groupId: string): string {
   return `nip29:${relayUrl}|${groupId}`;
 }
 
-/** What a round needs beyond the topic string. Registered by the live view. */
+/** Registered by the live view. */
 export interface Nip29SyncContext {
   nostr: NostrLike;
 }
@@ -66,11 +52,8 @@ export function setNip29SyncContext(topic: string, ctx: Nip29SyncContext): () =>
 }
 
 /**
- * Whether the last round's newest page came back FULL — the relay likely has
- * older history past it, so the timeline's scroll-up affordance should show.
- * Session-scoped: it regenerates on the first round after launch, and an
- * unknown value just means "assume more until a `loadOlder` probe says
- * otherwise" (the pre-scheduler default).
+ * Whether the last newest page came back full (older history likely exists).
+ * Session-scoped; unknown means "assume more".
  */
 const lastPullFull = new Map<string, boolean>();
 
@@ -83,8 +66,7 @@ registerSyncTopic("nip29:", {
   staleAfterMs: 60_000,
   handler: async ({ topic, signal }) => {
     const ctx = contexts.get(topic);
-    // Context is registered before the want (same hook, earlier effect), so a
-    // miss is an ordering bug — fail the run rather than stamping it fresh.
+    // Context is registered before the want, so a miss is an ordering bug.
     if (!ctx) throw new Error(`no nip29 sync context for ${topic}`);
     const key = topic.slice("nip29:".length);
     const sep = key.indexOf("|");
@@ -92,9 +74,7 @@ registerSyncTopic("nip29:", {
     const relayUrl = key.slice(0, sep);
     const groupId = key.slice(sep + 1);
 
-    // A throw here (timeout, dead socket) propagates: the scheduler marks the
-    // topic error and retries with backoff, and the timeline's skeleton gate
-    // releases to the empty state exactly as the old pull's `finally` did.
+    // A throw propagates: the scheduler marks the topic errored and retries with backoff.
     const events = await ctx.nostr.relay(relayUrl).query(
       [{ kinds: NIP29_TIMELINE_KINDS, "#h": [groupId], limit: NIP29_PAGE_SIZE }],
       { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
@@ -103,12 +83,10 @@ registerSyncTopic("nip29:", {
 
     const store = await appEventStore();
     await Promise.all(
-      // Filed under the serving relay (the relay-scoped tenant); per-event
-      // catch so one duplicate/refused row doesn't fail the round.
+      // Per-event catch so one refused row doesn't fail the round.
       events.map((ev) => store.event(ev, { relay: relayUrl }).catch(() => undefined)),
     );
-    // Ring even when nothing new landed: the re-read is cheap, and it is how
-    // the timeline learns the round settled (fresh `hasMore`, released gates).
+    // Ring even when nothing is new: it's how the timeline learns the round settled.
     emitWireScopes([`nip29:${groupId}`]);
   },
 });

@@ -17,7 +17,6 @@ import {
 } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 
-/** A small stacked avatar row for a set of RSVP'd pubkeys. */
 function AttendeeAvatars({ pubkeys, max = 5 }: { pubkeys: string[]; max?: number }) {
   const shown = pubkeys.slice(0, max);
   const extra = pubkeys.length - shown.length;
@@ -48,16 +47,14 @@ function AttendeeAvatar({ pubkey }: { pubkey: string }) {
 
 interface RsvpControlsProps {
   tally: RsvpTally;
-  /** Whether the current user may RSVP (shows the Going/Maybe/Can't-go row). */
   canRsvp: boolean;
   isSettingRsvp: boolean;
   onSet: (status: RsvpStatus) => void;
 }
 
 /**
- * Going / Maybe / Can't-go controls plus the current attendee tallies. Purely
- * presentational — the tally + RSVP setter come from a {@link CalendarTransport}
- * (a relay query for NIP-29, the sealed chat fold for Concord).
+ * Going / Maybe / Can't-go controls plus tallies; data comes from a
+ * {@link CalendarTransport} (relay query for NIP-29, sealed fold for Concord).
  */
 export function RsvpControls({ tally, canRsvp, isSettingRsvp, onSet }: RsvpControlsProps) {
   const { accepted, declined, tentative, mine: myStatus } = tally;
@@ -171,19 +168,12 @@ function RsvpButton({
 interface CalendarEventMessageCardProps {
   event: CalendarEvent;
   tally: RsvpTally;
-  /** Whether the current user may RSVP (membership / write access). */
   canRsvp: boolean;
   isSettingRsvp: boolean;
   onSetRsvp: (status: RsvpStatus) => void;
 }
 
-/**
- * An inline chat card for a calendar event (kind 31922/31923) — the Discord-like
- * "event" embed rendered in the message timeline. Transport-agnostic: the tally
- * and RSVP setter are supplied, so NIP-29 and Concord render the same card
- * (the same events also list in {@link CalendarEventsBar}). Reuses
- * {@link RsvpControls} for the Going/Maybe/Can't-go row + attendee tallies.
- */
+/** Inline timeline card for a calendar event (kind 31922/31923); transport-agnostic. */
 export function CalendarEventMessageCard({
   event,
   tally,
@@ -239,7 +229,6 @@ interface EventDetailDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/** Full detail view of a single calendar event with RSVP controls. */
 export function EventDetailDialog({ calendar, event, open, onOpenChange }: EventDetailDialogProps) {
   const organizer = useAuthor(event?.event.pubkey);
   const organizerName = useScopedDisplayName(event?.event.pubkey, organizer.data?.metadata);

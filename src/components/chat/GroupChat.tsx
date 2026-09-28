@@ -48,9 +48,7 @@ import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { CalendarTransport } from "@/lib/calendar";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** NIP-29 reply context: fetch the replied-to event from the relay, then render
- *  the shared chrome with the author name + a content preview. Clicking jumps
- *  the timeline to the replied-to message. */
+/** NIP-29 reply context: fetches the replied-to event and renders the shared chrome. */
 function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl: string; onJump: (id: string) => void }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
   const author = useAuthor(event?.pubkey);
@@ -88,10 +86,8 @@ interface Nip29ChatMessageProps {
 }
 
 /**
- * NIP-29 binding for a single message. Reactions and threaded-reply counts are
- * resolved ONCE per room (batched) by {@link GroupChat} and read here from the
- * transport via `reactionsFor`/`replyCountFor` — no per-message relay hooks —
- * then rendered through the shared presentational {@link ChatMessage}.
+ * NIP-29 binding for one message. Reactions/reply counts are batched per room by
+ * {@link GroupChat} and read from the transport.
  */
 function Nip29ChatMessage({
   event,
@@ -110,13 +106,8 @@ function Nip29ChatMessage({
   onReply,
 }: Nip29ChatMessageProps) {
   const { config } = useAppContext();
-  // The transport object is rebuilt whenever `messages` changes — on every
-  // arriving message and every backfilled page — so anything derived from it
-  // inline hands ChatMessage a fresh prop identity and defeats its React.memo,
-  // re-rendering the whole mounted window. The per-id accessors already return
-  // identity-stable values; it's the inline arrows and object/element literals
-  // that churn, so those are memoized here and the transport is read through a
-  // ref so the callbacks don't have to depend on its identity.
+  // The transport is rebuilt on every message/page, so memoize derived props and
+  // read it through a ref, or ChatMessage's memo breaks for the whole window.
   const transportRef = useRef(transport);
   transportRef.current = transport;
 
@@ -141,8 +132,7 @@ function Nip29ChatMessage({
       ) : undefined,
     [replyToId, relayUrl, onJumpToReply],
   );
-  // This row is a timeline message, so its link names the room only. Replies
-  // are rendered by ThreadPanel, which supplies its own thread-scoped base.
+  // Timeline rows link to the room; ThreadPanel supplies thread-scoped links.
   const permalink = useMemo(
     () => ({ kind: "nip29", relayUrl, groupId }) as const,
     [relayUrl, groupId],
@@ -186,12 +176,8 @@ function Nip29ChatMessage({
 }
 
 /**
- * A placeholder shaped exactly like {@link ChatComposer}'s input row, shown
- * while membership is still resolving so an actual member never sees the "join
- * to message" prompt flash — and so swapping to the real composer doesn't shift
- * the layout. Mirrors ChatComposer's outer wrapper, `p-2` body, and the
- * `clip-corner-lg bg-secondary/60` input pill (round + button, text line, round
- * action button).
+ * Composer-shaped placeholder while membership resolves, so members never see
+ * the join prompt flash and the swap doesn't shift layout.
  */
 function ComposerSkeleton() {
   return (
@@ -215,36 +201,19 @@ function ComposerSkeleton() {
 interface GroupChatProps {
   relayUrl: string;
   groupId: string;
-  /** Whether the current user can write to this group. */
   canWrite: boolean;
-  /**
-   * Whether membership is still resolving for a logged-in user (tri-state
-   * "unknown"). While true, the composer area shows a skeleton instead of the
-   * "join to message" prompt, so an actual member never sees the join prompt
-   * flash before membership confirms.
-   */
+  /** Membership still resolving (logged in): show a skeleton, not the join prompt. */
   membershipPending?: boolean;
-  /** Whether the current user can moderate (delete messages). */
   canModerate: boolean;
-  /**
-   * The group's NIP-52 calendar events + RSVPs (assembled by GroupPage from the
-   * relay hooks). Its events render inline in the timeline as event cards — the
-   * same events the header's events bar lists.
-   */
+  /** NIP-52 calendar events + RSVPs, rendered inline as event cards. */
   calendar?: CalendarTransport;
-  /**
-   * Active search query. When non-empty, the timeline is replaced by matching
-   * messages (filtered in-place in the chat area, not a separate view).
-   */
+  /** Non-empty: matching messages replace the timeline in place. */
   searchQuery?: string;
 }
 
 /**
- * The message timeline + composer for a NIP-29 group. Messages are kind 9
- * (and kind 1068 polls) with the `h` tag, published only to the group's host
- * relay. NIP-29 data + mutations are assembled here into a {@link ChatTransport}
- * and rendered through the shared {@link MessageTimeline}/{@link ChatMessage}/
- * {@link ChatComposer}, the same components Concord uses.
+ * Timeline + composer for a NIP-29 group (kind 9 / 1068 polls with `h`, host
+ * relay only), assembled into a {@link ChatTransport} for the shared components.
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "" }: GroupChatProps) {
   const { user } = useCurrentUser();
@@ -279,10 +248,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, groupId);
   const { markRead } = useReadState();
-  // Covered by Settings: mounted but not on screen, so not being read.
   const covered = usePageCovered();
-  // Where the red "NEW" divider sits for this visit (captured before markRead
-  // stamps the channel below, frozen until the channel changes).
+  // Captured before markRead stamps the channel; frozen until the channel changes.
   const newDividerId = useNewMessagesDivider(
     channelReadKey(relayUrl, groupId),
     messages.map((message) => ({ id: message.id, createdAt: message.created_at, author: message.pubkey })),
@@ -294,10 +261,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     searchQuery,
   );
 
-  // Batched per-room reactions + reply counts: resolved ONCE for every message
-  // currently in view (timeline ∪ search results), instead of one relay query +
-  // live subscription per message. The rows read these back via the transport's
-  // `reactionsFor`/`replyCountFor`. Mirrors Concord's `useConcordReactions`.
+  // Batched reactions + reply counts for all visible ids (mirrors `useConcordReactions`).
   const visibleIds = useMemo(() => {
     const set = new Set<string>();
     for (const m of messages) set.add(m.id);
@@ -307,9 +271,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const { replyCountFor, threadRepliesFor } = useGroupThreads(relayUrl, groupId, visibleIds);
   const sendThreadReply = useSendThreadReply(relayUrl, groupId);
 
-  // The room as a route: what the thread panel pushes `/t/<root>` onto, what
-  // "Copy message link" stamps a message id onto, and what the legacy
-  // `?m=`/`?thread=` translation redirects into.
   const room = useMemo(
     () => (relayUrl && groupId ? ({ kind: "nip29", relayUrl, groupId } as const) : undefined),
     [relayUrl, groupId],
@@ -325,30 +286,23 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     closeThread,
   } = useThreadPanel({ room, messages });
 
-  // Stable thread-panel permalink — an inline object would defeat the thread rows' memo.
+  // Memoized: an inline object would defeat the thread rows' memo.
   const threadPermalink = useMemo(
     () => (lastThreadRoot ? ({ kind: "nip29", relayUrl, groupId, threadRoot: lastThreadRoot.id } as const) : undefined),
     [relayUrl, groupId, lastThreadRoot],
   );
 
-  // Tell the native notification service this NIP-29 room (and, if a thread
-  // panel is open, that specific thread) is on screen, so it suppresses
-  // redundant tray entries. Cleared on unmount/background. The roomKey shapes
-  // must match the service: `h:<relayUrl>|<groupId>` for the room,
-  // `h:<relayUrl>|<groupId>:t:<rootId>` for a specific open thread.
+  // Suppress redundant native notifications. roomKey shapes must match the
+  // service: `h:<relayUrl>|<groupId>` and `h:<relayUrl>|<groupId>:t:<rootId>`.
   useActiveRoom(
     relayUrl && groupId ? `h:${relayUrl}|${groupId}` : undefined,
     relayUrl && groupId && threadRoot ? `h:${relayUrl}|${groupId}:t:${threadRoot.id}` : undefined,
   );
 
-  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
-  // Old tray notifications and copied links still carry them.
+  // Legacy `?thread=`/`?m=` deep links from old notifications and copied links.
   useLegacyFocusParams(room);
 
-  // Reaction and zap tallies resolve over the timeline PLUS the open thread's
-  // replies (kind-1111 comments, which aren't in the timeline), so a reply's
-  // ⚡/emoji counts show in the thread panel too. The id set changes only when
-  // a thread opens or closes.
+  // Include open-thread replies (kind 1111), which aren't in the timeline.
   const tallyIds = useMemo(() => {
     if (!threadRoot) return visibleIds;
     const replyIds = (threadRepliesFor?.(threadRoot.id) ?? []).map((r) => r.id);
@@ -357,8 +311,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   }, [visibleIds, threadRoot, threadRepliesFor]);
 
   const { reactionsFor } = useGroupReactions(relayUrl, groupId, tallyIds);
-  // Public NIP-57 receipts for the visible window + open thread (providers
-  // publish them to the app relays the 9734 lists).
+  // NIP-57 receipts are published to the app relays the 9734 lists.
   const { zapsFor } = useZapReceipts(
     relayUrl && groupId ? `nip29:${relayUrl}:${groupId}` : undefined,
     tallyIds,
@@ -378,11 +331,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     isLoading,
     hasMore,
     loadOlder,
-    // While search results replace the timeline there is nothing to jump.
     enabled: !searching,
   });
 
-  // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
     if (!user || messages.length === 0 || covered) return;
     const latest = messages[messages.length - 1]?.created_at ?? 0;
@@ -397,12 +348,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [user, messages, relayUrl, groupId, markRead, covered]);
-
-  // Opening the thread panel (its width animates over ~200ms) and the footer
-  // swapping between composer / membership skeleton / join prompt both resize
-  // the timeline. Nothing to do here: the timeline observes its own scroller and
-  // content, so it holds the reading position across every frame of both — this
-  // used to be a rAF loop polling `maintainBottom` for 260ms.
 
   const handleSlashAction = useCallback(
     async (action: SlashAction) => {
@@ -427,8 +372,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     async (event: NostrEvent) => {
       markFailed(event.id);
       try {
-        // The timeline copy may have come from the event store, which drops
-        // signatures; the outbox holds the signed one.
+        // The event store drops signatures; the outbox holds the signed copy.
         await republish({ event: await withSignature(event), relay: relayUrl });
         markSent(event.id);
       } catch {
@@ -466,10 +410,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     [isPinned, pin, unpin],
   );
 
-  // Calendar events render inline in the timeline as event cards, alongside the
-  // header's events bar. They come from a separate relay query (not
-  // `useGroupMessages`), so merge them into a display timeline by created_at and
-  // expose each event's RSVP state per id for the row's card.
+  // Calendar events come from a separate query; merge them by created_at.
   const calendarEvents = calendar?.events;
   const calendarMsgs = useMemo<ChatMsg[]>(
     () => (calendarEvents ?? []).map((c) => c.event as ChatMsg),
@@ -511,8 +452,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     return (id: string) => map.get(id);
   }, [calendar]);
 
-  // Assemble the NIP-29 transport: the shared timeline/message components read
-  // capabilities from here. Every method maps onto the existing NIP-29 hooks.
   const transport = useMemo<ChatTransport>(
     () => ({
       messages: timelineMessages,
@@ -569,7 +508,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     <div className="relative flex flex-1 min-h-0 min-w-0">
       <ComposerBoundsProvider value={composerBoundsRef}>
       <div className={cn("relative flex flex-col flex-1 min-h-0 min-w-0", chatColumnClass)}>
-        {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4">
             {searchLoading ? (
@@ -642,21 +580,16 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           />
         )}
 
-        {/* Composer — hidden while showing search results. */}
         {searching ? null : user && canWrite ? (
           <ChatComposer
             relayUrl={relayUrl}
             groupId={groupId}
             messages={messages}
-            // Where a share routed to this group lands. Rebuilt from the
-            // group's own identity — the same derivation `recordSent` stamps
-            // into the Direct Share shortcut — rather than read from the
-            // ambient location.
+            // Built from the group's identity (as `recordSent` does), not the location.
             shareRoute={chatRoute({ kind: "nip29", relayUrl, groupId })}
             replyTo={replyTo}
             placeholder={channelName ? `Message ${channelName}` : undefined}
-            // Android Direct Share: the group's own name/picture, captured on
-            // send. The publisher can't resolve NIP-29 metadata itself.
+            // Android Direct Share label; the publisher can't resolve NIP-29 metadata.
             shareLabel={channelName}
             shareIconUrl={groupDetails?.group?.picture}
             onCancelReply={() => setReplyTo(undefined)}
@@ -668,14 +601,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             botCommands
             onSlashAction={handleSlashAction}
             onEditLast={editLast}
-            // Caret in the composer on open and on each channel switch; not on
-            // touch, where it raises the keyboard.
+            // Not on touch, where it raises the keyboard.
             autoFocus={!isTouch}
           />
         ) : membershipPending ? (
-          // Membership is still resolving — don't flash the "join to message"
-          // prompt at an actual member. Show a composer-shaped skeleton (same
-          // frame/padding/pill as ChatComposer) so the swap doesn't jump.
           <ComposerSkeleton />
         ) : (
           <div className="border-t p-3 shrink-0 pb-safe">

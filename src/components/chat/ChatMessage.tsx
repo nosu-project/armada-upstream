@@ -73,35 +73,21 @@ import { KIND_POLL } from "@/lib/polls";
 const REPLY_MENTION_RE =
   /(?:nostr:)?(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)/gi;
 
-/** Resolve a single mention pubkey to `@displayname` for the preview line. */
 function ReplyMentionName({ pubkey }: { pubkey: string }) {
   return <span className="text-primary">@<DisplayName pubkey={pubkey} /></span>;
 }
 
-/** The bot an invocation was addressed to, by display name. */
 function InvokedBotName({ pubkey }: { pubkey: string }) {
   return <span className="font-semibold not-italic text-primary"><DisplayName pubkey={pubkey} /></span>;
 }
 
 /**
- * A one-line reply preview that renders `@mentions` as resolved display names
- * (via {@link ReplyMentionName}) instead of a raw `nostr:npub…`/hex string, and
- * collapses URLs to 📎 — matching how the message body shows them. Falls back to
- * 📎 for an all-URL/empty body. Used inside the reply-context line, the
- * composer's reply banner and the composer's quote bar.
- *
- * `hideMediaPlaceholder` drops the 📎 placeholder (used when a {@link
- * ReplyThumbnail} already shows the image, so an image-only reply reads as just
- * the thumbnail, not "📎"). When `tags` are supplied, NIP-30 `:shortcode:`
- * custom emojis in the text are rendered as inline images (matching the body).
+ * One-line reply preview: mentions as `@name`, URLs as 📎 (dropped with
+ * `hideMediaPlaceholder` when a thumbnail shows), NIP-30 emoji when `tags` given.
  */
 export function ReplyPreview({ content, hideMediaPlaceholder = false, tags }: { content: string; hideMediaPlaceholder?: boolean; tags?: string[][] }) {
-  // Collapse URLs first (they'd blow out the single line), then split on
-  // mentions so each resolves to @name.
   const placeholder = hideMediaPlaceholder ? "" : "📎";
   const withoutUrls = content.replace(/https?:\/\/\S+/g, placeholder);
-  // NIP-30 custom emojis, when the caller passes the event's tags: each plain
-  // text run is emojified so `:shortcode:` shows the image, not the raw code.
   const emojiMap = tags ? buildEmojiMap(tags) : undefined;
   const renderText = (text: string): ReactNode =>
     emojiMap && emojiMap.size > 0
@@ -143,12 +129,7 @@ export function ReplyPreview({ content, hideMediaPlaceholder = false, tags }: { 
   return <>{parts}</>;
 }
 
-/**
- * A small square image thumbnail for the reply preview. Resolves the media the
- * same way the message body does ({@link useResolvedMediaSrc}) so Concord's
- * encrypted attachments decrypt too; renders nothing until it's ready (so the
- * line never flashes a broken image).
- */
+/** Reply thumbnail, resolved like the body (decrypts Concord media); renders nothing until ready. */
 export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
   const { resolved, onError } = useMediaWithFallback(image);
   if (resolved.status !== "ready") return null;
@@ -164,19 +145,9 @@ export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
 }
 
 /**
- * The "replying to …" context line shown ABOVE a reply message: the replied-to
- * author's round avatar, their name (accent-highlighted) and a one-line
- * snippet, tied down to the replying message's own avatar by a thin
- * `.chat-reply-connector` elbow. The `pl-[3.25rem]` indent aligns it with the
- * message body (past the avatar gutter) so the connector has the gutter to run
- * in; `mb-1` keeps it off the avatar below. Purely presentational: the
- * transport resolves WHO is replied to and hands the resolved `name` /
- * `preview` here so the chrome is defined once. Renders nothing until a name is
- * resolved (avoids a flash of an empty line). When `onClick` is supplied the
- * line jumps the timeline to the replied-to message.
- *
- * Must be placed in the row directly above the avatar (see MessageRow) for the
- * connector geometry to land.
+ * "Replying to …" line above a reply, tied to the row's avatar by a
+ * `.chat-reply-connector` elbow; must sit directly above the avatar (see
+ * MessageRow). Presentational: the transport resolves `name`/`preview`.
  */
 export function ReplyContextLine({
   name,
@@ -186,10 +157,8 @@ export function ReplyContextLine({
   onClick,
 }: {
   name: string | undefined;
-  /** The replied-to author, when known — supplies their avatar + emoji tags. */
   pubkey?: string;
   preview?: ReactNode;
-  /** Optional media thumbnail shown before the preview (e.g. an image reply). */
   thumbnail?: ReactNode;
   onClick?: () => void;
 }) {
@@ -230,7 +199,6 @@ export function ReplyContextLine({
   );
 }
 
-/** One reply participant's avatar in the thread badge's overlapping stack. */
 function ThreadParticipantAvatar({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -245,11 +213,7 @@ function ThreadParticipantAvatar({ pubkey }: { pubkey: string }) {
   );
 }
 
-/**
- * The prominent, Slack-style "thread" affordance shown under a message that has
- * replies: an overlapping avatar stack of the (distinct) repliers, the reply
- * count, "Last reply …" recency, and a chevron. Clicking opens the thread.
- */
+/** Slack-style thread affordance: replier avatars, count, last-reply recency. */
 function ThreadBadge({
   count,
   participants,
@@ -291,11 +255,7 @@ function ThreadBadge({
   );
 }
 
-/**
- * Leave focus where a menu action put it — Reply focusing the composer —
- * instead of letting the closing menu restore it to what held it on open
- * (usually the body, since right-clicking a row blurs the composer).
- */
+/** Keep focus where a menu action put it (e.g. Reply → composer) instead of restoring it. */
 function keepActionFocus(e: Event) {
   const active = document.activeElement;
   if (active && active !== document.body) e.preventDefault();
@@ -305,178 +265,87 @@ export interface ChatMessageProps {
   event: ChatMsg;
   canWrite: boolean;
   canModerate: boolean;
-  /**
-   * Explicit author identity for non-Nostr authors (Bluetooth mesh peers). When
-   * set, the message header renders this name/color/suffix instead of resolving
-   * a Nostr profile from `event.pubkey` (which is a mesh peer id, not a key).
-   */
+  /** Non-Nostr author identity (mesh peers, whose `event.pubkey` is a peer id). */
   identityOverride?: MessageIdentity;
-  /**
-   * Context for rendering/voting on NIP-88 polls in this message. Only NIP-29
-   * group chat carries polls (kind 1068); transports without polls omit this
-   * and a poll kind would never appear in their timeline.
-   */
+  /** NIP-88 poll context (kind 1068). Only NIP-29 carries polls this way. */
   pollContext?: { relayUrl: string; groupId: string };
-  /**
-   * Resolved poll tally + vote callback for a poll (kind 1068) message, for
-   * transports that carry the tally themselves (Concord's sealed chat fold)
-   * rather than querying a relay. When present it renders the poll; NIP-29 uses
-   * {@link pollContext} instead.
-   */
+  /** Poll tally + vote for transports that fold it themselves (Concord); NIP-29 uses {@link pollContext}. */
   poll?: MessagePoll;
-  /**
-   * Resolved calendar event + RSVP state for a calendar (kind 31922/31923)
-   * message. When present it renders the inline event card with RSVP controls.
-   * Both NIP-29 and Concord supply it; transports without calendar events omit
-   * it and a calendar kind would never appear in their timeline.
-   */
+  /** Calendar event (kind 31922/31923) + RSVP state; renders the inline event card. */
   calendar?: MessageCalendar;
-  /** Resolved reaction tallies + toggle for this message. */
   reactions?: MessageReactions;
-  /** Whether this surface supports zaps (shows the ⚡ button on others' messages). */
   zapEnabled?: boolean;
-  /** Aggregated zaps for this message (feeds the ⚡ total chip). */
   zaps?: MessageZaps;
-  /**
-   * CORD.md announcement publisher (Concord). Passed through to the zap
-   * dialog; absent means the NIP-57 public-receipt flow.
-   */
+  /** CORD.md announcement publisher (Concord); absent means the NIP-57 receipt flow. */
   onSendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
   /** CORD.md on-chain zap announcement publisher (Concord). */
   onSendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
-  /** Optimistic send status, if this message is locally-published & unconfirmed. */
   sendStatus?: SendStatus;
-  /** Search term to highlight in the message body (search-results mode). */
   highlight?: string;
-  /** Whether this message is currently being edited inline. */
   isEditing?: boolean;
-  /** Whether this message is currently pinned (moderators only see the control). */
   isPinned?: boolean;
-  /** Threaded-reply count, for the inline "N replies" thread badge. */
   replyCount?: number;
-  /**
-   * Distinct pubkeys that have replied in this message's thread (newest-first),
-   * for the thread badge's avatar stack. Deduped by the transport.
-   */
+  /** Distinct repliers (newest-first) for the thread badge. */
   threadParticipants?: string[];
-  /** Timestamp (epoch seconds) of the latest reply, shown as "Last reply …". */
+  /** Epoch seconds. */
   lastReplyAt?: number;
-  /**
-   * A rendered "replying to …" context line, shown above the body. The
-   * transport owns resolving the referenced message (different per protocol),
-   * so it's passed in as a node rather than computed here.
-   */
+  /** Rendered "replying to …" line; resolved by the transport per protocol. */
   replyContext?: ReactNode;
   /**
-   * A heading rendered at the top of the body, above the content — a titled
-   * post's subject (Concord forum posts, CORD-03 §3). Its presence also keeps
-   * the row out of continuation collapsing: a titled post is a new topic, and
-   * needs its author line however soon it follows the same author's chatter.
+   * Heading above the body (Concord forum post subject, CORD-03 §3). Also
+   * disables continuation collapsing.
    */
   heading?: ReactNode;
   onRetry?: () => void;
   onDiscard?: () => void;
-  /** Pin or unpin this message (moderators only; hidden when absent). */
   onTogglePin?: (event: ChatMsg) => void;
-  /** Delete this message (hidden when absent). */
   onDelete?: (event: ChatMsg) => void;
-  /**
-   * Kick this message's author from the community (Concord moderation). The
-   * callback is stable; visibility for THIS author is gated by {@link canKick},
-   * which the page computes (and which already excludes self and the owner).
-   * Opens a confirmation rather than acting on select. Hidden when absent.
-   */
+  /** Concord kick; per-author visibility gated by {@link canKick}. Confirms first. */
   onKick?: (pubkey: string) => void;
-  /** Whether the viewer may kick this message's author — gates the Kick item. */
   canKick?: boolean;
-  /**
-   * Ban this message's author from the community (Concord moderation). Stable
-   * callback; visibility gated per-author by {@link canBan}. Opens a
-   * confirmation (which may rotate the community's keys). Hidden when absent.
-   */
+  /** Concord ban; gated by {@link canBan}. Confirms first (may rotate keys). */
   onBan?: (pubkey: string) => void;
-  /** Whether the viewer may ban this message's author — gates the Ban item. */
   canBan?: boolean;
-  /** Open the threaded-replies side panel — the "reply in thread" action (hidden when absent). */
   onOpenThread?: (event: ChatMsg) => void;
-  /**
-   * Begin an inline reply to this message (Signal/Discord style — quoted in the
-   * timeline, distinct from a thread reply). Hidden when absent.
-   */
+  /** Inline (quoted) reply, distinct from a thread reply. */
   onReply?: (event: ChatMsg) => void;
-  /**
-   * Forward this message's content to another conversation — Signal's
-   * semantics: the text (and its attachments) are re-sent as a NEW message
-   * authored by the forwarder, with nothing identifying the original sender or
-   * the thread it came from. Hidden when absent.
-   */
+  /** Forward, Signal-style: re-sent as a NEW message by the forwarder, no attribution. */
   onForward?: (event: ChatMsg) => void;
-  /** Begin editing this message (own, non-poll messages only; hidden when absent). */
   onEdit?: (event: ChatMsg) => void;
-  /** Submit an inline edit with new content. */
   onEditSubmit?: (event: ChatMsg, content: string) => void;
-  /** Cancel an in-progress inline edit. */
   onEditCancel?: () => void;
-  /** Whether this message's tap-to-reveal toolbar is active (mobile only). */
   active?: boolean;
-  /** Toggle this message's active state (mobile tap-to-reveal toolbar). */
   onToggleActive?: (id: string) => void;
-  /** Render compactly as a continuation of the previous same-author message. */
   continuation?: boolean;
   /**
-   * Whether p-tagging the current user highlights the row as a mention.
-   * Defaults on (group surfaces). DMs turn it off: a NIP-17 kind-14 rumor
-   * always p-tags the recipient (the `p` set IS the conversation), so every
-   * received message would light up as a "mention".
+   * Highlight rows that p-tag the viewer. Off in DMs, where kind-14 rumors always
+   * p-tag the recipient.
    */
   mentionHighlight?: boolean;
-  /** This Concord message contains an authorized channel-wide @everyone. */
   everyoneMention?: boolean;
-  /**
-   * A small badge rendered next to the author's name (after the bot pill) —
-   * e.g. the DM page's "NIP-04" legacy-encryption marker.
-   */
+  /** Badge after the author's name, e.g. the DM page's "NIP-04" marker. */
   nameBadge?: ReactNode;
   /**
-   * Where this message lives: the room, plus the thread when the row is a
-   * reply inside one. When present, the menu offers "Copy message link" — the
-   * same route with `/m/<id>` appended, so a reply's link opens its thread
-   * rather than sending the reader hunting a timeline it was never in.
-   * Omitted on surfaces where a row isn't addressable (the inbox digest, mesh).
+   * Room (+ thread) for "Copy message link" (`/m/<id>` appended, so a reply's link
+   * opens its thread). Omit where rows aren't addressable.
    */
   permalink?: ChatRoute;
   /**
-   * When set, this message is an unsigned rumor (e.g. a Concord sealed chat
-   * event) rather than a relay-addressable signed event. "View event JSON" then
-   * shows this object (pretty-printed); the "Copy message ID" off-ramp, which
-   * references a relay-addressable event id that doesn't exist for a rumor, is
-   * suppressed. Signed events show "View event JSON" for the event itself.
+   * The unsigned rumor (Concord) for "View event JSON"; also suppresses "Copy
+   * message ID" (no relay-addressable id).
    */
   rumor?: unknown;
   /**
-   * Command names a bot in this conversation declares. Lets an untagged `/cmd`
-   * with arguments render as an action line in a 1:1 DM (which sends
-   * invocations untagged), without ever promoting undeclared `/word` prose.
+   * Declared bot command names, so an untagged `/cmd` in a 1:1 DM renders as an
+   * action line without promoting undeclared `/word` prose.
    */
   knownCommands?: ReadonlySet<string>;
 }
 
 /**
- * Transport-agnostic presentational shell for a single chat message: the action
- * toolbar (react/reply/thread/edit/pin/delete), inline edit field, reaction bar,
- * reply-context line and send-status — all driven purely by props. NIP-29 group
- * chat and Concord communities both render through this component; the data and
- * mutations come from a {@link ChatTransport}, never from a relay hook here.
- *
- * Capabilities are presence-gated: a control renders only when its callback is
- * supplied (e.g. no `onTogglePin` ⇒ no pin button), so a transport that can't
- * do a thing shows no dead control for it.
- *
- * Memoized to avoid re-rendering every message row when the timeline re-renders
- * (e.g. a new message or reaction arrives, or the channel polls). The transport
- * supplies stable `event`/`reactions`/callback identities for unchanged rows, so
- * `React.memo`'s shallow prop compare keeps untouched rows from re-tokenizing
- * content, rebuilding emoji maps, and re-running author queries.
+ * Transport-agnostic chat message shell; data and mutations come from a
+ * {@link ChatTransport}. Controls render only when their callback is supplied.
+ * Memoized: transports keep identities stable for unchanged rows.
  */
 const ChatMessageInner = memo(function ChatMessageInner({
   event,
@@ -526,29 +395,21 @@ const ChatMessageInner = memo(function ChatMessageInner({
 }: ChatMessageProps) {
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
-  // Read through `useContext` rather than `useAppContext`, which throws without
-  // a provider: this row is deliberately mountable bare in tests.
+  // `useContext`, not `useAppContext` (which throws): mountable bare in tests.
   const sendOnEnter = sendsOnEnter(useContext(AppContext)?.config.sendOnEnter, isTouch);
   const composerBoundsRef = useComposerBoundsRef();
-  // The author's name is resolved by MessageRow (the byline) and, on the rare
-  // action-line rows, by DisplayName itself — not here too: a profile and a
-  // server-profile lookup per row, per render, for a name most rows never use.
-  // A command reads as an action ("JSKitty ran /greet with Concordia"), not as a
-  // wall of raw arguments. The content still carries them for the bot.
+  // The author name is resolved by MessageRow, not here. A bot command reads as
+  // an action line rather than raw arguments.
   const invocation = useMemo(
     () => commandLine(event.content, event.tags, knownCommands),
     [event.content, event.tags, knownCommands],
   );
-  // An inline reply renders a "replying to …" line above the body. The page
-  // resolves it per-protocol (NIP-29 NIP-10 `e`, Concord NIP-C7 `q`) and passes
-  // it as `replyContext`; its presence is the authoritative "this is a reply".
+  // Its presence is the authoritative "this is a reply".
   const hasReplyContext = Boolean(replyContext);
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;
-  // Highlight messages that mention you, reply to you, or carry an authorized
-  // Concord @everyone. Not your own messages.
-  // Suppressed where a `p` tag is addressing, not mentioning (DMs).
+  // Mentions, replies to you, or authorized @everyone; never your own. Off in DMs.
   const mentionsMe = Boolean(
     mentionHighlight &&
       user && !isOwn && (
@@ -556,27 +417,20 @@ const ChatMessageInner = memo(function ChatMessageInner({
         || event.tags.some(([name, value]) => name === "p" && value === user.pubkey)
       ),
   );
-  // Only plain group/NIP-17 chat messages are editable (polls, files and other
-  // structured rows carry semantics an inline text field cannot preserve).
+  // Structured rows carry semantics an inline text field can't preserve.
   const canEdit =
     isOwn &&
     (event.kind === KIND_GROUP_CHAT || event.kind === KIND_DM_CHAT) &&
     !isPending &&
     !isFailed &&
     Boolean(onEdit);
-  // The author can delete their own confirmed message; moderators can delete
-  // anyone's. The transport decides how (NIP-09 vs NIP-29 vs Concord delete).
   const canDelete = Boolean(onDelete) && ((isOwn && !isPending && !isFailed) || canModerate);
-  // Moderators can pin any confirmed message.
   const canPin = Boolean(onTogglePin) && canModerate && !isPending && !isFailed;
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
   const editRef = useAutosizeTextarea(editText);
-  // Autosize returns a callback ref; compose it with a caret-to-end placement so
-  // that opening an edit lands the cursor after the existing text (browsers
-  // default `autoFocus` to the start, which reads as a single-line box with the
-  // caret in the wrong place on a multi-line message). The flag resets on
-  // unmount so re-editing re-places the caret.
+  // Place the caret at the end when an edit opens (autoFocus puts it at the
+  // start). Resets on unmount.
   const caretPlacedRef = useRef(false);
   const setEditRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -593,36 +447,21 @@ const ChatMessageInner = memo(function ChatMessageInner({
     },
     [editRef],
   );
-  // Deleting is irreversible and now sits one tap away in the action sheet, so
-  // it confirms. (It used to be a two-step "arm the trash icon" gesture, which
-  // only worked because it WAS a bare icon on the hover strip.)
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // The touch long-press menu.
   const [sheetOpen, setSheetOpen] = useState(false);
-  // The action sheet (a vaul Drawer root) is built on the first long-press, not
-  // with the row: one per mounted message was the heaviest thing a touch
-  // timeline mounted and re-rendered, for a sheet almost none are ever opened
-  // into. Latched, so closing still animates.
+  // Built on first long-press, not per row (it was the heaviest per-row mount).
+  // Latched so closing still animates.
   const [sheetBuilt, setSheetBuilt] = useState(false);
   if (sheetOpen && !sheetBuilt) setSheetBuilt(true);
-  // Image actions contributed by the image under a long-press / right-click,
-  // prepended to this row's own actions in whichever surface opens. Null for a
-  // press on text or away from any image. Cleared as each surface closes.
+  // Image actions staged by a long-press/right-click on an image; cleared on close.
   const [imageActions, setImageActions] = useState<MessageActionItem[] | null>(null);
 
-  // Raw-event JSON viewer (rumor context menu).
   const [jsonOpen, setJsonOpen] = useState(false);
 
-  // Reporting. Where a report goes is a property of the surrounding room, not
-  // of this row, so it comes from the ambient chat scope: a Concord community
-  // routes to its moderators, a NIP-29 server to its host relay, and anywhere
-  // without a room (DMs) to the public network. `undefined` means the room has
-  // moderators in principle but no way to reach them privately (a legacy
-  // Concord epoch), and offers no report at all.
+  // Report destination comes from the chat scope. `undefined`: moderators exist
+  // but can't be reached privately (legacy Concord epoch), so no report.
   const [reportOpen, setReportOpen] = useState(false);
-  // The desktop right-click menu, built on the first right-click (see
-  // useLazyContextMenu). Its collision padding forces a layout flush, so it is
-  // computed only while open.
+  // Built on first right-click (see useLazyContextMenu).
   const clearImageActions = useCallback(() => setImageActions(null), []);
   const contextMenu = useLazyContextMenu(
     useCallback((open: boolean) => {
@@ -631,56 +470,36 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
-  // A mesh/proxied identity isn't a Nostr pubkey a report could name, and a
-  // message you sent isn't one you report.
+  // Mesh/proxied identities aren't Nostr pubkeys.
   const canReport = Boolean(reportTo && user && !isOwn && !identityOverride);
 
-  // Muting, unlike reporting, needs no destination — it is a private list on
-  // the user's own account — so it is offered in every room, including the ones
-  // with nobody to report to. Same identity caveat: a mesh/proxied row isn't a
-  // Nostr pubkey the mute list can name.
+  // A private list on the user's account, so offered in every room.
   const mute = useMuteToggle(identityOverride ? undefined : event.pubkey);
 
-  // Per-author options (view profile, copy npub). Suppressed for a mesh/proxied
-  // row, whose `event.pubkey` is a peer id rather than a Nostr key.
+  // Suppressed for mesh/proxied rows (peer id, not a key).
   const openProfile = useOpenProfile();
   const { toast } = useToast();
 
-  // Hiding is viewer-local removal — instant, unpublished, undoable from its
-  // toast — so like blocking it needs no destination and is offered in every
-  // room.
+  // Viewer-local, unpublished and undoable, so offered in every room.
   const hiddenMessages = useHiddenMessages();
 
-  // Zap dialog. The button shows on others' messages whenever the surface
-  // supports zaps, and is never gated on the author's lightning address: the
-  // dialog opens on Bitcoin, whose address is derived from their pubkey, and
-  // it also offers any NIP-A3 payment targets they've declared.
+  // Never gated on a lightning address: the dialog defaults to Bitcoin (derived
+  // from pubkey) and NIP-A3 targets.
   const [zapOpen, setZapOpen] = useState(false);
   const canZap = Boolean(zapEnabled && user && !isOwn && !identityOverride);
-  // Raw event source for the "View event JSON" menu item: the unsigned rumor
-  // when present (Concord sealed chat), otherwise the signed event (NIP-29).
   const isRumor = rumor !== undefined;
-  // What a report names. A rumor id resolves only for someone who holds the
-  // room it was sealed in, so a PUBLIC report (a DM) names the person alone —
-  // an id nobody can fetch would attest to a private conversation while proving
-  // nothing about it. Everywhere else the id is worth naming: a NIP-29 message
-  // is a relay-addressable event, and a Concord rumor id resolves for exactly
-  // the moderators the report is encrypted to.
+  // A PUBLIC report (DM) names only the person: a rumor id nobody can fetch
+  // proves nothing. Elsewhere the id resolves for the report's recipients.
   const reportTarget: ReportTarget =
     isRumor && reportTo?.kind === "network"
       ? { pubkey: event.pubkey }
       : { pubkey: event.pubkey, eventId: event.id };
-  // Reset the draft whenever an edit (re)starts.
   useEffect(() => {
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
 
-  // The long-press sheet also marks the row active, so the message you pressed
-  // stays visibly picked out behind the sheet. (The opening gesture's spurious
-  // dismiss is refused inside MessageActionSheet, so onOpenChange only ever
-  // carries a real close here.)
+  // The spurious dismiss from the opening gesture is refused in MessageActionSheet.
   const openSheet = useCallback(() => {
-    // A long-press on the row's text carries no image actions.
     setImageActions(null);
     setSheetOpen(true);
     if (!active) onToggleActive?.(event.id);
@@ -692,10 +511,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
     if (!open && active) onToggleActive?.(event.id);
   }, [active, onToggleActive, event.id]);
 
-  // The image-menu bridge: an image hands its own actions up to whichever
-  // surface this row opens. Touch long-press opens the sheet with them
-  // prepended; a desktop right-click stages them for the context menu that the
-  // same click opens (see the ContextMenuTrigger below).
+  // Images hand their actions up: touch opens the sheet with them; desktop stages
+  // them for the context menu the same click opens.
   const openImageSheet = useCallback((acts: MessageActionItem[]) => {
     setImageActions(acts);
     setSheetOpen(true);
@@ -717,9 +534,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
     }
   }, [event.id, event.pubkey]);
 
-  // Every action the message offers, in menu order. One list drives the touch
-  // sheet, the desktop `⋯` overflow and the right-click menu, so they can't
-  // drift apart.
+  // One list drives the touch sheet, `⋯` overflow and right-click menu.
   const menuActions: MessageActionItem[] = [];
   if (canWrite && !isEditing && onReply) {
     menuActions.push({ id: "reply", label: "Reply", icon: Reply, onSelect: () => onReply(event) });
@@ -732,10 +547,8 @@ const ChatMessageInner = memo(function ChatMessageInner({
       onSelect: () => onOpenThread(event),
     });
   }
-  // Not gated on `canWrite`: the forward is composed in the DESTINATION
-  // conversation, so being read-only here is irrelevant. Suppressed for polls
-  // and other structured rows, whose text alone (the question, without its
-  // options or tally) would forward as something misleading.
+  // Not gated on `canWrite` (composed in the destination). Not for polls or
+  // structured rows, whose text alone would mislead.
   if (onForward && !isEditing && !poll && event.content.trim().length > 0) {
     menuActions.push({
       id: "forward",
@@ -778,8 +591,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       onSelect: copyMessageId,
     });
   }
-  // Not while unconfirmed: an optimistic row's id can still change when the
-  // signed event adopts its final id, and a copied link must not go stale.
+  // An optimistic row's id can still change.
   if (permalink && !isPending && !isFailed) {
     menuActions.push({
       id: "copy-link",
@@ -795,8 +607,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
-  // Per-author options, in their own group above moderation. Suppressed for a
-  // mesh/proxied identity, whose id is not a Nostr key to view or copy.
   if (!identityOverride) {
     menuActions.push({
       id: "view-profile",
@@ -819,10 +629,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       },
     });
   }
-  // Hide, block, report and delete share the trailing moderation group, so only
-  // the first of them opens it — two adjacent separators would read as three
-  // groups. Hide leads: it is the mildest tool (this one message, this device,
-  // undoable from its toast), and the escalation reads top-down from there.
+  // Only the first of hide/block/report/delete opens the moderation group.
   const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
   const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
@@ -840,8 +647,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       id: "mute",
       label: mute.muted ? "Unblock person" : "Block person",
       icon: mute.muted ? UserCheck : UserX,
-      // Unblocking restores someone rather than removing them; styling it
-      // destructive would read as the dangerous direction of the same switch.
+      // Unblocking restores someone, so it isn't styled destructive.
       destructive: !mute.muted,
       groupStart: !showHide,
       onSelect: () => void mute.toggle(),
@@ -867,10 +673,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       onSelect: () => setConfirmDelete(true),
     });
   }
-  // Person-level moderation on the author (Concord). Gated per-author by the
-  // page: `canKick`/`canBan` already exclude the viewer's own messages and the
-  // owner. Each opens a confirmation dialog rather than acting on select. They
-  // trail the destructive group, opening it only if nothing above them did.
+  // `canKick`/`canBan` already exclude self and the owner.
   const showKick = Boolean(onKick) && Boolean(canKick) && !isEditing && !isOwn;
   const showBan = Boolean(onBan) && Boolean(canBan) && !isEditing && !isOwn;
   if (showKick) {
@@ -894,7 +697,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
     });
   }
 
-  // What the desktop hover strip doesn't show as its own button.
   const overflowActions = menuActions.filter(
     (a) => !["reply", "thread", "zap"].includes(a.id),
   );
@@ -950,8 +752,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             onKeyDown={(e) => {
-              // Enter saves; when send-on-Enter is off, Enter is a newline and
-              // Ctrl/Cmd+Enter saves instead (matching the composer).
               const saveKey = sendOnEnter
                 ? e.key === "Enter" && !e.shiftKey
                 : e.key === "Enter" && (e.ctrlKey || e.metaKey);
@@ -1005,9 +805,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           />
         ) : null
       ) : invocation ? (
-        // The same third-person action line `/me` uses. The arguments are left
-        // out on purpose: they were addressed to the bot, not to the room, and
-        // the bot's reply is what actually says how it went.
+        // Arguments are omitted: they were for the bot, whose reply reports the outcome.
         <div className="text-[15px] italic text-muted-foreground">
           <span className="font-semibold not-italic text-primary">
             <DisplayName pubkey={identityOverride ? undefined : event.pubkey} name={identityOverride?.name} />
@@ -1015,8 +813,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
           ran{" "}
           <button
             type="button"
-            // Re-arms the command in the composer, already filtered — the fast
-            // path for "do that again", without retyping the arguments blind.
+            // Re-arms the command in the composer, already filtered.
             onClick={(e) => {
               e.stopPropagation();
               requestCommand(invocation.name);
@@ -1051,8 +848,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
     </>
   );
 
-  // The ⚡ total chip sits inline with the reaction pills (one row), as an
-  // extra pill — not its own line.
   const zapPill =
     !isEditing && zaps && zaps.tally.count > 0 ? (
       <ZapPill tally={zaps.tally} canZap={canZap} onZap={() => setZapOpen(true)} />
@@ -1104,28 +899,20 @@ const ChatMessageInner = memo(function ChatMessageInner({
           createdAt={event.created_at}
           pending={isPending}
           edited={wasEdited && !isEditing}
-          // Read straight off the message: a NIP-40 `expiration` is the only
-          // thing that entitles a row to the disappearing-message clock, and
-          // it's carried by the message itself on every surface that has one.
+          // NIP-40 `expiration` alone entitles a row to the disappearing clock.
           expiresAt={expirationOf(event.tags)}
-          // NIP-48: marks a message that was bridged in from another network.
+          // NIP-48: bridged in from another network.
           proxy={parseProxyTag(event.tags)}
           nameBadge={nameBadge}
-          // Touch gets the long-press sheet instead: a horizontal strip of
-          // icon buttons floated over the row can't hold this many actions on
-          // a phone without wrapping across the message.
+          // Touch uses the long-press sheet: the strip can't fit on a phone.
           actions={isTouch ? undefined : toolbar}
           beforeBody={hasReplyContext ? replyContext : undefined}
           afterBody={afterBody}
           continuation={
-            // Collapse into the previous message only for plain consecutive chats;
-            // a reply line, edit field, pin or mention needs the full header.
             continuation && !hasReplyContext && !heading && !isEditing && !isPinned && !mentionsMe
           }
           className={cn(
-            // The picked-out highlight tracks the sheet alone: the row's
-            // `active` state is set and cleared together with it, so keying the
-            // background off `active` too only risks it lingering without a menu.
+            // Keyed on the sheet alone so the highlight can't linger without a menu.
             sheetOpen && "bg-secondary/40",
             isPinned && "bg-amber-500/5",
             mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
@@ -1144,18 +931,13 @@ const ChatMessageInner = memo(function ChatMessageInner({
 
   return (
     <ChatImageMenuContext.Provider value={imageMenu}>
-    {/* On touch the long-press gesture belongs to the action sheet, so the
-        Discord-style right-click ContextMenu isn't mounted at all — one fewer
-        Radix root per row on the platform whose per-row render budget is
-        tightest. Desktop keeps the right-click menu, built from the same
-        action list as the touch sheet and the `⋯` overflow — and built on
-        the first right-click, as a sibling of the row (useLazyContextMenu). */}
+    {/* Touch: no right-click ContextMenu (one fewer Radix root per row). Desktop
+        builds it on first right-click (useLazyContextMenu). */}
     {isTouch ? (
       row
     ) : (
-      // Clearing image actions on close, and again in the trigger's capture
-      // phase (which runs before an image's own contextmenu handler restages
-      // them), keeps a right-click on text from inheriting the last image's.
+      // Clearing in the capture phase (before an image restages) keeps a text
+      // right-click from inheriting the last image's actions.
       <span className="block" onContextMenuCapture={clearImageActions} onContextMenu={contextMenu.onContextMenu}>
         {row}
       </span>
@@ -1189,9 +971,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         reactions={canWrite && !isEditing && reactions ? reactions : undefined}
       />
     )}
-    {/* Mounted only while open, like the zap dialog below: a Radix dialog root
-        per message row is pure weight on a long timeline, and neither of these
-        is reachable without first opening a menu. */}
+    {/* Mounted only while open: a Radix dialog root per row is pure weight. */}
     {confirmDelete && (
     <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
       <AlertDialogContent>
@@ -1240,9 +1020,5 @@ const ChatMessageInner = memo(function ChatMessageInner({
   );
 });
 
-/**
- * Exported as the memoized component itself, not a wrapper around it: a
- * wrapper re-ran for every mounted row on every timeline render, only to
- * bail out one level down.
- */
+/** Exported directly: a wrapper re-ran for every row on every timeline render. */
 export const ChatMessage = ChatMessageInner;

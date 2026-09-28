@@ -1,17 +1,11 @@
 /**
  * Concord Invites — CORD-05.
  *
- * An invite is a URL in two parts: a public locator in the path (a bare NIP-19
- * naddr naming the addressable bundle `(kind 33301, link_signer, d="")`) and a
- * secret in the `#fragment` (a 16-byte unlock token + up to 3 bootstrap
- * relays, encoded as base64url binary against a versioned relay dictionary).
- * The fragment never reaches any server; the token derives exactly one thing —
- * the bundle's decrypt key. The bundle carries the actual membership keys.
- *
- * Minting a link mints a fresh LINK SIGNER keypair used for nothing else; only
- * its holder (the creator, via the self-encrypted Invite List) can refresh or
- * tombstone the bundle, so a link-holder can join but never squat or kill the
- * link.
+ * URL = public locator (naddr of the bundle `(kind 33301, link_signer, d="")`)
+ * + secret `#fragment` (16-byte token + up to 3 bootstrap relays, base64url).
+ * The token derives only the bundle's decrypt key. Each link has its own LINK
+ * SIGNER keypair held by the creator, so a link-holder can join but never squat
+ * or kill the link.
  */
 
 import { hexToBytes } from "@noble/hashes/utils.js";
@@ -33,10 +27,8 @@ export const MAX_BOOTSTRAP_RELAYS = 3;
 export const FRAGMENT_VERSION = 4;
 
 /**
- * The bundle preview's description cap: far below the 10,000-byte Community
- * metadata cap (CORD-02 §6), because the preview exists to render a card, not
- * to mirror the full about text. Applied at build AND at parse (a hostile
- * bundle is truncated, not refused — the description is cosmetic).
+ * Bundle preview description cap, far below the 10,000-byte metadata cap (CORD-02
+ * §6). Applied at build AND parse (hostile bundles are truncated, not refused).
  */
 export const BUNDLE_DESCRIPTION_MAX_BYTES = 500;
 
@@ -49,8 +41,6 @@ export function capBundleDescription(s: string): string {
   return new TextDecoder().decode(bytes.subarray(0, end));
 }
 
-// ── The bundle (CORD-05 §1) ──────────────────────────────────────────────────
-
 export interface InviteBundle {
   community_id: string;
   owner: string;
@@ -58,13 +48,9 @@ export interface InviteBundle {
   community_root: string;
   root_epoch: number;
   /**
-   * The Control Plane's signer pubkey at `root_epoch` (CORD-02 §5): subscribe,
-   * verify, read — never write. Absent = a legacy, pre-split Community (fold
-   * Control at the legacy address, CORD-06 §3). Taken on trust — it derives
-   * from a secret the joiner never holds, so nothing in the bundle can prove
-   * it; a wrong one is eclipse-class self-harm by the inviter (the joiner
-   * reads a stale/empty plane), never forged authority, and a later verified
-   * base rotation re-delivers the true key (CORD-05 §1).
+   * The Control Plane's signer pubkey at `root_epoch` (CORD-02 §5). Absent = a
+   * legacy pre-split Community (CORD-06 §3). Taken on trust: a wrong one only
+   * harms the joiner's view; a later verified rotation corrects it (CORD-05 §1).
    */
   control_pk?: string;
   /** The granted (private) Channels. */
@@ -112,12 +98,9 @@ function boundBundle(bundle: InviteBundle): InviteBundle {
 }
 
 /**
- * Validate a decrypted bundle regardless of how it arrived — fetched from a
- * link's coordinate or handed over whole in a Direct Invite (CORD-05 §6): the
- * §1 bounds apply, and the self-certifying `community_id` must reproduce from
- * (owner, salt), so even a compromised creator can't smuggle a false owner.
- * Throws `bounds` / `owner-mismatch`; expiry is the caller's concern (a parked
- * invite still renders past `expires_at` — joining refuses).
+ * Validate a decrypted bundle however it arrived (CORD-05 §6): §1 bounds, and
+ * `community_id` must reproduce from (owner, salt). Throws `bounds` /
+ * `owner-mismatch`; expiry is the caller's concern.
  */
 export function validateBundle(bundle: InviteBundle): InviteBundle {
   boundBundle(bundle);
@@ -128,12 +111,9 @@ export function validateBundle(bundle: InviteBundle): InviteBundle {
 }
 
 /**
- * Re-post events for every live link, carrying `bundle` (the CURRENT keys) at
- * each link's coordinate (CORD-05 §2). `entries` are the creator's Invite List
- * entries for this community — each supplies the `token` + `signer_sk` needed
- * to author its coordinate. A malformed entry is skipped. The per-link
- * `expires_at`/`label` are preserved from the entry; everything else (root,
- * epoch, channels, relays, name) comes from the fresh `bundle`.
+ * Re-post every live link's coordinate carrying the CURRENT `bundle` (CORD-05 §2).
+ * Each Invite List entry supplies `token` + `signer_sk`; per-link `expires_at`/
+ * `label` are kept. Malformed entries are skipped.
  */
 export function buildRefreshedBundleEvents(
   bundle: InviteBundle,
@@ -149,7 +129,7 @@ export function buildRefreshedBundleEvents(
       };
       events.push(buildBundleEvent(perLink, hexToBytes(entry.token), hexToBytes(entry.signer_sk)));
     } catch {
-      // A malformed stored entry can't be refreshed; skip it.
+      // Malformed stored entry; skip it.
     }
   }
   return events;
@@ -189,11 +169,8 @@ export function buildRevocationEvent(linkSignerSk: Uint8Array): NostrEvent {
 }
 
 /**
- * Verify + decrypt a fetched bundle event. `expectedSigner` is the naddr's
- * author — the coordinate itself is the anti-squat guard, but we re-check the
- * signature and author to reject a relay handing back garbage. Throws
- * `revoked` on a tombstone, `expired` past `expires_at`, `owner-mismatch` when
- * (owner, salt) fail to reproduce the community_id.
+ * Verify + decrypt a fetched bundle event. Re-checks signature and author
+ * against `expectedSigner`. Throws `revoked`, `expired`, or `owner-mismatch`.
  */
 export function parseBundleEvent(
   event: NostrEvent,
@@ -219,8 +196,6 @@ export function parseBundleEvent(
     throw new InviteError("bad-bundle", `bundle decrypt: ${e instanceof Error ? e.message : e}`);
   }
 
-  // The community_id self-certifies the owner: a mismatching bundle is refused,
-  // so even a compromised creator can't smuggle a false owner (CORD-05 §1).
   validateBundle(bundle);
   if (typeof bundle.expires_at === "number" && nowMs > bundle.expires_at) {
     throw new InviteError("expired", "this invite link has expired");
@@ -228,14 +203,7 @@ export function parseBundleEvent(
   return bundle;
 }
 
-// ── The fragment codec (CORD-05 §3) ──────────────────────────────────────────
-
-/**
- * The stock relay dictionary and the set the flags bit selects. Defined in
- * `stockRelays.ts` (a leaf module, so the app config and landing page can read
- * the set without this file's crypto dependencies) and re-exported here
- * because both are part of the CORD-05 codec's public surface.
- */
+/** Re-exported from the leaf `stockRelays.ts`; part of the CORD-05 codec's surface. */
 export { RELAY_DICTIONARY, STOCK_RELAYS } from "@/concord/lib/stockRelays";
 
 /** flags bit 0: the stock set is in use, zero relay bytes follow. */
@@ -266,8 +234,7 @@ const DICT_BY_URL = new Map(Object.entries(RELAY_DICTIONARY).map(([id, url]) => 
  */
 export function encodeFragment(token: Uint8Array, relays: string[]): string {
   if (token.length !== TOKEN_BYTES) throw new InviteError("bad-fragment", `token must be ${TOKEN_BYTES} bytes`);
-  // The stock set is selected by a flag (zero relay bytes), so it is exempt
-  // from the 3-relay bootstrap cap, which applies to explicit entries only.
+  // The stock set is flag-selected (zero bytes), so exempt from the 3-relay cap.
   const isStock = relays.length === STOCK_RELAYS.length && relays.every((r, i) => r === STOCK_RELAYS[i]);
   const bounded = relays.slice(0, MAX_BOOTSTRAP_RELAYS);
 
@@ -311,8 +278,7 @@ export function decodeFragment(fragment: string): { token: Uint8Array; relays: s
   need(2);
   const version = bytes[o++];
   if (version < FRAGMENT_VERSION) {
-    // A client MAY reject lower values as legacy links rather than decode them
-    // against the wrong dictionary (CORD-05 §3).
+    // Lower versions are rejected rather than decoded against the wrong dictionary (CORD-05 §3).
     throw new InviteError("bad-fragment", `legacy invite format (version ${version})`);
   }
   if (version > FRAGMENT_VERSION) {
@@ -353,8 +319,6 @@ export function decodeFragment(fragment: string): { token: Uint8Array; relays: s
   return { token, relays };
 }
 
-// ── The link (CORD-05 §2) ────────────────────────────────────────────────────
-
 export const INVITE_PATH_PREFIX = "/invite/";
 
 /** A parsed Concord invite link: the bundle coordinate + the fragment's secrets. */
@@ -377,17 +341,10 @@ export function buildInviteUrl(base: string, linkSignerPk: string, token: Uint8A
 }
 
 /**
- * A stored invite URL as it should be handed out TODAY, re-based onto `base`
- * when the origin it was minted on is one only the app that minted it can
- * resolve — the desktop shell serves the SPA over its own `app://armada`
- * scheme, so a link created there is dead for every recipient, and the Invite
- * List syncs it to the creator's other devices to be handed out from there
- * too. The naddr path and the `#fragment` secret ARE the link (the origin is
- * cosmetic, CORD-05 §2), so such a link is repaired where it's shown rather
- * than reminted — a remint is a second live door to revoke.
- *
- * An http(s) origin is left exactly as minted: a self-hosted or localhost
- * deployment's links are meant to stay on that deployment.
+ * A stored invite URL re-based onto `base` when minted on a non-http origin
+ * (the desktop shell's `app://armada`), which no recipient can resolve. The origin
+ * is cosmetic (CORD-05 §2), so repair beats reminting a second live link.
+ * http(s) origins are left as minted.
  */
 export function shareableInviteUrl(base: string, url: string): string {
   if (/^https?:\/\//i.test(url.trim())) return url;
@@ -410,12 +367,9 @@ function naddrToSigner(naddr: string): string | undefined {
 }
 
 /**
- * Whether `input` names a Concord invite bundle coordinate — an `…/invite/<naddr>`
- * path (or bare `naddr`) whose naddr is a valid invite-bundle coordinate —
- * REGARDLESS of whether the `#fragment` secret is present. Use this to route a
- * link to the invite UI (which can then explain a missing secret) rather than
- * letting a fragment-less invite fall through to a generic event card: the
- * bundle's content is encrypted and can never render as a plain event.
+ * Whether `input` names an invite-bundle coordinate, with or without the
+ * `#fragment` — routes secret-less links to the invite UI to explain, since the
+ * encrypted bundle can't render as a plain event.
  */
 export function isInviteUrl(input: string): boolean {
   const trimmed = input.trim();
@@ -436,10 +390,8 @@ export function isInviteUrl(input: string): boolean {
 }
 
 /**
- * Parse a Concord invite from a full URL (`…/invite/<naddr>#<fragment>`) or the
- * domain-agnostic bare form (`<naddr>#<fragment>`). Returns undefined for
- * anything that isn't recognizably a Concord invite (so callers can fall through to
- * other classifiers).
+ * Parse an invite from `…/invite/<naddr>#<fragment>` or bare `<naddr>#<fragment>`;
+ * undefined if it isn't one.
  */
 export function parseInviteLink(input: string): ParsedInviteLink | undefined {
   const trimmed = input.trim();
@@ -487,15 +439,13 @@ export function parseInviteRoute(naddr: string, fragment: string): ParsedInviteL
   }
 }
 
-// ── The Invite List (CORD-05 §4, kind 13303) ─────────────────────────────────
-
+// The Invite List (CORD-05 §4, kind 13303)
 export interface InviteListEntry {
   /** The link's unlock secret AND its merge key (hex). */
   token: string;
   /** The link_signer secret (hex): refreshing or retiring the bundle needs it. */
   signer_sk: string;
   community_id: string;
-  /** The shareable link. */
   url: string;
   label?: string;
   created_at: number;
@@ -543,13 +493,11 @@ export function mergeInviteLists(a: InviteList, b: InviteList): InviteList {
   };
 }
 
-/** Mint a fresh link-signer keypair. */
 export function mintLinkSigner(): { sk: Uint8Array; pk: string } {
   const sk = generateSecretKey();
   return { sk, pk: getPublicKey(sk) };
 }
 
-/** Mint a fresh 16-byte unlock token. */
 export function mintToken(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(TOKEN_BYTES));
 }

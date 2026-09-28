@@ -15,9 +15,7 @@ interface WalletDialogProps {
 }
 
 export function WalletDialog({ open, onOpenChange }: WalletDialogProps) {
-  // This dialog is rendered unconditionally by its parent, so the wallet
-  // queries must be gated on `open` — otherwise they poll Esplora for the
-  // entire session.
+  // Rendered unconditionally by the parent, so gate queries on `open` or they poll Esplora all session.
   const { bitcoinAddress, addressData, btcPrice, transactions, isLoading, error, refetch } = useBitcoinWallet({ enabled: open });
   const [copiedAddress, setCopiedAddress] = useState(false);
 

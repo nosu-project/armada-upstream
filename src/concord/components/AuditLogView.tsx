@@ -41,21 +41,9 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Control-plane audit log for a Concord community — CORD-04.
- *
- * The Control Plane is an append-only stream of real-npub-signed, version-
- * chained editions. This view renders those raw editions directly (no new
- * tracking): every metadata change, role/grant, channel edit, ban, and invite-
- * registry update — WHO signed it, WHAT it did (in detail), and whether the
- * fold actually HONORED it in context (authorized + current), superseded it
- * with a later edition, or dropped it (unauthorized / forged / lost a fork).
- *
- * It shows exactly what any member could reconstruct from raw event access —
- * authorship is the seal's Schnorr signature, and the validity verdict is the
- * same fold every client runs — so nothing here is privileged or synthesised.
- *
- * Rendered inline in the main content column (replacing the chat timeline when
- * the "Audit log" view is selected), not as a modal.
+ * CORD-04 control-plane audit log: raw editions with signer, detail, and
+ * whether the fold honored, superseded or dropped each. Nothing here is
+ * privileged; any member can reconstruct it.
  */
 export function AuditLogView({ community }: { community: Community }) {
   const control = useControlEvents(community);
@@ -64,8 +52,7 @@ export function AuditLogView({ community }: { community: Community }) {
   const rows = useMemo<AuditRow[]>(() => {
     if (!control.data) return [];
     const editions = openControlEditions(control.data);
-    // The verdicts are shared with the suspicious-activity watchdog, so both
-    // read the same decision rather than each classifying for itself.
+    // Shared with the suspicious-activity watchdog so both read the same verdicts.
     const validity = classifyEditions(editions, folded);
     return editions
       .map((e) => {
@@ -105,30 +92,20 @@ export function AuditLogView({ community }: { community: Community }) {
 
 type Validity = AuditValidity;
 
-/** A normalised audit row derived from one raw control edition. */
 interface AuditRow {
   key: string;
   author: string;
   createdAt: number;
-  /** Short verb phrase, e.g. "assigned roles to". */
   action: string;
-  /** The target member pubkey (grants/bans), rendered with a name. */
   targetMembers?: string[];
-  /** Free-text detail lines (role names, permissions, channel name, etc.). */
   details: string[];
   version: bigint;
   validity: Validity;
-  /** Whether the actor cited a specific grant as their authority (non-owner actions). */
+  /** Whether the actor cited a specific grant as authority (non-owner actions). */
   citedAuthority: boolean;
   /**
-   * The edition rumor itself, for "View event JSON".
-   *
-   * Every field above is a rendering of this, so the row can be checked against
-   * the thing it claims to describe. It is the RUMOR — the bytes the author
-   * signed — rather than the opened stream event, whose wire fields are present
-   * only for an edition swept this session and absent for one read back from
-   * the store; showing those would make the same row's JSON depend on how it
-   * happened to arrive.
+   * The edition RUMOR (the signed bytes) for "View event JSON", not the stream
+   * event, whose wire fields depend on how it arrived.
    */
   rumor: NostrRumor;
 }
@@ -139,8 +116,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
   const isOwner = row.author === community.owner;
   const isTouch = useIsTouch();
   const [jsonOpen, setJsonOpen] = useState(false);
-  // One action, so the touch gesture opens it directly rather than a sheet
-  // holding a single item.
+  // One action, so long-press opens it directly.
   const longPress = useLongPress(isTouch ? () => setJsonOpen(true) : undefined);
 
   const item = (
@@ -190,8 +166,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
 
   return (
     <>
-      {/* Same split as the chat timeline: on touch the long press owns the
-          gesture, so the right-click menu isn't mounted at all. */}
+      {/* On touch the long press owns the gesture, so no context menu. */}
       {isTouch ? (
         item
       ) : (
@@ -217,7 +192,6 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
   );
 }
 
-/** A pubkey rendered as its scoped display name, inline. */
 function MemberName({ pubkey, community }: { pubkey: string; community: Community }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
@@ -267,25 +241,21 @@ function ValidityBadge({ validity }: { validity: Validity }) {
   );
 }
 
-/** Resolve a channel id (hex) to its current name, if the fold knows it. */
 function channelName(folded: FoldedControl | undefined, idHex: string): string {
   return folded?.channels.get(idHex)?.name ?? `channel ${idHex.slice(0, 8)}…`;
 }
 
-/** Human labels for a permission bitmask. */
 function permissionLabels(perms: bigint): string[] {
   const out = PERMISSION_LABELS.filter((p) => (perms & p.bit) === p.bit).map((p) => p.label);
   return out.length ? out : ["no permissions"];
 }
 
-/** Resolve role ids to their current names (falling back to a short id). */
 function roleNames(roster: CommunityRoles | undefined, roleIds: string[]): string {
   return roleIds
     .map((rid) => roster?.roles.find((r) => r.roleId === rid)?.name ?? `${rid.slice(0, 8)}…`)
     .join(", ");
 }
 
-/** Turn a raw signed edition into a detailed "who did what, and was it honored" row. */
 function toRow(
   e: ParsedEdition,
   roster: CommunityRoles | undefined,

@@ -8,13 +8,9 @@ import { emojiPackCoord, emojiPackName } from "@/hooks/useEmojiPacks";
 import type { CustomEmoji } from "@/hooks/useCustomEmojis";
 
 /**
- * The Buzz workspace's shared custom-emoji palette: the UNION of every
- * member's kind-30030 emoji set with `d = "buzz:custom-emoji"` on the host
- * relay. First-publisher wins on shortcode collisions (matching the Buzz
- * client's palette semantics closely enough for display + picking).
- *
- * Pass `undefined` (or a non-Buzz relay) to disable — the hook resolves the
- * relay's Buzz-ness itself so callers can pass any chat scope's relay.
+ * The workspace's custom-emoji palette: the union of every member's kind-30030
+ * set with `d = "buzz:custom-emoji"`. First publisher wins on shortcode clashes.
+ * Resolves Buzz-ness itself, so any relay (or undefined) may be passed.
  */
 export function useBuzzEmojiPalette(relayUrl: string | undefined): CustomEmoji[] {
   const { nostr } = useNostr();

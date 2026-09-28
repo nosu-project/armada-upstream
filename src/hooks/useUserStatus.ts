@@ -18,13 +18,7 @@ export type UserStatusType = 'general' | 'music';
 export interface UserStatus {
   /** The status message (kind-30315 content). Empty string = cleared. */
   content: string;
-  /**
-   * Optional link the status points at (NIP-38 `r` tag), already restricted to
-   * `http(s)` by {@link sanitizeUrl}. Anyone can publish a kind 30315, and this
-   * ends up in an `href` on hover over their profile, so it is sanitized HERE
-   * rather than at each of the four render sites — one of which will otherwise
-   * eventually be added without the check.
-   */
+  /** NIP-38 `r` link, sanitized to http(s) here (it lands in an `href`) rather than at each render site. */
   link?: string;
   /** Unix seconds the status expires at, if the event carried an `expiration`. */
   expiration?: number;
@@ -35,10 +29,8 @@ export interface UserStatus {
 export type UserStatusResult = { status?: UserStatus };
 
 /**
- * Whether a status's NIP-40 `expiration` has passed as of `now`. Music statuses
- * typically expire when the track ends, so callers should hide an expired one
- * even if it's still sitting in the query cache (the fetch-time check in
- * {@link parseUserStatusEvent} only runs when the event is (re)fetched).
+ * Whether a status's NIP-40 `expiration` has passed. Callers must check this
+ * too: the parse-time check only runs when the event is (re)fetched.
  */
 export function isStatusExpired(status: UserStatus | undefined, now = Date.now()): boolean {
   return (
@@ -81,18 +73,10 @@ function statusEvent(data: UserStatusResult): NostrRumor | undefined {
 }
 
 /**
- * Read a user's NIP-38 status (kind 30315). The query shape
- * `{ kinds: [30315], authors: [pubkey], '#d': [statusType], limit: 1 }`
- * is recognized by `NostrBatcher`, which merges concurrent requests for
- * different authors (e.g. an entire member list) into a single REQ — no
- * per-user subscription thread.
- *
- * A status is just a low-stakes vanity string, so it never goes stale within a
- * session — no background re-polling for either hits or misses. It's refreshed
- * only on remount/GC, and the publish path (`useSetUserStatus`) writes changes
- * straight into the cache. Treating a miss as urgent (re-checking every 60s)
- * used to make an idle channel full of status-less members — the common case —
- * generate near-constant traffic.
+ * Read a user's NIP-38 status (kind 30315). This query shape is batched by
+ * `NostrBatcher` into a single REQ across authors. Never re-polled within a
+ * session: publishes write straight into the cache, and polling misses made idle
+ * channels generate constant traffic.
  */
 export function useUserStatus(
   pubkey: string | undefined,
@@ -157,19 +141,13 @@ export interface SetUserStatusInput {
   link?: string;
   /** Status type / `d` tag. Defaults to "general". */
   type?: UserStatusType;
-  /**
-   * NIP-30 `["emoji", shortcode, url]` tags for custom emojis referenced in
-   * the content (see `collectEmojiTags`), so `:shortcode:` renders for
-   * viewers who don't have the emoji in their own collection.
-   */
+  /** NIP-30 emoji tags for custom emojis in the content. */
   emojiTags?: string[][];
 }
 
 /**
- * Publish (or clear) the current user's NIP-38 status (kind 30315). Per the
- * spec, publishing an event with empty content clears the status. On success
- * the local query cache for this user+type is updated immediately so the UI
- * reflects the change without waiting for a refetch.
+ * Publish (or clear, with empty content) the current user's NIP-38 status and
+ * update the local query cache immediately.
  */
 export function useSetUserStatus(): UseMutationResult<NostrEvent, Error, SetUserStatusInput> {
   const { mutateAsync: publish } = useNostrPublish();
@@ -193,7 +171,6 @@ export function useSetUserStatus(): UseMutationResult<NostrEvent, Error, SetUser
         tags,
       });
 
-      // Reflect the change locally right away.
       if (user) {
         queryClient.setQueryData<UserStatusResult>(
           ['user-status', type, user.pubkey],

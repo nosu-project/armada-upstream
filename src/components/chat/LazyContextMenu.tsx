@@ -9,25 +9,13 @@ export interface LazyContextMenu {
   /** Where the last right-click landed; `null` until the first one. */
   point: { x: number; y: number } | null;
   setOpen: (open: boolean) => void;
-  /** Spread on the element the right-click belongs to. */
   onContextMenu: (event: React.MouseEvent) => void;
 }
 
 /**
- * A right-click menu whose Radix root is built on the first right-click rather
- * than with its row.
- *
- * Radix's `ContextMenu` has to wrap its trigger, so a timeline that offers one
- * per message mounts a Menu root, a Popper and an anchor per row, and every
- * anchor sets its Popper's state after mount — a second render pass for every
- * row paged in, and a subtree deep enough that any context change above the
- * timeline walks all of it. Here the row only carries a `contextmenu` handler;
- * the menu itself (see {@link LazyContextMenuContent}) is a SIBLING of the row,
- * anchored at the pointer, so building it on demand never remounts the row it
- * belongs to.
- *
- * A touch or pen long-press on a hover device still arrives as a native
- * `contextmenu` event, which is all this listens for.
+ * Right-click menu whose Radix root is built on first right-click, as a SIBLING
+ * of the row anchored at the pointer. A per-row ContextMenu mounted a Popper per
+ * row plus a second render pass.
  */
 export function useLazyContextMenu(onOpenChange?: (open: boolean) => void): LazyContextMenu {
   const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
@@ -52,12 +40,7 @@ export function useLazyContextMenu(onOpenChange?: (open: boolean) => void): Lazy
   return { open, point, setOpen, onContextMenu };
 }
 
-/**
- * The menu for {@link useLazyContextMenu}: nothing until the first right-click,
- * then a dropdown anchored to a zero-size point where it landed, placed the way
- * Radix places a context menu (to the right of the pointer, top-aligned).
- * Latched once built, so closing still animates.
- */
+/** Anchored at the click point, placed like Radix's context menu. Latched once built so closing animates. */
 export function LazyContextMenuContent({
   menu,
   className,
@@ -87,13 +70,10 @@ export function LazyContextMenuContent({
         align="start"
         sideOffset={2}
         collisionPadding={collisionPadding}
-        // Inert while it animates out: a Radix item focuses itself on
-        // pointermove, so a mouse still over the closing menu took focus back
-        // from wherever the action put it (Reply's composer) and dropped it on
-        // the body when the menu unmounted.
+        // Inert while closing: Radix items focus on pointermove and would steal focus
+        // from where the action put it.
         className={cn("data-[state=closed]:pointer-events-none", className)}
-        // Never return focus to the invisible anchor: leave it where an action
-        // put it, as the context menu this replaces did.
+        // Never return focus to the invisible anchor.
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           event.preventDefault();

@@ -28,7 +28,7 @@ COPY . .
 #   VITE_DEFAULT_*             true
 #   VITE_CONCORD_AV_SERVERS    https://armada.buzz (empty disables Concord voice)
 #   VITE_KLIPY_API_KEY         unset ⇒ the keyless GIFverse backend
-#   VITE_NOSTR_PUSH_*          both unset ⇒ no web-push path
+#   VITE_NOSTR_PUSH2_*         unset ⇒ the public nostr-push2 service
 ARG VITE_APP_NAME
 ARG VITE_APP_RELAYS
 ARG VITE_BROADCAST_RELAYS
@@ -40,8 +40,8 @@ ARG VITE_KLIPY_API_KEY
 ARG VITE_DEFAULT_NOISE_SUPPRESSION
 ARG VITE_DEFAULT_ECHO_CANCELLATION
 ARG VITE_DEFAULT_AUTO_GAIN_CONTROL
-ARG VITE_NOSTR_PUSH_PUBKEY
-ARG VITE_NOSTR_PUSH_RELAYS
+ARG VITE_NOSTR_PUSH2_PUBKEY
+ARG VITE_NOSTR_PUSH2_RELAYS
 RUN npm run build
 
 # Runtime stage

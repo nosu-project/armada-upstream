@@ -1,37 +1,16 @@
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 
 /**
- * What a forwarded message carries.
- *
- * Forwarding re-sends a message's CONTENT as a new message authored by the
- * forwarder — Signal's semantics, where the recipient sees an ordinary message
- * and nothing identifies the original sender. So everything that names the
- * source is dropped: the author (implicit — the forward is composed and signed
- * fresh), the reply/quote context (`e`/`q`), the addressing (`p`), the room
- * (`h`/`a`), the disappearing deadline (`expiration` — the DESTINATION's
- * retention applies, not the source room's), and edit/routing bookkeeping.
- *
- * Two kinds of tag are NOT context but part of the content itself, and are
- * carried verbatim:
- *
- *  - `imeta` (NIP-92). A media URL in the body renders as an attachment only
- *    via its imeta, and for a client-encrypted attachment the imeta is the ONLY
- *    place the AES-GCM key/nonce exists. Dropping it forwards a ciphertext URL
- *    nobody can decrypt — a silently broken forward. Carrying the tag verbatim
- *    also means the blob is re-referenced, never re-uploaded.
- *  - `emoji` (NIP-30). A `:shortcode:` in the body is meaningless without it,
- *    and the forwarder may not have the sender's emoji collection to re-derive
- *    it from.
- *
- * Both are filtered against the outgoing text, so nothing the user edited out
- * of the draft ships as a tag for content that isn't there.
+ * Forwarding re-sends a message's CONTENT as a new message by the forwarder
+ * (Signal semantics): author, reply/quote, `p`, room, `expiration`, and edit
+ * bookkeeping are dropped. `imeta` (NIP-92; for encrypted attachments the only
+ * place the AES key lives) and `emoji` (NIP-30) are content, carried verbatim
+ * but filtered to what the outgoing text still references.
  */
 
 /**
- * An imeta field list, parsed into `key → value` (fields are `"key value"`).
- * A bare `content-warning` — a spoiler with no reason, which is how other
- * clients may spell it — is the one valueless field that means something, so
- * it is kept (as the reason Armada writes) rather than dropped with the rest.
+ * Parse an imeta tag's `"key value"` fields. A bare `content-warning` (spoiler
+ * with no reason) is kept rather than dropped as valueless.
  */
 function imetaFields(tag: string[]): Record<string, string> {
   const fields: Record<string, string> = {};
@@ -48,13 +27,8 @@ function imetaFields(tag: string[]): Record<string, string> {
 }
 
 /**
- * A NIP-17 kind-15 file message keeps its file metadata in TOP-LEVEL tags and
- * puts the bare blob URL in `content` (Amethyst/0xChat's shape) — there is no
- * imeta tag to carry. A forward is an ordinary kind-14 text message, where
- * those top-level tags mean nothing, so they're re-expressed as the equivalent
- * imeta. Without this, forwarding a received DM attachment drops
- * `decryption-key`/`decryption-nonce` and the recipient gets an undecryptable
- * blob.
+ * NIP-17 kind-15 file messages keep file metadata in top-level tags; a forward
+ * is kind 14, so re-express them as imeta or the decryption key is lost.
  */
 function fileMessageImeta(url: string, tags: string[][]): string[] | null {
   if (!/^https?:\/\//i.test(url)) return null;
@@ -84,18 +58,9 @@ function fileMessageImeta(url: string, tags: string[][]): string[] | null {
 }
 
 /**
- * Filter `tags` down to the `imeta`/`emoji` entries the text still references.
- *
- * An `imeta` is kept only while its exact URL appears in `content` (exact
- * match, because that's how the renderer pairs the two), and an `emoji` only
- * while its `:shortcode:` does — so a URL the user deleted from the draft
- * doesn't ship a tag for content that isn't there. Duplicate URLs/shortcodes
- * keep the FIRST tag: a later duplicate would win in the renderer's map, which
- * would let an appended tag silently override the one already resolved.
- *
- * `skipUrls`/`skipShortcodes` exclude entries the caller has already emitted
- * from another source (a fresh upload in this composer session, the viewer's
- * own emoji collection), which take precedence.
+ * Filter `tags` to the `imeta`/`emoji` entries still referenced (exact URL /
+ * `:shortcode:`) in `content`. Duplicates keep the FIRST tag. `skipUrls`/
+ * `skipShortcodes` exclude entries the caller already emits from elsewhere.
  */
 export function contentTagsFor(
   tags: string[][],
@@ -124,32 +89,17 @@ export function contentTagsFor(
 }
 
 /**
- * A forwarded `imeta` decomposed into the shape the composer already holds
- * uploads in: NIP-94 `[key, value]` pairs plus, separately, the AES-GCM params.
- *
- * A forwarded attachment is an ATTACHMENT, not a URL in the message text — it
- * gets a chip above the input (previewable, removable, and for an encrypted
- * blob decrypted for that preview) exactly like a file picked here, and its
- * URL is re-appended to the body on send. That's why this splits rather than
- * passing the tag through: the composer's chip rendering, draft persistence
- * and imeta regeneration all read these two structures, and reconstruct an
- * equivalent imeta from them.
- *
- * The encryption params are lifted OUT of the pairs because the composer
- * re-appends them from the encryption map; leaving them in both would emit
- * each field twice.
+ * A forwarded `imeta` split into the composer's upload shape: NIP-94 pairs plus
+ * separate AES-GCM params, so it renders as an attachment chip like a fresh
+ * upload. Encryption params are removed from the pairs or they'd be emitted twice.
  */
 export interface ForwardedAttachment {
   url: string;
-  /** NIP-94 pairs, including `["url", …]` — the composer's upload shape. */
   tags: string[][];
   encryption?: { algorithm: string; key: string; nonce: string; ox?: string };
 }
 
-/**
- * Decompose an `imeta` tag into a {@link ForwardedAttachment}, or `null` when
- * it names no URL.
- */
+/** Decompose an `imeta` tag into a {@link ForwardedAttachment}, or `null` without a URL. */
 export function forwardedAttachment(tag: string[]): ForwardedAttachment | null {
   const fields = imetaFields(tag);
   if (!fields.url) return null;
@@ -161,8 +111,7 @@ export function forwardedAttachment(tag: string[]): ForwardedAttachment | null {
 
   const tags: string[][] = [];
   for (const [name, value] of Object.entries(fields)) {
-    // `ox` rides with the encryption params (the composer re-appends it there),
-    // but is an ordinary NIP-94 field on a plaintext attachment.
+    // `ox` rides with the encryption params when encrypted, but is ordinary NIP-94 otherwise.
     if (encrypted && (name === "ox" || name.startsWith("encryption-") || name.startsWith("decryption-"))) {
       continue;
     }
@@ -176,13 +125,7 @@ export function forwardedAttachment(tag: string[]): ForwardedAttachment | null {
   };
 }
 
-/**
- * Remove `urls` from `text` and tidy the whitespace they leave behind.
- *
- * Forwarded media moves out of the body and into an attachment chip, so the
- * bare URL must not also sit in the draft — the composer re-appends it on
- * send, and leaving it would send it twice.
- */
+/** Remove `urls` from `text` (they move to attachment chips and are re-appended on send). */
 export function stripUrlsFromText(text: string, urls: Iterable<string>): string {
   const list = [...urls];
   const kept: string[] = [];
@@ -190,27 +133,21 @@ export function stripUrlsFromText(text: string, urls: Iterable<string>): string 
     let stripped = line;
     for (const url of list) stripped = stripped.split(url).join("");
     stripped = stripped.replace(/[^\S\n]{2,}/g, " ").trim();
-    // A line that held nothing but the URL goes with it — the common shape,
-    // where the media was the whole message or sat under a caption. A line
-    // that was ALREADY blank is the author's paragraph break, and stays.
+    // A line that held only the URL goes; an already-blank line is a paragraph break and stays.
     if (!stripped && line.trim()) continue;
     kept.push(stripped);
   }
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/**
- * The tags a forward of `event` should carry, given the text actually being
- * sent (the user may edit the draft before sending it).
- */
+/** Tags a forward of `event` should carry, given the (possibly edited) text being sent. */
 export function forwardableTags(
   event: { kind: number; content: string; tags: string[][] },
   content: string = event.content,
 ): string[][] {
   const out = contentTagsFor(event.tags, content);
 
-  // A kind-15's URL is its whole content, and it carries no imeta of its own —
-  // unless one is already there, which is the more specific description.
+  // A kind-15's URL is its whole content; prefer an existing imeta if present.
   if (event.kind === KIND_DM_FILE) {
     const url = event.content.trim();
     const covered = out.some((t) => t[0] === "imeta" && imetaFields(t).url === url);

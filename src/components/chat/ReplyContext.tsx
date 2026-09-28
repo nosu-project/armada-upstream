@@ -6,18 +6,9 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import type { ChatMsg } from "@/components/chat/transport";
 
 /**
- * The "replying to …" line above an inline reply, for a parent the caller has
- * ALREADY resolved.
- *
- * Concord and DMs both resolve it the same way — a by-id lookup over the
- * decoded set, because a sealed rumor is not relay-fetchable — so the only
- * thing left is to name the author and preview the content, which is this.
- * (NIP-29's parent lives on a relay, so {@link GroupChat} keeps its own
- * fetching wrapper around the same {@link ReplyContextLine} chrome.)
- *
- * Renders nothing when the parent isn't in the loaded set: a reply whose target
- * has scrolled out of history is still a readable message, and a placeholder
- * bar naming nothing is worse than no bar.
+ * "Replying to …" line for a parent the caller already resolved (Concord and
+ * DMs; NIP-29 fetches in {@link GroupChat}). Renders nothing when the parent
+ * isn't loaded.
  */
 export function ReplyContext({
   parent,

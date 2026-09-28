@@ -7,12 +7,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import type { Root, RootContent } from "hast";
 import type { ReactNode } from "react";
 
-/**
- * Render lowlight's hast output as React nodes: nested `<span>`s carrying the
- * `hljs-*` scope classes that `index.css` colors. highlight.js emits only
- * elements and text, so nothing else needs handling — and building elements
- * (rather than setting innerHTML) keeps the block inside React's escaping.
- */
+/** Lowlight hast → React `<span>`s with `hljs-*` classes (no innerHTML, so React escapes). */
 function renderHast(nodes: RootContent[], keyPrefix = ""): ReactNode[] {
   const out: ReactNode[] = [];
   nodes.forEach((node, i) => {
@@ -32,10 +27,8 @@ function renderHast(nodes: RootContent[], keyPrefix = ""): ReactNode[] {
 }
 
 /**
- * The highlighted tree for a code block. Answered synchronously from the cache
- * when this block (or an identical one) was highlighted before; otherwise the
- * grammars load in the background and the block re-renders highlighted. No
- * language, an unknown one, or an oversized block all stay plain (`null`).
+ * Highlighted tree, synchronously from cache when possible; otherwise grammars
+ * load in the background. No/unknown language or oversized blocks stay plain.
  */
 function useHighlight(code: string, lang: string | undefined): Root | null {
   const [, rerender] = useReducer((n: number) => n + 1, 0);
@@ -48,8 +41,7 @@ function useHighlight(code: string, lang: string | undefined): Root | null {
         if (!cancelled) rerender();
       },
       () => {
-        // The grammar chunk failed to load (offline, stale deploy) — the block
-        // simply stays plain.
+        // Grammar chunk failed (offline, stale deploy): stay plain.
       },
     );
     return () => {
@@ -59,7 +51,6 @@ function useHighlight(code: string, lang: string | undefined): Root | null {
   return cached ?? null;
 }
 
-/** Fenced code block, syntax-highlighted when its fence names a known language. */
 export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const tree = useHighlight(code, lang);
   const [copied, setCopied] = useState(false);
@@ -96,7 +87,6 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   );
 }
 
-/** `inline code` span. */
 export function InlineCode({ code }: { code: string }) {
   return (
     <code className="rounded-[3px] border border-border/40 bg-muted/60 px-1 py-px font-mono text-[0.85em]">

@@ -6,11 +6,7 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { toast } from "@/hooks/useToast";
 import { impact } from "@/lib/haptics";
 
-/**
- * Follow / unfollow state and toggle for a pubkey, with the toast + haptics +
- * error handling shared by the positive `FollowButton` and the negative
- * (unfollow) entry that lives in the profile card's overflow menu.
- */
+/** Shared by `FollowButton` and the profile card's unfollow menu entry. */
 export function useFollowToggle(pubkey: string) {
   const { user } = useCurrentUser();
   const { data: followData } = useFollowList();
@@ -21,7 +17,6 @@ export function useFollowToggle(pubkey: string) {
     return followData.pubkeys.includes(pubkey);
   }, [pubkey, followData]);
 
-  // Not for self or when logged out.
   const canToggle = !!user && user.pubkey !== pubkey;
 
   const toggle = useCallback(async (e?: React.MouseEvent) => {

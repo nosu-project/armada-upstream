@@ -6,11 +6,7 @@ import { parseInline } from "@/lib/markdown";
 import type { InlineNode } from "@/lib/markdown";
 import type { ReactNode } from "react";
 
-/**
- * Render an inline-markdown AST. Leaf text goes through `renderLeaf`, so the
- * caller keeps its existing plain-text pipeline (custom emoji, search-term
- * highlighting) inside bold/italic/etc. spans.
- */
+/** Render an inline-markdown AST; leaf text goes through `renderLeaf` (emoji, highlighting). */
 export function renderInlineNodes(
   nodes: InlineNode[],
   renderLeaf: (text: string) => ReactNode,
@@ -37,7 +33,6 @@ export function renderInlineNodes(
   });
 }
 
-/** Parse + render a text run's inline markdown in one step. */
 export function renderInlineMarkdown(
   text: string,
   renderLeaf: (text: string) => ReactNode,

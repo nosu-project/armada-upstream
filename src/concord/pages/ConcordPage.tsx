@@ -192,11 +192,7 @@ const EMPTY_REPLIES: ChatMsg[] = [];
 /** Shared empty feed, so a chat-presented channel keeps a stable reference. */
 const NO_POSTS: ForumPost[] = [];
 
-/**
- * What the header calls each community-wide pane that isn't a moderation one —
- * those are named by `MODERATION_TABS`, so their tab strip and the header
- * can't disagree.
- */
+/** Header names for community-wide panes that aren't moderation ones (those use `MODERATION_TABS`). */
 const PANE_HEADERS: Record<
   Exclude<Concord2Pane, ModerationPane>,
   { icon: LucideIcon; label: string }
@@ -209,9 +205,7 @@ const PANE_HEADERS: Record<
   suspicious: { icon: Shield, label: "Suspicious activity" },
 };
 
-/** The community's decrypted icon for the channel-list title. Renders nothing
- *  when the community has no icon (the header falls back to a name-only
- *  layout). */
+/** The community's decrypted icon for the channel-list title; nothing if none. */
 function TitleIcon({ icon }: { icon: ImagePointer | undefined }) {
   const url = useDecryptedImage(icon);
   if (!url) return null;
@@ -250,9 +244,10 @@ function Banner({ banner }: { banner: ImagePointer | undefined }) {
   );
 }
 
-/** Concord inline-reply context: resolve the replied-to rumor from the
- *  in-memory decoded set (rumors aren't relay-fetchable) and render the shared
- *  "replying to …" chrome. Clicking jumps the timeline to the parent. */
+/**
+ * Concord inline-reply context: resolve the parent from the in-memory decoded set
+ * (rumors aren't relay-fetchable). Clicking jumps to the parent.
+ */
 interface ChatMessage2Props {
   /** Channel route for "Copy message link" (see ChatMessage.permalink). */
   permalink?: ChatRoute;
@@ -279,18 +274,14 @@ interface ChatMessage2Props {
   onOpenThread: ((event: ChatMsg) => void) | undefined;
   onReply: ((event: ChatMsg) => void) | undefined;
   /**
-   * The inline reply's parent: its id (undefined when this isn't a reply) and
-   * the resolved message (undefined when it isn't in the decoded set). Passed
-   * as plain values rather than a ready-made element — a fresh element on every
-   * caller render would defeat this component's `memo` for every reply row.
+   * The inline reply's parent id and resolved message, as plain values — a fresh
+   * element per render would defeat `memo` for every reply row.
    */
   replyToId: string | undefined;
   replyParent: ChatMsg | undefined;
   onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
-  /** Kick/ban the author from the community; stable openers of the confirm
-   *  dialogs. `canKick`/`canBan` gate visibility per-author (KICK/BAN power,
-   *  strict outrank — already false for self and the owner). */
+  /** Kick/ban openers; `canKick`/`canBan` gate visibility per author (strict outrank). */
   onKick: ((pubkey: string) => void) | undefined;
   onBan: ((pubkey: string) => void) | undefined;
   canKick: boolean;
@@ -306,9 +297,7 @@ interface ChatMessage2Props {
   onEditCancel: () => void;
 }
 
-/** Memoized per-message binding. A normal
- *  reply quotes the parent inline (`onReply`); "reply in thread" opens the
- *  thread panel (`onOpenThread`). */
+/** Memoized per-message binding. `onReply` quotes inline; `onOpenThread` opens the thread panel. */
 const ConcordChatMessage = memo(function ConcordChatMessage({
   event,
   title,
@@ -346,23 +335,16 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   onEditCancel,
   permalink,
 }: ChatMessage2Props) {
-  // Memoized: each is a prop of the (memoized) ChatMessage below, and building
-  // them fresh on every render of this row re-rendered its whole subtree even
-  // when nothing it shows had changed.
+  // Memoized: props of the memoized ChatMessage below.
   const threadInfo = useMemo(() => threadSummary(replies), [replies]);
   const replyContext = useMemo(
     () => (replyToId ? <ReplyContext parent={replyParent} onJump={onJumpToReply} /> : undefined),
     [replyToId, replyParent, onJumpToReply],
   );
-  // Concord messages are unsigned rumors sealed at the channel's stream
-  // address — there's no relay-addressable event id, so the "Copy message ID" /
-  // "View on Ditto" off-ramps are nonsensical. Pass the rumor through so the
-  // context menu offers "View event JSON" instead.
-  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  // Concord messages are unsigned rumors with no relay-addressable id, so the
+  // context menu offers "View event JSON" instead of ID/Ditto off-ramps.
   const rumor = event;
-  // A titled post keeps its title in the timeline too: in a chat channel that
-  // is the whole affordance, and in a forum's live-chat view it marks the
-  // rows that also appear in the feed.
+  // A titled post keeps its title in the timeline too.
   const heading = useMemo(
     () =>
       title ? (
@@ -405,8 +387,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       canBan={canBan}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
-      // Only a failed row renders Retry/Discard; any other row gets no
-      // per-render closure to defeat ChatMessage's memo with.
+      // Only a failed row gets Retry/Discard closures (keeps ChatMessage's memo).
       onRetry={sendStatus === "failed" && onRetry ? () => onRetry(event) : undefined}
       onDiscard={sendStatus === "failed" && onDiscard ? () => onDiscard(event.id) : undefined}
       isEditing={isEditing}
@@ -419,10 +400,8 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
 });
 
 /**
- * The pinned footer for the Concord channel sidebar: the persistent voice call-bar
- * slot (the call UI portals here, above the account area) — mirroring the
- * NIP-29 ChannelSidebar footer. Each rendered instance (desktop pane + mobile
- * drawer) registers its own slot.
+ * Pinned footer for the Concord channel sidebar: the voice call-bar portal slot
+ * (per rendered instance) above the account area, mirroring NIP-29's ChannelSidebar.
  */
 function SidebarFooter() {
   const { user } = useCurrentUser();
@@ -435,11 +414,8 @@ function SidebarFooter() {
   }, [registerCallBarSlot]);
   return (
     <>
-      {/* Voice call bar slot — the persistent call UI portals here. */}
       <div ref={ref} className="empty:hidden shrink-0 px-2 pb-2" />
-      {/* Account area. The inner pb-2 mirrors the composer's inner `p-2` so the
-          switcher and the chat composer end at the SAME line above the safe-area
-          inset (without it the switcher sat ~8px lower). */}
+      {/* pb-2 mirrors the composer's inner `p-2` so both end on the same line. */}
       <div className="px-3 pb-safe shrink-0">
         {user ? (
           <div className="pb-2">
@@ -488,13 +464,9 @@ export const ChannelRow = memo(function ChannelRow({
   /** Opens the naming prompt — a context menu is a poor place for a text field. */
   onNewCategory?: (channel: Channel) => void;
 }) {
-  // Every Channel is callable (CORD-07): live presence drives the Discord-style
-  // nested roster under the row whenever a call is active. The rendezvous broker
-  // is NOT resolved here — a sidebar mounts every row in one commit (the channel
-  // list can't be viewport-gated, its rows being drag-reorder targets), so a
-  // per-row `useVoiceBroker` stood up one query observer per channel on every
-  // page switch. It is resolved lazily by `handleJoinVoice` instead, which
-  // already falls back to a live `resolveVoiceBroker` when handed no broker.
+  // Every Channel is callable (CORD-07); presence drives the nested roster. The
+  // broker is NOT resolved per row (one query observer per channel on every page
+  // switch); `handleJoinVoice` resolves it lazily.
   const fold = useVoicePresence(community, channel);
   const { voiceRoomPubkeys } = useVoiceActivity();
   const { isConcordChannelMuted } = useMutes();
@@ -506,26 +478,20 @@ export const ChannelRow = memo(function ChannelRow({
     ? isConcordChannelMuted("c2", community.idHex, channel.idHex)
     : false;
   const foldedParticipants = useMemo(() => fold.present.map((p) => p.author), [fold]);
-  // Raised hands (Armada client feature) read straight off the presence fold,
-  // so the roster shows them even for a call you haven't joined.
+  // Raised hands come off the presence fold, visible even when not joined.
   const raisedVoice = useMemo(
     () => new Set(fold.present.filter((p) => p.hand).map((p) => p.author)),
     [fold],
   );
-  // While YOU are in this call, the connected room's live LiveKit roster is
-  // authoritative — presence heartbeats lag (30s cadence, 90s staleness) and
-  // desync. Folded presence remains the source for calls you're not in.
+  // While in this call, LiveKit's live roster is authoritative (presence lags).
   const participants = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : foldedParticipants;
 
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
-  // A forum row offers no call: no CTA, no roster, no speaker glyph. A call
-  // is live in a chat channel when anyone is present.
+  // A forum row offers no call UI.
   const callable = channel.view !== "forum";
   const occupied = callable && participants.length > 0;
-  // While a call is live, the row wears a speaker glyph in place of its usual
-  // hashtag (or lock, or the forum's post glyph) — the surest signal there's
-  // voice to join here.
+  // A live call swaps the row's glyph for a speaker.
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block">
@@ -543,14 +509,11 @@ export const ChannelRow = memo(function ChannelRow({
                 onSelect(channel.idHex);
               }}
               className={cn(
-                // Slack-style selection: the active channel sits on a filled primary
-                // rectangle with the house cut-corner chamfer (matches ChannelSidebar).
+                // Selected: filled primary with the house cut-corner chamfer (matches ChannelSidebar).
                 "flex flex-1 min-w-0 items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left",
                 !active && "text-muted-foreground group-hover/row:text-foreground",
-                // Unread (but not selected) channels read brighter + bold (Slack).
-                // Muted channels never bold — their unread is deliberately silent.
+                // Unread reads brighter + bold, except muted channels.
                 !active && hasUnread && !muted && "text-foreground font-semibold",
-                // Muted channels read dimmer (Discord-style).
                 !active && muted && "opacity-60",
                 active && "font-medium",
               )}
@@ -563,8 +526,6 @@ export const ChannelRow = memo(function ChannelRow({
               />
               <span className="truncate flex-1 min-w-0">{channel.name}</span>
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
-              {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
-                  brighter + bold text (no dot). */}
               {hasMention ? (
                 <span
                   className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
@@ -574,10 +535,6 @@ export const ChannelRow = memo(function ChannelRow({
                 </span>
               ) : null}
             </button>
-            {/* Quick call CTA (Discord-style): join/start a call in this channel
-                without leaving the list. Always visible while a call is live;
-                otherwise appears on hover/focus (desktop only — touch devices
-                have no hover, so it stays hidden there until a call is live). */}
             {callable && !inCall && (
               <button
                 type="button"
@@ -590,8 +547,7 @@ export const ChannelRow = memo(function ChannelRow({
                 className={cn(
                   "shrink-0 flex items-center justify-center size-7 mr-1 rounded transition-opacity",
                   "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
-                  // No hover on touch devices: keep it hidden there unless a call
-                  // is already live in the channel.
+                  // No hover on touch: hidden unless a call is live.
                   !occupied && "touch:hidden",
                   occupied && "opacity-100",
                   active
@@ -604,9 +560,6 @@ export const ChannelRow = memo(function ChannelRow({
               </button>
             )}
           </div>
-          {/* Discord-style nested voice roster: who's in the call, under the row
-              (with live speaking rings while you're in it). Shown whenever a
-              call is live in the channel. */}
           {occupied && (
             <VoiceParticipantList
               participants={participants}
@@ -664,12 +617,8 @@ export const ChannelRow = memo(function ChannelRow({
 });
 
 /**
- * The community-wide "@ Mentions" pane: every cached kind-9 message that
- * p-tags the current user, across all channels, newest-first — read purely
- * from the local decrypted rumor cache. Each message is grouped under a header
- * naming its source channel; clicking a mention jumps to that message in its
- * channel. The rows reuse the shared `ChatMessage` shell (read-only — no
- * react/reply/delete in this aggregate view).
+ * Community-wide "@ Mentions" pane: cached messages p-tagging the user across
+ * channels, newest first, grouped by channel; click jumps to the message. Read-only.
  */
 function MentionsView({
   channels,
@@ -722,11 +671,8 @@ function MentionsView({
 }
 
 /**
- * A single read-only row in a community-wide pane — Mentions and All messages
- * both (unsigned rumor → "View event JSON" menu). The row is a button that
- * jumps to the message in its channel; the inner `ChatMessage`'s own controls
- * (context menu, links) stop propagation so they still work, and text remains
- * selectable.
+ * A read-only row in a community-wide pane (Mentions, All messages). The row
+ * jumps to the message; inner ChatMessage controls stop propagation.
  */
 const AggregateMessage = memo(function AggregateMessage({
   event,
@@ -739,9 +685,8 @@ const AggregateMessage = memo(function AggregateMessage({
 }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
-  // The beveled hover tint is a clipped `::before` behind the content, not a
-  // clip-path on the wrapper: clipping the wrapper also slices off
-  // ChatMessage's action toolbar, which floats above the row's top edge.
+  // Hover tint is a clipped `::before`: clipping the wrapper would slice off
+  // ChatMessage's toolbar, which floats above the row.
   return (
     <div
       role={onJump ? "button" : undefined}
@@ -770,20 +715,10 @@ const AggregateMessage = memo(function AggregateMessage({
 });
 
 /**
- * The community-wide "All messages" pane: every channel's messages merged into
- * one feed, newest first, so a community can be followed without opening each
- * channel in turn. Rows are read-only and clicking one jumps to the message
- * where it actually lives.
- *
- * Newest-first, like the other aggregate panes (a catch-up surface is read
- * from the top down), with a day divider on each calendar boundary and the
- * channel named whenever it changes — the two things a merged list needs in
- * order to stay legible as messages from different rooms interleave. A day
- * divider always restates the channel under it, so a label never appears for a
- * change the reader can't see.
- *
- * `hasMore` here is the completeness watermark, not a scroll cursor: see
- * {@link useCommunityFeed} for why the feed is cut where it is.
+ * Community-wide "All messages" pane: every channel merged newest first, with day
+ * dividers and a channel label on each change (restated after a day divider).
+ * Rows jump to the message. `hasMore` is the completeness watermark (see
+ * {@link useCommunityFeed}).
  */
 function AllMessagesView({
   channels,
@@ -810,8 +745,6 @@ function AllMessagesView({
     return m;
   }, [channels]);
 
-  // Where the dividers fall, decided in one pass so the render just walks a
-  // list rather than carrying state across a `.map`.
   const rows = useMemo(() => {
     let prevDay: number | undefined;
     let prevChannel: string | undefined;
@@ -881,11 +814,8 @@ function AllMessagesView({
 }
 
 /**
- * The community-wide "Threads" pane: every thread the current user has
- * participated in (authored the root or a reply), newest-reply first, read
- * purely from the local rumor cache. Each row shows the thread root plus a
- * reply summary; clicking it switches to that channel and opens the thread
- * panel. Unread rows (a newer reply than last opened) light up.
+ * Community-wide "Threads" pane: threads the user participated in, newest reply
+ * first; clicking opens the thread panel. Unread rows light up.
  */
 function ThreadsView({
   channels,
@@ -1000,11 +930,7 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
   );
 }
 
-/**
- * A disappearing-messages timer change (CORD-08 §4), rendered as a centered
- * notice like the DM feed's — conversation state, not a message: no avatar,
- * no actions, no reactions.
- */
+/** A disappearing-messages timer change (CORD-08 §4), rendered as a centered notice. */
 function TimerNotice({ author, seconds, self }: { author: string; seconds: number; self: string | undefined }) {
   const a = useAuthor(author);
   const name = a.data?.metadata?.name ?? author.slice(0, 8);
@@ -1019,18 +945,12 @@ function TimerNotice({ author, seconds, self }: { author: string; seconds: numbe
 }
 
 /**
- * A Concord community — CORD-01..06 Private Streams over interchangeable
- * relays, no host, no `#z` tags: every plane is kind-1059 traffic at derived
- * stream addresses. Lives at `/c/:communityId`, rehydrated from the
- * self-encrypted Community List. Renders through the SAME shared chat
- * components as NIP-29 / DMs; only the transport differs.
+ * A Concord community (CORD-01..06) at `/c/:communityId`, rehydrated from the
+ * Community List and rendered through the same chat components as NIP-29/DMs.
  */
 export function ConcordPage() {
-  // The whole location, parsed once: which channel, which community-wide pane,
-  // which thread, which message. Read through `parseChatRoute` rather than
-  // `useParams` because the panes are static segments (they have no param to
-  // read) and because it is the same parse the builder, the notification
-  // producers and the analytics sanitizer use — one spelling of the route.
+  // Parsed via `parseChatRoute` (panes are static segments with no params), the
+  // same parse the builder, notifications and analytics use.
   const location = useLocation();
   const { pathname } = location;
   const route = useMemo(() => {
@@ -1041,66 +961,45 @@ export function ConcordPage() {
   const routeChannelId = route?.channelId;
   const routePane = route?.pane;
   const { user } = useCurrentUser();
-  // Stable across navigations: every callback built on it (channel selection,
-  // thread opening, the #channel resolver in ChannelNavContext) is handed to
-  // each message row, and `useNavigate`'s per-location identity re-rendered
-  // every row — and their content — on every switch.
+  // Stable across navigations: it's passed to every message row, and
+  // `useNavigate`'s per-location identity re-rendered them all on each switch.
   const navigateTo = useStableNavigate();
   const isTouchDevice = useIsTouch();
-  // Covered by Settings: mounted but not on screen, so nothing here is being
-  // read — the read stamps below hold off until it closes.
+  // Covered by Settings: read stamps below wait until it closes.
   const covered = usePageCovered();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   const lastChannelKey = communityId ? `c2:${communityId}` : "";
 
-  // Session activation: being navigated into makes this community "live" for
-  // the rest of the session — the wire stops deferring it (unread-dot rule)
-  // and the global control sweep gives it first turn (see wire/activation).
+  // Navigating in makes this community "live" for the session (see wire/activation).
   useEffect(() => {
     if (communityId) activateScope(concordScope(communityId));
   }, [communityId]);
 
   const baseCommunity = useCommunity(communityId);
   const { data: folded } = useControlFold(baseCommunity);
-  // Overlay the folded, owner-controlled metadata onto the bundle preview.
   const community = useMemo<Community | undefined>(() => {
     if (!baseCommunity) return undefined;
     if (!folded?.metadata) return baseCommunity;
     return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
   }, [baseCommunity, folded]);
   const channels = useChannels(baseCommunity);
-  // The serial gate in front of the timeline: the community has to rehydrate from
-  // the list, the control plane has to be read and folded, and only then does a
-  // Channel (with its derived stream keys) exist for the timeline query to be
-  // ENABLED on. Each step gets a milestone so a profile shows which one the user
-  // was actually waiting on, rather than one undifferentiated "slow".
+  // Serial gate before the timeline: rehydrate → fold control plane → Channel
+  // exists. Each step gets a profiling milestone.
   usePerfMilestone("page.community resolved", Boolean(baseCommunity));
   usePerfMilestone("page.control folded", Boolean(folded));
   usePerfMilestone("page.channels resolved", channels.length > 0);
-  // Only show channel skeletons if there's nothing to render yet AND that has
-  // lasted long enough to be worth a placeholder. On a cache hit the bundle
-  // resolves within a frame or two, so the skeleton would otherwise flash for a
-  // nanosecond — which reads as a glitch. Delay it so fast loads show nothing.
-  // The list counts as "nothing to render" until the control fold resolves:
-  // before that it holds only the bundle's private channels (public channels
-  // exist only in the fold), and painting that fragment as if it were the
-  // sidebar reads as the community having lost its channels.
+  // Channel skeletons only after a delay (cache hits would flash them), and until
+  // the control fold resolves — before that the list holds only the bundle's
+  // private channels.
   const showChannelSkeleton = useDelayedFlag(!community || !folded || channels.length === 0);
 
-  // Categories are derived from the channels the member can actually see —
-  // `channelsView` has already dropped any whose key they don't hold — so a
-  // category all of whose channels are gated away simply isn't here. No
-  // separate visibility rule to keep in step (see channelCategory.ts).
+  // Categories derive from visible channels only (see channelCategory.ts).
   /**
-   * A drop the user has made but the control plane has not confirmed yet: one
-   * edition per moved channel, each a signed publish, so waiting for the fold
-   * would leave the row under the finger sitting where it was for as long as
-   * the relay takes. The overlay is the planned arrangement, applied over the
-   * folded channels and re-sorted by the same comparator `channelsView` uses,
-   * so the sidebar reads exactly as it will once the editions land. It is
-   * dropped when the fold agrees (below) or when the publish fails.
+   * Optimistic arrangement from a drop the fold hasn't confirmed yet (one signed
+   * edition per moved channel), re-sorted like `channelsView`. Dropped when the
+   * fold agrees or the publish fails.
    */
   const [pendingArrangement, setPendingArrangement] = useState<PendingArrangement | null>(null);
 
@@ -1109,8 +1008,7 @@ export function ConcordPage() {
     [channels, pendingArrangement],
   );
 
-  // Let go of the overlay the moment the fold says the same thing, so a later
-  // change from anyone else is never masked by a drop of ours that has landed.
+  // Release the overlay once the fold agrees, so it never masks later changes.
   useEffect(() => {
     if (pendingArrangement && arrangementSettled(channels, pendingArrangement)) {
       setPendingArrangement(null);
@@ -1128,10 +1026,8 @@ export function ConcordPage() {
   );
 
   /**
-   * The sidebar's rendered sequence, flattened — the uncategorized run then
-   * each category's channels, exactly as drawn. A drop index is an index into
-   * THIS, so the drag never has to translate between what the user sees and
-   * how the fold happens to be ordered (channelArrangement.ts).
+   * The sidebar's rendered sequence, flattened. Drop indices index into THIS
+   * (channelArrangement.ts).
    */
   const renderedChannels = useMemo(
     () => [...uncategorizedChannels, ...channelCategories.flatMap((group) => group.channels)],
@@ -1156,7 +1052,6 @@ export function ConcordPage() {
         if (collapsed.has(key)) collapsed.delete(key);
         else collapsed.add(key);
         const next = { ...current.collapsedChannelCategories };
-        // Don't leave an empty array behind for every community ever visited.
         if (collapsed.size > 0) next[idHex] = [...collapsed];
         else delete next[idHex];
         return { ...current, collapsedChannelCategories: next };
@@ -1165,36 +1060,28 @@ export function ConcordPage() {
     [community?.idHex, updateConfig],
   );
 
-  // Per-channel unread badges, computed purely from the local rumor cache
-  // (which the wire keeps fed for every channel of every community).
+  // Per-channel unread badges from the local rumor cache.
   const gitAttachmentsByChannel = useMemo(() => new Map(channels.map((candidate) => [
     candidate.idHex,
     channelGitRepositoryAttachments(folded?.channels.get(candidate.idHex)?.metadata ?? { name: candidate.name, private: candidate.isPrivate }),
   ])), [channels, folded]);
   const communityGitActivity = useCommunityGitActivity(gitAttachmentsByChannel);
-  // The Projects tab exists only once some channel is tied to a repository.
   const hasProjects = useMemo(
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  // `active` — this is the OPEN community, the one mount that should resolve
-  // moderation over the network. Every other caller of this hook is an ambient
-  // rail/badge surface and leaves it passive.
+  // `active`: the open community is the one mount that resolves moderation over the network.
   const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community, channels, communityGitActivity.byChannel, true);
 
-  // "Mark all as read": stamp every unread channel to its newest unread
-  // message (monotonic stamps, so already-read channels no-op).
+  // "Mark all as read" (stamps are monotonic, so read channels no-op).
   const markAllChannelsRead = useCallback(() => {
     for (const [idHex, unread] of Object.entries(unreadByChannel)) {
       markChannelRead(idHex, unread.latest);
     }
   }, [unreadByChannel, markChannelRead]);
 
-  // Community-wide "@ Mentions" — every cached kind-9 that p-tags the user,
-  // across all channels, served from the local rumor cache only. Its unread
-  // indicator has its OWN read state (not the channel read state), so opening
-  // the Mentions tab clears it without visiting every mentioning channel
-  // (issue #53; see the auto-mark effect below).
+  // "@ Mentions" from the local cache, with its OWN read state so opening the tab
+  // clears it (issue #53).
   const {
     mentions,
     isLoading: mentionsLoading,
@@ -1203,15 +1090,10 @@ export function ConcordPage() {
     markAllRead: markAllMentionsRead,
   } = useConcordMentions(community, channels);
 
-  // The community-wide "All messages" feed. Reads the store only while its
-  // pane is open — see `useCommunityFeed` on why it isn't ambient.
+  // "All messages" reads the store only while open (see `useCommunityFeed`).
   const feed = useCommunityFeed(community, channels, routePane === "all");
 
-  // Community-wide "Threads" — threads the user participated in (authored the
-  // root or a reply), newest-reply first, from the local rumor cache only.
-  // Lights up when any has replies newer than the user last opened it; opening
-  // the Threads pane marks everything in it read (see the auto-mark effect
-  // below).
+  // "Threads" the user participated in; opening the pane marks them read.
   const {
     threads,
     isLoading: threadsLoading,
@@ -1220,68 +1102,36 @@ export function ConcordPage() {
     markAllRead: markAllThreadsRead,
   } = useConcordThreads(community, channels);
 
-  // Authenticate the connection as this community's per-channel stream keys
-  // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
+  // NIP-42 auth as per-channel stream keys (plane keys are registered in MainLayout).
   useRegisterChannelStreamKeys(communityId);
 
-  // React to base-rekey rotations (adopt the new epoch, or discover removal).
-  // `stranded`: a stale invite dropped us onto a superseded epoch with no wire
-  // path forward — the link is out of date and only a refresh/Direct Invite heals.
+  // Base-rekey rotations. `stranded`: a stale invite left us on a superseded epoch.
   const { stranded } = useRekeyWatch(baseCommunity);
-  // And per-held-private-channel rotations (CORD-06 §2): adopt fresh channel
-  // keys or drop a channel we've been removed from. No-op without any.
+  // Per-private-channel rotations (CORD-06 §2).
   useChannelRekeyWatch(baseCommunity);
-  // Adopt the staff write key a promotion delivered inside my Grant
-  // (CORD-04 §3): verify the control_wrap and record the control_root in the
-  // vault, unlocking Control Plane writes on this and my other devices.
+  // Adopt a staff write key delivered in my Grant (CORD-04 §3).
   useStaffKeyWatch(baseCommunity);
-  // Keep our OWN live invite links vending the current epoch (CORD-05 §2), so a
-  // rotation on another device / by another admin doesn't leave them stale.
+  // Keep our live invite links vending the current epoch (CORD-05 §2).
   useLinkRefreshWatch(baseCommunity);
-  // Follow the fold's relay list (CORD-02 §6): a Metadata edition that moves
-  // the community's relays re-points this member (and, via the 33302
-  // write-back, their other devices) at the new set.
+  // Follow the fold's relay list (CORD-02 §6).
   useRelayFollow(baseCommunity);
-  // Honest-client compliance: a stripped CREATE_INVITE means my own live
-  // links must die — only my signer_sk can tombstone their bundles.
+  // Stripped CREATE_INVITE → tombstone my own live links (only my signer_sk can).
   useLinkAuthorityWatch(baseCommunity);
-  // Keep my live links' bundles vending the CURRENT community (metadata +
-  // epoch): a stale coordinate otherwise serves old previews to Discover and
-  // old keys to joiners until its creator happens to re-mint.
+  // Keep my live links' bundles vending current metadata + epoch.
   useLinkFreshnessWatch(baseCommunity);
-  // Durable read-cut: finish a rotating ban's rotation that a relay outage
-  // dropped, from the keep-list persisted at ban time. Mounted ONCE here.
+  // Durable read-cut: finish a rotating ban dropped by a relay outage. Mounted ONCE here.
   useReadCutRetry(baseCommunity);
-  // Stranded self-heal: while stranded, quietly re-resolve the link we joined
-  // through; once its creator refreshes the bundle, merge the fresh epoch in.
+  // Stranded self-heal: re-resolve our invite link until its bundle is refreshed.
   const { canRecover, checking: recoveryChecking, checkNow: recoveryCheckNow } = useStrandedRecovery(baseCommunity, stranded);
 
-  // Kicked/banned: the community stays on the rail but goes read-only (the
-  // composer is swapped for a banner). Cleared automatically if re-included.
+  // Kicked/banned: stays on the rail but read-only; clears if re-included.
   const excluded = useIsExcluded(communityId);
 
-  // Seeded from the route when it names a channel, else from the persisted
-  // last-open channel for this community — synchronously available from app
-  // config. Knowing the channel id at FIRST render is what lets the timeline
-  // snapshot prewarm and paint before the control fold has resolved anything
-  // (a community-only URL previously had no id until the fold, so the
-  // snapshot never engaged and the chat pane sat on a skeleton).
-  // `pickDefaultChannel` prefers this same stored id once channels resolve,
-  // and a stale id (channel since deleted) falls back to the first channel —
-  // but only once the control fold has resolved and the miss is therefore
-  // real (see the `channel` memo below).
-  // The route names the channel. When it doesn't — the community root, or a
-  // community-wide pane, both of which leave the channel implicit — fall back
-  // to the persisted last-open channel, which app config makes available
-  // synchronously on the first render. That fallback is what lets the timeline
-  // snapshot prewarm and paint before the control fold has resolved anything.
+  // Fall back to the persisted last-open channel when the route doesn't name one:
+  // knowing the id at first render lets the timeline snapshot paint before the
+  // control fold resolves.
   const channelIdHex = routeChannelId ?? (lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null);
-  // Which pane the main area shows: the selected channel's chat, or one of the
-  // community-wide panes. Navigating to a channel returns to chat by virtue of
-  // the route no longer naming a pane.
   const view: "channel" | Concord2Pane = routePane ?? "channel";
-  // The header's icon + title for a pane; null in a channel, where the header
-  // names the channel instead.
   const paneHeader =
     view === "channel" ? null : isModerationPane(view) ? MODERATION_TABS[view] : PANE_HEADERS[view];
   const selectChannel = useCallback(
@@ -1298,16 +1148,11 @@ export function ConcordPage() {
     },
     [communityId, navigateTo],
   );
-  // Projects data loads lazily: the first time the tab is opened this session,
-  // or when a ticket conversation opens (its trust set and thread need it).
+  // Projects data loads lazily (tab opened, or a ticket conversation opens).
   const [projectsTouched, setProjectsTouched] = useState(false);
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
-  // The page instance outlives navigation, so the ticket panel is closed when
-  // the reader moves to another community, channel or pane — during render,
-  // so the new surface never paints with the previous context's ticket.
-  // The ROUTE's channel, not `channelIdHex`: on a pane route that falls back
-  // to the persisted last channel, which is written a beat after a switch and
-  // would otherwise close a ticket opened in the meantime.
+  // Close the ticket panel on community/channel/pane change during render. Uses
+  // the ROUTE's channel, since the persisted fallback lags a switch.
   const ticketContextKey = `${communityId ?? ""}|${routeChannelId ?? ""}|${view}`;
   const [ticketContext, setTicketContext] = useState(ticketContextKey);
   if (ticketContext !== ticketContextKey) {
@@ -1316,10 +1161,7 @@ export function ConcordPage() {
   }
   const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
   const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched || Boolean(openTicket));
-  // Clicking a mention/search result: navigate to the surface that actually
-  // renders it. Top-level rows use `/m/<id>`; kind-1111 replies live only in a
-  // thread panel, so they use `/t/<root>/m/<id>`. The permalink hunt resolves
-  // older pages once that channel is active.
+  // Kind-1111 replies only render in a thread panel, hence `/t/<root>/m/<id>`.
   const jumpToMention = useCallback(
     (channelIdHex: string, message: ChatMsg) => {
       if (!communityId) return;
@@ -1334,10 +1176,7 @@ export function ConcordPage() {
     },
     [communityId, navigateTo],
   );
-  // Opening a thread from the Threads tab: navigate straight to the thread's
-  // own route, in whichever channel it lives. Marks it read and drops its
-  // "new" highlight (the auto-mark below keeps rows lit for the visit, but
-  // actually opening one means it's been read for real).
+  // Opening a thread from the Threads tab marks it read and drops its highlight.
   const openThreadFromList = useCallback(
     (thread: ConcordThread) => {
       markThreadRead(thread.root.id, thread.lastReplyAt);
@@ -1361,12 +1200,8 @@ export function ConcordPage() {
     [communityId, navigateTo, markThreadRead],
   );
 
-  // Having the Mentions pane on screen counts as reading it, same as Threads
-  // below: the list is flat and newest-first, so the pane being visible means
-  // the newest mention is too — advance the last-seen stamp immediately, and
-  // again as new mentions land while the pane stays open. Visibility-gated so
-  // a background tab doesn't silently eat the badge. (Unlike Threads there's
-  // no per-row "new" highlight to preserve, so no snapshot.)
+  // A visible Mentions pane counts as reading it (newest-first list), advancing
+  // the stamp as mentions land. Visibility-gated.
   useEffect(() => {
     if (view !== "mentions" || !user || !hasUnreadMention || covered) return;
     const stamp = () => {
@@ -1377,14 +1212,8 @@ export function ConcordPage() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [view, user, hasUnreadMention, markAllMentionsRead, covered]);
 
-  // Having the Threads pane on screen counts as reading it: every listed
-  // thread with unseen replies is marked read (the sidebar dot clears by just
-  // looking — no manual "mark all"), immediately and as new replies or the
-  // initial scan land while the pane stays open. The rows keep their "new"
-  // highlight for the visit, though: `freshThreadIds` snapshots each root as
-  // it's auto-cleared so the visual survives the read map advancing, and
-  // resets on leaving the pane. Visibility-gated like the channel read stamp
-  // below, so a background tab doesn't silently eat unread threads.
+  // A visible Threads pane marks its threads read; `freshThreadIds` keeps rows lit
+  // for the visit. Visibility-gated.
   const [freshThreadIds, setFreshThreadIds] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
     if (view !== "threads") {
@@ -1408,8 +1237,6 @@ export function ConcordPage() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [view, user, hasNewThreadReplies, threads, markAllThreadsRead, covered]);
 
-  // What the Threads pane renders: the live list, with the just-auto-cleared
-  // roots still lit as "new" for this visit.
   const displayedThreads = useMemo(
     () =>
       threads.map((t) =>
@@ -1417,22 +1244,15 @@ export function ConcordPage() {
       ),
     [threads, freshThreadIds],
   );
-  // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
     () => channels.map((c) => ({ name: c.name, go: () => selectChannel(c.idHex) })),
     [channels, selectChannel],
   );
   const channelNav = useChannelNavValue(navChannels);
 
-  // Until the control fold resolves, `channels` holds ONLY the private
-  // channels carried in the bundle (channelsView renders held keys without
-  // waiting for the fold) — a public channel named by the URL is not findable
-  // yet. So before the fold, a miss means "not known yet", not "deleted": stay
-  // unresolved rather than falling back, or the reader is dropped into the
-  // first private channel, yanked to the right one when the fold lands, and
-  // the wrong id is persisted as last-open along the way. Same for the
-  // default pick on a channel-less URL, which the canonicalize effect below
-  // would otherwise write into the address bar for good.
+  // Before the control fold, `channels` holds only the bundle's private channels,
+  // so a miss means "not known yet": stay unresolved rather than fall back (and
+  // persist or canonicalize the wrong id).
   const channel = useMemo(() => {
     if (channels.length === 0) return undefined;
     if (channelIdHex) {
@@ -1449,50 +1269,38 @@ export function ConcordPage() {
     );
   }, [channels, channelIdHex, folded, config.lastChannelByServer, lastChannelKey]);
 
-  // The chat scope for in-message app affordances (a `.xdc` launch card) and
-  // the top-of-chat app stage. Present only once both community + channel
-  // resolve; drives `useChatScope()` and `<AppStageSlot>` like the NIP-29
-  // page does.
+  // Chat scope for in-message app affordances and the app stage (like NIP-29).
   const appScope = useMemo<AppScope | undefined>(
     () => (community && channel ? { kind: "concord", community, channel } : undefined),
     [community, channel],
   );
 
-  // Stable "Copy message link" route — a fresh object per row in `renderMessage`
-  // would defeat every message's memo.
+  // Stable route object, or every message's memo breaks.
   const permalink = useMemo<ChatRoute | undefined>(
     () => (communityId && channel ? { kind: "concord", communityId, channelId: channel.idHex } : undefined),
     [communityId, channel],
   );
 
-  // A running Mini App captured this scope when it launched, and a rotation
-  // replaces the channel's keys without changing its id — so hand the live one
-  // back, or the app keeps sealing under an epoch the channel has retired and
-  // every other member silently drops what it publishes.
+  // A Mini App captured this scope at launch; rotations swap keys under the same
+  // id, so hand back the live one or it seals under a retired epoch.
   const { refreshScope } = useApps();
   useEffect(() => {
     if (appScope) refreshScope(appScope);
   }, [appScope, refreshScope]);
 
-  // Individual mute states for the ⋮ menu. Like GroupPage, the side-by-side
-  // "Mute channel" / "Mute community" items each reflect only their own scope
-  // (no cascade), so a muted community doesn't flip the channel item.
+  // Channel/community mute items each reflect only their own scope (like GroupPage).
   const channelMuted = Boolean(
     community && channel &&
     mutedChannels.has(concordChannelMuteKey("c2", community.idHex, channel.idHex)),
   );
   const communityMuted = Boolean(community && isCommunityMuted(`c2:${community.idHex}`));
 
-  // Remember the channel once the reader has settled on it, not on every hop:
-  // a config write re-renders every component that reads the app config —
-  // which, mid channel-switch, is most of the app. A channel left within the
-  // delay is never recorded; leaving the community flushes the pending write,
-  // so the last channel viewed is still the one remembered.
+  // Remember the channel only once settled: config writes re-render most of the
+  // app. Leaving the community flushes the pending write.
   const channelIdToRemember = channel?.idHex;
   const pendingLastChannel = useRef<((() => void) & { key?: string }) | undefined>(undefined);
   useEffect(() => {
     if (!lastChannelKey || !channelIdToRemember) return;
-    // Moving to another community: the one being left keeps its channel.
     if (pendingLastChannel.current && pendingLastChannel.current.key !== lastChannelKey) {
       pendingLastChannel.current();
     }
@@ -1510,16 +1318,9 @@ export function ConcordPage() {
   }, [channelIdToRemember, lastChannelKey, updateConfig]);
   useEffect(() => () => pendingLastChannel.current?.(), []);
 
-  // Canonicalize the community root: `/c/<id>` resolves a default channel to
-  // render, so name it in the URL once it is known. Without this the address
-  // bar keeps claiming the community while the reader is looking at a
-  // channel — and "Copy message link" would build a link that lands elsewhere
-  // for anyone whose default resolves differently.
-  //
-  // `replace`, because this is the app finishing the reader's navigation
-  // rather than a new one: a pushed entry here would make Back bounce between
-  // the bare URL and its own redirect. A pane route is already canonical and
-  // deliberately leaves the channel implicit, so it is left alone.
+  // Canonicalize `/c/<id>` to name the resolved default channel, so the URL and
+  // copied links are accurate. `replace` so Back doesn't bounce. Pane routes are
+  // left alone.
   useEffect(() => {
     if (!communityId || routeChannelId || routePane || !channel) return;
     navigateTo(chatRoute({ kind: "concord", communityId, channelId: channel.idHex }), {
@@ -1554,47 +1355,27 @@ export function ConcordPage() {
   const canManageRoles = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_ROLES));
   const canManageMetadata = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA));
   const canManageChannels = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS));
-  // Community pause (CORD-04 §8): a frozen room. Nobody posts — every member
-  // (staff included) drops the chat wire to save bandwidth, so a message would
-  // reach no live audience — so the composer is disabled for everyone; a manager
-  // resumes it (banner / menu) to talk. The timeline's staff-exempt collapse
-  // (foldTimeline) is a separate, rendering-only concern.
+  // Community pause (CORD-04 §8): everyone drops the chat wire, so the composer is
+  // disabled for all; a manager resumes it.
   const communityPaused = Boolean(communityPause);
   const canCreateInvite = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.CREATE_INVITE));
-  // Only the owner and admins may mint a shareable invite link. A plain member
-  // still opens the invite dialog and invites people one by one (direct key
-  // handoff); the link section is hidden from them. Same owner-or-admin gate the
-  // Discover share below uses.
+  // Only owner/admins may mint a shareable link; members invite one by one.
   const iAmAdminOrOwner = Boolean(user && (iAmOwner || (roster ? badgeOf(roster, user.pubkey) === "admin" : false)));
   const canKickAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.KICK));
   const canBanAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.BAN));
-  // Reports are encrypted to the Control Plane address, so reading the queue is
-  // exactly holding that epoch's secret — no roster bit is consulted, because
-  // none could be: nothing else can decrypt them. Absent on a legacy epoch,
-  // which has no staff-only address and therefore no reports either.
+  // Reading reports = holding this epoch's Control Plane secret; none on legacy epochs.
   const canReadReports = Boolean(community && reportInboxSecret(community));
-  // Channel-targeted authority honors role scope: a Role scoped to one channel
-  // moderates there and nowhere else (its bits are inert outside it).
+  // Channel-targeted authority honors role scope.
   const canModerateMessages = Boolean(
     user && folded && channel &&
     isAuthorizedIn(folded.roster, user.pubkey, ownerHex, channel.idHex, Permissions.MANAGE_MESSAGES),
   );
-  // A dissolved community is terminal: the owner has torn it down, so no key
-  // rotation or new messages will ever land. Keep it fully readable (members
-  // asked to still see the history), but freeze every write path.
-  //
-  // `excluded` (a moderator rotated the keys without us) and `stranded` (a stale
-  // invite dropped us onto a superseded epoch) are equally write-dead: our new
-  // messages would be encrypted to keys nobody keeps. All three replace the main
-  // composer with a notice; folding them into `canWrite` freezes the same write
-  // paths everywhere else too — timeline reply/edit and the thread composer.
+  // Dissolved, `excluded` (rotated out) and `stranded` communities stay readable
+  // but write-dead; folded into `canWrite` to freeze every write path.
   const { data: dissolved } = useDissolved(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
-  // Which tabs the moderation panel offers this viewer. The audit log and the
-  // invite links are open to every member — a community's history and the links
-  // that let people in are things it owes its members — so the panel always has
-  // something to show, and "Moderation" is always in the menu.
+  // Audit log and invite links are open to every member, so "Moderation" always shows.
   const moderationAccess: ModerationAccess = useMemo(
     () => ({
       members: canManageRoles || canKickAny || canBanAny || canCreateInvite,
@@ -1616,21 +1397,15 @@ export function ConcordPage() {
     route,
   );
 
-  // Physically purge this community's expired disappearing messages
-  // (CORD-08 §3) — the sweep self-gates to one walk per interval, and every
-  // read path filters expired rows regardless, so this is hygiene, not a gate.
+  // Purge expired disappearing messages (CORD-08 §3); hygiene, reads filter anyway.
   const sweepIdHex = community?.idHex;
   useEffect(() => {
     if (sweepIdHex) void sweepExpiredCommunityRumors(sweepIdHex);
   }, [sweepIdHex]);
 
-  // Pins (CORD-04 §7). Building a proof needs the ORIGINAL seal, not the
-  // rendered message, so the toggle reaches back into the opened-rumor cache
-  // by rumor id — the decrypted row alone can prove nothing.
+  // Pins (CORD-04 §7) need the ORIGINAL seal, from the opened-rumor cache.
   const pins = usePins(community, channel, openedById);
-  // Read through a ref: `pins` is a fresh object per render and `openedById`
-  // changes with every page of messages, and this toggle is a prop of every
-  // row — a new identity per render re-rendered the whole loaded timeline.
+  // Via a ref so this per-row toggle keeps a stable identity.
   const pinDeps = useRef({ pins, openedById });
   pinDeps.current = { pins, openedById };
   const togglePin = useCallback(
@@ -1655,18 +1430,14 @@ export function ConcordPage() {
     },
     [],
   );
-  // Git activity remains its own event domain. The store-first channel hook
-  // supplies attached repository activity; this page only merges its display
-  // order with decrypted chat rumors.
+  // Git activity is its own domain; this only merges display order with chat.
   const gitAttachments = useMemo(
     () => channelGitRepositoryAttachments(folded?.channels.get(channel?.idHex ?? "")?.metadata ?? { name: channel?.name ?? "", private: Boolean(channel?.isPrivate) }),
     [folded, channel?.idHex, channel?.name, channel?.isPrivate],
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
   const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries), [baseTransport.messages, gitActivity.activities, timerEntries]);
-  // Memoized: this parallel array feeds a hook that settles once, and
-  // rebuilding it on every page render was a full-timeline allocation per
-  // keystroke/hover anywhere on the page.
+  // Memoized: rebuilding per render allocated the full timeline.
   const dividerEntries = useMemo(
     () =>
       mixedEntries.map((entry) => ({
@@ -1683,16 +1454,13 @@ export function ConcordPage() {
     setOpenTicket(ticket);
     void projects.refreshTicket(ticket);
   }, [projects]);
-  // Stable identity so an unchanged Git row's props don't churn (React.memo).
-  // Depends on the hook's own `refreshTicket` callback, not on the result
-  // object, which the hook rebuilds on every render.
+  // Stable identity (depends on `refreshTicket`, not the rebuilt result object).
   const refreshChannelTicket = gitActivity.refreshTicket;
   const openChannelTicket = useCallback((ticket: GitTicket) => {
     setOpenTicket(ticket);
     void refreshChannelTicket(ticket);
   }, [refreshChannelTicket]);
-  // The conversation panel merges gated channel activity with the Projects
-  // view's full history, so a ticket opened from either surface reads complete.
+  // Merge channel activity with the Projects history so a ticket reads complete.
   const panelActivities = useMemo(
     () => projects.activities.length === 0
       ? gitActivity.activities
@@ -1700,10 +1468,8 @@ export function ConcordPage() {
     [gitActivity.activities, projects.activities],
   );
   const gitActions = useGitWorkItemActions();
-  // The ticket's repository as this community holds it (address + trust set).
-  // No first-tag fallback: `a` tag order is author-controlled, so guessing
-  // could grant a fork owner status controls (and mis-tag emitted statuses)
-  // while the projects data is still loading. Controls appear once it lands.
+  // No first-tag fallback: `a` tag order is author-controlled, so guessing could
+  // grant a fork owner status controls. Controls appear once projects data lands.
   const ticketRepository = useCallback((ticket: GitTicket): GitWorkItemRepository | undefined => {
     const held = new Set(projects.repos.map((repo) => repo.coord));
     const address = matchGitTicketRepository(ticket, held);
@@ -1752,45 +1518,22 @@ export function ConcordPage() {
   }, [gitActions, projects]);
   const { mutateAsync: send } = useSendMessage(community, channel);
 
-  // (useActiveRoom is called below, after `threadRoot` is defined, so it can
-  // also pass thread-level keys for notification suppression.)
-
-  // Mark the open channel read up to its newest timeline entry (chat or git)
-  // while it's on screen —
-  // immediately and again on tab refocus (mirrors GroupChat's NIP-29 behavior).
-  // Reading a channel naturally also consumes what it shows: mentions of the
-  // user and new replies in threads they participate in get their own stamps
-  // advanced too, so the Mentions/Threads tabs don't re-badge what was already
-  // read here.
-  //
-  // The stamp is the MAX of the newest rendered row and the badge's own
-  // `latest` (useConcordUnread). Those two can disagree: the render fold drops
-  // rows the badge scan still counts — a moderator-authorized delete (deleter
-  // != author), a banned author, an expired (NIP-40) message — because the
-  // badge path has no roster (see useConcordUnread). When the NEWEST message in
-  // a channel is one of those, the newest rendered row is strictly older than
-  // the badge's `latest`, and since markRead is monotonic (>=), a stamp to the
-  // rendered row alone can never reach it — the channel stays unread forever, no
-  // matter how often it's opened. Clearing to the badge's own `latest` closes
-  // that whole class by construction: whatever made the badge fire, opening the
-  // channel consumes exactly it.
+  // Mark the open channel read while on screen (and on refocus), also advancing
+  // mentions/threads stamps for what it shows. The stamp is the MAX of the newest
+  // rendered row and the badge's `latest`: the render fold drops rows the badge
+  // counts (mod deletes, banned, expired), and markRead is monotonic, so the
+  // rendered row alone could leave the channel unread forever.
   const channelIdForRead = channel?.idHex;
   const readerPubkey = user?.pubkey;
-  // Read inside stamp() rather than as an effect dep, so a read-state recompute
-  // (every markRead, anywhere) doesn't re-register the visibilitychange listener.
+  // Read in stamp() rather than as a dep, so read-state changes don't re-register the listener.
   const unreadByChannelRef = useRef(unreadByChannel);
   unreadByChannelRef.current = unreadByChannel;
   useEffect(() => {
     if (!readerPubkey || !channelIdForRead || covered) return;
-    // Newest rendered row, if any. May be 0 when every message in the channel
-    // is one the render fold drops (all mod-deleted / banned / expired); the
-    // badge's own `latest` (read in stamp() below) still clears it in that case.
-    // markChannelRead no-ops on a <= 0 stamp, so an empty channel is harmless.
+    // Newest rendered row; may be 0 (badge `latest` still clears it; markChannelRead ignores <= 0).
     const latest = mixedEntries[mixedEntries.length - 1]?.createdAt ?? 0;
 
-    // The newest visible mention of the user (never self-authored — the tab
-    // doesn't surface self-mentions), and the newest visible reply per
-    // participated thread.
+    // Newest visible mention of the user and newest reply per participated thread.
     let newestMention = 0;
     const followedRoots = new Set(threads.map((t) => t.root.id));
     const replyStamps = new Map<string, number>();
@@ -1823,11 +1566,7 @@ export function ConcordPage() {
   const { leave, isLeaving, dissolve, createChannel, privatiseChannel, mintAccessRole, setChannelCategory, arrangeChannels } =
     useCommunityManagement(community);
   const retireLinks = useRetireCommunityLinks(community);
-  /**
-   * The dissolve toast's Retry. The community is gone by now, so this runs
-   * the retirement's own `retry`, which holds exactly what missed — and a
-   * miss again re-raises the same toast with the next `retry`.
-   */
+  /** Dissolve toast Retry: runs the retirement's own `retry` with what missed. */
   const showRetirementMiss = (outcome: RetirementOutcome) => {
     const retry = outcome.retry;
     if (!retry) return;
@@ -1839,11 +1578,7 @@ export function ConcordPage() {
     }));
   };
 
-  /**
-   * File one channel, from the sidebar's own context menu — the same edition
-   * the community-settings row publishes, just reachable where the arrangement
-   * is actually visible.
-   */
+  /** File one channel from the sidebar context menu (same edition as settings). */
   const fileChannel = useCallback(
     async (channelIdHex: string, category: string | undefined) => {
       try {
@@ -1860,21 +1595,14 @@ export function ConcordPage() {
   );
 
   /**
-   * Re-file every channel in a category at once — what "rename" and "ungroup"
-   * mean when a category is only ever the set of channels naming it. One
-   * edition per channel, sequentially so a rate-limited relay doesn't drop
-   * half of them, and each is independently version-chained (they are
-   * different entities), so a failure part-way leaves a half-renamed category
-   * rather than a corrupt one. Renaming onto a name already in use merges.
+   * Re-file every channel in a category (rename / ungroup). Sequential so a
+   * rate-limited relay doesn't drop some; each is its own entity, so partial
+   * failure is safe. Renaming onto an existing name merges.
    */
   /** The column the drag pans by hand on touch (rows are `touch-action: none`). */
   const channelScrollRef = useRef<HTMLElement | null>(null);
 
-  /**
-   * Measure the drop points off the DOM at pickup. Each row offers two — its
-   * top edge and its bottom edge — so the ends of every run and every category
-   * are reachable without enumerating them; nearest-y wins.
-   */
+  /** Measure drop points at pickup: each row's top and bottom edge; nearest-y wins. */
   const measureDropSlots = useCallback((): ChannelDropSlot[] => {
     const root = channelScrollRef.current;
     if (!root) return [];
@@ -1887,10 +1615,7 @@ export function ConcordPage() {
       out.push({ index, category, y: rect.top });
       out.push({ index: index + 1, category, y: rect.bottom });
     }
-    // Only present once a drag is in flight, which is why the slots are
-    // re-measured after the chrome mounts (useChannelDrag.ts). The channel
-    // lands at the end of the sequence, so the index is the row count — each
-    // row contributed two slots above.
+    // Present only mid-drag (hence re-measured after the chrome mounts); index = row count.
     const zone = root.querySelector<HTMLElement>("[data-ch-newzone]");
     if (zone) {
       const rect = zone.getBoundingClientRect();
@@ -1908,8 +1633,7 @@ export function ConcordPage() {
     (sourceIdHex: string, drop: ChannelDrop) => {
       const source = renderedChannels.find((c) => c.idHex === sourceIdHex);
       if (!source) return;
-      // A brand-new category has no name yet, so the drop becomes the naming
-      // prompt; the channel is filed when it's answered.
+      // A new category needs a name: the drop opens the naming prompt.
       if (drop.newCategory) {
         setCategoryPrompt({ channels: [source], initial: "" });
         return;
@@ -1922,14 +1646,10 @@ export function ConcordPage() {
       const plan = planChannelDrop(before, sourceIdHex, drop.index, drop.category);
       const changes = arrangementChanges(before, plan);
       if (changes.length === 0) return;
-      // Show the whole planned arrangement, not just the changed run: it is
-      // what the sidebar will read once the editions land, and `before` was
-      // itself read off the rendered order, so a second drag before the first
-      // confirms plans against what the user is looking at.
+      // Show the whole planned arrangement (what the sidebar will read once landed).
       setPendingArrangement(pendingFromPlan(plan));
       void arrangeChannels(changes).catch((e: unknown) => {
-        // Put the sidebar back: nothing was published, so the optimistic order
-        // is a claim about the community that isn't true.
+        // Nothing published: restore the sidebar.
         setPendingArrangement(null);
         toast({
           title: "Couldn't rearrange the channels",
@@ -1978,21 +1698,16 @@ export function ConcordPage() {
     });
     selectChannel(created);
   }, [createChannel, selectChannel]);
-  // Repositories already connected anywhere in this community (wizard dedupe).
   const connectedCoordinates = useMemo(
     () => new Set([...gitAttachmentsByChannel.values()].flatMap((list) => list.filter((a) => a.detachedAt === undefined).map((a) => a.address.coordinate))),
     [gitAttachmentsByChannel],
   );
   const { coalesced } = useGuestbook(community);
 
-  // Voice (CORD-07): the rendezvous broker (a no-op for text channels) powers
-  // the join button. No presence subscription here — the broker is resolved
-  // from config alone, and the channel row that renders the call's roster
-  // subscribes for itself.
+  // Voice (CORD-07): broker from config; channel rows subscribe to presence themselves.
   const { joinConcordCall, activeCall } = useCall();
   const { speakingPubkeys, mutedPubkeys } = useVoiceActivity();
-  // The community's own brokers (CORD-02 §6), read off the fold this page
-  // already holds rather than subscribed to again in every channel row.
+  // Community brokers (CORD-02 §6) from the fold already held.
   const avBrokers = useMemo(() => communityAvBrokers(folded?.metadata), [folded?.metadata]);
   const { data: activeBroker } = useVoiceBroker(channel, avBrokers);
   const inThisVoice = Boolean(
@@ -2005,8 +1720,7 @@ export function ConcordPage() {
       if (activeCall?.concord?.channel.idHex === ch.idHex) return; // already there
       let resolved = broker;
       if (!resolved) {
-        // The broker query may still be loading, or a transient probe failure
-        // cached `null` — re-run the rendezvous live instead of refusing.
+        // Broker may be loading or a cached `null`; re-run the rendezvous live.
         const roomHex = ch.voice.room.pk;
         resolved = roomHex ? await resolveVoiceBroker(roomHex, avBrokers) : null;
       }
@@ -2020,21 +1734,17 @@ export function ConcordPage() {
         });
         return;
       }
-      // Members on another broker are reported by the room itself, which knows
-      // the origin that actually minted rather than the one nominated here.
+      // Members on another broker are reported by the room (it knows the real origin).
       joinConcordCall({ community, channel: ch, broker: resolved });
     },
     [community, user, activeCall, joinConcordCall, avBrokers],
   );
 
-  // Compliant self-removal: if the folded Banlist or the coalesced Guestbook
-  // names ME as removed, silently tear down the local copy and route home
-  // (CORD-04 §4/§6).
+  // Compliant self-removal (CORD-04 §4/§6): tear down locally and route home.
   useSelfRemove(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
   const [creatingChannel, setCreatingChannel] = useState(false);
 
-  // Close the create-channel wizard when switching communities — the user's
-  // MANAGE_CHANNELS permission doesn't carry over.
+  // Close the create-channel wizard on community switch (permissions differ).
   useEffect(() => {
     setCreatingChannel(false);
     setCommunityMenuOpen(false);
@@ -2044,88 +1754,46 @@ export function ConcordPage() {
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [kickTarget, setKickTarget] = useState<string | null>(null);
-  // Stable single-element arrays for the confirm dialogs. A fresh `[target]`
-  // literal every render is a new prop identity, which retriggers the dialog's
-  // "reset on new selection" effect on every parent re-render — including the
-  // ones react-query fires while the kick/ban mutation is in flight, which
-  // wiped the progress and re-enabled the button mid-action.
+  // Stable single-element arrays: a fresh `[target]` retriggers the dialog's
+  // reset effect mid-mutation.
   const kickTargets = useMemo(() => (kickTarget ? [kickTarget] : null), [kickTarget]);
   const banTargets = useMemo(() => (banTarget ? [banTarget] : null), [banTarget]);
   const [rotateKeysOpen, setRotateKeysOpen] = useState(false);
-  /**
-   * The pending "name a category" prompt. A category has no id, so naming one
-   * is the same act whether it is being created (file one channel under a new
-   * name) or renamed (re-file every channel currently under the old one) —
-   * hence one prompt with two targets rather than two dialogs.
-   */
+  /** Pending "name a category" prompt: create (file one channel) or rename (re-file all). */
   const [categoryPrompt, setCategoryPrompt] = useState<
     { channels: Channel[]; initial: string } | null
   >(null);
-  // The community-name header menu (Discord-style): expands inline below the
-  // header, pushing the channel list down with a height animation.
+  // Community-name header menu, expanding inline below the header.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
-  /** Member roster pane, persisted in app config (`memberListVisible`). Defaults
-   * OFF on touch devices (a landscape phone crosses the 900px breakpoint but is
-   * too short to spare the roster width); openable from the header toggle. On
-   * real desktop it stays on. Once the user hides or shows it, that choice is
-   * remembered across visits. */
+  /** Member roster pane (`memberListVisible`); defaults off on touch devices, remembered once toggled. */
   const membersVisible = config.memberListVisible ?? !isTouchDevice;
   const toggleMembersVisible = () =>
     updateConfig((c) => ({ ...c, memberListVisible: !(c.memberListVisible ?? !isTouchDevice) }));
-  // Header message search: expands inline over the header, swapping the timeline
-  // for community-wide (cross-channel) results while active. `searchFilters`
-  // holds the structured query (text + channels + authors + media facet).
+  // Header search: community-wide results replace the timeline while active.
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(EMPTY_SEARCH_FILTERS);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [createEventOpen, setCreateEventOpen] = useState(false);
-  // Mobile: landing on the community root (no channel in the URL) shows the
-  // channel list, not a chat pane — selecting a community should let you pick a
-  // channel, not auto-dive into one. A deep link with a channel opens chat
-  // directly. (On desktop the SwipeReveal is inert — both panes always show.)
+  // Mobile: the community root shows the channel list; a deep link opens chat.
   const [channelsOpen, setChannelsOpen] = useState(!routeChannelId);
-  // This page instance is reused across community switches (the route pattern
-  // is stable), so the initial state above only applies to the first mount.
-  // Reset the reveal state to match the destination route *during render* (not
-  // in a post-paint effect): switching community navigates to its root
-  // (no channel), so `channelsOpen` must already be `true` on the first render
-  // after the route change. A lagging effect would paint one frame of the
-  // (stale) chat pane first — the "flash of the previous chat" glitch. A deep
-  // link with a channel opens chat directly.
-  //
-  // Keyed on the COMMUNITY, not on the community+channel pair: the root route
-  // canonicalizes itself to a channel (see the redirect above), so a key that
-  // included the channel would fire a second time the instant that redirect
-  // lands and slam the list shut again — the list would flash and never stay
-  // open. What matters is how the reader ARRIVED at this community, which is
-  // exactly what the first render for a new `communityId` sees. Selecting a
-  // channel or a pane still closes the list, explicitly, at each call site.
+  // The page is reused across communities, so reset the reveal during render (an
+  // effect would flash the previous chat). Keyed on the COMMUNITY only: the root
+  // redirect to a channel would otherwise re-close the list.
   const [navKey, setNavKey] = useState(communityId);
   if (navKey !== communityId) {
     setNavKey(communityId);
     setChannelsOpen(!routeChannelId);
   }
-  // A permalink names one message, and messages are only visible in the chat
-  // pane — so honouring one means the list cannot stay revealed. Keying the
-  // reveal on the COMMUNITY alone (above) misses exactly this: a notification
-  // for a channel in the community already open leaves `channelsOpen` true, and
-  // the destination the reader was sent to sits parked off-screen behind the
-  // list. Keyed on the NAVIGATION rather than on the message id, for the same
-  // reason `useMessagePermalink` keys its own once-per-arrival guard that way:
-  // tapping one notification twice must land twice, and an id-keyed check sees
-  // no change on the second tap and leaves the list sitting over the
-  // destination. Firing once per arrival leaves the reader free to swipe the
-  // list back open afterwards, and the mount seeds rather than fires, because
-  // `channelsOpen` above already initializes from the arriving route.
+  // A permalink must show the chat pane, even within the already-open community.
+  // Keyed per NAVIGATION (like `useMessagePermalink`), so tapping one notification
+  // twice lands twice; the mount seeds rather than fires.
   const [focusNavKey, setFocusNavKey] = useState(location.key);
   if (focusNavKey !== location.key) {
     setFocusNavKey(location.key);
     if (route?.messageId) setChannelsOpen(false);
   }
-  // The open channel as a route: what the thread panel pushes `/t/<root>`
-  // onto, what "Copy message link" stamps a message id onto, and what the
-  // legacy `?m=`/`?thread=` translation redirects into.
+  // The open channel's route (thread panel, message links, legacy query redirects).
   const channelRoute = useMemo(
     () =>
       communityId && channel
@@ -2145,8 +1813,7 @@ export function ConcordPage() {
     closeThread,
   } = useThreadPanel({ room: channelRoute, messages: allMessages, canWrite });
 
-  // Search is community-wide, so it survives channel switches but resets when
-  // the community changes.
+  // Search survives channel switches, resets on community change.
   const [searchCommunityKey, setSearchCommunityKey] = useState(communityId);
   if (searchCommunityKey !== communityId) {
     setSearchCommunityKey(communityId);
@@ -2155,23 +1822,15 @@ export function ConcordPage() {
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
 
-  // Tell the native notification service this channel (and, if a thread panel
-  // is open, that specific thread) is on screen, so it suppresses redundant
-  // tray entries. Cleared on unmount/background. The roomKey shapes must match
-  // the service: `c2:<channelIdHex>` for the channel, `c2:<channelIdHex>:t:<rootId>`
-  // for a specific open thread.
+  // Tell the native notification service what's on screen. roomKey shapes must
+  // match the service: `c2:<channelIdHex>` and `c2:<channelIdHex>:t:<rootId>`.
   useActiveRoom(
     channel?.idHex ? `c2:${channel.idHex}` : undefined,
     channel?.idHex && threadRoot ? `c2:${channel.idHex}:t:${threadRoot.id}` : undefined,
   );
 
-  // Member list: the coalesced Guestbook (joins) ∪ observed authors ∪ roster,
-  // minus the banned — the Complete Memberlist (CORD-02 §5).
-  //
-  // The Admin/Mod tier badge follows the STOCK Admin/Moderator roles only
-  // (the same name-match setTier grants by), never permission-bit inference:
-  // a custom role carrying management bits shows as itself — its hoisted
-  // section or name chip — not as a phantom "Mod".
+  // Member list: Guestbook ∪ observed authors ∪ roster, minus banned (CORD-02 §5).
+  // Admin/Mod badges follow only the STOCK roles, never permission-bit inference.
   const memberAdmins = useMemo(() => {
     const out: Array<{ pubkey: string; roles: string[] }> = [];
     if (ownerHex) out.push({ pubkey: ownerHex, roles: ["owner"] });
@@ -2191,10 +1850,8 @@ export function ConcordPage() {
     return out;
   }, [roster, ownerHex]);
 
-  // The per-member "Roles" picker: every role, position-ordered (ties broken by
-  // the lower role_id, the display rule of CORD-04 §3), each flagged with
-  // whether the viewer outranks its position — the same gate the fold applies,
-  // so an un-assignable role renders disabled instead of failing on publish.
+  // Per-member Roles picker in CORD-04 §3 order, each flagged by whether the viewer
+  // outranks it (so un-assignable roles render disabled).
   const roleCatalog = useMemo(() => {
     if (!roster || !user) return undefined;
     return [...roster.roles]
@@ -2205,16 +1862,14 @@ export function ConcordPage() {
           id: r.roleId,
           name: r.name,
           color: r.color,
-          // A channel deleted since (or never seen) names nothing: the role
-          // stays listed, since a member may still hold it, without a hint.
+          // A deleted/unknown channel: keep the role listed, without a hint.
           channelName: r.scope.kind === "channel" ? (scoped && !scoped.deleted ? scoped.name : null) : undefined,
           assignable: canActOnPosition(roster, user.pubkey, ownerHex, r.position, Permissions.MANAGE_ROLES),
         };
       });
   }, [roster, user, ownerHex, folded]);
 
-  // Per channel, the Roles scoped to it — the channel's access list
-  // (CORD-04 §2), for the info dialog's access panel.
+  // Per channel, its scoped Roles — the access list (CORD-04 §2).
   const channelRoleCatalog = useMemo(() => {
     const out = new Map<string, Array<{ id: string; name: string }>>();
     for (const r of roster?.roles ?? []) {
@@ -2233,8 +1888,6 @@ export function ConcordPage() {
   const roleIntent = useRoleIntent(memberRoleIds, setMemberRoles);
   const { rolesFor: intendedRolesFor, isPending: isRoleTogglePending } = roleIntent;
 
-  // Every surface that shows a person (profile card today) can name their
-  // roles without each one re-deriving the roster.
   const memberRolesValue = useMemo<MemberRolesValue>(() => {
     const byId = new Map((roster?.roles ?? []).map((r) => [r.roleId, r]));
     const cache = new Map<string, Array<{ id: string; name: string; color: number }>>();
@@ -2257,22 +1910,16 @@ export function ConcordPage() {
   const canEditMemberRoles = useCallback(
     (pubkey: string) => {
       if (!roster || !user) return false;
-      // The owner may hold roles COSMETICALLY (hoisted-section filing; their
-      // authority stays position 0 either way), and only they can self-grant:
-      // the fold admits any owner-authored grant, while no one else may ever
-      // target the owner (canActOnMember).
+      // The owner may self-grant roles cosmetically; nobody else may target the owner.
       if (user.pubkey === ownerHex && pubkey === ownerHex) return true;
       return canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.MANAGE_ROLES);
     },
     [roster, user, ownerHex],
   );
 
-  // EVERY live Private Channel, flagged with whether I hold its key — not
-  // just the ones I hold. Granting a Role scoped to one vends its key onward;
-  // revoking that Role rotates the key away from the loser (CORD-06 §1). A
-  // revoke that only looked at my own keyring could not see that a channel I
-  // lack changed hands, so it would report success while the target kept
-  // reading it (`channelsHingingOn` splits the two).
+  // EVERY live Private Channel, flagged by whether I hold its key: a revoke must see
+  // channels I lack too, or it reports success while the target keeps reading
+  // (`channelsHingingOn` splits the two).
   const privateChannelsHere = useMemo(() => {
     if (!community || !folded) return [] as Array<{ idHex: string; heldByMe: boolean }>;
     const heldIds = new Set(community.privateChannels.map((ch) => bytesToHex(ch.id)));
@@ -2286,11 +1933,8 @@ export function ConcordPage() {
 
   const memberPubkeys = useMemo(() => {
     const banned = folded?.banned ?? new Set<string>();
-    // Observed authors: newest ms each pubkey was seen publishing. `created_at`
-    // is seconds; the Guestbook fold compares against millisecond kick/leave
-    // times, so scale up. This lets `completeMemberlist` drop a kicked member
-    // whose only presence is stale chat history, while an author still active
-    // AFTER their kick correctly re-enters.
+    // Observed authors: newest ms each pubkey published (seconds scaled to ms to
+    // match Guestbook kick/leave times), so stale chat doesn't resurrect a kicked member.
     const observed = new Map<string, number>();
     for (const m of allMessages) {
       const seenMs = m.created_at * 1000;
@@ -2304,15 +1948,11 @@ export function ConcordPage() {
     return [...set];
   }, [coalesced, allMessages, roster, ownerHex, user, folded]);
 
-  // One Set identity per member-list change, shared by the git timeline rows
-  // and the ticket side panel — building a fresh Set inside render handed
-  // their memoized components a new prop every time the page rendered.
+  // One Set identity per member-list change, shared by memoized git rows and the ticket panel.
   const memberSet = useMemo(() => new Set(memberPubkeys), [memberPubkeys]);
 
-  // Hoisted role sections (Role.display): position order, a member files under
-  // their highest hoisted role only. The owner included — a self-granted
-  // hoisted role moves their row out of the synthetic Admins group (the crown
-  // chip still marks them; authority is position 0 either way).
+  // Hoisted role sections (Role.display): position order, filed under the highest
+  // hoisted role only (owner included).
   const roleSections = useMemo(() => {
     if (!roster) return undefined;
     const memberSet = new Set(memberPubkeys);
@@ -2332,9 +1972,7 @@ export function ConcordPage() {
     return sections.filter((s) => s.members.length > 0);
   }, [roster, memberPubkeys]);
 
-  // A private channel's member panel shows only those entitled to its key
-  // (CORD-03: readable only by granted role-holders) — listing members who
-  // can't read the room would be a lie about access.
+  // A private channel's member panel lists only those entitled to its key (CORD-03).
   const entitledHere = useCallback(
     (pk: string) => !channel?.isPrivate || isEntitled(roster, ownerHex, pk, channel.idHex),
     [channel, roster, ownerHex],
@@ -2346,10 +1984,8 @@ export function ConcordPage() {
     [roleSections, entitledHere],
   );
 
-  // "Add members" to a private channel = grant one of its scoped Roles (the
-  // grant vends the key, handleToggleRole). The panel affordance exists only
-  // when the viewer can actually grant one: MANAGE_ROLES alone doesn't cover
-  // a role whose position the viewer doesn't outrank.
+  // "Add members" = grant a scoped Role (vends the key); shown only if the viewer
+  // outranks one.
   const addableChannelRoles = useMemo(() => {
     if (!channel?.isPrivate) return [];
     const assignable = new Set((roleCatalog ?? []).filter((r) => r.assignable).map((r) => r.id));
@@ -2360,11 +1996,8 @@ export function ConcordPage() {
     [channel, memberPubkeys, entitledHere],
   );
 
-  // The dialog is about ONE channel's access; switching rooms closes it.
   useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
-  // The mobile member overlay covers the chat; switching rooms or communities,
-  // revealing the channel list, or back closes it. (The desktop roster is
-  // `memberListVisible`, a persisted preference, and is left alone.)
+  // The mobile member overlay closes on room/community switch, list reveal, or back.
   const [membersOpen, setMembersOpen] = useMobileMembersOverlay(
     `${communityId ?? ""}|${channel?.idHex ?? ""}`,
     channelsOpen,
@@ -2377,18 +2010,14 @@ export function ConcordPage() {
       accessRoleName: opts?.accessRoleName,
       view: opts?.view,
     });
-    // A newborn Private Channel is born alongside the Role that names who may
-    // read it, and nobody holds that Role yet — so there is nobody to vend to.
-    // Access starts empty and is handed out by granting the Role, which is the
-    // path that vends the key (see handleToggleRole).
+    // A newborn Private Channel's Role is held by nobody; access is granted via the
+    // Role (see handleToggleRole).
     selectChannel(created);
   }, [createChannel, selectChannel]);
 
   /**
-   * Re-key a private channel to exactly the members entitled TODAY. The repair
-   * for custody drift: anyone still holding a key they are no longer entitled
-   * to (a key vended before a Role was revoked elsewhere, a suspected leak) is
-   * cut from here forward, without needing a role change to trigger it.
+   * Re-key a private channel to exactly the members entitled TODAY — repairs
+   * custody drift (keys held after revocation, suspected leaks).
    */
   const handleRotateChannelKey = useCallback(async (channelIdHex: string) => {
     if (!roster) throw new Error("Not ready.");
@@ -2402,17 +2031,14 @@ export function ConcordPage() {
   }, [roster, memberPubkeys, ownerHex, rekeyChannel]);
 
   /**
-   * Convert a public channel to private (CORD-03 §2). It gets its own key and
-   * a Role scoped to it; access is then granted by handing out that Role. The
-   * role's name is the caller's choice (display only; the scope is the
-   * binding), defaulting to the channel's own name.
+   * Convert a public channel to private (CORD-03 §2): own key plus a scoped Role
+   * (name defaults to the channel's).
    */
   const handlePrivatiseChannel = useCallback(async (channelIdHex: string, accessRoleName?: string) => {
     const def = folded?.channels.get(channelIdHex);
     if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
     const roleName = accessRoleName?.trim() || def.name;
-    // The conversion moves the conversation to a new stream and cannot reach
-    // back over what has already been said, so the trade is stated plainly.
+    // The conversion can't cover past messages, so say so.
     const ok = confirm(
       `Make #${def.name} private?\n\n` +
       `It gets its own key from here on, and the "${roleName}" role decides who may read it. Nobody holds that role yet, so grant it to the members who should have access. ` +
@@ -2427,10 +2053,8 @@ export function ConcordPage() {
   }, [folded, privatiseChannel]);
 
   /**
-   * Mint an additional access Role for a private channel, under a chosen
-   * name. Entitlement is any-of over the channel's scoped Roles, so this
-   * widens who CAN be let in without touching who already is: the newborn
-   * role is held by nobody and vends its first key on its first grant.
+   * Mint another access Role for a private channel. Entitlement is any-of, so this
+   * widens who CAN be let in; it vends on its first grant.
    */
   const handleMintAccessRole = useCallback(async (channelIdHex: string, name: string) => {
     await mintAccessRole({ channelIdHex, name });
@@ -2438,8 +2062,7 @@ export function ConcordPage() {
   }, [mintAccessRole]);
 
 
-  // Inline-reply plumbing: a by-id lookup over the decoded set (rumors aren't
-  // relay-fetchable, so the "replying to …" line resolves the parent locally).
+  // By-id lookup over the decoded set, for resolving inline-reply parents locally.
   const messagesById = useMemo(() => {
     const m = new Map<string, ChatMsg>();
     for (const msg of allMessages) m.set(msg.id, msg);
@@ -2450,11 +2073,8 @@ export function ConcordPage() {
     setSearchOpen(false);
     setSearchFilters(EMPTY_SEARCH_FILTERS);
   }, []);
-  // Every channel in the community — the default search scope when the filter
-  // picks no specific channels.
   const allChannelIds = useMemo(() => channels.map((c) => c.idHex), [channels]);
-  // Community-wide message search over the local decrypted rumor store. The
-  // filters are only fed in while the bar is open, so closing it stops search.
+  // Community-wide search over the local rumor store; only fed while the bar is open.
   const {
     results: searchResults,
     isLoading: searchLoading,
@@ -2467,8 +2087,7 @@ export function ConcordPage() {
 
   const [searchParams, setSearchParams] = useSearchParams();
   const ticketParam = searchParams.get("ticket");
-  // Git notification deep links use the stable ticket event id. Wait for the
-  // local activity query, focus the matching panel, then consume the parameter.
+  // Git notification deep links: wait for the activity query, focus the panel, consume the param.
   useEffect(() => {
     if (!ticketParam || openTicket) return;
     const activity = gitActivity.activities.find((item) => item.type !== "ci-run" && item.ticket.id === ticketParam);
@@ -2480,23 +2099,14 @@ export function ConcordPage() {
       return next;
     }, { replace: true });
   }, [ticketParam, openTicket, gitActivity.activities, setSearchParams]);
-  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
-  // Old tray notifications and copied links still carry them.
+  // Legacy `?thread=` / `?m=` links become route equivalents.
   useLegacyFocusParams(channelRoute);
 
-  // Inject `openThread` (page-owned panel state) onto the data transport.
   const transport = useMemo(() => ({
     ...baseTransport,
-    // A scroll-up page is one mixed operation. Both stores may prepend entries;
-    // MessageTimeline owns the single scroll-height restoration around this
-    // promise, so chat and Git cannot fight over the reader's anchor.
-    //
-    // `isLoading` is deliberately NOT merged: it is the timeline's skeleton
-    // gate, and the skeleton stands for the chat store read. Git activity is
-    // its own event domain read from the shared event store, so ORing it in
-    // held a fully-cached conversation behind a skeleton whenever a
-    // repo-attached channel's Git query was slow. Its rows simply appear when
-    // they resolve, like any other late entry.
+    // MessageTimeline owns scroll restoration around this promise, so chat and Git
+    // can't fight over the anchor. `isLoading` is NOT merged: it gates the chat
+    // skeleton, and a slow Git query shouldn't hide cached chat.
     hasMore: Boolean(baseTransport.hasMore || gitActivity.hasMore),
     isLoadingOlder: Boolean(baseTransport.isLoadingOlder || gitActivity.isLoadingOlder),
     loadOlder: async () => {
@@ -2504,24 +2114,15 @@ export function ConcordPage() {
       return chatAdded + gitAdded;
     },
     openThread,
-    // Lights up the pin entry in the message menu (ChatMessage already renders
-    // it when both are present).
     isPinned: pins.canPin ? pins.isPinned : undefined,
     togglePin: pins.canPin ? togglePin : undefined,
   }), [baseTransport, gitActivity, openThread, pins.canPin, pins.isPinned, togglePin]);
-  // Recently-active members, for a bot command's `user`-argument picker. Concord
-  // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
+  // Concord passes `messages: []` to ChatComposer, so it supplies the bot `user` picker itself.
   const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
-  // ── Forum presentation (CORD-03 §2 `view: "forum"`) ───────────────────────
-  //
-  // A forum channel opens to its feed of titled posts, with the plain timeline
-  // still reachable as an alternate view (CORD-03 §2) — untitled messages in a
-  // forum (from a chat-only client, or from before the flip) are valid
-  // Chat-plane rumors that count toward unread, and the chat view is where
-  // they are read. The choice is the reader's, per channel, kept locally. The
-  // feed is presentation only — the same folded timeline the chat view shows,
-  // arranged differently — so flipping either way never refetches.
+  // Forum presentation (CORD-03 §2 `view: "forum"`): a feed of titled posts, with
+  // the plain timeline as a per-channel local alternate (untitled messages live
+  // there). Same folded timeline, so flipping never refetches.
   const [forumAsChat, setForumAsChat] = useLocalStorage<string[]>("armada:concord-forum-as-chat", []);
   const forumOpensAsChat = Boolean(channel && forumAsChat.includes(channel.idHex));
   const presentation: "feed" | "chat" = channel?.view === "forum" && !forumOpensAsChat ? "feed" : "chat";
@@ -2538,26 +2139,17 @@ export function ConcordPage() {
     activeId,
     toggleActive,
   } = useTimelineFocus({
-    // Only top-level messages exist in MessageTimeline. Thread replies in
-    // `allMessages` belong to ThreadPanel and have their own scoped permalink.
+    // Thread replies belong to ThreadPanel's own permalink.
     messages: baseTransport.messages,
     isLoading: Boolean(baseTransport.isLoading),
     hasMore: transport.hasMore,
     loadOlder: transport.loadOlder,
-    // Search results replace (unmount) the timeline, so they cannot consume a
-    // focus arrival. This mirrors the NIP-29 and Buzz chat surfaces. The forum
-    // feed replaces it too: with no timeline to scroll, the hunt would only
-    // pull older pages and then strip the segment. A link to a titled post is
-    // answered below instead, by opening the post as a page.
+    // Search results and the forum feed replace the timeline, so neither can
+    // consume a focus arrival (titled-post links are handled below).
     enabled: view === "channel" && !searching && presentation !== "feed",
   });
-  // `/m/<id>` into a forum channel — "Copy message link" from its chat view,
-  // or a link made before the flip — names a row the feed has no timeline to
-  // scroll to. When the id is a loaded titled post, that link means the post:
-  // open it as the page it reads as here, replacing the location so Back
-  // returns to wherever the link was followed from rather than to a feed
-  // carrying a segment nothing consumes. An untitled message keeps the
-  // segment for the chat view, which is where it lives.
+  // `/m/<id>` into a forum: if it's a loaded titled post, open it as a page
+  // (replacing the location); untitled messages keep the segment for the chat view.
   const routedMessageId = route?.threadRoot ? undefined : route?.messageId;
   useEffect(() => {
     if (presentation !== "feed" || !routedMessageId || !channelRoute) return;
@@ -2566,17 +2158,8 @@ export function ConcordPage() {
     navigateTo(chatRoute({ ...channelRoute, threadRoot: root.id }), { replace: true });
   }, [presentation, routedMessageId, channelRoute, baseTransport.messages, navigateTo]);
 
-  // Background catch-up. `channelSyncing` = the channel on screen is being
-  // caught up: its sync TOPIC is pending (covers the whole span from the
-  // timeline hook declaring interest to the scheduler's round settling —
-  // including the queue/warm-up gaps before any relay is touched), or a sync
-  // task is scoped to it (the running round's live message counts). The
-  // timeline uses it for its quiet catching-up affordance, so an empty store
-  // read never paints "No messages yet" as a verdict mid-catch-up. The
-  // passive corner indicator on the header icon surfaces whatever is in
-  // flight (self-gated so a sub-second sync never paints), so it needn't hide
-  // once the focused channel is live — it simply goes away when there's no
-  // work left.
+  // `channelSyncing`: the on-screen channel's sync topic is pending or a task is
+  // scoped to it, so an empty read never shows "No messages yet" mid-catch-up.
   const syncTasks = useSyncTasks();
   const channelScope = channel ? `c2:${channel.idHex}` : undefined;
   const channelTopic = useSyncTopicState(channelScope);
@@ -2584,33 +2167,20 @@ export function ConcordPage() {
     channelScope &&
       (channelTopic.status === "pending" || syncTasks.some((t) => t.scope === channelScope)),
   );
-  // The serial gate itself (community list → control sweep → fold), surfaced
-  // as "syncing" while it is genuinely in flight on a cold load. Before the
-  // fold names a Channel the timeline query is disabled and `isLoading` is
-  // deliberately false, so without this the chat pane sat BLANK — no spinner,
-  // no skeleton — for the whole list-fetch + control-sweep chain on a fresh
-  // device. Scoped so a resolved list with no such community (a bad link, a
-  // left community) still falls through to the page's not-found handling
-  // instead of spinning forever.
+  // The serial gate (list → control sweep → fold) as "syncing" on a cold load, so
+  // the pane isn't blank before a Channel exists. Scoped so a missing community
+  // still reaches not-found.
   const { data: listData, isLoading: communityListLoading } = useCommunityList();
   const gateResolving = Boolean(
     !channel && communityId && (communityListLoading || (baseCommunity && !folded)),
   );
-  // No live entry for this community in the ACTIVE account's vault: it holds no
-  // keys for it, so there is nothing here it may see (rendered by
-  // `CommunityNoAccess`, below).
-  //
-  // Only once the list has genuinely resolved. `data` being present is the
-  // load-bearing half — a list that hasn't been read yet, or one whose decrypt
-  // failed because a remote signer's nip44 isn't up, is indistinguishable from
-  // an empty one, and treating either as "not a member" would lock a member out
-  // of their own community for as long as their signer took to answer.
+  // No live vault entry for this community: render `CommunityNoAccess`. Only once
+  // the list has truly resolved — an unread or undecryptable list (slow nip44
+  // signer) must not lock a member out.
   const membershipResolved = Boolean(listData && !listData.decryptFailed && !communityListLoading);
   const noAccess = Boolean(communityId && !baseCommunity && membershipResolved);
-  // A catch-up stuck in its retry loop: the scheduler alternates error
-  // (backoff) and pending (retry) forever against an unreachable relay set,
-  // so the verdict must LATCH across that cycle — it clears only when a round
-  // actually settles, or when the channel changes.
+  // A catch-up stuck retrying (error/pending cycle) latches until a round settles
+  // or the channel changes.
   const [channelSyncFailed, setChannelSyncFailed] = useState(false);
   useEffect(() => setChannelSyncFailed(false), [channelScope]);
   useEffect(() => {
@@ -2618,28 +2188,20 @@ export function ConcordPage() {
     else if (channelTopic.status === "settled") setChannelSyncFailed(false);
   }, [channelTopic.status]);
 
-  // Stable identities so an unchanged message row's props don't churn and its
-  // `memo` can bail out. `transport` is rebuilt on every message, so reach it
-  // through a ref rather than depending on it.
+  // Stable identities for memoized rows; `transport` is reached via a ref.
   const transportRef = useRef(transport);
   transportRef.current = transport;
-  // Refuse sends while the community is paused for a non-staff member (CORD-04
-  // §8); the reason surfaces in the composer. Staff fall through to the
-  // transport's own gate. Reads the ref so this callback identity stays stable.
+  // Refuse sends while paused for non-staff (CORD-04 §8). Reads the ref for a stable identity.
   const composerCanSend = useCallback((): string | null => {
     if (communityPaused) return "This community is paused. A moderator must resume it before anyone can post.";
     return transportRef.current.canSend?.() ?? null;
   }, [communityPaused]);
 
-  // ── The forum feed itself (its presentation is decided above) ─────────────
   const [forumSort, setForumSort] = useLocalStorage<ForumSort>("armada:concord-forum-sort", "active");
   const [newPostOpen, setNewPostOpen] = useState(false);
-  // The composer is about ONE channel's post; switching rooms closes it.
   useEffect(() => setNewPostOpen(false), [channel?.idHex]);
-  // The feed: titled roots of the loaded window, pinned first, then by
-  // `forumSort`. Reads `pins.isPinned` directly rather than the transport's
-  // (which is gated to PIN_MESSAGES holders): everyone sees the pins, only
-  // some may change them.
+  // Titled roots of the loaded window, pinned first, then `forumSort`. Uses
+  // `pins.isPinned` directly: everyone sees pins.
   const { messages: topLevelMessages, threadRepliesFor } = baseTransport;
   const feedPosts = useMemo<ForumPost[]>(
     () =>
@@ -2652,10 +2214,7 @@ export function ConcordPage() {
           ),
     [presentation, topLevelMessages, threadRepliesFor, forumSort, pins.isPinned],
   );
-  // "New" per post is the same per-thread stamp the Threads tab keeps
-  // (`c2t:<rootId>`): a post lights up when its newest activity — the post
-  // itself, or its newest comment — is newer than the reader last opened it,
-  // and never for the reader's own words.
+  // "New" per post uses the Threads tab's stamp (`c2t:<rootId>`), never for own words.
   const { readState } = useReadState();
   const isPostNew = useCallback(
     (post: ForumPost) =>
@@ -2665,8 +2224,7 @@ export function ConcordPage() {
   );
   const openPost = useCallback(
     (post: ForumPost) => {
-      // Opening consumes the activity; the thread panel keeps the stamp
-      // advancing as comments land while it is open.
+      // Opening consumes the activity; the thread panel keeps advancing it.
       markThreadRead(post.root.id, post.lastActivityAt);
       openThread(post.root);
     },
@@ -2674,9 +2232,7 @@ export function ConcordPage() {
   );
   const handleCreatePost = useCallback(
     async (title: string, content: string, tags: string[][]) => {
-      // One kind-9 message: the title rides as the `subject` tag beside the
-      // composer's content-derived tags (mentions, imeta, emoji), with the
-      // same drops `handleSend` applies to a top-level message.
+      // One kind-9 with the title as `subject`, plus the composer's tags (same drops as handleSend).
       const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
       await send({ content, extraTags: [...subjectTags(title), ...extraTags] });
       setNewPostOpen(false);
@@ -2691,11 +2247,7 @@ export function ConcordPage() {
     self: user?.pubkey,
   });
 
-  // Keep the open thread's read stamp advancing as new replies land while its
-  // panel is on screen — mirrors the channel read effect above so the Threads
-  // tab's "new" highlight clears for replies that arrive mid-view, not just
-  // for replies that were present at open time. Visibility-gated so a
-  // backgrounded tab doesn't silently eat the badge.
+  // Keep the open thread's read stamp advancing as replies land. Visibility-gated.
   const threadRootId = threadRoot?.id;
   useEffect(() => {
     if (!user || !threadRootId || covered) return;
@@ -2713,11 +2265,8 @@ export function ConcordPage() {
 
   const moderation = useModeration(community, memberPubkeys);
 
-  // The member panel's action callbacks land on every memoized MemberRow, so
-  // they must keep a stable identity while their bodies read the freshest
-  // fold/moderation state. The handler closures live below the route guard;
-  // each render writes them into this ref, and these render-stable wrappers
-  // delegate through it (never invoked on a guard-returned render).
+  // Stable member-panel callbacks for memoized MemberRows, delegating through a
+  // ref written each render (never invoked on a guard-returned render).
   const memberOpsRef = useRef<{
     setRole: (pk: string, roles: string[]) => Promise<void>;
     toggleRole: (pk: string, roleId: string, on: boolean) => Promise<void>;
@@ -2736,11 +2285,7 @@ export function ConcordPage() {
   const openAddMembers = useCallback(() => setAddMembersOpen(true), []);
   const closeMembers = useCallback(() => setMembersOpen(false), [setMembersOpen]);
 
-  // Moderating a person from wherever they were clicked (a message author's
-  // avatar, a mention, a roster row) rather than only from the member panel,
-  // which on a phone is an overlay you first have to open and then search.
-  // Gated the way the message menu is — the ambient permission AND authority
-  // over this particular member — so the card offers nothing it can't do.
+  // Moderate a person from wherever they were clicked, gated like the message menu.
   const memberActionsValue = useMemo<MemberActionsValue>(
     () => ({
       actionsFor: (pubkey: string) => {
@@ -2751,14 +2296,12 @@ export function ConcordPage() {
             id: "kick",
             label: "Kick",
             icon: UserMinus,
-            // The dialog, not the member panel's act-on-select kick: a button
-            // sitting under the avatar is far easier to hit by accident.
+            // The confirm dialog, not an instant kick: easy to hit by accident.
             onSelect: () => setKickTarget(pubkey),
           });
         }
         if (moderation.banned.has(pubkey)) {
-          // Reachable because a banned member's old messages outlive their
-          // roster row — until now, unbanning meant finding the Banned pane.
+          // A banned member's old messages outlive their roster row.
           if (canBanAny) {
             out.push({ id: "unban", label: "Unban", icon: ShieldOff, onSelect: () => handleUnbanMember(pubkey) });
           }
@@ -2773,10 +2316,7 @@ export function ConcordPage() {
         }
         return out;
       },
-      // The member list's ⋮ → Roles picker, on the card too: same catalog,
-      // same outrank gate (canEditMemberRoles), same toggle. Offered only when
-      // at least one role is the viewer's to assign — a list of nothing but
-      // disabled rows is not a control.
+      // The Roles picker on the card too, only if some role is assignable.
       rolePickerFor: (pubkey: string) => {
         if (!canManageRoles || !roleCatalog?.some((r) => r.assignable) || !canEditMemberRoles(pubkey)) return undefined;
         return {
@@ -2793,13 +2333,10 @@ export function ConcordPage() {
     ],
   );
 
-  // Stable identities for the memoized ChannelRow's callbacks; these close
-  // over only render-stable values, so no ref indirection is needed.
   const suppressChannelClick = channelDrag.shouldSuppressClick;
   const handleSelectChannel = useCallback(
     (idHex: string) => {
-      // The browser synthesizes a click after the drag's pointerup;
-      // without this, dropping a channel also navigates to it.
+      // Swallow the click the browser synthesizes after a drag's pointerup.
       if (suppressChannelClick()) return;
       selectChannel(idHex);
       setChannelsOpen(false);
@@ -2819,34 +2356,24 @@ export function ConcordPage() {
   const typingPubkeys = useTyping(community, channel);
 
 
-  // A dissolved community stays viewable (read-only) rather than redirecting
-  // home — members asked to keep seeing the history. `canWrite` (above) is
-  // already false when `dissolved`, freezing every write path; the timeline
-  // renders a banner + explicit "Remove" button (below) so the member can
-  // reap their own list entry when they're ready. The owner's dissolution
-  // can't reach into each member's self-encrypted list, so removal MUST be a
-  // local, per-member action.
+  // A dissolved community stays viewable read-only (`canWrite` false) with a
+  // "Remove" button: the owner can't edit members' self-encrypted lists, so
+  // removal is a local per-member action.
 
   if (!communityId) return <Navigate to="/" replace />;
-  // Render NOTHING of the community to a non-member — not the timeline, not the
-  // name, not the channel list. Placed before every one of those so there is no
-  // ordering to get wrong later.
+  // Render NOTHING of the community to a non-member; placed before all of it.
   if (noAccess) return <CommunityNoAccess />;
 
   const handleSend = async (content: string, tags: string[][]) => {
-    // The composer's content-derived tags (emoji, imeta, mentions) are sealed
-    // verbatim; NIP-29 `h` and stray `e` tags are always dropped. An INLINE
-    // reply keeps its NIP-C7 `q` (+ the `p` notifying the replied-to author) so
-    // it renders quoted in the timeline; a top-level message keeps neither.
-    // THREAD replies are a separate path (kind-1111, via `sendThreadReply`).
+    // Composer tags are sealed verbatim; `h` and stray `e` always dropped. INLINE
+    // replies keep NIP-C7 `q` (+ `p`); thread replies use `sendThreadReply` (kind 1111).
     const isReply = Boolean(replyTo);
     const extraTags = tags.filter(([name]) =>
       name !== "h" && name !== "e" && (isReply || name !== "q"),
     );
     await send({ content, extraTags });
     setReplyTo(undefined);
-    // Sending is an explicit "I'm at the present": the location must stop
-    // claiming the reader is parked at some older message.
+    // Sending means "I'm at the present": drop any parked message location.
     clearMessageFocus();
   };
 
@@ -2876,12 +2403,8 @@ export function ConcordPage() {
           missed = await retireLinks();
         },
       });
-      // Internal navigation home — NOT a reload. `dissolve` drops the vault
-      // entry (so the community leaves the rail) but first marks it dissolved,
-      // which keeps any active call alive across the transition (see
-      // useCallSync). The persistent voice room rides through the SPA navigate.
-      // One toast either way: only one shows at a time, so a separate
-      // "dissolved" toast would replace the miss before it could be read.
+      // Internal navigation home, not a reload: `dissolve` marks it dissolved first,
+      // which keeps an active call alive (see useCallSync). One toast either way.
       if (missed?.retry) {
         showRetirementMiss(missed);
       } else {
@@ -2899,10 +2422,8 @@ export function ConcordPage() {
       return;
     }
     try {
-      // Composes on this client's last intent, not the lagging fold, and
-      // ignores a repeat of the same toggle while one is in flight — a Grant
-      // replaces the member's WHOLE role list, so two racing toggles would
-      // drop each other's role and start the gate rotation below twice.
+      // Composes on this client's last intent and ignores repeats in flight: a
+      // Grant replaces the whole role list, so racing toggles would clobber.
       const published = await roleIntent.toggle(pubkey, roleId, on);
       if (!published) return; // already in flight
       toast({ title: on ? "Role granted" : "Role removed" });
@@ -2911,10 +2432,8 @@ export function ConcordPage() {
       return;
     }
 
-    // Role-gated channel keys follow the grant (channelAccess.ts). Judged with the
-    // just-published change overlaid, since the fold lags the publish; "via
-    // another role" uses the withoutRoleIds overlay so a member keeping
-    // entitlement through a second scoped role is never vended-to or cut twice.
+    // Role-gated channel keys follow the grant (channelAccess.ts), judged with the
+    // change overlaid since the fold lags.
     if (!roster) return;
     const affected = channelsHingingOn(roster, ownerHex, pubkey, roleId, privateChannelsHere);
     const nameOf = (idHex: string) => folded?.channels.get(idHex)?.name ?? idHex.slice(0, 8);
@@ -2926,9 +2445,7 @@ export function ConcordPage() {
           await sendDirectInvite({
             recipientPubkey: pubkey,
             onlyChannelIdHexes: new Set(affected.held),
-            // The Grant landed moments ago and the fold still lags it, so the
-            // vend has to judge entitlement with it overlaid — otherwise the
-            // recipient reads as unentitled and is handed nothing.
+            // Overlay the just-published Grant, or the recipient reads as unentitled.
             entitlementOverlay: { withRoleIds: [roleId] },
           });
           toast({ title: "Channel keys sent", description: `The member received ${affected.held.length} private channel key${affected.held.length > 1 ? "s" : ""}.` });
@@ -2940,8 +2457,7 @@ export function ConcordPage() {
           });
         }
       }
-      // A key I don't hold can't be vended by me, and the grantee cannot read
-      // the room until someone who holds it hands it over.
+      // Only a key holder can vend; the grantee waits until one does.
       if (affected.unheld.length > 0) {
         toast({
           title: "Some channel keys weren't sent",
@@ -2952,8 +2468,7 @@ export function ConcordPage() {
     }
 
     if (affected.held.length === 0 && affected.unheld.length === 0) return;
-    // Say the un-rotatable part FIRST and always: a revoke that cuts nobody is
-    // the failure worth hearing about, and it is invisible from my keyring.
+    // Report the un-rotatable part first: a revoke that cuts nobody is the failure to hear about.
     if (affected.unheld.length > 0) {
       toast({
         title: "Channel access not revoked",
@@ -2975,8 +2490,7 @@ export function ConcordPage() {
         (pk) => pk !== pubkey && isEntitled(roster, ownerHex, pk, idHex),
       );
       try {
-        // The revoke targets exactly this member: everyone else entitled is
-        // kept, so they are the whole removed set (CORD-06 §Authority).
+        // Everyone else entitled is kept, so this member is the whole removed set (CORD-06).
         await rekeyChannel({ channelIdHex: idHex, keepRecipients: keep, removedTargets: [pubkey] });
       } catch (e) {
         toast({
@@ -2998,9 +2512,7 @@ export function ConcordPage() {
     }
   };
 
-  // This render's closures for the stable member-panel wrappers declared
-  // above the route guard (memberOpsRef): a render-time ref write, as in
-  // ui/avatar.tsx.
+  // This render's closures for the memberOpsRef wrappers (render-time ref write, as in ui/avatar.tsx).
   memberOpsRef.current = {
     setRole: handleSetRole,
     toggleRole: handleToggleRole,
@@ -3012,9 +2524,8 @@ export function ConcordPage() {
         : "Ban",
   };
 
-  // A ban rotates keys unless someone ELSE holds a live link (a rotation
-  // would strand it; my own links refresh with the rotation). Judged as-of
-  // after this ban: the target's links die with their authority.
+  // A ban rotates keys unless someone ELSE holds a live link (it'd be stranded).
+  // Judged as-of after the ban.
   const banWillRotate =
     banTarget !== null && !!folded && !!user && !hasForeignLiveLinks(folded, user.pubkey, banTarget) &&
     moderation.canRekey;
@@ -3036,10 +2547,7 @@ export function ConcordPage() {
     return result;
   };
 
-  // The standalone rotation strands every OTHER creator's live links until
-  // they next open the app (only their signer_sk can refresh a bundle). Unlike
-  // a ban this doesn't veto the action — there is no banlist-only fallback
-  // that still answers a suspect key — so it is warned about instead.
+  // A standalone rotation strands other creators' live links; warned, not vetoed.
   const rotateStrandsForeignLinks = Boolean(folded && user && hasForeignLiveLinks(folded, user.pubkey));
 
   const runRotateKeys = async () => {
@@ -3062,19 +2570,11 @@ export function ConcordPage() {
         data-ch-index={index}
         data-ch-category={c.category ?? ""}
         onPointerDown={channelDrag.onPointerDown(c.idHex)}
-        // Unconditional `touch-none` while the drag is live, as the rail's
-        // entries carry: Chrome's gesture arbitration otherwise claims a touch
-        // drag as a pan and kills it with pointercancel. The column is then
-        // panned by hand for gestures that turn out to be scrolls
-        // (usePressDrag.ts). A member who can't rearrange gets neither, and
-        // keeps native scrolling.
+        // `touch-none` while draggable, or Chrome claims the drag as a pan
+        // (pointercancel); scrolling is panned by hand (usePressDrag.ts).
         className={cn("relative", canManageChannels && "touch-none")}
       >
-      {/* The dragged row's real content stays MOUNTED and merely invisible,
-          with the dashed placeholder over it — the rail's `DragSlot`, and for
-          its reason: unmounting the DOM node the finger is touching detaches
-          the touch target, its events stop bubbling, and Chrome cancels the
-          gesture on the first movement. */}
+      {/* Keep the dragged row mounted (invisible): unmounting the touched node makes Chrome cancel the gesture. */}
       <span className={cn("contents", dragged && "invisible")}>
       <ChannelRow
         community={community}
@@ -3098,10 +2598,7 @@ export function ConcordPage() {
     );
   };
 
-  // There is ONE channel column, mounted on every viewport (the mobile reveal
-  // and the desktop sidebar are the same element), so it always carries the
-  // drag's container ref — which is both what the drop slots are measured out
-  // of and where the touchmove canceller lives.
+  // The one channel column (mobile and desktop) carries the drag container ref.
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
       scrollRef={channelDrag.attachColumn}
@@ -3155,9 +2652,7 @@ export function ConcordPage() {
                     onClick: () => setInviteOpen(true),
                   },
                   {
-                    // Listing publishes an invite link (secret included), so
-                    // only the owner or an admin may put the community on
-                    // Discover — the same gate the share dialog enforces.
+                    // Listing publishes the secret link, so owner/admin only.
                     show: iAmAdminOrOwner && !dissolved,
                     icon: <Megaphone className="size-4" />,
                     label: "Share to Discover",
@@ -3170,10 +2665,7 @@ export function ConcordPage() {
                     onClick: () => setCreatingChannel(true),
                   },
                   {
-                    // One entry for the six moderation panes, landing on the
-                    // first this viewer may open. Also closes the mobile
-                    // channel drawer so the view slides into the <main>
-                    // overlay (inert on desktop).
+                    // One entry for the moderation panes; also closes the mobile drawer.
                     show: true,
                     icon: <Shield className="size-4" />,
                     label: "Moderation",
@@ -3291,8 +2783,6 @@ export function ConcordPage() {
                 view === "mentions"
                   ? "bg-primary text-primary-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
-                // Unread (but not selected) mentions read brighter + bold, matching
-                // an unread channel row.
                 view !== "mentions" && hasUnreadMention && "text-foreground font-semibold",
               )}
               aria-current={view === "mentions"}
@@ -3319,7 +2809,6 @@ export function ConcordPage() {
                 view === "threads"
                   ? "bg-primary text-primary-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
-                // Unread (but not selected) thread replies read brighter + bold.
                 view !== "threads" && hasNewThreadReplies && "text-foreground font-semibold",
               )}
               aria-current={view === "threads"}
@@ -3370,9 +2859,7 @@ export function ConcordPage() {
           {uncategorizedChannels.map(renderChannelRow)}
           {channelCategories.map((group) => {
             const collapsed = collapsedCategories.has(group.key);
-            // A collapsed category still surfaces the channel you are in and
-            // anything unread — folding a heading away is for tidiness, and
-            // must never make the active channel vanish or silence a mention.
+            // A collapsed category still shows the active channel and anything unread.
             const shown = collapsed
               ? group.channels.filter(
                   (c) =>
@@ -3380,9 +2867,7 @@ export function ConcordPage() {
                 )
               : group.channels;
             return (
-              // `space-y-0.5` mirrors the sidebar's own row spacing: these rows
-              // are nested a level deeper than the uncategorized ones, so
-              // without it a filed channel sits flush against its neighbour.
+              // `space-y-0.5` mirrors the sidebar's row spacing for nested rows.
               <div key={group.key} className="space-y-0.5">
                 <ChannelCategoryHeading
                   name={group.name}
@@ -3407,10 +2892,7 @@ export function ConcordPage() {
               </div>
             );
           })}
-          {/* The trailing drop zone: dragging here asks for a name and files
-              the channel under it. Only while dragging — an always-present
-              "new category" affordance would be a button, and a category with
-              no channel in it can't exist to be created. */}
+          {/* Trailing drop zone (drag only): names a new category for the channel. */}
           {channelDrag.dragging && (
             <div
               data-ch-newzone
@@ -3428,9 +2910,7 @@ export function ConcordPage() {
         </>
       )}
 
-      {/* Everything below is the server rail's drag chrome, in channel shape:
-          the pointer-following ghost, the grabbing-cursor layer and the
-          insertion line (ServerRail.tsx). Same z-bands, same treatments. */}
+      {/* Drag chrome in channel shape, as in ServerRail.tsx. */}
 
       {channelDrag.pointer && draggedChannel && (
         <div
@@ -3444,18 +2924,12 @@ export function ConcordPage() {
         </div>
       )}
 
-      {/* A full-viewport layer carrying the grabbing cursor. This is what makes
-          the cursor actually flip at pickup: Chromium does not re-evaluate a
-          style-only cursor change while a button is down and the pointer is
-          stationary, but a NEW element appearing under it forces the recompute.
-          It must NOT be pointer-events-none (hit-test-transparent elements
-          don't contribute a cursor); the listeners live on window, so events
-          bubbling through it are still seen. */}
+      {/* Grabbing-cursor layer: Chromium only re-evaluates the cursor during a drag
+          when a new element appears. Must not be pointer-events-none. */}
       {channelDrag.dragging && (
         <div className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
       )}
 
-      {/* Insertion indicator: where the drop would land. */}
       {channelDrag.indicatorY !== null && !channelDrag.target?.newCategory && (
         <div
           aria-hidden
@@ -3472,8 +2946,7 @@ export function ConcordPage() {
 
   return (
     <ChannelNavContext.Provider value={channelNav}>
-      {/* Member kind-0s often live only on the community's own relays, which
-          the pool's general routing never asks. */}
+      {/* Member kind-0s often live only on the community's own relays. */}
       <ProfileRelayHints relays={community?.relays} />
       <MemberRolesContext.Provider value={memberRolesValue}>
       <MemberActionsContext.Provider value={memberActionsValue}>
@@ -3485,12 +2958,8 @@ export function ConcordPage() {
           onClose: () => setChannelsOpen(false),
           underlay: (
             <>
-              {/* The rail only ever navigates to *other* servers/communities, so
-                  it must NOT close this community's channel list on click: doing
-                  so slides this community's chat pane back in for a frame before
-                  the route changes — the "flash of the previous chat" glitch. The
-                  destination governs its own reveal state. (DMsPage omits the prop
-                  for the same reason.) */}
+              {/* No onNavigate: closing this list would flash this community's chat
+                  before the route changes. */}
               <ServerRail />
               {channelList(() => setChannelsOpen(false), "flex-1 sidebar:flex-none")}
             </>
@@ -3508,10 +2977,7 @@ export function ConcordPage() {
               <ChevronLeft className="size-5" />
             </Button>
 
-            {/* Desktop / wide: "# channel-name" (or "@ Mentions" / "Threads"). */}
             <div className="relative hidden sidebar:flex items-center gap-1.5 min-w-0">
-              {/* Passive background-sync indicator, pinned to the corner of the
-                  leading title icon (replaces the old full-width sync bar). */}
               <SyncStatusIndicator
                 priorityScope={channelScope}
                 className="absolute -bottom-0.5 left-2 z-10"
@@ -3533,10 +2999,8 @@ export function ConcordPage() {
               )}
             </div>
 
-            {/* Mobile: community avatar + name large, channel muted below */}
             <div className="relative flex sidebar:hidden items-center min-w-0">
-              {/* Passive background-sync indicator, pinned to the avatar corner
-                  (can't live inside the info button — nested buttons). */}
+              {/* Sync indicator on the avatar corner (can't nest in the info button). */}
               <SyncStatusIndicator
                 priorityScope={channelScope}
                 className="absolute bottom-0 left-5 z-10"
@@ -3568,13 +3032,7 @@ export function ConcordPage() {
             </button>
             </div>
             <div className="ml-auto flex items-center gap-0.5">
-              {/* Voice — the primary channel action, inline at every width
-                  (mirrors the DM header's Call). Search + the members toggle
-                  stay inline on desktop; Invite and Mute always live in the …
-                  menu, and on mobile Search + Members join them there. */}
-              {/* A forum has no call, no pins bar and no events: those are
-                  chat furniture, and a room of titled posts offers none of
-                  them. Only search, members and the … menu remain. */}
+              {/* A forum has no call, pins bar or events. */}
               {user && view === "channel" && channel && channel.view !== "forum" && !dissolved && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -3661,10 +3119,6 @@ export function ConcordPage() {
                 </Tooltip>
               )}
 
-              {/* Overflow … menu — shown at every width. Invite and Mute always
-                  live here (they were the least-used inline buttons cluttering
-                  the desktop bar); Search + Members are here only on mobile,
-                  where they aren't already inline. */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -3687,10 +3141,6 @@ export function ConcordPage() {
                     <Users className="size-4" />
                     Members
                   </DropdownMenuItem>
-                  {/* The private channel's "who can read this" door, on the
-                      channel itself: the same dialog the member panel's Add
-                      members button opens, for viewers who can grant one of
-                      the channel's access roles. */}
                   {view === "channel" && channel?.isPrivate && addableChannelRoles.length > 0 && (
                     <DropdownMenuItem className="px-3 py-2" onClick={openAddMembers}>
                       <UserPlus className="size-4" />
@@ -3703,8 +3153,7 @@ export function ConcordPage() {
                       Invite people
                     </DropdownMenuItem>
                   )}
-                  {/* A forum's alternate view (CORD-03 §2): the same channel
-                      as a plain timeline, where its untitled chatter lives. */}
+                  {/* A forum's alternate view (CORD-03 §2): the plain timeline. */}
                   {view === "channel" && channel?.view === "forum" && (
                     <DropdownMenuItem className="px-3 py-2" onClick={toggleForumPresentation}>
                       {forumOpensAsChat ? <MessageSquareText className="size-4" /> : <Hash className="size-4" />}
@@ -3727,11 +3176,8 @@ export function ConcordPage() {
                         Resume community
                       </DropdownMenuItem>
                     ) : (
-                      // A duration submenu rather than a toggle: pausing freezes
-                      // chat for every member, so it should not be one stray
-                      // click away from "Mute channel" — and a bounded pause is
-                      // the one that still lifts if whoever set it never comes
-                      // back (CORD-04 §8).
+                      // A duration submenu, not a toggle: pausing freezes chat for
+                      // everyone, and a bounded pause lifts on its own (CORD-04 §8).
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger className="px-3 py-2">
                           <Pause className="size-4" />
@@ -3782,11 +3228,8 @@ export function ConcordPage() {
             )}
           </header>
 
-          {/* Top-of-chat call stage portal target (active when this channel is
-              the one in encrypted voice). */}
           <CallStageSlot active={inThisVoice} />
 
-          {/* Top-of-chat app stage (webxdc apps) for this channel. */}
           {appScope && <AppStageSlot scope={appScope} />}
 
           <div className="relative flex flex-1 min-h-0">
@@ -3902,8 +3345,6 @@ export function ConcordPage() {
                   />
                 </div>
               ) : searching ? (
-                /* Community-wide search results replace the timeline + composer
-                   in-place. Clicking a result jumps to its channel. */
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <SearchResultsView
                     channels={channels}
@@ -3918,9 +3359,7 @@ export function ConcordPage() {
                 </div>
               ) : (
                 <>
-                  {/* The pinned and events bars are chat furniture: a forum
-                      lists its pins at the top of the feed and offers no
-                      events. Neither is reachable there, so neither mounts. */}
+                  {/* Pins/events bars are chat furniture; forums don't mount them. */}
                   {presentation !== "feed" && (
                   <PinnedBar
                     open={pinsOpen}
@@ -3977,12 +3416,8 @@ export function ConcordPage() {
                       onCancel={() => setNewPostOpen(false)}
                     />
                   ) : presentation === "feed" && channel && threadRoot ? (
-                    // Reading a post takes the feed's place too: the post as a
-                    // page with its comments under it, never a side drawer.
-                    // The route still carries the post (`/t/<root>`), so back
-                    // returns to the feed and a deep link lands here. A root
-                    // without a subject (a plain thread reached by link) still
-                    // reads as a page, headed by nothing.
+                    // Reading a post takes the feed's place (route `/t/<root>`, so back
+                    // returns to the feed).
                     <ForumPostPage
                       className="flex-1 min-h-0"
                       root={threadRoot}
@@ -3998,8 +3433,6 @@ export function ConcordPage() {
                     />
                   ) : presentation === "feed" ? (
                     <ForumFeed
-                      // Per channel: a fresh scroll position and a fresh
-                      // auto-paging budget for each feed.
                       key={channel?.idHex}
                       className="flex-1 min-h-0"
                       posts={feedPosts}
@@ -4026,14 +3459,8 @@ export function ConcordPage() {
                     />
                   ) : (
                   <MessageTimeline
-                    // No per-channel `key`: a channel switch updates the
-                    // timeline in place (as the NIP-29 GroupChat path already
-                    // does) instead of tearing down and rebuilding the scroller,
-                    // its ResizeObserver and scroll listeners, and flashing a
-                    // skeleton. A switch changes `transport`/`entries` to the new
-                    // channel; the old window anchor no longer resolves, so the
-                    // timeline's own `anchorLost` path resets the ramp and pins
-                    // to the newest messages (MessageTimeline.tsx:607).
+                    // No per-channel `key`: switch in place; the lost anchor resets
+                    // the timeline via its `anchorLost` path.
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
@@ -4043,13 +3470,8 @@ export function ConcordPage() {
                     syncFailed={channelSyncFailed}
                     className="flex-1 min-h-0"
                     emptyState={
-                      // Only once a channel has actually resolved. Before the
-                      // control fold names one there is no conversation to
-                      // call empty, and "say something" would be inviting the
-                      // reader to write into a channel that isn't there yet.
-                      // A decode dead-end (the last round pulled wraps and
-                      // opened none) is a different verdict from "empty": the
-                      // messages exist, this device just can't read them yet.
+                      // Only once a channel has resolved. A decode dead-end (wraps
+                      // pulled, none opened) is distinct from "empty".
                       channel ? (
                         channelDecodeDeadEnd(channel.idHex) ? (
                           <p className="px-2 py-8 text-center text-sm text-muted-foreground">
@@ -4176,8 +3598,6 @@ export function ConcordPage() {
                       )}
                     </div>
                   ) : (
-                    // The feed carries its own pause banner and its "New
-                    // post" door; the message bar is the chat view's.
                     channel && presentation !== "feed" && (
                       <>
                         {communityPause && (
@@ -4192,9 +3612,7 @@ export function ConcordPage() {
                           relayUrl="dm"
                           groupId={channel.idHex}
                           messages={[]}
-                          // Where a share routed to this channel lands — the
-                          // same address the switcher and Direct Share name it
-                          // by, not whatever the location happens to say.
+                          // The canonical share address, not the current location.
                           shareRoute={channelRoute && chatRoute(channelRoute)}
                           mentionPubkeys={memberPubkeys}
                           canMentionEveryone={transport.canMentionEveryone}
@@ -4202,16 +3620,9 @@ export function ConcordPage() {
                           recentAuthors={recentAuthors}
                           conversationRelays={community?.relays}
                           placeholder={communityPaused ? "This community is paused" : user ? `Message #${channel.name}` : "Sign in to send"}
-                          // Android Direct Share: named community-first, since
-                          // a bare "#general" is ambiguous across communities,
-                          // and a suggestion has one short line to identify a
-                          // destination by. No icon, deliberately: a community
-                          // image is an encrypted ImagePointer that only this
-                          // client can decrypt, and the shortcut avatar is
-                          // fetched natively by plain HTTP — handing it the
-                          // ciphertext URL would spend a request to decode
-                          // nothing. The suggestion ships icon-less and the OS
-                          // draws the app icon.
+                          // Android Direct Share: named community-first. No icon:
+                          // the community image is encrypted and the OS fetches
+                          // shortcut avatars over plain HTTP.
                           shareLabel={community?.name ? `${community.name} #${channel.name}` : `#${channel.name}`}
                           sendOverride={handleSend}
                           canSend={composerCanSend}
@@ -4222,8 +3633,7 @@ export function ConcordPage() {
                           onTyping={publishTyping}
                           encryptAttachments
                           onEditLast={canWrite ? editLast : undefined}
-                          // Caret in the composer on open and on each channel
-                          // switch; not on touch, where it raises the keyboard.
+                          // Focus on open/switch, except on touch (keyboard).
                           autoFocus={!isTouchDevice}
                         />
                       </>
@@ -4252,8 +3662,7 @@ export function ConcordPage() {
             </MountWhenOpened>
             </ComposerBoundsProvider>
 
-            {/* Chat channels read a thread in the side drawer; a forum reads
-                its post as a page in the pane above, so the drawer stays shut. */}
+            {/* Forums read posts as a page, so the thread drawer stays shut. */}
             <ThreadPanelSlot open={Boolean(threadRoot) && presentation !== "feed"} expanded={threadExpanded}>
               {lastThreadRoot && channel && presentation !== "feed" && (
                 <ThreadPanel
@@ -4275,7 +3684,6 @@ export function ConcordPage() {
               )}
             </ThreadPanelSlot>
 
-            {/* Member panel: width-animated on desktop, slide overlay on mobile. */}
             <div
               className={cn(
                 "overflow-hidden",
@@ -4328,8 +3736,7 @@ export function ConcordPage() {
           </div>
       </ChatShell>
 
-      {/* The dialogs below are built on first open (MountWhenOpened): closed,
-          each still ran on every render of this page. */}
+      {/* Dialogs are built on first open (MountWhenOpened). */}
       <MountWhenOpened open={inviteOpen}>
         <InviteDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
       </MountWhenOpened>

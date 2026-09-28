@@ -22,11 +22,7 @@ export interface BotManifestsResult {
   entries: BotCommandEntry[];
   /** Hex pubkeys of the bots in this conversation, whether or not they publish a manifest. */
   bots: string[];
-  /**
-   * Profiles of everyone in the conversation, a by-product of the bot sweep.
-   * Surfaced so a `user` argument's member picker can search by name and show
-   * faces without a second lookup.
-   */
+  /** Everyone's profiles (a by-product of the bot sweep), for the `user` argument picker. */
   profiles: Record<string, BotRosterProfile>;
   /** Nothing known yet and a fetch is in flight. */
   isLoading: boolean;
@@ -35,9 +31,7 @@ export interface BotManifestsResult {
 }
 
 const EMPTY: string[] = [];
-// Stable empties: a fresh `[]`/`{}` per render would change every consumer's
-// memo inputs (DMsPage derives a `knownCommands` Set from `entries` and hands it
-// to every message row) while nothing has changed.
+// Stable empties, so consumers' memo inputs don't churn.
 const EMPTY_ENTRIES: BotCommandEntry[] = [];
 const EMPTY_PROFILES: Record<string, BotRosterProfile> = {};
 
@@ -57,11 +51,8 @@ async function queryChunked(
 }
 
 /**
- * The newest event of `kind` per author. A relay may answer with whatever it
- * likes, so both the kind and the author are re-checked here rather than trusted
- * from the filter: a bot's manifest is newer than its profile, so a relay
- * returning the manifest to a kind-0 query would otherwise win the
- * newest-per-author race and make the bot look like it has no `bot` flag at all.
+ * Newest event of `kind` per author, re-checking kind and author rather than
+ * trusting the relay (a manifest returned for a kind-0 query would win otherwise).
  */
 function newestPerAuthor(events: NostrEvent[], asked: Set<string>, kind: number): Map<string, NostrEvent> {
   const best = new Map<string, NostrEvent>();
@@ -74,29 +65,11 @@ function newestPerAuthor(events: NostrEvent[], asked: Set<string>, kind: number)
 }
 
 /**
- * Resolve the bot commands available in a conversation.
- *
- * Discovery is two-stage, which is what keeps it cheap in a large room. First the
- * participants' `kind:0` metadata says which of them are bots (NIP-24's `bot`
- * flag — the same signal the Bot pill renders from). Only those few get a
- * manifest query, so a 500-member channel costs one profile sweep and a lookup
- * for the handful of bots, not five hundred lookups.
- *
- * A manifest is untrusted: one that fails validation is ignored entirely rather
- * than partially rendered, and a bot with no valid manifest simply contributes
- * no commands.
- *
- * Discovery warms when the conversation opens rather than when a `/` is typed:
- * the composer has to know whether any bot is present before the user types
- * anything, in order to decide whether to offer Commands at all. Warming here
- * also means the `/` menu is already populated by the time it is opened. A
- * conversation with no roster (a plain DM) fetches nothing.
- *
- * `conversationRelays` are the relays this conversation's own traffic uses (a
- * community's relays, a NIP-29 host). They are searched alongside the user's app
- * relays, because a bot may have published its manifest to only one of the two:
- * a bot serving one community may publish only there, while a bot that
- * republishes its interface may land on the app relays first.
+ * Resolve the bot commands available in a conversation. Two-stage: kind-0 `bot`
+ * flags (NIP-24) pick the bots, then only they get a manifest query. Invalid
+ * manifests are ignored entirely. Warms on open so the composer knows whether
+ * to offer Commands. Searches `conversationRelays` plus app relays, since bots
+ * may publish to either.
  */
 export function useBotManifests(
   memberPubkeys: string[] | undefined,
@@ -106,20 +79,15 @@ export function useBotManifests(
   const { config } = useAppContext();
   const eventStore = useEventStore();
 
-  // Sorted + joined so the query key is stable under member-list reordering, and
-  // changes the moment the participant set actually changes.
+  // Sorted + joined so the key is stable under reordering.
   const members = useMemo(
     () => (memberPubkeys ? [...new Set(memberPubkeys)].sort() : EMPTY),
     [memberPubkeys],
   );
   const membersKey = members.join(",");
 
-  // Both sweeps search the same union: the conversation's own relays (a Concord
-  // bot's profile AND manifest live on its community relay) and the user's app
-  // relays. Bot detection has to look where the bot actually is — querying only
-  // the pool misses a bot whose kind-0 never reached it, even though its member
-  // row shows a Bot pill (the pill reads the local cache, filled from the
-  // community relay on join).
+  // Search the conversation's relays plus app relays: a bot's kind-0 may never
+  // have reached the pool.
   const relays = useMemo(
     () => [...new Set([...(conversationRelays ?? []), ...config.appRelays])].sort(),
     [conversationRelays, config.appRelays],
@@ -130,19 +98,9 @@ export function useBotManifests(
     queryKey: ["bot-flags", membersKey, relayKey],
     queryFn: async ({ signal }) => {
       const asked = new Set(members);
-      // Merge the local cache with the network. The cache is what a member's Bot
-      // pill already reads (via useAuthor), so reading it here makes detection
-      // agree with what the user sees, even when a fresh relay query is slow,
-      // auth-gated, or simply lacks a profile the client synced on join.
-      //
-      // The network is asked only about members the cache has NO profile for.
-      // Sweeping every member's kind 0 re-downloaded the whole roster — on a
-      // 500-member community, ~1000 profiles and most of a megabyte from each
-      // relay pair — every time the member set changed or went stale, which
-      // on a phone was the largest network cost of just reading a channel. A
-      // cached profile is kept fresh by the profile sync for as long as its
-      // author is on screen, and a bot turning its flag on is rare enough to
-      // wait for that.
+      // Merge the local cache (what the Bot pill reads) with the network, asking
+      // the network only about uncached members — re-sweeping every kind 0 was the
+      // largest network cost of reading a channel.
       const store = await eventStore;
       const cached = (await store.query([{ kinds: [0], authors: members }])) as NostrEvent[];
       const known = new Set(cached.map((ev) => ev.pubkey));
@@ -183,9 +141,7 @@ export function useBotManifests(
   const botsKey = bots.join(",");
 
   const manifestsQuery = useQuery({
-    // The relay set is part of the identity of this result: querying a different
-    // set can legitimately yield a different (newer) manifest, so a relay change
-    // must invalidate rather than serve a cached answer from the old set.
+    // The relay set is part of the result's identity.
     queryKey: ["bot-manifests", botsKey, relayKey],
     queryFn: async ({ signal }) => {
       const asked = new Set(bots);
@@ -197,9 +153,7 @@ export function useBotManifests(
       );
       const entries: BotCommandEntry[] = [];
       for (const [pubkey, ev] of newestPerAuthor(events, asked, BOT_MANIFEST_KIND)) {
-        // The newest manifest is the only one that counts: a bot that breaks its
-        // own latest edition has no interface, rather than falling back to a
-        // stale one it has already retired.
+        // Only the newest manifest counts; a broken latest means no interface.
         const manifest = parseBotManifest(ev.content);
         if (!manifest) continue;
         for (const command of manifest.commands) entries.push({ bot: pubkey, command });
@@ -207,10 +161,7 @@ export function useBotManifests(
       return entries;
     },
     enabled: bots.length > 0,
-    // Republishing is the one mechanism a bot has to change its interface, so a
-    // cached manifest must not be assumed current for the whole session. Bounded
-    // rather than live: this refetches on the next mount past the window, and
-    // never polls a bot that has no manifest at all.
+    // Bounded staleness: republishing is how a bot changes its interface.
     staleTime: 5 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
     refetchOnWindowFocus: false,

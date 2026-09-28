@@ -17,37 +17,26 @@ const KIND_PROFILE_BADGES = 30008;
 const KIND_BADGE_DEFINITION = 30009;
 
 export interface ProfileBadge {
-  /** The definition coordinate (`30009:<issuer>:<d>`). */
   addr: string;
-  /** Issuer pubkey (from the coordinate). */
   issuer: string;
-  /** The definition's `d` identifier (for naddr links). */
   identifier: string;
   name: string;
   description?: string;
-  /** Full-size image URL. */
   image?: string;
-  /** Thumbnail URL (falls back to `image` at render time). */
+  /** Falls back to `image` at render time. */
   thumb?: string;
 }
 
 /**
- * The badges a person WEARS: their kind-30008 `profile_badges` list, resolved
- * to definitions and verified against the awards (NIP-58). The list is
- * consecutive `a`/`e` pairs — the `a` names the definition, the `e` the
- * kind-8 award. A badge renders only when all three check out: the pair is in
- * the list, the award exists, is signed by the definition's issuer, and names
- * this person in a `p` tag. Anything less lets anyone wear any badge by
- * spelling its coordinate.
+ * Badges a person WEARS (NIP-58): consecutive `a`/`e` pairs in their kind 30008, each verified
+ * against a kind-8 award signed by the definition's issuer and naming this person. Anything less
+ * lets anyone wear any badge.
  */
 export function profileBadgesQueryKey(pubkey: string): [string, string] {
   return ["profile-badges", pubkey];
 }
 
-/**
- * Shared so {@link useProfileBadges} and the prefetch in `usePrefetchProfile`
- * fill the same cache entry rather than racing two copies of this work.
- */
+/** Shared with the `usePrefetchProfile` prefetch so both fill one cache entry. */
 export function profileBadgesQueryOptions(
   nostr: Nostr,
   eventStore: EventStore,
@@ -64,14 +53,8 @@ export function profileBadgesQueryOptions(
       if (!pubkey) return [];
       const store = await eventStore;
 
-      // STORE-FIRST, and this one is worth spelling out: resolving badges is
-      // two dependent rounds — the list names the coordinates, and only then
-      // can the definitions and awards be asked for. Reading the list from the
-      // network first made every open pay a full relay round trip BEFORE the
-      // second round could even start, which is the slowest thing on the
-      // profile. The list is replaceable and changes about never, so a stored
-      // copy starts round two immediately and the network refresh rides along
-      // behind it for the next open.
+      // STORE-FIRST: resolution is two dependent rounds, and a stored list lets round two start
+      // immediately; the network refresh serves the next open.
       const [cached] = await store.query([
         { kinds: [KIND_PROFILE_BADGES], authors: [pubkey], "#d": ["profile_badges"] },
       ]);
@@ -97,8 +80,7 @@ export function profileBadgesQueryOptions(
       }
       if (!list) return [];
 
-      // Consecutive a/e pairs, in list order. An `a` without a following `e`
-      // is an unverifiable claim and is skipped.
+      // An `a` without a following `e` is unverifiable and skipped.
       const pairs: { addr: string; awardId: string }[] = [];
       let pendingAddr: string | undefined;
       for (const tag of list.tags) {
@@ -116,9 +98,7 @@ export function profileBadgesQueryOptions(
         .filter((p) => p.coord?.kind === KIND_BADGE_DEFINITION);
       if (parsed.length === 0) return [];
 
-      // One round for the definitions, one for the awards. The definition
-      // filter is a cartesian over authors × d-tags, so it can over-select;
-      // rows are matched back to exact coordinates below.
+      // The definition filter is authors × d-tags and can over-select; matched exactly below.
       const [definitions, awards] = await Promise.all([
         nostr.query(
           [{

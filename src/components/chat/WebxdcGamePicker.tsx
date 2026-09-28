@@ -8,10 +8,9 @@ import { useWebxdcApps, type WebxdcApp } from "@/hooks/useWebxdcApps";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
-/** One game row: icon + name, clickable to attach. */
 function GameRow({ app, onSelect }: { app: WebxdcApp; onSelect: (app: WebxdcApp) => void }) {
   const [iconError, setIconError] = useState(false);
-  // A published game's icon URL is chosen by whoever published it.
+  // Icon URL is publisher-controlled.
   const icon = sanitizeImageSrc(app.icon);
   return (
     <button
@@ -31,12 +30,7 @@ function GameRow({ app, onSelect }: { app: WebxdcApp; onSelect: (app: WebxdcApp)
   );
 }
 
-/**
- * Browse webxdc apps/games published as Nostr events (NIP-94 kind 1063) and pick
- * one to attach. Rendered as an inline composer panel (like the GIF picker):
- * a search box, a "Follows" filter, and a scrolling list. `onSelect` hands the
- * chosen app back to the composer, which attaches it with a fresh session id.
- */
+/** Browse webxdc apps published as NIP-94 kind 1063 events and pick one to attach. */
 export function WebxdcGamePicker({
   onSelect,
   relays,
@@ -63,7 +57,6 @@ export function WebxdcGamePicker({
 
   return (
     <div className="flex flex-col w-full h-[360px] max-h-[55dvh] bg-popover rounded-lg overflow-hidden">
-      {/* Search + follows filter */}
       <div className="flex items-center gap-2 px-3 pt-2 pb-2">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />

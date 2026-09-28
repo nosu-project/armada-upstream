@@ -3,25 +3,16 @@ import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 
 /**
- * The thread panel's slot, which is two different layouts at two widths.
- *
- * Wide (≥1200px, the `thread:` variant): an in-flow sibling of the chat whose
- * width animates open, pushing the timeline aside. Narrower — including the
- * 900–1200 band where the rail and channel list are shown but there is no room
- * for a 23rem push — it overlays the chat absolutely and slides in over a
- * fading backdrop.
- *
- * `children` is the caller's `ThreadPanel`, kept mounted through the slide-out
- * by {@link useThreadPanel}'s `lastThreadRoot`.
+ * Thread panel slot: in-flow and width-animated at ≥1200px (`thread:`),
+ * otherwise an absolute overlay. `children` stays mounted through the slide-out
+ * via {@link useThreadPanel}'s `lastThreadRoot`.
  */
 export function ThreadPanelSlot({
   open,
   expanded,
   children,
 }: {
-  /** Whether a thread is routed open. */
   open: boolean;
-  /** Whether it's expanded to full width. */
   expanded: boolean;
   children: ReactNode;
 }) {
@@ -38,7 +29,6 @@ export function ThreadPanelSlot({
           : "thread:shrink-0 thread:w-0 pointer-events-none thread:pointer-events-auto",
       )}
     >
-      {/* Mobile backdrop: fades in/out in sync with the panel slide. */}
       <div
         className={cn(
           "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",

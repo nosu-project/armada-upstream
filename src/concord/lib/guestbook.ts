@@ -1,15 +1,9 @@
 /**
- * Concord Guestbook Plane — CORD-02 §5.
- *
- * One stream per Community (community_root-keyed), carrying only membership
- * motion: self-signed Joins/Leaves, authorized Kicks, and refounder-signed
- * post-Refounding snapshots. Off-consensus: nothing in Control or Chat depends
- * on it, so it loads last and can lag without harm.
- *
- * A client folds it by COALESCING flat — one final state per npub (latest
- * entry wins by millisecond time, ties broken by the lower rumor id) — then
- * merges observed authors (anyone seen publishing anywhere in the Community is
- * observably present, forward of their latest departure), minus the Banlist.
+ * Concord Guestbook Plane — CORD-02 §5. One community_root-keyed stream carrying
+ * membership motion: self-signed Joins/Leaves, authorized Kicks, refounder-signed
+ * snapshots. Off-consensus, so it loads last and may lag. Folded by COALESCING
+ * flat (latest ms per npub, ties to the lower rumor id), merged with observed
+ * authors (forward of their latest departure), minus the Banlist.
  */
 
 import type { NostrEvent } from "nostr-tools/pure";
@@ -26,8 +20,6 @@ export const GUESTBOOK_MAX_FUTURE_MS = 60 * 60 * 1000;
 /** Snapshot chunk size: 400 members per event (CORD-02 §5). */
 export const SNAPSHOT_CHUNK = 400;
 
-// ── Addressing ───────────────────────────────────────────────────────────────
-
 /** Every guestbook stream key across held root epochs, newest first. */
 export function guestbookGroups(community: Community): GroupKey[] {
   return community.heldRoots.map((r) => guestbookGroupKey(r.key, community.id, r.epoch));
@@ -39,16 +31,10 @@ export function currentGuestbookGroup(community: Community): GroupKey {
 }
 
 /**
- * The npubs whose Refoundings minted the epochs this client holds — the
- * snapshot authorities for the guestbooks {@link guestbookGroups} sweeps
- * (CORD-02 §5).
- *
- * Genesis (epoch 0) has no snapshot, so it contributes no authority. An epoch
- * whose refounder was never recorded (adopted before `HeldRoot.refounder`
- * existed) contributes none either: accepting NO snapshot is the safe miss —
- * §5 heals it by observation and by the member's own unsuppressable Join —
- * whereas falling back to the owner would let an npub who never minted an
- * epoch seed arbitrary members into it.
+ * The npubs whose Refoundings minted the held epochs — snapshot authorities
+ * (CORD-02 §5). Genesis and epochs with no recorded refounder contribute none:
+ * accepting no snapshot is the safe miss (§5 heals by observation), whereas
+ * falling back to the owner would let a non-minter seed members.
  */
 export function snapshotAuthorities(community: Community): Set<string> {
   const out = new Set<string>();
@@ -58,8 +44,6 @@ export function snapshotAuthorities(community: Community): Set<string> {
   if (community.rootEpoch > 0n && community.refounder) out.add(community.refounder);
   return out;
 }
-
-// ── Builders ─────────────────────────────────────────────────────────────────
 
 /** A self-signed Join, optionally attributing the invite link used (CORD-05 §1). */
 export function buildJoinRumor(pubkey: string, ms: number, attribution?: { creator: string; label?: string }): NostrRumor {
@@ -74,9 +58,8 @@ export function buildLeaveRumor(pubkey: string, ms: number): NostrRumor {
 }
 
 /**
- * An admin-signed Kick, naming its target and citing the Grant it acts under
- * (the `vac`, CORD-04 §5). Honored only if the signer holds KICK and strictly
- * outranks the target.
+ * An admin-signed Kick citing its Grant (`vac`, CORD-04 §5); honored only if the
+ * signer holds KICK and strictly outranks the target.
  */
 export function buildKickRumor(
   adminPubkey: string,
@@ -91,8 +74,7 @@ export function buildKickRumor(
 
 /**
  * Refounder-signed snapshot rumors seeding a new epoch's Guestbook: present
- * members only, chunked at {@link SNAPSHOT_CHUNK}, all chunks sharing one
- * snapshot id and one timestamp (CORD-02 §5).
+ * members, chunked at {@link SNAPSHOT_CHUNK}, sharing one id and timestamp (CORD-02 §5).
  */
 export function buildSnapshotRumors(refounderPubkey: string, members: string[], snapshotIdHex: string, ms: number): NostrRumor[] {
   const chunks: string[][] = [];
@@ -115,8 +97,6 @@ export async function sealGuestbook(rumor: NostrRumor, guestbook: GroupKey, sign
   const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, guestbook, signer);
   return wrapSeal(seal, guestbook);
 }
-
-// ── Coalesce fold ────────────────────────────────────────────────────────────
 
 export type MemberState = "join" | "leave" | "kick";
 
@@ -159,12 +139,7 @@ export function openGuestbookWraps(wraps: NostrEvent[], groups: GroupKey[]): Ope
   return out;
 }
 
-/**
- * The Guestbook fold input when events are ALREADY opened (from the decrypted
- * opened-event cache). The wrap decrypt happened at ingest; nothing to do but
- * pass them through — kept as a named seam so the read path reads symmetrically
- * with the control plane's `openControlEditions`.
- */
+/** Guestbook fold input when events are already opened at ingest (mirrors `openControlEditions`). */
 export function openGuestbookOpened(opened: OpenedEvent[]): OpenedEvent[] {
   return opened;
 }
@@ -172,54 +147,38 @@ export function openGuestbookOpened(opened: OpenedEvent[]): OpenedEvent[] {
 /**
  * Coalesce opened guestbook events flat: one final state per npub.
  *
- *   - entries dated > 1h ahead of the local clock are dropped outright;
- *   - a malformed `ms` was already dropped by the stream layer;
- *   - every entry from a `banned` author is dropped — a banned npub's events,
- *     kicks included, are never honored (CORD-04 §4);
- *   - guestbook seals must be encrypted (CORD-02 §5);
- *   - latest wins by ms; ties break by the LOWER rumor id;
- *   - a Kick is honored only when `canKick(actor, target)` (KICK bit + strict
- *     outrank, resolved against the caller's folded roster);
- *   - a snapshot chunk is honored only from a `snapshotAuthorities` npub (a
- *     refounder whose Refounding minted one of the held epochs), and merely
- *     SEEDS an npub's state — any self-signed entry (or authorized kick) newer
- *     than it supersedes it.
+ *   - entries > 1h in the future are dropped;
+ *   - `banned` authors' entries, kicks included, are dropped (CORD-04 §4);
+ *   - seals must be encrypted (CORD-02 §5);
+ *   - latest ms wins; ties to the LOWER rumor id;
+ *   - a Kick needs `canKick(actor, target)` (KICK bit + strict outrank);
+ *   - a snapshot chunk counts only from a `snapshotAuthorities` npub and merely
+ *     SEEDS state that any newer firsthand entry supersedes.
  */
 export function coalesceGuestbook(
   opened: OpenedEvent[],
   opts: {
     nowMs: number;
     /**
-     * KICK bit + strict outrank, PLUS the CORD-04 §5 sync floor: `citation` is
-     * the kick's `vac`. A kick is an authority action, so a client whose roster
-     * is one sweep stale must not honor one from an already-demoted admin.
+     * KICK bit + strict outrank, plus the CORD-04 §5 sync floor via `citation` (the
+     * kick's `vac`), so a stale roster doesn't honor a demoted admin.
      */
     canKick: (actorHex: string, targetHex: string, citation: AuthorityCitation | undefined, atMs: number) => boolean;
     /**
-     * The npubs whose Refoundings minted the held epochs (CORD-02 §5: a
-     * snapshot "is honored only from the npub whose Refounding minted that
-     * epoch"). A SET, because the sweep spans every held epoch's guestbook
-     * (`guestbookGroups`) and each was minted by its own refounder — matching
-     * only the current one drops every prior epoch's snapshot. Empty/absent
-     * honors NO snapshot rather than falling back to the owner.
-     *
-     * Per-epoch exactness isn't reachable here: which epoch's stream carried a
-     * rumor is wire-only (`streamPk`) and deliberately not persisted beside it,
-     * and a snapshot rumor doesn't name its own epoch. The residual is that a
-     * refounder of one held epoch is accepted on another's snapshot — all of
-     * them are npubs that legitimately held that key, and a snapshot only
-     * seeds a state any newer firsthand entry supersedes.
+     * The npubs whose Refoundings minted the held epochs (CORD-02 §5). A SET, since
+     * the sweep spans every held epoch's guestbook; empty honors NO snapshot. Not
+     * per-epoch exact (a rumor's epoch isn't persisted), but every member of the set
+     * legitimately held that key, and snapshots only seed.
      */
     snapshotAuthorities?: ReadonlySet<string>;
 
-    /** Banned npubs (the Banlist fold) — their entries are dropped entirely. */
+    /** Banned npubs; their entries are dropped entirely. */
     banned?: Set<string>;
   },
 ): Map<string, CoalescedMember> {
   const byMember = new Map<string, CoalescedMember>();
 
-  /** Does `next` beat `prev`? Later ms wins; tie → lower rumor id. A firsthand
-   *  entry at the same instant beats a snapshot seed (secondhand). */
+  /** Later ms wins; tie → lower rumor id; firsthand beats a snapshot at the same instant. */
   const supersedes = (prev: CoalescedMember | undefined, next: CoalescedMember): boolean => {
     if (!prev) return true;
     if (next.ms !== prev.ms) return next.ms > prev.ms;
@@ -234,8 +193,7 @@ export function coalesceGuestbook(
 
   for (const ev of opened) {
     if (ev.ms > opts.nowMs + GUESTBOOK_MAX_FUTURE_MS) continue;
-    // Encrypted-seal (CORD-02 §5), while the seal form is known; a stored
-    // rumor has no envelope and passed this at ingest — see parseEdition.
+    // Encrypted seal (CORD-02 §5) when the form is known; stored rumors passed at ingest.
     if (ev.sealKind !== undefined && ev.sealKind !== KIND_SEAL_ENCRYPTED) continue;
     if (opts.banned?.has(ev.author)) continue;
 
@@ -287,10 +245,8 @@ export function coalesceGuestbook(
 }
 
 /**
- * The Complete Memberlist: the coalesced Guestbook, merged with OBSERVED
- * authors (an author seen publishing is present, forward of their latest
- * departure), minus the Banlist. `observed` maps author → the newest ms they
- * were seen publishing anywhere in the Community.
+ * The Complete Memberlist: coalesced Guestbook ∪ observed authors (forward of
+ * their latest departure) − Banlist. `observed` maps author → newest ms seen.
  */
 export function completeMemberlist(
   coalesced: Map<string, CoalescedMember>,
@@ -298,13 +254,9 @@ export function completeMemberlist(
   banned: Set<string>,
   bannedAt?: Map<string, number>,
 ): Set<string> {
-  // A Join or activity that predates a member's most recent ban is STALE: a ban
-  // is a departure the Guestbook never records (self-removal is network-silent),
-  // so on unban an old Join would resurface as a phantom member. `bannedAt` (the
-  // control plane's authorized ban history) is in SECONDS; ms compares to it×1000.
-  // Activity/Join AFTER the ban still counts — that's a genuine rejoin. (A member
-  // offline for the WHOLE ban→unban window never actually left; they're briefly
-  // suppressed until they next publish — the `observed` path then re-adds them.)
+  // A Join or activity predating the member's latest ban is STALE (bans aren't
+  // recorded in the Guestbook), or an unban would resurrect a phantom. `bannedAt`
+  // is in SECONDS. Activity after the ban is a genuine rejoin.
   const stalePreBan = (pk: string, ms: number): boolean => {
     const at = bannedAt?.get(pk);
     return at !== undefined && ms <= at * 1000;
@@ -316,8 +268,7 @@ export function completeMemberlist(
   for (const [pk, seenMs] of observed) {
     if (banned.has(pk) || stalePreBan(pk, seenMs)) continue;
     const m = coalesced.get(pk);
-    // Observation only counts FORWARD: activity newer than the latest Leave/
-    // Kick re-enters them; a departed member's old history never resurrects them.
+    // Observation only counts FORWARD of the latest Leave/Kick.
     if (!m || m.state === "join" || seenMs > m.ms) out.add(pk);
   }
   return out;

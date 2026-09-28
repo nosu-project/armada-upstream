@@ -6,24 +6,11 @@ import { cn } from "@/lib/utils";
 import { captureMirrors, captureUrl, useCaptureSize, type CaptureSize } from "./captures";
 
 /**
- * The pitch's screens: the faces of a slowly turning prism, one CRT per face,
- * seen from outside so the neighbours angle away either side of the one
- * facing you. When a face comes round it powers on the way a tube does: a
- * collapsed white line that opens into the picture, with the colour guns
- * splitting and a few scan bands tearing sideways before it settles.
- *
- * The prism turns on its own, slowly and without stopping, and reports each
- * face as it comes round so the pitch's word can follow it. A drag spins it
- * under your hand; a tap on a neighbour or the word nudges it one face on.
- * Both move the target of a slow spring, so nothing ever snaps. Resting the
- * pointer on it holds the spin, and the whole shape leans toward the cursor.
- *
- * Each face is a FLAT element placed by its own `perspective()` transform,
- * written straight onto the element each frame. Deliberately not
- * `preserve-3d` (Chrome rasterizes inside a 3D context at about 1x, which
- * blurred the captures) and deliberately not React: a frame is five transform
- * writes and a composite. The loop only runs while the prism is on screen and
- * the tab is visible; reduced motion gets no easing, no lean and no power-on.
+ * The pitch's screens: a slowly turning prism, one CRT per face, which powers
+ * on as it comes round and reports the front face. Drag spins it, tap nudges
+ * it (both move a spring target). Faces are flat elements with per-frame
+ * `perspective()` transforms written directly (not React, not preserve-3d —
+ * see ProductShots). The loop runs only on screen in a visible tab.
  */
 
 export interface Channel {
@@ -39,23 +26,16 @@ const VIGNETTE = {
   backgroundImage: "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.6) 100%)",
 } as React.CSSProperties;
 
-/** The bezel: a dark set with a lit rim, no glow. */
 const CASING =
   "rounded-[18px] bg-[#0c0a10] p-2 shadow-[0_30px_50px_-30px_rgba(0,0,0,0.6)] ring-1 ring-white/[0.07] sm:p-3";
 const GLASS = "relative overflow-hidden rounded-[10px] aspect-[1170/2532] sm:aspect-[2400/1520]";
 
-/** How quickly the prism closes on its target, per second. Low is slow. */
+/** Spring rate per second. */
 const EASE = 1.3;
-/** Seconds the idle spin takes to bring the next face round. */
 const SPIN_S = 7;
-/** Air between neighbouring faces, as a share of a face's width. */
+/** Gap between faces, as a share of face width. */
 const SPREAD = 0.1;
-/**
- * Each set's thickness, as a share of its width, and how many flat layers draw
- * it. The layers sit behind the face under the same pose, shaded lighter
- * toward the front, so a face turned away shows a lit side rather than a flat
- * panel's edge (see `ProductShots` for why not real 3D faces).
- */
+/** Set thickness as a share of width, drawn by stacked flat layers (see `ProductShots`). */
 const DEPTH = 0.035;
 const LAYERS = 10;
 const LAYER_SHADE = Array.from({ length: LAYERS }, (_, j) => {
@@ -67,12 +47,10 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** `x` wrapped into the window of `n` centred on 0. */
 function wrap(x: number, n: number) {
   return ((((x + n / 2) % n) + n) % n) - n / 2;
 }
 
-/** Warm the face up: a soft bloom, the colour guns drifting into register, one faint torn band. */
 function powerOn(screen: Element | null) {
   if (!screen || prefersReducedMotion()) return;
   const picture = screen.querySelector<HTMLElement>("[data-picture]");
@@ -106,11 +84,7 @@ function powerOn(screen: Element | null) {
   );
 }
 
-/**
- * The capture at `size`, walking its Blossom mirrors on error. Memoized: each
- * face draws it four times (picture, two colour guns, the tear), and the prism
- * re-renders every time a face comes round.
- */
+/** Memoized: each face draws it four times and the prism re-renders per face change. */
 const Capture = memo(function Capture({ slug, size, alt }: { slug: string; size: CaptureSize; alt: string }) {
   return (
     <FallbackImage
@@ -132,17 +106,14 @@ export const TvDrum = memo(function TvDrum({
   onFront,
 }: {
   channels: readonly Channel[];
-  /** Nudges asked for so far; each change turns the prism by the difference. */
   step: number;
-  /** Ask for a nudge by this many faces (a tap on a neighbour). */
   onTune: (delta: number) => void;
-  /** The face now at the front changed. Must be stable. */
+  /** Must be stable. */
   onFront: (index: number) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const spacerRef = useRef<HTMLDivElement>(null);
   const facesRef = useRef<(HTMLDivElement | null)[]>([]);
-  /** Per face, its body layers back to front. */
   const bodiesRef = useRef<(HTMLDivElement | null)[][]>([]);
   // Read by the frame loop, which outlives any one render.
   const targetRef = useRef(0);
@@ -150,7 +121,6 @@ export const TvDrum = memo(function TvDrum({
   useEffect(() => {
     onFrontRef.current = onFront;
   });
-  // A nudge lands on a whole face from wherever the spin has got to.
   const prevStepRef = useRef(step);
   useEffect(() => {
     const delta = step - prevStepRef.current;
@@ -196,8 +166,7 @@ export const TvDrum = memo(function TvDrum({
       lean = { x: lean.x + (leanTarget.x - lean.x) * kl, y: lean.y + (leanTarget.y - lean.y) * kl };
       const t = reduced ? 0 : (now - start) / 1000;
 
-      // The apothem: how far each face sits from the prism's axis so that
-      // neighbouring faces meet at their edges.
+      // Distance from axis so neighbouring faces meet at their edges.
       const apothem = (width / 2 + width * SPREAD) / Math.tan(Math.PI / n);
       const depth = width * DEPTH;
       const persp = width * 2.8;
@@ -213,11 +182,10 @@ export const TvDrum = memo(function TvDrum({
           `perspective(${persp.toFixed(0)}px) translateY(${bob.toFixed(1)}px) ` +
           `translateZ(${(-apothem).toFixed(1)}px) rotateX(${tilt.toFixed(2)}deg) ` +
           `rotateY(${ry.toFixed(2)}deg) translateZ(${apothem.toFixed(1)}px)`;
-        // Two z slots per face: its body under it, the face on top.
         const z = (100 - Math.round(a * 10)) * 2;
         const shown = a < 1.6 ? "visible" : "hidden";
         el.style.visibility = shown;
-        // A face round the back can't be seen: skip its writes, and its body's.
+        // Faces round the back are invisible: skip their writes.
         if (a >= 1.6) {
           bodiesRef.current[i]?.forEach((layer) => layer && (layer.style.visibility = shown));
           return;
@@ -311,7 +279,7 @@ export const TvDrum = memo(function TvDrum({
       if (!moved) return;
       targetRef.current = Math.round(targetRef.current);
     };
-    // A drag that ends over a neighbour must not also count as a tap on it.
+    // A drag ending over a neighbour must not count as a tap.
     const onClick = (e: MouseEvent) => {
       if (!moved) return;
       moved = false;
@@ -342,7 +310,6 @@ export const TvDrum = memo(function TvDrum({
       data-live="false"
       className="group/drum relative -mx-6 w-[calc(100%+3rem)] cursor-grab touch-pan-y select-none overflow-x-clip py-10 active:cursor-grabbing"
     >
-      {/* Sizes the prism: exactly one face tall and wide. */}
       <div ref={spacerRef} aria-hidden="true" className={cn(CASING, "invisible mx-auto w-[240px] sm:w-[540px] lg:w-[680px]")}>
         <div className={GLASS} />
       </div>
@@ -389,7 +356,6 @@ export const TvDrum = memo(function TvDrum({
                   <Capture slug={channel.slug} size={size} alt={front ? `Armada: ${channel.label}` : ""} />
                 </div>
 
-                {/* The colour guns, split apart while the tube warms up. */}
                 <div data-gun="red" aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-0 mix-blend-screen">
                   <div className="absolute inset-0 isolate">
                     <Capture slug={channel.slug} size={size} alt="" />
@@ -402,7 +368,6 @@ export const TvDrum = memo(function TvDrum({
                     <div className="absolute inset-0 bg-[#2bf5ff] mix-blend-multiply" />
                   </div>
                 </div>
-                {/* A scan band torn loose and shoved sideways. */}
                 <div data-tear="" aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-0">
                   <Capture slug={channel.slug} size={size} alt="" />
                 </div>
@@ -410,7 +375,6 @@ export const TvDrum = memo(function TvDrum({
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-70" style={SCANLINES} />
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={VIGNETTE} />
 
-                {/* The refresh band rolling down the faces that aren't tuned in. */}
                 <div
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-0 overflow-hidden opacity-0 transition-opacity duration-1000 group-data-[dim]/face:opacity-100"

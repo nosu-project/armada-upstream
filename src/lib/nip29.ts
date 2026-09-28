@@ -4,31 +4,17 @@ import { nip19 } from "nostr-tools";
 
 import { tryNaddrEncode } from "@/lib/safeNip19";
 
-/**
- * NIP-29 (Relay-based Groups) constants and event parsing.
- * https://github.com/nostr-protocol/nips/blob/master/29.md
- */
+/** NIP-29 (Relay-based Groups) constants and event parsing. */
 
-/**
- * Turn a publish error into a human-readable, user-facing reason. Nostrify's
- * NRelay1 throws the relay's `OK: false` machine reason as the Error message
- * (e.g. "blocked: ...", "restricted: ..."), so we strip the leading
- * machine-readable prefix and fall back to a generic message when there's
- * nothing useful (timeouts, network errors).
- */
+/** User-facing reason for a publish error: strips the NIP-01 OK machine prefix; generic fallback. */
 export function relayRejectionMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const trimmed = raw.trim();
   if (!trimmed) return "The relay rejected the message.";
-  // NIP-01 OK reasons are "<machine-prefix>: <human message>". Show the human
-  // part when present; otherwise show the whole thing.
   const m = trimmed.match(/^(blocked|restricted|invalid|error|rate-limited|duplicate|pow):\s*(.+)$/i);
   const message = m ? m[2] : trimmed;
-  // Keep it short for a toast.
   return message.length > 200 ? message.slice(0, 197) + "…" : message;
 }
-
-// ── Kinds ────────────────────────────────────────────────────────────────────
 
 /** NIP-09 event deletion request. */
 export const KIND_DELETE = 5;
@@ -36,8 +22,6 @@ export const KIND_DELETE = 5;
 export const KIND_REACTION = 7;
 /** Chat message inside a group (requires `h` tag). */
 export const KIND_GROUP_CHAT = 9;
-/** Thread/forum post inside a group. */
-export const KIND_GROUP_THREAD = 11;
 /** NIP-22 comment — used here as a threaded reply to a chat message. */
 export const KIND_COMMENT = 1111;
 
@@ -56,48 +40,27 @@ export const KIND_DELETE_GROUP = 9008;
 /** Moderation: create invite code. */
 export const KIND_CREATE_INVITE = 9009;
 /**
- * Moderation: replace the group's pinned-events list. Carries the FULL list
- * as `e` tags (regular events) and `a` tags (addressable events), in display
- * order; pinning, unpinning, reordering and clearing are all done by
- * submitting a new list. The relay regenerates kind 39005 to mirror the most
- * recent accepted one.
+ * Moderation: replace the pinned-events list. Carries the FULL list as `e`/`a`
+ * tags in display order; the relay regenerates kind 39005 from it.
  */
 export const KIND_UPDATE_PIN_LIST = 9010;
 
 /**
- * NIP-52 date-based calendar event (all-day). `start`/`end` are `YYYY-MM-DD`
- * strings (`end` exclusive). Addressable on a random `d`. Scoped to a group by
- * an `h` tag so the relay routes/authorizes it. One event per occurrence.
- * https://github.com/nostr-protocol/nips/blob/master/52.md
+ * NIP-52 all-day calendar event: `start`/`end` are `YYYY-MM-DD` (`end` exclusive).
+ * Addressable on a random `d`; group-scoped via `h`. One event per occurrence.
  */
 export const KIND_CALENDAR_DATE = 31922;
-/**
- * NIP-52 time-based calendar event. `start`/`end` are Unix-timestamp strings,
- * optionally with `start_tzid`/`end_tzid`. Addressable; group-scoped via `h`.
- */
+/** NIP-52 time-based calendar event: Unix-timestamp strings, optional `start_tzid`/`end_tzid`. */
 export const KIND_CALENDAR_TIME = 31923;
-/**
- * NIP-52 calendar event RSVP. Addressable; references the event via an `a`
- * coordinate (and `e` id when known) and carries a `status` tag
- * (accepted/declined/tentative). Group-scoped via `h`.
- */
+/** NIP-52 RSVP: `a` coordinate (+ `e` when known) and a `status` tag. Group-scoped via `h`. */
 export const KIND_CALENDAR_RSVP = 31925;
 
 /**
- * In-chat app (webxdc) state update — Armada's NIP-29 mapping of the
- * webxdc `sendUpdate()` API (see NIP-DC / ditto's NOSTR_WEBXDC.md). A regular
- * event scoped to the group by an `h` tag, carrying a `i` tag = the app
- * session UUID, and a JSON-serialised payload in `content`. Updates are ordered
- * by `created_at` and assigned serial numbers by the client.
+ * Webxdc `sendUpdate()` mapped to NIP-29 (see NIP-DC / ditto's NOSTR_WEBXDC.md):
+ * `h`-scoped, `i` = session UUID, JSON payload. Ordered by `created_at`.
  */
 export const KIND_GROUP_WEBXDC_UPDATE = 9450;
-/**
- * In-chat app (webxdc) realtime data — Armada's NIP-29 mapping of the webxdc
- * `joinRealtimeChannel()` API. An ephemeral, group-scoped (`h` tag) event with
- * an `i` tag = the app session UUID and a base64-encoded `Uint8Array` payload
- * in `content`. The relay forwards these to active subscribers but never stores
- * them.
- */
+/** Webxdc `joinRealtimeChannel()` data: ephemeral, `h`-scoped, `i` = session UUID, base64 payload. */
 export const KIND_GROUP_WEBXDC_REALTIME = 24450;
 
 /** User: request to join a group. */
@@ -105,33 +68,18 @@ export const KIND_JOIN_REQUEST = 9021;
 /** User: request to leave a group. */
 export const KIND_LEAVE_REQUEST = 9022;
 
-// ── Relay membership (zooid / Coracle "relay access", NIP-43-ish) ────────────
-//
-// Some community relays (e.g. zooid, which backs Flotilla/Soapbox) gate ALL
-// reads and writes behind *relay-level* membership, separate from per-group
-// NIP-29 membership. A non-member is rejected with "restricted: you are not a
-// member of this relay" before any group join is even considered. To become a
-// relay member you publish an ephemeral RELAY_JOIN carrying a `claim` tag whose
-// value was minted by the relay as a RELAY_INVITE event. These kinds are not
-// part of NIP-29 proper; they are the de-facto Coracle/zooid relay-access
-// protocol that we implement for cross-relay interop.
+// Relay-level membership (zooid / Coracle "relay access"): some relays gate all
+// access behind relay membership separate from NIP-29 group membership. Join by
+// publishing RELAY_JOIN with a `claim` minted as a RELAY_INVITE. Not NIP-29 proper.
 
 /** User: ephemeral request to join the *relay* (carries a `claim` tag). */
 export const KIND_RELAY_JOIN = 28934;
 /** Relay-signed: an invite "claim" usable with KIND_RELAY_JOIN. */
 export const KIND_RELAY_INVITE = 28935;
-/** User: ephemeral request to leave the *relay*. */
-export const KIND_RELAY_LEAVE = 28936;
-
 /**
- * NIP-43 relay-level membership snapshot (Buzz "community" roster). Relay-signed
- * and replaceable, ONE per relay — it carries no `d` scope, so a community's
- * whole roster of owner/admin/member lives in a single event keyed only by the
- * relay's own key. This is DISTINCT from per-channel NIP-29 membership
- * (39001/39002): a community owner/admin holds authority in *every* channel of
- * the community, whereas 39001/39002 are per-group. Each member is either a
- * `["member", pubkey, role]` tag or the NIP-29-style `["p", pubkey, relay_url,
- * role]`. https://github.com/nostr-protocol/nips (NIP-43, Buzz extension).
+ * NIP-43 relay-level membership snapshot (Buzz community roster): relay-signed,
+ * one per relay (no `d`). Distinct from per-group 39001/39002. Members are
+ * `["member", pk, role]` or `["p", pk, relay_url, role]`.
  */
 export const KIND_RELAY_MEMBERS = 13534;
 
@@ -145,11 +93,7 @@ export const KIND_GROUP_MEMBERS = 39002;
 export const KIND_GROUP_ROLES = 39003;
 /** Relay-signed: live AV room participants. */
 export const KIND_GROUP_PARTICIPANTS = 39004;
-/**
- * Relay-signed: the group's pinned events (addressable, `d` = group id), in
- * display order. Regenerated by the relay to mirror the most recent accepted
- * kind 9010 update-pin-list.
- */
+/** Relay-signed: pinned events in display order (addressable, `d` = group id), mirrored from kind 9010. */
 export const KIND_GROUP_PINS = 39005;
 
 /** NIP-51: user's list of groups. */
@@ -158,21 +102,9 @@ export const KIND_USER_GROUPS = 10009;
 /** NIP-32 label event. Used here for per-server self-labels (nickname/label). */
 export const KIND_LABEL = 1985;
 
-// ── Per-server self-labels (NIP-32) ──────────────────────────────────────────
-//
-// Armada lets a user set a per-server nickname and a per-server label that
-// apply ONLY within a given relay (server). These are NIP-32 kind-1985 label
-// events the user authors about *their own* pubkey, namespaced under `armada`
-// and scoped to a single relay via an `r` tag.
-//
-// Enforcement is a *client convention*, not a cryptographic guarantee: a
-// signed kind-1985 event is public, so we can't stop another client (or the
-// relay) from re-serving it. What this client guarantees is:
-//   1. the event is published ONLY to its target relay (never fanned out),
-//   2. it is queried ONLY from that relay, and
-//   3. the nickname/label is rendered ONLY where the event's `r` tag matches
-//      the relay currently being viewed.
-// So within *our* client the value never manifests outside its server.
+// Per-server self-labels (NIP-32 kind 1985 about one's own pubkey, namespace
+// `armada`, scoped by an `r` tag). A client convention, not a guarantee: the
+// event is published to, queried from, and rendered for its target relay only.
 
 /** NIP-32 label namespace for Armada self-labels. */
 export const SERVER_PROFILE_NAMESPACE = "armada";
@@ -185,26 +117,20 @@ export const SERVER_COLOR_MARK = "armada/color";
 
 /** A user's per-server self-profile (nickname + label + color) for one relay. */
 export interface ServerProfile {
-  /** The relay (server) this profile applies to. */
   relay: string;
-  /** The user's chosen nickname on this server, if any. */
   nickname?: string;
-  /** The user's chosen label on this server, if any. */
   label?: string;
-  /** The user's chosen username color on this server (CSS hex), if any. */
+  /** Username color (CSS hex). */
   color?: string;
 }
-
-// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface Nip29Group {
   /** Group id (the `d` tag of the kind 39000 event). */
   id: string;
-  /** Relay websocket URL hosting this instance of the group. */
+  /** Relay hosting this instance of the group. */
   relay: string;
   name: string;
   picture?: string;
-  /** Optional header/banner image for the group page. */
   banner?: string;
   about?: string;
   /** Only members can read. */
@@ -219,7 +145,6 @@ export interface Nip29Group {
   hasLivekit: boolean;
   /** Supported kinds, when restricted. `undefined` = all kinds. */
   supportedKinds?: number[];
-  /** The raw kind 39000 event. */
   event: NostrRumor;
 }
 
@@ -233,30 +158,21 @@ export interface Nip29Role {
   description?: string;
 }
 
-/** A group reference stored in the user's kind 10009 list. */
 export interface GroupRef {
   id: string;
   relay: string;
 }
 
-/**
- * The fully-parsed kind 10009 list (NIP-51 "Simple groups"): the user's joined
- * groups (`group` tags) and the servers/relays they use (`r` tags). Both can
- * appear in the public tags or the NIP-44-encrypted private tags.
- */
+/** Parsed kind 10009 (NIP-51 "Simple groups"): joined groups and servers, from public or encrypted tags. */
 export interface UserGroupList {
-  /** Joined groups: `["group", id, relay, name?]`. */
+  /** `["group", id, relay, name?]` */
   groups: GroupRef[];
-  /** Servers in use: `["r", relayUrl]`. Normalized, de-duplicated. */
+  /** `["r", relayUrl]` values, normalized and deduped. */
   servers: string[];
 }
 
-// ── Calendar events (NIP-52) ─────────────────────────────────────────────────
-
-/** RSVP status (NIP-52). */
 export type RsvpStatus = "accepted" | "declined" | "tentative";
 
-/** A participant referenced by a calendar event's `p` tag. */
 export interface CalendarParticipant {
   pubkey: string;
   /** Optional relay hint (tag slot 2). */
@@ -265,43 +181,28 @@ export interface CalendarParticipant {
   role?: string;
 }
 
-/**
- * A parsed NIP-52 calendar event (kind 31922 date-based or 31923 time-based),
- * scoped to a NIP-29 group via its `h` tag.
- */
+/** Parsed NIP-52 calendar event (31922/31923), group-scoped via `h`. */
 export interface CalendarEvent {
-  /** Addressable `d` identifier (unique per event within the author+kind). */
   identifier: string;
   /** 31922 (all-day, date strings) or 31923 (timestamped). */
   kind: typeof KIND_CALENDAR_DATE | typeof KIND_CALENDAR_TIME;
   title: string;
-  /** Markdown/freeform description (event content). */
   description: string;
   summary?: string;
   image?: string;
-  /** Human-readable location string. */
   location?: string;
-  /**
-   * Start. For 31922: `YYYY-MM-DD`. For 31923: a Unix timestamp (seconds, as a
-   * number). Always present on a valid event.
-   */
+  /** 31922: `YYYY-MM-DD`. 31923: Unix timestamp string. */
   start: string;
   /** End (exclusive). Optional. Same format as `start`. */
   end?: string;
-  /** IANA timezone for a time-based event's start (e.g. "America/New_York"). */
   startTzid?: string;
-  /** Hashtags (`t` tags). */
   hashtags: string[];
-  /** External links (`r` tags). */
   references: string[];
   participants: CalendarParticipant[];
-  /** Group id this event belongs to (`h` tag). */
   groupId?: string;
-  /** The raw signed event. */
   event: NostrRumor;
 }
 
-/** Input for building a calendar-event template (kind 31922/31923). */
 export interface CalendarEventInput {
   identifier: string;
   kind: typeof KIND_CALENDAR_DATE | typeof KIND_CALENDAR_TIME;
@@ -322,22 +223,16 @@ export interface CalendarEventInput {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TS_RE = /^\d+$/;
 
-/** A short random identifier suitable for a NIP-52 `d` tag. */
 export function randomCalendarId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Build the addressable coordinate (`kind:pubkey:d`) for a calendar event. */
 export function calendarEventCoord(kind: number, pubkey: string, identifier: string): string {
   return `${kind}:${pubkey}:${identifier}`;
 }
 
-/**
- * Parse a kind 31922/31923 event into a {@link CalendarEvent}. Returns
- * `undefined` when it isn't a calendar kind or is missing required fields
- * (`d`, `title`, a valid `start`).
- */
+/** Parse a kind 31922/31923 event; undefined if not a calendar kind or missing `d`/`title`/valid `start`. */
 export function parseCalendarEvent(event: NostrRumor): CalendarEvent | undefined {
   if (event.kind !== KIND_CALENDAR_DATE && event.kind !== KIND_CALENDAR_TIME) return undefined;
   const identifier = tag(event, "d")?.[1];
@@ -345,8 +240,6 @@ export function parseCalendarEvent(event: NostrRumor): CalendarEvent | undefined
   const start = tag(event, "start")?.[1];
   if (!identifier || !title || !start) return undefined;
 
-  // Validate the start format for the kind so a malformed event can't render
-  // garbage dates.
   if (event.kind === KIND_CALENDAR_DATE && !DATE_RE.test(start)) return undefined;
   if (event.kind === KIND_CALENDAR_TIME && !TS_RE.test(start)) return undefined;
 
@@ -381,12 +274,7 @@ export function parseCalendarEvent(event: NostrRumor): CalendarEvent | undefined
   };
 }
 
-/**
- * Build the tags for a NIP-52 calendar event (kind 31922/31923) scoped to a
- * NIP-29 group. Always emits `d`, `h`, `title`, and `start`; everything else is
- * conditional. The group `h` tag is what lets relay29 route/authorize the write
- * and serve it back on a group-scoped query.
- */
+/** NIP-52 event tags scoped to a group; the `h` tag lets relay29 route and authorize it. */
 export function buildCalendarEventTags(groupId: string, input: CalendarEventInput): string[][] {
   const tags: string[][] = [
     ["d", input.identifier],
@@ -416,7 +304,6 @@ export function buildCalendarEventTags(groupId: string, input: CalendarEventInpu
   return tags;
 }
 
-/** Format a calendar event's date/time range for display. */
 export function formatCalendarEventWhen(event: CalendarEvent): string {
   if (event.kind === KIND_CALENDAR_TIME) {
     const start = new Date(Number(event.start) * 1000);
@@ -429,7 +316,7 @@ export function formatCalendarEventWhen(event: CalendarEvent): string {
     if (sameDay) return `${startStr} – ${end.toLocaleTimeString(undefined, timeFmt)}`;
     return `${startStr} – ${end.toLocaleDateString(undefined, dateFmt)}, ${end.toLocaleTimeString(undefined, timeFmt)}`;
   }
-  // Date-based (all-day). Parse as UTC to avoid TZ drift.
+  // All-day: parse as UTC to avoid TZ drift.
   const dateFmt: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" };
   const start = new Date(`${event.start}T00:00:00Z`);
   const startStr = start.toLocaleDateString(undefined, dateFmt);
@@ -441,7 +328,6 @@ export function formatCalendarEventWhen(event: CalendarEvent): string {
   return `${startStr} – ${endExclusive.toLocaleDateString(undefined, dateFmt)}`;
 }
 
-/** Parse the `status` tag of a kind 31925 RSVP into a {@link RsvpStatus}. */
 export function parseRsvpStatus(event: NostrRumor): RsvpStatus | undefined {
   if (event.kind !== KIND_CALENDAR_RSVP) return undefined;
   const status = tag(event, "status")?.[1];
@@ -449,16 +335,13 @@ export function parseRsvpStatus(event: NostrRumor): RsvpStatus | undefined {
   return undefined;
 }
 
-/** The event coordinate (`a` tag) a kind 31925 RSVP points at. */
 export function parseRsvpCoord(event: NostrRumor): string | undefined {
   return tag(event, "a")?.[1];
 }
 
 /**
- * Build the tags for a kind 31925 RSVP to a calendar event. The `a` tag is the
- * event coordinate; a stable `d` tag (derived from the coordinate) makes the
- * RSVP addressable so re-RSVPing replaces the prior one. The `h` tag scopes it
- * to the group; `e`/`p` reference the event and its author when known.
+ * Kind 31925 RSVP tags. A stable `d` derived from the coordinate makes
+ * re-RSVPing replace the prior one; `h` scopes it to the group.
  */
 export function buildRsvpTags(params: {
   groupId: string;
@@ -478,8 +361,6 @@ export function buildRsvpTags(params: {
   return tags;
 }
 
-// ── Parsing ──────────────────────────────────────────────────────────────────
-
 const HEX64 = /^[0-9a-f]{64}$/;
 
 function tag(event: NostrRumor, name: string): string[] | undefined {
@@ -490,7 +371,6 @@ function hasTag(event: NostrRumor, name: string): boolean {
   return event.tags.some(([n]) => n === name);
 }
 
-/** Parse a kind 39000 group-metadata event. Returns undefined when malformed. */
 export function parseGroupMetadata(event: NostrRumor, relay: string): Nip29Group | undefined {
   if (event.kind !== KIND_GROUP_METADATA) return undefined;
   const id = tag(event, "d")?.[1];
@@ -517,29 +397,19 @@ export function parseGroupMetadata(event: NostrRumor, relay: string): Nip29Group
   };
 }
 
-// ── Group identifiers (naddr + invite-code suffix) ───────────────────────────
-//
-// NIP-29 identifies a group by an naddr for its kind-39000 metadata event:
-// the coordinate's pubkey is the relay's `self` key, the `d` identifier is the
-// group id, and a relay hint names the host relay. An invite code rides along
-// as a `?invite=<code>` suffix — `?` is outside the bech32 charset, so the
-// bare naddr stays valid on its own for clients that don't know the suffix.
+// NIP-29 group identifiers: naddr of the kind-39000 metadata (pubkey = relay
+// `self`, `d` = group id, relay hint). An invite rides as `?invite=<code>`;
+// `?` is outside bech32, so the bare naddr stays valid.
 
 /** A parsed group identifier (`naddr1...` with optional `?invite=` suffix). */
 export interface ParsedGroupNaddr {
-  /** The group id (the naddr's `d` identifier). */
   groupId: string;
-  /** The first relay hint, when present (raw — not normalized). */
+  /** First relay hint (not normalized). */
   relay?: string;
-  /** The `?invite=<code>` suffix value, when present. */
   inviteCode?: string;
 }
 
-/**
- * Build the standardized NIP-29 group identifier for a group, optionally
- * carrying an invite code. Returns undefined when `relaySelf` isn't a valid
- * pubkey (e.g. the relay's NIP-11 doc hasn't resolved).
- */
+/** Group naddr with optional invite; undefined when `relaySelf` isn't a valid pubkey (NIP-11 unresolved). */
 export function buildGroupNaddr(params: {
   relaySelf: string;
   groupId: string;
@@ -559,17 +429,13 @@ export function buildGroupNaddr(params: {
 }
 
 /**
- * Parse a group identifier — bare `naddr1...` or `nostr:naddr1...`, with an
- * optional `?invite=<code>` suffix. Returns undefined unless the naddr points
- * at a kind-39000 group metadata coordinate. An unrecognized suffix is ignored
- * (the portion before `?` is still a valid identifier), per the spec.
+ * Parse `naddr1…` / `nostr:naddr1…` with optional `?invite=`. Undefined unless it
+ * points at a kind-39000 coordinate. Unknown suffixes are ignored, per spec.
  */
 export function parseGroupNaddr(input: string): ParsedGroupNaddr | undefined {
   let value = input.trim();
   if (value.toLowerCase().startsWith("nostr:")) value = value.slice("nostr:".length);
 
-  // Split the suffix first: `?` isn't in the bech32 charset, so everything
-  // before it must decode on its own.
   let inviteCode: string | undefined;
   const q = value.indexOf("?");
   if (q !== -1) {
@@ -593,18 +459,9 @@ export function parseGroupNaddr(input: string): ParsedGroupNaddr | undefined {
 }
 
 /**
- * Build the IndexedDB filters that read a single relay's channel metadata
- * (kind 39000) from the shared local event cache.
- *
- * Scoping is the whole point. Every server's kind-39000 events live together
- * in one cache, so an unscoped `{ kinds: [39000] }` read returns *every*
- * server's channels and bleeds them into this server's list — the
- * duplicate/cross-server channels bug. Kind 39000 is signed by the relay's own
- * key, so when that key (`relaySelf`) is known we scope by `authors`. Before
- * NIP-11 resolves we don't know it, so we fall back to scoping by the ids the
- * user remembers for THIS relay (their `d` tag) — never an open read. With
- * neither, there is nothing relay-scoped to read, so we return no filters
- * rather than risk surfacing another server's channels.
+ * Local-cache filters for one relay's kind-39000 metadata. MUST be relay-scoped
+ * (all servers share one cache): by `authors: [relaySelf]` when known, else by
+ * the group ids remembered for this relay, else no filters at all.
  */
 export function relayGroupCacheFilters(
   relaySelf: string | undefined,
@@ -616,13 +473,8 @@ export function relayGroupCacheFilters(
 }
 
 /**
- * Collapse kind-39000 metadata events into a de-duplicated, name-sorted channel
- * list for `relay`. Events are de-duplicated by group id (`d` tag), keeping the
- * newest `created_at` so a relay edit/delete supersedes an older copy. Malformed
- * events are skipped.
- *
- * This is a pure collapse; whether a cached copy still counts is decided by
- * `reconcileRelayGroups` below, which is what the channel list reads through.
+ * Dedupe kind-39000 events by `d` (newest wins) into a name-sorted channel list.
+ * Staleness is decided by `reconcileRelayGroups`.
  */
 export function buildRelayGroups(events: NostrRumor[], relay: string): Nip29Group[] {
   const groups = new Map<string, Nip29Group>();
@@ -638,17 +490,10 @@ export function buildRelayGroups(events: NostrRumor[], relay: string): Nip29Grou
 }
 
 /**
- * Reconcile the cached channel list against a live relay read.
- *
- * `live` is everything the relay answered this time (the open listing plus
- * any membership-scoped recovery). When it named at least one channel, it is
- * the authority: the result is the live set (with the cached copy of a live
- * channel still competing on `created_at`, so a newer edit that arrived by
- * subscription is not lost), and every cached channel it did NOT name is
- * reported in `stale` for the caller to prune. When `live` is empty the cache
- * stays the floor and nothing is stale — an empty read looks the same whether
- * the relay has no channels, the pool was cold, or AUTH gated the REQ, and a
- * sidebar that blanks on that is worse than one stale row.
+ * Reconcile cached channels against a live read. A non-empty `live` is
+ * authoritative (cached copies still compete on `created_at`); unnamed cached
+ * channels go in `stale`. An empty `live` is ambiguous (no channels, cold pool,
+ * AUTH-gated), so the cache stays and nothing is stale.
  */
 export function reconcileRelayGroups(
   cached: NostrRumor[],
@@ -668,7 +513,6 @@ export function reconcileRelayGroups(
   return { groups: buildRelayGroups([...kept, ...live], relay), stale };
 }
 
-/** Parse a kind 39001 group-admins event into a list of admins with roles. */
 export function parseGroupAdmins(event: NostrRumor): Nip29Admin[] {
   if (event.kind !== KIND_GROUP_ADMINS) return [];
   return event.tags
@@ -676,7 +520,6 @@ export function parseGroupAdmins(event: NostrRumor): Nip29Admin[] {
     .map(([, pubkey, ...roles]) => ({ pubkey, roles: roles.filter(Boolean) }));
 }
 
-/** Parse a kind 39002 group-members event into a list of pubkeys. */
 export function parseGroupMembers(event: NostrRumor): string[] {
   if (event.kind !== KIND_GROUP_MEMBERS) return [];
   return event.tags
@@ -684,11 +527,7 @@ export function parseGroupMembers(event: NostrRumor): string[] {
     .map(([, pubkey]) => pubkey);
 }
 
-/**
- * Parse per-member roles from a kind 39002 members event. Buzz relays carry
- * the member's role in the tag's last slot (`["p", pk, "", "bot"]`); plain
- * NIP-29 members events carry none, yielding an empty map.
- */
+/** Per-member roles from kind 39002: Buzz puts the role in the last slot; plain NIP-29 yields `{}`. */
 export function parseGroupMemberRoles(event: NostrRumor): Record<string, string> {
   if (event.kind !== KIND_GROUP_MEMBERS) return {};
   const out: Record<string, string> = {};
@@ -701,11 +540,8 @@ export function parseGroupMemberRoles(event: NostrRumor): Record<string, string>
 }
 
 /**
- * Parse a kind 13534 NIP-43 membership snapshot into a `pubkey → role` map of
- * community-level roles (`owner`/`admin`/`member`). Each member is either a
- * `["member", pk, role]` tag or the NIP-29-style `["p", pk, relay_url, role]`,
- * so the role sits in a different slot per tag. A missing/unknown role defaults
- * to `member` (Buzz convention). Case-insensitive; first tag per pubkey wins.
+ * Kind 13534 NIP-43 snapshot → `pubkey → role`. Unknown/missing roles default
+ * to `member` (Buzz). Case-insensitive; first tag per pubkey wins.
  */
 export function parseRelayMemberRoles(event: NostrRumor): Record<string, string> {
   if (event.kind !== KIND_RELAY_MEMBERS) return {};
@@ -715,15 +551,13 @@ export function parseRelayMemberRoles(event: NostrRumor): Record<string, string>
     if (name !== "member" && name !== "p") continue;
     const pubkey = (tag[1] ?? "").toLowerCase();
     if (!HEX64.test(pubkey) || out[pubkey]) continue;
-    // NIP-43 `member` tags carry the role at index 2; NIP-29-shaped `p` tags
-    // put an (often empty) relay_url at index 2 and the role at index 3.
+    // `member` tags: role at index 2; NIP-29 `p` tags: relay_url at 2, role at 3.
     const raw = (name === "member" ? tag[2] : tag[3])?.toLowerCase();
     out[pubkey] = raw === "owner" || raw === "admin" ? raw : "member";
   }
   return out;
 }
 
-/** Parse a kind 39003 group-roles event. */
 export function parseGroupRoles(event: NostrRumor): Nip29Role[] {
   if (event.kind !== KIND_GROUP_ROLES) return [];
   return event.tags
@@ -731,7 +565,6 @@ export function parseGroupRoles(event: NostrRumor): Nip29Role[] {
     .map(([, name, description]) => ({ name, description }));
 }
 
-/** Parse a kind 39004 livekit-participants event into a list of pubkeys. */
 export function parseGroupParticipants(event: NostrRumor): string[] {
   if (event.kind !== KIND_GROUP_PARTICIPANTS) return [];
   return event.tags
@@ -739,23 +572,16 @@ export function parseGroupParticipants(event: NostrRumor): string[] {
     .map(([, pubkey]) => pubkey);
 }
 
-/**
- * An address-coordinate pin reference (`a` tag value, `kind:pubkey:d`). The
- * `d` identifier may itself contain colons, so only the first two are split.
- */
+/** `a` pin ref `kind:pubkey:d`; `d` may contain colons. */
 const ADDR_PIN = /^(\d+):([0-9a-f]{64}):(.*)$/;
 
-/** Coordinates of an addressable event pinned via an `a` tag. */
 export interface PinAddr {
   kind: number;
   pubkey: string;
   identifier: string;
 }
 
-/**
- * Parse a pin reference into address coordinates, or undefined when it isn't
- * one (i.e. it's an event-id pin or garbage).
- */
+/** Address coordinates from a pin ref, or undefined for event-id pins. */
 export function parseAddrPinRef(ref: string): PinAddr | undefined {
   const m = ADDR_PIN.exec(ref);
   if (!m) return undefined;
@@ -765,10 +591,8 @@ export function parseAddrPinRef(ref: string): PinAddr | undefined {
 }
 
 /**
- * Parse a pin-list event into the ordered pin references: event ids from `e`
- * tags and address coordinates (`kind:pubkey:d`) from `a` tags, de-duplicated,
- * in tag order (the display order per NIP-29). Accepts the relay-mirrored
- * kind 39005 and the kind 9010 moderation event (for optimistic updates).
+ * Ordered, deduped pin refs (`e` ids, `a` coordinates) in display order. Accepts
+ * kind 39005 and kind 9010 (for optimistic updates).
  */
 export function parseGroupPins(event: NostrRumor): string[] {
   if (event.kind !== KIND_GROUP_PINS && event.kind !== KIND_UPDATE_PIN_LIST) {
@@ -786,12 +610,7 @@ export function parseGroupPins(event: NostrRumor): string[] {
   return refs;
 }
 
-/**
- * Build the tags for a kind 9010 update-pin-list moderation event: the FULL
- * replacement pin list, `h`-scoped to the group. Event-id refs become `e`
- * tags, address coordinates `a` tags; order is preserved (it's the display
- * order).
- */
+/** Kind 9010 tags: the FULL replacement pin list in display order, `h`-scoped. */
 export function buildGroupPinsTags(groupId: string, pinnedRefs: string[]): string[][] {
   const tags: string[][] = [["h", groupId]];
   const seen = new Set<string>();
@@ -808,17 +627,7 @@ export function buildGroupPinsTags(groupId: string, pinnedRefs: string[]): strin
   return tags;
 }
 
-/** Parse a kind 10009 user-groups list into group references (public tags only). */
-export function parseUserGroupList(event: NostrRumor): GroupRef[] {
-  if (event.kind !== KIND_USER_GROUPS) return [];
-  return parseGroupListTags(event.tags).groups;
-}
-
-/**
- * Parse a set of kind 10009 tags (public or decrypted-private) into the full
- * list of joined groups and servers. Per NIP-51, the "Simple groups" list
- * carries `["group", id, relay, name?]` and `["r", relayUrl]` items.
- */
+/** Parse kind 10009 tags (public or decrypted) into joined groups and servers. */
 export function parseGroupListTags(tags: string[][]): UserGroupList {
   const groups: GroupRef[] = [];
   const servers: string[] = [];
@@ -843,12 +652,7 @@ export function parseGroupListTags(tags: string[][]): UserGroupList {
   return { groups, servers };
 }
 
-/**
- * Build the kind 10009 tag list from groups + servers. Group tags carry the
- * host relay so the group can be located; server tags (`r`) list each relay in
- * use (NIP-51). Items are emitted in chronological order (servers first, then
- * groups) — callers preserve ordering by passing the existing arrays through.
- */
+/** Build kind 10009 tags: servers (`r`) then groups (with host relay), preserving input order. */
 export function buildGroupListTags(list: UserGroupList): string[][] {
   return [
     ...list.servers.map((url) => ["r", url]),
@@ -857,17 +661,9 @@ export function buildGroupListTags(list: UserGroupList): string[][] {
 }
 
 /**
- * Parse a kind-1985 self-label event into a {@link ServerProfile}, scoped to a
- * relay. Returns `undefined` when the event isn't an Armada per-server
- * self-label authored by `pubkey` for `relay`.
- *
- * Expected shape:
- *   ["L", "armada"]
- *   ["l", "<nickname>", "armada/nickname"]   (optional)
- *   ["l", "<label>",    "armada/label"]      (optional)
- *   ["l", "<#rrggbb>",  "armada/color"]      (optional)
- *   ["p", "<pubkey>"]                        (self-label target)
- *   ["r", "<relay>"]                         (server scope)
+ * Parse a kind-1985 Armada per-server self-label by `pubkey` for `relay`, else undefined.
+ * Shape: `["L","armada"]`, `["l",value,"armada/nickname"|"armada/label"|"armada/color"]`,
+ * `["p",pubkey]`, `["r",relay]`.
  */
 export function parseServerProfile(
   event: NostrRumor,
@@ -877,7 +673,6 @@ export function parseServerProfile(
   if (event.kind !== KIND_LABEL) return undefined;
   if (event.pubkey !== pubkey) return undefined;
 
-  // Must be namespaced as an Armada label, self-targeted, and scoped to relay.
   const namespaces = event.tags.filter(([n]) => n === "L").map(([, v]) => v);
   if (!namespaces.includes(SERVER_PROFILE_NAMESPACE)) return undefined;
 
@@ -901,15 +696,11 @@ export function parseServerProfile(
   return { relay, nickname, label, color };
 }
 
-/** True when `value` is a 3- or 6-digit CSS hex color (e.g. `#f80`, `#ff8800`). */
 export function isHexColor(value: string | undefined): value is string {
   return typeof value === "string" && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value);
 }
 
-/**
- * Build the tags for a per-server self-label (kind 1985). Empty/blank values
- * are omitted so clearing a field removes it from the published event.
- */
+/** Kind 1985 self-label tags; blank values are omitted so clearing removes them. */
 export function buildServerProfileTags(
   pubkey: string,
   relay: string,
@@ -929,49 +720,26 @@ export function buildServerProfileTags(
   return tags;
 }
 
-/** Get the group id (`h` tag) of a group-scoped event. */
-export function getGroupId(event: NostrRumor): string | undefined {
-  return tag(event, "h")?.[1];
-}
-
 /**
- * Build the NIP-22 tags for a kind-1111 comment replying to `parent` inside a
- * NIP-29 group. The uppercase `K`/`E`/`P` tags pin the immutable *thread root*;
- * the lowercase `k`/`e`/`p` tags point at the *immediate parent*. When the
- * parent is itself a comment, its uppercase root tags are inherited so the root
- * is stable at any nesting depth (matching Flotilla / @welshman). The group `h`
- * tag is kept so the NIP-29 relay scopes and authorizes the reply.
- *
- * https://github.com/nostr-protocol/nips/blob/master/22.md
+ * NIP-22 tags for a kind-1111 reply inside a group: uppercase `K`/`E`/`P` pin
+ * the thread root (inherited from a comment parent, as Flotilla/@welshman do),
+ * lowercase point at the immediate parent; `h` scopes it to the group.
  */
 export function buildCommentTags(parent: NostrRumor, groupId: string): string[][] {
   const tags: string[][] = [["h", groupId]];
 
   const rootTags = parent.tags.filter(([n]) => n === "K" || n === "E" || n === "P");
   if (rootTags.length > 0) {
-    // Parent is itself a comment: inherit its root pointer verbatim.
     for (const t of rootTags) tags.push([...t]);
   } else {
-    // Parent is the root of this thread.
     tags.push(["K", String(parent.kind)]);
     tags.push(["E", parent.id, "", parent.pubkey]);
     tags.push(["P", parent.pubkey]);
   }
 
-  // Immediate-parent pointer (always the event being replied to).
   tags.push(["k", String(parent.kind)]);
   tags.push(["e", parent.id, "", parent.pubkey]);
   tags.push(["p", parent.pubkey]);
 
   return tags;
-}
-
-/** The thread-root event id a comment belongs to (its uppercase `E` tag). */
-export function getCommentRootId(event: NostrRumor): string | undefined {
-  return tag(event, "E")?.[1];
-}
-
-/** The immediate parent event id a comment replies to (its lowercase `e` tag). */
-export function getCommentParentId(event: NostrRumor): string | undefined {
-  return tag(event, "e")?.[1];
 }

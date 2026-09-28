@@ -12,44 +12,32 @@ import { registerStreamKeys } from "@/concord/lib/streamAuth";
 import { onWireScopes } from "@/wire/bus";
 
 /**
- * The Concord native-notification subscriptions for EVERY live community
- * in the user's membership list: per channel, the kind-1059 stream addresses
- * (across held epochs), the conversation keys that open their wraps, and the
- * names/ids for the notification + deep link.
+ * Concord native-notification subscriptions for EVERY live community: per
+ * channel, the kind-1059 stream addresses (across held epochs), the keys that
+ * open their wraps, and names/ids for the notification + deep link.
  *
- * Channels are assembled from the persisted control-fold snapshot
- * ({@link readControlFold}) — a local IndexedDB read, no relay fan-out — so
- * this stays cheap enough to poll. A community whose fold has never been
- * computed on this device (never opened) contributes only the private
- * channels carried in its join bundle; opening it once fills in the rest.
- *
- * Every derived stream key is also registered with the NIP-42 stream-auth
- * registry, so the WebView can authenticate the native service's kind-1059
- * REQs on auth-gating relays (the service bridges AUTH challenges here).
+ * Built from persisted control-fold snapshots ({@link readControlFold}), no
+ * relay fan-out. A never-opened community contributes only its join bundle's
+ * private channels. Stream keys are registered for NIP-42 so the WebView can
+ * answer AUTH for the native service's REQs.
  */
 export interface ConcordSubsState {
   /** Last complete derived subscription snapshot (empty is authoritative when ready). */
   subs: ConcordSub[];
   /**
-   * True only after both the membership list and the control-fold derivation
-   * for that exact list have completed successfully.
-   *
-   * Callers that REPLACE a persisted/native config or PRUNE remote records
-   * must wait for this. `subs: []` while false means "not known yet", not
-   * "the account has no Concord channels".
+   * True only once membership and the control-fold derivation for that exact
+   * list have both completed. Callers that REPLACE persisted/native config or
+   * PRUNE remote records must wait: `subs: []` while false means "not known yet".
    */
   ready: boolean;
   /**
-   * Safe to replace the sealed decrypt config. A complete persisted fold for a
-   * non-empty cached membership is trusted last-good data even while a relay
-   * is down; only `ready` may authorize gateway pruning.
+   * Safe to replace the sealed decrypt config (a complete persisted fold is
+   * trusted last-good data). Only `ready` may authorize gateway pruning.
    */
   configReady: boolean;
   /**
-   * Communities the list says the member left (tombstoned, not re-added).
-   * Valid whenever the list is readable, `ready` or not: a controller that
-   * only MERGES while unready must still drop these, or a left community keeps
-   * notifying for as long as the list stays unconfirmed.
+   * Communities the list says the member left. Valid whether `ready` or not: a
+   * controller that only merges while unready must still drop these.
    */
   left: string[];
   /** The read which prevented this snapshot becoming authoritative, if any. */
@@ -57,33 +45,26 @@ export interface ConcordSubsState {
 }
 
 /**
- * The Concord notification subscriptions together with their completeness.
- *
- * Keep this separate from {@link useConcordSubs}: existing render-only callers
- * can continue consuming the best currently available array, while background
- * controllers opt into the readiness contract before replacing durable state.
+ * The subscriptions together with their completeness. Background controllers
+ * use this before replacing durable state; render-only callers use {@link useConcordSubs}.
  */
 export function useConcordSubsState(): ConcordSubsState {
   const communityList = useCommunityList();
   const { data } = communityList;
   const queryClient = useQueryClient();
 
-  // Key the query on membership identity + epoch (what changes the derived
-  // streams), not the whole list object, so unrelated list churn is free.
+  // Keyed on membership identity + epoch, so unrelated list churn is free.
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
-  // Keyed on the ids, not `data`, so a list refetch that leaves nobody new
-  // doesn't hand the native controller a fresh array to reconfigure over.
+  // Keyed on ids, so a refetch that leaves nobody new doesn't hand the native
+  // controller a fresh array.
   const leftSig = data && !data.decryptFailed
     ? removedCommunityIds(data.list).sort().join(",")
     : "";
   const left = useMemo(() => (leftSig ? leftSig.split(",") : []), [leftSig]);
 
-  // A pause (or its lift) is a control edition delivered on the GLOBAL c2ctl
-  // sub for every community, not only the open one. Recompute the sub set when
-  // one lands, so a pause on a community the user isn't viewing stops its
-  // notifications promptly rather than on the 60s poll. Matched against the
-  // live list first: a re-run re-reads every community's fold, which is too
-  // much to spend on a `c2ctl:` scope for a community this list doesn't carry.
+  // A pause/lift arrives on the GLOBAL c2ctl sub for every community; recompute
+  // so a background community's notifications stop promptly. Checked against the
+  // live list first, since a re-run re-reads every fold.
   const liveIdsRef = useRef<Set<string>>(new Set());
   liveIdsRef.current = useMemo(() => new Set(entries.map((e) => e.community_id.toLowerCase())), [entries]);
   useEffect(
@@ -99,21 +80,16 @@ export function useConcordSubsState(): ConcordSubsState {
     [queryClient],
   );
   const listSig = useMemo(
-    // Include the complete live membership material. A count-only signature
-    // treats "one channel key replaced by another" (or a relay rotation) as
-    // the same query and can expose the previous query's success as readiness
-    // for a snapshot it never derived.
+    // Full membership material, not a count: a swapped key or relay would otherwise
+    // reuse the previous query's success as readiness.
     () => bytesToHex(sha256(new TextEncoder().encode(canonicalJson(
       [...entries].sort((a, b) => a.community_id.localeCompare(b.community_id)),
     )))),
     [entries],
   );
 
-  // An undecryptable list is public-only and therefore not an authoritative
-  // membership snapshot. Do not derive (or later prune from) it.
-  // Boot/cache seeds intentionally omit `repairPending`: they paint the rail,
-  // but no current relay cohort has confirmed them yet. Only an explicit
-  // `false` from syncCommunityList is authority to prune background watches.
+  // An undecryptable list is public-only, not authoritative. Boot/cache seeds omit
+  // `repairPending`; only an explicit `false` from syncCommunityList authorizes pruning.
   const membershipReady = data !== undefined
     && !data.decryptFailed
     && data.repairPending === false;
@@ -123,8 +99,7 @@ export function useConcordSubsState(): ConcordSubsState {
     queryKey: ["concord", "notif-subs", listSig],
     enabled: membershipUsable && entries.length > 0,
     staleTime: 30_000,
-    // Fold snapshots update out-of-band (when a community's control plane is
-    // opened/synced), so re-read them periodically to pick up new channels.
+    // Fold snapshots update out-of-band; re-read to pick up new channels.
     refetchInterval: 60_000,
     queryFn: async () => {
       const subs: ConcordSub[] = [];
@@ -136,28 +111,18 @@ export function useConcordSubsState(): ConcordSubsState {
           continue;
         }
         const folded = await readControlFold(community.idHex);
-        // A cache miss is not an explicitly empty fold. Private channels from
-        // the join bundle remain useful additive watches, but public channels
-        // exist only in the persisted fold; pruning before it appears would
-        // silently remove them.
+        // A cache miss is not an empty fold: public channels exist only in the
+        // persisted fold, so pruning before it appears would silently remove them.
         if (folded === undefined) foldsReady = false;
-        // Freeze: a paused community (CORD-04 §8) drops its chat plane from the
-        // background service too, for everyone, staff included — the pause is
-        // advisory, so a spammer floods regardless and any listener just eats
-        // it. `readLivePause` reads the CURRENT pause rather than `folded`,
-        // which for a background community can predate it by hours. The control
-        // plane stays subscribed, so the lift still lands and the 60s refetch
-        // resumes; an `until` expiry self-resumes with no edition. The window
-        // this misses is owed the same catch-up as the wire's, and gets it from
-        // the same IOU — WireSync defers the community on the same condition.
+        // A paused community (CORD-04 §8) drops its chat plane from the background
+        // service too, staff included. `readLivePause` reads the CURRENT pause (the fold
+        // may be hours stale). The control plane stays subscribed so the lift lands;
+        // the missed window is caught up via the same IOU WireSync uses.
         if (await readLivePause(community, Math.floor(Date.now() / 1000))) continue;
         const built = buildConcordSubs(community, folded);
         subs.push(...built.subs);
-        // Register for NIP-42, scoped to the community's relays: the native
-        // service bridges each relay's AUTH challenge to the WebView, which
-        // signs a kind-22242 per stream key SCOPED TO THAT RELAY (see
-        // useNativeNotifications) — required by relays that gate kind-1059
-        // REQs behind authenticated `authors`.
+        // NIP-42, scoped per relay: the native service bridges AUTH challenges to the
+        // WebView, which signs a kind-22242 per stream key (see useNativeNotifications).
         registerStreamKeys(built.streamKeys, community.relays);
       }
       return { subs, foldsReady };
@@ -166,9 +131,8 @@ export function useConcordSubsState(): ConcordSubsState {
 
   const ready = membershipReady && (entries.length === 0
     || (query.isSuccess && query.data.foldsReady));
-  // Do not treat an absent/error-seeded empty membership as an authoritative
-  // empty config. A non-empty cached list whose every fold is explicitly
-  // persisted is a distinguishable trusted last-good snapshot, though.
+  // An absent/error-seeded empty membership is not an authoritative empty config;
+  // a non-empty list whose folds are all persisted is trusted last-good.
   const configReady = ready || (entries.length > 0
     && query.isSuccess
     && query.data.foldsReady);
@@ -182,10 +146,7 @@ export function useConcordSubsState(): ConcordSubsState {
   };
 }
 
-/**
- * Compatibility view for consumers that do not persist or prune from the
- * result. Background controllers should use {@link useConcordSubsState}.
- */
+/** For consumers that don't persist or prune; background controllers use {@link useConcordSubsState}. */
 export function useConcordSubs(): ConcordSub[] {
   return useConcordSubsState().subs;
 }

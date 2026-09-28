@@ -1,32 +1,11 @@
 /**
- * A relay connection whose incoming events are verified in BATCHES, off the
- * socket's message handler — and, for a burst, off the main thread.
+ * A relay whose EVENTs are verified in batches off the socket handler (and,
+ * for bursts, off the main thread via verifyPool). NRelay1 otherwise verifies
+ * synchronously per message (~2ms each, seconds on a cold sync).
  *
- * `NRelay1` verifies every EVENT synchronously inside the WebSocket `message`
- * callback (`opts.verifyEvent`, a plain boolean function), so a cold sync's
- * firehose pays one ~2ms Schnorr verify per event on the main thread, one
- * message task at a time. A profiled community switch spent ~2.2s of a 13s
- * capture there — more than React spent rendering the page — while the worker
- * pool built for exactly this work (`verifyPool.ts`) sat idle, because nothing
- * on the relay path reached it.
- *
- * The subclass hands `NRelay1` an always-true `verifyEvent` and does the real
- * check itself, through a {@link RelayInbox}: each message is queued, and a
- * drain loop takes WHATEVER has accumulated, runs the batch through
- * `verifyEventsOnce` (hash-bind + memo on this thread, the EC residue through
- * the pool), then dispatches the survivors in wire order. The await on the
- * pool is the coalescing window — under load the next drain finds dozens of
- * messages waiting and verifies them in one round; a lone live message is a
- * batch of one and stays inline, exactly as the pool's small-batch rule
- * intends.
- *
- * Order is the contract. `NRelay1.query()` stops at EOSE and `req()` ends at
- * CLOSED, so an EVENT verified late would be lost if its EOSE could overtake
- * it: EVENT, EOSE and CLOSED go through one FIFO per relay. AUTH, OK, NOTICE
- * and COUNT carry no subscription ordering and are dispatched at once, so a
- * NIP-42 challenge is never held behind a backlog of signatures — and a
- * `CLOSED: auth-required` that IS held finds `authPromise` already armed when
- * it lands, which is the order the relay meant anyway.
+ * Order is the contract: EVENT/EOSE/CLOSED share one FIFO per relay so an EOSE
+ * can't overtake a late-verified EVENT. AUTH/OK/NOTICE/COUNT dispatch
+ * immediately so NIP-42 challenges aren't stuck behind a backlog.
  */
 
 import { NRelay1, type NRelay1Opts } from "@nostrify/nostrify";
@@ -36,17 +15,11 @@ import { relayMsgSchema } from "./relayMsgParse";
 import { type EcVerifyBatch, verifyEventsOnce } from "./verifyCache";
 import { ecVerifyBatch } from "./verifyPool";
 
-// Every NRelay1 parses each frame through `NRelay1.msgSchema`, a static read at
-// message time: swap in the hand-written parser (same verdicts, same output —
-// see relayMsgParse.ts) for the zod one, for every relay in the app.
+// Replace NRelay1's zod frame parser app-wide with the hand-written one (same verdicts).
 (NRelay1 as unknown as { msgSchema: typeof relayMsgSchema }).msgSchema = relayMsgSchema;
 
 export interface RelayInboxOpts {
-  /**
-   * Events the verify is skipped for entirely (delivered as-is). The app uses
-   * this for NIP-59 wraps, whose outer signature proves nothing the decrypt
-   * path doesn't re-check — see `NostrProvider`.
-   */
+  /** Events delivered unverified (NIP-59 wraps; decrypt re-checks — see `NostrProvider`). */
   skipVerify?: (event: NostrEvent) => boolean;
   /** The EC verifier for the memo's residue. Default: the worker pool. */
   ecVerify?: EcVerifyBatch;
@@ -57,11 +30,7 @@ function isOrdered(msg: NostrRelayMsg): boolean {
   return msg[0] === "EVENT" || msg[0] === "EOSE" || msg[0] === "CLOSED";
 }
 
-/**
- * The ordered, batching front of a relay connection: see the module comment.
- * Standalone (takes the dispatch as a callback) so its ordering and batching
- * contract is testable without a socket.
- */
+/** The ordered, batching front of a relay connection; standalone for testability. */
 export class RelayInbox {
   private pending: NostrRelayMsg[] = [];
   private draining = false;
@@ -94,8 +63,7 @@ export class RelayInbox {
     try {
       this.dispatch(msg);
     } catch {
-      // A listener's failure is its own; it must not stall every message
-      // behind it in the queue.
+      // A listener's failure must not stall the queue.
     }
   }
 
@@ -107,15 +75,12 @@ export class RelayInbox {
     this.draining = true;
     try {
       while (this.pending.length > 0) {
-        // Take everything that has accumulated: while the previous round's
-        // verify was awaited, the socket kept delivering into `pending`.
+        // Take everything accumulated while the previous verify was awaited.
         const batch = this.pending;
         this.pending = [];
         const events: NostrEvent[] = [];
         for (const msg of batch) if (this.needsVerify(msg)) events.push(msg[2]);
-        // `verifyEventsOnce` never throws: a dead verifier reads as
-        // "unverified" for the residue, and those events are dropped exactly
-        // as a bad signature would be.
+        // Never throws: a dead verifier yields "unverified", dropping those events.
         const verdicts = events.length > 0 ? await verifyEventsOnce(events, this.ecVerify) : [];
         let k = 0;
         for (const msg of batch) {
@@ -137,8 +102,7 @@ export class VerifiedRelay extends NRelay1 {
 
   constructor(url: string, opts: VerifiedRelayOpts = {}) {
     const { skipVerify, ecVerify, ...relayOpts } = opts;
-    // The base class's check is replaced, not disabled: every EVENT still has
-    // to pass the inbox's verify before `super.receive` ever sees it.
+    // Replaced, not disabled: the inbox verifies before `super.receive`.
     super(url, { ...relayOpts, verifyEvent: () => true });
     this.inbox = new RelayInbox((msg) => super.receive(msg), { skipVerify, ecVerify });
   }

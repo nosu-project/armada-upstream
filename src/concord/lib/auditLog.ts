@@ -1,16 +1,9 @@
 /**
- * Control-plane audit classification, and the suspicious-activity detector
- * built on it.
+ * Control-plane audit classification and the suspicious-activity detector.
  *
- * The fold accepts one HEAD edition per entity. An edition is `superseded`
- * only if it is a genuine ANCESTOR of that head on the verified hash chain
- * (prevHash → selfHash) — it really was the honored state before a later,
- * chained edition replaced it. Anything else at the entity (a forgery at any
- * version, an unauthorized edition, a same-version fork loser, an unchained
- * plant) was NEVER honored, whatever version it claims.
- *
- * Shared by the Audit Log view (which renders every row) and the watchdog
- * (which reads the same verdicts and looks for one specific shape).
+ * An edition is `superseded` only if it is a genuine ANCESTOR of the fold's head
+ * on the verified hash chain (prevHash → selfHash). Anything else at the entity
+ * (forgery, unauthorized, fork loser, unchained plant) was NEVER honored.
  */
 
 import { bytesToHex, grantLocator, hex32 } from "@/concord/lib/derive";
@@ -30,10 +23,7 @@ import { Permissions, isAuthorized } from "@/concord/lib/roles";
 
 export type AuditValidity = "current" | "superseded" | "dropped" | "unknown";
 
-/**
- * Verdict per edition, keyed by rumor id hex. Without a fold every edition is
- * `unknown` — absence of a decision, never a claim that it was dropped.
- */
+/** Verdict per edition, keyed by rumor id hex. Without a fold every edition is `unknown`. */
 export function classifyEditions(
   editions: readonly ParsedEdition[],
   folded: FoldedControl | undefined,
@@ -87,11 +77,7 @@ const REQUIRED_PERMISSION: Record<string, bigint> = {
   [VSK_PINS]: Permissions.PIN_MESSAGES,
 };
 
-/**
- * Human label per edition kind, for the summary ("7 bans, 18 channel changes").
- * Plain words only — this is read by members, not by people who know what a
- * control plane or a vsk is.
- */
+/** Plain-language label per edition kind, for the member-facing summary. */
 export const ACTION_LABELS: Record<string, { one: string; many: string }> = {
   [VSK_METADATA]: { one: "community setting change", many: "community setting changes" },
   [VSK_ROLE]: { one: "role change", many: "role changes" },
@@ -104,7 +90,7 @@ export const ACTION_LABELS: Record<string, { one: string; many: string }> = {
 };
 
 export interface SuspiciousActor {
-  /** The signer, proven by the seal's Schnorr signature. */
+  /** Proven by the seal's Schnorr signature. */
   author: string;
   /** vsk → how many editions of that kind they attempted. */
   attempts: Map<string, number>;
@@ -120,24 +106,15 @@ export const UNRECOGNISED = "unrecognised";
 
 /**
  * Unrecognised events needed WITHIN {@link UNRECOGNISED_WINDOW} to flag an
- * author on their own.
- *
- * A rumor we can't parse is not proof of malice: CORD is meant to extend, so a
- * newer client publishing a control-plane kind this build predates looks
- * exactly the same. What separates the two is rate. Nobody's honest upgrade
- * emits twenty unparseable events inside five minutes.
+ * author alone. A newer client's unknown kinds look the same; rate separates them.
  */
 export const UNRECOGNISED_BURST = 20;
 export const UNRECOGNISED_WINDOW = 5 * 60;
 
 /**
  * Unauthorized invite-registry editions tolerated before they alone flag an
- * author. Registries are the least sensitive entity on the plane: clients
- * sometimes mint one wrongly (a bundle refresh racing a revoked grant), the
- * fold refuses it, and nothing in the community changes. What separates a
- * buggy client from a flooder is volume — nobody's honest refresh loop
- * publishes twenty refused registry editions. They still join the tally of an
- * actor already flagged for something real: there they corroborate, not accuse.
+ * author (buggy clients mint these; volume separates a flooder). Below it they
+ * only corroborate an actor already flagged.
  */
 export const INVITE_ALERT_THRESHOLD = 20;
 
@@ -152,20 +129,12 @@ function hasBurst(times: number[]): boolean {
 }
 
 /**
- * Members writing control editions the fold refuses for lack of authority.
+ * Members writing control editions the fold refuses for lack of authority —
+ * narrower than "dropped", since admins lose fork races often.
  *
- * Deliberately NARROWER than "dropped": that verdict also covers a forgery and
- * a same-version fork loser, and a legitimate admin loses a fork race often
- * enough that alerting on it would cry wolf. This asks the sharper question —
- * did someone with no standing to act try to act anyway.
- *
- * `since` exists because the fold judges by CURRENT authority: the moment an
- * admin is demoted, their entire back catalogue becomes unauthorized and would
- * otherwise light up the alarm. Pass the watermark of the last inspection.
- *
- * Only call once a sweep has run its course. Cut one off early and we may not
- * have fetched the grant that authorises someone, so they would look roleless
- * purely because their promotion hasn't been read yet.
+ * `since` is the last inspection's watermark (authority is judged as of now, so
+ * a demotion would otherwise flag the whole back catalogue). Only call after a
+ * sweep completes, or an unread grant makes someone look roleless.
  */
 export function suspiciousActivity(
   editions: readonly ParsedEdition[],
@@ -180,22 +149,12 @@ export function suspiciousActivity(
   const inviteBy = new Map<string, number[]>();
 
   /**
-   * When this member's standing last changed, as far as the fold can tell.
+   * When this member's standing last changed, per the fold, so only editions
+   * published while already without standing are denounced. Standing moves via
+   * their grant, their ban, AND any role they hold (a role mask edit strips holders).
    *
-   * Authority is judged as it stands TODAY, so everything a demoted, kicked or
-   * banned member ever published reads as unauthorized the instant they lose
-   * it. Anchoring on the change means we only denounce what they published
-   * while they already had no standing — which losing it cannot manufacture,
-   * and a genuine outsider trips from their very first edition.
-   *
-   * Standing moves through THREE entities, not one: their own grant row, their
-   * ban, and any role they hold — editing a role's permission mask strips
-   * everyone holding it without touching a single grant. Missing that last one
-   * denounces an honest moderator the moment an owner narrows their role.
-   *
-   * CAVEAT: every timestamp here is the publisher's own `created_at`, which an
-   * attacker sets freely. Backdating below the watermark hides an edition from
-   * this alert (never from the fold, which orders by version, not time).
+   * CAVEAT: timestamps are attacker-set `created_at`; backdating hides an edition
+   * from this alert (never from the fold, which orders by version).
    */
   const standingChangedAt = (author: string): number => {
     let at = folded.bannedAt?.get(author) ?? -Infinity;
@@ -204,9 +163,7 @@ export function suspiciousActivity(
       const head = folded.headEditions.get(bytesToHex(grantLocator(communityId, hex32(author))));
       if (head) at = Math.max(at, head.createdAt);
       grant = folded.roster.grants.find((g) => g.member === author);
-    } catch {
-      // A malformed author hex can't index a grant; treat it as no grant.
-    }
+    } catch { /* ignore */ }
     for (const roleId of grant?.roleIds ?? []) {
       const roleHead = folded.headEditions.get(roleId.toLowerCase());
       if (roleHead) at = Math.max(at, roleHead.createdAt);
@@ -220,23 +177,15 @@ export function suspiciousActivity(
     const required = REQUIRED_PERMISSION[e.vsk];
     if (required === undefined) continue; // a kind with no authority gate
     const author = e.author;
-    // The owner is never suspicious: their rank comes from the community_id
-    // commitment, not from any edition. Checked FIRST because a moderator can
-    // put the owner on the banlist, and the checks below would otherwise
-    // denounce them to every other admin.
+    // The owner is never suspicious (rank comes from the community_id commitment).
+    // Checked FIRST: a moderator could banlist the owner.
     if (author === folded.ownerHex) continue;
-    // Standing they hold right now settles it: an authorized author's dropped
-    // edition is a fork race, which admins lose often enough that alerting on
-    // it would cry wolf.
+    // Authorized now ⇒ a dropped edition is a fork race, not an attack.
     if (isAuthorized(folded.roster, author, folded.ownerHex, required)) continue;
-    // No standing now. Did they have it then? Only a grant or a ban moves the
-    // line, so an edition published BEFORE the most recent of those may well
-    // have been legitimate when it landed. Anything after it was published in
-    // full knowledge of having none.
+    // Only editions published after they lost standing count.
     if (e.createdAt <= standingChangedAt(author)) continue;
 
-    // Registry editions ride a side tally: alone they only count past
-    // INVITE_ALERT_THRESHOLD, merged below once the rest of the verdict is in.
+    // Registry editions ride a side tally (see INVITE_ALERT_THRESHOLD).
     if (e.vsk === VSK_INVITE_REGISTRY) {
       const times = inviteBy.get(author);
       if (times) times.push(e.createdAt);
@@ -261,11 +210,8 @@ export function suspiciousActivity(
     byAuthor.set(author, actor);
   }
 
-  // Events that opened (so the seal names their signer) but are not editions we
-  // understand. Folded in at LOWER weight: they join a tally already opened by
-  // unauthorized editions, but on their own they only count against someone who
-  // produced a burst of them — otherwise a client newer than this one would
-  // read as an attacker.
+  // Opened but unparsed events: lower weight — they join an existing tally, and
+  // alone count only as a burst (a newer client would otherwise look hostile).
   const parsed = new Set(editions.map((e) => bytesToHex(e.rumorId)));
   const unrecognisedBy = new Map<string, number[]>();
   for (const ev of opened) {
@@ -295,8 +241,7 @@ export function suspiciousActivity(
     byAuthor.set(author, actor);
   }
 
-  // Invite registries, last: below the threshold they only corroborate an
-  // actor someone else's evidence already flagged; at it, they accuse alone.
+  // Below the threshold registries only corroborate; at it, they accuse alone.
   for (const [author, times] of inviteBy) {
     const existing = byAuthor.get(author);
     if (!existing && times.length < INVITE_ALERT_THRESHOLD) continue;
@@ -321,9 +266,7 @@ export function suspiciousActivity(
 /** "7 bans, 18 channel updates" — the summary line for one actor. */
 export function describeAttempts(attempts: ReadonlyMap<string, number>): string {
   return [...attempts.entries()]
-    // Busiest first, except unrecognised events, which trail regardless of
-    // volume: they carry the least certainty, so they read as a footnote to the
-    // named actions rather than leading them.
+    // Busiest first, but unrecognised events trail (least certain).
     .sort((a, b) => {
       const aLast = a[0] === UNRECOGNISED;
       const bLast = b[0] === UNRECOGNISED;

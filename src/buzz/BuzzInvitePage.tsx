@@ -17,12 +17,8 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 
 /**
- * Landing page for a Buzz relay invite on the Armada host —
- * `/invite/<code>?r=<relay-host>`. Unlike a Concord invite, a Buzz invite is
- * an HTTP claim against the relay (the code is a dotted HMAC token, not an
- * naddr); `?r=` names the relay because the code doesn't encode it. Once
- * signed in we claim membership, add the server, and dive in. A relay that
- * requires a join policy shows its terms first.
+ * Landing for a Buzz relay invite: `/invite/<code>?r=<relay-host>`. The claim
+ * is an HTTP call against the relay; `?r=` names it since the code doesn't.
  */
 export function BuzzInvitePage() {
   const { naddr: code } = useParams<{ naddr: string }>();
@@ -45,8 +41,6 @@ export function BuzzInvitePage() {
   const [error, setError] = useState<string | null>(null);
   const attempted = useRef(false);
 
-  // Preview the relay (NIP-11 name) and load its join policy, even before
-  // sign-in, so the invitee sees where they're headed.
   useEffect(() => {
     if (!invite) return;
     let cancelled = false;
@@ -84,9 +78,8 @@ export function BuzzInvitePage() {
           policy: policy ?? undefined,
           ageConfirmed,
         });
-        // The kind 10009 list is the only store for added servers, so this
-        // write IS the add. Awaited: a rejected publish must fail the claim
-        // rather than leave a rail icon that vanishes at the next sync.
+        // Kind 10009 is the only store for added servers, so this write IS the add.
+        // Awaited so a rejected publish fails the claim.
         await updateList({ type: "add-server", url: invite.relayUrl });
         toast({ title: "Joined", description: previewName || invite.host });
         navigate(`/s/${relayToRouteParam(invite.relayUrl)}`, { replace: true });
@@ -100,8 +93,7 @@ export function BuzzInvitePage() {
     [invite, user, policy, policyAccepted, ageConfirmed, previewName, updateList, navigate],
   );
 
-  // Auto-join once signed in when there's no policy to accept; a policy needs an
-  // explicit tick, so wait for the button then.
+  // Auto-join only when there's no policy to accept.
   useEffect(() => {
     if (invite && user && policy === null && !attempted.current) void claim();
   }, [invite, user, policy, claim]);

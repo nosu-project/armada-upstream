@@ -8,13 +8,8 @@ import { Label } from "@/components/ui/label";
 import { NAME_MAX_BYTES } from "@/concord/lib/types";
 
 /**
- * Name a channel category — the prompt behind both "New category" and a
- * category rename. A category has no id of its own; it is only ever the set of
- * channels naming it (channelCategory.ts), so "rename" re-files every member
- * and "create" simply files the first one under the name typed here.
- *
- * Shared by the channel sidebar (ConcordPage) and the community settings
- * organizer (CommunitySettingsView) so the two ask the question identically.
+ * Name a channel category (create or rename). Categories have no id — they're
+ * the set of channels naming them — so rename re-files every member channel.
  */
 export function CategoryNameDialog({
   open,
@@ -25,7 +20,6 @@ export function CategoryNameDialog({
 }: {
   open: boolean;
   initial: string;
-  /** How many channels the name will be applied to, for the button's copy. */
   count: number;
   onOpenChange: (open: boolean) => void;
   onSubmit: (name: string) => void;
@@ -41,9 +35,6 @@ export function CategoryNameDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent title={renaming ? "Rename category" : "New category"}>
-        {/* The house dialog header: centered crest + lowercase mono heading.
-            It also gives the shell's close button its own row — the form used
-            to start flush at the top, putting the X over the input's corner. */}
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Folder className="size-6" />

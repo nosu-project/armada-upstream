@@ -68,19 +68,13 @@ import { withChannelView } from "@/concord/lib/channelView";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord/lib/control";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
 
-/**
- * How far up a channel's rekey addresses to look when finding the epoch floor
- * for a privatisation. Bounded because the scan is speculative — one REQ of
- * this many authors per held root — and a channel that has genuinely rotated
- * past it is far outside anything a UI flow produces.
- */
+/** Bound on the speculative rekey-address scan when privatising (one REQ per held root). */
 const MAX_PROBED_CHANNEL_EPOCH = 64;
 import { KIND_WRAP } from "@/concord/lib/kinds";
 import { attachGitRepository, detachGitRepository, parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Thrown when the joiner is on the community's folded Banlist (CORD-04 §4). */
 export class BannedFromCommunityError extends Error {
   constructor() {
     super("You're banned from this community and can't rejoin.");
@@ -88,7 +82,6 @@ export class BannedFromCommunityError extends Error {
   }
 }
 
-/** Thrown when an invite leads to a community its owner has dissolved. */
 export class DissolvedCommunityError extends Error {
   constructor() {
     super("This community was dissolved by its owner and can no longer be joined.");
@@ -97,14 +90,9 @@ export class DissolvedCommunityError extends Error {
 }
 
 /**
- * Refuse an invite whose community has been dissolved (CORD-02 §9). A bundle
- * keeps resolving after dissolution — nothing about the grave touches link
- * coordinates — so without this, joining a dead community's still-live link
- * quietly re-adds it to the rail as a read-only husk. Direct invites are held
- * to the same check (a bundle is a bundle, however it arrived).
- *
- * The probe answers within a short budget and reuses a recent "not found", so
- * a preview followed by its join pays one probe between them.
+ * Refuse an invite to a dissolved community (CORD-02 §9): bundles keep
+ * resolving after dissolution. Applies to direct invites too. The probe
+ * caches recent "not found", so preview + join pay once.
  */
 export async function assertNotDissolved(
   nostr: Parameters<typeof probeCommunityDissolved>[0],
@@ -127,12 +115,9 @@ export class UnusableRelaysError extends Error {
 }
 
 /**
- * Whether a failed join chain is a VERDICT — the invite or the community says
- * no, and asking again will say the same — rather than a network that didn't
- * answer. Only a verdict may drop a persisted pending join outright; anything
- * else — including an invite no longer found on its relays — keeps it for the
- * next launch to retry, until the record's own bound gives up on it
- * (`PENDING_JOIN_MAX_AGE_MS` / `PENDING_JOIN_MAX_ATTEMPTS`).
+ * Whether a join failure is a VERDICT (asking again gives the same answer)
+ * rather than a network failure. Only verdicts drop a pending join; others
+ * retry until `PENDING_JOIN_MAX_AGE_MS` / `PENDING_JOIN_MAX_ATTEMPTS`.
  */
 export function isJoinRejected(error: unknown): boolean {
   return (
@@ -143,7 +128,6 @@ export function isJoinRejected(error: unknown): boolean {
   );
 }
 
-/** Tell the user a pending join was given up on after failing past its bound. */
 function toastJoinAbandoned(name: string): void {
   toast({
     title: `Couldn't join ${name}`,
@@ -161,37 +145,25 @@ export class ControlUnreadableError extends Error {
 }
 
 /**
- * Refuse to join a community whose CURRENT Banlist names me (CORD-04 §4). An
- * honest client MUST NOT publish a Join, record the entry, or emit anything
- * while banlisted — presence on the folded head is disqualifying regardless of
- * edition timestamps (the self-removal watcher's timestamp guard is for the
- * post-join replay race, NOT for entry). Fetch + fold the control plane and
- * throw before any side effect.
+ * Refuse to join when the CURRENT Banlist names me (CORD-04 §4), before any
+ * side effect. Fail CLOSED: a real community always has control editions, so
+ * an empty read means withheld/unreachable, not "no ban". NIP-42 authenticated
+ * with the control-group keys.
  *
- * Fail CLOSED: a real community always carries control editions (genesis
- * metadata + channel), so an empty read means the plane was withheld or
- * unreachable, NOT "no ban" — refuse-and-retry rather than wave a banned user
- * through. The read is NIP-42 authenticated (the stock relays gate stream
- * reads), scoped to the community's control-group keys.
- *
- * ORDERING INVARIANT: this must fold the FRESH bundle entry, before any merge
- * with a previously-held list entry. The fresh entry spans only the invite's
- * epoch, so the fold is single-epoch and needs no snapshot attribution; a
- * merged rejoin entry restores older roots and would need the full
- * cross-epoch fold semantics (see headCandidates' `snapshot`).
+ * ORDERING INVARIANT: fold the FRESH single-epoch bundle entry, before any
+ * merge with a held entry (a merged entry would need cross-epoch snapshot
+ * attribution; see headCandidates).
  */
 export async function assertNotBanned(
   nostr: ReturnType<typeof useNostr>["nostr"],
   community: Community,
   pubkey: string,
 ): Promise<void> {
-  // Enforce the single-epoch invariant in code, not just prose: this fold omits
-  // snapshot attribution, so a merged multi-epoch entry could anchor on a stale
-  // old-epoch fragment and wave a banned rejoiner through. Fail closed.
+  // Enforce the single-epoch invariant: a multi-epoch entry could anchor on a
+  // stale fragment and let a banned rejoiner through.
   if (community.heldRoots.length !== 1) throw new ControlUnreadableError();
   const groups = controlGroups(community);
-  // Answer the relays' NIP-42 challenge with the control-group keys, else a
-  // gated relay serves nothing and the ban goes unseen.
+  // Otherwise a gated relay serves nothing and the ban goes unseen.
   registerStreamKeys(groups, community.relays);
   const authors = groups.map((g) => g.pk);
   const results = await Promise.all(
@@ -209,7 +181,6 @@ export async function assertNotBanned(
   if (folded.banned.has(pubkey)) throw new BannedFromCommunityError();
 }
 
-/** A preview of where a Concord invite leads, resolved before joining. */
 export interface InvitePreview {
   communityId: string;
   name: string;
@@ -219,17 +190,9 @@ export interface InvitePreview {
 }
 
 /**
- * The newest bundle event seen at each link coordinate, memory-cached and
- * persisted in KV. Any one fetch races per-relay timeouts, and a relay that
- * missed a refresh (or a revocation) happily vends its older copy — so
- * without a memory, a repeat resolve can REGRESS to a bundle an earlier
- * resolve already superseded (previews flickering between fresh and stale
- * metadata, joins landing on an old epoch). Addressable-event semantics make
- * newest-wins the truth, so remember the newest raw event per coordinate and
- * never accept an older one — across reloads, hence KV, not a session map.
- * Tombstones are events too and sort the same way, so a seen revocation stays
- * terminal. Only signature-verified events enter (see the filter below), so a
- * hostile relay can't pin a forgery here.
+ * Newest bundle event per link coordinate, persisted in KV so a laggard relay's
+ * older copy can't regress a later resolve (newest-wins; tombstones stay
+ * terminal). Only signature-verified events enter, so forgeries can't pin it.
  */
 const BUNDLE_FLOOR_KV = "c2bundlehead:";
 const newestBundleEvents = new Map<string, NostrEvent>();
@@ -248,25 +211,18 @@ async function readBundleFloor(linkSigner: string): Promise<NostrEvent | undefin
 
 function writeBundleFloor(linkSigner: string, event: NostrEvent): void {
   newestBundleEvents.set(linkSigner, event);
-  // Best-effort: losing the persisted floor only re-exposes the relay race.
+  // Best-effort: losing the floor only re-exposes the relay race.
   getArmadaDB().kv.set(BUNDLE_FLOOR_KV + linkSigner, event).catch(() => undefined);
 }
 
 /**
- * How long a coordinate query keeps waiting for the REMAINING relays once one
- * of them has already produced a valid bundle event. The full per-relay
- * timeout below exists for the nothing-yet case; once a copy is in hand, the
- * other live relays (dialed in parallel) answer within moments, and only a
- * dead relay is still pending — which must not hold every invite preview
- * hostage for the whole timeout. Stale-copy risk from cutting a laggard off
- * is already covered twice over: the persisted newest-copy floor never
- * regresses, and resolveBundle's second hop re-asks the community's home
- * relays for a newer copy.
+ * Wait for remaining relays after the first valid bundle arrives; a dead relay
+ * mustn't hold previews hostage. Stale risk is covered by the floor and the
+ * home-relay second hop.
  */
 const BUNDLE_GRACE_MS = 250;
 const BUNDLE_RELAY_TIMEOUT_MS = 8000;
 
-/** Query one relay set for a link's bundle coordinate, verified events only. */
 async function queryBundleCoordinate(
   nostr: ReturnType<typeof useNostr>["nostr"],
   invite: ParsedInviteLink,
@@ -289,10 +245,8 @@ async function queryBundleCoordinate(
           { signal: AbortSignal.timeout(BUNDLE_RELAY_TIMEOUT_MS) },
         )
         .then((events) => {
-          // Only link-signer-authored, signature-valid events count: a hostile
-          // relay answering with a forged far-future event must not pin the
-          // coordinate (parseBundleEvent re-checks, but by then the floor
-          // would be poisoned).
+          // Only link-signer-authored, signature-valid events, or a forged far-future
+          // event would poison the floor before parseBundleEvent rejects it.
           for (const e of events) {
             if (
               e.kind === KIND_INVITE_BUNDLE &&
@@ -316,41 +270,27 @@ async function queryBundleCoordinate(
   return valid.sort((a, b) => b.created_at - a.created_at);
 }
 
-/**
- * What resolveBundle's home-relay second hop found, delivered asynchronously
- * when the caller opted into a non-blocking second hop.
- */
+/** Result of resolveBundle's non-blocking home-relay second hop. */
 export interface SecondHopResult {
-  /** A newer, valid bundle the home relays vended. */
   bundle?: InviteBundle;
-  /** The home relays vended a newer revocation tombstone. */
   revoked?: boolean;
 }
 
-/** Fetch + verify a Concord invite bundle from its bootstrap relays. */
 export async function resolveBundle(
   nostr: ReturnType<typeof useNostr>["nostr"],
   invite: ParsedInviteLink,
   fallbackRelays: string[],
   opts?: {
     /**
-     * When set, the home-relay second hop below runs in the BACKGROUND and
-     * reports through this callback instead of blocking the return. Meant for
-     * previews (the Discover cards), where painting the first-hop bundle now
-     * beats waiting a further round trip for a copy that is almost always
-     * identical — and where a join that follows re-resolves with full
-     * (blocking) semantics anyway. The floor is still written either way, so
-     * whatever the background hop learns outlives this call.
+     * Run the home-relay second hop in the BACKGROUND and report here (for
+     * previews; a join re-resolves blocking). The floor is written either way.
      */
     onSecondHop?: (result: SecondHopResult) => void;
   },
 ): Promise<InviteBundle> {
   const pool = invite.bootstrapRelays.length ? invite.bootstrapRelays : fallbackRelays;
   const flat = await queryBundleCoordinate(nostr, invite, pool);
-  // The newest event at the coordinate wins: a refresh replaces the bundle, a
-  // revocation tombstone replaces it terminally. The persisted floor keeps a
-  // flaky read (relays timing out, a laggard vending its stale copy) from
-  // un-replacing what a better read already saw, on this or any earlier load.
+  // The persisted floor keeps a flaky read from un-replacing what a better read saw.
   const remembered = await readBundleFloor(invite.linkSigner);
   let best = flat[0] as NostrEvent | undefined;
   if (remembered && (!best || remembered.created_at > best.created_at)) best = remembered;
@@ -358,21 +298,14 @@ export async function resolveBundle(
 
   let bundle = parseBundleEvent(best, invite.linkSigner, invite.token, Date.now());
 
-  // Second hop: the decrypted bundle names the community's HOME relays, and a
-  // refresh always lands there even when a frozen bootstrap relay rejected or
-  // missed it — so a reader stuck on a stale bootstrap copy would otherwise
-  // serve stale previews (and stale keys!) forever. Ask the home relays the
-  // pool didn't cover and adopt a newer copy if one exists. Best-effort: the
-  // first-hop bundle already in hand is the floor, never the ceiling.
+  // Second hop: refreshes always land on the community's HOME relays, even if a
+  // bootstrap relay missed it; otherwise stale previews (and keys) could persist.
   const covered = new Set(pool);
   const home = (Array.isArray(bundle.relays) ? bundle.relays : []).filter((r) => !covered.has(r));
 
   if (home.length > 0 && opts?.onSecondHop) {
     const onSecondHop = opts.onSecondHop;
-    // Non-blocking mode: the first-hop bundle is the answer; the home-relay
-    // check refines it out-of-band. Write the first-hop floor NOW so an
-    // interrupted session still remembers it; the background hop only ever
-    // overwrites it with a strictly newer event.
+    // Write the first-hop floor NOW; the background hop only overwrites with strictly newer.
     if (best !== remembered) writeBundleFloor(invite.linkSigner, best);
     const first = best;
     void (async () => {
@@ -383,15 +316,14 @@ export async function resolveBundle(
         writeBundleFloor(invite.linkSigner, newer);
         onSecondHop({ bundle: fresher });
       } catch {
-        // A newer tombstone still terminates the link honestly; anything else
-        // malformed keeps the first-hop bundle (and the first-hop floor — a
-        // floor that doesn't parse would poison every later read).
+        // A newer tombstone terminates; other malformed events keep the first-hop
+        // bundle and floor (a floor that doesn't parse would poison later reads).
         if (newer.tags.some((t) => t[0] === "vsk" && t[1] === VSK_INVITE_REVOKED)) {
           writeBundleFloor(invite.linkSigner, newer);
           onSecondHop({ revoked: true });
         }
       }
-    })().catch(() => undefined); // the caller has its answer; the refinement is best-effort
+    })().catch(() => undefined); // the refinement is best-effort
     return bundle;
   }
 
@@ -402,8 +334,7 @@ export async function resolveBundle(
         bundle = parseBundleEvent(newer, invite.linkSigner, invite.token, Date.now());
         best = newer;
       } catch {
-        // A newer tombstone still terminates the link honestly; anything else
-        // malformed keeps the first-hop bundle.
+        // A newer tombstone terminates; other malformed events keep the first-hop bundle.
         if (newer.tags.some((t) => t[0] === "vsk" && t[1] === VSK_INVITE_REVOKED)) throw new InviteError("revoked", "this invite link has been revoked");
       }
     }
@@ -414,13 +345,8 @@ export async function resolveBundle(
 }
 
 /**
- * The invite bundle as remembered locally — the persisted newest-copy floor
- * (see {@link resolveBundle}) parsed with the link's own secret, no relay
- * round trip. `null` when nothing usable is remembered: no floor yet, or a
- * floor that no longer parses (revoked tombstone, expired link, wrong token),
- * which the caller must treat as "ask the network", never as "not revoked".
- * Used to paint invite previews (the Discover cards) instantly from local
- * data while a live resolve refreshes them.
+ * The bundle from the persisted floor, no network. `null` means "ask the
+ * network", never "not revoked". Used for instant previews.
  */
 export async function readCachedBundle(invite: ParsedInviteLink): Promise<InviteBundle | null> {
   const remembered = await readBundleFloor(invite.linkSigner);
@@ -432,7 +358,6 @@ export async function readCachedBundle(invite: ParsedInviteLink): Promise<Invite
   }
 }
 
-/** Turn a verified bundle into the membership-list join material + entry. */
 export function bundleToEntry(bundle: InviteBundle, opts?: { inviteRef?: string }): CommunityListEntry {
   const jm: JoinMaterial = {
     community_id: bundle.community_id,
@@ -455,9 +380,7 @@ export function bundleToEntry(bundle: InviteBundle, opts?: { inviteRef?: string 
     seed: jm,
     current: jm,
     added_at: Date.now(),
-    // Remember the link joined through (bare `naddr#fragment`), so a member
-    // stranded on a superseded epoch can re-resolve the SAME link once its
-    // creator refreshes the bundle (CORD-05 §2) — see useStrandedRecovery.
+    // Lets a member stranded on a superseded epoch re-resolve the SAME link (CORD-05 §2, useStrandedRecovery).
     ...(opts?.inviteRef ? { invite_ref: opts.inviteRef } : {}),
   };
 }
@@ -468,43 +391,24 @@ export function inviteRefOf(invite: ParsedInviteLink): string {
 }
 
 /**
- * The home-relay set for a NEW community: the user's configured community
- * relays (`AppConfig.communityRelays`, editable in Settings and per-mint in
- * the create dialog), falling back to the CORD stock set — the wss:// interop
- * relays every CORD client shares — when they have emptied the list, since a
- * community with no relays has no home at all. Portable-filtered so a stray
- * `ws://` dev relay can't lock https members out (#47), deduped, and capped to
- * the recommended community relay count.
- *
- * Nothing else is folded in. The app relays carry the user's own account
- * traffic and have no bearing on where a community lives; the creator's NIP-17
- * DM relays are curated for their inbox, not for hosting. Both used to be
- * unioned in alongside an unconditional stock set, which is how communities
- * ended up on relays their creator never picked and could not see in any
- * setting. This one list is now the whole answer.
+ * Home relays for a NEW community: the configured community relays, else the
+ * CORD stock set. Portable-filtered (#47), deduped, capped. App and DM relays
+ * are deliberately not included.
  */
 export function defaultCreateRelays(communityRelays: string[]): string[] {
   return capRelays(preferPortableRelays(communityRelays.length > 0 ? communityRelays : STOCK_RELAYS));
 }
 
-/**
- * The relays the create dialog pre-selects — {@link defaultCreateRelays} over
- * the user's configured set, which the picker can then pare down or add to
- * before minting. Resolved synchronously: with no DM-relay lookup left, the
- * dialog paints its relay list on first render instead of after a round trip.
- */
+/** The create dialog's preselected relays; synchronous so the list paints on first render. */
 export function useCreateRelayCandidates(): string[] {
   const { config } = useAppContext();
   return useMemo(() => defaultCreateRelays(config.communityRelays), [config.communityRelays]);
 }
 
 /**
- * Create / preview / join for Concord communities. Creating publishes the
- * genesis Control Plane — EXACTLY two owner-signed editions, the metadata and
- * one public `#general` (CORD-02 §1) — records the keys in the Community List
- * (the only durable record), announces the creator's own Guestbook Join, and
- * follows up with one private `#private` starter room so a fresh community
- * shows both channel shapes.
+ * Create / preview / join. Genesis is EXACTLY two owner-signed editions
+ * (metadata + public `#general`, CORD-02 §1), keys recorded in the Community
+ * List, the creator's Guestbook Join, then a private `#private` starter.
  */
 export function useCommunityActions() {
   const { nostr } = useNostr();
@@ -513,11 +417,7 @@ export function useCommunityActions() {
   const { mutateAsync: updateList } = useUpdateCommunityList();
   const queryClient = useQueryClient();
 
-  // Fallback relays for resolving an invite bundle when the fragment carries no
-  // bootstrap relays of its own. Prefer the user's configured app relays (so a
-  // removed relay isn't silently reused) and fall back to the stock interop set
-  // (not the app defaults) when the user has emptied their list — a relayless
-  // link must still resolve against the relays every CORD client shares.
+  // For fragments with no bootstrap relays: the user's app relays, else the stock interop set.
   const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
 
   const create = useMutation<
@@ -541,33 +441,20 @@ export function useCommunityActions() {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Name your community first.");
 
-      // The community's home relays. When the create dialog supplied an
-      // explicit set, honor it (portable-filtered all the same); otherwise the
-      // configured community relays. Prefer the wss:// subset either way: a
-      // stray ws:// dev relay sealed into the bundle is permanently unreachable
-      // for every member on a secure origin, however reachable it is for the
-      // creator (#47).
+      // Prefer wss://: a ws:// relay sealed into the bundle is unreachable from secure origins (#47).
       const relays = chosen && chosen.length > 0
         ? preferPortableRelays(chosen)
         : defaultCreateRelays(config.communityRelays);
       const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, relays);
 
-      // Disappearing messages (CORD-08): default 30 days unless the creation
-      // screen chose otherwise; 0 (off) writes no field at all.
+      // CORD-08: default 30 days; 0 (off) writes no field.
       const timerSecs = Math.floor(messageExpirationSecs ?? DEFAULT_MESSAGE_EXPIRATION_SECS);
 
-      // Presentation, when the creation wizard collected any. Written into the
-      // genesis edition rather than a follow-up update so a member who folds
-      // the community for the first time already has its face — and so an
-      // abandoned second publish can't leave version 1 describing a community
-      // the creator never saw. Absent fields write no key at all.
+      // In the genesis edition so first-time folders see the face, and an abandoned
+      // follow-up can't leave version 1 wrong.
       const trimmedDescription = description?.trim();
 
-      // The community's voice servers: whatever the wizard showed the creator,
-      // or their own server when the caller names none — the same shape as
-      // relays, and for the same reason. Members resolve calls from this and
-      // not from their own preference (CORD-07 §5), so an explicitly EMPTY
-      // list is meaningful and survives: it puts every member back on theirs.
+      // Members resolve calls from this list (CORD-07 §5), so an explicit EMPTY list is meaningful.
       const avBrokers = (chosenBrokers ?? ownAvServers())
         .map(canonicalOrigin)
         .filter((origin): origin is string => Boolean(origin))
@@ -603,11 +490,8 @@ export function useCommunityActions() {
         ),
       );
 
-      // The second starter room: a private #private, born the way any private
-      // channel is (see createChannel): its key goes into the vault entry
-      // below BEFORE its edition publishes — a lost list write would
-      // otherwise orphan the only copy of the key behind a live channel
-      // definition, unreadable forever.
+      // Private channel key goes into the vault BEFORE its edition publishes, or a
+      // lost list write orphans the only copy of the key.
       const privateStarter: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "private" };
       community.privateChannels = [privateStarter];
 
@@ -618,17 +502,11 @@ export function useCommunityActions() {
         entry: { community_id: community.idHex, seed: jm, current: jm, added_at: Date.now() },
       });
 
-      // The private starter room's access role, then its channel edition (the
-      // createChannel ordering: a role scoped to a channel that never
-      // appeared is inert, a channel whose role mint failed is a visible
-      // room with no access list). Best-effort past this point: genesis
-      // landed and membership is recorded, so failing the create here would
-      // strand a working community behind an error and invite a duplicate
-      // retry — roll the unused key back out and ship #general alone.
+      // Role then channel (createChannel ordering). Best-effort past here: genesis
+      // landed, so failing would strand a working community and invite a duplicate;
+      // roll the key back and ship #general alone.
       try {
-        // The owner's rank needs no fold (supremacy comes from the
-        // community_id commitment), so this resolves before anything is
-        // readable back; the throw is unreachable for the creator.
+        // The owner's rank needs no fold (community_id commitment), so this can't throw for the creator.
         const position = accessRolePosition(undefined, user.pubkey, community.owner);
         if (position === undefined) throw new Error("No resolvable rank for the access role.");
         await publishEdition(
@@ -666,7 +544,6 @@ export function useCommunityActions() {
         }).catch(() => undefined);
       }
 
-      // Best-effort founder Join, so the member list has a firsthand entry.
       void (async () => {
         const rumor = buildJoinRumor(user.pubkey, Date.now());
         const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
@@ -682,9 +559,7 @@ export function useCommunityActions() {
   const preview = useMutation<InvitePreview, Error, { invite: ParsedInviteLink }>({
     mutationFn: async ({ invite }) => {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
-      // Fail loudly when this platform can't reach ANY of the community's
-      // relays (#47) — e.g. a ws://-only dev community opened on the APK,
-      // where mixed content silently blocks every connection.
+      // Fail loudly if no relay is reachable here (#47), e.g. ws:// under mixed-content blocking.
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new Error(unusable);
       await assertNotDissolved(nostr, bundle);
@@ -698,13 +573,9 @@ export function useCommunityActions() {
     },
   });
 
-  // The durable join chain — same ORDER as the old blocking join: a fresh
-  // resolve (catches a revocation the preview's copy predates), the platform
-  // reachability check, the ban check BEFORE anything is recorded or
-  // published, then the vault write and the best-effort Guestbook Join.
-  //
-  // `pendingId` names the pending join this chain settles: one the user has
-  // since walked away from (Leave on its optimistic entry) is not written.
+  // Durable join chain, in order: fresh resolve (catches revocations), reachability,
+  // ban check BEFORE any record/publish, vault write, best-effort Guestbook Join.
+  // `pendingId` names the pending join; one walked away from isn't written.
   const completeJoin = async (
     invite: ParsedInviteLink,
     pendingId?: string,
@@ -713,37 +584,25 @@ export function useCommunityActions() {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
       const unusable = unusableRelaysReason(bundle.relays);
       if (unusable) throw new UnusableRelaysError(unusable);
-      // Neither may anyone join a dissolved community — checked here too, not
-      // only in the preview, since the optimistic path joins from a preview's
-      // bundle that may predate the grave.
+      // Also here: the optimistic path may join from a pre-grave preview bundle.
       await assertNotDissolved(nostr, bundle);
       const entry = bundleToEntry(bundle, { inviteRef: inviteRefOf(invite) });
-      // A banned npub must not join (CORD-04 §4): check BEFORE recording the
-      // entry or publishing anything.
+      // CORD-04 §4: check before recording or publishing anything.
       const community = rehydrateCommunity(entry);
       if (community) await assertNotBanned(nostr, community, user.pubkey);
       const walkedAway = () => pendingId !== undefined && !hasPendingJoin(user.pubkey, pendingId);
       if (walkedAway()) return { communityId: bundle.community_id, name: bundle.name };
-      // A pending join is dated by its CLICK, not by this run, which may be a
-      // resume launches later: the newest of `added_at`/`removed_at` decides
-      // liveness, so a replay stamped now would outrank a Leave taken since on
-      // another device, or a kick.
+      // Date by the CLICK, not this (possibly resumed) run, so a replay can't
+      // outrank a later Leave or kick.
       const clicked = pendingId !== undefined ? pendingJoinEntry(user.pubkey, pendingId)?.added_at : undefined;
       if (clicked !== undefined) entry.added_at = clicked;
       const list = await updateList({ type: "add", entry, replay: pendingId !== undefined });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
-      // A replay a later removal superseded wrote nothing, and announces nothing.
       if (!isLive(list, bundle.community_id)) return { communityId: bundle.community_id, name: bundle.name };
 
-      // Best-effort self-signed Guestbook Join, echoing the link's attribution
-      // (CORD-02 §5 / CORD-05 §1) — the coalesce self-heals if it never lands.
-      // Asked again after each await: a Leave taken while the vault write or
-      // the seal was in flight has already published its Guestbook Leave, and
-      // a Join after it would be the newest entry — joined, to everyone else.
-      // The seal is awaited HERE, not in the background, because the pending
-      // record is what tells a leave apart and it is forgotten once this
-      // returns. Dated like the entry, so a resumed Join can't postdate a
-      // Leave or kick that came after the click.
+      // Best-effort Guestbook Join (CORD-02 §5 / CORD-05 §1). Re-check walk-away
+      // after each await: a Join after a Leave would read as joined. Awaited here
+      // because the pending record is forgotten once this returns.
       if (community && !walkedAway()) {
         const attribution = bundle.creator_npub
           ? { creator: bundle.creator_npub, label: bundle.label }
@@ -761,12 +620,8 @@ export function useCommunityActions() {
   };
 
   /**
-   * Run a pending join's durable chain in the background and settle its
-   * record: forgotten once the vault write lands or the join is refused
-   * outright, KEPT on a transient failure so the next launch retries it — and
-   * counted, so one that keeps failing is eventually given up on.
-   * `resumed` marks a retry from a previous launch, whose transient failures
-   * stay quiet — it already told the user "Joined" once.
+   * Run a pending join's chain and settle the record: forgotten on success or
+   * refusal, KEPT (and counted) on transient failure. `resumed` retries stay quiet.
    */
   const settleJoin = (
     invite: ParsedInviteLink,
@@ -813,17 +668,10 @@ export function useCommunityActions() {
   >({
     mutationFn: async ({ invite, bundle: resolved }) => {
       if (!user) throw new Error("Sign in to join an encrypted community.");
-      // Callers with no resolved preview in hand keep the blocking chain.
       if (!resolved) return completeJoin(invite);
 
-      // Optimistic path: the preview already resolved and verified this
-      // bundle, so the community's identity, name and keys are in hand at
-      // click time. Record a pending entry — on disk, so closing the app
-      // mid-chain doesn't lose the join — and answer NOW; the durable chain
-      // runs behind it, the real vault entry replaces the pending one when it
-      // lands, and the ban check still precedes every publish and every
-      // vault record. Nothing is published to revert on failure — a refused
-      // join drops the pending entry and a toast says why.
+      // Optimistic path: record a pending entry on disk and answer NOW; the durable
+      // chain (with the ban check before any publish) runs behind it.
       const unusable = unusableRelaysReason(resolved.relays);
       if (unusable) throw new UnusableRelaysError(unusable);
       await persistPendingJoin(user.pubkey, bundleToEntry(resolved, { inviteRef: inviteRefOf(invite) }));
@@ -844,12 +692,7 @@ export function useCommunityActions() {
   };
 }
 
-/**
- * Resume the pending joins a previous launch was closed on (see
- * pendingJoins.ts), once per session, for the signed-in account only. A
- * record whose invite no longer parses can never finish, so it is dropped; one
- * the load found past its retry bound was already dropped, and is announced.
- */
+/** Resume pending joins from a previous launch (pendingJoins.ts), once per session. */
 export function useResumePendingJoins(): void {
   const { user } = useCurrentUser();
   const { settleJoin } = useCommunityActions();
@@ -883,7 +726,6 @@ export function useResumePendingJoins(): void {
   }, [pubkey, canWrite]);
 }
 
-/** Per-community actions: leave, dissolve, and channel management. */
 export function useCommunityManagement(community: Community | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -895,30 +737,20 @@ export function useCommunityManagement(community: Community | undefined) {
   const removeRailKey = useRemoveRailKey();
 
   const leave = useMutation<void, Error, void>({
-    // Purely local until it returns, so nothing here should wait on
-    // `navigator.onLine` (unreliable in the Android WebView).
+    // Local-only; `navigator.onLine` is unreliable in the Android WebView.
     networkMode: "always",
     mutationFn: async () => {
       if (!user || !community) throw new Error("Not ready.");
       const communityId = community.idHex;
       const removedAt = Date.now();
-      // Leave locally FIRST — the tombstone is the authoritative act, and it
-      // is on disk before this returns, so the community is off the rail now
-      // and stays off after a restart. A join still pending is walked away
-      // from too, or its chain would write the membership right back.
+      // The local tombstone is authoritative and on disk now. Walk away from any
+      // pending join too, or its chain would re-add membership.
       await forgetPendingJoin(user.pubkey, communityId);
       await removeCommunityLocally(queryClient, user.pubkey, communityId, removedAt);
-      // The arrangement follows the local leave, not the vault write: a write
-      // that fails still leaves the community left, and a later rejoin must
-      // not land back in the folder it used to live in.
+      // Follows the local leave so a rejoin doesn't land back in the old folder.
       removeRailKey(`c2:${communityId}`);
-      // Then, in the background and side by side, the Guestbook Leave and the
-      // vault write (a full read-modify-write, queued behind any other list
-      // write). Neither holds the button: one dead relay costs the publish its
-      // timeout, and a list write stuck on a remote signer ahead in the queue
-      // can take a minute. A Leave no relay took stays in the publish outbox
-      // for a retry; a vault write that never lands is republished from the
-      // local tombstone by the next sync's reconcile.
+      // Guestbook Leave and vault write run in the background (either can take a
+      // long time); the outbox and next sync's reconcile retry them.
       void publisher.mutateAsync({ type: "leave" }).catch(() => undefined);
       void updateList({ type: "remove", communityId, removedAt }).catch((e) => {
         logSync(
@@ -940,61 +772,31 @@ export function useCommunityManagement(community: Community | undefined) {
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the dissolution.");
       }
-      // Mark the community dissolved locally FIRST, then drop the owner's own
-      // vault entry (which removes it from the rail). Order is load-bearing: an
-      // active call is kept alive by `useCallSync`, which reads a gone entry as
-      // a "removed" hang-up — but a community it already knows is dissolved is a
-      // grave, not a judgment, so it stays connected (the room key still
-      // derives; dissolution rolls no epoch). Setting the dissolved flag before
-      // the entry vanishes means the call watcher sees `dissolved` on the same
-      // render the community goes undefined, and the call rides through.
+      // Mark dissolved BEFORE dropping the vault entry: `useCallSync` treats a gone
+      // entry as removal, but a known grave keeps the call connected.
       await markDissolvedLocally(queryClient, community.idHex, Date.now());
-      // Take down what still advertises the community — the owner's invite
-      // links and Discover listings — only NOW: after the grave is accepted,
-      // so a dissolution that fails leaves a live community's links alone.
-      // The retirement publishes revocation tombstones and NIP-09 deletions
-      // only, never a registry edition (the tombstones are what kill the
-      // links, and nothing may follow the grave on the control plane — the
-      // local mark above also makes publishEdition refuse one). Best-effort:
-      // the community is dissolved either way, the Discover card and the join
-      // path both check for the grave themselves, and whatever did not land is
-      // offered back to the owner as a Retry.
+      // Retire links/listings only after the grave is accepted. Tombstones and
+      // NIP-09 only: nothing may follow the grave on the control plane. Misses are offered as Retry.
       await opts?.retire?.().catch(() => undefined);
       await updateList({ type: "remove", communityId: community.idHex });
     },
   });
 
   /**
-   * Mint a Role that confers read access to a Private Channel (CORD-04 §2
-   * `scope`). The binding is the scope's channel_id; the NAME is display only
-   * (callers default it to the channel's name, but any name is as good; the
-   * spec's own example gates `#testers` with a `Tester` role, CORD-06 §0).
-   *
-   * It carries NO permission bits: read access is key possession (CORD-04 §1)
-   * and a Role "mints no key, so granting it hands a member rank, never a
-   * secret" (§2) — the scope is what routes the key, the bits would only hand
-   * out authority nobody asked for.
-   *
-   * It is minted at the BOTTOM of the hierarchy for the same reason. Rank is
-   * the lowest position among a member's Roles and is independent of the
-   * bits, so an access Role placed at the signer's ceiling would promote
-   * every grantee to the signer's own rank (see `accessRolePosition`).
+   * Mint a Role scoped to a Private Channel (CORD-04 §2 `scope`); the name is
+   * display only. NO permission bits (access is key possession, §1), and minted
+   * at the BOTTOM so grantees aren't promoted (see `accessRolePosition`).
    */
   const mintChannelRole = async (channelId: Uint8Array, roleName: string): Promise<string | undefined> => {
     if (!user || !community) return undefined;
     const ownerHex = folded?.ownerHex ?? community.owner;
-    // Below every existing Role and strictly below the signer, or nothing at
-    // all. A signer with no resolvable rank (roleless, or a roster that has
-    // not folded) may mint no Role: treating them as rank 0 would publish an
-    // edition every verifier drops for self-promotion while this client
-    // reported success.
+    // A signer with no resolvable rank may mint no Role (verifiers would drop it as self-promotion).
     const position = accessRolePosition(folded?.roster, user.pubkey, ownerHex);
     if (position === undefined) {
       throw new Error("You don't hold a rank that can create this channel's access role.");
     }
-    // At the 100-role cap the fold keeps the 100 LOWEST role_ids (CORD-04
-    // §2), so a fresh random id may silently fold out — or evict one that
-    // gates another channel. Refuse rather than gamble with the access list.
+    // At the 100-role cap the fold keeps the lowest role_ids (CORD-04 §2), so a
+    // new id could fold out or evict another; refuse.
     if ((folded?.roster.roles.length ?? 0) >= MAX_ROLES_PER_COMMUNITY) {
       throw new Error("This community is at its 100-role limit; delete a role first.");
     }
@@ -1018,15 +820,7 @@ export function useCommunityManagement(community: Community | undefined) {
     return roleId;
   };
 
-  /**
-   * Mint an ADDITIONAL access Role for an existing Private Channel, under a
-   * caller-chosen name. Entitlement is any-of over the Roles scoped to a
-   * channel (`channelRoles`/`isEntitled`), so several Roles gating one room
-   * ("editors" and "advisors" both reading #planning) is already how every
-   * read path works; this is just the mint. The newborn Role is held by
-   * nobody: it starts conferring access only as it is granted (the grant is
-   * what vends the key, see handleToggleRole).
-   */
+  /** Mint an ADDITIONAL access Role for a Private Channel (entitlement is any-of); held by nobody until granted. */
   const mintAccessRole = useMutation<string | undefined, Error, { channelIdHex: string; name: string }>({
     mutationFn: async ({ channelIdHex, name }) => {
       const trimmed = name.trim();
@@ -1047,14 +841,10 @@ export function useCommunityManagement(community: Community | undefined) {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
       const channelId = random32();
-      // A repository rides the channel's FIRST edition rather than a follow-up
-      // attachRepository: that path resolves the channel out of the control
-      // fold, which this mutation only invalidates in the background, so a
-      // just-created channel is absent from it and the attach throws. Building
-      // one edition leaves the channel born attached instead.
+      // In the FIRST edition: attachRepository resolves from the fold, which won't
+      // have the new channel yet.
       let metadata: ChannelMetadata = { name: trimmed, private: Boolean(isPrivate) };
-      // The view rides the first edition for the same reason: a forum should
-      // open as one the moment it exists, not after a second publish lands.
+      // Same: a forum opens as one from the start.
       if (view) metadata = withChannelView(metadata, view);
       if (repository) {
         const address = parseGitRepositoryAddress(repository.address);
@@ -1065,11 +855,8 @@ export function useCommunityManagement(community: Community | undefined) {
         );
       }
 
-      // A Private Channel is born with its own independent key (CORD-03),
-      // epoch 0. The key lands in the creator's own list BEFORE the edition
-      // publishes: a lost list write would otherwise orphan the only copy of
-      // the key behind a live channel definition — unreadable forever. The
-      // reverse failure (edition never lands) is rolled back below.
+      // CORD-03: an independent key at epoch 0, stored BEFORE the edition
+      // publishes (else the only key copy is orphaned); failures roll back below.
       let minted: PrivateChannelKey | undefined;
       const priorChannels = community.privateChannels;
       if (isPrivate) {
@@ -1082,12 +869,8 @@ export function useCommunityManagement(community: Community | undefined) {
       }
 
       try {
-        // The Role publishes BEFORE the channel edition. The pair is born
-        // together, and a partial failure has to leave the less harmful
-        // orphan: a role scoped to a channel that never appeared is inert
-        // (it confers no key and grants nothing), while a channel whose role
-        // mint then failed is a live room the whole community can see — and
-        // the retry that follows the error would mint a SECOND one.
+        // Role BEFORE the channel edition: an orphan role is inert, while an
+        // access-less live channel invites a duplicate retry.
         if (isPrivate) await mintChannelRole(channelId, accessRoleName?.trim() || trimmed);
         await publishEdition(
           nostr,
@@ -1101,8 +884,7 @@ export function useCommunityManagement(community: Community | undefined) {
         );
       } catch (e) {
         if (minted) {
-          // Best-effort: pull the never-announced key back out so it doesn't
-          // linger as a ghost channel in the creator's sidebar.
+          // Best-effort: remove the unannounced key so it doesn't ghost in the sidebar.
           await updateList({ type: "refresh-channels", communityId: community.idHex, channels: channelKeysToWire(priorChannels) }).catch(() => undefined);
         }
         throw e;
@@ -1126,7 +908,7 @@ export function useCommunityManagement(community: Community | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          // Round-trip all metadata a rename doesn't touch (CORD-02 §6 discipline).
+          // Round-trip untouched metadata (CORD-02 §6).
           { ...(def?.metadata ?? { private: false }), name: trimmed },
           {
             actorPubkey: user.pubkey,
@@ -1141,20 +923,10 @@ export function useCommunityManagement(community: Community | undefined) {
   });
 
   /**
-   * Convert a Public Channel to Private (CORD-03 §2): mint its independent
-   * key at the next channel epoch, flip the metadata flag, and mint the Role
-   * scoped to it that names who may read it.
-   *
-   * A public channel's stream derives from the `community_root` that every
-   * member holds, so restriction is impossible without an independent key.
-   * The mint lands in the caller's own list before the edition publishes (a
-   * lost list write would orphan the only copy of the key), and `minted` is
-   * returned so the caller can vend it to the entitled.
-   *
-   * Conversion moves the channel to a NEW stream: "Privatising protects the
-   * future only" (§2) — pre-conversion history was written under
-   * root-derived keys every member holds and stays readable to all of them.
-   * Callers must say so before doing it.
+   * Convert Public → Private (CORD-03 §2): mint a key at the next channel
+   * epoch (stored before the edition), flip the flag, and mint the scoped
+   * Role. Protects the future only: prior history stays readable to all
+   * members. `minted` is returned for vending.
    */
   const privatiseChannel = useMutation<
     { minted?: PrivateChannelKey; roleId?: string },
@@ -1168,16 +940,9 @@ export function useCommunityManagement(community: Community | undefined) {
       if (def.isPrivate) throw new Error("This channel is already private.");
       const head = folded?.heads.get(channelIdHex);
 
-      // CORD-03 §2: a conversion mints at the NEXT channel_epoch, monotonic
-      // and never resetting. Resetting to 0 would put two different keys at
-      // one epoch across a privatise -> publish -> privatise cycle, where the
-      // list merge (epoch-max) and a `channel_cuts` floor (epoch-min) both
-      // stop being able to tell the generations apart.
-      //
-      // The floor is read off the wire, not out of this client's keyring: a
-      // channel's rotations publish to addresses derived from the
-      // `community_root` and `channel_id` alone (CORD-06 §2), so generations
-      // this client never held are still countable by it.
+      // CORD-03 §2: mint at the NEXT channel_epoch (never reset, or two keys share
+      // an epoch). The floor is read off the wire (CORD-06 §2 addresses are
+      // derivable), so unheld generations still count.
       const channelId = hex32(channelIdHex);
       const roots = community.heldRoots.length > 0 ? community.heldRoots : [{ key: community.root }];
       const window = channelRekeyAddressWindow(roots, channelId, MAX_PROBED_CHANNEL_EPOCH);
@@ -1195,12 +960,10 @@ export function useCommunityManagement(community: Community | undefined) {
         );
         seenPubkeys = seen.flat().map((e) => e.pubkey);
       } catch {
-        // Unreachable relays leave the local floor to stand on its own.
+        // Unreachable relays: the local floor stands alone.
       }
-      // A saturated probe THROWS rather than returning its ceiling: a rotation
-      // found at the edge of the window proves only that the channel reached
-      // the edge, and minting on top of that guess collides with a generation
-      // that already exists (CORD-03 §2's counter is what tells them apart).
+      // A saturated probe THROWS: hitting the window edge proves only the edge, and
+      // minting on that guess could collide.
       const observedFloor =
         seenPubkeys === undefined ? 0n : channelEpochFloor(window, seenPubkeys, MAX_PROBED_CHANNEL_EPOCH);
 
@@ -1219,11 +982,7 @@ export function useCommunityManagement(community: Community | undefined) {
 
       let roleId: string | undefined;
       try {
-        // Role first, flag second — same partial-failure ordering as
-        // createChannel: an orphan role scoped to a still-public channel is
-        // inert, while a privatised channel whose role mint then failed is a
-        // room whose access list nobody can ever be added to, and a retry
-        // would re-run the whole conversion against a now-private channel.
+        // Role first, flag second (createChannel ordering).
         roleId = await mintChannelRole(channelId, accessRoleName?.trim() || def.name);
         await publishEdition(
           nostr,
@@ -1231,7 +990,7 @@ export function useCommunityManagement(community: Community | undefined) {
           user.signer,
           buildChannelEdition(
             channelId,
-            // Round-trip everything the conversion doesn't touch (CORD-02 §6).
+            // Round-trip untouched metadata (CORD-02 §6).
             { ...def.metadata, private: true },
             {
               actorPubkey: user.pubkey,
@@ -1252,19 +1011,9 @@ export function useCommunityManagement(community: Community | undefined) {
   });
 
   /**
-   * Convert a Private Channel back to Public (CORD-03 §2): flip the metadata
-   * flag and nothing else. "The Channel begins deriving from the
-   * `community_root` going forward, and a member joining after the switch
-   * reads only the now-public history, never the prior private messages (they
-   * never held that key)."
-   *
-   * No key is minted or destroyed. The held channel key STAYS in the caller's
-   * list: `channelsView` keeps querying it alongside the root-derived stream,
-   * so the private era remains readable to whoever held it — a conversion is
-   * never retroactive in either direction. The Role scoped to the channel is
-   * left alone too; it now confers nothing (a public channel's key derives
-   * from the root every member holds) and is inert rather than wrong, and
-   * deleting it is a separate authority action the user can take.
+   * Convert Private → Public (CORD-03 §2): flip the flag only. The held key
+   * stays so the private era remains readable to its holders; the scoped Role
+   * is left (inert).
    */
   const publiciseChannel = useMutation<void, Error, { channelIdHex: string }>({
     mutationFn: async ({ channelIdHex }) => {
@@ -1284,7 +1033,7 @@ export function useCommunityManagement(community: Community | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          // Round-trip everything the conversion doesn't touch (CORD-02 §6).
+          // Round-trip untouched metadata (CORD-02 §6).
           { ...def.metadata, private: false },
           {
             actorPubkey: user.pubkey,
@@ -1298,11 +1047,7 @@ export function useCommunityManagement(community: Community | undefined) {
     },
   });
 
-  /**
-   * The channels the sidebar shows, in the order it shows them — the shared
-   * input for every reorder, so a move computed here and a move computed by
-   * the drag both index into the same list.
-   */
+  /** The sidebar's channel order: the shared index space for every reorder. */
   const orderedForMove = useCallback(
     () =>
       [...(folded?.channels.values() ?? [])]
@@ -1317,12 +1062,8 @@ export function useCommunityManagement(community: Community | undefined) {
   );
 
   /**
-   * Publish the position changes a move implies. One version-chained Channel
-   * edition per channel whose position actually changes — two for an ordinary
-   * swap; the first reorder in a never-ordered community stamps every channel,
-   * since an arrangement isn't expressible until each carries a position.
-   * Editions are independent entities, so a partial failure leaves a coherent
-   * (if partly-applied) order that the next move repairs.
+   * One Channel edition per changed position. The first reorder in a
+   * never-ordered community stamps every channel. Partial failures stay coherent.
    */
   const publishPositions = useCallback(
     async (moves: Array<{ idHex: string; position: number }>) => {
@@ -1337,7 +1078,7 @@ export function useCommunityManagement(community: Community | undefined) {
           user.signer,
           buildChannelEdition(
             hex32(idHex),
-            // Round-trip everything a reorder doesn't touch (CORD-02 §6).
+            // Round-trip untouched metadata (CORD-02 §6).
             withChannelPosition(def.metadata, position),
             {
               actorPubkey: user.pubkey,
@@ -1353,15 +1094,7 @@ export function useCommunityManagement(community: Community | undefined) {
     [user, community, folded, nostr, queryClient],
   );
 
-  /**
-   * Apply a whole planned arrangement — what a drag commits.
-   *
-   * A drop sets a channel's slot AND the heading it landed under, so each
-   * changed channel gets ONE edition carrying both. Publishing position and
-   * category separately would be two editions on one entity for one gesture,
-   * and a failure between them would leave a channel filed where it isn't
-   * positioned.
-   */
+  /** Apply a drag's arrangement: ONE edition per channel carrying both position and category. */
   const arrangeChannels = useMutation<
     void,
     Error,
@@ -1383,7 +1116,7 @@ export function useCommunityManagement(community: Community | undefined) {
           user.signer,
           buildChannelEdition(
             hex32(idHex),
-            // Round-trip everything the drop doesn't touch (CORD-02 §6).
+            // Round-trip untouched metadata (CORD-02 §6).
             withChannelPosition(withChannelCategory(def.metadata, category), position),
             {
               actorPubkey: user.pubkey,
@@ -1398,7 +1131,6 @@ export function useCommunityManagement(community: Community | undefined) {
     },
   });
 
-  /** Move a channel one slot up or down the sidebar (the settings buttons). */
   const moveChannel = useMutation<void, Error, { channelIdHex: string; direction: -1 | 1 }>({
     mutationFn: async ({ channelIdHex, direction }) => {
       const ordered = orderedForMove();
@@ -1410,10 +1142,7 @@ export function useCommunityManagement(community: Community | undefined) {
     },
   });
 
-  /**
-   * Move a channel to an ABSOLUTE slot — what a drag lands on, where the drop
-   * index is read off the pointer rather than accumulated one step at a time.
-   */
+  /** Move a channel to an ABSOLUTE slot (drag drop index). */
   const reorderChannel = useMutation<void, Error, { channelIdHex: string; toIndex: number }>({
     mutationFn: async ({ channelIdHex, toIndex }) => {
       const ordered = orderedForMove();
@@ -1424,18 +1153,9 @@ export function useCommunityManagement(community: Community | undefined) {
   });
 
   /**
-   * File a channel into a category (or out of one with `undefined`).
-   *
-   * A category is only ever the set of channels naming it, so there is nothing
-   * else to publish: this one edition both creates a category and, when it was
-   * the last member, removes it.
-   *
-   * Refuses a channel the Control fold hasn't produced yet. `channelsView`
-   * renders bundle-held private channels ahead of their fold (a fresh join),
-   * and filing one of those against a default `{name:"", private:false}` would
-   * publish an edition that blanks the name and turns a Private Channel public.
-   * Every other metadata edit here (`publiciseChannel`, `attachRepository`)
-   * takes the same refusal.
+   * File a channel into a category (or out with `undefined`); categories are
+   * just the channels naming them. Refuses channels not yet in the fold, since
+   * editing a default metadata would blank the name and make a private channel public.
    */
   const setChannelCategory = useMutation<void, Error, { channelIdHex: string; category: string | undefined }>({
     mutationFn: async ({ channelIdHex, category }) => {
@@ -1458,8 +1178,7 @@ export function useCommunityManagement(community: Community | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          // Round-trips everything the category doesn't touch — the `private`
-          // flag and any sibling extension (CORD-02 §6).
+          // Round-trip untouched metadata (CORD-02 §6).
           withChannelCategory(def.metadata, trimmed),
           {
             actorPubkey: user.pubkey,
@@ -1473,12 +1192,7 @@ export function useCommunityManagement(community: Community | undefined) {
     },
   });
 
-  /**
-   * Set what a channel opens to (CORD-03 §2 `view`): the forum feed or the
-   * plain timeline. In place, same `channel_id` — the Chat Plane is untouched,
-   * so every message already there stays valid either way; only the door
-   * changes. Takes the same not-yet-folded refusal `setChannelCategory` does.
-   */
+  /** Set what a channel opens to (CORD-03 §2 `view`); same id, chat plane untouched. Same not-yet-folded refusal. */
   const setChannelView = useMutation<void, Error, { channelIdHex: string; view: ChannelView }>({
     mutationFn: async ({ channelIdHex, view }) => {
       if (!user || !community) throw new Error("Not ready.");
@@ -1496,7 +1210,7 @@ export function useCommunityManagement(community: Community | undefined) {
         user.signer,
         buildChannelEdition(
           hex32(channelIdHex),
-          // Round-trips everything the view doesn't touch (CORD-02 §6).
+          // Round-trip untouched metadata (CORD-02 §6).
           withChannelView(def.metadata, view),
           {
             actorPubkey: user.pubkey,
@@ -1628,21 +1342,10 @@ export function useCommunityManagement(community: Community | undefined) {
 }
 
 /**
- * Self-heal for a STRANDED member (a stale invite dropped them onto an epoch a
- * pre-join Refounding already superseded — see useRekeyWatch): re-resolve the
- * SAME link they joined through (`entry.invite_ref`), and when its creator has
- * refreshed the bundle to a higher epoch (CORD-05 §2, now guaranteed on the
- * creator's next community open by useLinkRefreshWatch), merge it forward.
- *
- * The merge rides the ordinary `add` (epoch-monotonic: `freshest` keeps the
- * higher epoch, `seed` keeps the earliest root), so a still-stale bundle is a
- * no-op and nothing can move backward. After a successful catch-up, a fresh
- * Join is announced on the NEW epoch's Guestbook — the stranded Join landed on
- * the superseded epoch's plane, invisible to current members, and re-following
- * a link announces exactly like a first join (CORD-05 §1).
- *
- * Polls at a relaxed cadence while stranded (the banner also exposes a manual
- * "Check again"). Inert unless `stranded` and the entry carries a link ref.
+ * Self-heal a STRANDED member (see useRekeyWatch): re-resolve the joined link
+ * (`entry.invite_ref`) and merge a refreshed higher-epoch bundle forward via
+ * the epoch-monotonic `add`, then announce a Join on the new Guestbook.
+ * Polls while stranded; inert without a link ref.
  */
 export function useStrandedRecovery(
   community: Community | undefined,
@@ -1661,7 +1364,7 @@ export function useStrandedRecovery(
   const canRecover = Boolean(stranded && inviteRef && user && community);
   const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
 
-  /** One recovery attempt. Resolves true when a fresher epoch was merged in. */
+  /** True when a fresher epoch was merged in. */
   const checkNow = useCallback(async (): Promise<boolean> => {
     if (!community || !user || !inviteRef || inFlight.current) return false;
     const invite = parseInviteLink(inviteRef);
@@ -1670,16 +1373,14 @@ export function useStrandedRecovery(
     setChecking(true);
     try {
       const bundle = await resolveBundle(nostr, invite, bootstrapRelays);
-      // Still vending the epoch we hold (or older): the creator hasn't
-      // refreshed yet. Nothing to do — the next poll re-asks.
+      // The creator hasn't refreshed yet.
       if (BigInt(bundle.root_epoch) <= community.rootEpoch) return false;
 
       const fresh = bundleToEntry(bundle, { inviteRef });
       await updateList({ type: "add", entry: fresh });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
 
-      // Announce on the epoch we can now read: the stranded Join went to the
-      // superseded epoch's Guestbook, which current members never watch.
+      // The stranded Join went to the superseded Guestbook; announce on the new one.
       void (async () => {
         const rehydrated = rehydrateCommunity(fresh);
         if (!rehydrated) return;
@@ -1694,8 +1395,7 @@ export function useStrandedRecovery(
       })().catch(() => undefined);
       return true;
     } catch {
-      // Unreachable relays / revoked / expired: leave the banner up — a revoked
-      // link can never heal this member, only a fresh invite can.
+      // A revoked link can never heal this; only a fresh invite can.
       return false;
     } finally {
       inFlight.current = false;
@@ -1704,8 +1404,7 @@ export function useStrandedRecovery(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [community?.idHex, community?.rootEpoch, user?.pubkey, inviteRef]);
 
-  // Relaxed poll while stranded: the heal depends on the link's creator coming
-  // online, which can happen any time — but never poll a closed banner.
+  // Never poll a closed banner.
   useEffect(() => {
     if (!canRecover) return;
     const timer = setInterval(() => void checkNow(), 60_000);

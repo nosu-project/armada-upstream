@@ -4,11 +4,7 @@ import { useBuzzCanvas } from "@/buzz/useBuzzCanvas";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { Button } from "@/components/ui/button";
 
-/**
- * Read-only view of a Buzz channel's shared canvas document (kind 40100),
- * rendered as markdown in a bar below the channel header (mirrors the
- * pinned-messages bar pattern).
- */
+/** Read-only bar showing a Buzz channel's shared canvas document (kind 40100) as markdown. */
 export function BuzzCanvasBar({
   open,
   relayUrl,

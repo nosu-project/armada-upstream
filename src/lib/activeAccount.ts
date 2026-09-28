@@ -1,33 +1,15 @@
 /**
- * Which account is active, as a synchronously-readable signal.
- *
- * `logins[0]` is the active account (see `useCurrentUser`), but the component
- * that owns that array — `NostrLoginProvider` — sits BELOW `AppProvider` in the
- * tree, and its storage is async on native (the Keychain/KeyStore round-trip in
- * `secureStorage`). So the one thing that has to pick an account-scoped
- * storage key on its very first render cannot ask React for it.
- *
- * This module is that answer: a plain-localStorage marker, read synchronously
- * at module load, and kept current by `ActiveAccountSync` (mounted inside the
- * login provider, which is the only place `logins[0]` is knowable). It is a
- * MIRROR, never the source of truth — `armada:login` remains that, and a marker
- * that disagrees costs at most one re-render once the real list resolves.
- *
- * Deliberately NOT a secret and deliberately not in `secureStorage`: a pubkey
- * is public, and putting it behind an async read would defeat the entire point.
+ * Synchronously-readable mirror of the active account (`logins[0]`), kept by
+ * `ActiveAccountSync`. Needed because the login provider sits below
+ * `AppProvider` and its storage is async on native. Not the source of truth
+ * (`armada:login` is); a pubkey is public, so plain localStorage is fine.
  */
 
-/** Where the active account's pubkey is mirrored for synchronous reads. */
 export const ACTIVE_PUBKEY_KEY = "armada:active-pubkey";
 
 /**
- * Which account claimed the pre-scoping `armada:app-config` blob.
- *
- * Before config was account-scoped there was ONE blob shared by every account
- * on the device. On upgrade it has to become somebody's — the account that was
- * active when the app last ran is the only honest answer — and it must become
- * exactly one account's, or every account would inherit the same DM peer list
- * and rail arrangement, which is the bug this scoping exists to fix.
+ * Which account claimed the pre-scoping unscoped `armada:app-config` blob.
+ * It must go to exactly one account, or all accounts would share it.
  */
 const LEGACY_CLAIM_KEY = "armada:app-config:claimed-by";
 
@@ -45,21 +27,12 @@ function readMarker(): string | null {
 let active: string | null = readMarker();
 
 /**
- * The active-account marker as it stood at module load — i.e. who was signed in
- * when the app booted, before any in-session login/switch mutated {@link active}.
- *
- * This module is imported eagerly from `App.tsx`, so this snapshot is taken at
- * boot, before the login provider resolves and long before the lazy
- * per-account services (the sync gate among them) mount. It is the "was this a
- * restored session?" signal `useFreshLogin` needs: a session restored from
- * storage has its account here, whereas a fresh login activates a pubkey that
- * was not signed in at boot. (Account switches hard-reload, so the switched-to
- * account is a boot account on the next load — never a fresh login.) Frozen for
- * the process lifetime; `setActivePubkey` never touches it.
+ * The active-account marker at module load (eagerly imported from `App.tsx`),
+ * i.e. who was signed in at boot. `useFreshLogin` uses it to tell a restored
+ * session from a fresh login (account switches hard-reload). Never mutated in-session.
  */
 let bootPubkey: string | null = active;
 
-/** Who was signed in at app boot (module load), or null. Never changes in-session. */
 export function getBootPubkey(): string | null {
   return bootPubkey;
 }
@@ -98,12 +71,8 @@ export function accountScopedKey(base: string, pubkey: string | null): string {
 }
 
 /**
- * Give the legacy unscoped `base` blob to `pubkey`, once, if it is unclaimed.
- *
- * Idempotent and synchronous, so it can run in render immediately before the
- * scoped key is read. A second account reaching this finds the claim taken and
- * starts from defaults — which its own NIP-78 settings documents then fill in,
- * rather than inheriting whatever the first account had.
+ * Give the legacy unscoped `base` blob to `pubkey`, once, if unclaimed.
+ * Idempotent and synchronous so it can run in render before the scoped read.
  */
 export function adoptLegacyConfig(base: string, pubkey: string): void {
   try {
@@ -121,29 +90,16 @@ export function adoptLegacyConfig(base: string, pubkey: string): void {
 }
 
 /**
- * Merge `patch` into `pubkey`'s stored config, for an account that is not
- * active yet.
- *
- * The signup wizard is the caller: it settles an account's home relays and its
- * freshly-published kind-10002 mirror BEFORE `login.nsec` makes that account
- * active. Routing those through `updateConfig` would write them to whichever
- * account is active at the time — the previous one, or the unscoped blob — and
- * the new account would then read a config that never received them. Writing
- * the target account's key directly makes the destination explicit instead of
- * a consequence of when the marker happens to flip relative to an effect.
- *
- * Merged shallowly over whatever is stored. `AppProvider` validates every field
- * on read, so a patch it can't parse costs that field and nothing else.
+ * Merge `patch` into `pubkey`'s stored config before that account is active
+ * (signup wizard: `updateConfig` would write to the previously active account).
+ * Shallow merge; `AppProvider` validates each field on read.
  */
 export function seedAccountConfig(
   base: string,
   pubkey: string,
   patch: Record<string, unknown>,
 ): void {
-  // Adopt first: on a fresh install the account being created is the one that
-  // should inherit anything set before login (a theme picked on the landing
-  // page). Adoption is skipped once the scoped key exists, so this stays a
-  // one-time handover rather than something the seed can re-trigger.
+  // Adopt first so the new account inherits pre-login settings (e.g. a theme).
   adoptLegacyConfig(base, pubkey);
   try {
     const scoped = accountScopedKey(base, pubkey);
@@ -155,9 +111,7 @@ export function seedAccountConfig(
         current = parsed as Record<string, unknown>;
       }
     } catch {
-      // An unparseable blob is already unusable — `AppProvider` reads it as
-      // defaults. Seeding over it is strictly better than dropping the seed,
-      // which is this account's home relays.
+      // Unparseable blob already reads as defaults; seed over it.
     }
     localStorage.setItem(scoped, JSON.stringify({ ...current, ...patch }));
   } catch {
@@ -165,11 +119,7 @@ export function seedAccountConfig(
   }
 }
 
-/**
- * Test seam: forget the in-memory marker so a suite can start from storage.
- * Re-reads the boot snapshot too, since a real module load would take it from
- * whatever the marker says at that moment.
- */
+/** Test seam: re-read the marker and boot snapshot from storage. */
 export function _resetActiveAccountForTests(): void {
   active = readMarker();
   bootPubkey = active;

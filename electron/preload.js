@@ -72,6 +72,19 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   signalWebReady: () => ipcRenderer.send("armada:web-ready"),
 
   /**
+   * Web-bundle updates (Flatpak): whether a newer bundle was installed this
+   * run, a subscription for when one is, and a restart to activate it.
+   */
+  isWebUpdatePending: () => ipcRenderer.invoke("armada:web-update-pending"),
+  onWebUpdateReady: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = () => handler();
+    ipcRenderer.on("armada:web-update-ready", listener);
+    return () => ipcRenderer.removeListener("armada:web-update-ready", listener);
+  },
+  restartForWebUpdate: () => ipcRenderer.send("armada:web-update-restart"),
+
+  /**
    * Report the App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname) at boot, so
    * the shell can recognize a link to our own public host — a copied message or
    * invite link clicked inside the app — and route it inward instead of out to

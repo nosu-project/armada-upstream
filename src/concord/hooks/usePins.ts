@@ -51,14 +51,9 @@ const PIN_FAILURE_MESSAGE: Record<PinBuildFailure, string> = {
 
 
 /**
- * A Channel's pins (CORD-04 §7).
- *
- * The list rides the Control Plane, so compaction carries it across every
- * rotation and a member who joined yesterday reads pins written years ago with
- * none of that history's keys. Every rendered pin has been VERIFIED here — the
- * seal's signature, the MAC under the disclosed keys, the decryption, the
- * author equality, and the channel binding — so the UI never displays an
- * unproven claim about who said what.
+ * A Channel's pins (CORD-04 §7). The list rides the Control Plane, so it
+ * survives rotations. Every rendered pin is VERIFIED here (seal signature, MAC
+ * under disclosed keys, decryption, author equality, channel binding).
  */
 export function usePins(
   community: Community | undefined,
@@ -77,8 +72,7 @@ export function usePins(
   );
   const head = eidHex ? folded?.pinLists.get(eidHex) : undefined;
 
-  /** Verified pins, newest first. Memoized on the raw content: verification is
-   *  a signature + MAC + decrypt per entry, far too costly to redo per render. */
+  /** Verified pins, newest first; memoized on raw content since verification is costly. */
   const pins = useMemo<VerifiedPin[]>(() => {
     if (!head || !channel) return [];
     const { entries } = readList(head.content, channel);
@@ -91,7 +85,7 @@ export function usePins(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head?.content, channel?.idHex, channel?.streams.length]);
 
-  /** Whether the list exists but is sealed under an epoch key we never held. */
+  /** The list exists but is sealed under an epoch key we never held. */
   const dark = useMemo(() => {
     if (!head || !channel) return false;
     return readList(head.content, channel).sealed;
@@ -99,10 +93,8 @@ export function usePins(
   }, [head?.content, channel?.idHex, channel?.streams.length]);
 
   /**
-   * Edits this client can read but the entry doesn't carry (§7 Edits). A keyed
-   * member folds these locally and MUST show the revision rather than
-   * superseded words; a curator can then push the proof so keyless readers
-   * catch up. Keyed by the pinned rumor id.
+   * Edits this client can read but the entry doesn't carry (§7), keyed by pinned
+   * rumor id. A keyed member MUST show the revision; a curator can push the proof.
    */
   const localEdits = useMemo(() => {
     const out = new Map<string, { opened: OpenedEvent; content: string; ms: number }>();
@@ -113,10 +105,8 @@ export function usePins(
       const target = ev.tags.find((t) => t[0] === "e")?.[1];
       if (!target) continue;
       const pin = pinned.get(target);
-      // Only the original author may revise — the fold's own rule.
       if (!pin || ev.author !== pin.author) continue;
-      // Newer than whatever the entry already proves, and newer than any
-      // sibling edit we've already picked.
+      // Newer than the entry's proof and any sibling edit picked so far.
       if (pin.edited && ev.ms <= pin.edited.ms) continue;
       const prev = out.get(target);
       if (prev && prev.ms >= ev.ms) continue;
@@ -126,12 +116,9 @@ export function usePins(
   }, [opened, pins]);
 
   /**
-   * Deletes this client holds (§7). Self-erasure outranks curation: a reader
-   * holding the delete MUST hide the entry immediately, whether or not anyone
-   * ever republishes the list. Without this a message its author erased keeps
-   * rendering under a "proven" badge — on the Control Plane head, which
-   * compaction carries into every future epoch, so the pin would outlive the
-   * deletion it was meant to obey.
+   * Deletes this client holds (§7): self-erasure outranks curation, so a held
+   * delete hides the entry immediately — otherwise the pin (carried by compaction)
+   * would outlive the deletion.
    */
   const deletes = useMemo(
     () => [...(opened?.values() ?? [])].filter((e) => e.kind === KIND_DELETE),
@@ -139,11 +126,7 @@ export function usePins(
   );
   const { alive, killed } = useMemo(() => partitionDeletedPins(pins, deletes), [pins, deletes]);
 
-  /**
-   * What the UI renders: the verified pins with any locally-readable Edit
-   * applied on top. `staleEdit` marks a pin whose revision this client can see
-   * but the entry cannot yet prove to keyless readers.
-   */
+  /** Verified pins with locally-readable Edits applied; `staleEdit` marks unprovable ones. */
   const view = useMemo(
     () =>
       alive.map((p) => {
@@ -155,29 +138,22 @@ export function usePins(
     [alive, localEdits],
   );
 
-  // A view that is empty because we could not READ the list must never be
-  // published from: a replace-entire edition would drop every entry we cannot
-  // see, and compaction would then prune the ancestors that still held them.
-  // Two ways that happens, and neither looks different from "no pins yet":
-  // the list is sealed under an epoch we never held (`dark`), or the fold
-  // served no edition for this entity this round (`incomplete`).
+  // Never publish from a view we couldn't READ: a replace-entire edition would drop
+  // unseen entries. Either the list is sealed under an unheld epoch (`dark`) or
+  // the fold served no edition for this entity this round (`incomplete`).
   const unreadable = dark || Boolean(eidHex && folded?.incomplete.includes(eidHex));
   const canPin =
     Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.PIN_MESSAGES)) &&
     !unreadable;
 
   /**
-   * Our own last write, held until the fold catches up to it.
-   *
-   * Every write here is replace-entire, and the fold is a relay round trip
-   * behind: two actions in quick succession would each build from the
-   * pre-write list, so the second would silently erase the first's entry and
-   * claim a version that is already taken. The edition hash is computable
-   * locally, so we chain off our own edition rather than waiting to see it.
+   * Our own last write, held until the fold catches up. Writes are replace-entire
+   * and the fold lags, so we chain off our own (locally hashable) edition or a
+   * second quick write would erase the first.
    */
   const written = useRef<{ eid: string; version: bigint; hash: Uint8Array; held: HeldPin[] } | undefined>(undefined);
-  // Keyed by entity, not cleared on switch: an op already queued for the old
-  // channel resolves after any clear and would repopulate the ref.
+  // Keyed by entity, not cleared on switch: a queued op for the old channel would
+  // repopulate it after any clear.
   const mineHere = () => (written.current?.eid === eidHex ? written.current : undefined);
 
   /** The head as we best know it: our own write while it outranks the fold. */
@@ -191,8 +167,7 @@ export function usePins(
     unconfirmedWrite(mineHere(), eidHex ? folded?.heads.get(eidHex) : undefined, eidHex) ??
     pins.map((p) => ({ rumorId: p.rumorId, entry: p.entry }));
 
-  // Writes run one at a time. Concurrency here is not a race to lose a render,
-  // it is a race to lose someone's pin.
+  // Serialized: concurrent writes lose pins.
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const serialize = <T,>(op: () => Promise<T>): Promise<T> => {
     const next = queue.current.then(op, op);
@@ -240,12 +215,10 @@ export function usePins(
       if (current.length >= PIN_MAX_ENTRIES) {
         throw new Error(`This channel already has ${PIN_MAX_ENTRIES} pins. Unpin one first.`);
       }
-      // The epoch the message was written under — its keys, not today's.
+      // The epoch the message was written under.
       const epoch = epochOf(opened);
       const stream = channel.streams.find((s) => (epoch === undefined ? false : s.epoch === epoch)) ?? channel.current;
-      // A row read back from the store has no seal (it lives in KV beside the
-      // rumor); a row just sent carries a PLACEHOLDER one. Both need the real
-      // seal fetched here — pinning is the only path that needs it at all.
+      // Store rows have no seal and just-sent rows a PLACEHOLDER; pinning needs the real one.
       const needsSeal = !opened.seal || isPlaceholderSeal(opened.seal);
       const withSeal = needsSeal
         ? { ...opened, seal: community ? await readStoredSeal(community.idHex, opened.rumorId) : undefined }
@@ -265,15 +238,9 @@ export function usePins(
   });
 
   /**
-   * Settle what the published list owes its keyless readers: drop entries whose
-   * author erased the message, and attach the newest Edit this client can prove
-   * so nobody reads superseded words.
-   *
-   * Both duties are one write because both are the same write — the list is
-   * replace-entire, so splitting them would publish two editions to say one
-   * thing. An Edit is attached only while we hold something NEWER than the
-   * entry carries: attaching an older one would silently revert the pin, and no
-   * keyless reader could detect that.
+   * Settle what the list owes keyless readers: drop author-erased entries and
+   * attach the newest provable Edit, in one replace-entire write. Attach only
+   * edits NEWER than the entry's, or the pin would silently revert.
    */
   const refreshEdits = useMutation<number, Error, void>({
     mutationFn: () => serialize(async () => {
@@ -283,9 +250,8 @@ export function usePins(
       let changed = 0;
       const next: HeldPin[] = [];
       for (const p of currentPins()) {
-        // An erased message leaves the head entirely. Hiding it locally is not
-        // enough: compaction re-wraps the head verbatim, so an entry left in
-        // place carries the deleted words into every future epoch.
+        // Drop erased messages from the head: compaction re-wraps it verbatim into
+        // every future epoch.
         if (erased.has(p.rumorId)) {
           changed += 1;
           continue;
@@ -298,17 +264,13 @@ export function usePins(
         const epoch = epochOf(local.opened);
         const stream =
           channel.streams.find((s) => (epoch === undefined ? false : s.epoch === epoch)) ?? channel.current;
-        // A row read back from the store carries the rumor, not the seal — and
-        // proving a revision needs the Edit's seal exactly as pinning needs the
-        // message's. Recover it here, on this path only.
+        // Store rows lack the seal; proving a revision needs the Edit's seal.
         const opened =
           local.opened.seal && !isPlaceholderSeal(local.opened.seal)
             ? local.opened
             : { ...local.opened, seal: await readStoredSeal(community.idHex, local.opened.rumorId) };
         const withEdit = withProvenEdit(p.entry, opened, stream.group.convKey);
-        // Compare on CONTENT: withProvenEdit always returns a fresh object when
-        // the edit verifies, so an identity check counts a no-op as a change
-        // and republishes an identical list.
+        // Compare CONTENT: withProvenEdit always returns a fresh object.
         if (withEdit.edit?.keys !== p.entry.edit?.keys) changed += 1;
         next.push({ rumorId: p.rumorId, entry: withEdit });
       }
@@ -318,19 +280,11 @@ export function usePins(
   });
 
   /**
-   * Push a revision to keyless readers on our own, the way the deletion
-   * omission does. A pin nobody refreshes shows superseded words forever, and a
-   * button nobody clicks is the same as no rule at all.
-   *
-   * Deferring by a random interval does double duty: it collapses simultaneous
-   * curators into one publisher (every republish carries the same list), and it
-   * coalesces an author's burst of corrections, since the push attaches
-   * whatever is newest when it fires rather than each revision as it lands.
+   * Push revisions to keyless readers automatically. A random delay collapses
+   * simultaneous curators into one publisher and coalesces an author's burst of edits.
    */
-  // Depend on a STRING, never the Map or the mutation: both take a fresh
-  // identity most renders, and an effect keyed on them re-arms its own cleanup
-  // before the timer can fire — the push would be scheduled forever and never
-  // happen.
+  // Depend on a STRING: the Map/mutation change identity most renders, and the
+  // effect would re-arm forever without firing.
   const editSignature = useMemo(
     () =>
       [
@@ -351,9 +305,8 @@ export function usePins(
     // One attempt per distinct set of stale revisions: a failure must not spin.
     if (pushed.current === editSignature) return;
     const timer = setTimeout(() => {
-      // Marked done only on success: a relay that was briefly unreachable must
-      // not cost the list a §7 obligation permanently. Re-firing is bounded —
-      // the signature only survives while the obligation does.
+      // Marked done only on success so a brief outage doesn't drop the §7 obligation;
+      // the signature bounds re-firing.
       void runPush.current().then(
         () => {
           pushed.current = editSignature;
@@ -375,7 +328,7 @@ export function usePins(
     deletedPins: killed.length,
     refreshEdits: refreshEdits.mutateAsync,
     isRefreshingEdits: refreshEdits.isPending,
-    /** The list is sealed under an epoch we never held — pins exist but are unreadable. */
+    /** Sealed under an epoch we never held: pins exist but are unreadable. */
     dark,
     canPin,
     isPinned,

@@ -1,54 +1,24 @@
 // A published screen-share audio track must never carry the call's own playback.
+// Requests aren't trusted (Chrome/Windows and Electron have ignored them): the
+// verdict reads the track's actual settings, and anything not CONFIRMED clean is
+// dropped. No shared audio is a gap; echo is the bug.
 //
-// When a user shares WITH audio, the browser captures what the OS is playing —
-// in a call, that includes the other participants' voices out of the sharer's
-// speakers — and would republish it, so everyone who spoke hears themselves.
-// Requesting `restrictOwnAudio` asks the platform to leave our own output out,
-// but a request is not a guarantee: Chrome on Windows reports it as NOT applied
-// to an entire-screen (system audio) capture, and the Electron desktop build's
-// display-media handler was observed handing back the plain "loopback" mix for
-// every surface with the constraint set. So nothing here trusts the request. The decision
-// reads what the platform actually did back out of the track's settings, and a
-// track that cannot be CONFIRMED clean is dropped before it is ever published.
-// No shared audio is a gap; echo is the bug.
-//
-// The bases below are the only ways a track is known to exclude our playback.
-// Each is a measured platform signal or a structural scope — never an
-// assumption that a flag worked:
+// Admitting bases:
 //   restrictOwnAudio        the platform confirmed the restriction in settings.
-//   callPlayoutCancelled    Chrome confirmed echo cancellation on the display
-//                           audio. For display capture Chromium builds that
-//                           canceller with this page's peer-connection playout
-//                           as its reference and nothing else, so what it
-//                           removes is the call. Google Meet's approach, and
-//                           the only one Chrome allows below Windows 11.
-//   processExcludedLoopback Chromium's "loopbackWithoutChrome" device: system
-//                           audio minus this app's audio service (WASAPI
-//                           process loopback). The desktop shell grants it by
-//                           name on Windows 10 2004+ (displayMediaPolicy.js).
-//   venmic                  the Linux PipeWire virtual mic, which excludes the
-//                           Electron audio service by pid (desktop.ts).
-//   tabScoped               another tab's audio. The capturing tab itself is
-//                           kept out of the picker (selfBrowserSurface).
-// Chromium's bare "loopback" device is the unrestricted system mix — the exact
-// source of the echo — and is refused BEFORE any scoping rule can admit it.
-// A WINDOW share is deliberately not a basis: the capture asks for that
-// window's audio alone (windowAudio:"window"), but Chrome cannot scope audio
-// to a window below Windows 11 and hands back the system mix without saying
-// so — measured on Windows 10, call included. What was requested confirms
-// nothing; a window share is admitted only on one of the signals above.
+//   callPlayoutCancelled    Chrome confirmed echo cancellation on display audio
+//                           (reference = this page's peer-connection playout).
+//   processExcludedLoopback Chromium's "loopbackWithoutChrome" (desktop, Win10 2004+).
+//   venmic                  Linux PipeWire virtual mic excluding Electron by pid.
+//   tabScoped               another tab's audio (own tab excluded from picker).
+// Bare "loopback" (the unrestricted mix) is refused before any scoping rule. A
+// WINDOW share is not a basis: below Windows 11 Chrome silently returns the system mix.
 //
-// This is what makes the invariant testable without a human: the verdict is a
-// pure function of the settings, and the fixtures are the values measured on
-// real machines. When a platform starts confirming exclusion where it did not
-// before, the setting flips and audio flows, with no code change.
+// The verdict is a pure function of settings; fixtures are measured values.
 
 export type WindowAudioPreference = "exclude" | "window" | "system";
 
 declare global {
-  // Not yet in lib.dom.
   interface MediaTrackSettings {
-    /** Chrome 141+: whether the capture excludes the capturing document's audio. */
     restrictOwnAudio?: boolean;
   }
   interface DisplayMediaStreamOptions {
@@ -59,9 +29,7 @@ declare global {
   }
 }
 
-/** Chromium's device id for the unrestricted system-audio mix. */
 const UNRESTRICTED_LOOPBACK = "loopback";
-/** Chromium's device id for system audio minus this process. */
 const PROCESS_EXCLUDED_LOOPBACK = "loopbackWithoutChrome";
 /** The label desktop.ts gives venmic's PipeWire virtual microphone. */
 const VENMIC_LABEL = "vencord-screen-share";
@@ -80,36 +48,26 @@ export type OwnAudioVerdict =
   | { publish: false; reason: OwnAudioDropReason };
 
 export interface OwnAudioEvidence {
-  /** The track's settings, as reported by the platform after capture. */
   settings: MediaTrackSettings;
-  /** The track's label (identifies venmic). */
   label: string;
 }
 
-/**
- * Decide whether a captured screen-share audio track may be published.
- *
- * Pure: reads only the evidence handed to it, so every platform observation
- * becomes a fixture. Refuses anything it cannot positively confirm.
- */
+/** Whether a captured share audio track may be published. Pure; refuses anything unconfirmed. */
 export function ownAudioVerdict(evidence: OwnAudioEvidence): OwnAudioVerdict {
   const { settings, label } = evidence;
 
   if (settings.restrictOwnAudio === true) {
     return { publish: true, basis: "restrictOwnAudio" };
   }
-  // Checked ahead of the loopback refusal below: on the web the cancelled
-  // track IS the system loopback, and the canceller is what makes it clean.
-  // Display capture gets no processing unless it was asked for, so a true here
-  // is Chrome confirming the request rather than a default.
+  // Before the loopback refusal: on web the cancelled track IS the loopback, and
+  // display capture only gets echo cancellation when requested.
   if (settings.echoCancellation === true) {
     return { publish: true, basis: "callPlayoutCancelled" };
   }
   if (settings.deviceId === PROCESS_EXCLUDED_LOOPBACK) {
     return { publish: true, basis: "processExcludedLoopback" };
   }
-  // The unrestricted system mix is the echo. Refused here, ahead of the
-  // structural scopes, so nothing below can admit it by surface type.
+  // The unrestricted mix is the echo; refuse it before surface-type scopes can admit it.
   if (settings.deviceId === UNRESTRICTED_LOOPBACK) {
     return { publish: false, reason: "unrestrictedLoopback" };
   }
@@ -127,16 +85,10 @@ export interface DroppedOwnAudio {
   displaySurface?: string;
 }
 
-// The most recent capture's drop, for the UI to explain. Every capture
-// overwrites it (a clean capture writes null), so a stale record cannot
-// outlive the capture it describes; the UI also discards it on failure.
+// The latest capture's drop, for the UI; overwritten by every capture.
 let lastDrop: DroppedOwnAudio | null = null;
 
-/**
- * Remove from `stream` every audio track that cannot be confirmed free of the
- * call's own playback, stopping each so the capture releases it. Returns what
- * was dropped, or null when every audio track (if any) was admitted.
- */
+/** Drop (and stop) every audio track not confirmed free of call playback; returns what was dropped, or null. */
 export function enforceOwnAudioExclusion(stream: MediaStream): DroppedOwnAudio | null {
   let dropped: DroppedOwnAudio | null = null;
   for (const track of stream.getAudioTracks()) {
@@ -163,11 +115,7 @@ export function peekOwnAudioDrop(): DroppedOwnAudio | null {
   return lastDrop;
 }
 
-/**
- * What a published screen-share audio track is, and why it was allowed out —
- * for the presenter's stream details, so a report names the basis rather than
- * guessing at it.
- */
+/** Describe the admitted basis for the presenter's stream details. */
 export function describeOwnAudioBasis(basis: OwnAudioBasis): string {
   switch (basis) {
     case "restrictOwnAudio":

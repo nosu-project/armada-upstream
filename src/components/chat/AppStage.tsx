@@ -4,11 +4,8 @@ import { useApps } from "@/hooks/useApps";
 import { appScopeKey, type AppScope } from "@/contexts/AppsContext";
 
 /**
- * The top-of-chat host into which the active app's stage portals. A chat
- * surface renders this for its scope; when an app is open in *this* scope it
- * registers its DOM node as the stage slot and the persistent `RunningApp`
- * (which owns the coordination session) portals into it. Renders nothing when
- * no app is open here.
+ * Top-of-chat slot the active app's stage portals into when an app is open in
+ * *this* scope. Renders nothing otherwise.
  */
 export function AppStageSlot({ scope }: { scope: AppScope }) {
   const { activeApp, registerAppStageSlot } = useApps();

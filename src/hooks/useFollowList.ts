@@ -13,23 +13,15 @@ import { queryExplicitRelaysWithStatus, uniqueRelayUrls } from "@/lib/nip65";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface FollowListData {
-  /** The raw kind 3 event (null if none found). */
   event: NostrRumor | null;
-  /** All pubkeys from `p` tags. */
   pubkeys: string[];
   /** Cache-first seeds omit this; only a completed live read sets it true. */
   wireReady?: boolean;
 }
 
 /**
- * Cached view of the logged-in user's follow list (kind 3), for display reads
- * like "is this person followed?" and follow-prioritized search. Ported from
- * Ditto's `useFollowList`.
- *
- * Reads via `fetchContactList`, which queries relays then falls back to the
- * IndexedDB event store on a relay miss so an existing follow list isn't
- * blanked out by a transient empty response. Seeds cache-first from the store
- * so follows are available on first render without waiting for the round-trip.
+ * The user's follow list (kind 3) for display reads, ported from Ditto. `fetchContactList`
+ * falls back to the event store on a relay miss; seeded cache-first for first render.
  */
 export function useFollowList() {
   const { nostr } = useNostr();
@@ -70,8 +62,7 @@ export function useFollowList() {
       return {
         event,
         pubkeys: contactListPubkeys(event),
-        // Cached fallback and partial relay success remain additive only. A
-        // missing self-state relay can hold the newer replaceable list.
+        // Fallback / partial reads are additive only: a missing relay may hold a newer list.
         wireReady: relays.length > 0
           && relays.every((relay) => answered.has(relay)),
       };

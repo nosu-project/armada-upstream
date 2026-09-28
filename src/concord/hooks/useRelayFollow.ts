@@ -6,36 +6,23 @@ import { capRelays, type Community } from "@/concord/lib/types";
 import { logSync } from "@/lib/syncLog";
 
 /**
- * Follow the fold's relay list (CORD-02 §6: "a metadata edition replaces aged
- * or retired relays, clients follow the fold").
- *
- * The Community List's `current.relays` is a join-time snapshot — bootstrap
- * material that gets a fresh device connected well enough to reach the fold.
- * The fold is the authority: whenever the folded Metadata names a different
- * relay set, this watcher writes it back into the list entry, and everything
- * downstream re-points through {@link rehydrateCommunity} (subscriptions,
- * sweeps, publishes, stream-key auth scopes all read `community.relays`).
- *
- * The write-back also keeps the bootstrap ladder fresh: the member's OTHER
- * devices sync the 33302 List and reconnect on the new relays even if they never
- * saw the edition on the old ones.
+ * Follow the fold's relay list (CORD-02 §6). The Community List's
+ * `current.relays` is a join-time snapshot; the fold is the authority, so a
+ * differing folded relay set is written back into the list entry (which also
+ * moves the member's other devices, via the synced 33302 List).
  */
 export function useRelayFollow(community: Community | undefined): void {
   const { data: folded } = useControlFold(community);
   const { mutateAsync: updateList } = useUpdateCommunityList();
   const entry = useCommunityEntry(community?.idHex);
-  // Guards only the IN-FLIGHT write (the effect re-fires on every fold/entry
-  // change): once the mutation lands, the list's optimistic cache makes the
-  // equality check the gate, so the key is dropped — a later flip back to a
-  // previously-seen set must still be followed.
+  // Guards only the IN-FLIGHT write; once it lands the list's optimistic cache
+  // gates via equality, so a later flip back to a seen set is still followed.
   const handled = useRef(new Set<string>());
 
   useEffect(() => {
     if (!community || !entry || !folded?.metadata) return;
-    // The fold truncates on read (capRelays), so compare what members actually
-    // honor. An empty folded set is treated as "no instruction" — a metadata
-    // edition that names no relays must not disconnect the community from
-    // everything (a bundle or edition MUST stay usable when trimmed, §6).
+    // Compare what members honor (capRelays). An empty folded set is "no
+    // instruction", never a disconnect (§6).
     const foldRelays = capRelays(Array.isArray(folded.metadata.relays) ? folded.metadata.relays : []);
     if (foldRelays.length === 0) return;
     const listRelays = Array.isArray(entry.current.relays) ? entry.current.relays : [];

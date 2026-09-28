@@ -97,9 +97,7 @@ export function saveNotificationSoundSettings(
   const normalized = normalizeSettings(settings);
   try {
     localStorage.setItem(NOTIFICATION_SOUND_SETTINGS_KEY, JSON.stringify(normalized));
-  } catch {
-    // Storage can be unavailable in privacy modes. Keep the current session usable.
-  }
+  } catch { /* ignore */ }
   return normalized;
 }
 
@@ -110,13 +108,7 @@ export interface PlayNotificationSoundOptions {
   preview?: boolean;
 }
 
-/**
- * Play Armada's selected sound while its web UI is running.
- *
- * Browsers can reject playback until the user has interacted with the page;
- * that failure is deliberately non-fatal because the visual and OS cues still
- * remain available.
- */
+/** Play the selected sound while the web UI runs. Autoplay rejections are non-fatal. */
 export function playNotificationSound(options: PlayNotificationSoundOptions = {}): void {
   if (typeof Audio === "undefined") return;
 
@@ -138,7 +130,6 @@ export function playNotificationSound(options: PlayNotificationSoundOptions = {}
     activeAudio = audio;
     void audio.play().catch(() => undefined);
   } catch {
-    // Unsupported codecs, autoplay policy and output-device failures are all
-    // presentation failures; none should break notification ingest.
+    // Codec/autoplay/output failures must not break notification ingest.
   }
 }

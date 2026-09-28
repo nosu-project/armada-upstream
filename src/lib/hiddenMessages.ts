@@ -1,17 +1,6 @@
 /**
- * Viewer-local hidden messages — "remove this post from my feed, now".
- *
- * Hiding is a statement about THIS viewer's screen, not about the network:
- * nothing is published, the author is never told, and no relay is asked to do
- * anything — which is exactly why it can be immediate and unconditional where
- * a delete request cannot. It complements the two person-level tools: block
- * (NIP-51 mute, hides everything from an author) and NIP-09 delete (the
- * author's own posts). Per-account localStorage, like the wallet and Esplora
- * prefs — a device-local view decision, not a synced document.
- *
- * The set is capped: hiding is for the message in front of you, not an
- * archive, and an unbounded set would grow with every hide forever. Oldest
- * entries fall off first.
+ * Viewer-local hidden messages: nothing published, per-account localStorage.
+ * Complements block (NIP-51 mute) and delete (NIP-09). Capped; oldest drop first.
  */
 
 const HIDDEN_LIMIT = 1000;
@@ -20,8 +9,7 @@ const storageKey = (pubkey: string) => `armada:hidden-messages:${pubkey}`;
 
 const EMPTY: ReadonlySet<string> = new Set();
 
-// One cached snapshot per active key, so `useSyncExternalStore` gets a stable
-// reference between writes (a re-parse per read would loop the store).
+// Cached snapshot so `useSyncExternalStore` gets a stable reference between writes.
 let cachedKey: string | null = null;
 let cachedOrder: string[] = [];
 let cachedIds: ReadonlySet<string> = EMPTY;
@@ -52,7 +40,7 @@ function persist(key: string): void {
   }
 }
 
-/** The hidden-message ids for one account. Stable reference between writes. */
+/** Hidden-message ids for one account. */
 export function getHiddenMessageIds(pubkey: string | undefined): ReadonlySet<string> {
   if (!pubkey) return EMPTY;
   const key = storageKey(pubkey);

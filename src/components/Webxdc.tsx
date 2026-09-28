@@ -21,44 +21,25 @@ import type { FileResponse } from "@/lib/sandbox";
 import { decryptBuffer, fetchCapped, verifyPlaintextHash } from "@/lib/encryptedMedia";
 import type { ImetaEncryption } from "@/lib/imeta";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface WebxdcProps
   extends Omit<IframeHTMLAttributes<HTMLIFrameElement>, "src" | "id"> {
   /** Unique session identifier — used as the sandbox subdomain. */
   id: string;
-  /** The `.xdc` archive: raw bytes or a URL to fetch them from. */
   xdc: Uint8Array | string;
-  /**
-   * AES-GCM params when the fetched blob is a client-encrypted attachment
-   * (Concord channels encrypt uploads). The archive is decrypted before unzip.
-   * Absent for plaintext attachments.
-   */
+  /** AES-GCM params for client-encrypted attachments (Concord); decrypted before unzip. */
   encryption?: ImetaEncryption;
-  /** A `Webxdc` instance that backs the iframe's webxdc API calls. */
   webxdc: WebxdcAPI<unknown>;
 }
 
-/** Imperative handle exposed by the Webxdc component. */
 export interface WebxdcHandle {
-  /** Send a postMessage to the iframe (used for synthetic keyboard events). */
   postMessage: (msg: Record<string, unknown>, transfer?: Transferable[]) => void;
-  /** Focus the iframe element. */
   focus: () => void;
 }
 
-// ---------------------------------------------------------------------------
-// CSP applied to every response served from the archive.
-//
-// The webxdc spec requires that all internet access is denied. We enforce
-// this with a strict Content-Security-Policy on every response. Permits
-// same-origin, inline, eval, wasm, data: and blob: — all commonly needed
-// by webxdc apps — but blocks any external network access.
-// ---------------------------------------------------------------------------
+// The webxdc spec denies all internet access; enforced by CSP on every
+// response (same-origin, inline, eval, wasm, data:, blob: allowed).
 
-/** Ceiling on a `.xdc` bundle. This is a decent amount larger than the current largest xdc and should be safe */
+/** Well above the largest known xdc. */
 const MAX_XDC_BYTES = 500 * 1024 * 1024;
 
 const WEBXDC_CSP = [
@@ -67,26 +48,15 @@ const WEBXDC_CSP = [
   "form-action 'self'",
 ].join("; ");
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve `xdc` prop to a Uint8Array, decrypting the blob if it's encrypted.
- * `candidates` is the URL plus the same blob on the viewer's other Blossom
- * servers, walked by `fetchCapped` when the first is down.
- */
+/** Resolve `xdc` to bytes, decrypting if needed; `candidates` includes Blossom mirrors. */
 async function resolveXdc(
   xdc: Uint8Array | string,
   encryption: ImetaEncryption | undefined,
   candidates: readonly string[],
 ): Promise<Uint8Array> {
   if (typeof xdc === "string") {
-    // Capped: an app bundle is opened on a tap, but the size is still the
-    // sender's choice, and unzipping multiplies whatever we let through.
+    // Capped: the size is the sender's choice, and unzipping multiplies it.
     const raw = await fetchCapped(candidates.length ? candidates : [xdc], { maxBytes: MAX_XDC_BYTES });
-    // Concord attachments are AES-GCM ciphertext on Blossom; decrypt to the
-    // real ZIP before unzip (a plaintext attachment has no encryption params).
     const bytes = encryption
       ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
       : new Uint8Array(raw);
@@ -96,23 +66,18 @@ async function resolveXdc(
   return xdc;
 }
 
-/** Unzip a `.xdc` archive into a normalised file map. */
 function unzipXdc(bytes: Uint8Array): Map<string, Uint8Array> {
   const unzipped = unzipSync(bytes);
   const fileMap = new Map<string, Uint8Array>();
   for (const [path, content] of Object.entries(unzipped)) {
     const normalised = path.replace(/^\/+/, "").replace(/\\/g, "/");
-    if (normalised.endsWith("/")) continue; // skip directories
+    if (normalised.endsWith("/")) continue;
     fileMap.set(normalised, content);
   }
   return fileMap;
 }
 
-/**
- * Generate the webxdc bridge script that will be injected into HTML responses.
- * This script implements window.webxdc by sending JSON-RPC requests to the
- * parent through the sandbox frame's relay.
- */
+/** The injected `window.webxdc` bridge, sending JSON-RPC via the sandbox frame. */
 function generateWebxdcBridge(api: WebxdcAPI<unknown>): string {
   return `(function(){
   var nextId = 1;
@@ -240,29 +205,17 @@ function generateWebxdcBridge(api: WebxdcAPI<unknown>): string {
 })();`;
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-/**
- * Renders a webxdc app inside a sandboxed iframe. Fetches + unzips the `.xdc`,
- * serves its files via the sandbox frame's fetch proxy, injects the webxdc
- * bridge script into HTML responses, and proxies `webxdc.*` RPC requests from
- * the bridge to the provided `WebxdcAPI` instance.
- */
+/** Webxdc app in a sandboxed iframe: serves the unzipped `.xdc`, injects the bridge, proxies `webxdc.*` RPC. */
 export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   { id, xdc, encryption, webxdc, ...iframeProps },
   ref,
 ) {
   const sandboxRef = useRef<SandboxFrameHandle>(null);
 
-  // Keep latest props in refs so callbacks always see current values.
   const webxdcRef = useRef(webxdc);
   const xdcRef = useRef(xdc);
   const encryptionRef = useRef(encryption);
-  // Opening an app fetches its bundle directly rather than through the image
-  // proxy — the proxy is for the passive display an image gets by being
-  // scrolled past, not a deliberate open of an arbitrary file.
+  // Fetched directly, not via the image proxy: this is a deliberate open.
   const candidates = useBlossomCandidates(typeof xdc === "string" ? xdc : undefined);
   const candidatesRef = useRef(candidates);
   useEffect(() => {
@@ -278,19 +231,12 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
     candidatesRef.current = candidates;
   }, [candidates]);
 
-  // The unzipped file map, populated on first `onReady`.
   const fileMapRef = useRef<Map<string, Uint8Array> | null>(null);
-  // The generated bridge script, cached per webxdc instance.
   const bridgeScriptRef = useRef<string>("");
-  // The in-flight (or settled) archive load. The sandbox loader re-sends
-  // `ready` every 500ms until it receives `init` (which we only send once
-  // `onReady` resolves), so a slow download would otherwise spawn a new
-  // parallel fetch on every retry — dozens of overlapping downloads that
-  // starve each other and never finish. Caching the promise makes every
-  // repeat `ready` await the SAME single load.
+  // The loader re-sends `ready` every 500ms until `init`; cache the promise so
+  // a slow download isn't restarted in parallel on every retry.
   const loadPromiseRef = useRef<Promise<void> | null>(null);
 
-  // Realtime channel handles, keyed by channelId.
   const realtimeChannels = useRef<Map<string, RealtimeListener>>(new Map());
 
   useImperativeHandle(
@@ -306,7 +252,6 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
     [],
   );
 
-  // Clean up realtime channels on unmount.
   useEffect(() => {
     const channels = realtimeChannels.current;
     return () => {
@@ -315,8 +260,6 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
     };
   }, []);
 
-  // onReady: fetch and unzip the archive when the sandbox is ready. Re-entrant:
-  // repeated `ready` signals share one load instead of re-downloading.
   const onReady = useCallback(() => {
     loadPromiseRef.current ??= (async () => {
       try {
@@ -342,7 +285,6 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
       };
     }
 
-    // "/" and "/index.html" both resolve to "index.html".
     const filePath =
       pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
 
@@ -352,9 +294,7 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
     return { status: 200, contentType: getMimeType(filePath), body: fileBytes };
   }, []);
 
-  // The webxdc bridge is generated dynamically in onReady (it embeds runtime
-  // values like selfAddr), so we serve /webxdc.js ourselves and inject the
-  // <script src="/webxdc.js"> tag into HTML responses here.
+  // The bridge embeds runtime values (selfAddr), so serve /webxdc.js ourselves.
   const resolveFileWithBridge = useCallback(
     async (pathname: string): Promise<FileResponse | null> => {
       if (pathname === "/webxdc.js") {

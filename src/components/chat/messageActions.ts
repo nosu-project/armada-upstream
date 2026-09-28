@@ -1,21 +1,16 @@
 import type { LucideIcon } from "lucide-react";
 
 /**
- * One entry in a message's action list.
- *
- * The same array feeds all three surfaces that expose message actions — the
- * desktop overflow (`⋯`) dropdown, the right-click context menu, and the touch
- * long-press sheet — so a capability can't be offered in one and forgotten in
- * another (which is how the old hover toolbar and context menu drifted apart:
- * reactions were in one, not the other).
+ * One message action. The same array feeds the `⋯` dropdown, right-click menu
+ * and touch sheet so they can't drift apart.
  */
 export interface MessageActionItem {
   id: string;
   label: string;
   icon: LucideIcon;
   onSelect: () => void;
-  /** Rendered in the destructive style and, by convention, listed last. */
+  /** Destructive style; listed last by convention. */
   destructive?: boolean;
-  /** Starts a new visual group (a separator is drawn before it). */
+  /** Draws a separator before it. */
   groupStart?: boolean;
 }

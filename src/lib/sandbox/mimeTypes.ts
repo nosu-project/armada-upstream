@@ -1,8 +1,3 @@
-/**
- * Unified MIME type lookup for sandbox file serving.
- * Covers common web-relevant file types served through the sandbox frame.
- */
-
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
   ".htm": "text/html",
@@ -38,10 +33,7 @@ const MIME_TYPES: Record<string, string> = {
   ".toml": "application/toml",
 };
 
-/**
- * Guess a MIME type from a file path or extension.
- * Falls back to `application/octet-stream` for unknown extensions.
- */
+/** MIME type from a path or extension; `application/octet-stream` when unknown. */
 export function getMimeType(path: string): string {
   const dot = path.lastIndexOf(".");
   if (dot === -1) return "application/octet-stream";

@@ -15,10 +15,7 @@ interface GifPickerProps {
 /** Reference column width used to derive thumbnail heights from aspect ratios. */
 const THUMB_REF_WIDTH = 170;
 
-/**
- * Compute a thumbnail's display height from its true aspect ratio, clamping the
- * ratio so very wide/tall GIFs aren't forced into an ultrawide/sliver shape.
- */
+/** Height from the aspect ratio, clamped so extreme GIFs aren't ultrawide/slivers. */
 function thumbHeight(gif: GifResult): number {
   const rawRatio = gif.width && gif.height ? gif.width / gif.height : 1;
   const aspectRatio = Math.min(Math.max(rawRatio, 0.6), 1.5);
@@ -29,7 +26,6 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
 
-  // Calculate the height from the (clamped) aspect ratio to prevent layout shifts
   const displayHeight = thumbHeight(gif);
 
   const sources = gif.previewSources ?? [];
@@ -47,20 +43,17 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
       style={{ height: displayHeight }}
       title={gif.title}
     >
-      {/* Skeleton placeholder */}
       {!loaded && !error && (
         <Skeleton className="absolute inset-0 rounded-lg" />
       )}
 
-      {/* Error state */}
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-muted rounded-lg">
           <ImageOff className="size-5 text-muted-foreground/40" />
         </div>
       )}
 
-      {/* Prefer KLIPY's lightweight muted MP4 renditions for the grid. A
-          persisted favorite without preview metadata falls back to its GIF. */}
+      {/* KLIPY's muted MP4 renditions; favorites without preview metadata fall back to the GIF. */}
       {sources.length > 0 ? (
         <video
           autoPlay
@@ -70,10 +63,8 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
           aria-label={gif.title}
           disablePictureInPicture
           className={cn(
-            // No `controls`, so nothing chrome-like renders. `pointer-events-none`
-            // hands taps to the enclosing tile button and keeps a long-press off
-            // the WebView's native media context menu; the favourite star is a
-            // sibling above it and keeps its own hit area.
+            // `pointer-events-none` passes taps to the tile and keeps long-press off the
+            // WebView's native media menu.
             'pointer-events-none w-full h-full object-cover rounded-lg transition-opacity duration-200',
             loaded ? 'opacity-100' : 'opacity-0',
           )}
@@ -101,7 +92,6 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
         />
       )}
 
-      {/* Favorite toggle button */}
       {onToggleFavorite && (
         <div
           className="absolute top-1.5 right-1.5 z-10"
@@ -134,7 +124,6 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
         </div>
       )}
 
-      {/* Hover overlay with title */}
       <div className={cn(
         'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent',
         'px-2 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150',
@@ -149,14 +138,12 @@ function GifThumbnail({ gif, onClick, isFavorite, onToggleFavorite }: { gif: Gif
 
 /** Masonry-style multi-column grid for GIF results. */
 function GifGrid({ results, columns: columnCount, onSelect, isFavorite, onToggleFavorite }: { results: GifResult[]; columns: number; onSelect: (gif: GifResult) => void; isFavorite?: (id: string) => boolean; onToggleFavorite?: (gif: GifResult) => void }) {
-  // Split results across columns for a masonry-like layout
   const columns: GifResult[][] = Array.from({ length: columnCount }, () => []);
   const columnHeights = new Array<number>(columnCount).fill(0);
 
   for (const gif of results) {
     const height = thumbHeight(gif);
 
-    // Add to the shortest column
     let shortest = 0;
     for (let i = 1; i < columnCount; i++) {
       if (columnHeights[i] < columnHeights[shortest]) shortest = i;
@@ -186,7 +173,6 @@ export function GifPicker({ onSelect }: GifPickerProps) {
   const { isFavorite, toggleFavorite, favoriteList, count: favoriteCount } = useFavoriteGifs();
   const [activeTab, setActiveTab] = useState<'search' | 'favorites'>('search');
 
-  // Auto-focus the search input on mount
   useEffect(() => {
     const timer = setTimeout(() => {
       if (activeTab === 'search') inputRef.current?.focus();
@@ -203,7 +189,6 @@ export function GifPicker({ onSelect }: GifPickerProps) {
 
   return (
     <div className="flex flex-col w-full h-[360px] max-h-[55dvh] bg-popover rounded-lg overflow-hidden">
-      {/* Tab switcher */}
       <div className="flex items-center gap-1 px-3 pt-2 pb-1">
         <button
           type="button"
@@ -242,7 +227,6 @@ export function GifPicker({ onSelect }: GifPickerProps) {
 
       {activeTab === 'search' && (
         <>
-          {/* Search input */}
           <div className="px-3 pt-1 pb-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
@@ -269,14 +253,12 @@ export function GifPicker({ onSelect }: GifPickerProps) {
             </div>
           </div>
 
-          {/* Section header */}
           <div className="px-3 pb-1.5">
             <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
               {isSearching ? 'Results' : 'Trending'}
             </span>
           </div>
 
-          {/* Results area */}
           <ScrollArea className="flex-1">
             {isLoading ? (
               <div className="px-2 pb-2">

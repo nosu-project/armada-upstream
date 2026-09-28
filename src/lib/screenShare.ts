@@ -133,14 +133,9 @@ function codecParameter(codec: RTCRtpCodec, name: string): string | undefined {
 }
 
 /**
- * Keep H.264 in non-interleaved packetization mode for encrypted shares.
- * LiveKit E2EE
- * preserves the H.264 NAL header and encrypts the remaining frame. Mode 0
- * cannot fragment the resulting large encrypted NAL, so keyframes are silently
- * dropped even though an unencrypted OpenH264 loopback looks healthy. Mode 1
- * permits FU-A fragmentation and survives encrypted 1080p loopback end to end.
- * The Electron shell independently selects software encoding by default to
- * avoid Mesa hardware encoders that omit SPS/PPS from transformed keyframes.
+ * Prefer H.264 packetization-mode=1 for encrypted shares: LiveKit E2EE keeps the
+ * NAL header and encrypts the rest, and mode 0 can't fragment the large
+ * encrypted NAL, so keyframes are silently dropped.
  */
 export function preferredE2eeH264Codecs(
   codecs: readonly RTCRtpCodec[],
@@ -149,17 +144,15 @@ export function preferredE2eeH264Codecs(
   const e2eeCompatible = h264.filter(
     (codec) => codecParameter(codec, "packetization-mode") === "1",
   );
-  // setCodecPreferences() negotiates exactly what it is given, so the repair
-  // codecs have to survive both branches: a list without video/rtx negotiates
-  // the share with no NACK retransmission at all.
+  // setCodecPreferences() negotiates exactly this list, so keep repair codecs
+  // (without video/rtx there is no NACK retransmission).
   const repair = codecs.filter((codec) =>
     ["video/rtx", "video/red", "video/ulpfec", "video/flexfec-03"].includes(
       codec.mimeType.toLowerCase(),
     )
   );
 
-  // Keep every H.264 profile on implementations that do not expose mode 1
-  // instead of making H.264 impossible to negotiate.
+  // No mode-1 profile exposed: keep all H.264 rather than make it unnegotiable.
   if (e2eeCompatible.length === 0) return [...h264, ...repair];
 
   return [...e2eeCompatible, ...repair];
@@ -196,8 +189,7 @@ function configureScreenShareCodecPreferences(
   if (!transceiver?.setCodecPreferences) return;
 
   try {
-    // LocalSenderCreated fires before LiveKit creates its offer, which is the
-    // only safe point to affect the H.264 fmtp/profile negotiation.
+    // LocalSenderCreated fires before the offer — the only point to affect H.264 negotiation.
     transceiver.setCodecPreferences(preferences);
   } catch (error) {
     console.warn("failed to prefer a compatible H.264 screen-share profile", error);
@@ -255,13 +247,9 @@ async function ensureHighLayerCeiling(
               ? encoding
               : best,
           ));
-    // Firefox disables an unused layer by pinning it to a 10 bps sentinel
-    // rather than clearing `active`, so writing a ceiling there would turn the
-    // layer back on. Everywhere else the ceiling is recorded even while the
-    // layer is paused: dynacast re-enables a layer by setting `active` alone
-    // and never restores maxBitrate, so skipping the write would cap the layer
-    // at its old ceiling for the rest of the share. `active` is never written
-    // here — the subscription state stays dynacast's to decide.
+    // Firefox disables an unused layer by pinning maxBitrate to 10 bps; writing
+    // a ceiling would re-enable it. Otherwise write even while paused: dynacast
+    // re-enables via `active` alone and never restores maxBitrate.
     if (high.maxBitrate === 10) return;
     high.maxBitrate = quality.maxBitrate;
     high.maxFramerate = quality.frameRate;
@@ -269,21 +257,15 @@ async function ensureHighLayerCeiling(
     high.networkPriority = "medium";
     await sender.setParameters(parameters);
   } catch (error) {
-    // LocalVideoTrack.replaceTrack() already refreshes LiveKit's internal
-    // encoding policy. This direct write is a compatibility belt for browsers
-    // that expose a different encoding count (notably non-simulcast Safari).
+    // Belt-and-braces for browsers with a different encoding count (non-simulcast Safari).
     console.warn("failed to confirm screen-share sender ceiling", error);
   }
 }
 
 /**
- * Snapshot the capture constraints to restore if a quality change fails.
- *
- * getConstraints() reports only what applyConstraints() last set, so a capture
- * straight out of getDisplayMedia() reports nothing at all. Replaying that
- * would *lift* the caps rather than restore them, leaving a failed attempt at
- * a lower quality uploading more than it did before. Fall back to pinning what
- * the track is measurably producing.
+ * Snapshot capture constraints to restore if a quality change fails.
+ * getConstraints() is empty for a fresh getDisplayMedia() capture, so fall back
+ * to pinning the measured settings rather than lifting the caps.
  */
 function captureConstraintSnapshot(track: MediaStreamTrack): MediaTrackConstraints {
   const applied = track.getConstraints();
@@ -459,16 +441,14 @@ export async function applyPublishedScreenShareQuality(
   if (renegotiate) activePublishOptions.simulcast = publishOptions.simulcast;
   track.publishOptions = { ...track.publishOptions, ...activePublishOptions };
   publication.options = { ...publication.options, ...activePublishOptions };
-  // replaceTrack() recomputes LiveKit's internal simulcast encodings, but it
-  // skips that work if the dimensions compare equal. The bitrate/FPS may have
-  // changed independently, so force the recomputation in that case too.
+  // replaceTrack() skips recomputing encodings when dimensions compare equal;
+  // bitrate/FPS may have changed, so force it.
   track.lastEncodedDimensions = undefined;
 
   try {
     if (renegotiate) {
-      // Codec and simulcast topology are SDP decisions; sender.setParameters()
-      // cannot change them. Republish the same capture track so the user does
-      // not see another source picker and screen audio keeps playing.
+      // Codec/simulcast are SDP decisions; republish the same capture track so
+      // no new source picker appears.
       await participant.unpublishTrack(track, false);
       await participant.publishTrack(track, activePublishOptions);
     } else {
@@ -500,11 +480,8 @@ export async function applyPublishedScreenShareQuality(
 }
 
 /**
- * A source switch that failed only after the new video reached the sender.
- *
- * Everyone is already watching the new screen by then, so the caller must not
- * offer the "your previous share is still active" reassurance that a cancelled
- * or rolled-back swap deserves.
+ * A source switch that failed after the new video reached the sender, so the
+ * previous share is already gone.
  */
 export function isScreenShareSwitchPartialFailure(error: unknown): boolean {
   return error instanceof Error &&
@@ -512,16 +489,9 @@ export function isScreenShareSwitchPartialFailure(error: unknown): boolean {
 }
 
 /**
- * Whether a capture failed because its AUDIO source could not be opened.
- *
- * Chromium raises `NotReadableError: "Could not start audio source"` when the
- * chosen surface has no loopback audio endpoint it can open (a specific window,
- * a busy device) — most often on Windows. `getDisplayMedia({ audio: true })`
- * makes that a whole-capture failure, video included, so the presenter shares
- * nothing. The distinguishing signal is the message: a video device that will
- * not start is the same error name with "video source", which turning audio off
- * would not fix. Matched on both so a genuine video failure is not offered an
- * audio retry.
+ * Whether a capture failed because its AUDIO source couldn't open (Chromium
+ * `NotReadableError: "Could not start audio source"`, mostly Windows), which
+ * fails the whole capture. "video source" failures aren't fixed by dropping audio.
  */
 export function isScreenShareAudioSourceFailure(error: unknown): boolean {
   return error instanceof Error &&
@@ -530,13 +500,9 @@ export function isScreenShareAudioSourceFailure(error: unknown): boolean {
 }
 
 /**
- * Replace an active LiveKit screen share without unpublishing its video track.
- *
- * The replacement stream is acquired first, so cancelling the picker leaves
- * the current share untouched. Keeping the existing video publication also
- * preserves its sender, subscription and E2EE state for remote participants.
- * Screen audio is replaced in place when possible and published/unpublished
- * only when the new selection adds or removes audio altogether.
+ * Replace an active LiveKit screen share without unpublishing its video track,
+ * preserving sender, subscription and E2EE state. The new stream is acquired
+ * first, so cancelling the picker leaves the current share untouched.
  */
 export async function switchPublishedScreenShare(
   participant: LocalParticipant,
@@ -570,9 +536,7 @@ export async function switchPublishedScreenShare(
     const publishOptions = screenSharePublishOptions(quality);
     const activePublishOptions = {
       ...publishOptions,
-      // Source switching keeps the existing negotiated codec/topology. Those
-      // settings are changed through applyPublishedScreenShareQuality(), which
-      // can republish deliberately when negotiation is required.
+      // Keep the negotiated codec/topology; applyPublishedScreenShareQuality() changes those.
       videoCodec: currentVideo.publishOptions?.videoCodec ?? publishOptions.videoCodec,
       simulcast: currentVideo.publishOptions?.simulcast ?? publishOptions.simulcast,
     };
@@ -604,10 +568,7 @@ export async function switchPublishedScreenShare(
       currentVideo.lastEncodedDimensions = previousDimensions;
       throw error;
     }
-    // The sender already carries the new capture and LiveKit has already let
-    // go of the old screen audio, so the previous share is gone no matter what
-    // happens next. Say so, rather than letting the caller reassure the user
-    // that nothing changed.
+    // The new video is live and the old audio released: report a partial failure.
     throw Object.assign(
       new Error(
         `Sharing the new source, but its audio could not follow: ${

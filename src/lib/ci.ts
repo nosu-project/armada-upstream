@@ -1,37 +1,19 @@
 /**
- * ngit-ci CI workflow events — the NIP-34 CI extension (experimental kinds
- * 9840 / 9841 / 9842 / 39842).
+ * ngit-ci workflow events — NIP-34 CI extension (experimental kinds 9840 /
+ * 9841 / 9842 / 39842). 9841 Job Result: signed by the compute provider.
+ * 9842 Workflow Result: the durable outcome, signed by the coordinator,
+ * quoting jobs via `q`. 39842 Workflow Progress: addressable, expiring (≤30 min).
  *
- * Kind 9841 "Job Result" is signed by the compute provider that ran the job;
- * its content is a log tail and the full log hangs off a `logs` tag. Kind 9842
- * "Workflow Result" is the durable combined outcome, signed by the coordinator
- * that scheduled the run, quoting each Job Result with a `q` tag. Kind 39842
- * "Workflow Progress" is an addressable, EXPIRING (≤30 min) mirror of the same
- * shape for a run that is still queued or executing — so the durable record is
- * always the 9842 and a progress marker must never be the thing a feed
- * remembers.
+ * Trust model: none (like gitworkshop). Nothing binds a coordinator to a repo,
+ * so render every CI event and ALWAYS show the signer; never imply verification.
  *
- * Trust model: none, matching gitworkshop. The extension explicitly leaves the
- * choice to clients ("Clients choose which coordinator and compute-provider
- * pubkeys to trust"), and no designation mechanism exists on-relay — nothing
- * binds a coordinator to a repository, and the `a` tag is unauthenticated. We
- * therefore render every CI event and ALWAYS surface the signer, so a reader
- * judges the claim by its key rather than by our having shown it. Anyone can
- * publish a green run against a public coordinate; the UI must not imply we
- * verified it.
- *
- * Multi-maintainer repositories are announced once per maintainer, so CI
- * events carry one `a` tag per coordinate. Match against every coordinate the
- * caller holds, never just the first tag.
+ * Multi-maintainer repos yield one `a` tag per coordinate; match every one.
  */
 
 import { parseGitRepositoryAddress, type GitRepositoryAddress } from "@/lib/gitActivity";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
-
-/** Kind 9840 — maintainer-requested manual workflow trigger. */
-export const CI_MANUAL_TRIGGER_KIND = 9840;
 /** Kind 9841 — one job's result, signed by the compute provider. */
 export const CI_JOB_RESULT_KIND = 9841;
 /** Kind 9842 — a workflow run's combined outcome, signed by the coordinator. */
@@ -60,9 +42,7 @@ export type CIStatus = "queued" | "in_progress" | "concluded";
 export interface CIJobResult {
   event: NostrRumor;
   id: string;
-  /** The compute provider's key — the direct execution claim. */
   author: string;
-  /** Job id as declared in the workflow file. */
   job: string;
   name?: string;
   conclusion?: CIConclusion;
@@ -76,12 +56,10 @@ export interface CIRunJob {
   eventId: string;
   /** The provider the coordinator vouched for, from the `q` tag. */
   provider?: string;
-  /** Resolved once the Job Result itself is in hand. */
   result?: CIJobResult;
 }
 
 export interface CIRun {
-  /** The 9842 when one exists, else the newest 39842 for the attempt. */
   event: NostrRumor;
   id: string;
   /** The coordinator that signed the run. Displayed, never trusted. */
@@ -89,7 +67,6 @@ export interface CIRun {
   repositoryAddresses: GitRepositoryAddress[];
   /** First `c` tag: the commit the workflow ran against. */
   commit?: string;
-  /** Workflow file path from the `w` tag. */
   workflow?: string;
   /** Normalized trigger: push | pull_request | schedule | manual. */
   trigger?: string;
@@ -141,10 +118,9 @@ export function parseCIJobResult(event: NostrRumor): CIJobResult | undefined {
 }
 
 /**
- * Parse a kind-9842 Workflow Result or kind-39842 Workflow Progress into a run.
- * A 9842 has no `status` tag and is by definition concluded; a 39842 without a
- * recognized status is treated as in-progress rather than dropped, since the
- * marker's existence is itself the signal that something is running.
+/**
+ * Parse a 9842 (always concluded) or 39842 into a run. A 39842 with an
+ * unrecognized status is treated as in-progress: its existence is the signal.
  */
 export function parseCIRun(event: NostrRumor): CIRun | undefined {
   if (event.kind !== CI_RESULT_KIND && event.kind !== CI_PROGRESS_KIND) return undefined;
@@ -189,18 +165,10 @@ function runKey(run: CIRun): string {
 }
 
 /**
- * Collapse CI events into one run per attempt, with Job Results resolved onto
- * the `q` tags that quoted them.
- *
- * A 39842 progress marker and the 9842 it precedes describe the SAME attempt
- * but share no run identifier — the progress `d` is random and the result has
- * no `d` at all — so they are joined on (coordinator, commit, workflow). The
- * durable 9842 always wins that join even when a progress marker is newer,
- * because the marker expires within 30 minutes and would otherwise take the
- * concluded result's place and then vanish. Re-runs of the same workflow on the
- * same commit collapse to the newest, which is what the extension prescribes
- * ("clients SHOULD order attempts by created_at and treat the latest as
- * current").
+ * Collapse CI events into one run per attempt, resolving Job Results onto `q`
+ * tags. 39842 and 9842 share no run id, so they join on (coordinator, commit,
+ * workflow); the durable 9842 always wins (the marker expires). Re-runs
+ * collapse to the newest, as the extension prescribes.
  */
 export function assembleCIRuns(events: readonly NostrRumor[]): CIRun[] {
   const jobResults = new Map<string, CIJobResult>();
@@ -249,11 +217,7 @@ export function isCIEventKind(kind: number): boolean {
   return (CI_EVENT_KINDS as readonly number[]).includes(kind);
 }
 
-/**
- * The held repository a raw CI event belongs to. Job Results carry the same
- * common `a` tags as runs, so all three kinds scope identically — no root
- * lookup, unlike NIP-22 comments and NIP-34 statuses.
- */
+/** The held repository a raw CI event belongs to; all three kinds carry `a` tags (no root lookup). */
 export function matchCIEventRepository(
   event: NostrRumor,
   known: { has(coordinate: string): boolean },
@@ -281,24 +245,16 @@ export function isCIFailure(outcome: CIConclusion | CIStatus): boolean {
   return CI_FAILING.has(outcome);
 }
 
-/** One workflow's runs within a stretch of CI activity, newest first. */
 export interface CIWorkflowGroup {
-  /** Display name, from {@link ciWorkflowName}. */
   name: string;
-  /** Every run of this workflow in the stretch, newest first. */
   runs: CIRun[];
   /** The run whose outcome is the workflow's CURRENT state. */
   latest: CIRun;
 }
 
 /**
- * Collapse a run of CI activity to one entry per workflow.
- *
- * `assembleCIRuns` already folds re-attempts of one workflow on ONE commit, so
- * what reaches a channel as twenty rows is twenty commits — the same job
- * passing and failing down the timeline. Only the newest outcome per workflow
- * is a fact about the repository now; the rest is history, and history belongs
- * behind a disclosure rather than in the reading order of a conversation.
+ * Collapse CI runs to one entry per workflow (different commits); only the
+ * newest outcome is current, the rest is history behind a disclosure.
  */
 export function groupCIRunsByWorkflow(runs: readonly CIRun[]): CIWorkflowGroup[] {
   const groups = new Map<string, CIRun[]>();
@@ -316,11 +272,7 @@ export function groupCIRunsByWorkflow(runs: readonly CIRun[]): CIWorkflowGroup[]
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt || a.name.localeCompare(b.name));
 }
 
-/**
- * The state a stretch of CI is in, from each workflow's latest run. A failure
- * outranks work still in flight: "something is broken" is the reason to look,
- * and it stays true while the next attempt runs.
- */
+/** Overall state from each workflow's latest run; a failure outranks in-flight work. */
 export function ciGroupsOutcome(groups: readonly CIWorkflowGroup[]): CIConclusion | CIStatus {
   const outcomes = groups.map((group) => ciRunOutcome(group.latest));
   if (outcomes.some(isCIFailure)) return "failure";

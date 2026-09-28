@@ -114,25 +114,13 @@ interface NavItem {
   id: SectionId;
   title: string;
   icon: LucideIcon;
-  /**
-   * Render this section's row(s) directly in the list (no collapsible
-   * header). Used for single-item sections — Account (the login pill), About
-   * (one link row), and Advanced (whose one row is already its own
-   * collapsible) — where a header would just hide a single tap target.
-   */
+  /** Render the row(s) directly with no collapsible header (single-item sections). */
   inline?: boolean;
-  /**
-   * Open something instead of expanding. The entry still renders as a section
-   * header (icon, title, chevron) so it sits in the list like its neighbours;
-   * only what happens on tap differs.
-   */
+  /** Open something on tap instead of expanding (still drawn as a section header). */
   action?: () => void;
 }
 
-/**
- * The row that heads a section. Shared by the collapsible sections and the
- * ones that open a dialog, so the two can't drift apart visually.
- */
+/** Section header row, shared by collapsible and dialog-opening sections. */
 const SECTION_HEADER_CLASS =
   "flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/40";
 
@@ -141,25 +129,17 @@ interface NavGroup {
   items: NavItem[];
 }
 
-/**
- * App settings: one scrolling list (same format on every viewport). Sections
- * with multiple controls sit behind a collapsible header (icon + title,
- * expands in place); single-item sections render their row directly.
- */
+/** App settings: one scrolling list; multi-control sections collapse, single-item ones render inline. */
 export function SettingsPage({
   section,
   onClose,
 }: {
-  /**
-   * Drawn as an overlay (`lib/settingsOverlay.ts`), where `useLocation()` is
-   * the page underneath: the section and the close come from the overlay.
-   */
+  /** Set when drawn as an overlay (`lib/settingsOverlay.ts`), where `useLocation()` is the page underneath. */
   section?: string;
   onClose?: () => void;
 } = {}) {
   const back = useBackOrHome();
-  // Deep-linked section (e.g. /settings#profile from the account switcher's
-  // "Edit profile"): that section renders expanded and is scrolled into view.
+  // Deep-linked section (e.g. /settings#profile) renders expanded and scrolled into view.
   const routedSection = useLocation().hash.slice(1);
   const targetSection = section ?? routedSection;
   useEffect(() => {
@@ -178,20 +158,14 @@ export function SettingsPage({
   const portablePull = usePullPortableSetup();
   const portableSetup = usePublishPortableSetup();
 
-  // Voice mic-processing prefs are device-local (stored in localStorage, not
-  // synced AppConfig — a setting right for a laptop mic is wrong on a phone).
-  // Mirror the in-call gear menu; changes apply to the next captured mic track
-  // (and live mid-call, since the gear menu restarts the track on change).
+  // Mic-processing prefs are device-local (localStorage), not synced AppConfig.
   const [voiceProcessing, setVoiceProcessing] = useState<AudioProcessingPrefs>(() =>
     getAudioProcessing(),
   );
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [standingOpen, setStandingOpen] = useState(false);
 
-  /**
-   * Opening Account Standing retires its nag dot for good. Written on the way
-   * in rather than on close, so a dismissed dialog doesn't nag again.
-   */
+  /** Retire Account Standing's nag dot on open (not close). */
   const openStanding = useCallback(() => {
     setStandingOpen(true);
     updateConfig((current) =>
@@ -208,9 +182,8 @@ export function SettingsPage({
   };
 
   /**
-   * App relays are an Armada preference and travel in encrypted NIP-78. Search
-   * relays have their own interoperable NIP-51 kind 10007 list, so their editor
-   * explicitly publishes that canonical record too.
+   * App relays travel in encrypted NIP-78; search relays also publish their
+   * interoperable NIP-51 kind 10007 list.
    */
   const setAppRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, appRelays: relays }));
@@ -244,12 +217,7 @@ export function SettingsPage({
     }
   };
 
-  /**
-   * Update the user's server list by diffing against the kind 10009 list —
-   * the one and only store for added servers. There is no local mirror to
-   * write: `useNip29Servers` re-derives from the list mutation's own fold
-   * write, so the editor reflects the change as soon as it lands.
-   */
+  /** Update added servers by diffing the kind 10009 list (their only store). */
   const setAddedRelays = (relays: string[]) => {
     if (!user) return;
     for (const url of relays) {
@@ -267,99 +235,60 @@ export function SettingsPage({
   };
 
   /**
-   * Toggle the app's default DM relays in/out of THIS client's DM relay set.
-   *
-   * App DM relays are a purely client-side helper (`effectiveDmRelays`): the
-   * relays this client also reads/writes DMs on for reliability + push. They are
-   * NEVER part of the user's published kind-10050 inbox — that's the user's own
-   * event and must not carry app defaults. So this is local-only and publishes
-   * nothing. Config syncs across the user's devices via NostrSync.
+   * Toggle the app's default DM relays for THIS client (`effectiveDmRelays`).
+   * Local-only: app defaults must NEVER enter the user's published kind 10050.
    */
   const setUseAppDmRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useAppDmRelays: value }));
   };
 
-  /**
-   * Toggle whether this client also uses the user's own DM relays. Local-only:
-   * the published kind-10050 reflects the personal list itself (`setDmRelays`),
-   * not whether this client currently reads from it.
-   */
+  /** Toggle this client's use of the user's own DM relays. Local-only. */
   const setUseOwnDmRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useOwnDmRelays: value }));
   };
 
-  /**
-   * Toggle whether the app relays are used in the general pool at all. On by
-   * default; turning it off is a foot-gun (see the warning rendered alongside).
-   * Local config only; publishes nothing.
-   */
+  /** Toggle app relays in the general pool (off is a foot-gun). Local-only. */
   const setUseAppRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useAppRelays: value }));
   };
 
-  /**
-   * Toggle whether the general relay pool also uses the user's own NIP-65
-   * (kind 10002) relays. Local-only and publishes nothing: `relayMetadata` is
-   * a read-only mirror of the user's published list (synced by NostrSync), so
-   * this only controls whether this client reads/writes on those relays too.
-   */
+  /** Toggle this client's use of the user's NIP-65 relays. Local-only (`relayMetadata` is a read-only mirror). */
   const setUseUserRelays = (value: boolean) => {
     updateConfig((current) => ({ ...current, useUserRelays: value }));
   };
 
-  /**
-   * Toggle DM typing indicators. Off by default — see `dmTypingIndicators`.
-   * Local config only (synced across devices); publishes nothing.
-   */
+  /** Toggle DM typing indicators (off by default). Local-only. */
   const setDmTypingIndicators = (value: boolean) => {
     updateConfig((current) => ({ ...current, dmTypingIndicators: value }));
   };
 
   /**
-   * Turn direct messages off (or back on) entirely — see `dmsDisabled`. When
-   * on, every standing DM subscription (wire, inbox top-up, typing, calls, and
-   * the push/native watch sets) collapses to an empty relay set, so the client
-   * stops receiving DMs at the network level. Local config only (synced across
-   * devices); publishes nothing and deletes no stored conversations.
+   * Disable DMs entirely: every standing DM subscription gets an empty relay
+   * set. Local-only; deletes no conversations.
    */
   const setDmsDisabled = (value: boolean) => {
     updateConfig((current) => ({ ...current, dmsDisabled: value }));
   };
 
-  /**
-   * Toggle whether unknown-sender DMs are surfaced in the request tier. On by
-   * default — see `showDmRequests`. Local config only (synced across devices);
-   * publishes nothing and drops no messages.
-   */
+  /** Toggle the unknown-sender DM request tier. Local-only; drops nothing. */
   const setShowDmRequests = (value: boolean) => {
     updateConfig((current) => ({ ...current, showDmRequests: value }));
   };
 
-  /**
-   * Toggle whether the rail shows the automatic strip of recent unread DMs. On
-   * by default — see `showRecentRailDms`. Local config only (synced across
-   * devices); publishes nothing and leaves manually arranged rail DMs untouched.
-   */
+  /** Toggle the rail's automatic recent-unread-DM strip. Local-only. */
   const setShowRecentRailDms = (value: boolean) => {
     updateConfig((current) => ({ ...current, showRecentRailDms: value }));
   };
 
-  /**
-   * Toggle whether Discover bypasses the curated author allow-list and shows
-   * the unfiltered public firehose. Off by default; on is a foot-gun (see the
-   * warning rendered alongside). Local config only (synced across devices);
-   * publishes nothing.
-   */
+  /** Toggle bypassing Discover's curated allow-list (foot-gun). Local-only. */
   const setDiscoverAllContent = (value: boolean) => {
     updateConfig((current) => ({ ...current, discoverAllContent: value }));
   };
 
   /**
-   * Persist the user's own DM relays. kind-10050 is the user's canonical,
-   * discoverable inbox and holds ONLY their personal relays — never the app
-   * defaults. So publish exactly the edited list (a direct edit to their own
-   * relay list is the one legitimate reason to write their 10050). No async
-   * refetch/seed, so an in-flight fetch can't clobber a fresh edit.
+   * Publish the user's kind 10050 with exactly the edited personal list (never
+   * app defaults) — the one legitimate reason to write it. No refetch, so an
+   * in-flight fetch can't clobber the edit.
    */
   const setDmRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, dmRelays: relays }));
@@ -369,12 +298,7 @@ export function SettingsPage({
     }
   };
 
-  /**
-   * Persist the user's Blossom media servers. Updates local config (the
-   * encrypted-settings push is handled centrally by NostrSync) and — since
-   * kind 10063 is the canonical, discoverable "where my media lives" list
-   * (BUD-03) — republishes it so other clients stay in sync.
-   */
+  /** Persist Blossom servers and republish the canonical BUD-03 kind 10063 list. */
   const setBlossomServers = (servers: string[]) => {
     updateConfig((current) => ({
       ...current,
@@ -386,25 +310,16 @@ export function SettingsPage({
     }
   };
 
-  /** Toggle whether uploads also use the app default Blossom servers. */
   const setUseAppBlossomServers = (value: boolean) => {
     updateConfig((current) => ({ ...current, useAppBlossomServers: value }));
   };
 
-  /**
-   * Toggle tracking-parameter stripping. Publishes nothing; affects both what
-   * this client sends and how it renders links it receives. Synced.
-   */
+  /** Toggle tracking-parameter stripping (send and render). Synced. */
   const setStripTrackingParams = (value: boolean) => {
     updateConfig((current) => ({ ...current, stripTrackingParams: value }));
   };
 
-  /**
-   * Toggle whether Enter sends a message. When off, Enter is a newline and
-   * Ctrl/Cmd+Enter sends. Stored per device class (touch vs physical keyboard)
-   * and synced, so the choice follows every like device without a desktop
-   * preference reaching a phone — see AppConfig.sendOnEnter.
-   */
+  /** Toggle send-on-Enter, stored per device class — see AppConfig.sendOnEnter. */
   const setSendOnEnter = (value: boolean) => {
     const key = isTouch ? "touch" : "desktop";
     updateConfig((current) => ({
@@ -413,17 +328,14 @@ export function SettingsPage({
     }));
   };
 
-  // Section list, gated the same way the old flat sections were.
   const navGroups = useMemo<NavGroup[]>(() => {
     const userItems: NavItem[] = [
       { id: "account", title: "Account", icon: UserCircle, inline: true },
     ];
     if (user) {
-      // Only an nsec login has a key this client can show/back up. Remote,
-      // extension and Android-signer logins keep the key inside the signer.
+      // Only nsec logins have a key this client can show/back up.
       const activeLogin = logins[0];
-      // Until it's been opened the entry wears an alert shield, which the
-      // dialog then reveals to be a joke. Afterwards it settles into the check.
+      // Wears an alert shield until opened (the dialog reveals it's a joke).
       userItems.push({
         id: "standing",
         title: "Account standing",
@@ -436,15 +348,13 @@ export function SettingsPage({
       userItems.push(
         { id: "profile", title: "Profile", icon: UserCircle },
         { id: "notifications", title: "Notifications", icon: Bell },
-        // The only route back from a block: a blocked person appears in no
-        // list anywhere else, so there is nowhere else an unblock could live.
+        // The only place to unblock: blocked people appear in no other list.
         { id: "muted", title: "Blocked people", icon: UserX },
       );
     }
     const appItems: NavItem[] = [
       { id: "appearance", title: "Appearance", icon: Palette },
     ];
-    // Launch-at-login and start-minimized are Electron-shell settings.
     if (isDesktop()) {
       appItems.push({ id: "desktop", title: "Desktop", icon: Monitor });
     }
@@ -464,16 +374,12 @@ export function SettingsPage({
       appItems.push({ id: "emojis", title: "Emoji packs", icon: Smile });
     }
     if (user) {
-      // The Wallet page is reachable even when zaps are off, because its own
-      // enable toggle lives inside it — gating the nav entry on zapsEnabled
-      // would strand the user with no way to turn it back on. The page hides
-      // its own contents when disabled.
+      // Reachable even with zaps off, since its enable toggle lives inside.
       appItems.push({ id: "wallet", title: "Wallet", icon: Zap });
     }
     if (canInstall || needsManualInstall) {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
     }
-    // The profiler it reports on exists only in profiling builds.
     if (import.meta.env.VITE_PROFILE === "1") {
       appItems.push({ id: "diagnostics", title: "Diagnostics", icon: Activity });
     }
@@ -487,7 +393,6 @@ export function SettingsPage({
     return groups;
   }, [user, logins, canInstall, needsManualInstall, config.accountStandingSeen, openStanding]);
 
-  /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {
     switch (id) {
       case "account":
@@ -497,8 +402,7 @@ export function SettingsPage({
           </SettingsRow>
         );
       case "standing":
-        // Header-only: its trigger opens AccountStandingDialog, so there's
-        // nothing to expand into.
+        // Header-only: it opens AccountStandingDialog.
         return null;
       case "keys": {
         const activeLogin = logins[0];
@@ -775,9 +679,7 @@ export function SettingsPage({
             >
               <Switch checked={config.dmsDisabled} onCheckedChange={setDmsDisabled} />
             </SettingsRow>
-            {/* Everything below configures a DM inbox the account is no longer
-                listening on, so the whole-DM opt-out hides it — leaving only
-                the master toggle to turn DMs back on. */}
+            {/* With DMs disabled, only the master toggle remains. */}
             {!config.dmsDisabled && (
               <>
                 <SettingsRow
@@ -1030,9 +932,6 @@ export function SettingsPage({
 
   return (
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
-      {/* Header — a detached floating command bar matching the group/Concord/DM
-          chrome (cut-corner card, recessed shade), capped to the settings
-          content width and centered on desktop. */}
       <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
         <Button
           variant="ghost"
@@ -1056,7 +955,6 @@ export function SettingsPage({
               <div className="space-y-1.5">
                 {group.items.map((item) =>
                   item.action ? (
-                    /* Dressed as a section header, but it opens a dialog. */
                     <div
                       key={item.id}
                       id={`settings-${item.id}`}
@@ -1071,7 +969,6 @@ export function SettingsPage({
                       </button>
                     </div>
                   ) : item.inline ? (
-                    /* Single-item section: its row IS the list entry. */
                     <div
                       key={item.id}
                       id={`settings-${item.id}`}
@@ -1080,7 +977,6 @@ export function SettingsPage({
                       {sectionBody(item.id)}
                     </div>
                   ) : (
-                    /* Multi-control section: collapsible header, expands in place. */
                     <Collapsible
                       key={item.id}
                       id={`settings-${item.id}`}
@@ -1118,7 +1014,6 @@ export function SettingsPage({
             </Suspense>
           )}
 
-          {/* Bottom ornament */}
           <div className="flex items-center gap-2 px-6 pt-2 pb-1">
             <div className="h-px flex-1 bg-gradient-to-r from-transparent via-primary/20 to-primary/30" />
             <svg width="22" height="22" viewBox="0 0 128 128" fill="none" aria-hidden className="text-primary/30 shrink-0">
@@ -1127,7 +1022,6 @@ export function SettingsPage({
             <div className="h-px flex-1 bg-gradient-to-l from-transparent via-primary/20 to-primary/30" />
           </div>
 
-          {/* Version footer — links to the changelog, with terms/privacy beside it */}
           <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50 select-none pt-1 pb-2">
             <Link to="/changelog" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
               <ScrollText className="size-3" />

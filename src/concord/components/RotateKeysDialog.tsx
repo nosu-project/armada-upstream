@@ -13,26 +13,15 @@ import {
 
 interface RotateKeysDialogProps {
   open: boolean;
-  /** Members carried into the new epoch — the keep-list this will rotate to. */
   memberCount: number;
-  /** Private channels that rotate alongside the community root. */
   privateChannelCount: number;
-  /** Whether a live invite link belongs to someone else (it goes stale). */
+  /** A live invite link belongs to someone else (it goes stale). */
   strandsForeignLinks: boolean;
   onClose: () => void;
-  /** Runs the rotation. Throws on failure; the message is shown inline. */
   onConfirm: () => Promise<void>;
 }
 
-/**
- * Confirmation for the standalone key rotation (a Refounding with nobody
- * excluded). Like the ban dialog it stays up for the duration rather than
- * firing and closing: the rotation is an exhaustive control-plane sweep, a
- * root roll, a re-wrap of every control head and a rekey per private channel,
- * which takes seconds and can fail partway with something the staffer needs to
- * read. The same 30s grace timer re-enables Cancel so a dead signer can't
- * trap them.
- */
+/** Standalone rotation (Refounding excluding nobody). Stays up while it runs; 30s grace re-enables Cancel. */
 export function RotateKeysDialog({
   open,
   memberCount,
@@ -45,7 +34,6 @@ export function RotateKeysDialog({
   const [error, setError] = useState<string | null>(null);
   const [stuck, setStuck] = useState(false);
 
-  // A fresh open is a fresh attempt.
   useEffect(() => {
     if (!open) return;
     setBusy(false);

@@ -24,19 +24,15 @@ import type { ThemeTokens } from "@/themes";
 const ICON_CLASS = "size-4 shrink-0 text-primary";
 
 /**
- * A shared addressable event at a bare `/<naddr>` — the target of a theme or
- * emoji pack card's "Copy link", dispatched here by `Nip19Route`. Public like
- * Discover: a signed-out visitor can preview a theme and apply it; the actions
- * that publish are simply absent until they sign in. Any other kind falls back
- * to the generic event card chat uses.
+ * A shared addressable event at `/<naddr>` (theme or emoji pack link). Public:
+ * signed-out visitors can preview; publishing actions appear once signed in.
  */
 export function NaddrPage() {
   const { user: segment } = useParams<{ user: string }>();
   const address = useMemo(() => parseNaddr(segment), [segment]);
   const discoverRelays = useDiscoverRelays();
-  // Our own relays first, so a link's hints can't crowd them out of the
-  // fallback's five slots; the hints are the link author's choice of where the
-  // viewer connects, so only public `wss:` ones survive.
+  // Our relays first so link hints can't crowd them out; hints are
+  // author-chosen, so only public `wss:` ones survive.
   const relays = useMemo(
     () => [...new Set([...discoverRelays, ...publicRelayHints(address?.relays)])],
     [address, discoverRelays],
@@ -115,10 +111,7 @@ function NaddrView({ event, icon }: { event: NostrRumor; icon: ReactNode }) {
   );
 }
 
-/**
- * A mock of the app drawn in the theme's palette — chrome, a message, and a
- * primary action — so it can be judged before it's applied.
- */
+/** A mock of the app in the theme's palette, for judging it before applying. */
 function ThemePreview({ title, tokens }: { title: string; tokens: ThemeTokens }) {
   const hsl = (v: string) => `hsl(${v})`;
   return (

@@ -15,12 +15,8 @@ import { share } from "@/lib/share";
 import type { SecretsStatus } from "@/lib/desktop";
 
 /**
- * How this device stores the key at rest. Desktop only: the browser has no
- * credential store to report on, and native builds always use the OS keystore.
- *
- * `basic_text` is Chromium's no-keyring fallback — a hardcoded key, so the
- * blob is obfuscated rather than encrypted. Saying so is the point of the row:
- * claiming protection the machine isn't providing is worse than silence.
+ * Desktop key-at-rest storage. `basic_text` is Chromium's no-keyring
+ * fallback (obfuscated, not encrypted); say so rather than claim protection.
  */
 function KeyStorageRow() {
   const [status, setStatus] = useState<SecretsStatus | null>(null);
@@ -61,18 +57,11 @@ function KeyStorageRow() {
 }
 
 interface KeyBackupSettingsProps {
-  /** Bech32 nsec of the active login (only nsec logins expose a key). */
   nsec: string;
-  /** Hex pubkey of the active login. */
   pubkey: string;
 }
 
-/**
- * "Keys" settings section: reveal, copy, and download the account's secret
- * key. Only nsec logins have a retrievable key. Remote (NIP-46), extension
- * (NIP-07) and Android-signer logins keep the key inside the signer, so
- * SettingsPage only renders this for nsec logins.
- */
+/** Reveal/copy/download the secret key. Only rendered for nsec logins. */
 export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState<"nsec" | "npub" | null>(null);
@@ -92,10 +81,7 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
     }
   };
 
-  // Back the key up out of the app. On the web this offers the browser's
-  // password manager (Chromium) or downloads a text file; on native, blob
-  // downloads don't work in the WebView, so hand the key to the share sheet
-  // (save to files, a notes app, a password manager…).
+  // Native WebViews can't do blob downloads, so use the share sheet.
   const backup = async () => {
     try {
       if (Capacitor.isNativePlatform()) {

@@ -4,27 +4,13 @@ import { NostrSignerPlugin } from 'capacitor-plugin-nostr-signer';
 
 import type { BtcSigner } from '@/lib/bitcoin-signers';
 
-// Native Android signer (NIP-55) via `capacitor-plugin-nostr-signer`, which
-// talks to an installed signer app (Amber, etc.) over Android intents /
-// ContentResolver. Implements `BtcSigner` so it drops straight into the same
-// signer pipeline as the nsec / extension / bunker variants (including the
-// PSBT surface probed by `useBitcoinSigner`).
-//
-// The plugin speaks lowercase hex pubkeys at the boundary, matching the rest
-// of the app. Each crypto call also wants a request id (echoed back so
-// multiple in-flight requests can be matched up); we generate a fresh UUID per
-// call.
-//
-// Every `decrypt` here is a round-trip to the signer app, so — as with the
-// extension/bunker signers — the app-facing instance is wrapped in `AppSigner`
-// (see `useCurrentUser`) to serve the persistent content-addressed decrypt
-// cache instead of re-prompting the signer on every load.
+// Native Android signer (NIP-55, Amber etc.) via `capacitor-plugin-nostr-signer`.
+// Each crypto call takes a fresh request id to match concurrent responses.
+// Wrapped in `AppSigner` by `useCurrentUser` for the decrypt cache.
 export class AndroidNativeSigner implements BtcSigner {
   readonly packageName: string;
 
-  // Cached on first getPublicKey() call so we don't re-prompt the signer every
-  // time the app boots. If the login was persisted with a known pubkey it
-  // can be seeded via the constructor.
+  // Cached (or seeded from the persisted login) so boot doesn't re-prompt.
   private pubkey: string | null;
   private connected = false;
 
@@ -50,9 +36,6 @@ export class AndroidNativeSigner implements BtcSigner {
     return apps;
   }
 
-  // Bind the plugin to this signer's package and learn the user's pubkey if
-  // we don't already have it. Safe to call repeatedly — only the first call
-  // touches the plugin.
   private async setup(): Promise<string> {
     if (this.connected && this.pubkey) return this.pubkey;
 
@@ -74,8 +57,7 @@ export class AndroidNativeSigner implements BtcSigner {
   async signEvent(template: Omit<NostrEvent, 'id' | 'pubkey' | 'sig'>): Promise<NostrEvent> {
     const pubkey = await this.getPublicKey();
 
-    // The plugin requires a fully-formed event payload including a precomputed
-    // id and a placeholder sig field.
+    // The plugin requires a precomputed id and a placeholder sig.
     const withPubkey = { ...template, pubkey } as Omit<NostrEvent, 'id' | 'sig'>;
     const id = getEventHash(withPubkey);
     const eventJson = JSON.stringify({ ...withPubkey, id, sig: '' });
@@ -94,10 +76,7 @@ export class AndroidNativeSigner implements BtcSigner {
     return signed;
   }
 
-  // Bitcoin PSBT signing — hands the unsigned PSBT to the native signer app
-  // (Amber, etc.) which signs the user's Taproot inputs and returns the
-  // hex-encoded signed PSBT. Like the other crypto calls, this needs a fresh
-  // request id so concurrent requests can be matched up.
+  // Bitcoin PSBT signing of the user's Taproot inputs; returns the signed hex PSBT.
   async signPsbt(psbtHex: string): Promise<string> {
     const pubkey = await this.getPublicKey();
     const { result } = await NostrSignerPlugin.signPsbt(

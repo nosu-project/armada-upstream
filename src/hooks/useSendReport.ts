@@ -17,22 +17,14 @@ export interface SendReportArgs {
   destination: ReportDestination;
   target: ReportTarget;
   reason: ReportReason;
-  /** The reporter's own words. May be empty — the reason alone is a report. */
+  /** May be empty — the reason alone is a report. */
   comment: string;
 }
 
 /**
- * Send a NIP-56 report to wherever its surface says it belongs.
- *
- * Each branch is the ordinary send path for that surface, not a new one: a
- * Concord report is a NIP-59 giftwrap to the Control Plane address published to
- * the community's relays; a NIP-29 report is an `h`-tagged event pinned to the
- * group's host relay, like every other kind-9000-series moderation event; and
- * everywhere else it is a plain signed event to the user's own write relays.
- *
- * The public branch is the reason the dialog says so out loud: outside a room
- * there are no moderators, so a report is a note to the network, and the
- * reporter's words are readable by anyone — including the person reported.
+ * Send a NIP-56 report via the surface's normal path: Concord → giftwrap to the Control Plane;
+ * NIP-29 → `h`-tagged event to the host relay; elsewhere → public event to the user's write relays
+ * (readable by anyone, including the reported person).
  */
 export function useSendReport(): UseMutationResult<void, Error, SendReportArgs> {
   const { nostr } = useNostr();
@@ -57,8 +49,7 @@ export function useSendReport(): UseMutationResult<void, Error, SendReportArgs> 
           return;
         }
         case "nip29": {
-          // The `h` tag is what files this with the group; without it the relay
-          // has no idea which moderators it concerns.
+          // The `h` tag files it with the group's moderators.
           await publish.mutateAsync({
             kind: KIND_REPORT,
             content: comment,
@@ -78,8 +69,7 @@ export function useSendReport(): UseMutationResult<void, Error, SendReportArgs> 
       }
     },
     onSuccess: (_void, { destination }) => {
-      // A moderator with the queue open should see their own community's new
-      // report without waiting out the poll.
+      // So a moderator with the queue open sees it without waiting for the poll.
       if (destination.kind === "concord") {
         queryClient.invalidateQueries({
           queryKey: ["concord", "reports", destination.communityIdHex],

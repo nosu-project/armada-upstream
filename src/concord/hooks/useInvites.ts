@@ -60,8 +60,7 @@ import type { NUser } from "@nostrify/react/login";
 
 /**
  * The creator's Invite List (kind 13303, CORD-05 §4): private bookkeeping for
- * minted links — the unlock token AND the link-signer secret live here, synced
- * across the creator's devices, NIP-44-encrypted to self.
+ * minted links (unlock token AND link-signer secret), NIP-44-encrypted to self.
  */
 export const inviteListKey = (pubkey: string | undefined) => ["concord", "invite-list", pubkey] as const;
 export const inviteListFoldKey = (pubkey: string) => `concord2-invite-list:${pubkey}`;
@@ -90,8 +89,8 @@ export async function publishInviteListEvent(
 ): Promise<{ accepted: string[]; rejected: string[] }> {
   const targets = uniqueRelayUrls(relayUrls);
   if (targets.length === 0) throw new Error("No relay is available for creator invite recovery");
-  // A creator-list update changes revocation authority. Never start a partial
-  // fan-out unless the exact signed event and every target are durable first.
+  // This changes revocation authority: never start a partial fan-out before the
+  // exact event and every target are durable.
   await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
   const result = await publishSignedEventToRelays(nostr, event, targets, 8_000);
   await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
@@ -165,18 +164,10 @@ export async function decodeInviteListEvents(
 }
 
 /**
- * Fetch and decrypt the user's Invite List, merging every copy that reaches us
- * rather than trusting a single newest event: tombstones union and win
- * terminally (CORD-05 §4). Also returns the newest `created_at` seen, for
- * replaceable-event monotonicity on write.
- *
- * The merge here is defensive, NOT the guarantee — `NPool.query` collects into
- * an `NSet`, which applies replaceable semantics itself and hands back at most
- * ONE 13303 (the newest that arrived inside the pool's ~300ms EOSE window). So
- * a pool answered only by relays that haven't yet indexed our latest write
- * returns a list that is genuinely BEHIND, tombstones and all. Every caller
- * therefore merges this result into what it already holds and never assigns it
- * over the top — see {@link useInviteList} and {@link useUpdateInviteList}.
+ * Fetch and decrypt the Invite List, merging every copy received: tombstones
+ * union and win terminally (CORD-05 §4). Also returns the newest `created_at`
+ * for replaceable monotonicity. `NPool.query` returns at most ONE 13303, which
+ * may be BEHIND, so callers must merge this into what they hold, never assign it.
  */
 export async function fetchInviteList(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -231,16 +222,9 @@ export function useInviteList() {
         AbortSignal.any([signal, AbortSignal.timeout(8000)]),
         inviteListRelays(selfStateRelays(config, user!.pubkey)),
       );
-      // A network read may only WIDEN this device's list, never narrow it.
-      // Publishing the 13303 echoes it back on NostrSync's standing self-sync
-      // sub, which invalidates this query — so a revoke's refetch races the
-      // relays' indexing of the write that caused it, and a pool answering
-      // from the pre-revocation copy would hand back the entry we just
-      // tombstoned. Assigning that over the cache is what made a revoked link
-      // reappear a moment after vanishing. Merging is sound in both
-      // directions: entries are immutable once minted and keyed by token, and
-      // tombstones are terminal (CORD-05 §4), so folding the cache forward can
-      // only preserve facts, never invent or resurrect one.
+      // A network read may only WIDEN this device's list: a revoke's refetch can race
+      // relay indexing and return the pre-revocation copy (the revoked link would
+      // reappear). Merging is sound: entries are immutable and tombstones terminal.
       const cached = queryClient.getQueryData<InviteList>(inviteListKey(user!.pubkey));
       const local = cached && persisted
         ? mergeInviteLists(persisted.list, cached)
@@ -254,11 +238,8 @@ export function useInviteList() {
         ...(persisted?.needsPublish ? { needsPublish: true } : {}),
       } satisfies PersistedInviteList);
 
-      // A mint/revoke is folded before its network read, so an offline attempt
-      // leaves `needsPublish` behind. The next successful full read merges that
-      // durable patch with every visible relay copy and reconciles it to only
-      // the answered cohort. This is what turns local survival into eventual
-      // cross-device recovery rather than waiting for another invite edit.
+      // An offline mint/revoke leaves `needsPublish`; the next full read merges it
+      // with relay copies and reconciles to the answered cohort.
       if (persisted?.needsPublish) {
         const wireAlreadyContainsFold = JSON.stringify(merged) === JSON.stringify(list);
         if (wireAlreadyContainsFold) {
@@ -299,8 +280,7 @@ export function useInviteList() {
                 newestCreatedAt: createdAt,
               } satisfies PersistedInviteList);
             } catch (error) {
-              // Keep the durable dirty marker. A later refetch retries, while
-              // an event that made it into the outbox retries exact bytes too.
+              // Keep the dirty marker; a later refetch retries (outbox entries retry exact bytes).
               console.warn("Failed to reconcile creator invite recovery state:", error);
             }
           }
@@ -312,13 +292,9 @@ export function useInviteList() {
 }
 
 /**
- * The epoch each of my live links CURRENTLY vends, keyed by token (CORD-05 §2).
- * A link's coordinate is re-posted on rekey, so its bundle's `root_epoch` may
- * lag the community while the creator hasn't refreshed it (offline during a
- * rotation, a non-NIP-44 signer, etc.) — comparing this against the community's
- * live `rootEpoch` is how the UI flags a link a fresh joiner would land behind.
- * Best-effort per link: an unresolvable link (revoked/expired/offline relay) is
- * simply absent from the map rather than failing the whole query.
+ * The epoch each of my live links CURRENTLY vends, by token (CORD-05 §2), so the
+ * UI can flag links that lag the community's `rootEpoch`. Unresolvable links
+ * are simply absent.
  */
 export function useMyLinkEpochs(community: Community | undefined) {
   const { nostr } = useNostr();
@@ -339,9 +315,7 @@ export function useMyLinkEpochs(community: Community | undefined) {
           try {
             const bundle = await resolveBundle(nostr, parsed, community!.relays);
             if (typeof bundle.root_epoch === "number") out[e.token] = bundle.root_epoch;
-          } catch {
-            // Revoked/expired/offline: leave it absent (no notice, not "behind").
-          }
+          } catch { /* ignore */ }
         }),
       );
       return out;
@@ -365,9 +339,8 @@ export async function updateInviteList(
   const durable = persisted?.list ?? EMPTY_INVITE_LIST;
   const optimistic = mergeInviteLists(mergeInviteLists(durable, cached), patch);
 
-  // A mint patch contains the only copy of signer_sk. Make that merge durable
-  // and verify the read-back before the first network await, so an offline
-  // source read or process kill cannot make an already-shared link irrevocable.
+  // A mint patch holds the only copy of signer_sk: persist and verify it before
+  // any network await, or a shared link could become irrevocable.
   await writeFolded(inviteListFoldKey(user.pubkey), {
     list: optimistic,
     newestCreatedAt: persisted?.newestCreatedAt ?? 0,
@@ -432,12 +405,8 @@ function useUpdateInviteList() {
     scope: { id: "concord-invite-list" },
     mutationFn: async (patch: InviteList) => {
       if (!user?.signer.nip44) throw new Error("NIP-44 unsupported.");
-      // Fold the patch into the local cache before anything that can fail: for
-      // a mint the patch carries the ONLY copy of `signer_sk`, and createLink
-      // no longer blocks on this write — so the cache, not the publish, is
-      // what keeps a just-shared link revocable from this device when the
-      // read-merge below can't reach the relays. Merge is idempotent by token,
-      // so re-merging the patch into `next` is harmless.
+      // Fold into the local cache before anything can fail: for a mint it holds the
+      // ONLY copy of `signer_sk`. Merge is idempotent by token.
       return updateInviteList(
         nostr,
         user,
@@ -451,18 +420,16 @@ function useUpdateInviteList() {
 
 
 /**
- * Invite actions for one community (CORD-05) — public links + direct handoffs:
+ * Invite actions for one community (CORD-05):
  *
- *   - MINT: fresh 16-byte token + fresh link-signer keypair; the encrypted
- *     bundle posts at `(33301, link_signer, d="")` on the community's relays;
- *     the link is `<base>/invite/<naddr>#<fragment>`; the Invite List records
- *     the secrets; the member-facing Registry (vsk 8) lists the coordinate.
- *   - REVOKE: the coordinate is re-posted as a tombstone (creator-only — needs
- *     the link-signer secret), the Registry drops it, the Invite List
- *     tombstones it. Retiring the last live link is what flips the Community
- *     back to Private.
- *   - DIRECT: the bundle giftwraps straight to a known npub (CORD-05 §6) —
- *     no link, no Registry entry, nothing revocable, never flips Public.
+ *   - MINT: fresh 16-byte token + link-signer keypair; the encrypted bundle posts
+ *     at `(33301, link_signer, d="")`; link is `<base>/invite/<naddr>#<fragment>`;
+ *     the Invite List records the secrets; the Registry (vsk 8) lists the coordinate.
+ *   - REVOKE: re-post the coordinate as a tombstone (needs the signer secret),
+ *     drop it from the Registry and Invite List. Retiring the last live link
+ *     flips the Community back to Private.
+ *   - DIRECT: giftwrap the bundle to an npub (CORD-05 §6) — no link, no Registry
+ *     entry, unrevocable, never flips Public.
  */
 export function useInviteActions(community: Community | undefined) {
   const { nostr } = useNostr();
@@ -472,18 +439,11 @@ export function useInviteActions(community: Community | undefined) {
   const inviteList = useInviteList();
   const { mutateAsync: updateInviteList } = useUpdateInviteList();
   const { mutateAsync: publishEvent } = useNostrPublish();
-  // The freshest membership snapshot from the live Community List vault. The
-  // `community` prop is a memoized snapshot that can lag a just-adopted rekey
-  // (staleTime/poll/render windows), and a bundle minted from a stale snapshot
-  // would embed an OLD epoch — the exact defect that strands a fresh joiner on
-  // a dead epoch (CORD-05 §2 requires the CURRENT keys). Reconcile against this.
+  // The `community` prop can lag a just-adopted rekey; minting from it would embed
+  // an OLD epoch and strand joiners (CORD-05 §2). Reconcile against the live list.
   const fresh = useCommunity(community?.idHex);
 
-  /**
-   * The community to mint a bundle from: whichever of the caller's snapshot and
-   * the live-list entry holds the HIGHER epoch. Monotonic — never mints below
-   * what either source knows, so a lagging snapshot can't emit a stale bundle.
-   */
+  /** Whichever snapshot holds the HIGHER epoch, so a lagging one can't mint a stale bundle. */
   const bundleSource = (): Community | undefined => {
     if (!community) return fresh;
     if (!fresh) return community;
@@ -491,22 +451,16 @@ export function useInviteActions(community: Community | undefined) {
   };
 
   /**
-   * The §1 CommunityInvite bundle: everything membership is (link + direct
-   * alike).
-   *
-   * `audience` is required rather than defaulted, because the default is the
-   * whole defect: a bundle built without asking who it is for carries every
-   * Private Channel key the creator holds to whoever opens it, which makes
-   * CORD-03 §1's "readable only by granted role-holders" false. A link is
-   * entitled to nothing; a member is entitled to what their Roles scope them
-   * to (CORD-04 §2).
+   * The §1 CommunityInvite bundle. `audience` is required: a default would hand
+   * every Private Channel key to whoever opens it (CORD-03 §1). A link is entitled
+   * to nothing; a member to what their Roles scope them to (CORD-04 §2).
    */
   const buildBundle = (
     audience: VendAudience,
     opts?: {
       expiresAtMs?: number;
       label?: string;
-      /** Narrow the grant further (a role-grant vend hands over just that role's channels). */
+      /** Narrow further (a role-grant vend hands over just that role's channels). */
       onlyChannelIdHexes?: ReadonlySet<string>;
     },
   ): InviteBundle => {
@@ -522,8 +476,7 @@ export function useInviteActions(community: Community | undefined) {
       owner_salt: bytesToHex(src.ownerSalt),
       community_root: bytesToHex(src.root),
       root_epoch: Number(src.rootEpoch),
-      // Read access to the Control Plane, never write (CORD-02 §7); absent on
-      // a legacy pre-split epoch.
+      // Control Plane read access only (CORD-02 §7); absent on legacy pre-split epochs.
       ...(src.controlPk ? { control_pk: src.controlPk } : {}),
       channels: vendable.map((ch) => ({
         id: bytesToHex(ch.id),
@@ -557,9 +510,8 @@ export function useInviteActions(community: Community | undefined) {
   };
 
   /**
-   * Publish this creator's registry (vsk 8) with the given live link set.
-   * Expired links are pruned first: they can't be joined, so they must not
-   * keep the community reading Public (CORD-05 §5).
+   * Publish my registry (vsk 8) with these live links, pruning expired ones so
+   * they don't keep the community Public (CORD-05 §5).
    */
   const publishRegistry = async (linkSigners: string[]) => {
     if (!user || !community) return;
@@ -588,10 +540,8 @@ export function useInviteActions(community: Community | undefined) {
       expiresAtMs?: number;
       label?: string;
       /**
-       * Opt-in: also publish a PUBLIC community announcement (kind 3314)
-       * carrying the full shareable link (fragment included), so Discover can
-       * list it. This deliberately trades the link's secrecy for
-       * discoverability; only ever set from an explicit user action.
+       * Opt-in: also publish a PUBLIC kind-3314 announcement with the full link for
+       * Discover, trading its secrecy. Only from an explicit user action.
        */
       listPublicly?: boolean;
     }
@@ -600,10 +550,8 @@ export function useInviteActions(community: Community | undefined) {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't mint invite links (NIP-44 unsupported).");
 
-      // Warn (don't refuse — localhost/LAN quickstarts are a supported flow)
-      // when the invite will embed relays that secure platforms can't reach:
-      // Android/desktop builds run on a secure origin where ws:// is blocked
-      // as mixed content, so an all-ws:// community is dead for them (#47).
+      // Warn (not refuse; LAN quickstarts are supported): Android/desktop run on a
+      // secure origin where ws:// is blocked as mixed content (#47).
       const insecure = community.relays.filter((url) => !/^wss:\/\//i.test(url));
       if (insecure.length > 0) {
         const fatal = insecure.length === community.relays.length;
@@ -619,56 +567,34 @@ export function useInviteActions(community: Community | undefined) {
 
       const token = mintToken();
       const link = mintLinkSigner();
-      // A link's audience is whoever the URL reaches (CORD-05 §2), who holds
-      // no Role and is therefore entitled to no Private Channel. Access to one
-      // is handed out by granting its scoped Role, which vends the key by
-      // Direct Invite.
+      // A link's audience holds no Role, so it gets no Private Channel (CORD-05 §2);
+      // those keys are vended by Direct Invite on role grant.
       const bundle = buildBundle({ kind: "link" }, { expiresAtMs, label });
       const bundleEvent = buildBundleEvent(bundle, token, link.sk);
-      // The URL is decided LOCALLY — the naddr names the freshly minted signer
-      // and the fragment carries the freshly minted token, so no write below
-      // feeds into it. That is what lets the writes run concurrently.
-      //
-      // Store on the re-basable base (the page origin on web, a canonical
-      // sentinel on native/desktop where the runtime origin is unreachable) and
-      // hand out the same URL re-based onto today's share origin — the exact
-      // transform `myLinks` applies to a synced entry, so a fresh mint and a
-      // later read of this same entry agree. Storing a concrete origin here is
-      // what pinned every link to armada.buzz.
+      // The URL is decided LOCALLY, so the writes below can run concurrently. Store
+      // the re-basable base (a sentinel on native/desktop) and hand out the URL
+      // re-based onto today's share origin, as `myLinks` does for synced entries.
       const storedUrl = buildInviteUrl(linkStoreBase(), link.pk, token, community.relays);
       const url = shareableInviteUrl(shareOrigin(), storedUrl);
 
-      // The member-facing Registry: this creator's live coordinates.
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
       mine.add(link.pk);
 
-      // Opt-in public community announcement (best-effort — a failed post must
-      // not fail the mint; the link itself is already live).
+      // Best-effort: a failed announcement must not fail the mint.
       const announcement = listPublicly ? buildCommunityAnnouncement({ inviteUrl: url }) : null;
 
-      // The bundle is the ONLY write that makes the link joinable, so it is the
-      // only one the caller waits on. Awaiting the others in series made the
-      // mint the sum of several round trips (each with its own 8s ceiling)
-      // before the user could be handed a URL that had been valid since the
-      // first one landed.
+      // The bundle is the only write that makes the link joinable, so the only one awaited.
       await publishToAnyRelay(nostr, community.relays, bundleEvent, "No relay accepted the invite bundle.");
 
-      // The creator's private bookkeeping (the merge key is the token).
-      // `signer_sk` exists nowhere else, so losing this write costs the ability
-      // to revoke — but it is optimistically cached before it publishes, so the
-      // secret is on this device either way, and a failure here used to be
-      // reported as "couldn't create the link" for a link that was already
-      // live, which invites minting a second one.
+      // Not awaited: `signer_sk` is optimistically cached before publishing, and
+      // reporting a failure here for an already-live link invites a duplicate mint.
       void updateInviteList({
         entries: [
           {
             token: bytesToHex(token),
             signer_sk: bytesToHex(link.sk),
             community_id: community.idHex,
-            // Store the re-basable form, not `url` (the concrete-origin one
-            // handed out today): a synced entry is re-based onto each reader's
-            // own share origin, and a stored http(s) origin would short-circuit
-            // that — the pin this fix removes.
+            // The re-basable form: synced entries are re-based onto each reader's origin.
             url: storedUrl,
             ...(label ? { label } : {}),
             created_at: Math.floor(Date.now() / 1000),
@@ -685,9 +611,7 @@ export function useInviteActions(community: Community | undefined) {
         });
       });
 
-      // The member-facing Registry (swallows its own publish errors; the catch
-      // covers a throw before it) and the opt-in announcement: neither gates
-      // the link working.
+      // Neither gates the link working.
       void publishRegistry([...mine]).catch(() => undefined);
       if (announcement) void publishEvent(announcement).catch(() => undefined);
 
@@ -701,7 +625,7 @@ export function useInviteActions(community: Community | undefined) {
       const parsed = parseInviteLink(url);
       if (!parsed) throw new Error("Not a recognizable invite link.");
 
-      // The signer secret lives in the Invite List (only the creator holds it).
+      // Only the creator holds the signer secret (Invite List).
       const entry = inviteList.data?.entries.find(
         (e) => e.community_id === community.idHex && parseInviteLink(e.url)?.linkSigner === parsed.linkSigner,
       );
@@ -722,29 +646,16 @@ export function useInviteActions(community: Community | undefined) {
   });
 
   /**
-   * Revoke EVERY invite link of mine for this community, in two halves,
-   * because they are two different acts (CORD-05 §5):
+   * Revoke EVERY link of mine for this community (CORD-05 §5):
    *
-   *   - A link whose `signer_sk` is in my Invite List gets a real revocation
-   *     tombstone at its bundle coordinate — the URL is dead for everyone,
-   *     immediately.
-   *   - A registry coordinate of mine WITHOUT a held secret (the kind-13303
-   *     Invite List is the ONLY copy of `signer_sk`, so a lost or unsynced
-   *     list orphans its links) can never be tombstoned, by anyone. The best
-   *     remedy that exists is the one the protocol already uses for stripped
-   *     creators: republish my registry (vsk 8) without them, so they stop
-   *     counting toward the community's Public flag and vanish from the admin
-   *     panel — while a URL already in someone's hands keeps vending its
-   *     bundle until the next rekey strands it on a dead epoch.
+   *   - with a held `signer_sk`: tombstone its bundle coordinate (dead for everyone);
+   *   - registry coordinates WITHOUT a held secret can never be tombstoned; the best
+   *     remedy is delisting them from my registry (vsk 8) so they stop counting
+   *     toward Public, though the URL keeps working until the next rekey.
    *
-   * A tombstone that no relay accepts keeps its Invite List entry (so the
-   * link stays individually revocable on a retry) and stays IN the registry —
-   * delisting a still-working held link would flip the Public flag to a lie
-   * the creator can still fix.
-   *
-   * `skipRegistry` is for a DISSOLVED community: no edition may follow the
-   * grave (publishEdition refuses one anyway), and the tombstones alone are
-   * what kill the links.
+   * A tombstone no relay accepts keeps its Invite List and registry entries (so
+   * it can be retried). `skipRegistry` is for a DISSOLVED community (nothing may
+   * follow the grave).
    */
   const revokeAllMyLinks = useMutation<
     { revoked: number; delisted: number; failed: number; failedSignerSks: string[] },
@@ -757,7 +668,6 @@ export function useInviteActions(community: Community | undefined) {
         (e) => e.community_id === community.idHex,
       );
 
-      // Tombstone what this account can (best-effort per link).
       const results = await Promise.allSettled(
         entries.map((entry) =>
           publishToAnyRelay(
@@ -783,8 +693,7 @@ export function useInviteActions(community: Community | undefined) {
         return { revoked: revoked.length, delisted: 0, failed: kept.length, failedSignerSks };
       }
 
-      // My registry keeps only the links whose tombstone didn't land; every
-      // other coordinate of mine — revoked or orphaned — is delisted.
+      // Keep only links whose tombstone didn't land; delist the rest.
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
       const keptSigners = new Set(
         kept.map((e) => parseInviteLink(e.url)?.linkSigner).filter((s): s is string => !!s),
@@ -796,11 +705,7 @@ export function useInviteActions(community: Community | undefined) {
     },
   });
 
-  /**
-   * Whether revoking ALL my links would empty the aggregate live-link set,
-   * flipping the community Private — the bulk analogue of
-   * {@link revokeWouldPrivatize}.
-   */
+  /** Whether revoking ALL my links would flip the community Private (see {@link revokeWouldPrivatize}). */
   const revokeAllWouldPrivatize = (): boolean => {
     if (!user || !folded || folded.liveInviteLinks.size === 0) return false;
     const mine = new Set(folded.registriesByCreator.get(user.pubkey) ?? []);
@@ -808,12 +713,9 @@ export function useInviteActions(community: Community | undefined) {
   };
 
   /**
-   * Hand the keys straight to an npub (CORD-05 §6): the same §1 bundle, sealed
-   * by the sender's REAL key (the seal's verified npub is what proves who
-   * invited them) inside an ephemeral, `k`-tagged giftwrap the recipient can
-   * look up indexed. No coordinate, no token, no Registry entry — a Direct
-   * Invite never flips the community Public, which is what lets a Private
-   * community grow one npub at a time. Unrevocable once landed.
+   * Hand the keys straight to an npub (CORD-05 §6): the §1 bundle sealed by the
+   * sender's REAL key inside an ephemeral, `k`-tagged giftwrap. No coordinate or
+   * Registry entry, so it never flips Public. Unrevocable once landed.
    */
   const sendDirectInvite = useMutation<
     void,
@@ -823,9 +725,8 @@ export function useInviteActions(community: Community | undefined) {
       expiresAtMs?: number;
       onlyChannelIdHexes?: ReadonlySet<string>;
       /**
-       * Judge entitlement with a Grant this client just published overlaid —
-       * the control fold lags its own publish, so a grant-driven vend would
-       * otherwise find the recipient still unentitled and hand over nothing.
+       * Overlay a Grant just published by this client; the fold lags, so a
+       * grant-driven vend would otherwise find the recipient unentitled.
        */
       entitlementOverlay?: { withRoleIds?: string[]; withoutRoleIds?: string[] };
     }
@@ -834,8 +735,7 @@ export function useInviteActions(community: Community | undefined) {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't send direct invites (NIP-44 unsupported).");
 
-      // The recipient is a known npub, so the bundle carries exactly the
-      // Private Channels they are a granted role-holder of (CORD-03 §1).
+      // Exactly the Private Channels the recipient's roles grant (CORD-03 §1).
       const bundle = buildBundle(
         {
           kind: "member",
@@ -850,13 +750,10 @@ export function useInviteActions(community: Community | undefined) {
       const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
       const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
 
-      // Deliver to the recipient's giftwrap inbox (their 10050 DM relays, else
-      // NIP-65 reads), or the stock interop floor when they've published
-      // neither — the same set their own scanner resolves (CORD-05 §6).
+      // Their 10050 DM relays, else NIP-65 reads, else stock — the set their own
+      // scanner resolves (CORD-05 §6).
       const inbox = await recipientInboxRelays(nostr, recipientPubkey);
-      // A FAILED inbox lookup is not "no list": falling back to stock here would
-      // silently misdeliver a list-having recipient's invite (and report
-      // success). Fail loudly so the user retries once the network settles.
+      // A FAILED lookup isn't "no list"; falling back to stock could misdeliver.
       if (inbox === null) throw new Error("Couldn't reach the network to send the invite. Please try again.");
       const relays = inviteDeliveryRelays(inbox);
       await publishToAnyRelay(nostr, relays, wrap, "No relay accepted the invite.");
@@ -864,12 +761,8 @@ export function useInviteActions(community: Community | undefined) {
   });
 
   /**
-   * This creator's live links for THIS community (from the private list),
-   * each re-based onto the origin this build hands links out on. The list is
-   * a synced record of what was minted, wherever it was minted: a link created
-   * in the desktop shell was stored on its private `app://armada` origin, and
-   * it is these entries — not a fresh mint — that "Invite" reuses, the link
-   * list copies, and a Discover announcement publishes.
+   * My live links for THIS community from the private list, re-based onto this
+   * build's share origin (entries may have been minted elsewhere, e.g. `app://armada`).
    */
   const myLinks = (inviteList.data?.entries ?? [])
     .filter((e) => e.community_id === community?.idHex)
@@ -879,26 +772,13 @@ export function useInviteActions(community: Community | undefined) {
     });
 
   /**
-   * Re-post the CURRENT bundle at every live link coordinate I hold for this
-   * community (CORD-05 §2). A link's coordinate vends whatever was posted
-   * last, so a link minted before the community's metadata (or keys) changed
-   * keeps serving the stale preview until its creator refreshes it — this is
-   * that refresh, run on the community page (freshness watcher) and when
-   * re-sharing a link to Discover.
+   * Re-post the CURRENT bundle at every live link coordinate I hold (CORD-05 §2),
+   * so links minted before a metadata/key change stop serving stale previews.
    *
-   * VERSION-FENCED, because the control fold is incremental: a fold can hold
-   * an OLDER metadata edition than the coordinate already vends (icon swept
-   * in, the banner edition not yet), and a refresh built from it would
-   * DOWNGRADE the public preview — this exact path overwrote live
-   * banner-carrying bundles in the wild. Every re-posted bundle records the
-   * metadata version it previewed (`meta_v`), and a refresh skips any link
-   * whose current bundle records a newer one than this fold holds. The
-   * metadata entity's eid is the community id itself.
-   *
-   * Each link's refresh targets the community relays UNIONED with the
-   * BOOTSTRAP relays frozen into that link's URL fragment: a resolver reads
-   * from the bootstrap set, and a bootstrap relay the refresh never reached
-   * keeps vending the old bundle. Best-effort per relay.
+   * VERSION-FENCED: an incremental fold may hold OLDER metadata than a coordinate
+   * already vends, so each bundle records `meta_v` and a refresh skips links
+   * vending a newer one (this once downgraded live banners). Targets community
+   * relays ∪ the link's bootstrap relays. Best-effort per relay.
    */
   const refreshMyLinks = async (): Promise<void> => {
     if (!community || myLinks.length === 0) return;
@@ -912,8 +792,7 @@ export function useInviteActions(community: Community | undefined) {
         if (entry.expires_at && entry.expires_at <= now) return; // can't be joined; don't touch
         const parsed = parseInviteLink(entry.url);
         if (!parsed) return;
-        // What the coordinate currently vends. Unreachable → refresh anyway
-        // (a re-post can't be worse than nothing); revoked → never resurrect.
+        // Unreachable → refresh anyway; revoked → never resurrect.
         try {
           const current = await resolveBundle(nostr, parsed, community.relays);
           const currentMetaV = typeof current.meta_v === "number" ? current.meta_v : 0;
@@ -931,15 +810,13 @@ export function useInviteActions(community: Community | undefined) {
         accepted += results.filter((r) => r.status === "fulfilled").length;
       }),
     );
-    // Total rejection is a real failure the caller must hear about — swallow
-    // it and every coordinate keeps vending the stale bundle forever.
+    // Total rejection must surface, or coordinates vend stale bundles forever.
     if (attempted > 0 && accepted === 0) throw new Error("No relay accepted the refreshed invite bundle.");
   };
 
   /**
-   * Whether revoking this link would empty the aggregate live-link set,
-   * flipping the community Private (CORD-05 §2): the caller should warn
-   * before crossing that line, since bans start rotating keys past it.
+   * Whether revoking this link would flip the community Private (CORD-05 §2);
+   * callers should warn, since bans start rotating keys past it.
    */
   const revokeWouldPrivatize = (url: string): boolean => {
     const parsed = parseInviteLink(url);
@@ -970,34 +847,10 @@ export function useInviteActions(community: Community | undefined) {
 }
 
 /**
- * Honest-client compliance: revoke MY OWN live links when I no longer hold
- * CREATE_INVITE.
- *
- * The Registry fold already stops honoring a stripped creator's links (the
- * community reads Private, CORD-05 §5) — but the BUNDLE keeps vending keys at
- * its coordinate, and only this creator's `signer_sk` can tombstone it. An
- * owner stripping the permission flips the flag; this watcher is the only
- * thing that can close the door. Mirrors banlist self-removal: authority
- * decided, my client complies.
- *
- * The action is destructive and irreversible (a tombstone kills a shared URL),
- * so it fires only on POSITIVE evidence of a strip, never on authority absence:
- * a genuine strip folds a revoke edition at my grant coordinate, while a cold
- * device or a relay gap folds nothing there. Requiring my grant HEAD present
- * (on a settled fold) distinguishes "demoted" from "not yet synced."
- */
-/**
- * Self-healing link freshness: while a link creator is on their community
- * page, re-post the CURRENT bundle at each of their live link coordinates
- * (once per community per session; a failure retries on a later mount).
- *
- * Unconditional by design. A staleness check would have to ask what the
- * relays vend — but resolveBundle answers through the persisted newest-copy
- * floor, which HIDES relay staleness exactly when it matters (the floor is
- * fresh, the laggard relay is not, and a non-member reading that relay sees
- * the old preview). Rather than build a floor-bypassing probe of every relay,
- * just re-post: the write is one addressable event to a handful of relays,
- * replaces itself, and converges every copy to the current community.
+ * Self-healing link freshness: on their community page, a link creator
+ * re-posts the CURRENT bundle at each live link coordinate (once per community
+ * per session). Unconditional: resolveBundle's persisted newest-copy floor
+ * hides relay staleness, and the re-post is cheap and self-replacing.
  */
 export function useLinkFreshnessWatch(community: Community | undefined): void {
   const { user } = useCurrentUser();
@@ -1009,9 +862,8 @@ export function useLinkFreshnessWatch(community: Community | undefined): void {
 
   useEffect(() => {
     if (!user || !community || !folded || myLinks.length === 0) return;
-    // Only once the community is KNOWN alive (`null`; `undefined` is still
-    // asking): re-posting a dissolved community's bundles would keep its dead
-    // links resolving, and with them its Discover listings.
+    // Only once KNOWN alive (`null`; `undefined` is still asking): re-posting a
+    // dissolved community's bundles would keep dead links resolving.
     if (dissolved !== null) return;
     if (control.isLoading || control.isFetching) return; // don't publish from a partial fold
     // Only a creator still authorized to maintain links should re-post them.
@@ -1039,19 +891,10 @@ export interface RetirementOutcome {
 }
 
 /**
- * Retire everything of mine that still advertises this community: revoke all
- * my invite links (so every copy of them, whoever shared it, stops resolving)
- * and delete my own Discover listings of them. What dissolving runs, and what
- * the ghost-listing workaround had to do by hand through "Revoke all".
- *
- * The two halves run side by side and fail independently; the result counts
- * both so the caller can say which one didn't land.
- *
- * Run by dissolve only, AFTER the grave: so no registry edition is published
- * (tombstones alone kill the links, and nothing may follow the grave). The
- * community is about to leave the rail, so whatever did not land comes back as
- * a `retry` that holds exactly the misses — the dissolve toast's Retry — rather
- * than anything that would need the community to still be there.
+ * Retire everything of mine advertising this community: revoke all my invite
+ * links and delete my Discover listings, independently. Run by dissolve AFTER
+ * the grave, so no registry edition is published; misses come back as `retry`,
+ * which doesn't need the community to still exist.
  */
 export function useRetireCommunityLinks(community: Community | undefined) {
   const { nostr } = useNostr();
@@ -1075,8 +918,7 @@ export function useRetireCommunityLinks(community: Community | undefined) {
     const unrevoked = revoke.status === "fulfilled" ? revoke.value.failedSignerSks : myLinks.map((e) => e.signer_sk);
     const unlistFailed = unlist.status === "rejected";
 
-    // Later attempts publish straight from what they hold: the community,
-    // its Invite List entry and this hook are gone by the time Retry is hit.
+    // Retries publish from what they hold; the community and this hook are gone by then.
     const outcome = (sks: string[], unlistOwed: string[], unlisted: number): RetirementOutcome => ({
       revokeFailed: sks.length > 0,
       unlistFailed: unlistOwed.length > 0,
@@ -1104,13 +946,19 @@ export function useRetireCommunityLinks(community: Community | undefined) {
   };
 }
 
+/**
+ * Honest-client compliance: revoke MY OWN live links once I no longer hold
+ * CREATE_INVITE — the Registry fold stops honoring them, but only my
+ * `signer_sk` can tombstone the bundle. Destructive, so it fires only on
+ * POSITIVE evidence of a strip (a revoke edition at my grant head), never on
+ * authority absence (a cold device or relay gap).
+ */
 export function useLinkAuthorityWatch(community: Community | undefined): void {
   const { user } = useCurrentUser();
   const control = useControlFold(community);
   const folded = control.data;
   const { myLinks, revokeLink } = useInviteActions(community);
-  // Guards only the in-flight revoke per link; a failure retries on the next
-  // fold/list change.
+  // Guards only the in-flight revoke per link; failures retry on the next change.
   const handled = useRef(new Set<string>());
 
   useEffect(() => {
@@ -1118,9 +966,8 @@ export function useLinkAuthorityWatch(community: Community | undefined): void {
     if (control.isLoading || control.isFetching) return; // an in-flight fold under-authorizes
     if (user.pubkey === folded.ownerHex) return; // the owner is always authorized
     if (isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.CREATE_INVITE)) return;
-    // Positive-evidence gate: my grant must actually be in the fold (a strip
-    // folds a revoke edition here; a sync gap folds nothing). Without it, a
-    // partial fold's authority-absence would wrongly tombstone live links.
+    // Positive-evidence gate: my grant head must be in the fold (a strip folds a
+    // revoke edition; a sync gap folds nothing).
     if (!folded.heads.has(bytesToHex(grantLocator(community.id, hex32(user.pubkey))))) return;
     for (const entry of myLinks) {
       if (handled.current.has(entry.token)) continue;

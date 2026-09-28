@@ -54,12 +54,7 @@ export interface ScreenShareQuality {
   delivery: ScreenShareDeliveryMode;
   /** Maximum bitrate for the full-resolution layer, in bits per second. */
   maxBitrate: number;
-  /**
-   * Whether to request audio from the captured surface. Default on. Turning it
-   * off is the recovery for Windows/Chromium's "Could not start audio source"
-   * (`NotReadableError`), where a surface with no openable loopback endpoint
-   * fails the WHOLE capture — video included — rather than just the audio.
-   */
+  /** Request surface audio. Off is the recovery for Windows/Chromium "Could not start audio source", which fails the whole capture. */
   captureAudio: boolean;
 }
 
@@ -116,8 +111,7 @@ export function normalizeScreenShareQuality(value: unknown): ScreenShareQuality 
       ? candidate.delivery
       : DEFAULT_SCREEN_SHARE_QUALITY.delivery,
     maxBitrate: normalizeBitrate(candidate.maxBitrate),
-    // Absent in older persisted selections; default to sharing audio so an
-    // upgrade never silently drops it.
+    // Absent in older persisted selections.
     captureAudio: typeof candidate.captureAudio === "boolean"
       ? candidate.captureAudio
       : DEFAULT_SCREEN_SHARE_QUALITY.captureAudio,
@@ -131,9 +125,7 @@ export function supportedScreenShareCodecs({
 }: { endToEndEncrypted?: boolean; customHevc?: boolean } = {}): ReadonlySet<ScreenShareCodec> {
   const sender = globalThis.RTCRtpSender;
   if (!sender?.getCapabilities) {
-    // A missing capabilities API is not evidence that every optional codec
-    // exists. VP8 + H.264 are WebRTC's conservative interoperability floor;
-    // the custom Linux publisher is independently probed by the desktop shell.
+    // Unknown capabilities: assume only WebRTC's interop floor (VP8 + H.264).
     const fallback = new Set<ScreenShareCodec>(["vp8", "h264"]);
     if (customHevc) fallback.add("h265");
     return fallback;
@@ -155,12 +147,8 @@ export function supportedScreenShareCodecs({
 }
 
 /**
- * Explain a codec that `supportedScreenShareCodecs` did not offer.
- *
- * There is deliberately no `customHevc` option: that flag only ever *adds*
- * h265 to the supported set, so a caller can only reach here with the custom
- * publisher absent — a branch keyed on it would assert the opposite of what
- * got us here.
+ * Explain a codec that `supportedScreenShareCodecs` did not offer. No `customHevc`
+ * option: that flag only adds h265, so callers here never have it.
  */
 export function screenShareCodecUnavailableReason(
   codec: ScreenShareCodec,
@@ -226,15 +214,9 @@ export function screenShareDisplayMediaOptions(
 ): DisplayMediaStreamOptions {
   const captureAudio = normalizeScreenShareQuality(quality).captureAudio;
   return {
-    // Exclude the call's own playback from the captured system audio so a
-    // sharer on speakers doesn't echo other participants back (Chrome 141+;
-    // ignored elsewhere — the desktop shell excludes its own audio by naming
-    // the loopback device itself, see electron/displayMediaPolicy.js).
-    // The flag is an audio-track constraint — a top-level member is dropped —
-    // so audio is an object whenever it is captured. This is the DIRECT
-    // getDisplayMedia path (screen-share switching); the LiveKit-driven initial
-    // capture strips the flag, so installScreenShareAudioRestriction() nests it
-    // back on that path.
+    // restrictOwnAudio (Chrome 141+) keeps call playback out of captured audio;
+    // it must be nested in the audio constraint. The LiveKit initial-capture path
+    // re-adds it via installScreenShareAudioRestriction().
     audio: captureAudio ? { restrictOwnAudio: true } : false,
     video: screenShareVideoConstraints(quality),
   };

@@ -3,24 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { encode, readFoldedShared, writeFolded } from "@/lib/foldedCache";
 
 /**
- * Process-lifetime memory of the last live fold per key. Seeds `restored`
- * SYNCHRONOUSLY when a key comes back into view (e.g. cycling between
- * communities), so the panel repaints the correct, already-computed fold in the
- * same frame instead of blanking to `undefined` while the IndexedDB snapshot
- * reloads after paint — which reads as a flash of empty channels. Keyed by the
- * community-scoped fold key, so it can only ever return THIS key's own value
- * (no cross-community leak). Untyped by necessity (one cache across all fold
- * types); each caller only ever reads back the type it wrote for its key.
+ * Process-lifetime memory of the last live fold per key, so a key coming back
+ * into view repaints synchronously instead of flashing empty while the
+ * IndexedDB snapshot reloads. Untyped: one cache across all fold types.
  */
 const memCache = new Map<string, unknown>();
 
 /**
- * How long a fold may be deferred, measured from the moment it became owed —
- * NOT from the latest reschedule.
- *
- * Deferring is a trade against a frame that is already painted, so it has to be
- * bounded by something a dependency burst cannot push back. See the scheduling
- * effect for what happens when it isn't.
+ * Max deferral, measured from when the fold became owed — NOT from the latest
+ * reschedule, so a dependency burst can't push it back.
  */
 const FOLD_DEADLINE_MS = 250;
 
@@ -28,16 +19,9 @@ const FOLD_DEADLINE_MS = 250;
 const PERSIST_MS = 2_000;
 
 /**
- * Persisting a fold, shared by every instance of its key.
- *
- * A community page mounts a dozen hooks that each fold the SAME control plane
- * under the same key, and every one of them used to encode its own copy of
- * the result — the whole fold, often hundreds of KB — for a write that was
- * then found identical and skipped. Every recompute also produced a fresh
- * object, so a sync burst encoded many times a second. Here one timer per key
- * encodes the latest value at most once per PERSIST_MS (a snapshot only has to
- * be close for the next cold start), and a value already written is not
- * encoded again.
+ * Persisting a fold, shared by every instance of its key: one timer per key
+ * encodes the latest value at most once per PERSIST_MS (folds can be hundreds of
+ * KB), and a value already written isn't encoded again.
  */
 const persistPending = new Map<string, unknown>();
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -50,10 +34,8 @@ function schedulePersist(key: string, value: unknown): void {
 }
 
 /**
- * Forget every fold held in memory, and drop the writes still waiting: they
- * are decrypted community state, and a pending one would land in the store the
- * purge just emptied, for an account that is gone. Called by
- * `purgeClientStorage`.
+ * Forget in-memory folds and drop pending writes (decrypted state that would
+ * land in a just-purged store). Called by `purgeClientStorage`.
  */
 export function clearDeferredFoldMemory(): void {
   for (const timer of persistTimers.values()) clearTimeout(timer);
@@ -63,10 +45,7 @@ export function clearDeferredFoldMemory(): void {
   memCache.clear();
 }
 
-/**
- * Write `key`'s pending value now — on its timer, or as ANY instance of the key
- * unmounts or leaves it (the others find nothing pending and return early).
- */
+/** Write `key`'s pending value now — on its timer, or when any instance unmounts/leaves it. */
 function flushPersist(key: string): void {
   const timer = persistTimers.get(key);
   if (timer !== undefined) clearTimeout(timer);
@@ -81,39 +60,17 @@ function flushPersist(key: string): void {
 }
 
 /**
- * Compute a heavy synchronous Concord fold (roster / metadata / banlist) WITHOUT
- * blocking the render-critical path, and persist/restore it across reloads.
+ * Compute a heavy synchronous Concord fold (roster / metadata / banlist) off the
+ * render path — after paint, deadline-bounded — and persist/restore it across
+ * reloads, since verifying a large control history would otherwise block first paint.
  *
- * The folds (`foldRoster`/`foldMetadata`/`foldBanlist`) decrypt + Schnorr-verify
- * every control edition (up to 500) and were previously run inside a `useMemo`,
- * i.e. synchronously DURING render on every mount/refresh. On a community with a
- * large control history that synchronous burst starves the first paint — the
- * channel's loading skeleton sits while the main thread verifies the whole
- * control plane.
+ * `key` namespaces the snapshot (e.g. `roster:<cid>`); `compute` returns the
+ * fold or `undefined` when inputs aren't ready; `deps` trigger recomputes.
+ * Returns the live fold, else the persisted snapshot.
  *
- * This hook moves the fold OFF the render path: it schedules the `compute` thunk
- * after paint (idle callback, deadline-bounded) so React can commit and the
- * browser can paint the cached UI first, then the fold runs and updates state.
- * Combined with the persisted snapshot (painted immediately on reload), the
- * heavy work never gates the first frame. The decode/verify itself is already
- * memoized per edition id (see `control.ts`), so subsequent recomputes are cheap.
- *
- * Deferring is only ever a trade against a frame that is ALREADY PAINTED, and
- * the two rules below are what keep it that trade instead of an open-ended
- * delay — see the scheduling effect.
- *
- * `key` namespaces the persisted snapshot (e.g. `roster:<cid>`). `compute`
- * returns the freshly-folded value (or `undefined` when inputs aren't ready).
- * `deps` is the dependency list that should trigger a recompute (the shared
- * control events, the community, any upstream fold). Returns the value to
- * render: the live fold when computed, else the persisted snapshot.
- *
- * `accept` vets a snapshot RESTORED FROM DISK, which arrives as `JSON.parse`
- * behind an unchecked cast and may therefore have been written by a build whose
- * shape differed (see `isCurrentFoldedControl`). One it rejects is treated as a
- * miss: `compute` fills in, and the next persist replaces it. The in-memory
- * cache is not vetted — this process wrote those, so they are this shape by
- * construction.
+ * `accept` vets a snapshot restored from disk (it may be from a build with a
+ * different shape; see `isCurrentFoldedControl`); a rejection is a miss. The
+ * in-memory cache isn't vetted — this process wrote it.
  */
 export function useDeferredFold<T>(
   key: string | null,
@@ -122,39 +79,26 @@ export function useDeferredFold<T>(
   accept?: (value: unknown) => boolean,
 ): T | undefined {
   const [live, setLive] = useState<T | undefined>(undefined);
-  // Seed the initial snapshot from the in-memory cache so a fresh mount of a
-  // key we've folded before this session (e.g. a cross-pattern remount back
-  // into a community) paints its channels/title immediately, not blank.
+  // Seed from the in-memory cache so a remount paints immediately, not blank.
   const [restored, setRestored] = useState<T | undefined>(() =>
     key ? (memCache.get(key) as T | undefined) : undefined,
   );
   // Keep the latest `compute` without making it a scheduling dependency.
   const computeRef = useRef(compute);
   computeRef.current = compute;
-  // Same, for the snapshot check: a caller passing an inline predicate must not
-  // re-run the restore (and re-read IndexedDB) on every render.
+  // Same, so an inline predicate doesn't re-run the restore every render.
   const acceptRef = useRef(accept);
   acceptRef.current = accept;
-  // Whether there is anything on screen for a deferral to protect. Read (not
-  // depended on) by the scheduling effect, so a `live`/`restored` change never
-  // by itself reschedules a fold.
+  // Whether anything is on screen for a deferral to protect. Read, not depended
+  // on, so a `live`/`restored` change never reschedules a fold.
   const paintableRef = useRef(false);
   paintableRef.current = live !== undefined || restored !== undefined;
-  // When the currently-owed fold is DUE. Set once per "fold is owed" period and
-  // deliberately NOT reset by a reschedule.
+  // When the owed fold is DUE; deliberately NOT reset by a reschedule.
   const deadlineRef = useRef<number | undefined>(undefined);
 
-  // Reset synchronously (during render) the moment the key changes, so one
-  // community's fold can NEVER render — or persist — under another community's
-  // key. Without this, switching A → B keeps A's `live` fold on screen until
-  // B's deferred recompute lands, and if B's compute returns undefined (its
-  // control events haven't loaded) while B has no persisted snapshot, the hook
-  // would fall back to A's stale `restored` — leaking A's roster/metadata/
-  // banlist into B (and letting A's ban set moderate B's messages).
-  //
-  // Seed `restored` from the in-memory cache for the NEW key (not the old one)
-  // so a key we've already folded this session repaints its own channels/title
-  // in the same frame — no empty flash while its IndexedDB snapshot reloads.
+  // Reset synchronously on key change so one community's fold can never render
+  // or persist under another's key (leaking A's banlist into B). Seed `restored`
+  // from the NEW key's memory entry.
   const [prevKey, setPrevKey] = useState(key);
   if (prevKey !== key) {
     setPrevKey(key);
@@ -163,15 +107,13 @@ export function useDeferredFold<T>(
     deadlineRef.current = undefined;
   }
 
-  // Restore the persisted snapshot once per key so the UI paints from cache.
   useEffect(() => {
     if (!key) {
       setRestored(undefined);
       return;
     }
     let cancelled = false;
-    // Shared: every instance of a key restores the SAME object, like memCache
-    // below — one bridge crossing and one decode per key per session.
+    // Shared: every instance of a key restores the SAME object.
     void readFoldedShared<T>(key).then((v) => {
       if (cancelled || v === undefined) return;
       // A snapshot this build can't read is a miss, not something to render.
@@ -183,21 +125,10 @@ export function useDeferredFold<T>(
     };
   }, [key]);
 
-  // Recompute the live fold AFTER commit, not during render — but never later
-  // than a deadline a dependency burst cannot move, and never at all when there
-  // is no painted frame to protect. `key` is included so a key change always
-  // reschedules a compute even if the caller's deps happen to be referentially
-  // stable across the switch.
-  //
-  // Both bounds exist because the plain "cancel on every dep change, re-arm an
-  // idle callback" schedule is unbounded in exactly the case that needs it most.
-  // A cold boot ingests a replay over the wire, whose `c2ctl:<id>` bus ring
-  // (coalesced at 50ms) re-seeds the control events; each re-seed cancelled the
-  // pending idle callback — its own `timeout` and all — and armed a fresh one,
-  // so the fold was re-armed faster than any idle slot arrived and did not run
-  // for the length of the burst. Downstream that is `channels === []`, hence no
-  // Channel, hence a channel timeline query that stays DISABLED: an empty chat
-  // pane for as long as the wire is busy, with the messages already on disk.
+  // Recompute after commit, but never later than a deadline a dependency burst
+  // can't move, and never deferred when nothing is painted. Without the deadline
+  // a cold-boot `c2ctl` ring burst re-armed the idle callback indefinitely,
+  // leaving channels empty. `key` is included so a switch always reschedules.
   useEffect(() => {
     let cancelled = false;
     const run = () => {
@@ -206,11 +137,8 @@ export function useDeferredFold<T>(
       setLive(computeRef.current());
     };
 
-    // Nothing is painted, so there is nothing to defer FOR: on a first-ever open
-    // there is no persisted snapshot and no memo entry, and everything
-    // downstream is blocked on this fold. Deferring work the whole view waits on
-    // only lengthens the empty frame. Run it here — still post-commit, so the
-    // shell has been handed to the browser first.
+    // Nothing painted (first-ever open), so deferring only lengthens the empty
+    // frame; run now, still post-commit.
     if (!paintableRef.current) {
       run();
       return;
@@ -234,12 +162,10 @@ export function useDeferredFold<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, ...deps]);
 
-  // Persist the live fold whenever its CONTENT changes (best-effort). See
-  // {@link schedulePersist}: once per key, not per instance, and throttled.
+  // Persist whenever CONTENT changes (best-effort), via {@link schedulePersist}.
   useEffect(() => {
     if (!key || live === undefined) return;
-    // Keep the in-memory cache hot so cycling back to this key repaints
-    // synchronously (see the key-change seed above).
+    // Keep the in-memory cache hot so cycling back repaints synchronously.
     memCache.set(key, live);
     schedulePersist(key, live);
   }, [key, live]);

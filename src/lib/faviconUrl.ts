@@ -1,12 +1,9 @@
 import { fillUriTemplate } from "@/lib/uriTemplate";
 
 /**
- * The favicon service, as a URI template. Ditto's default, and deliberately
- * the same one: a template rather than `<origin>/favicon.ico` means the icon
- * for an arbitrary host is fetched from ONE known service instead of from that
- * host, so rendering a list of hosts is not a round of requests announcing the
- * reader to each of them. Point it at `{origin}/favicon.ico` to opt back into
- * contacting hosts directly.
+ * Favicon service URI template (Ditto's default). A central service means
+ * rendering a host list doesn't announce the reader to each host.
+ * Use `{origin}/favicon.ico` to contact hosts directly.
  */
 export const FAVICON_URL_TEMPLATE = "https://ditto.pub/api/favicon/{hostname}";
 
@@ -15,10 +12,7 @@ export interface TemplateUrlOpts {
   url: string | URL;
 }
 
-/**
- * Fill a URI template with parts of the given URL.
- * Supports RFC 6570 variables: {url}, {href}, {origin}, {hostname}, etc.
- */
+/** Fill an RFC 6570 URI template ({url}, {href}, {origin}, {hostname}, …) from a URL. */
 export function templateUrl(opts: TemplateUrlOpts): string {
   const u = new URL(opts.url);
 
@@ -38,10 +32,7 @@ export function templateUrl(opts: TemplateUrlOpts): string {
   });
 }
 
-/**
- * The favicon URL for a host, or undefined when the input isn't a URL at all
- * (the caller then has nothing to render but its fallback).
- */
+/** Favicon URL for a host, or undefined when the input isn't a URL. */
 export function faviconUrl(url: string | URL, template: string = FAVICON_URL_TEMPLATE): string | undefined {
   try {
     return templateUrl({ template, url });

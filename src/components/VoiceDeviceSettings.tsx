@@ -41,18 +41,13 @@ import {
   supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
 
-/** A select option for a media device, with a sensible fallback label. */
 function deviceLabel(device: MediaDeviceInfo, index: number, kind: string): string {
   return device.label || `${kind} ${index + 1}`;
 }
 
 /**
- * Settings-page voice device controls: microphone + speaker pickers (outside a
- * LiveKitRoom, so they use the raw mediaDevices API rather than LiveKit's
- * room-scoped hooks), a live mic input-level meter, and a speaker test tone.
- *
- * Device choices persist via the shared `voiceDevices` helpers, so they match
- * the in-call gear menu and seed the next call's capture defaults.
+ * Settings-page mic/speaker pickers (raw mediaDevices API; outside a
+ * LiveKitRoom), mic meter and test tone. Choices persist via `voiceDevices`.
  */
 export function VoiceDeviceSettings() {
   const { config, updateConfig } = useAppContext();
@@ -61,8 +56,7 @@ export function VoiceDeviceSettings() {
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
   const [speakerId, setSpeakerId] = useState<string>(() => getPreferredSpeakerId() ?? "default");
   const [permissionError, setPermissionError] = useState<string | null>(null);
-  // True when the mic is blocked by the OS privacy setting (desktop app), not
-  // by our in-app handler — in that case we can deep-link the user to Settings.
+  // OS privacy block (desktop), not our handler, so we can deep-link to OS Settings.
   const [osMicBlocked, setOsMicBlocked] = useState(false);
   const pushToTalk = usePushToTalkPreferences();
   const [recordingPushToTalk, setRecordingPushToTalk] = useState(false);
@@ -72,9 +66,7 @@ export function VoiceDeviceSettings() {
   const [pushToTalkSettingsError, setPushToTalkSettingsError] = useState<string | null>(null);
   const pushToTalkModifierRef = useRef<ReturnType<typeof bindingFromKeyboardEvent>>(null);
 
-  // Voice server (advanced): the server used to start calls in empty Concord
-  // voice channels and to host DM calls. This account-level preference follows
-  // the user through encrypted settings; empty = build defaults.
+  // Server for empty Concord voice channels and DM calls; empty = build defaults.
   const [voiceServer, setVoiceServer] = useState<string>(
     () => config.preferredVoiceServer || getPreferredVoiceServer(),
   );
@@ -84,8 +76,6 @@ export function VoiceDeviceSettings() {
     const normalized = getPreferredVoiceServer();
     setVoiceServer(normalized);
     updateConfig((current) => ({ ...current, preferredVoiceServer: normalized }));
-    // Re-run every consumer of the preference: Concord broker rendezvous, the
-    // DM voice-relay pick, and our own status probe below.
     void queryClient.invalidateQueries({ queryKey: ["concord", "av-broker"] });
     void queryClient.invalidateQueries({ queryKey: ["nip29", "dm-voice-relay"] });
     void queryClient.invalidateQueries({ queryKey: ["voice-server-status"] });
@@ -95,9 +85,7 @@ export function VoiceDeviceSettings() {
     setVoiceServer(config.preferredVoiceServer);
   }, [config.preferredVoiceServer]);
 
-  // Live reachability: probe the exact effective server list (a custom server,
-  // or the deployment defaults when empty) exactly the way call setup does, so this row
-  // diagnoses "voice unavailable" on any device.
+  // Probe the effective server list the same way call setup does.
   const voiceServerInvalid = Boolean(getPreferredVoiceServer()) && !preferredVoiceServerOrigin();
   const effectiveServers = ownAvServers();
   const { data: reachableServer, isFetching: checkingServer } = useQuery<string | null>({
@@ -111,28 +99,22 @@ export function VoiceDeviceSettings() {
     staleTime: 60_000,
   });
 
-  // Mic-test state.
   const [testing, setTesting] = useState(false);
-  const [level, setLevel] = useState(0); // 0..1 input level for the meter
+  const [level, setLevel] = useState(0);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // Speaker test tone.
   const [playingTone, setPlayingTone] = useState(false);
   const toneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Enumerate devices. Labels are only populated once the page holds a media
-  // permission, so we (re)enumerate after the mic test grants one and on
-  // devicechange (plug/unplug).
+  // Labels populate only with a media permission, so re-enumerate after the mic test and on devicechange.
   const refreshDevices = useCallback(async () => {
     try {
       const list = await navigator.mediaDevices.enumerateDevices();
       setMics(list.filter((d) => d.kind === "audioinput"));
       setSpeakers(list.filter((d) => d.kind === "audiooutput"));
-    } catch {
-      // Enumeration unavailable — leave lists empty.
-    }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -141,9 +123,7 @@ export function VoiceDeviceSettings() {
     return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refreshDevices);
   }, [refreshDevices]);
 
-  // On the desktop app, warn up front if the OS privacy setting blocks apps
-  // from using the mic (the common "denied by default" case on Windows), so the
-  // user isn't left guessing after a silent getUserMedia failure.
+  // Warn up front on desktop if the OS blocks mic access (Windows default).
   useEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
@@ -178,8 +158,7 @@ export function VoiceDeviceSettings() {
     setPermissionError(null);
     setOsMicBlocked(false);
     try {
-      // Capture the chosen mic with no processing so the meter reflects the raw
-      // input. Reusing the selected deviceId ties the meter to the picker.
+      // Unprocessed capture so the meter reflects raw input.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: micId && micId !== "default" ? { exact: micId } : undefined,
@@ -189,7 +168,6 @@ export function VoiceDeviceSettings() {
         },
       });
       streamRef.current = stream;
-      // Labels become available now that we hold a grant.
       void refreshDevices();
 
       const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -203,8 +181,6 @@ export function VoiceDeviceSettings() {
 
       const tick = () => {
         analyser.getByteTimeDomainData(data);
-        // RMS of the centered waveform → a 0..1 level, lightly scaled so normal
-        // speech fills a good portion of the bar.
         let sum = 0;
         for (let i = 0; i < data.length; i++) {
           const v = (data[i] - 128) / 128;
@@ -218,10 +194,6 @@ export function VoiceDeviceSettings() {
       rafRef.current = requestAnimationFrame(tick);
     } catch (err) {
       const denied = err instanceof Error && err.name === "NotAllowedError";
-      // On desktop, distinguish an OS-level block (Windows "let desktop apps
-      // use the microphone" / macOS privacy) from an in-app denial. When the OS
-      // is the blocker we surface a deep-link to the right Settings page — this
-      // is the usual cause of "mic denied by default" on Windows.
       if (denied && isDesktop()) {
         const status = await desktopMicAccessStatus();
         if (status === "denied" || status === "restricted") {
@@ -242,8 +214,6 @@ export function VoiceDeviceSettings() {
     }
   }, [micId, refreshDevices, stopMicTest]);
 
-  // Restart the mic test when the selected device changes mid-test, so the
-  // meter follows the picker.
   useEffect(() => {
     if (testing) {
       stopMicTest();
@@ -252,7 +222,6 @@ export function VoiceDeviceSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [micId]);
 
-  // Clean up on unmount.
   useEffect(
     () => () => {
       stopMicTest();
@@ -271,9 +240,7 @@ export function VoiceDeviceSettings() {
     rememberVoiceDevice("audiooutput", value);
   };
 
-  // Play a short, gentle tone routed to the selected output device. We render
-  // the AudioContext to a MediaStream so it can be attached to an <audio>
-  // element, which is the only thing `setSinkId` can target.
+  // `setSinkId` only targets media elements, so route the AudioContext through a MediaStream.
   const playTestTone = useCallback(async () => {
     if (playingTone) return;
     try {
@@ -284,7 +251,7 @@ export function VoiceDeviceSettings() {
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.value = 440;
-      // Short fade in/out to avoid a click.
+      // Fade to avoid a click.
       const now = ctx.currentTime;
       gain.gain.setValueAtTime(0, now);
       gain.gain.linearRampToValueAtTime(0.15, now + 0.05);
@@ -299,9 +266,7 @@ export function VoiceDeviceSettings() {
           await (audio as HTMLMediaElement & { setSinkId(id: string): Promise<void> }).setSinkId(
             speakerId,
           );
-        } catch {
-          // Fall back to the default output.
-        }
+        } catch { /* ignore */ }
       }
       await audio.play();
       osc.start();
@@ -317,9 +282,7 @@ export function VoiceDeviceSettings() {
     }
   }, [playingTone, speakerId]);
 
-  // Register eagerly when the user opens voice settings so failures (missing
-  // macOS Accessibility grant or a Wayland compositor without the portal) are
-  // visible here instead of only after joining a call.
+  // Register eagerly so failures (macOS Accessibility, Wayland without the portal) show here.
   useEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
@@ -387,8 +350,7 @@ export function VoiceDeviceSettings() {
     const binding = bindingFromKeyboardEvent(event.nativeEvent);
     if (!binding) return;
     if (/^(Alt|Control|Meta|Shift)(Left|Right)$/.test(binding.code)) {
-      // Wait for either a non-modifier (Ctrl+Space) or this modifier's key-up
-      // (Right Ctrl by itself) before committing the binding.
+      // Wait for a non-modifier or this modifier's key-up (Right Ctrl alone) before committing.
       pushToTalkModifierRef.current = binding;
       return;
     }
@@ -405,7 +367,6 @@ export function VoiceDeviceSettings() {
 
   return (
     <div className="space-y-5">
-      {/* Microphone */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
           <Mic className="size-4 text-muted-foreground shrink-0" />
@@ -440,7 +401,6 @@ export function VoiceDeviceSettings() {
             {testing ? <MicOff className="size-4" /> : <Mic className="size-4" />}
             {testing ? "Stop" : "Test mic"}
           </Button>
-          {/* Segmented input-level meter — neon HUD style. */}
           <div className="flex flex-1 items-center gap-0.5" aria-hidden>
             {Array.from({ length: 16 }).map((_, i) => {
               const lit = level * 16 > i;
@@ -481,7 +441,6 @@ export function VoiceDeviceSettings() {
         )}
       </div>
 
-      {/* Speaker */}
       {supportsSpeakerSelection() && (
         <div className="space-y-2.5">
           <div className="flex items-center gap-2">
@@ -518,9 +477,7 @@ export function VoiceDeviceSettings() {
         </div>
       )}
 
-      {/* Desktop-only global push to talk. Kept per-device in localStorage:
-          physical shortcuts should not sync from a Windows keyboard onto a
-          phone or another computer. */}
+      {/* Per-device (localStorage): physical shortcuts shouldn't sync across machines. */}
       {isDesktop() && (
         <div className="space-y-2.5">
           <div className="flex items-center gap-2">
@@ -591,10 +548,7 @@ export function VoiceDeviceSettings() {
         </div>
       )}
 
-      {/* Voice server (advanced). Consulted only where no community answers the
-          question: a community that sets its own (Settings → Network) uses
-          those and nothing else, so this covers communities that set none, and
-          1:1 DM calls, which have no community to set any. */}
+      {/* Only used where no community sets its own (Settings → Network), and for DM calls. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
           <Globe className="size-4 text-muted-foreground shrink-0" />

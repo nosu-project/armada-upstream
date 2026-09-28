@@ -1,24 +1,16 @@
 /**
- * Buzz protocol parsing + timeline folding.
- *
- * Pure functions only (unit-tested in protocol.test.ts). The semantics mirror
- * the Buzz desktop client's `formatTimelineMessages.ts` / `threading.ts`:
- *
+ * Buzz protocol parsing + timeline folding, mirroring the Buzz desktop client's
+ * `formatTimelineMessages.ts` / `threading.ts`:
  *  - kind 5 AND kind 9005 are deletion markers (targets via `e` tags);
- *  - kind 40003 edits replace the target's content and OVERLAY its `imeta`
- *    tags (all non-imeta tags on the original are preserved);
- *  - a message is a THREAD reply iff it carries a NIP-10 *marked* `reply`
- *    `e` tag (unmarked/positional tags do not thread) and no `broadcast` tag;
- *    a `["broadcast","1"]` reply additionally surfaces on the main timeline.
+ *  - kind 40003 edits replace content and OVERLAY `imeta` tags;
+ *  - a THREAD reply has a NIP-10 *marked* `reply` `e` tag and no `broadcast`
+ *    tag; a `["broadcast","1"]` reply also surfaces on the timeline.
  */
 
 import {
   KIND_BUZZ_DELETE_EVENT,
   KIND_DELETE,
-  KIND_FORUM_COMMENT,
-  KIND_FORUM_POST,
   KIND_FORUM_VOTE,
-  KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_SYSTEM_MESSAGE,
 } from "@/buzz/kinds";
@@ -26,8 +18,6 @@ import {
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 const HEX64_RE = /^[0-9a-f]{64}$/i;
-
-// ── Threading (NIP-10 marked tags on kind-9 stream messages) ────────────────
 
 export interface BuzzThreadRef {
   /** The immediate parent id (the marked `reply` tag), or null when top-level. */
@@ -58,10 +48,8 @@ export function isThreadReply(tags: string[][]): boolean {
 }
 
 /**
- * Buzz's "Send to channel" provenance tag. Buzz never re-posts a thread reply
- * onto the channel; a message sent from a thread is a NEW top-level message
- * carrying `["buzz:sent-from-thread", <root id>, <root excerpt>?]`, and its
- * client renders that as a "Sent from thread: …" line above the body.
+ * Buzz's "Send to channel" provenance tag: a NEW top-level message carrying
+ * `["buzz:sent-from-thread", <root id>, <root excerpt>?]`.
  */
 export const SENT_FROM_THREAD_TAG = "buzz:sent-from-thread";
 
@@ -71,7 +59,6 @@ export interface SentFromThreadRef {
   excerpt: string | null;
 }
 
-/** The thread a top-level message was sent from, or null (mirrors Buzz). */
 export function sentFromThreadRef(tags: string[][]): SentFromThreadRef | null {
   const tag = tags.find(
     (t) => t[0] === SENT_FROM_THREAD_TAG && (t.length === 2 || t.length === 3),
@@ -82,10 +69,8 @@ export function sentFromThreadRef(tags: string[][]): SentFromThreadRef | null {
 }
 
 /**
- * Build the NIP-10 marked tags for a Buzz thread reply (mirrors buzz-sdk's
- * `buildReplyTags`): `p` the parent author, `h` the channel, and marked
- * `root`/`reply` `e` tags (a direct reply to the root carries a single
- * `reply` tag).
+ * NIP-10 marked tags for a Buzz thread reply (mirrors buzz-sdk's
+ * `buildReplyTags`). A direct reply to the root carries a single `reply` tag.
  */
 export function buildBuzzReplyTags(
   channelId: string,
@@ -112,14 +97,10 @@ export function resolveBuzzRootId(parent: NostrRumor): string {
   return ref.rootId ?? parent.id;
 }
 
-// ── Deletions & edits ────────────────────────────────────────────────────────
-
-/** Whether a kind is a Buzz deletion marker. */
 export function isBuzzDeletionKind(kind: number): boolean {
   return kind === KIND_DELETE || kind === KIND_BUZZ_DELETE_EVENT;
 }
 
-/** All valid `e`-tag targets of a deletion event. */
 export function deletionTargets(tags: string[][]): string[] {
   return tags
     .filter((t) => t[0] === "e" && typeof t[1] === "string" && HEX64_RE.test(t[1]))
@@ -136,9 +117,8 @@ export function eventTargetId(tags: string[][]): string | undefined {
 }
 
 /**
- * Overlay an edit's tags onto the original's: swap the original's `imeta`
- * tags for the edit's (an edit carries the FULL new attachment set), keep
- * every non-imeta original tag. Ports Buzz desktop's `applyEditTagOverlay`.
+ * Swap the original's `imeta` tags for the edit's (an edit carries the FULL
+ * attachment set), keep the rest. Ports Buzz desktop's `applyEditTagOverlay`.
  */
 export function applyEditTagOverlay(
   originalTags: string[][],
@@ -173,30 +153,23 @@ export function collectDeletedIds(events: NostrRumor[]): Set<string> {
   return out;
 }
 
-// ── Timeline folding ─────────────────────────────────────────────────────────
-
 export interface BuzzFoldedTimeline {
   /** Top-level rows (incl. broadcast replies), ascending by created_at. */
   timeline: NostrRumor[];
   /** Thread replies bucketed by root id, ascending within each thread. */
   repliesByRoot: Map<string, NostrRumor[]>;
-  /** Deleted ids (already removed from timeline/replies). */
   deletedIds: Set<string>;
 }
 
 /**
- * Fold a raw window of channel events (content + aux kinds mixed) into the
- * rendered shape: deletions applied, latest edit folded into each message
- * (content swap + imeta overlay + an `["edited", ts]` marker tag so the
- * shared row shows its edited state), and thread replies partitioned out of
- * the timeline into per-root buckets.
+ * Fold a raw channel window into rendered shape: deletions applied, latest edit
+ * folded in (with an `["edited", ts]` marker tag), thread replies bucketed by root.
  */
 export function foldBuzzTimeline(events: NostrRumor[], contentKinds: readonly number[]): BuzzFoldedTimeline {
   const contentSet = new Set(contentKinds);
   const deletedIds = collectDeletedIds(events);
   const edits = collectEdits(events, deletedIds);
 
-  // De-dupe by id, newest copy wins (harmless for immutable events).
   const byId = new Map<string, NostrRumor>();
   for (const ev of events) {
     if (contentSet.has(ev.kind) && !deletedIds.has(ev.id)) byId.set(ev.id, ev);
@@ -235,8 +208,6 @@ export function foldBuzzTimeline(events: NostrRumor[], contentKinds: readonly nu
   return { timeline, repliesByRoot, deletedIds };
 }
 
-// ── System messages (kind 40099) ────────────────────────────────────────────
-
 export interface BuzzSystemMessage {
   type: string;
   /** Pubkey of who performed the action. */
@@ -269,15 +240,9 @@ export function parseSystemMessage(event: NostrRumor): BuzzSystemMessage | undef
   }
 }
 
-// ── Channels (kind 39000 Buzz extensions) ────────────────────────────────────
-
 export type BuzzChannelType = "stream" | "forum" | "dm" | "workflow";
 
-/**
- * The Buzz channel type from a kind-39000 metadata event's `t` tag. A channel
- * tagged `hidden` with no explicit type is a DM channel (the relay marks DM
- * channels `hidden`).
- */
+/** Channel type from a 39000's `t` tag; `hidden` with no type is a DM channel. */
 export function buzzChannelType(event: NostrRumor): BuzzChannelType {
   const t = event.tags.find(([n]) => n === "t")?.[1];
   if (t === "forum" || t === "dm" || t === "workflow" || t === "stream") return t;
@@ -285,17 +250,13 @@ export function buzzChannelType(event: NostrRumor): BuzzChannelType {
   return "stream";
 }
 
-/** A channel's topic (Buzz 39000 `topic` tag), if any. */
 export function buzzChannelTopic(event: NostrRumor): string | undefined {
   return event.tags.find(([n]) => n === "topic")?.[1] || undefined;
 }
 
-/** Whether the channel is archived (Buzz 39000 `archived` tag). */
 export function buzzChannelArchived(event: NostrRumor): boolean {
   return event.tags.some(([n, v]) => n === "archived" && v === "true");
 }
-
-// ── Forum votes (45002) ─────────────────────────────────────────────────────
 
 export interface BuzzVoteTally {
   up: number;
@@ -304,15 +265,11 @@ export interface BuzzVoteTally {
   mine?: { eventId: string; value: "+" | "-" };
 }
 
-/**
- * Tally forum votes per target post/comment. One vote per pubkey (the latest
- * wins). Deleted votes must be pre-filtered by the caller.
- */
+/** One vote per pubkey (latest wins). Caller must pre-filter deleted votes. */
 export function tallyForumVotes(
   votes: NostrRumor[],
   viewer: string | undefined,
 ): Map<string, BuzzVoteTally> {
-  // target → pubkey → latest vote
   const latest = new Map<string, Map<string, NostrRumor>>();
   for (const v of votes) {
     if (v.kind !== KIND_FORUM_VOTE) continue;
@@ -337,17 +294,4 @@ export function tallyForumVotes(
     out.set(target, tally);
   }
   return out;
-}
-
-// ── Kind helpers used by rows ───────────────────────────────────────────────
-
-/** Whether a kind renders through the standard chat-message row. */
-export function isChatLikeKind(kind: number): boolean {
-  return (
-    kind === KIND_STREAM_MESSAGE ||
-    kind === 40001 ||
-    kind === 40002 ||
-    kind === KIND_FORUM_POST ||
-    kind === KIND_FORUM_COMMENT
-  );
 }

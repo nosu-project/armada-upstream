@@ -1,21 +1,7 @@
 /**
- * Read-only store census: how many rows are in each tenant, and of which kinds.
- *
- * The leading explanation for a slow local read is a read whose cost is the size
- * of the tenant rather than the size of the answer — `queryPlane(community,
- * "control")` is issued with NO limit, kind 3308 is a regular kind so the write
- * path never supersedes one, and nothing in the codebase ever `remove()`s from a
- * community tenant. If that's the story, every control edition ever published is
- * still there and is fetched, deserialized, sorted and re-folded on every read.
- *
- * That is a claim about DATA, not about code, so it can only be settled on the
- * machine that's slow:
- *
- *   await __armadaDbCensus()
- *
- * Counts only — no rumor content is read, nothing is written, and `count()` uses
- * the same index ranges a query would, so the numbers are the ones the planner
- * would walk.
+ * Read-only store census: rows per tenant and per kind, to test whether slow
+ * local reads scale with tenant size (e.g. unlimited, never-pruned control
+ * editions). Run on the slow machine: `await __armadaDbCensus()`. Counts only.
  */
 import { ARMADA_TENANTS, getArmadaDB } from "./armadaDB";
 
@@ -39,12 +25,8 @@ export interface TenantCensus {
 }
 
 /**
- * Every tenant to count.
- *
- * `tenantIds()` is on the two shipping adapters but not on the `ArmadaDB`
- * interface (`SqliteArmadaDB` has no registry), so it's duck-typed rather than
- * widening a contract for a diagnostic. The well-known tenants are unioned in so
- * a store without a registry still reports something.
+ * Every tenant to count. `tenantIds()` isn't on the `ArmadaDB` interface, so
+ * it's duck-typed; well-known tenants are unioned in.
  */
 async function tenantsToCount(db: ReturnType<typeof getArmadaDB>): Promise<string[]> {
   const registry =
@@ -54,7 +36,7 @@ async function tenantsToCount(db: ReturnType<typeof getArmadaDB>): Promise<strin
   return [...new Set([...registry, ...Object.values(ARMADA_TENANTS)])];
 }
 
-/** Count rows per tenant, newest-first-irrelevant — this is `count`, not a read. */
+/** Count rows per tenant. */
 export async function dbCensus(): Promise<TenantCensus[]> {
   const db = getArmadaDB();
   const ids = await tenantsToCount(db);
@@ -81,7 +63,6 @@ export async function dbCensus(): Promise<TenantCensus[]> {
   return out.sort((a, b) => b.total - a.total);
 }
 
-/** Print the census. Installed on `window` as `__armadaDbCensus`. */
 async function printCensus(): Promise<TenantCensus[]> {
   const census = await dbCensus();
   console.table(

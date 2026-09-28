@@ -37,15 +37,12 @@ interface LoginScreenProps {
   onSignupClick?: () => void;
 }
 
-// bech32's own charset, excluding the letters it never emits (b, i, o, 1 and
-// uppercase), so a mistyped/truncated key is rejected here rather than at decode.
+// bech32 charset (no b, i, o, 1 or uppercase), so a mistyped key fails here.
 const validateNsec = (nsec: string) => {
   return /^nsec1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/.test(nsec);
 };
 
-// Pick the most specific reason an nsec-shaped input was rejected. An input that
-// already starts with nsec1 is almost always a truncated/partial paste, so say
-// that rather than the generic "starts with nsec1" hint, which reads as wrong.
+// Input starting with nsec1 is almost always a truncated paste; say so.
 const nsecRejectionMessage = (input: string) => {
   return input.startsWith('nsec1')
     ? "That doesn't look like a complete secret key. Check you copied the whole nsec."
@@ -68,31 +65,15 @@ const connectStatusLabel = (status: NostrConnectStatus | null): string => {
 };
 
 /**
- * Log in — a full-screen takeover in the signup wizard's chrome
- * ({@link WizardShell}: ASCII sea, close top-right, no back since there's no
- * step before this one), rather than a modal.
- *
- * With `onSignupClick` — i.e. opened from "Join", which is every call site
- * but "Add another account" — the form view is framed as the choice it
- * actually is: "Create account" is the screen's one primary button, and the
- * login methods sit under an "or log in" divider as secondary actions. Without
- * it there is no account to create and the screen is the login form alone.
- *
- * The login options themselves are the single-smart-input format: one field
- * that accepts an nsec or a bunker:// URI, with the secondary methods (key
- * file, remote signer via QR/deeplink) tucked into a dropdown embedded at the
- * input's right edge. The remote-signer handshake swaps the form for a
- * QR / progress / error view on the same screen.
- *
- * Still driven by `isOpen` rather than being mounted conditionally: the
- * handshake subscription and its cleanup live in effects here, so the
- * component has to stay mounted across a close to abort cleanly.
+ * Full-screen login in the signup wizard's chrome ({@link WizardShell}). With
+ * `onSignupClick` (opened from "Join"), "Create account" is the primary action
+ * and login methods sit under an "or log in" divider. One smart input takes an
+ * nsec or bunker:// URI. Driven by `isOpen` (not conditionally mounted) so the
+ * handshake effects can abort cleanly on close.
  */
 const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onSignupClick }) => {
-  // The nostrconnect callback the signer app redirects back to. On the web
-  // that's this deployment; on the APK the WebView's own origin is unreachable
-  // from the signer's browser, so use the public deployment — its verified App
-  // Link reopens the app (#44).
+  // On the APK the WebView origin is unreachable from the signer's browser, so
+  // use the public deployment; its verified App Link reopens the app (#44).
   const callbackOrigin = shareOrigin();
   const [isLoading, setIsLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
@@ -102,30 +83,18 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   const [nostrConnectParams, setNostrConnectParams] = useState<NostrConnectParams | null>(null);
   const [nostrConnectUri, setNostrConnectUri] = useState<string>('');
   const [connectError, setConnectError] = useState<string | null>(null);
-  // Progress status for the nostrconnect handshake. `null` means the user
-  // hasn't kicked off the handshake yet (or they canceled/retried). Once the
-  // handshake advances we swap the QR/form for a spinner with a live-updating
-  // status line, so the user knows something is happening while the signer
-  // app is working.
+  // Handshake progress; `null` until the user starts it (or after cancel/retry).
   const [connectStatus, setConnectStatus] = useState<NostrConnectStatus | null>(null);
-  // Tracks whether the user has explicitly initiated the handshake from the
-  // mobile UI (tapped "Open signer app"). The subscription itself starts
-  // listening as soon as params are generated — without this flag we'd flip
-  // the dialog into the progress view before the user has done anything.
-  // Desktop doesn't need this: it stays on the QR until the handshake
-  // advances past `awaiting-connect`.
+  // Mobile only: the subscription listens as soon as params exist, so don't show
+  // progress until the user tapped "Open signer app".
   const [hasOpenedSigner, setHasOpenedSigner] = useState(false);
-  // Desktop remote-signer view: show the QR in place of the form.
   const [showQr, setShowQr] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const login = useLoginActions();
   const { currentUser } = useLoggedInAccounts();
 
-  // Keep stable refs to props/actions so the listening effect below doesn't
-  // re-run on every parent render (parents typically pass inline arrow
-  // functions for onLogin/onClose, and useLoginActions returns a fresh object
-  // each render).
+  // Stable refs so parents' inline callbacks don't re-run the listening effect.
   const onLoginRef = useRef(onLogin);
   const onCloseRef = useRef(onClose);
   const loginRef = useRef(login);
@@ -133,13 +102,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { loginRef.current = login; }, [login]);
 
-  // Check if on mobile device
   const isMobile = useIsMobile();
-  // Check if extension is available
   const hasExtension = 'nostr' in window;
 
-  // Generate nostrconnect params (sync) - just creates the QR code data.
-  // Returns the URI so callers (the mobile deeplink) can use it immediately.
+  // Returns the URI so the mobile deeplink can use it immediately.
   const generateConnectSession = useCallback((): string => {
     const relayUrls = login.getRelayUrls();
     const params = generateNostrConnectParams(relayUrls);
@@ -154,14 +120,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     return uri;
   }, [login, callbackOrigin]);
 
-  // Start listening for connection (async) - runs once after params are set.
-  //
-  // Deps are intentionally limited to `nostrConnectParams` so that parent
-  // re-renders (which produce fresh onLogin/onClose closures and a fresh
-  // `login` object from useLoginActions) do NOT tear down an in-flight
-  // subscription. Previously this effect re-ran on every render, repeatedly
-  // flipping a local `cancelled` flag to true and causing a successful
-  // nostrconnect response to be silently swallowed after the signer approved.
+  // Deps limited to `nostrConnectParams`: re-running on parent renders would
+  // cancel an in-flight subscription and swallow the signer's approval.
   useEffect(() => {
     if (!nostrConnectParams) return;
 
@@ -178,14 +138,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
             setConnectStatus(status);
           },
         );
-        // If the dialog was explicitly closed (handled by the isOpen effect,
-        // which aborts the controller), don't try to re-close it. Otherwise,
-        // the user is logged in — close the dialog and notify the parent.
+        // Already aborted by the isOpen effect: don't re-close.
         if (controller.signal.aborted) return;
         onLoginRef.current();
         onCloseRef.current();
       } catch (error) {
-        // AbortError means we intentionally aborted (dialog closed or retry)
         if (error instanceof Error && error.name === 'AbortError') return;
         if (controller.signal.aborted) return;
         console.error('Nostrconnect failed:', error);
@@ -196,12 +153,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
 
     startListening();
 
-    // No cleanup here: we do NOT want a re-render-triggered effect teardown
-    // to cancel the in-flight subscription. Cancellation is handled
-    // explicitly by the `isOpen` effect and by handleConnectCancel().
+    // No cleanup on purpose; cancellation is explicit (isOpen effect, handleConnectCancel).
   }, [nostrConnectParams]);
 
-  // Clean up on close
   useEffect(() => {
     if (!isOpen) {
       setLoginInput('');
@@ -219,7 +173,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     }
   }, [isOpen]);
 
-  // Cancel/retry the remote-signer handshake and return to the form.
   const handleConnectCancel = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -232,17 +185,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setShowQr(false);
   }, []);
 
-  // Desktop: generate a session and show the QR view.
   const handleShowQr = () => {
     if (!nostrConnectParams) generateConnectSession();
     setShowQr(true);
   };
 
-  // Mobile: open the nostrconnect URI in the system — this launches a signer
-  // app like Amber if installed. Flip into the progress view *synchronously*
-  // before navigating so that when the user returns from the signer app, the
-  // dialog is already showing "Waiting for signer connection…" — not the
-  // original form they're worried they need to re-tap.
+  // Opens a signer app like Amber. Flip into the progress view *synchronously*
+  // so it's showing when the user returns.
   const handleOpenSignerApp = () => {
     const uri = nostrConnectUri || generateConnectSession();
     setHasOpenedSigner(true);
@@ -273,7 +222,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setIsLoading(true);
     setLoginError('');
 
-    // Use a timeout to allow the UI to update before the synchronous login call
+    // Let the UI update before the synchronous login call.
     setTimeout(async () => {
       try {
         await login.nsec(key);
@@ -286,8 +235,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     }, 50);
   };
 
-  // One input, two shapes: an nsec logs in locally, a bunker:// URI connects
-  // a NIP-46 signer.
+  // An nsec logs in locally; a bunker:// URI connects a NIP-46 signer.
   const handleLogin = async () => {
     const input = loginInput.trim();
     if (!input) {
@@ -346,21 +294,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     reader.readAsText(file);
   };
 
-  // Progressive enhancement: attempt to retrieve a stored credential from the
-  // platform's password manager when the dialog opens. On Chromium browsers
-  // this shows the native credential chooser; everywhere else it resolves null
-  // and nothing happens. Note this is the WEB Credential Management API only —
-  // WebKit implements no `PasswordCredential`, so it is inert on iOS (there is
-  // no iCloud Keychain picker here). It is NOT inert on Android, though: the
-  // WebView is Chromium and reads from Google Password Manager, independently of
-  // the native Credential Manager plugin (which is save-only).
-  //
-  // Only auto-fill when there is no logged-in user, i.e. a cold login. When a
-  // user is already signed in this dialog was opened by "Add another account",
-  // where the whole point is to enter a *different* key — a silent auto-login
-  // (`mediation: "optional"` returns the one saved credential with no chooser)
-  // would re-log the same account and close the dialog before the user could
-  // type, making it impossible to add a second account.
+  // Web Credential Management API: Chromium (incl. Android WebView via Google
+  // Password Manager) only; inert on WebKit. Skipped when signed in: in "Add
+  // another account" `mediation: "optional"` would silently re-log the same account.
   useEffect(() => {
     if (!isOpen || currentUser) return;
     let cancelled = false;
@@ -375,12 +311,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     return () => { cancelled = true; };
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Decide whether to render the progress view in place of the QR/form.
-  // Mobile: flip in as soon as the user taps "Open signer app" (tracked by
-  // `hasOpenedSigner`) so they see feedback the moment they return from the
-  // signer. Desktop: keep the QR visible while waiting for the signer (it's
-  // still actionable — they might scan it with a different device) and only
-  // swap once the signer has acknowledged and we're fetching the pubkey.
+  // Mobile: show progress once "Open signer app" was tapped. Desktop: keep the
+  // QR (still scannable) until the signer acknowledges.
   const showProgressView = connectStatus !== null && (
     connectStatus === 'getting-public-key' ||
     (isMobile && hasOpenedSigner)
@@ -388,33 +320,18 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
 
   if (!isOpen) return null;
 
-  // Which of the four views is up. Doubles as the shell's step key, so moving
-  // between them replays the enter animation the wizard steps use.
+  // Doubles as the shell's step key so view changes replay the enter animation.
   const view = connectError ? 'error' : showProgressView ? 'progress' : showQr ? 'qr' : 'form';
 
-  // This screen is reached two ways, and they are not the same question. From
-  // "Join" (every call site that passes `onSignupClick`) the visitor has not
-  // said they have an account, so leading with a login form answers a question
-  // nobody asked: creating one is the primary action and logging in is the
-  // alternative underneath it. From "Add another account" there is no signup
-  // to offer, so it stays the login screen it has always been. Only the form
-  // view — the QR/progress/error views belong to a handshake already underway.
+  // From "Join", creating an account is primary; from "Add another account"
+  // there's nothing to create. Form view only.
   const joinMode = !!onSignupClick && view === 'form';
 
   return createPortal(
-    // No back arrow: this is where the flow starts, so there is no step behind
-    // it. `total={0}` drops the progress bar — a single screen has no progress.
-    // z-[255] clears Radix dialogs (z-[250]) for the call sites that open this
-    // from inside one, while staying under dropdown content (z-[260]) so the
-    // form's own "more options" menu still renders above it.
-    //
-    // Portalled to <body>: every LoginArea call site (the channel-sidebar pill,
-    // Settings, DMs) sits inside a transformed/`will-change` ancestor
-    // (SwipeReveal) that would become the containing block for WizardShell's
-    // `position: fixed`, shrinking the full-screen takeover to that element's
-    // box and clipping it under the surrounding `overflow-hidden` — so "Add
-    // another account" looked like it merely made the account pill vanish. Same
-    // fix as CreateCommunityPage / DiscordImportPage.
+    // `total={0}` drops the progress bar. z-[255] clears Radix dialogs (z-[250])
+    // but stays under dropdown content (z-[260]).
+    // Portalled to <body>: a transformed ancestor (SwipeReveal) would otherwise
+    // become the containing block for `position: fixed` and clip the takeover.
     <WizardShell index={0} total={0} stepKey={view} zClassName="z-[255]" onClose={onClose}>
       <div className="flex flex-col items-center gap-8 text-center">
         <ArmadaKey size={110} />
@@ -476,10 +393,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
             </div>
           ) : (
             <>
-              {/* The reason most people are here, above everything that asks
-                  for a key they may not have yet. Everything below it is the
-                  other case, so the divider names it rather than reading as a
-                  bare "or". */}
               {joinMode && onSignupClick && (
                 <div className='space-y-4'>
                   <Button
@@ -500,11 +413,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 </div>
               )}
 
-              {/* Native Android signer apps (Amber, etc.) — only renders on
-                  Capacitor Android with a signer installed. */}
+              {/* Capacitor Android only, with a signer installed. */}
               <AndroidSignerOptions onLogin={() => { onLogin(); onClose(); }} />
 
-              {/* Extension Login Button - shown if extension is available */}
               {hasExtension && (
                 <div className="space-y-3">
                   {extensionError && (
@@ -595,8 +506,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
                 </div>
                 {loginError && <p className='text-sm text-destructive'>{loginError}</p>}
 
-                {/* Secondary alongside Create account, so the screen has one
-                    primary action and it isn't this one. */}
+                {/* Secondary so the screen has one primary action. */}
                 <Button
                   type='submit'
                   size='lg'

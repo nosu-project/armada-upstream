@@ -6,24 +6,15 @@ import { cn } from "@/lib/utils";
 import type { MeshPeer } from "@/lib/bluetoothMesh";
 
 interface MeshContentProps {
-  /** The message body (plain mesh text). */
   content: string;
-  /** Nearby peers, used to color a mention chip by the mentioned peer's id. */
   peers: MeshPeer[];
-  /** Our own peer id, so a mention of us is highlighted. */
   myPeerID: string | null;
   className?: string;
 }
 
-/**
- * Renders a Bluetooth-mesh message body. Mesh content is plain text (no Nostr
- * tokens), so this is deliberately lighter than `ChatContent`: it only turns
- * `@name#suffix` mesh-mention tokens into colored chips. A mention of the local
- * user (matched by the unique peer-id suffix) is emphasized.
- */
+/** Plain-text mesh body with `@name#suffix` mention chips; mentions of us are emphasized. */
 export function MeshContent({ content, peers, myPeerID, className }: MeshContentProps) {
-  // Color a mention by the mentioned peer's id when that peer is nearby; the
-  // suffix (peer-id tail) is the stable key. Falls back to the primary color.
+  // The suffix (peer-id tail) is the stable key.
   const colorBySuffix = new Map<string, string>();
   for (const p of peers) colorBySuffix.set(meshSuffix(p.peerID), p.peerID);
   const mySuffix = myPeerID ? meshSuffix(myPeerID) : null;

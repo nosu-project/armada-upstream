@@ -1,19 +1,11 @@
 /**
- * Concord Community List — CORD-02 §8.
+ * Concord Community List — CORD-02 §8: the merge algebra over the unioned
+ * kind-33302 document (wire layer: `listFrag.ts`), hex-internal. Joined AND left
+ * communities stay in the document; liveness is DERIVED, never deletion.
  *
- * A member's memberships sync across devices (and clients) as kind-33302
- * fragment events, NIP-44-encrypted to self (the wire layer lives in
- * `listFrag.ts`; this module is the merge algebra over the unioned document,
- * hex-internal throughout). Every Community they're in AND every one they've
- * left lives in the document — liveness is DERIVED, never deletion, or merges
- * would depend on gossip order.
- *
- * Per entry, two snapshots solve opposite problems: `seed` holds the EARLIEST
- * epoch ever held (the full-history backfill anchor, only ever moves backward
- * on merge) and `current` the LATEST (instant reconstruction on a fresh
- * device). Tombstones are permanent; the newest of `added_at`/`removed_at`
- * decides liveness, so a re-join legitimately resurrects while a backfill can
- * never re-add a tombstoned id.
+ * Per entry, `seed` holds the EARLIEST epoch (history anchor, only moves backward)
+ * and `current` the LATEST. Tombstones are permanent; the newer of
+ * `added_at`/`removed_at` decides liveness.
  */
 
 import { bytesToHex, controlSignerGroupKey, hex32, verifyCommunityId } from "@/concord/lib/derive";
@@ -27,11 +19,9 @@ import {
 } from "@/concord/lib/types";
 
 /**
- * Join material — the invite bundle's MEMBERSHIP subset (never the icon, never
- * the link fields). Snake_case wire shape; unknown fields are preserved
- * (round-trip discipline, CORD-02 §6). The `held_roots` field is an Armada
- * extension carrying retained prior root epochs so history spanning a
- * Refounding stays readable without a rekey-chain walk.
+ * Join material — the invite bundle's MEMBERSHIP subset. Snake_case wire shape;
+ * unknown fields are preserved (CORD-02 §6). `held_roots` is an Armada extension
+ * keeping prior roots readable across Refoundings.
  */
 export interface JoinMaterial {
   community_id: string;
@@ -40,17 +30,14 @@ export interface JoinMaterial {
   community_root: string;
   root_epoch: number;
   /**
-   * The current epoch's Control Plane signer pubkey (CORD-02 §2/§8) — read
-   * access to the plane, never write. Absent = a legacy pre-split epoch,
-   * whose Control folds at the member-derivable legacy address.
+   * Current epoch's Control Plane signer pubkey (CORD-02 §2/§8) — read access only.
+   * Absent = legacy pre-split epoch.
    */
   control_pk?: string;
   /**
-   * Armada extension, STAFF ONLY: the current epoch's `control_root` write
-   * secret (hex). The list is NIP-44-encrypted to self and already carries the
-   * `community_root`, so this is the same trust class — it is how a staffer's
-   * write key survives across their own devices. Delivered by a staff-making
-   * Grant's `control_wrap` (CORD-04 §3) or a 136-byte base blob (CORD-06 §1).
+   * Armada extension, STAFF ONLY: the current epoch's `control_root` (hex), so a
+   * staffer's write key reaches their devices. Same trust class as `community_root`.
+   * Delivered by `control_wrap` (CORD-04 §3) or a 136-byte blob (CORD-06 §1).
    */
   control_root?: string;
   /** The PRIVATE channels held (public ones derive from the root — CORD-03). */
@@ -58,12 +45,9 @@ export interface JoinMaterial {
   relays: string[];
   name: string;
   /**
-   * Armada extension: retained prior roots `[{epoch, key}]` (current excluded).
-   * `retired_at` (epoch-seconds the superseding rotation published) is the
-   * hard read cutoff for that epoch; absent for epochs retired before this
-   * client recorded cutoffs. `refounder` names the npub whose Refounding
-   * minted that epoch — its Guestbook's snapshot authority (CORD-02 §5).
-   * `control_pk` names a split epoch's Control address (absent = legacy).
+   * Armada extension: retained prior roots (current excluded). `retired_at`
+   * (seconds) is the hard read cutoff; `refounder` is that epoch's snapshot
+   * authority (CORD-02 §5); `control_pk` names a split epoch's address.
    */
   held_roots?: Array<{ epoch: number; key: string; retired_at?: number; refounder?: string; control_pk?: string }>;
   /** Armada extension: the npub whose Refounding minted `root_epoch`. */
@@ -80,34 +64,20 @@ export interface CommunityListEntry {
   /** ms; tiebreaks against a tombstone. */
   added_at: number;
   /**
-   * The Refounding epoch that EXCLUDED me (a kick/ban rekey that carried no
-   * blob for me). Being excluded is NOT leaving: the entry stays LIVE and on
-   * the rail, but read-only — my keys can't decrypt this epoch. Cleared
-   * automatically when `current.root_epoch` advances past it (a later
-   * Refounding re-included me), so re-inclusion needs no explicit reset.
-   * Only the user's own Leave or the owner's Dissolve ever removes an icon.
+   * The Refounding epoch that EXCLUDED me (no blob for me). Not leaving: the entry
+   * stays live and read-only, auto-clearing once `current.root_epoch` passes it.
    */
   excluded_at_epoch?: number;
   /**
-   * Armada extension: per Private Channel, the CHANNEL epoch whose rotation
-   * cut me out (channelAccess.ts revoke, CORD-06 §2). Removal must be monotonic:
-   * dropping the key from `current.channels` alone is not enough, because the
-   * union merge is additive — an older invite bundle still sitting in my inbox
-   * (e.g. from when the channel was ungated and vended to everyone) carries
-   * the pre-rotation key and would silently RESTORE access. A cut floors the
-   * channel: only a key at or above the cut epoch — a genuine re-admission —
-   * is ever accepted again. Max wins on merge; never rolls back.
+   * Armada extension: per Private Channel, the channel epoch whose rotation cut me
+   * out (CORD-06 §2). A floor, since the union merge is additive and an old bundle
+   * would otherwise restore the key. Max wins; never rolls back.
    */
   channel_cuts?: Array<{ id: string; epoch: number }>;
   /**
-   * Armada extension: the invite link this membership was joined through, in
-   * the domain-agnostic bare form `<naddr>#<fragment>` (CORD-05 §2/§3). The
-   * link's coordinate is stable and its bundle refreshes in place, so a member
-   * STRANDED on a superseded epoch (a stale bundle dropped them onto history —
-   * see useRekeyWatch) can re-resolve this same link and merge the refreshed,
-   * higher-epoch bundle forward. Self-encrypted like the rest of the list, so
-   * carrying the secret fragment here leaks nothing new (the list already
-   * holds `community_root`). Absent for direct-invite and creator entries.
+   * Armada extension: the invite link joined through, bare `<naddr>#<fragment>`
+   * (CORD-05 §2/§3), so a STRANDED member can re-resolve its refreshed bundle.
+   * Absent for direct-invite and creator entries.
    */
   invite_ref?: string;
   [k: string]: unknown;
@@ -129,15 +99,9 @@ export interface CommunityList {
 export const EMPTY_COMMUNITY_LIST: CommunityList = { entries: [], tombstones: [] };
 
 /**
- * The Private Channel keys a join-material snapshot holds.
- *
- * `channels` is required by the shape, but the list is a CROSS-CLIENT document
- * (CORD-02 §8) and Private Channels are optional (CORD-03) — a client that
- * vends no keys omits the field. Every reader goes through here so that fact
- * lives in ONE place: read `.channels` off the object and the type promises an
- * array while the wire promises nothing. That matters most in the merge, which
- * is the read-modify-write step of every list write — a throw there fails
- * create, join and leave alike, for as long as the entry sits in the vault.
+ * The Private Channel keys a snapshot holds. `channels` may be absent on the wire
+ * (a cross-client document; Private Channels are optional), so every reader
+ * goes through here — a throw in the merge would break every list write.
  */
 export function heldChannelKeys(
   channels: JoinMaterial["channels"] | undefined,
@@ -146,13 +110,9 @@ export function heldChannelKeys(
 }
 
 /**
- * The locally cached, already-DECRYPTED community list for one viewer, as
- * persisted in `foldedCache`.
- *
- * Defined here rather than beside the hook that maintains it because it is the
- * only way to enumerate an account's communities without a signer or a relay,
- * which is exactly what the rumor-store migration needs — and it must not have
- * to import React to ask.
+ * The locally cached, DECRYPTED community list for one viewer (in `foldedCache`).
+ * Lives here so signer-less, React-free code (the rumor-store migration) can
+ * enumerate an account's communities.
  */
 export interface PersistedCommunityList {
   event: NostrRumor | null;
@@ -162,8 +122,6 @@ export interface PersistedCommunityList {
 /** Where {@link PersistedCommunityList} is cached, per viewer pubkey. */
 export const communityListFoldKey = (pubkey: string) => `concord2-list:${pubkey}`;
 
-// ── Canonical JSON (the total-order tiebreak) ────────────────────────────────
-
 /** JSON with recursively-sorted object keys — a total order for equal-epoch merges. */
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortKeys(value));
@@ -172,10 +130,8 @@ export function canonicalJson(value: unknown): string {
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") {
-    // fromEntries defines own data properties, so a "__proto__" key from a
-    // foreign document stays an ordinary field (as serde treats it) instead of
-    // silently vanishing through the inherited accessor — which would fork the
-    // canonical bytes, and the tie-breaks that compare them, across clients.
+    // fromEntries keeps a foreign "__proto__" key as a plain field (as serde does),
+    // so canonical bytes don't fork across clients.
     return Object.fromEntries(
       Object.keys(value as Record<string, unknown>)
         .sort()
@@ -184,8 +140,6 @@ function sortKeys(value: unknown): unknown {
   }
   return value;
 }
-
-// ── Merge (deterministic, commutative, idempotent) ───────────────────────────
 
 /** Higher epoch wins; tie → lexicographically lowest canonical bytes (CORD-02 §8). */
 function freshest(a: JoinMaterial, b: JoinMaterial): JoinMaterial {
@@ -200,14 +154,9 @@ function earliest(a: JoinMaterial, b: JoinMaterial): JoinMaterial {
 }
 
 /**
- * Union two private-channel key sets by channel id — higher channel epoch
- * wins, tie broken by canonical bytes. Channel epochs advance independently
- * of the root, so a key vended alongside an older root is still current for
- * its channel; the union means a partial vend (one channel's key, e.g. a
- * role-gate grant) can never displace the keys a member already holds.
- * Deterministic, commutative, idempotent — safe inside the list CRDT.
- *
- * Either side may be absent: see {@link heldChannelKeys}.
+ * Union two private-channel key sets by id: higher channel epoch wins, tie by
+ * canonical bytes, so a partial vend can never displace held keys. CRDT-safe.
+ * Either side may be absent (see {@link heldChannelKeys}).
  */
 export function unionChannelKeys(
   a: JoinMaterial["channels"] | undefined,
@@ -216,10 +165,8 @@ export function unionChannelKeys(
   const byId = new Map<string, JoinMaterial["channels"][number]>();
   for (const raw of [...heldChannelKeys(a), ...heldChannelKeys(b)]) {
     if (!raw || typeof raw.id !== "string") continue;
-    // CORD-01: hex is lowercase — but a merge is fed by other clients'
-    // documents, so the spelling is normalized here rather than trusted. Two
-    // spellings of one channel must fold to ONE entry, or the copies drift
-    // apart forever (and a cut floor keyed on the other spelling never bites).
+    // Normalize id case: foreign documents may not be lowercase, and two spellings
+    // must fold to ONE entry.
     const ch = { ...raw, id: raw.id.toLowerCase() };
     const prev = byId.get(ch.id);
     if (!prev) {
@@ -227,17 +174,13 @@ export function unionChannelKeys(
       continue;
     }
     if (ch.epoch !== prev.epoch) {
-      // The superseded side is KEPT as a prior: it is the key that reads the
-      // history written before the rotation, and dropping it here would make
-      // a merge silently truncate the conversation.
+      // Keep the superseded key as a prior; it reads pre-rotation history.
       const [winner, loser] = ch.epoch > prev.epoch ? [ch, prev] : [prev, ch];
       byId.set(ch.id, withPriorKey(winner, loser));
       continue;
     }
-    // Two rotations raced to one channel epoch. CORD-06 converges on a
-    // deterministic winner but RETAINS both forks' keys, so whatever was
-    // written into the losing branch stays readable — the loser becomes a
-    // prior at its own epoch, exactly as a superseded key does.
+    // Racing rotations at one epoch: deterministic winner, but the loser is kept as
+    // a prior (CORD-06) so its branch stays readable.
     if (canonicalJson(ch) < canonicalJson(prev)) byId.set(ch.id, withPriorKey(ch, prev));
     else byId.set(ch.id, withPriorKey(prev, ch));
   }
@@ -261,9 +204,7 @@ function attachPriors(entry: ChannelKeyEntry, priors: PriorKey[]): ChannelKeyEnt
     const id = `${p.epoch}:${p.key}`;
     const prev = byId.get(id);
     if (prev) {
-      // Same key from two documents, only one of which recorded when it was
-      // retired: keep the cutoff (dropping it would reopen the epoch for
-      // writes on the device that merges the cutoff-less copy).
+      // Keep a recorded cutoff when only one copy has it.
       if (prev.retired_at === undefined && typeof p.retired_at === "number") prev.retired_at = p.retired_at;
       continue;
     }
@@ -310,14 +251,11 @@ function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityList
   const channelCuts = mergeChannelCuts(x.channel_cuts, y.channel_cuts);
   const current = {
     ...freshest(x.current, y.current),
-    // Union first, then floor: a stale bundle can add a key back only if it
-    // is at or above the epoch that cut me out.
+    // Union first, then floor, so stale bundles can't restore cut keys.
     channels: applyChannelCuts(unionChannelKeys(x.current.channels, y.current.channels), channelCuts),
   };
-  // The higher exclusion epoch wins the merge, but an exclusion only bites
-  // while it names an epoch BEYOND what `current` holds: holding the marked
-  // epoch's own root is re-inclusion (a later Refounding or a fresh invite
-  // for exactly that epoch), so a spent marker is dropped.
+  // Higher exclusion wins, but only bites while beyond `current`'s epoch; holding
+  // that epoch's root is re-inclusion.
   const excludedAt = maxDefined(x.excluded_at_epoch, y.excluded_at_epoch);
   const merged: CommunityListEntry = {
     ...x,
@@ -325,7 +263,6 @@ function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityList
     community_id: x.community_id,
     current,
     seed: earliest(x.seed, y.seed),
-    // The newest add wins liveness races against a tombstone, so keep the max.
     added_at: Math.max(x.added_at, y.added_at),
   };
   if (channelCuts) merged.channel_cuts = channelCuts;
@@ -365,10 +302,8 @@ export function mergeCommunityLists(a: CommunityList, b: CommunityList): Communi
   return {
     ...a,
     ...b,
-    // Plain code-unit order, not localeCompare: this order feeds the fragment
-    // packer, whose layout must match the reference's BTreeMap byte order for
-    // identical state to produce identical fragments. For lowercase hex the
-    // two happen to agree, but only one of them is locale-proof.
+    // Code-unit order, not localeCompare: must match the reference's BTreeMap order
+    // so identical state yields identical fragments.
     entries: [...entries.values()].sort((x, y) => (x.community_id < y.community_id ? -1 : 1)),
     tombstones: [...tombstones.values()].sort((x, y) => (x.community_id < y.community_id ? -1 : 1)),
   };
@@ -388,11 +323,9 @@ export function liveEntries(list: CommunityList): CommunityListEntry[] {
 }
 
 /**
- * The communities this list says the member LEFT: tombstoned and not re-added
- * since. Unlike absence from {@link liveEntries}, which a partial or cold list
- * shares with every community it simply hasn't read yet, a tombstone is a
- * positive statement — so a background watch may drop these without waiting
- * for the list to become authoritative.
+ * Communities the list says the member LEFT (tombstoned, not re-added). Unlike
+ * absence from {@link liveEntries}, a tombstone is positive, so background watches
+ * may drop these without an authoritative list.
  */
 export function removedCommunityIds(list: CommunityList): string[] {
   return list.tombstones
@@ -401,16 +334,9 @@ export function removedCommunityIds(list: CommunityList): string[] {
 }
 
 /**
- * Whether the member has been EXCLUDED at their current epoch — a kick/ban
- * Refounding they got no key for. The community stays live and on the rail
- * (only Leave/Dissolve remove an icon), but it renders read-only: the member
- * can't decrypt this epoch.
- *
- * The marker names the epoch minted WITHOUT them, so exclusion holds only
- * while that epoch is beyond what they hold — strictly greater. Holding the
- * marked epoch's own root IS re-inclusion, however it arrived: a later
- * Refounding that re-included them, or a fresh invite handing them exactly
- * the epoch they were cut from (an unban + re-invite lands there).
+ * EXCLUDED at the current epoch: live and on the rail but read-only. Holds only
+ * while the marker is strictly beyond the held epoch; holding the marked epoch's
+ * root (later Refounding, or unban + re-invite) is re-inclusion.
  */
 export function isExcluded(entry: CommunityListEntry): boolean {
   return (
@@ -420,16 +346,13 @@ export function isExcluded(entry: CommunityListEntry): boolean {
 }
 
 /**
- * Where a REPLAYED add — a pending join settled after the click that made it,
- * possibly launches later — stands against `list`:
+ * Where a REPLAYED add (a pending join settled later) stands against `list`:
  *
- *   - `"superseded"`: a removal at or after the click (a Leave on another
- *     device, a kick) — replaying it would undo a later decision;
- *   - `"held"`: already live under this add or a newer one — the earlier run's
- *     write landed, and there is nothing to publish;
+ *   - `"superseded"`: a removal at/after the click — replaying would undo it;
+ *   - `"held"`: already live under this or a newer add — nothing to publish;
  *   - `undefined`: still to be written.
  *
- * Pure; the entry's `added_at` must be the click time, not the replay's.
+ * Pure; `added_at` must be the click time.
  */
 export function replayedAddStanding(
   list: CommunityList,
@@ -453,18 +376,14 @@ export function removeFromList(list: CommunityList, communityId: string, removed
 }
 
 /**
- * Mark a membership EXCLUDED at `epoch` (a kick/ban Refounding I got no blob
- * for). Unlike {@link removeFromList}, this NEVER hides the icon: being kicked
- * is not the same as leaving. The entry stays live and read-only until either
- * a later Refounding re-includes me (auto-clearing the marker) or I choose to
- * leave. Idempotent — a lower/equal epoch never lowers the marker. Pure.
+ * Mark a membership EXCLUDED at `epoch`. Never hides the icon (kicked ≠ left);
+ * cleared by re-inclusion. Never lowers the marker. Pure.
  */
 export function markExcluded(list: CommunityList, communityId: string, epoch: number): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === communityId);
   if (idx === -1) return list;
   const entries = list.entries.map((e, i) => {
     if (i !== idx) return e;
-    // Only bite while >= current epoch; a stale marker below `current` is moot.
     if (epoch < e.current.root_epoch) return e;
     const prior = typeof e.excluded_at_epoch === "number" ? e.excluded_at_epoch : -Infinity;
     return { ...e, excluded_at_epoch: Math.max(prior, epoch) };
@@ -473,24 +392,11 @@ export function markExcluded(list: CommunityList, communityId: string, epoch: nu
 }
 
 /**
- * Replace a membership's `current` snapshot in place (an authoritative local
- * refresh — e.g. a caught-up Refounding or rename). Bypasses the epoch-keyed
- * `freshest` so a same-epoch update can't silently lose the canonical-bytes
- * tiebreak.
- *
- * Also bumps `added_at` to now: adopting a fresh epoch key is PROOF of current
- * membership, so it must win liveness over any earlier removal tombstone —
- * exactly as a re-join does. Without this, a member excluded in one Refounding
- * (tombstoned) and RE-INCLUDED in a later one keeps their original `added_at`,
- * which stays below `removed_at`, so `isLive` judges the still-valid membership
- * dead and the community silently vanishes from the rail forever.
- *
- * That the bump can resurrect a tombstone is intentional (see
- * communityList.liveness.test.ts), and it is NOT a way for a leave to undo
- * itself: the callers that adopt an epoch — the rekey watcher, a manual
- * Refound — only run for a community whose page is mounted, and
- * `useCommunityEntry` resolves live memberships only, so a community the
- * user left never arms them. Pure.
+ * Replace a membership's `current` snapshot (e.g. an adopted Refounding),
+ * bypassing `freshest` so a same-epoch update can't lose the tiebreak. Bumps
+ * `added_at`: holding a fresh epoch key proves membership, so a re-included
+ * member beats their old tombstone. Can't undo a leave: callers only run on a
+ * mounted page, and `useCommunityEntry` resolves live entries only. Pure.
  */
 export function refreshCurrent(list: CommunityList, current: JoinMaterial, addedAt = Date.now()): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === current.community_id);
@@ -498,8 +404,7 @@ export function refreshCurrent(list: CommunityList, current: JoinMaterial, added
   const entries = list.entries.map((e, i) => {
     if (i !== idx) return e;
     const next: CommunityListEntry = { ...e, current, added_at: Math.max(e.added_at, addedAt) };
-    // Adopting the marked epoch's key (or any later one) is re-inclusion:
-    // drop the spent exclusion marker.
+    // Holding the marked epoch's key (or later) spends the exclusion marker.
     if (typeof next.excluded_at_epoch === "number" && next.excluded_at_epoch <= current.root_epoch) {
       delete next.excluded_at_epoch;
     }
@@ -509,28 +414,16 @@ export function refreshCurrent(list: CommunityList, current: JoinMaterial, added
 }
 
 /**
- * Replace a membership's private-channel set inside `current` — a
- * channel-scope rekey adoption (fresh key at the next channel epoch) or a
- * channel exclusion (the channel dropped so it visibly disappears, CORD-06
- * §2). Unlike {@link refreshCurrent} this NEVER bumps `added_at`: a channel
- * rotation says nothing about community-level membership, and `added_at`
- * feeds the base exclusion-vs-history decision.
- *
- * Merge caveat (CORD-02 §8): `current` snapshots at the same `root_epoch`
- * tie-break on canonical bytes, so a same-root-epoch channel bump can lose a
- * merge to a stale sibling until the watcher re-adopts — deterministic either
- * way, and the rekey events stay fetchable. An excluded channel's original
- * key survives in `seed` for history. Pure.
+ * Replace a membership's private-channel set inside `current` (a channel rekey
+ * adoption or exclusion, CORD-06 §2). Never bumps `added_at`. Caveat (CORD-02 §8):
+ * same-root-epoch snapshots tie-break on bytes, so a stale sibling can win until
+ * the watcher re-adopts. Excluded keys survive in `seed`. Pure.
  */
 export function refreshChannels(
   list: CommunityList,
   communityId: string,
   channels: JoinMaterial["channels"],
-  /**
-   * Channels this update REMOVES because a rotation cut me out, with the
-   * channel epoch that did it. Recorded as a floor so no later merge of an
-   * older bundle can restore the revoked key (see `channel_cuts`).
-   */
+  /** Channels REMOVED by a rotation, with its channel epoch — recorded as `channel_cuts` floors. */
   cuts?: CommunityListEntry["channel_cuts"],
 ): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === communityId);
@@ -549,14 +442,9 @@ export function refreshChannels(
 }
 
 /**
- * Replace a membership's relay set inside `current` — following a Metadata
- * fold whose relay list changed (CORD-02 §6: "clients follow the fold"). The
- * list's copy is bootstrap material for a fresh device; the fold stays the
- * authority, so every device re-derives and re-applies this from its own fold.
- * Like {@link refreshChannels}, NEVER bumps `added_at` (a relay change says
- * nothing about membership) and shares the same same-root-epoch merge caveat:
- * a stale sibling can win the canonical-bytes tiebreak until the watcher
- * re-adopts. `seed` is untouched — it only ever moves backward. Pure.
+ * Replace a membership's relay set inside `current`, following the Metadata fold
+ * (CORD-02 §6). Never bumps `added_at`; same merge caveat as
+ * {@link refreshChannels}. `seed` untouched. Pure.
  */
 export function refreshRelays(list: CommunityList, communityId: string, relays: string[]): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === communityId);
@@ -566,14 +454,9 @@ export function refreshRelays(list: CommunityList, communityId: string, relays: 
 }
 
 /**
- * Record the staff write secret for a membership's CURRENT epoch — a
- * `control_wrap` adoption (CORD-04 §3). The caller has already verified the
- * secret derives to the `control_pk` held for exactly this epoch; a stale
- * epoch (the entry advanced while the wrap was in flight) is a no-op. Never
- * bumps `added_at` (holding the write key says nothing about liveness), and
- * shares refreshChannels' same-root-epoch merge caveat: a stale sibling can
- * win the canonical-bytes tiebreak until the watcher re-adopts — the Grant
- * head persists on the plane, so it always can. Pure.
+ * Record the staff write secret for the CURRENT epoch (a verified `control_wrap`
+ * adoption, CORD-04 §3); a stale epoch is a no-op. Never bumps `added_at`; same
+ * merge caveat as {@link refreshChannels}. Pure.
  */
 export function setControlRoot(
   list: CommunityList,
@@ -591,18 +474,10 @@ export function setControlRoot(
   return { ...list, entries };
 }
 
-// ── Join material ⇄ runtime community ───────────────────────────────────────
-
 /**
- * Rehydrate a runtime {@link Community} from an entry. Verifies the
- * self-certifying owner commitment (a corrupted entry fails closed).
- *
- * `extraRelays` is unioned into the runtime relay set (community-first) — but
- * note that Concord plane traffic belongs ONLY on the community's own relays:
- * callers must NOT pass the deployment's app/platform relays here. A relay
- * that stores no Concord wraps answers every plane REQ instantly with an empty
- * EOSE, which can win the backfill's page race and starve the real relays
- * (issue #19).
+ * Rehydrate a {@link Community} from an entry, verifying the owner commitment
+ * (fails closed). `extraRelays` must NOT be app/platform relays: a relay with no
+ * Concord wraps answers instantly empty and starves the real ones (issue #19).
  */
 export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: string[] = []): Community | undefined {
   const jm = entry.current;
@@ -615,8 +490,7 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
     const asRefounder = (v: unknown): string | undefined =>
       typeof v === "string" && /^[0-9a-f]{64}$/i.test(v) ? v.toLowerCase() : undefined;
     const asHex32 = asRefounder; // same shape: 64 lowercase-hex chars
-    // The current head's refounder is the top-level `refounder` field; retained
-    // roots carry their own, so historical snapshot authority survives the walk.
+    // Retained roots carry their own refounder, so snapshot authority survives.
     const currentRefounder = asRefounder(jm.refounder);
     const controlPk = asHex32(jm.control_pk);
     const heldRoots: HeldRoot[] = [
@@ -644,14 +518,10 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
           ...(refounder ? { refounder } : {}),
           ...(hrControlPk ? { controlPk: hrControlPk } : {}),
         });
-      } catch {
-        // skip malformed retained roots
-      }
+      } catch { /* ignore */ }
     }
-    // The staff write secret rides only when it still derives to the held
-    // address for THIS epoch — a stale or corrupt secret fails closed to a
-    // read-only view rather than signing at an address nobody reads
-    // (CORD-02 §5; a legacy epoch has no address for it to derive to).
+    // Keep the write secret only if it derives to this epoch's address; otherwise
+    // fail closed to read-only (CORD-02 §5).
     let controlRoot: Uint8Array | undefined;
     if (controlPk && asHex32(jm.control_root)) {
       const candidate = hex32(jm.control_root as string);
@@ -664,9 +534,7 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
         if (!heldRoots.some((r) => r.epoch === seedEpoch)) {
           heldRoots.push({ epoch: seedEpoch, key: hex32(entry.seed.community_root) });
         }
-      } catch {
-        // skip malformed seed
-      }
+      } catch { /* ignore */ }
     }
     heldRoots.sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
 
@@ -696,9 +564,7 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
           name: typeof ch.name === "string" ? ch.name : "",
           ...(priors.length > 0 ? { priors } : {}),
         });
-      } catch {
-        // skip malformed channel entries
-      }
+      } catch { /* ignore */ }
     }
 
     return {
@@ -722,13 +588,8 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
 }
 
 /**
- * Serialize held private-channel keys for a `refresh-channels` list write.
- *
- * `priors` ride along deliberately: CORD-03 §3 has a client query every epoch
- * pubkey it holds so history spanning a rekey stays continuous, and
- * `refreshChannels` REPLACES the stored array. Dropping them here would take
- * every other channel's pre-rotation history dark as a side effect of touching
- * one channel.
+ * Serialize held private-channel keys for a `refresh-channels` write. `priors`
+ * must ride along (CORD-03 §3), since `refreshChannels` REPLACES the array.
  */
 export function channelKeysToWire(chs: PrivateChannelKey[]): JoinMaterial["channels"] {
   return chs.map((c) => ({
@@ -750,21 +611,10 @@ export function channelKeysToWire(chs: PrivateChannelKey[]): JoinMaterial["chann
 
 /**
  * The channel epoch a privatisation must mint at (CORD-03 §2): one past the
- * highest generation the channel has EVER used, and 1 when it has never been
- * private. Monotonic and never resetting, so privatise -> publish -> privatise
- * leaves each generation at its own epoch — a stale key is always a LOWER one
- * and can never share a coordinate with the current key, which is what lets
- * the merge (epoch-max) and a `channel_cuts` floor (epoch-min) tell the
- * generations apart at all.
- *
- * `observedFloor` is the highest epoch a rotation was actually seen at
- * (`highestRotatedEpoch`, read off the CORD-06 §2 rekey addresses that derive
- * from the community root alone). It matters because the keys in hand are not
- * the channel's history: whoever privatises a public channel need never have
- * held an earlier generation — they joined after it was published, were never
- * granted its Role, or were rotated out and the `channel_cuts` floor dropped
- * the key from their list. Their empty keyring is not evidence that no
- * generation existed, so the higher of the two bounds wins.
+ * highest generation EVER used (1 if never private). Monotonic, so stale keys are
+ * always lower and merges/`channel_cuts` can tell generations apart.
+ * `observedFloor` (`highestRotatedEpoch`, from CORD-06 §2 rekey addresses) covers
+ * a privatiser who never held earlier generations.
  */
 export function nextChannelEpoch(
   held: PrivateChannelKey[],
@@ -806,8 +656,7 @@ export function toJoinMaterial(c: Community, opts?: { relays?: string[]; prior?:
     ...(heldRoots.length > 0 ? { held_roots: heldRoots } : {}),
     ...(c.refounder ? { refounder: c.refounder } : {}),
   };
-  // Written or DELETED, never inherited from `prior`: a snapshot taken at a
-  // new epoch must not carry the old epoch's address or secret forward.
+  // Written or deleted, never inherited from `prior` across epochs.
   if (c.controlPk) jm.control_pk = c.controlPk;
   else delete jm.control_pk;
   if (c.controlPk && c.controlRoot) jm.control_root = bytesToHex(c.controlRoot);

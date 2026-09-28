@@ -26,7 +26,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { profileMatches, type SearchProfile } from "@/hooks/useSearchProfiles";
 
-/** Render cap before "Show all" — the house pattern is slicing, not virtualization. */
+/** Render cap before "Show all" (slicing, not virtualization). */
 const RENDER_CAP = 50;
 
 interface AddChannelMembersDialogProps {
@@ -37,26 +37,17 @@ interface AddChannelMembersDialogProps {
   candidates: string[];
   /** The channel's scoped roles the viewer may grant (CORD-04 §2). */
   roles: Array<{ id: string; name: string }>;
-  /**
-   * Grant one role to one member. The caller vends the channel key alongside
-   * (the direct-invite path) and narrates every outcome via toasts, so the
-   * dialog only tracks per-row publish state.
-   */
+  /** Grant one role to one member; the caller vends the key and toasts outcomes. */
   onAdd: (pubkey: string, roleId: string) => Promise<void>;
-  /** True while a grant for this member+role is still publishing. */
   isAdding: (pubkey: string, roleId: string) => boolean;
-  /** Whether the member holds the role per LOCAL intent — the fold lags the publish. */
+  /** Per LOCAL intent — the fold lags the publish. */
   hasRole: (pubkey: string, roleId: string) => boolean;
-  /** Whether the viewer holds the channel key (can vend it with the grant). */
   holdsKey: boolean;
 }
 
 /**
- * Add members to a private channel from inside it. Access is a Role scoped to
- * the channel, so "add" = grant that role; the grant vends the channel key to
- * the recipient (see handleToggleRole). Adds are one publish each with their
- * own failure modes, so each row acts immediately instead of batching behind
- * a checkbox list.
+ * Add members to a private channel by granting its scoped role (which vends
+ * the key). Each row acts immediately since each grant can fail independently.
  */
 export function AddChannelMembersDialog({
   open,
@@ -75,7 +66,6 @@ export function AddChannelMembersDialog({
   const [roleId, setRoleId] = useState<string | undefined>(roles[0]?.id);
   const [showAll, setShowAll] = useState(false);
 
-  // Fresh state every time it opens; the role default follows the catalog.
   useEffect(() => {
     if (!open) return;
     setQuery("");
@@ -84,13 +74,10 @@ export function AddChannelMembersDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Sorted once for a stable list; rows that get granted stay in place with
-  // an "Added" mark rather than vanishing mid-scroll (the fold catching up
-  // removes them from `candidates` on the next open).
+  // Granted rows stay in place (marked "Added") rather than vanishing mid-scroll.
   const ordered = useMemo(() => [...candidates].sort(), [candidates]);
 
-  // Batch-resolve profiles so search sees every candidate, not just rendered
-  // rows (the MembersView pattern; results land in the shared author cache).
+  // Batch-resolve profiles so search sees every candidate, not just rendered rows.
   const resolved = open ? ordered : [];
   const profileResults = useQueries({
     queries: resolved.map((pk) => authorQueryOptions(queryClient, eventStore, pk)),

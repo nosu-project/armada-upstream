@@ -18,6 +18,7 @@ import {
   type NotificationSoundSettings as NotificationSoundSettingsValue,
 } from "@/lib/notificationSounds";
 import { hasIosPush } from "@/lib/nativePush";
+import { hasNappPush } from "@/lib/nappPush";
 import { type DmRequestLevel, type PushPrefs } from "@/lib/pushPrefs";
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
 import {
@@ -39,16 +40,9 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 
 /**
- * Notification settings.
- *
- * Two delivery paths, picked by runtime:
- *  - Native APK: a foreground service holds a persistent relay connection and
- *    fires local notifications instantly (no FCM/Google). See
- *    useNativeNotifications.
- *  - Web / PWA: Web Push via a content-blind nostr-push gateway. See
- *    useWebPushNotifications.
- *
- * Both expose the same Discord-style per-type toggles.
+ * Notification settings. Native APK: a foreground service with a persistent
+ * relay connection (no FCM; see useNativeNotifications). Web/PWA: Web Push via
+ * a content-blind nostr-push gateway (see useWebPushNotifications).
  */
 export function NotificationSettings() {
   const { user } = useCurrentUser();
@@ -58,7 +52,6 @@ export function NotificationSettings() {
     return <p className="text-sm text-muted-foreground">Log in to enable notifications.</p>;
   }
 
-  // Native APK: instant background notifications via the relay connection.
   if (native.supported) {
     return (
       <div className="space-y-4">
@@ -86,7 +79,6 @@ export function NotificationSettings() {
   );
 }
 
-/** Permission/channel blocks and a compact, non-secret service diagnostic. */
 function NativeNotificationHealthPanel({
   native,
 }: {
@@ -246,7 +238,7 @@ function formatImportance(importance: number): string {
   return ["blocked", "min", "low", "default", "high", "max"][importance] ?? "n/a";
 }
 
-/** Sound played by the open web/desktop client; native platforms own audio. */
+/** Sound for the web/desktop client; native platforms own audio. */
 function NotificationSoundSettings() {
   const [settings, setSettings] = useState<NotificationSoundSettingsValue>(
     loadNotificationSoundSettings,
@@ -351,12 +343,8 @@ function NotificationSoundSettings() {
 }
 
 /**
- * Warns when Android battery optimization is still active for Armada.
- *
- * Battery optimization tears down the persistent relay websockets while the
- * device is idle, and on Android 15+ it also prevents the boot receiver from
- * restarting the service after a reboot. Offers the one-tap system exemption
- * dialog and re-checks when the user returns from it.
+ * Warns while Android battery optimization is active: it kills relay sockets
+ * when idle and, on Android 15+, blocks the boot receiver restart.
  */
 function BatteryOptimizationWarning() {
   const [optimized, setOptimized] = useState(false);
@@ -371,7 +359,6 @@ function BatteryOptimizationWarning() {
 
     check();
 
-    // Re-check when the user returns from the system exemption dialog.
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") check();
     };
@@ -410,8 +397,8 @@ function BatteryOptimizationWarning() {
 }
 
 function WebPushSettings() {
-  // The content-blind nostr-push path, which self-gates on `supported` when no
-  // push server is configured for this build.
+  // Web Push through nostr-push2, or Tenna's `window.napp.push`. Self-gates on
+  // `supported` when neither is available to this build.
   const {
     supported,
     unavailableReason,
@@ -427,15 +414,10 @@ function WebPushSettings() {
     retry,
   } = useWebPushNotifications();
 
-  // Browsers where Web Push is unavailable (Brave with Google push services
-  // off, or no configured push gateway) still get FOREGROUND OS notifications
-  // while Armada is open. Surface those controls instead of a dead end.
+  // Without Web Push (Brave with Google push off, no gateway), offer foreground notifications.
   if (!supported) {
-    // iOS exposes Web Push (and even the Notification API) only to a
-    // Home-Screen web app on iOS 16.4+, and every iOS browser is WKWebView
-    // underneath — so the "use Chrome/Firefox/Android app" advice in the
-    // foreground fallback is impossible here, and the foreground notifier is
-    // just as unavailable. Show iOS-specific guidance instead.
+    // Every iOS browser is WKWebView and Web Push needs a 16.4+ Home-Screen app,
+    // so the foreground fallback's advice doesn't apply.
     if (isIOS()) {
       return (
         <IosNotificationHint
@@ -467,11 +449,11 @@ function WebPushSettings() {
       description={!ready
         ? "Preparing secure background notifications…"
         : hasIosPush()
-          // The iOS app has no Notification Service Extension yet, so the
-          // gateway's fixed wake-up text is what the lock screen shows. Say so
-          // rather than let it read as a bug.
+          // No Notification Service Extension yet, so the lock screen shows the gateway's fixed text.
           ? "Get notified even when Armada is closed. Notifications say a new message arrived without naming the sender or quoting it — Armada only decrypts once you open it."
-          : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
+          : hasNappPush()
+            ? "Get notified even when Armada is closed."
+            : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}
@@ -486,16 +468,9 @@ function WebPushSettings() {
 }
 
 /**
- * iOS notification guidance, shown whenever Web Push is unavailable on iOS.
- *
- * iOS delivers Web Push only to a Home-Screen web app on iOS 16.4+, and every
- * iOS browser is WKWebView — so the generic "use Chrome/Firefox/Android app"
- * fallback is wrong here. The copy adapts:
- *  - Service Worker API absent → the substrate for Web Push is switched off at
- *    the device level, which on iOS is what Lockdown Mode does (content
- *    blockers can too). Reinstalling won't help.
- *  - Not installed → guide to Add to Home Screen.
- *  - Installed but still no push → iOS 16.4+ / re-add guidance.
+ * iOS notification guidance when Web Push is unavailable: Service Worker API
+ * absent (Lockdown Mode or content blockers), not installed (Add to Home
+ * Screen), or installed without push (iOS 16.4+ / re-add).
  */
 function IosNotificationHint({
   standalone,
@@ -504,9 +479,7 @@ function IosNotificationHint({
   standalone: boolean;
   reason?: WebPushUnavailableReason;
 }) {
-  // Only an iOS app built before push notifications existed reaches this now:
-  // a current one registers an APNs token with the same gateway the web client
-  // uses (useIosPush), and a browser reports the layer that is actually missing.
+  // Only pre-push iOS app builds reach this; current ones register APNs tokens (useIosPush).
   if (reason === "native-runtime") {
     return (
       <p className="text-sm text-muted-foreground">
@@ -525,10 +498,7 @@ function IosNotificationHint({
     );
   }
 
-  // No Service Worker API at all — Web Push is built on it, so nothing here can
-  // enable notifications until the device-level block is lifted. On iOS this is
-  // the signature of Lockdown Mode (which disables service workers and Web
-  // Push); a content blocker or a disabled WebKit feature flag can do the same.
+  // No Service Worker API: on iOS, Lockdown Mode (or a content blocker / WebKit flag).
   if (reason === "service-worker") {
     return (
       <div className="space-y-2">
@@ -584,13 +554,9 @@ function IosNotificationHint({
 }
 
 /**
- * Foreground-only notifications where Web Push is unavailable — a browser
- * without it (e.g. Brave), or the desktop shell, whose Electron Chromium
- * exposes the Push API but has no push service behind it. Fires OS
- * notifications while Armada is open (needs Notification permission). The
- * desktop shell keeps its relay sockets alive while minimized to the tray
- * (backgroundThrottling is off), so "while open" covers the tray too; there is
- * no closed-app delivery on desktop.
+ * Foreground-only notifications while Armada is open, where Web Push is
+ * unavailable (e.g. Brave, or Electron, which has the Push API but no push
+ * service). The desktop shell keeps sockets alive in the tray.
  */
 function ForegroundOnlySettings() {
   const { apiAvailable, permission, enabled, setEnabled, prefs, setPrefs } =
@@ -622,10 +588,7 @@ function ForegroundOnlySettings() {
         blockedMessage={desktop
           ? "Notifications are blocked. Allow Armada in your system notification settings."
           : "Notifications are blocked in your browser settings."}
-        // Distinct from blocked, and the state this panel spent a long time
-        // showing as simply "on": the master wish defaults to on, so without
-        // saying so here a profile that has never been asked looks enabled and
-        // silently never fires.
+        // Permission never asked: the master wish defaults on, so without this it looks enabled but never fires.
         hint={apiAvailable && permission === "default"
           ? desktop
             ? "Armada hasn't been allowed to notify yet — turn this on to ask."

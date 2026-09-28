@@ -4,17 +4,8 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { removeKey } from "@/lib/railLayout";
 
 /**
- * Purge a community from the rail's arrangement.
- *
- * Removing a community has to hit BOTH the source list (kind 10009, the
- * Concord Community List) and the arrangement, or the key lingers in
- * `railLayout` — invisible, because rendering filters against the live lists,
- * right up until the user rejoins and finds the community back in its old
- * folder at its old position.
- *
- * Called from the three list-mutation hooks rather than from each menu item,
- * so every removal path — leave, dissolve, decline, removed-by-ban — prunes
- * without having to remember to.
+ * Purge a community from `railLayout` when it's removed from its source list, or it reappears
+ * in its old folder on rejoin. Called from the list-mutation hooks so every removal path prunes.
  */
 export function useRemoveRailKey(): (key: string) => void {
   const { updateConfig } = useAppContext();
@@ -23,8 +14,7 @@ export function useRemoveRailKey(): (key: string) => void {
     (key: string) => {
       updateConfig((current) => {
         const railLayout = removeKey(current.railLayout, key);
-        // Don't churn the config (and with it the NIP-78 publish watcher) when
-        // the key wasn't in the arrangement to begin with.
+        // Don't churn the config (and the NIP-78 publish watcher) when nothing changed.
         if (JSON.stringify(railLayout) === JSON.stringify(current.railLayout)) return current;
         return { ...current, railLayout };
       });

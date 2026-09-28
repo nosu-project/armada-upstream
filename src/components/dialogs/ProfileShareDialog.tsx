@@ -21,12 +21,8 @@ interface ProfileShareDialogProps {
 }
 
 /**
- * "Share your profile": a QR code and a copyable link that open the current
- * account's profile in Armada (the bare-`/<npub>` route `UserPage` serves).
- * Built on {@link shareOrigin} so the link resolves to the public web
- * deployment even on native, where the WebView's own origin is unreachable.
- * The QR is tinted with the live theme's brand color via {@link getThemedQRColors},
- * darkened/lightened only as far as scannable contrast requires.
+ * Profile QR + link. Uses {@link shareOrigin} so it works on native, where the
+ * WebView origin is unreachable. QR tinted via {@link getThemedQRColors}.
  */
 export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogProps) {
   const { user } = useCurrentUser();
@@ -41,15 +37,10 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
 
   useEffect(() => {
     if (!url || !open) return;
-    // Read the theme's colors when the dialog opens (not at module load), so a
-    // theme switch behind the dialog is reflected the next time it's shown.
+    // Read at open time so a theme switch is reflected.
     const { dark, light } = getThemedQRColors();
-    // Render to an SVG rather than a canvas data URL: canvas-fingerprint
-    // blockers (Brave, Tor Browser, resistFingerprinting) poison or refuse the
-    // toDataURL/getImageData readback, which left this QR blank. SVG never
-    // touches a canvas, so it is immune to any canvas policy. It's carried to
-    // the <img> as a data URL (not innerHTML), so the browser script-sandboxes
-    // it — and the QR content lives in path modules, never as markup anyway.
+    // SVG, not canvas: fingerprint blockers (Brave, Tor, resistFingerprinting)
+    // poison canvas readback and blanked the QR. Loaded via data URL, so it's script-sandboxed.
     QRCode.toString(url, {
       type: "svg",
       width: 400,
@@ -87,8 +78,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
         title="Share your profile"
-        // Radix otherwise auto-focuses the first control (the link button),
-        // parking a focus ring on the npub the moment the dialog opens.
+        // Stop Radix auto-focusing the link button.
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col items-center gap-2 text-center">
@@ -125,7 +115,6 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
                 <div className="mx-auto size-64 clip-corner-lg bg-muted animate-pulse" />
               )}
 
-              {/* The link, front and center. */}
               <button
                 type="button"
                 onClick={copy}

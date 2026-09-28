@@ -2,16 +2,8 @@ import { useContext } from 'react';
 import { EventStoreContext, type EventStoreContextType } from '@/contexts/EventStoreContext';
 
 /**
- * Access the app-wide event store (the ArmadaDB `main` tenant).
- *
- * Returns a `Promise<ArmadaEventStore>`; `await` it inside a query function:
- *
- * ```ts
- * const eventStore = useEventStore();
- * // …
- * const store = await eventStore;
- * await store.event(event);
- * ```
+ * The app-wide event store (ArmadaDB `main` tenant), as a Promise to `await` inside a
+ * query function.
  */
 export function useEventStore(): EventStoreContextType {
   const context = useContext(EventStoreContext);

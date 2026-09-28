@@ -15,29 +15,13 @@ import { logSync } from "@/lib/syncLog";
 
 /**
  * Compliant self-removal (CORD-04 §4/§6): a client that finds a removal against
- * its OWN npub tears down its local copy and routes away.
+ * its OWN npub tears down its local copy and routes away. Handles both a folded
+ * Banlist entry (enforced by the following Refounding) and a Guestbook `kick`
+ * (enforced by nothing — this compliance is a kick's whole effect on the target).
  *
- * BOTH removals land here, because "removed from the community" is one local
- * state whatever minted it:
- *
- *   - the folded Control-plane Banlist naming me — enforced by the Refounding
- *     that follows it, so an ignoring client is merely rude to itself;
- *   - my coalesced Guestbook state being `kick` — enforced by NOTHING. The
- *     Guestbook is cooperative: the stream keys still open, so this compliance
- *     is the entire effect a kick has on the kicked member's own screen. Left
- *     unhandled, a kick removed the target from everyone's member list except
- *     the target's, who kept reading and writing as though nothing happened.
- *
- * Network-SILENT by design: no Leave directive, no farewell, nothing published
- * to the community (a ban's events are already dropped by every honest client,
- * and a kick is already recorded by the moderator's own directive). The only
- * write is the member's private Community List vault, so their other devices
- * don't resurrect the entry.
- *
- * Still deliberately narrower than rekey-exclusion: a rotation that carries no
- * blob for me but names me in neither plane keeps the read-only rail entry (the
- * stranded/excluded machinery) — a rotation can be a mistake; a kick or a ban is
- * a judgment.
+ * Network-silent: the only write is the private Community List vault, so other
+ * devices don't resurrect the entry. Narrower than rekey-exclusion on purpose:
+ * a rotation can be a mistake; a kick or ban is a judgment.
  */
 export function useSelfRemove(community: Community | undefined, onRemoved?: () => void): void {
   const { user } = useCurrentUser();
@@ -50,17 +34,15 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
   const queryClient = useQueryClient();
   const removeRailKey = useRemoveRailKey();
   const handled = useRef(new Set<string>());
-  // Verdicts we've seen once and forced a confirming refetch for; keyed by
-  // community AND verdict, since the two are confirmed against different
-  // planes. Cleared the moment the verdict lifts.
+  // Verdicts awaiting a confirming refetch, keyed by community AND verdict;
+  // cleared when the verdict lifts.
   const confirming = useRef(new Set<string>());
 
   useEffect(() => {
     if (!community || !entry || !folded || !user) return;
 
     const key = community.idHex;
-    // A removal only counts if it POSTDATES this membership — see
-    // `selfRemovalVerdict` for the two ways a stale one resurfaces.
+    // A removal only counts if it POSTDATES this membership (see `selfRemovalVerdict`).
     const banlistHead = folded.headEditions.get(bytesToHex(banlistLocator(community.id)));
     const mine = coalesced.get(user.pubkey);
     const verdict = selfRemovalVerdict({
@@ -78,24 +60,10 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
     }
     if (handled.current.has(key)) return;
 
-    // Self-removal costs a re-invite (ban) or at least a fresh invite link
-    // (kick), so a lone sighting is not enough: an unbanned member returning
-    // through a relay that withholds the unban head — or a rejoiner whose own
-    // Join hasn't come back around the Guestbook yet — would tear down during
-    // the propagation gap. Require the verdict to be seen TWICE, a render apart,
-    // and act only on the second sighting.
-    //
-    // Both planes' `refetch()` is now a pure STORE read (the network sweep runs
-    // un-awaited in the background — see useGuestbook/useControlEvents), so this
-    // is a debounce against a transient verdict, not a synchronous network
-    // re-confirmation: the lifting event has to reach the store (via the live
-    // c2ctl/c2gb sub, this device's own publisher seed, or a background sweep's
-    // onFresh merge) in the window before the second pass for the verdict to
-    // clear. The refetch still matters — it kicks that background sweep and
-    // resettles `isFetching` — but the guard is the two-sighting gate, not a
-    // blocking fetch. Same-device rejoin is covered synchronously by the
-    // publisher seed; a cross-device rejoin during the propagation gap rides
-    // the live sub, as the ban path always has.
+    // Removal is costly, so require the verdict TWICE, a render apart: a returning
+    // unbanned member or a rejoiner can see a stale verdict during propagation.
+    // `refetch()` is a pure store read (the sweep runs in the background), so this
+    // is a debounce, not a network re-confirmation.
     const plane = verdict === "ban" ? control : guestbook;
     if (!confirming.current.has(`${key}:${verdict}`)) {
       confirming.current.add(`${key}:${verdict}`);
@@ -106,41 +74,26 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
 
     handled.current.add(key);
     logSync("control", `${key.slice(0, 8)} ${verdict} names ME — silent self-removal`);
-    // Tear the LOCAL view down immediately — remove the queries, notify, route
-    // away — and let the vault write run in the BACKGROUND. The vault write is
-    // durability for the user's OTHER devices ("so they don't resurrect the
-    // entry"), not a precondition for this screen leaving the community, and it
-    // is a full read-modify-write over the network: a fragment read that waits
-    // on a (possibly NIP-42-gated) account-state relay plus a publish. Gating
-    // the route-away on it left the kickee sitting in a room they'd already been
-    // removed from for seconds after the kick had been decided locally.
-    // Tombstone the rail entry NOW, in the cache AND in the folded list on
-    // disk, exactly as a Leave does. The list query is otherwise only refreshed
-    // by updateCommunityList's own setQueryData at the END of its network RMW,
-    // and the rail boots from the folded list: a kickee whose vault write never
-    // landed would relaunch with the community back. The vault write records
-    // the same tombstone (same `removedAt`) and reconciles it with the relays;
-    // if it never lands, the next sync's reconcile republishes it.
+    // Tear the LOCAL view down now and run the vault write (a network RMW, for other
+    // devices) in the background. Tombstone the rail entry immediately in the cache
+    // AND the folded list on disk, as a Leave does, or a relaunch would restore it;
+    // the vault write records the same `removedAt`.
     const removedAt = Date.now();
     removeCommunityLocally(queryClient, user.pubkey, community.idHex, removedAt).catch((e) => {
       logSync("list2", `${key.slice(0, 8)} self-removal: folded write failed (${e instanceof Error ? e.message : String(e)})`);
     });
-    // A pending join for this community is walked away from too, or the next
-    // launch would resume it past the removal.
+    // Drop any pending join too, or the next launch would resume it.
     void forgetPendingJoin(user.pubkey, community.idHex);
     removeRailKey(`c2:${community.idHex}`);
     queryClient.removeQueries({ queryKey: ["concord", key] });
     toast(REMOVAL_TOAST[verdict]);
     onRemoved?.();
     updateList({ type: "remove", communityId: community.idHex, removedAt }).catch(() => {
-      // The vault write failed (offline / no relay confirmed). The local
-      // tombstone stands and the next sync's reconcile republishes it; clear
-      // `handled` too, so a mount that still resolves the entry (a pending
-      // join's overlay) re-derives the verdict and retries the write.
+      // Vault write failed: the local tombstone stands and the next sync republishes
+      // it; clear `handled` so a still-resolving entry retries.
       handled.current.delete(key);
     });
-    // `control`/`guestbook` are fresh objects each render; depend on their
-    // stable fields, not on them.
+    // Depend on the stable fields, not the per-render objects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     community,

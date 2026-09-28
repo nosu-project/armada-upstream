@@ -9,10 +9,8 @@ import {
 import { GIT_ANNOUNCEMENT_DISCOVERY_RELAY } from "@/lib/platform";
 
 /**
- * The public NIP-34 repository directory: newest announcement per repository
- * from the ngit discovery index. Fetched once and searched client-side —
- * discovery relays don't offer text search, and the whole directory is small.
- * Announcements without activity relays are dropped; they can't be attached.
+ * Public NIP-34 repository directory (ngit discovery index), searched client-side since
+ * discovery relays lack text search. Announcements without activity relays are dropped.
  */
 export function useGitRepositoryDirectory(enabled: boolean) {
   const { nostr } = useNostr();
@@ -39,10 +37,7 @@ export function useGitRepositoryDirectory(enabled: boolean) {
   });
 }
 
-/**
- * Rank directory entries against a typed query: exact identifier/name first,
- * then prefix, then substring, then description mentions; newest breaks ties.
- */
+/** Exact identifier/name, then prefix, substring, description; newest breaks ties. */
 export function searchGitRepositories(
   directory: readonly GitRepositoryAnnouncement[],
   query: string,

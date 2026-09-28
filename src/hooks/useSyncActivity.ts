@@ -7,9 +7,8 @@ function subscribe(onStoreChange: () => void): () => void {
 }
 
 /**
- * The background catch-up tasks currently in flight (oldest first) — see
- * src/lib/syncActivity.ts. Debounce with useDelayedFlag before painting an
- * indicator so fast syncs show nothing.
+ * In-flight background catch-up tasks (src/lib/syncActivity.ts). Debounce with useDelayedFlag
+ * so fast syncs show nothing.
  */
 export function useSyncTasks(): readonly SyncTask[] {
   return useSyncExternalStore(subscribe, getSyncTasks);

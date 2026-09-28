@@ -10,52 +10,27 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { backUpNsec } from "@/lib/credentialManager";
 
 /**
- * The shared parts of account creation, so the landing wizard
- * ({@link SignupWizard}) and the in-app dialog ({@link SignupDialog}) don't
- * carry two copies of the key-backup path between them.
- *
- * What lives here is everything the two flows do IDENTICALLY: minting the key,
- * the backup gate (the {@link useSignupKey} hook), and the two key step BODIES
- * (generate, save; the profile step is {@link ProfileStepBody}, in its own
- * module for the reason noted below). What stays with each consumer is everything they
- * do differently — the login itself, the fresh-account suppressions, the
- * onboarding flag, relay-list seeding, the mount model, the wizard chrome
- * (progress bar vs bare shell, z-index), and the exit (navigate to /discover
- * vs an `onComplete` callback). So the bodies are wrapped in each consumer's
- * own shell, and the step transitions stay with each consumer's step machine.
+ * Shared account-creation parts for {@link SignupWizard} and {@link SignupDialog}:
+ * key minting, the backup gate ({@link useSignupKey}) and the key step bodies.
+ * Login, chrome and step transitions stay with each consumer.
  */
 
 export interface SignupKey {
-  /** The current nsec, or "" before generation. */
   nsec: string;
-  /** The generated key's identity, or null while there's no valid key in hand. */
   identity: { pubkey: string; npub: string } | null;
   showKey: boolean;
   setShowKey: Dispatch<SetStateAction<boolean>>;
   copied: boolean;
-  /** True while the OS keyring / "Save as…" sheet is up. */
   saving: boolean;
-  /**
-   * True once the key has demonstrably left the screen — a successful Copy,
-   * keyring save, or file export. This is what makes Continue appear on the
-   * save step; until then the step has nothing to continue from.
-   */
+  /** True once the key has demonstrably left the screen (Copy, keyring save, or export); reveals Continue. */
   backedUp: boolean;
-  /** Mint a fresh key and reset the backup gate. */
   generate: () => void;
-  /** Copy the key to the clipboard (satisfies the backup gate on success). */
   copyKey: () => Promise<void>;
-  /** Back the key up via the OS/file dialog (satisfies the gate on success). */
   saveKey: () => Promise<void>;
   /** Return to a pristine, key-less state (the dialog reuses one instance). */
   reset: () => void;
 }
 
-/**
- * The key-generation and backup half of signup. Owns the key, its derived
- * identity, and the backup gate; the step transitions and the login itself
- * stay with each consumer, which differ.
- */
 export function useSignupKey(): SignupKey {
   const [nsec, setNsec] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -105,11 +80,7 @@ export function useSignupKey(): SignupKey {
     }
   };
 
-  // Back the key up to a place the user chose and watched it go to — a "Save
-  // as…" dialog on web, the Credential Manager sheet on native. Doesn't
-  // advance: Continue appears only once this (or Copy) has actually
-  // succeeded, so the outcomes stay apart rather than collapsing into "the
-  // button ran". A dismissed dialog leaves the step where it was.
+  // "Save as…" on web, Credential Manager on native. Doesn't advance; a dismissed dialog changes nothing.
   const saveKey = async () => {
     if (saving) return;
     if (!identity) {
@@ -166,13 +137,7 @@ export function useSignupKey(): SignupKey {
   };
 }
 
-/**
- * Step 1 body: mint the key. Wrap in the consumer's wizard shell.
- *
- * The Terms of Service notice is a plain anchor, not a router Link: both
- * signup surfaces render outside any spot a mid-wizard route change would be
- * safe, and /terms is a real page on every platform.
- */
+/** Step 1 body. ToS is a plain anchor: a mid-wizard route change isn't safe, and /terms exists everywhere. */
 export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
   return (
     <div className="flex flex-col items-center gap-8 text-center">
@@ -207,24 +172,8 @@ export function GenerateStepBody({ onGenerate }: { onGenerate: () => void }) {
 }
 
 /**
- * Step 2 body: back the key up, then continue.
- *
- * The step asks for ONE thing at a time. It opens with a single action — Save
- * key — because a file the user watched go somewhere is the backup worth
- * having, and a second button of equal weight beside it ("Copy key") only
- * turned that into a choice between two things neither of which had been
- * explained. Copying is still there, but as what it is: an affordance ON the
- * key, reached by looking at it. Revealing the key swaps the eye for a
- * clipboard, since a key that has been on screen has nothing left to hide.
- *
- * Continue is not disabled-until-backed-up, it is ABSENT until backed up —
- * a disabled button is a thing to try clicking and be told nothing by. It
- * occupies its space the whole time, so nothing moves when it arrives, and it
- * fades in rather than appearing, so the arrival is legible as a consequence
- * of the tap that caused it.
- *
- * The key state comes from {@link useSignupKey}; `loggingIn` and `onContinue`
- * belong to the consumer, which logs in (and advances) differently.
+ * Step 2 body: back the key up. Continue is ABSENT (not disabled) until backed
+ * up, with its space reserved so nothing moves when it fades in.
  */
 export function SaveKeyStepBody({
   signupKey,
@@ -243,9 +192,6 @@ export function SaveKeyStepBody({
         save your secret key
       </h1>
 
-      {/* The one thing this step has to land. There is no second copy of
-          this key and no way to reissue it, so the warning IS the step's
-          description rather than a footnote under a milder one. */}
       <div className="w-full clip-corner-lg bg-destructive/10 p-3.5 text-left">
         <div className="flex items-start gap-2.5">
           <AlertTriangle className="mt-px size-4 shrink-0 text-destructive" />
@@ -261,10 +207,7 @@ export function SaveKeyStepBody({
         </div>
       </div>
 
-      {/* One slot at the input's edge, holding whichever affordance the key's
-          state has earned: reveal it, or — once it is already on screen —
-          copy it. There is no hide: the key has been seen, and a toggle back
-          would only take away the copy button the reveal just produced. */}
+      {/* Reveal, then copy. No hide: that would only remove the copy button. */}
       <div className="relative w-full">
         <Input
           type={showKey ? "text" : "password"}
@@ -303,16 +246,6 @@ export function SaveKeyStepBody({
         )}
       </div>
 
-      {/* The step's one action, then the space Continue will occupy. The slot
-          is sized and reserved from the first frame so the arrival of Continue
-          moves nothing; `backedUp` is what fills it — a copy or a save that
-          actually succeeded.
-
-          The two trade places at that moment. Until the key is backed up
-          there is one thing to do and Save key is it; once it is, the step is
-          finished and the way out is what the eye should land on, with Save
-          key demoted to the thing already done (and still there to do again,
-          in another place). */}
       <div className="w-full space-y-2">
         <Button
           type="button"
@@ -342,6 +275,4 @@ export function SaveKeyStepBody({
   );
 }
 
-/* Step 3's body — the profile screen — is {@link ProfileStepBody} in
-   `./ProfileStep`. It lives apart because it is the only step that reaches
-   the publish path, the Blossom uploaders and the query cache. */
+/* Step 3 is {@link ProfileStepBody} in `./ProfileStep`. */

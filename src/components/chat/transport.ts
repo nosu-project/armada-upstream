@@ -1,21 +1,11 @@
 /**
- * Transport-agnostic chat contracts.
- *
- * The chat UI (timeline, message rows, composer) is 100% presentational and
- * derives entirely from these types. A "transport" supplies the data and the
- * mutation callbacks; the shared components never touch a relay, a NIP-29 hook
- * or Concord's sealed envelopes directly. NIP-29 group chat and Concord
- * (end-to-end-encrypted communities) each implement a transport that satisfies
- * this contract, so they render through exactly the same components.
- *
- * Capabilities are optional: a feature's control renders only when the
- * transport provides the matching callback. A transport that can't pin (or
- * thread, or edit) simply omits that method and the UI hides the control —
- * there are no dead/disabled buttons.
+ * Transport-agnostic chat contracts. NIP-29 and Concord each implement a
+ * transport; the shared components never touch relays or sealed envelopes.
+ * Optional capabilities: a control renders only when its callback exists.
  */
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
-import type { SendStatus } from "@/hooks/useGroupMessages";
+import type { SendStatus } from "@/hooks/useSendStatusMap";
 import type { CalendarEvent, RsvpStatus, RsvpTally } from "@/lib/calendar";
 import type { PollOption, PollTally, PollType } from "@/lib/polls";
 import type { ZapTally } from "@/lib/zaps";
@@ -26,35 +16,19 @@ import { KIND_DM_CHAT } from "@/lib/nip17/protocol";
 export type { ReactInput, ReactionTally, SendStatus };
 
 /**
- * A chat message in the shared event shape. NIP-29 messages are relay events
- * (kind 9 / 1068); Concord messages are adapted from a decrypted
- * `OpenedMessage` (`openedToEvent`); and either can be read back from the local
- * store, which drops signatures.
- *
- * So the shape is a RUMOR, not a `NostrEvent`. Rendering never verifies a
- * signature and does not need one — but a chat message is not a thing you can
- * hand to a relay, and this is where that stopped being a comment. Use
+ * A chat message as a RUMOR, not a `NostrEvent`: Concord messages are adapted
+ * from decrypted `OpenedMessage`s and the local store drops signatures. Use
  * `isSigned` (or the publish outbox) where a real signature is required.
  */
 export type ChatMsg = NostrRumor & {
   /**
-   * Stable React key, when the message's `id` is not stable for its lifetime.
-   *
-   * An optimistically-rendered message is shown before it can be signed, so it
-   * starts with a placeholder id and adopts the real event id once signing
-   * completes. Keying rows on `id` alone made that swap unmount and remount the
-   * row — the send read as "message appears, disappears, reappears", and the
-   * timeline's scroll-anchor bookkeeping (which tracks rows by key) lost its
-   * anchor. Transports that swap ids set this once and keep it across the swap.
+   * Stable React key when `id` changes over the message's life (optimistic sends
+   * adopt the signed id); keying on `id` remounted the row and lost the scroll anchor.
    */
   renderKey?: string;
 };
 
-/**
- * Participants ordered by how recently they last spoke, most recent first,
- * deduped. Feeds a bot command's `user`-argument picker so the people active in
- * this conversation surface ahead of the rest of the roster.
- */
+/** Distinct authors, most recent first (ranks `user`-argument pickers). */
 export function authorsByRecency(messages: ChatMsg[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -68,10 +42,8 @@ export function authorsByRecency(messages: ChatMsg[]): string[] {
 }
 
 /**
- * Adapt a non-`NostrEvent` message (a decrypted Concord `OpenedMessage`, a
- * decrypted DM) into the shared `ChatMsg` shape so it renders through the same
- * `MessageRow`/`ChatContent`/`ChatMessage` path. Rendering never re-verifies the
- * signature, so a synthetic `sig: ""` is filled in when the source has none.
+ * Adapt a non-`NostrEvent` message (decrypted Concord/DM) to `ChatMsg`; fills
+ * `sig: ""` since rendering never verifies.
  */
 export function toChatMsg(m: {
   id: string;
@@ -93,43 +65,28 @@ export function toChatMsg(m: {
   };
 }
 
-/**
- * Per-message reaction state + toggle, resolved by the transport for one
- * message. Mirrors the return shape of {@link useReactions} so the shared
- * `ReactionBar`/`ReactionPicker` consume it unchanged.
- */
+/** Mirrors {@link useReactions}' return shape so `ReactionBar`/`ReactionPicker` consume it unchanged. */
 export interface MessageReactions {
   tallies: ReactionTally[];
   react: (input: ReactInput) => void;
 }
 
-/** Per-message zap state, resolved by the transport for one message. */
 export interface MessageZaps {
   tally: ZapTally;
 }
 
-/** Per-poll tally + vote callback, resolved by the transport for a poll message. */
 export interface MessagePoll {
   tally: PollTally;
   vote: (optionIds: string[]) => void;
 }
 
-/**
- * Per-calendar-event RSVP state + setter, resolved by the transport for a
- * calendar (kind 31922/31923) message. Its presence lets the row render its
- * inline event card with live RSVP tallies. Both NIP-29 (relay query) and
- * Concord (sealed fold) supply it; the card itself is transport-agnostic.
- */
+/** RSVP state + setter for a calendar (kind 31922/31923) message. */
 export interface MessageCalendar {
-  /** The parsed, addressably-deduped event (newest per author/`d`). */
+  /** Addressably deduped (newest per author/`d`). */
   event: CalendarEvent;
-  /** The resolved RSVP tally (going / maybe / can't-go + the user's own). */
   tally: RsvpTally;
-  /** Whether the current user may RSVP (membership / write access). */
   canRsvp: boolean;
-  /** Whether an RSVP publish is in flight (drives the button disabled state). */
   isSettingRsvp: boolean;
-  /** Set the current user's RSVP for this event. */
   setRsvp: (status: RsvpStatus) => void;
 }
 
@@ -142,11 +99,7 @@ export interface PollDraft {
   durationDays: number;
 }
 
-/**
- * Wrap a tally lookup in a per-id object cache so unchanged rows keep a
- * stable {@link MessageZaps} prop (preserves React.memo). Shared by both
- * transports' `zapsFor`.
- */
+/** Per-id object cache so unchanged rows keep a stable {@link MessageZaps} (preserves memo). */
 export function stableZapsFor(
   get: (id: string) => ZapTally | undefined,
 ): (id: string) => MessageZaps | undefined {
@@ -163,10 +116,8 @@ export function stableZapsFor(
 }
 
 /**
- * Two reaction-tally lists that would render identically. The transports
- * rebuild every tally array whenever ANY reaction in view changes (or a page of
- * history lands); comparing by content lets them hand an unchanged row the
- * SAME `reactions` object, so its memo holds.
+ * Content equality for tally lists, so transports (which rebuild all tallies on
+ * any change) can hand unchanged rows the SAME object.
  */
 export function sameReactionTallies(a: readonly ReactionTally[], b: readonly ReactionTally[]): boolean {
   if (a === b) return true;
@@ -184,199 +135,121 @@ export function sameReactionTallies(a: readonly ReactionTally[], b: readonly Rea
 }
 
 /**
- * A settled lightning payment, handed by the shared zap dialog to a transport
- * whose zap announcement is its own event (Concord's sealed CORD.md rumor).
- * NIP-29 has no publish step — the LNURL provider's public receipt is the
- * announcement — so its transport omits {@link ChatTransport.sendZap}.
+ * A settled lightning payment for transports with their own announcement event
+ * (Concord's sealed CORD.md rumor). NIP-29 omits {@link ChatTransport.sendZap}:
+ * the LNURL receipt is the announcement.
  */
 export interface ZapPayment {
   amountMsats: number;
   bolt11: string;
-  /** Payment proof; present when the payer's wallet returned it (NWC/WebLN). */
+  /** Present when the payer's wallet returned it (NWC/WebLN). */
   preimage?: string;
   comment: string;
 }
 
 /**
- * A settled on-chain Bitcoin zap, handed by the zap dialog to a transport
- * whose on-chain zap announcement is a sealed chat-plane event (Concord).
- * NIP-29 has no publish step — the public kind 8333 event is the
- * announcement — so its transport omits {@link ChatTransport.sendOnchainZap}.
+ * A settled on-chain zap for transports that seal the announcement (Concord).
+ * NIP-29 omits {@link ChatTransport.sendOnchainZap}: public kind 8333 is it.
  */
 export interface OnchainZapAnnouncement {
-  /** The broadcast Bitcoin transaction id. */
   txid: string;
-  /** Amount sent in satoshis. */
   amountSats: number;
-  /** Optional comment from the payer. */
   comment: string;
 }
 
-/**
- * The capability surface a chat timeline/message/composer consumes. Required
- * members are the irreducible minimum (list + identity + send); everything else
- * is an optional capability gated by presence.
- */
+/** Required members: list + identity + send; everything else is presence-gated. */
 export interface ChatTransport {
   /** Ascending (oldest-first) message list. */
   messages: ChatMsg[];
-  /** Whether the initial message load is in flight (drives the skeleton). */
   isLoading: boolean;
-  /** Whether the current user may write (drives composer + per-message actions). */
   canWrite: boolean;
-  /** Whether the current user may moderate (delete others' messages, pin, …). */
   canModerate: boolean;
 
-  /** Whether the current user may insert a channel-wide @everyone. */
   canMentionEveryone?: boolean;
-  /** Whether a message carries an authorized channel-wide @everyone. */
   mentionsEveryone?: (event: ChatMsg) => boolean;
 
-  /**
-   * Whether this transport's messages are unsigned rumors (Concord's sealed
-   * chat events) rather than relay-addressable signed events. Drives the
-   * per-message context menu: rumors offer "View event JSON" instead of the
-   * "Copy message ID" / "View on Ditto" off-ramps (which reference a
-   * relay-addressable event id that doesn't exist for a rumor).
-   */
+  /** Unsigned rumors (Concord): "View event JSON" instead of the event-id off-ramps. */
   isRumor?: boolean;
 
-  // ── Optional capabilities (control hidden when undefined) ────────────────
-
-  /**
-   * Ids of messages that open a NEW key epoch (Concord): the timeline renders
-   * a "key rotated" divider directly above each, marking everything earlier as
-   * sealed under a previous key. Undefined for transports without rotations.
-   */
+  /** Concord: messages opening a NEW key epoch get a "key rotated" divider above. */
   rotationDividerIds?: ReadonlySet<string>;
 
   /**
-   * Ids of messages belonging to a visual flood (Concord, `floodCluster.ts`):
-   * the timeline folds each consecutive run of them into one expandable row.
-   *
-   * A DISPLAY hint and nothing more. These messages are present, ordered and
-   * readable — one click away — because the heuristic that produced them is
-   * allowed to be wrong. Never filter on this, and never let it inform a
-   * moderation decision: the Banlist is the only author-identity drop an honest
-   * client performs. Undefined for transports without flood detection.
+   * Visual flood members (Concord, `floodCluster.ts`), folded into expandable
+   * rows. A DISPLAY hint only: never filter on it or use it for moderation (the
+   * Banlist is the only author-identity drop an honest client performs).
    */
   quarantinedIds?: ReadonlySet<string>;
 
   /**
-   * The subset of {@link quarantinedIds} collapsed because the community is
-   * PAUSED (CORD-04 §8), not because they looked like a flood. Purely so the
-   * collapsed row can state the real reason — a paused room's ordinary traffic
-   * is not "near-identical messages from many accounts", and saying so about it
-   * is an accusation the client has no basis for.
+   * Subset of {@link quarantinedIds} collapsed because the community is PAUSED
+   * (CORD-04 §8), so the row states the real reason rather than accusing a flood.
    */
   pausedIds?: ReadonlySet<string>;
 
-  /** Backfill older history; resolves to the number of messages prepended. */
+  /** Resolves to the number of messages prepended. */
   loadOlder?: () => Promise<number>;
-  /** Whether more history remains to backfill. */
   hasMore?: boolean;
-  /** Whether an older-history page is currently loading. */
   isLoadingOlder?: boolean;
 
-  /** Optimistic send status for a message id (pending/failed), if tracked. */
   sendStatusFor?: (id: string) => SendStatus | undefined;
-  /** Re-publish a failed optimistic message (retry). */
   retry?: (event: ChatMsg) => void;
-  /** Drop a failed optimistic message (discard). */
   discard?: (id: string) => void;
 
-  /** Delete a message (own always; others' require moderation). */
+  /** Own always; others' require moderation. */
   deleteMessage?: (event: ChatMsg) => void;
-  /** Submit an inline edit, returning when applied. */
   editMessage?: (original: ChatMsg, content: string) => Promise<void>;
 
-  /** Whether a message id is pinned. */
   isPinned?: (id: string) => boolean;
-  /** Pin/unpin a message (moderation). */
   togglePin?: (event: ChatMsg) => void;
 
-  /** Threaded-reply count for a message id (drives the "N replies" badge). */
   replyCountFor?: (id: string) => number;
-  /** Resolved reaction tallies + toggle for a message id (batched per room). */
+  /** Batched per room. */
   reactionsFor?: (id: string) => MessageReactions;
-  /**
-   * Aggregated zaps for a message id. Presence enables the zap button; the
-   * payment itself runs in the shared dialog (it needs only the author's
-   * lightning address), while this feeds the ⚡ total chip.
-   */
+  /** Presence enables the zap button; the payment runs in the shared dialog. */
   zapsFor?: (id: string) => MessageZaps | undefined;
   /**
-   * Announce a settled zap payment for this message, for transports whose
-   * announcement is a chat-plane event (Concord / CORD.md). When present,
-   * the dialog REQUIRES a proof-returning payment method (NWC/WebLN — no
-   * manual QR, which never reveals the preimage).
+   * Announce a settled zap as a chat-plane event (Concord / CORD.md). When
+   * present, the dialog REQUIRES a proof-returning method (NWC/WebLN; manual QR
+   * never reveals the preimage).
    */
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
   /**
-   * Announce a settled on-chain Bitcoin zap for this message, for transports
-   * whose announcement is a sealed chat-plane event (Concord). When
-   * present, the on-chain zap hook seals the kind 8333 attribution rumor into
-   * the channel instead of publishing a public Nostr event (which would leak
-   * community/channel context). Absent = publish publicly via relays (NIP-29).
+   * Seal the on-chain kind 8333 attribution into the channel (Concord) instead of
+   * publishing publicly, which would leak community context. Absent: public (NIP-29).
    */
   sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
 
   /**
-   * Resolved poll tally + vote callback for a poll (kind 1068) message id. Its
-   * presence lets a poll render its live results and accept votes. NIP-29
-   * carries polls through the relay-querying {@link import("./PollCard").PollCard}
-   * instead, so it omits this; Concord supplies it from the sealed chat fold.
+   * Poll tally + vote for a kind-1068 message (Concord's sealed fold). NIP-29 uses
+   * {@link import("./PollCard").PollCard} instead.
    */
   pollFor?: (id: string) => MessagePoll | undefined;
-  /**
-   * Resolved calendar event + RSVP state for a calendar (kind 31922/31923)
-   * message id, so the row renders an inline event card. Both transports also
-   * surface these events in the events bar; this is the timeline copy. NIP-29
-   * resolves it from a relay query, Concord from the sealed chat fold.
-   */
+  /** Calendar (kind 31922/31923) state for the inline event card. */
   calendarFor?: (id: string) => MessageCalendar | undefined;
-  /**
-   * Publish a new poll as a chat-plane event (Concord sealed rumor). Its
-   * presence enables the composer's poll mode on the delegated send path. NIP-29
-   * publishes polls directly to its host relay, so it omits this.
-   */
+  /** Publish a poll as a sealed rumor (Concord); enables poll mode. NIP-29 omits it. */
   sendPoll?: (draft: PollDraft) => Promise<void>;
 
-  /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
 
   /**
-   * Pre-flight refusal for a send, checked before the composer clears itself:
-   * a reason to block, or null to allow. Concord returns its per-community
-   * rate-limit message here; transports without a send policy omit it.
-   *
-   * Call it exactly ONCE per send the user actually asked for: a refusal counts
-   * against the sender (Concord escalates its lockout on repeat flooding), so
-   * this is not a predicate to poll from render or to disable a button with.
+   * Pre-flight send refusal (Concord's rate limit), checked before the composer
+   * clears. Call exactly ONCE per real send: refusals count against the sender,
+   * so never poll it from render.
    */
   canSend?: () => string | null;
 
-  // ── Threading (Slack-style; shared ThreadPanel reads these) ──────────────
-  //
-  // A reply is NOT a top-level timeline message: it's nested under its root and
-  // only shown in the thread panel. Every protocol implements these three the
-  // same way — NIP-29 via kind-1111 comments, Concord via a parent-tagged
-  // sealed chat message — so the shared {@link ThreadPanel} is transport-driven.
+  // Threading: replies are never top-level timeline messages; they show only in
+  // the shared {@link ThreadPanel} (NIP-29 kind-1111 comments, Concord
+  // parent-tagged sealed messages).
 
-  /** Ascending (oldest-first) replies to a root message id. */
   threadRepliesFor?: (rootId: string) => ChatMsg[];
-  /** Whether a root's replies are still loading (drives the panel spinner). */
   threadLoading?: (rootId: string) => boolean;
-  /** Post a reply into a root's thread (content is the composer's final text). */
+  /** `content` is the composer's final text. */
   sendThreadReply?: (root: ChatMsg, content: string, tags: string[][]) => Promise<void>;
 }
 
-/**
- * Derive the thread badge's summary from a root's replies: the distinct
- * repliers (newest-first, so the freshest voices lead the avatar stack) and the
- * most recent reply time. Shared by every per-message binding so the badge
- * reads identically across protocols.
- */
+/** Thread badge summary: distinct repliers (newest-first) and last reply time. */
 export function threadSummary(replies: ChatMsg[]): {
   participants: string[];
   lastReplyAt: number | undefined;
@@ -384,7 +257,6 @@ export function threadSummary(replies: ChatMsg[]): {
   const seen = new Set<string>();
   const participants: string[] = [];
   let lastReplyAt: number | undefined;
-  // Replies arrive oldest-first; walk newest-first for the stack order.
   for (let i = replies.length - 1; i >= 0; i--) {
     const r = replies[i];
     if (lastReplyAt === undefined) lastReplyAt = r.created_at;
@@ -397,19 +269,9 @@ export function threadSummary(replies: ChatMsg[]): {
 }
 
 /**
- * The user's most recent message that an inline edit can reopen, scanning a
- * chronological (oldest-first) list from the end. Drives the "ArrowUp in an
- * empty composer edits your last message" gesture, and applies the SAME
- * editability gate as `ChatMessage`'s `canEdit`: the message is the user's own,
- * is plain chat text (NIP-29 group kind 9 or NIP-17 kind 14 — polls, files and
- * other structured rows carry semantics a text field can't preserve), and is
- * not an in-flight optimistic send (its id isn't a relay event yet, so the
- * delete-and-republish edit would have nothing to act on). Returns undefined
- * when there is nothing to edit.
- *
- * `isPending` reports whether an id is a still-pending/failed optimistic send
- * (typically `(id) => transport.sendStatusFor?.(id) !== undefined`); omit it on
- * transports that don't track optimistic status.
+ * The user's latest message an inline edit can reopen (ArrowUp in an empty
+ * composer), using `ChatMessage`'s `canEdit` gate: own, plain text (kind 9 or
+ * 14), and not a pending optimistic send. `isPending` flags pending/failed ids.
  */
 export function lastEditableOwnMessage(
   messages: readonly ChatMsg[],

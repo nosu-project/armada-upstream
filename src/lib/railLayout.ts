@@ -1,33 +1,12 @@
 /**
- * Data model + pure operations for the community-rail layout: a Discord-style
- * ordered list of items (NIP-29 servers / Concord communities, by stable rail
- * key) and folders that group them.
+ * Pure model and operations for the community rail: ordered items (NIP-29
+ * servers by normalized relay URL, `c2:<id>` communities, `dm:<pubkey>` DMs)
+ * and folders. Persisted in AppConfig and synced via NIP-78 (`${APP_ID}/rail`).
  *
- * The layout is persisted in AppConfig (`railLayout`) and synced across
- * devices in its own encrypted NIP-78 document (`${APP_ID}/rail`). All
- * functions here are pure so they can be unit-tested and so the ServerRail
- * component stays a thin view over them.
- *
- * Keys are the rail's stable item keys: a normalized relay URL for NIP-29
- * servers, `c2:${communityId}` for Concord communities,
- * `dm:${pubkey}` for a direct-message conversation the user put on the rail.
- *
- * DM keys are the one kind whose presence here IS the fact: a server or a
- * community is on the rail because it's in the user's kind 10009 / Community
- * List and the arrangement only orders it, but a DM is on the rail because the
- * user said so and nowhere else records that. So the arrangement is the whole
- * source of truth for them, and a `dm:` key is live by definition.
- *
- * The stored layout may reference keys that aren't currently "live" (a
- * Concord list still loading, a server on a relay that hasn't answered yet).
- * Those keys are kept in place — never dropped by these ops — so a drag
- * performed before everything has loaded can't destroy another device's
- * folders. Rendering simply skips them.
- *
- * The one exception is {@link removeKey}, which is called when the user
- * REMOVES a community: leaving must purge the key here as well as from the
- * source list, or a later re-add would silently resurrect it at its old
- * position inside its old folder.
+ * The layout is the sole record of which DMs are on the rail. Keys that aren't
+ * currently live (still loading) are kept, never dropped, so an early drag
+ * can't destroy another device's folders — except via {@link removeKey} when
+ * the user leaves.
  */
 
 import { nip19 } from "nostr-tools";
@@ -53,7 +32,6 @@ export type RailLayoutNode = RailItemNode | RailFolderNode;
 /** What is being dragged: a single item, or a whole folder. */
 export type RailDragSource = { kind: "item"; key: string } | { kind: "folder"; id: string };
 
-/** Where a drag lands. */
 export type RailDropTarget =
   /** Insert at the top level, before the node with this anchor. */
   | { type: "before"; anchor: string }
@@ -69,22 +47,14 @@ export function dmRailKey(pubkey: string): string {
   return `dm:${pubkey}`;
 }
 
-/**
- * The peer pubkey a `dm:` rail key names, or `null` for any other key. The hex
- * shape is checked here rather than trusted: the key round-trips through
- * synced settings, and every caller either encodes it as an npub or hands it
- * to a profile query.
- */
+/** Peer pubkey of a `dm:` key, or `null`. Hex is checked: the key round-trips through synced settings. */
 export function railKeyDmPubkey(key: string): string | null {
   if (!key.startsWith("dm:")) return null;
   const pubkey = key.slice("dm:".length);
   return /^[0-9a-f]{64}$/.test(pubkey) ? pubkey : null;
 }
 
-/**
- * Every DM peer on the rail, in visual order. Read straight from the stored
- * arrangement, because for DMs there is no separate list to be live against.
- */
+/** DM peers on the rail in visual order, read from the stored layout. */
 export function railDmPubkeys(stored: RailLayoutNode[]): string[] {
   const out: string[] = [];
   for (const key of flattenLayout(stored)) {
@@ -115,31 +85,20 @@ export function flattenLayout(nodes: RailLayoutNode[]): string[] {
   return out;
 }
 
-/**
- * Map a stable rail item key to its React Router path, or `null` if the key
- * isn't a recognized community/server key. NIP-29 servers use their normalized
- * relay URL as the key; Concord uses `c2:`-prefixed community ids.
- */
+/** React Router path for a rail key (relay URL, `c2:`, `dm:`), or `null`. */
 export function railKeyToRoute(key: string): string | null {
   if (key.startsWith("c2:")) {
     return `/c/${encodeURIComponent(key.slice("c2:".length))}`;
   }
   if (key.startsWith("dm:")) {
     const pubkey = railKeyDmPubkey(key);
-    // The peer route, not `/dm` — on mobile the conversation list and the
-    // thread are the same route's two states, so landing on the list would
-    // make the rail icon a shortcut to somewhere the user then has to search.
+    // The peer route, not `/dm`: on mobile the list would make the rail icon a dead end.
     return pubkey ? `/dm/${nip19.npubEncode(pubkey)}` : null;
   }
-  // NIP-29 server (key = normalized relay URL).
   return `/s/${relayToRouteParam(key)}`;
 }
 
-/**
- * Canonicalize a layout: de-duplicate keys (first occurrence wins), drop
- * empty folders, and dissolve single-item folders in place (Discord
- * behavior: dragging the second-to-last item out of a folder dissolves it).
- */
+/** Canonicalize: dedupe keys (first wins), drop empty folders, dissolve single-item folders (Discord behavior). */
 export function normalizeLayout(nodes: RailLayoutNode[]): RailLayoutNode[] {
   const seenKeys = new Set<string>();
   const seenFolders = new Set<string>();
@@ -168,12 +127,7 @@ export function normalizeLayout(nodes: RailLayoutNode[]): RailLayoutNode[] {
   return out;
 }
 
-/**
- * Build the working layout from the stored one plus the currently-live item
- * keys: appends any live key the layout doesn't know about (newly joined
- * server / community) as a top-level item at the end. Never removes unknown
- * keys.
- */
+/** Append live keys the layout doesn't know as top-level items. Never removes unknown keys. */
 export function mergeLayout(stored: RailLayoutNode[], liveKeys: string[]): RailLayoutNode[] {
   const out = normalizeLayout(stored);
   const known = new Set(flattenLayout(out));
@@ -200,24 +154,16 @@ function detachKey(nodes: RailLayoutNode[], key: string): RailLayoutNode[] {
 }
 
 /**
- * Drop an item key from the layout entirely — the counterpart to a removal
- * from the source list (leaving a community, removing a server).
- *
- * Unlike the render-time filter, this is destructive on purpose. The layout
- * otherwise keeps keys it doesn't recognize forever, so without this a user
- * who left a community and later rejoined it would find it back in whatever
- * folder it used to live in, at its old position.
+ * Remove a key entirely when leaving a community/server. Destructive on purpose,
+ * or a rejoin would resurrect it in its old folder.
  */
 export function removeKey(nodes: RailLayoutNode[], key: string): RailLayoutNode[] {
   return normalizeLayout(detachKey(nodes, key));
 }
 
 /**
- * Random id for a newly-created folder. `crypto.randomUUID` is a
- * secure-context-only API — it is UNDEFINED when the client is served over
- * plain http on a non-localhost host (a `./start.sh` box reached by LAN IP),
- * which made every folder-creating drop throw mid-gesture. `getRandomValues`
- * works in insecure contexts, so fall back to it.
+ * Random folder id. `crypto.randomUUID` is undefined in insecure contexts
+ * (plain http over LAN), so fall back to `getRandomValues`.
  */
 function generateFolderId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -225,18 +171,13 @@ function generateFolderId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * Apply a completed drag to the layout, returning the new normalized layout.
- * `newFolderId` supplies the id for a folder created by a combine drop
- * (injectable for tests; defaults to a random UUID).
- */
+/** Apply a drop and normalize. `newFolderId` is injectable for tests. */
 export function applyDrop(
   nodes: RailLayoutNode[],
   source: RailDragSource,
   target: RailDropTarget,
   newFolderId?: string,
 ): RailLayoutNode[] {
-  // No-op guards: dropping a node onto its own anchor.
   const sourceAnchor = source.kind === "item" ? itemAnchor(source.key) : folderAnchor(source.id);
   if (target.type === "before" && target.anchor === sourceAnchor) return normalizeLayout(nodes);
 
@@ -306,7 +247,6 @@ function insertTopLevel(
   return out;
 }
 
-/** Rename a folder. */
 export function renameFolder(nodes: RailLayoutNode[], id: string, name: string): RailLayoutNode[] {
   return nodes.map((n) => (n.type === "folder" && n.id === id ? { ...n, name } : n));
 }
@@ -324,18 +264,12 @@ export function dissolveFolder(nodes: RailLayoutNode[], id: string): RailLayoutN
   return normalizeLayout(out);
 }
 
-// ─── Drag geometry ───────────────────────────────────────────────────────
-
-/**
- * A rendered rail slot, frozen at drag pickup. Top-level items, folder
- * buttons/headers, and the children of expanded folders each contribute one.
- */
+/** A rendered rail slot, frozen at drag pickup. */
 export interface RailSlot {
   /** `item:<key>` or `folder:<id>`. */
   anchor: string;
   /** Set when this slot is a child inside an expanded folder. */
   parentFolderId?: string;
-  /** Viewport Y of the slot's top edge. */
   top: number;
   height: number;
 }
@@ -350,23 +284,15 @@ export interface RailDropPlan {
 }
 
 /**
- * Fraction of an ITEM slot's height (centered) that counts as its "combine"
- * band; the rest of the slot + the gaps between slots are reorder zones.
- * Folders accept a drop across their FULL rect (hovering a folder means
- * "put it in there" — reordering around it uses the gaps), which keeps the
- * into-folder drop forgiving, especially under a finger.
+ * Centered fraction of an item slot that means "combine"; the rest are reorder
+ * zones. Folders accept drops over their full rect (forgiving under a finger).
  */
 const ITEM_COMBINE_BAND = 0.7;
 
 /**
- * Given the pointer's viewport Y, the frozen slots, and what is being
- * dragged, decide where the drop would land — Discord semantics:
- *
- * - Anywhere over a folder drops into that folder; the middle band of an
- *   item combines the two into a new folder.
- * - Everywhere else is a gap: insert before the nearest slot below the
- *   pointer (inside a folder when that slot is a folder child), or at the end.
- * - Folders themselves only reorder at the top level.
+ * Where a drop at viewport `y` lands (Discord semantics): over a folder → into
+ * it; an item's middle band → combine into a new folder; otherwise insert
+ * before the nearest slot below. Folders only reorder at the top level.
  */
 export function planDrop(y: number, slots: RailSlot[], source: RailDragSource): RailDropPlan | null {
   // Exclude the dragged node's own slot(s); folders only see top-level slots.
@@ -378,7 +304,6 @@ export function planDrop(y: number, slots: RailSlot[], source: RailDragSource): 
   });
   if (eligible.length === 0) return null;
 
-  // 1. Combine / into-folder bands (items only).
   if (source.kind === "item") {
     const band = eligible.find((s) => {
       const frac = s.anchor.startsWith("folder:") ? 1 : ITEM_COMBINE_BAND;
@@ -418,7 +343,6 @@ export function planDrop(y: number, slots: RailSlot[], source: RailDragSource): 
     }
   }
 
-  // 2. Gap: before the first slot whose center is below the pointer.
   for (const s of eligible) {
     if (y < s.top + s.height / 2) {
       if (s.parentFolderId !== undefined) {

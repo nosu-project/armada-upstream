@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 
-/**
- * Only one mounted composer may consume a document-level paste. This matters
- * when a channel and its open thread panel each render their own composer.
- */
+/** Only one composer may consume a document-level paste (channel + thread panel). */
 let pasteOwner: symbol | undefined;
 const mountedComposers: symbol[] = [];
 
@@ -20,9 +17,8 @@ function imageFiles(event: ClipboardEvent): File[] {
 }
 
 /**
- * Capture image clipboard files even when the composer textarea is not focused.
- * Editable controls keep their native paste behavior, and a paste already
- * handled by the textarea is ignored when it bubbles to `document`.
+ * Capture pasted images even when the textarea isn't focused. Editable controls keep native
+ * paste; pastes the textarea already handled are ignored.
  */
 export function useGlobalImagePaste(onImages: (files: File[]) => void): () => void {
   const id = useRef(Symbol("chat-composer"));

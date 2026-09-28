@@ -1,21 +1,15 @@
 /**
- * Buzz HTTP bridge auth: NIP-98 signed requests.
- *
- * Buzz relays expose HTTP endpoints (invite claim/mint, /query, /events)
- * authenticated with NIP-98 — a kind-27235 event carrying the request URL,
- * method, and (for bodies) a `payload` tag with the body's SHA-256, base64'd
- * into an `Authorization: Nostr …` header.
+ * Buzz HTTP bridge auth: NIP-98 (kind-27235, with a `payload` SHA-256 tag for
+ * bodies) sent as `Authorization: Nostr <base64>`.
  */
 
 import type { NostrSigner } from "@nostrify/nostrify";
 
-/** SHA-256 of a UTF-8 string, hex-encoded. */
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Build the `Authorization: Nostr <base64>` header value for a request. */
 export async function nip98AuthHeader(
   signer: NostrSigner,
   url: string,

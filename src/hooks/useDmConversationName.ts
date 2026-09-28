@@ -1,24 +1,15 @@
 /**
- * The display name of a DM conversation, resolved from every participant.
- *
- * A 1:1 needed one profile; a group needs all of them, and it needs them the
- * same way the row already resolves one — store-first through the shared
- * `['author', pubkey]` cache, with the network half declared to the profile
- * sync topic. `useQueries` is how that generalizes without a hook per
- * participant: the participant set can change between renders (opening a
- * different conversation, a group gaining a member) and `useQueries` takes the
- * list as data rather than as call sites.
- *
- * `metadata` is returned alongside the name for the 1:1 case, whose row still
- * wants the avatar shape and the bot pill from that one profile. A group has no
- * single profile to take either from, so it is undefined there.
+ * Display name of a DM conversation from every participant, via the shared
+ * `['author', pubkey]` cache. `useQueries` handles a participant set that changes between
+ * renders. `metadata`/`emojiTags` are only set for a 1:1.
  */
 
 import { useNostr } from "@nostrify/react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { authorQueryOptions, type AuthorResult } from "@/hooks/useAuthor";
+import { authorQueryOptions } from "@/hooks/useAuthor";
+import type { AuthorResult } from "@/lib/authorCache";
 import { useEventStore } from "@/hooks/useEventStore";
 import { NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import {
@@ -35,19 +26,9 @@ export interface DmConversationName {
   name: string;
   /** Every participant's name/display-name/NIP-05/pubkey alias for launchers. */
   searchText: string;
-  /** Each participant's name, in the conversation's own (sorted) order. */
   names: string[];
-  /** The single participant's profile, for a 1:1 only. */
   metadata: NostrMetadata | undefined;
-  /**
-   * The single participant's kind-0 tags, for a 1:1 only — what resolves NIP-30
-   * custom emoji in their display name.
-   *
-   * Returned from here rather than left to the caller's own `useAuthor` so a
-   * conversation row resolves each profile ONCE. A row already pays a profile
-   * query per participant through the avatar; a second lookup for the same
-   * pubkey doubled that on every row of the list.
-   */
+  /** Kind-0 tags for NIP-30 emoji in the name; returned here so each profile resolves once per row. */
   emojiTags: string[][] | undefined;
 }
 
@@ -91,8 +72,6 @@ export function useDmConversationName(
   }, [peerKey, resultsKey]);
 
   return useMemo(() => {
-    // The conversation with yourself is Note to Self throughout, not a thread
-    // with your own profile.
     if (targets.length === 1 && targets[0] === selfPubkey) {
       return {
         name: NOTE_TO_SELF_NAME,

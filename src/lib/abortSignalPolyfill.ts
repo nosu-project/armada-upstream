@@ -1,26 +1,7 @@
-// AbortSignal statics for WebViews that predate them.
-//
-// The client composes nearly every relay read's deadline as
-// `AbortSignal.any([signal, AbortSignal.timeout(ms)])` — some eighty call
-// sites. `AbortSignal.any` reached Chromium in 116 (Aug 2023), and Android
-// System WebView is updated independently of the OS, so a phone can run a
-// current Android with a WebView that lacks it: a stock Android 13 Samsung
-// was reported failing "Use this relay" with `AbortSignal.any is not a
-// function` out of the portable-state mirror. `AbortSignal.timeout` is older
-// (Chromium 103) but sits in the same expression, so a WebView old enough to
-// miss one may miss the other; both are filled here.
-//
-// Installed by `src/polyfills.ts`, which `main.tsx` imports FIRST so the
-// statics exist before any module that reads them evaluates. Nothing is
-// touched where the native implementation exists — the polyfill is not a
-// replacement, only a fallback — so evergreen browsers, Electron and the test
-// runtime (Node 22) never see it.
-//
-// The one behavioural gap: the native `any` holds its sources weakly, so a
-// long-lived source signal does not retain every dependent ever derived from
-// it. The fallback registers a listener per call and removes it when ANY
-// source aborts. Every call site pairs the long-lived signal with a timeout,
-// so the listener lives at most as long as that deadline.
+// AbortSignal.any/timeout fallbacks for old Android System WebViews (`any` is
+// Chromium 116+). Installed first by `src/polyfills.ts`; no-op where native.
+// Unlike native `any`, the fallback holds sources strongly until one aborts;
+// call sites always pair with a timeout, bounding that.
 
 /** `AbortSignal.any`: a signal that aborts when any of `signals` does. */
 export function abortSignalAny(signals: Iterable<AbortSignal>): AbortSignal {

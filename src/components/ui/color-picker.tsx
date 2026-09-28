@@ -7,22 +7,14 @@ import { cn } from '@/lib/utils';
 interface ColorPickerProps {
   /** Current color in hex format (#RRGGBB) */
   value: string;
-  /** Called with new hex color */
   onChange: (hex: string) => void;
-  /** Optional label */
   label?: string;
-  /** Optional className for the trigger */
   className?: string;
-  /** Disable the picker */
   disabled?: boolean;
 }
 
 const HEX_REGEX = /^#[0-9a-fA-F]{6}$/;
 
-/**
- * Color picker with a swatch trigger and popover containing a gradient area,
- * hue slider, and hex input.
- */
 export function ColorPicker({ value, onChange, label, className, disabled }: ColorPickerProps) {
   const [localHex, setLocalHex] = React.useState(value);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -32,14 +24,12 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
   const [isDraggingHue, setIsDraggingHue] = React.useState(false);
   const [popoverOpen, setPopoverOpen] = React.useState(false);
 
-  // Sync external value changes
   React.useEffect(() => {
     setLocalHex(value);
     setHue(hexToHue(value));
   }, [value]);
 
-  // Draw the saturation/lightness gradient.
-  // Uses requestAnimationFrame to ensure the canvas is in the DOM after popover opens.
+  // rAF so the canvas is in the DOM after the popover mounts.
   React.useEffect(() => {
     if (!popoverOpen) return;
 
@@ -52,14 +42,12 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
       const w = canvas.width;
       const h = canvas.height;
 
-      // White to hue (horizontal)
       const gradH = ctx.createLinearGradient(0, 0, w, 0);
       gradH.addColorStop(0, '#ffffff');
       gradH.addColorStop(1, `hsl(${hue}, 100%, 50%)`);
       ctx.fillStyle = gradH;
       ctx.fillRect(0, 0, w, h);
 
-      // Transparent to black (vertical)
       const gradV = ctx.createLinearGradient(0, 0, 0, h);
       gradV.addColorStop(0, 'rgba(0,0,0,0)');
       gradV.addColorStop(1, '#000000');
@@ -67,12 +55,10 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
       ctx.fillRect(0, 0, w, h);
     };
 
-    // Defer drawing to next frame so Radix has time to mount the portal content
     const raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, [hue, popoverOpen]);
 
-  // Draw the hue bar when popover opens
   React.useEffect(() => {
     if (!popoverOpen) return;
 
@@ -96,7 +82,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
     return () => cancelAnimationFrame(raf);
   }, [popoverOpen]);
 
-  /** Extract clientX/clientY from either a mouse or touch event. */
   const getPointer = (e: MouseEvent | TouchEvent | React.MouseEvent | React.TouchEvent) => {
     if ('touches' in e) {
       const touch = e.touches[0] ?? (e as TouchEvent).changedTouches[0];
@@ -116,7 +101,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
 
       const s = x * 100;
       const v = (1 - y) * 100;
-      // HSV to HSL conversion
       const l = v * (1 - s / 200);
       const sl = l === 0 || l === 100 ? 0 : ((v - l) / Math.min(l, 100 - l)) * 100;
 
@@ -137,7 +121,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
       const newHue = Math.round(x * 360);
       setHue(newHue);
 
-      // Re-derive color with new hue but keep sat/light from current value
       const { s, l } = hexToHSL(localHex);
       const hex = hslToHex(newHue, s, l);
       setLocalHex(hex);
@@ -146,7 +129,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
     [localHex, onChange],
   );
 
-  // Global mouse + touch handlers for dragging
   React.useEffect(() => {
     if (!isDraggingSL && !isDraggingHue) return;
 
@@ -181,9 +163,7 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
     }
   };
 
-  // Compute the SL picker indicator position
   const { s, l } = hexToHSL(value);
-  // HSL to HSV for positioning
   const v = l + s * Math.min(l, 100 - l) / 100;
   const sv = v === 0 ? 0 : 2 * (1 - l / v);
   const indicatorX = sv * 100;
@@ -203,12 +183,10 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
             className,
           )}
         >
-          {/* Color circle swatch */}
           <div
             className="relative size-12 rounded-full border-2 border-border shadow-sm cursor-pointer transition-all group-hover:scale-105 group-hover:shadow-md group-hover:border-foreground/20 shrink-0"
             style={{ backgroundColor: value }}
           >
-            {/* Edit overlay */}
             <div className="absolute inset-0 rounded-full flex items-center justify-center transition-colors">
               <Pencil className="size-3.5 text-white drop-shadow-sm" />
             </div>
@@ -222,7 +200,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-3 space-y-3" align="center" sideOffset={8} onOpenAutoFocus={(e) => e.preventDefault()}>
-        {/* Saturation/Lightness area */}
         <div className="relative w-full aspect-square rounded-lg overflow-hidden cursor-crosshair">
           <canvas
             ref={canvasRef}
@@ -238,14 +215,12 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
               handleSLInteraction(e);
             }}
           />
-          {/* Indicator */}
           <div
             className="absolute size-4 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.3)] pointer-events-none -translate-x-1/2 -translate-y-1/2"
             style={{ left: `${indicatorX}%`, top: `${indicatorY}%` }}
           />
         </div>
 
-        {/* Hue slider */}
         <div className="relative w-full h-3 rounded-full overflow-hidden cursor-pointer">
           <canvas
             ref={hueRef}
@@ -267,7 +242,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
           />
         </div>
 
-        {/* Hex input */}
         <div className="flex items-center gap-2">
           <div
             className="size-8 rounded-md border border-border shrink-0"
@@ -285,8 +259,6 @@ export function ColorPicker({ value, onChange, label, className, disabled }: Col
     </Popover>
   );
 }
-
-// ─── Color Helpers (local, lightweight) ────────────────────────────────
 
 function hexToHue(hex: string): number {
   return hexToHSL(hex).h;

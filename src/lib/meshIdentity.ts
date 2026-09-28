@@ -1,48 +1,23 @@
 /**
- * Display identity for Bluetooth-mesh peers.
- *
- * Mesh peers are NOT Nostr identities, so they can't go through the kind-0
- * author/profile resolution the rest of the app uses. Instead we derive a
- * stable, human-friendly identity purely from the mesh peer id:
- *
- *   - a default "anon<4hex>" nickname (incognito), stable per device because the
- *     peer id is derived from the device's persistent Noise key fingerprint;
- *   - a deterministic color (djb2 → HSV), ported from bitchat so Armada and
- *     bitchat assign the SAME color to the same peer;
- *   - a short "#abcd" suffix so two peers who pick the same nickname (or both
- *     run incognito) stay visually distinct and individually @-referenceable.
- *
- * Keeping this self-contained means none of it leaks into the Nostr identity
- * path (`useAuthor`/`useScopedIdentity`): the mesh UI passes the resolved
- * identity into the shared message row as an explicit override.
+ * Display identity for Bluetooth-mesh peers (not Nostr identities), derived from
+ * the peer id: `anon<4hex>` nickname, bitchat-compatible color, and a `#abcd`
+ * suffix to disambiguate. Kept separate from the Nostr identity path.
  */
 
 /** Self color, matching bitchat's reserved orange for "me". */
 export const MESH_SELF_COLOR = "#ff9500";
 
-/**
- * The incognito nickname for a peer id: `anon` + the first 4 hex chars of the
- * id (lowercased). Stable across sessions because the peer id is derived from
- * the device's persistent Noise key fingerprint.
- */
+/** `anon` + first 4 hex chars of the id; stable because the id derives from the persistent Noise key. */
 export function meshAnonName(peerID: string): string {
   return `anon${peerID.slice(0, 4).toLowerCase()}`;
 }
 
-/**
- * A short disambiguating suffix (`abcd`) for a peer id — the last 4 hex chars,
- * lowercased. Rendered muted after the name (e.g. "Alice #3f9a") so identically
- * named peers stay distinct and individually referenceable.
- */
+/** Last 4 hex chars of the id, shown after the name to distinguish same-named peers. */
 export function meshSuffix(peerID: string): string {
   return peerID.slice(-4).toLowerCase();
 }
 
-/**
- * djb2 hash of a UTF-8 string as an unsigned 64-bit value. BigInt is used so
- * the 2^64 wraparound matches the Kotlin/iOS bitchat implementation exactly
- * (and therefore yields the same colors).
- */
+/** djb2 as unsigned 64-bit; BigInt so wraparound (and colors) match bitchat's Kotlin/iOS exactly. */
 function djb2(seed: string): bigint {
   let hash = 5381n;
   const mask = (1n << 64n) - 1n;
@@ -70,36 +45,24 @@ function hsvToHex(h: number, s: number, v: number): string {
 }
 
 /**
- * A deterministic display color for a mesh peer, ported from bitchat
- * (`colorForPeerSeed`). The peer id is seeded as `noise:<id>` so it matches
- * bitchat's mesh-peer seeding. Orange (~30°) is nudged away because it's
- * reserved for "me". The app is dark-themed, so the dark variant is used.
+ * Deterministic color, ported from bitchat `colorForPeerSeed` (seed `noise:<id>`).
+ * Orange is nudged away (reserved for self). Dark-theme variant.
  */
 export function meshColor(peerID: string): string {
   const hash = djb2(`noise:${peerID.toLowerCase()}`);
   let hue = Number(hash % 360n) / 360;
   const orange = 30 / 360;
   if (Math.abs(hue - orange) < 0.05) hue = (hue + 0.12) % 1.0;
-  // Dark-theme saturation/value from bitchat (the app is dark by default).
   return hsvToHex(hue * 360, 0.5, 0.85);
 }
 
-/** A mesh peer's resolved display identity (name + color + disambiguator). */
 export interface MeshIdentity {
-  /** The name to show (announced nickname, or the anon fallback). */
   name: string;
-  /** Deterministic color derived from the peer id. */
   color: string;
-  /** Short `#abcd` disambiguating suffix (peer-id tail). */
   suffix: string;
 }
 
-/**
- * Resolve a peer's display identity from its id and announced nickname. When a
- * peer announces no usable nickname (or announced its own anon name), the
- * stable `anon<4hex>` fallback is used. `isSelf` swaps in the reserved self
- * color.
- */
+/** Resolve display identity; falls back to `anon<4hex>` without a usable nickname. */
 export function meshIdentity(
   peerID: string,
   nickname: string | undefined,
@@ -114,30 +77,15 @@ export function meshIdentity(
   };
 }
 
-/**
- * The `@`-mention token for a peer: `@<name>#<suffix>` (e.g. `@anon3f9a#6f70`).
- * Matches bitchat's `nick#abcd` disambiguation convention and is plain text, so
- * it survives the BLE wire and reads sensibly on bitchat clients too. The
- * suffix pins the mention to a specific device even when two peers share a name.
- */
+/** `@<name>#<suffix>` — bitchat's plain-text convention, pinned to a device by the suffix. */
 export function meshMentionToken(identity: MeshIdentity): string {
   return `@${identity.name}#${identity.suffix}`;
 }
 
-/**
- * Matches a mesh mention token in message text: `@name#abcd`. The name allows
- * letters, digits, underscore, hyphen and dot (covers `anon3f9a`, `armada-…`,
- * and NIP-05-ish names); the suffix is exactly 4 hex chars. Global + unicode so
- * the renderer can walk every mention. `g` state is reset by the caller.
- */
+/** Matches `@name#abcd` mentions. Global: callers reset `lastIndex`. */
 export const MESH_MENTION_REGEX = /@([\p{L}\p{N}_.-]+)#([0-9a-f]{4})/giu;
 
-/**
- * Whether a message body mentions the local user, by matching any
- * `@name#suffix` token against our own suffix (the peer-id tail is unique per
- * device, so the suffix alone is a reliable self-check). Returns false when we
- * don't yet know our own peer id.
- */
+/** Whether `content` mentions us, matched by our unique suffix. False without our peer id. */
 export function meshMentionsMe(content: string, myPeerID: string | null): boolean {
   if (!myPeerID) return false;
   const mySuffix = meshSuffix(myPeerID);

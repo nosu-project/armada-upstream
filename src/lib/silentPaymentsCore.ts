@@ -1,42 +1,16 @@
 /**
- * BIP352 Silent Payments — dependency-light core.
- *
- * Address decoding and validation for silent payment addresses (`sp1…`
- * mainnet, `tsp1…` testnets), plus the bech32m (BIP350) primitives shared
- * with the encode side in `@/lib/silentPayments`.
- *
- * This module is deliberately free of `@scure/btc-signer` so callers on the
- * initial-load path (payment-target validation, campaign parsing) can
- * validate addresses without pulling the ~150 kB transaction-signing stack
- * into the entry bundle. Its only dependency is `@noble/curves/secp256k1`,
- * which is already loaded eagerly via `nostr-tools`.
- *
- * The full sender-side derivation (ECDH, output tweaking, PSBT plumbing)
- * lives in `@/lib/silentPayments`, which re-exports everything here.
+ * BIP352 Silent Payments — address decoding/validation (`sp1…` / `tsp1…`) and
+ * bech32m (BIP350) primitives. Kept free of `@scure/btc-signer` so initial-load
+ * callers avoid the ~150 kB signing stack; `@/lib/silentPayments` has the
+ * sender-side derivation and re-exports this.
  */
 import { schnorr } from '@noble/curves/secp256k1.js';
 
-/**
- * secp256k1 Point class (used for compressed-point validation).
- *
- * `@noble/curves` v1 exposed the projective-point constructor as
- * `secp256k1.ProjectivePoint`; v2 moved it to `schnorr.Point`. We use the
- * v2 export to match the rest of the armada codebase.
- */
+/** noble-curves v2 location of the secp256k1 Point class. */
 const Point = schnorr.Point;
 
-// ---------------------------------------------------------------------------
-// bech32m (BIP350) — variant for silent payment addresses (BIP352)
-// ---------------------------------------------------------------------------
-//
-// BIP352 uses bech32m, but unlike segwit addresses (BIP173/BIP350):
-//   - the witness version may be 0..31 (segwit caps at 0..16),
-//   - the encoded payload has no 90-char hard limit; a 1023-char ceiling is
-//     suggested for forward compatibility,
-//   - the HRP is "sp" / "tsp" rather than "bc" / "tb".
-//
-// We therefore can't reuse bech32 from a segwit library and must implement
-// the small bit of base32+checksum logic ourselves.
+// bech32m for BIP352: unlike segwit, version is 0..31, the length cap is 1023
+// (not 90), and HRP is "sp"/"tsp" — so segwit bech32 libraries don't fit.
 
 export const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 
@@ -110,10 +84,6 @@ export function isValidCompressedPoint(bytes: Uint8Array): boolean {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Silent payment address decoding
-// ---------------------------------------------------------------------------
-
 /** Network of a silent payment address. */
 export type SilentPaymentNetwork = 'mainnet' | 'testnet';
 
@@ -124,16 +94,10 @@ export interface SilentPaymentAddress {
   network: SilentPaymentNetwork;
   /** Silent-payment-version (0 for `sp1q…`). */
   version: number;
-  /**
-   * Receiver's scan pubkey (33-byte compressed sec).
-   * Used as the multiplicand in the ECDH step.
-   */
+  /** Receiver's scan pubkey (33-byte compressed); the ECDH multiplicand. */
   scanPubKey: Uint8Array;
   /**
-   * Receiver's spend pubkey (33-byte compressed sec). When the address is
-   * labelled, this is the labelled `B_m`, not the raw `B_spend`. From the
-   * sender's perspective the two are interchangeable.
-   */
+  /** Receiver's spend pubkey (33-byte compressed); `B_m` if labelled, equivalent for senders. */
   spendPubKey: Uint8Array;
 }
 
@@ -145,20 +109,9 @@ export function isSilentPaymentAddress(s: string): boolean {
 }
 
 /**
- * Decode a BIP352 silent payment address.
- *
- * Throws on:
- *   - mixed case,
- *   - invalid characters,
- *   - bad checksum,
- *   - unknown HRP,
- *   - version 31 (reserved for breaking changes),
- *   - data part shorter than 66 bytes after the version,
- *   - silent payment v0 with a payload that isn't exactly 66 bytes,
- *   - scan or spend pubkey not on the curve.
- *
- * The decoder accepts (but ignores) trailing bytes for v1–v30 per the BIP's
- * forward-compatibility rule.
+ * Decode a BIP352 silent payment address. Throws on mixed case, bad chars or
+ * checksum, unknown HRP, reserved version 31, short payload, v0 payload ≠ 66
+ * bytes, or off-curve keys. Trailing bytes are ignored for v1–v30.
  */
 export function decodeSilentPaymentAddress(addr: string): SilentPaymentAddress {
   if (typeof addr !== 'string' || addr.length === 0) {
@@ -249,12 +202,7 @@ export function decodeSilentPaymentAddress(addr: string): SilentPaymentAddress {
   return { hrp, network, version, scanPubKey, spendPubKey };
 }
 
-/**
- * Best-effort validator. Returns `true` iff the string is a syntactically
- * valid silent payment address (bech32m + curve checks). Use for inline
- * form validation where pickers may speculatively check half-typed addresses
- * and a thrown error is the wrong UX signal.
- */
+/** Non-throwing validator for inline form validation of possibly half-typed input. */
 export function validateSilentPaymentAddress(addr: string): boolean {
   try {
     decodeSilentPaymentAddress(addr);

@@ -1,10 +1,6 @@
 /**
- * Cross-platform share + clipboard.
- *
- * On the native APK these route through Capacitor's plugins (the Android System
- * WebView often doesn't expose the Web Share API, so `navigator.share` is
- * unavailable and sharing silently falls back to a copy). On the web we use the
- * Web Share / Clipboard APIs when present.
+ * Cross-platform share + clipboard. Native uses Capacitor plugins because the
+ * Android System WebView often lacks `navigator.share`.
  */
 
 import { Capacitor } from "@capacitor/core";
@@ -20,12 +16,7 @@ export function canShare(): boolean {
   return typeof navigator !== "undefined" && "share" in navigator;
 }
 
-/**
- * True when the share sheet can carry a FILE, not just a link. Narrower than
- * {@link canShare}: Web Share Level 2 is missing on desktop Firefox and older
- * Safari, so the caller must be able to hide the affordance rather than offer
- * one that does nothing.
- */
+/** True when the sheet can carry a FILE (Web Share Level 2 is missing on desktop Firefox / older Safari). */
 export function canShareFiles(): boolean {
   if (native) return true;
   if (typeof navigator === "undefined" || typeof navigator.canShare !== "function") return false;
@@ -37,9 +28,8 @@ export function canShareFiles(): boolean {
 }
 
 /**
- * Open the native share sheet (or Web Share API). Resolves true if the share
- * was presented, false if it couldn't be (so callers can fall back to copy).
- * A user-cancelled share still counts as presented.
+ * Open the share sheet. Resolves false if it couldn't be presented (so callers
+ * can fall back to copy); a user cancel counts as presented.
  */
 export async function share(opts: {
   title?: string;
@@ -56,9 +46,7 @@ export async function share(opts: {
         dialogTitle: opts.dialogTitle ?? opts.title,
       });
     } catch {
-      // Cancelled, or failed after the sheet was up — the plugin doesn't
-      // distinguish them, and falling back to a copy on a cancel would be
-      // worse than doing nothing.
+      // Cancel and post-open failure are indistinguishable; don't fall back on a cancel.
     }
     return true;
   }
@@ -67,10 +55,8 @@ export async function share(opts: {
       await navigator.share({ title: opts.title, text: opts.text, url: opts.url });
       return true;
     } catch (e) {
-      // AbortError is the user closing a sheet that DID open. Anything else —
-      // NotAllowedError when an await upstream consumed the click's transient
-      // activation, TypeError on bad data — means no sheet was ever shown, so
-      // report false and let the caller fall back to copy instead of nothing.
+      // AbortError = user closed an opened sheet. Others (e.g. NotAllowedError
+      // after lost transient activation) mean no sheet was shown.
       return (e as Error | null)?.name === "AbortError";
     }
   }
@@ -78,22 +64,10 @@ export async function share(opts: {
 }
 
 /**
- * Share the CONTENTS of a media `src` — the file itself, not a link to it.
- *
- * A link is the wrong thing to hand over for most attachments here: an
- * encrypted one's `url` names ciphertext on a Blossom host and the decryption
- * key never leaves the client, so the recipient gets bytes they can't read; and
- * a `blob:` src has no meaning outside this document at all. The bytes are
- * already local by the time a lightbox can offer this, so sending them is both
- * correct and cheap.
- *
- * Native writes a transient copy to the cache directory and hands the system
- * sheet its file URI — Capacitor's Share plugin takes paths, not blobs. Web
- * uses `navigator.share({ files })`.
- *
- * Resolves false when no file-capable sheet exists or the bytes couldn't be
- * read, so callers can fall back instead of silently doing nothing. A
- * user-cancelled share counts as presented (true), matching {@link share}.
+ * Share the CONTENTS of a media `src`, not a link (encrypted URLs point at
+ * ciphertext; `blob:` URLs mean nothing elsewhere). Native writes a cache copy
+ * since Capacitor Share takes paths. Resolves false when unavailable or
+ * unreadable; a cancel counts as presented.
  */
 export async function shareFile(
   src: string,
@@ -105,9 +79,7 @@ export async function shareFile(
     const res = await fetch(src);
     if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
     bytes = new Uint8Array(await res.arrayBuffer());
-    // Type and extension are what make the sheet render a thumbnail instead of
-    // a blank document, and both are frequently missing upstream — so fall
-    // back to the transport's claim, then to the bytes themselves.
+    // Type/extension drive the sheet's thumbnail: fall back to header, then sniffing.
     const declared = res.headers.get("content-type")?.split(";")[0].trim();
     mime = mime || (declared && declared !== "application/octet-stream" ? declared : undefined) ||
       sniffImageMime(bytes);
@@ -120,13 +92,8 @@ export async function shareFile(
     let uri: string;
     try {
       const { Filesystem, Directory } = await import("@capacitor/filesystem");
-      // Cache, not Documents: this copy exists only to feed the share sheet and
-      // the OS may reclaim it. Keeping a copy is what the download button does.
-      //
-      // The name is reduced to a bare filename at the write as well as where it
-      // is derived: the plugin resolves whatever path it is handed against the
-      // base directory without a containment check, and the cache directory's
-      // siblings are the databases and preferences.
+      // Cache dir: transient copy. safeFilename again at the write because the
+      // plugin doesn't contain paths, and the cache's siblings are the databases.
       ({ uri } = await Filesystem.writeFile({
         path: safeFilename(filename),
         data: bytesToBase64(bytes),
@@ -143,8 +110,7 @@ export async function shareFile(
         dialogTitle: opts.dialogTitle ?? opts.title,
       });
     } catch {
-      // Cancelled, or failed after the sheet was up — indistinguishable, and
-      // falling back to a download on a cancel would be worse than doing nothing.
+      // Cancel is indistinguishable from failure; don't fall back on a cancel.
     }
     return true;
   }
@@ -156,17 +122,12 @@ export async function shareFile(
     await navigator.share({ files: [file], title: opts.title, text: opts.text });
     return true;
   } catch (e) {
-    // Same distinction as `share`: AbortError = cancelled a sheet that opened;
-    // anything else = no sheet, so the caller should offer its fallback.
+    // AbortError = cancelled an opened sheet; anything else = no sheet.
     return (e as Error | null)?.name === "AbortError";
   }
 }
 
-/**
- * Open an external URL. On native, use the share sheet (the WebView's
- * `window.open` doesn't always hand off to the system browser); on web,
- * open in a new tab.
- */
+/** Open an external URL; native uses the share sheet since WebView `window.open` may not hand off. */
 export async function openUrl(url: string): Promise<void> {
   if (native) {
     await Share.share({ url });

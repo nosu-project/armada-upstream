@@ -12,25 +12,10 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { logSync } from "@/lib/syncLog";
 
 /**
- * Keeps a connected Concord call in lockstep with the live vault + Control
- * fold (CORD-07 §1/§7). The connected room is a join-time snapshot; this
- * watcher compares it against the community's LIVE state and:
- *
- *   - REJOINS at the fresh coordinates when the channel's epoch/room rolled
- *     (a Rekey/Refounding severs a removed member only if everyone else moves
- *     to the new room — `joinConcordCall` with the fresh channel remounts the
- *     connection via CallProvider's epoch-keyed remount);
- *   - HANGS UP when the folded Banlist or the coalesced Guestbook names this
- *     membership, when the vault entry is gone (left, or the compliant
- *     self-removal ran), or when the channel left the live view (deleted /
- *     rotated key withheld). A kick rotates nothing, so unlike a ban's
- *     Refounding this hang-up is the ONLY thing that ends a kicked member's
- *     call.
- *
- * Mounted by ConcordVoiceRoom, so it runs exactly while a call is connected —
- * app-level, independent of which page the user is on. One action per mount:
- * a rejoin remounts the room (a fresh watcher takes over) and a leave tears
- * it down.
+ * Keeps a connected Concord call in step with the live vault + Control fold
+ * (CORD-07 §1/§7): REJOINS on an epoch/room roll, HANGS UP on ban, Guestbook
+ * removal, vault removal, or channel loss. A kick rotates nothing, so this
+ * hang-up is the ONLY thing that ends a kicked member's call.
  */
 export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void {
   const { joinConcordCall } = useCall();
@@ -40,9 +25,7 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
   const entry = useCommunityEntry(ctx.community.idHex);
   const { data: folded } = useControlFold(community);
   const { coalesced } = useGuestbook(community);
-  // Keyed on the join-time snapshot, not the live `community` (which goes
-  // undefined the moment the owner's dissolve drops the vault entry) — the
-  // grave outlives the entry, and the check below must still see it.
+  // Keyed on the join-time snapshot: the live `community` vanishes on dissolve, but the grave outlives it.
   const { data: dissolvedAtMs } = useDissolved(ctx.community);
   const channels = useMemo(() => (community ? channelsView(community, folded) : []), [community, folded]);
   const acted = useRef(false);
@@ -79,8 +62,7 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
       "voice",
       `${ctx.community.idHex.slice(0, 8)} call sync: epoch rolled — rejoining #${decision.channel.name} at epoch ${decision.channel.current.epoch}`,
     );
-    // Keep the current broker; the §5 rendezvous migration effect re-runs in
-    // the remounted room if presence points somewhere better.
+    // Keep the current broker; §5 migration re-runs in the remounted room.
     joinConcordCall({ community: decision.community, channel: decision.channel, broker: ctx.broker });
   }, [ctx, listData, community, folded, coalesced, channels, entry, user, dissolvedAtMs, onLeave, joinConcordCall]);
 }

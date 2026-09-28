@@ -1,20 +1,9 @@
 /**
- * Titled posts and the forum feed — CORD-03 §3.
- *
- * A forum post is an ordinary kind-9 message carrying a `["subject", <title>]`
- * tag (NIP-14, the tag NIP-17 reuses). The `content` is the body and its
- * kind-1111 threaded replies are its comments, so a post is one publish with
- * no partial state, and "is this a post?" is a tag check rather than an
- * inference over structure. A client without forum support renders it as a
- * normal message with a thread under it and loses nothing.
- *
- * The tag marks the MESSAGE; the channel's `view` (`channelView.ts`) only
- * chooses which presentation the channel opens to. A titled post in a chat
- * channel renders with its title in the timeline, and a bare message in a
- * forum channel is timeline chatter behind the feed. Both are well-formed.
- *
- * Everything here is pure: the feed is a different ARRANGEMENT of the same
- * folded output the timeline shows, not a second decode path.
+ * Titled posts and the forum feed — CORD-03 §3. A forum post is a kind-9 message
+ * with a `["subject", <title>]` tag (NIP-14); its kind-1111 replies are the
+ * comments. Clients without forum support render a normal message with a thread.
+ * The tag marks the MESSAGE; the channel `view` (`channelView.ts`) only picks the
+ * default presentation. Pure: the feed rearranges the same folded output.
  */
 
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
@@ -26,10 +15,7 @@ import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 /** The NIP-14 tag a titled post carries. */
 export const SUBJECT_TAG = "subject";
 
-/**
- * A title, not a name — so wider than the 64-byte name cap — and bounded so a
- * feed row has a known worst case (CORD-03 §3). Counted as UTF-8.
- */
+/** Title cap (wider than the 64-byte name cap), UTF-8 bytes (CORD-03 §3). */
 export const SUBJECT_MAX_BYTES = 256;
 
 const encoder = new TextEncoder();
@@ -39,11 +25,7 @@ function utf8Len(s: string): number {
   return encoder.encode(s).length;
 }
 
-/**
- * Cut a string to at most `maxBytes` of UTF-8 without splitting a code point:
- * the decoder is lossy on a partial sequence, and dropping the partial tail is
- * exactly the intended result.
- */
+/** Cut to at most `maxBytes` of UTF-8 without splitting a code point. */
 export function truncateUtf8(s: string, maxBytes: number): string {
   const bytes = encoder.encode(s);
   if (bytes.length <= maxBytes) return s;
@@ -54,10 +36,8 @@ export function truncateUtf8(s: string, maxBytes: number): string {
 }
 
 /**
- * The post's title, or undefined when the message is not a titled post.
- * Kind 9 only — a threaded reply (1111) is a comment, never a post, whatever
- * tags it carries. Blank titles read as no title; an over-long one is
- * truncated for display, never grounds for dropping the message.
+ * The post's title, or undefined if not a titled post. Kind 9 only (a 1111 is a
+ * comment). Blank reads as none; over-long is truncated, never dropped.
  */
 export function subjectOf(msg: { kind: number; tags: string[][] }): string | undefined {
   if (msg.kind !== KIND_MESSAGE) return undefined;
@@ -74,9 +54,8 @@ export function isTitledPost(msg: { kind: number; tags: string[][] }): boolean {
 }
 
 /**
- * The tags a new post adds to its kind-9 rumor. Throws on a title the spec
- * would truncate rather than silently publishing a clipped one — the composer
- * enforces the same limit so this is the backstop, not the UX.
+ * Tags for a new post's kind-9 rumor. Throws rather than publishing a clipped
+ * title (the composer enforces the same limit).
  */
 export function subjectTags(title: string): string[][] {
   const trimmed = title.replace(/\s+/g, " ").trim();
@@ -96,11 +75,9 @@ export function subjectBytes(title: string): number {
 export type ForumImage = EncryptedRef & { spoiler?: boolean };
 
 /**
- * The images a post carries, in order, for the feed row's gallery preview.
- * Uses the pin extractor's rules (URLs sanitized, local-network hosts and SVG
- * never auto-rendered) since a feed row, like a pin, renders unprompted for
- * every reader of the channel. The spoiler flag is kept so the row can cover
- * the image rather than drop it.
+ * A post's images, in order, for the feed gallery — using the pin extractor's
+ * rules (sanitized URLs, no local-network hosts or SVG), since rows render
+ * unprompted. Spoilers are kept, to be covered.
  */
 export function forumImages(root: { content: string; tags: string[][] }): ForumImage[] {
   return pinAttachmentEntries(root.content, root.tags)
@@ -118,10 +95,8 @@ export function forumImages(root: { content: string; tags: string[][] }): ForumI
 
 /** One post as the feed lists it, derived from the timeline and its threads. */
 export interface ForumPost {
-  /** The post itself (a kind-9 root carrying a subject). */
   root: ChatMsg;
   title: string;
-  /** Comments (threaded replies), excluding the root. */
   replyCount: number;
   /** Newest activity in the post — the newest comment, or the post itself. Unix SECONDS. */
   lastActivityAt: number;
@@ -135,10 +110,8 @@ export interface ForumPost {
 export type ForumSort = "active" | "newest";
 
 /**
- * The feed: every titled post in the loaded window, pinned first, then by
- * `sort` — `active` bumps a post whenever a comment lands (forum-style),
- * `newest` orders by when the post was made. Ties break on the lower id so
- * every client lists one order.
+ * The feed: titled posts in the loaded window, pinned first, then by `sort`
+ * (`active` = latest comment, `newest` = post time); ties on lower id.
  */
 export function forumPosts(
   topLevel: readonly ChatMsg[],
@@ -150,11 +123,8 @@ export function forumPosts(
     const title = subjectOf(root);
     if (!title) continue;
     const replies = repliesFor(root.id);
-    // The transport hands replies oldest-first, which `threadSummary` relies
-    // on for the stack's newest-first ORDER (cosmetic). The newest activity
-    // drives the sort and the "new" dot, so it is found by scanning rather
-    // than read off the last slot: a caller that violates the order costs
-    // avatar order, never a post's place in the feed.
+    // Newest activity is found by scanning, not read off the last slot, so an
+    // ordering violation only affects avatar order.
     const { participants } = threadSummary(replies as ChatMsg[]);
     let newest: ChatMsg = root;
     for (const r of replies) if (r.created_at > newest.created_at) newest = r;

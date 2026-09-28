@@ -2,15 +2,9 @@ import type { OpenedChat } from "@/concord/lib/chat";
 
 /**
  * How far ahead of the local clock a message must be dated to be REPORTED as a
- * "time traveler" in the moderation panel.
- *
- * Deliberately far coarser than the timeline's {@link FUTURE_HOLD_MS} 2s grace:
- * that hold exists to keep ordinary sub-second clock jitter from stranding a
- * row, and flagging every honest device a couple of seconds fast would make the
- * panel meaningless. A minute-plus ahead is a genuinely wrong clock (or a
- * deliberately future-dated event), worth a wink rather than an accusation. The
- * stamp is the sender's own `created_at` and unauthenticated, so this NAMES a
- * clock problem, it never proves intent, and the panel copy says so.
+ * "time traveler" in moderation. Far coarser than {@link FUTURE_HOLD_MS} so
+ * honest devices a few seconds fast aren't flagged. `created_at` is
+ * unauthenticated, so this names a clock problem, never intent.
  */
 export const TIME_TRAVELER_THRESHOLD_MS = 60_000;
 
@@ -27,16 +21,9 @@ export interface TimeTraveler {
 }
 
 /**
- * The authors of messages dated more than {@link TIME_TRAVELER_THRESHOLD_MS}
- * ahead of `nowMs`, across a community's cached rumors.
- *
- * Pure and window-bounded: it reads only the rumor sets it is handed (the
- * community's newest window, shared via `useCommunityRumors`), which is where a
- * future-dated message lives anyway (a large `created_at` sorts it to the
- * newest end). One entry per author, carrying their FURTHEST-ahead sighting so
- * the row can say "3 minutes from now". Own messages are excluded by the caller
- * (a device flagging itself is just telling the user their own clock is wrong,
- * which the row cannot act on).
+ * Authors of messages dated more than {@link TIME_TRAVELER_THRESHOLD_MS} ahead of
+ * `nowMs`, from the community's newest window (where future-dated messages sort).
+ * One entry per author with their FURTHEST-ahead sighting. Caller excludes self.
  */
 export function timeTravelers(
   rumorsByChannel: ReadonlyMap<string, readonly OpenedChat[]>,
@@ -62,7 +49,6 @@ export function timeTravelers(
         });
       } else {
         existing.count += 1;
-        // Keep the FURTHEST-ahead sighting as the representative one.
         if (aheadMs > existing.aheadMs) {
           existing.aheadMs = aheadMs;
           existing.sample = sampleOf(ev.content);
@@ -71,7 +57,6 @@ export function timeTravelers(
     }
   }
 
-  // Furthest traveler first (the most eye-catching one leads the list).
   return [...byAuthor.values()].sort((a, b) => b.aheadMs - a.aheadMs);
 }
 
@@ -81,11 +66,7 @@ function sampleOf(content: string): string {
   return oneLine.length > 80 ? `${oneLine.slice(0, 79)}…` : oneLine;
 }
 
-/**
- * A rounded, human phrase for how far ahead a traveler is ("3 minutes",
- * "2 hours", "5 days"), the tail of "arriving from N ahead". Always at least
- * "a minute" (the threshold guarantees >= 1 min).
- */
+/** A rounded phrase for how far ahead ("3 minutes", "2 hours"); at least "a minute". */
 export function describeAhead(aheadMs: number): string {
   const secs = Math.round(aheadMs / 1000);
   if (secs < 90) return "a minute";
@@ -97,11 +78,7 @@ export function describeAhead(aheadMs: number): string {
   return `${days} days`;
 }
 
-/**
- * A tongue-in-cheek "clearance level" that scales with how far ahead the
- * traveler is dated: the further out, the more absurd. Pure flavor for the row
- * badge, so a wrong clock reads as a fun anomaly rather than an accusation.
- */
+/** A tongue-in-cheek "clearance level" badge scaling with how far ahead. */
 export function travelerRank(aheadMs: number): string {
   const mins = aheadMs / 60_000;
   if (mins < 10) return "Slightly ahead of schedule";

@@ -3,47 +3,34 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 /** Maximum recording duration in seconds (NIP-A0 recommends 60s). */
 const MAX_DURATION = 60;
 
-/** Number of waveform amplitude samples to capture. */
 const WAVEFORM_SAMPLES = 100;
 
-/** Sampling interval in ms for waveform amplitude capture. */
 const SAMPLE_INTERVAL_MS = 100;
 
 /**
- * Speech-tuned encoder bitrate. Browsers default to ~128 kbps, which is music
- * quality — a voice message is transparent well below that, and every listener
- * downloads the difference. Opus stays clean for speech at 32 kbps; AAC-LC
- * (the Safari/mp4 path) degrades harder at low rates, so it gets 64 kbps.
+ * Speech-tuned bitrate (browsers default to ~128 kbps). Opus is clean at 32 kbps;
+ * AAC-LC (Safari/mp4) degrades harder, so 64 kbps.
  */
 function audioBitsPerSecond(mimeType: string): number {
   return mimeType.includes('opus') ? 32_000 : 64_000;
 }
 
 export interface VoiceRecording {
-  /** The recorded audio blob. */
   blob: Blob;
-  /** MIME type of the recording. */
   mimeType: string;
-  /** Duration in seconds. */
   duration: number;
   /** Waveform amplitude values (0–100 integers, ~100 samples). */
   waveform: number[];
 }
 
 export interface UseVoiceRecorderReturn {
-  /** Whether the browser supports audio recording. */
   isSupported: boolean;
-  /** Whether a recording is currently in progress. */
   isRecording: boolean;
-  /** Elapsed recording time in seconds. */
   recordingDuration: number;
   /** Live waveform amplitude samples captured so far (0–100 integers). */
   liveWaveform: number[];
-  /** Start recording. Requests microphone permission if needed. */
   startRecording: () => Promise<void>;
-  /** Stop recording and return the result. */
   stopRecording: () => Promise<VoiceRecording | null>;
-  /** Cancel recording without returning data. */
   cancelRecording: () => void;
 }
 
@@ -65,12 +52,7 @@ function getRecordingMimeType(): string {
   return 'audio/webm'; // fallback
 }
 
-/**
- * Hook for recording voice messages with real-time waveform capture.
- *
- * Records audio using the MediaRecorder API and captures amplitude samples
- * via an AnalyserNode for generating NIP-A0 waveform data.
- */
+/** Record voice messages, capturing amplitude samples for NIP-A0 waveform data. */
 export function useVoiceRecorder(): UseVoiceRecorderReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -92,7 +74,6 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
     && !!navigator.mediaDevices.getUserMedia
     && typeof MediaRecorder !== 'undefined';
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       cleanup();
@@ -128,7 +109,6 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
 
-    // Set up Web Audio API for amplitude analysis
     const audioCtx = new AudioContext();
     audioContextRef.current = audioCtx;
     const source = audioCtx.createMediaStreamSource(stream);
@@ -137,7 +117,6 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
     source.connect(analyser);
     analyserRef.current = analyser;
 
-    // Set up MediaRecorder
     const mimeType = getRecordingMimeType();
     const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: audioBitsPerSecond(mimeType) });
     mediaRecorderRef.current = recorder;
@@ -152,7 +131,6 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
       const blob = new Blob(chunksRef.current, { type: mimeType });
       const duration = (Date.now() - startTimeRef.current) / 1000;
 
-      // Downsample waveform to WAVEFORM_SAMPLES points
       const raw = waveformRef.current;
       const waveform = downsampleWaveform(raw, WAVEFORM_SAMPLES);
 
@@ -169,19 +147,16 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
       setLiveWaveform([]);
     };
 
-    // Start recording
-    recorder.start(250); // collect data every 250ms
+    recorder.start(250);
     startTimeRef.current = Date.now();
     setIsRecording(true);
     setRecordingDuration(0);
     setLiveWaveform([]);
 
-    // Duration timer (updates every 100ms for smooth display)
     timerRef.current = setInterval(() => {
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       setRecordingDuration(elapsed);
 
-      // Auto-stop at max duration
       if (elapsed >= MAX_DURATION) {
         if (mediaRecorderRef.current?.state === 'recording') {
           mediaRecorderRef.current.stop();
@@ -189,13 +164,11 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
       }
     }, 100);
 
-    // Waveform amplitude sampler
     samplerRef.current = setInterval(() => {
       if (!analyserRef.current) return;
       const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
       analyserRef.current.getByteTimeDomainData(dataArray);
 
-      // Compute RMS amplitude (0–100 integer)
       let sum = 0;
       for (let i = 0; i < dataArray.length; i++) {
         const v = (dataArray[i] - 128) / 128; // -1..1
@@ -223,7 +196,6 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
   const cancelRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state === 'recording') {
-      // Detach the onstop handler to prevent resolving
       recorder.onstop = () => {
         cleanup();
         setIsRecording(false);
@@ -254,10 +226,7 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
   };
 }
 
-/**
- * Downsample an amplitude array to a target number of samples.
- * Each output sample is the max amplitude within its window.
- */
+/** Downsample to `targetLen` samples, taking the max of each window. */
 function downsampleWaveform(raw: number[], targetLen: number): number[] {
   if (raw.length === 0) return [];
   if (raw.length <= targetLen) return raw;

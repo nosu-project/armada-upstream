@@ -20,9 +20,8 @@ interface FileAttachmentProps {
   url: string;
   /** Sender-declared MIME — an ICON HINT ONLY. Never used to render the bytes. */
   mime?: string;
-  /** Original filename (sender-declared, untrusted). */
+  /** Sender-declared, untrusted. */
   name?: string;
-  /** Sender-declared byte size, for the label. */
   size?: number;
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
@@ -31,7 +30,6 @@ interface FileAttachmentProps {
   className?: string;
 }
 
-/** Pick a coarse icon from the MIME family. Cosmetic only. */
 function iconFor(mime: string | undefined) {
   const m = (mime ?? "").toLowerCase();
   if (m.startsWith("video/")) return FileVideo;
@@ -44,13 +42,7 @@ function iconFor(mime: string | undefined) {
   return File;
 }
 
-/**
- * A short, always-visible type token for the card's subtitle (e.g. "AVI") —
- * the filename is often a content-addressed hash whose extension the `truncate`
- * ellipsis hides, so the format would otherwise be invisible. Prefers the
- * name's extension, falling back to the MIME subtype with its `x-`/`vnd.`
- * noise stripped.
- */
+/** Always-visible type token (e.g. "AVI"); hashed filenames hide the extension under truncation. */
 function typeLabel(name: string, mime: string | undefined): string | null {
   const dot = name.lastIndexOf(".");
   if (dot > 0 && dot < name.length - 1) return name.slice(dot + 1).toUpperCase();
@@ -60,19 +52,10 @@ function typeLabel(name: string, mime: string | undefined): string | null {
 }
 
 /**
- * Download-only card for a non-media attachment (PDF, zip, arbitrary document).
- *
- * SECURITY: the bytes are never rendered, previewed, embedded, or opened
- * in-tab — a hostile PDF/HTML/SVG can't execute or be displayed here. On click
- * the blob is fetched (and AES-GCM-decrypted for encrypted Concord/Vector
- * attachments), then handed to {@link downloadBinaryFile} as a forced *save*.
- * On the web that is an `application/octet-stream` object URL + a `download`
- * filename, so even a stray navigation downloads rather than renders; on native
- * the bytes go to the app's Documents directory, because the anchor pattern
- * silently fails in the WebView — it reported success here while saving
- * nothing. Only the filename survives to name the file, so what keeps a
- * traversal or control-char name from escaping is `safeFilename`. The sender's
- * MIME is used only to choose an icon.
+ * Download-only card for non-media attachments.
+ * SECURITY: bytes are never rendered or opened. Web: octet-stream object URL
+ * + `download`; native: written to Documents (the anchor silently fails in the
+ * WebView). `safeFilename` guards the name; the sender's MIME only picks an icon.
  */
 export function FileAttachment({ url, mime, name, size, encryption, fallbacks, className }: FileAttachmentProps) {
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
@@ -80,31 +63,24 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
   const displayName = safeFilename(name);
   const Icon = iconFor(mime);
   const kind = typeLabel(displayName, mime);
-  // The same blob on the viewer's other Blossom servers, for when the one the
-  // sender named is down (the mirrors hold identical ciphertext). A deliberate
-  // file download fetches directly rather than through the image proxy — the
-  // proxy is for the passive display an image gets just by being scrolled past.
+  // Mirrors on the viewer's other Blossom servers. Fetched directly, not via the
+  // image proxy (that's for passive display).
   const candidates = useBlossomCandidates(url, fallbacks);
 
   const download = useCallback(async () => {
     if (status === "loading") return;
     setStatus("loading");
     try {
-      // The ceiling is enforced while READING, not after: checking a fully
-      // buffered body has already spent the memory it was meant to protect,
-      // and a `size` field is sender-controlled so it proves nothing.
+      // Cap enforced while READING; the `size` field is sender-controlled.
       const raw = await fetchCapped(candidates, { maxBytes: MAX_EXPLICIT_DECRYPT_BYTES });
 
       const bytes = encryption
         ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
         : new Uint8Array(raw);
-      // A swapped blob fails closed rather than being saved to the user's disk
-      // under the sender's filename.
+      // A swapped blob fails closed.
       if (encryption) await verifyPlaintextHash(bytes, encryption.ox);
 
-      // Force a save, never a render. The sender's real MIME is deliberately
-      // discarded: the web branch of `downloadBinaryFile` hands the bytes over
-      // as octet-stream, and on native they are written to disk unopened.
+      // Force a save, never a render; the sender's MIME is discarded.
       await downloadBinaryFile(displayName, bytes);
       if (Capacitor.isNativePlatform()) {
         toast({ title: "Saved", description: "You'll find it in the Armada folder in Files." });

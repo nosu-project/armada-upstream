@@ -1,12 +1,9 @@
 /**
  * Concord roles & permissions — CORD-04.
  *
- * Two kinds of permission, enforced two ways: READ access is key possession
- * (never a permission bit); WRITE authority is a member's rank in the
- * owner-rooted Roster. Bit positions are FROZEN wire format. `permissions`
- * rides the wire as a DECIMAL STRING (a JSON number is a float in JS and
- * silently corrupts past 2^53); a reader accepts either form, always writes
- * the string.
+ * READ access is key possession; WRITE authority is rank in the owner-rooted
+ * Roster. Bit positions are FROZEN wire format. `permissions` is written as a
+ * DECIMAL STRING (JSON numbers lose precision past 2^53); either form is read.
  */
 
 export const Permissions = {
@@ -25,9 +22,8 @@ export const Permissions = {
 } as const;
 
 /**
- * Every currently-defined management bit — what an "Admin" role holds. There
- * is deliberately no all-powerful bit: a Role granted everything today does
- * NOT inherit a permission added tomorrow (CORD-04 §3).
+ * Every currently-defined management bit (an "Admin" role). No all-powerful bit:
+ * new permissions aren't inherited (CORD-04 §3).
  */
 export const ADMIN_ALL =
   Permissions.MANAGE_ROLES |
@@ -45,12 +41,8 @@ export const ADMIN_ALL =
 export const MANAGEMENT_MASK = ADMIN_ALL & ~Permissions.MENTION_EVERYONE;
 
 /**
- * The STAFF bits (CORD-04 §3): the permissions whose authorized actions land
- * as Control Plane editions. A member holding ANY of them — plus always the
- * owner — is staff: the set that holds the `control_root` write key
- * (CORD-02 §2). KICK writes to the Guestbook and MANAGE_MESSAGES to Chat
- * planes; neither needs it. A future permission whose actions are Control
- * editions joins this mask by definition.
+ * STAFF bits (CORD-04 §3): permissions whose actions are Control Plane editions.
+ * Holders (and the owner) get the `control_root` write key (CORD-02 §2).
  */
 export const STAFF_MASK =
   Permissions.MANAGE_ROLES |
@@ -99,23 +91,16 @@ export interface Role {
   /** Cosmetic badge tint; 0 = theme default. */
   color: number;
   /**
-   * Hoist: show holders under this role's own named section in the member
-   * list. An Armada extension field — written only when true, read tolerantly,
-   * absent on the frozen CORD-04 baseline (a client that drops it loses only
-   * the grouping, never authority).
+   * Hoist into its own member-list section. Armada extension, written only when
+   * true; absent on the CORD-04 baseline.
    */
   display?: boolean;
 }
 
 /**
- * The CORD-04 §3 display order: by `position` (lower is higher authority),
- * ties broken by the lower `role_id`.
- *
- * The tiebreak is not cosmetic. Two Roles MAY share a position — they are
- * peers — and without a deterministic second key the order falls out of fold
- * insertion, which differs between clients and between reloads. Anything
- * index-based over the list (a drag, a move-up button) then acts on whichever
- * pair happened to land adjacent.
+ * CORD-04 §3 display order: `position` ascending, ties by lower `role_id`. The
+ * tiebreak matters: peers would otherwise order by fold insertion, differing
+ * between clients and breaking index-based reorders.
  */
 export function byDisplayOrder(a: Role, b: Role): number {
   return a.position - b.position || a.roleId.localeCompare(b.roleId);
@@ -131,16 +116,14 @@ export const MODERATOR_ALL =
   Permissions.KICK | Permissions.BAN | Permissions.MANAGE_MESSAGES | Permissions.MENTION_EVERYONE;
 
 /**
- * A stock server-scope Moderator role at position 2 — below Admin (1), so a
- * position-1 Admin strictly outranks it and may grant it (CORD-04 §3; the
- * Admin position itself is grantable only by the owner).
+ * A stock Moderator role at position 2, below Admin (1) so Admins may grant it
+ * (CORD-04 §3).
  */
 export function moderatorRole(roleId: string): Role {
   return { roleId, name: "Moderator", position: 2, permissions: MODERATOR_ALL, scope: { kind: "server" }, color: 0 };
 }
 
-// ── Wire JSON (CORD-04 §2) ───────────────────────────────────────────────────
-
+// Wire JSON (CORD-04 §2)
 interface RoleWire {
   role_id: string;
   name: string;
@@ -154,12 +137,8 @@ interface RoleWire {
 }
 
 /**
- * Coerce a wire `color` to the spec's u32 (CORD-04 §2). A non-number, a
- * negative, or a value past 2^32-1 is out of range and becomes the theme
- * default rather than an arbitrary tint; an in-range float is truncated, since
- * its integer part is a colour the sender plausibly meant. Since `roleToJSON`
- * writes back whatever we parsed, this is also what stops a malformed value
- * round-tripping onto the wire unchanged.
+ * Coerce wire `color` to u32 (CORD-04 §2): out-of-range becomes theme default,
+ * in-range floats truncate. Stops malformed values round-tripping.
  */
 function clampColor(color: unknown): number {
   if (typeof color !== "number" || !Number.isFinite(color)) return 0;
@@ -191,8 +170,7 @@ export function roleFromJSON(json: string): Role | undefined {
     else if (typeof w.permissions === "number" && Number.isFinite(w.permissions)) permissions = BigInt(Math.trunc(w.permissions));
     else return undefined;
     if (typeof w.position !== "number" || !Number.isInteger(w.position) || w.position < 1) {
-      // Position 0 is the owner's alone — the top is not mintable (CORD-04 §3);
-      // a non-integer/negative position is malformed.
+      // Position 0 is the owner's alone (CORD-04 §3); others are malformed.
       return undefined;
     }
     const name = typeof w.name === "string" ? w.name : "";
@@ -216,17 +194,9 @@ export function roleFromJSON(json: string): Role | undefined {
 }
 
 /**
- * Wire `color` is a u32 holding packed 0xRRGGBB. 0 is "theme default", so a
- * role tinted pure black is indistinguishable from an untinted one — an
- * inherent property of the spec encoding, not something a client can fix.
- * Returns undefined for 0 so callers fall through to the theme.
- *
- * NOTE the asymmetry with serialization: `roleFromJSON`/`roleToJSON` carry the
- * full u32, so a foreign client's high byte survives a round-trip untouched.
- * These two only speak 24-bit RGB, because that is all the picker can express —
- * so EDITING such a role's colour narrows it to its low 24 bits. That is a real
- * (if cosmetic) loss, and it is confined to an explicit user edit rather than
- * happening to every role we merely read.
+ * Wire `color` is packed 0xRRGGBB in a u32; 0 = theme default (so pure black is
+ * untintable). Returns undefined for 0. Only 24-bit RGB here, so editing a
+ * foreign role's colour drops its high byte (roleFromJSON/roleToJSON keep it).
  */
 export function colorToHex(color: number): string | undefined {
   if (!Number.isFinite(color)) return undefined;
@@ -242,20 +212,10 @@ export function hexToColor(hex: string): number {
 }
 
 /**
- * Where a reorder would actually land. A reorder reuses the existing multiset
- * of `position` values, reassigned to the roles in the requested visual order,
- * rather than renumbering 1..N — renumbering would try to claim position 1,
- * which no actor ranked at 1 may write, so a legal reshuffle of the lower ranks
- * would fail for everyone but the owner.
- *
- * The cost of that reuse is that it cannot separate peers: given A(3) B(3)
- * C(5), requesting C, A, B assigns C→3 and B→5, and the §3 tie-break then
- * renders A, C, B. The request is unsatisfiable, not merely partially applied,
- * so callers must compare `rendered` against what was asked for BEFORE
- * publishing anything.
- *
- * `current` must already be sorted by {@link byDisplayOrder}; `next` is a
- * permutation of it.
+ * Where a reorder would land: reuses the existing `position` multiset in the
+ * requested order (renumbering 1..N would claim position 1, which only the owner
+ * may write). Peers can't be separated this way, so compare `rendered` against
+ * the request BEFORE publishing. `current` sorted by {@link byDisplayOrder}.
  */
 export function projectReorder(current: Role[], next: Role[]): { landing: Role[]; rendered: Role[] } {
   const positions = current.map((r) => r.position);
@@ -264,40 +224,23 @@ export function projectReorder(current: Role[], next: Role[]): { landing: Role[]
 }
 
 /**
- * The escape from a roster reuse cannot reorder. Peers are legal (§3) and a
- * roster where every Role shares one position has ZERO reachable orders under
- * {@link projectReorder} — every reassignment is the identity — while
- * `RoleEditor` offers no position control, so the roster is stuck. Such a
- * roster is reachable in practice: a reorder that failed partway leaves two
- * Roles on one position.
+ * Give every Role its own `position` in the requested order — the escape when
+ * peers make a roster unreorderable via {@link projectReorder} (e.g. after a
+ * partial reorder). Position-on-role is the spec's own mechanism (CORD-04 §3).
  *
- * This gives every Role its own `position`, in the requested display order, so
- * the tie-break stops deciding anything and the drag then applies normally.
- * Rewriting position-on-role is the spec's own mechanism ("position-on-role is
- * the frozen baseline", CORD-04 §3) — no wire change, no RoleOrder entity.
- *
- * `floor` is the lowest position the actor may claim: rank + 1, or 1 for the
- * owner (no edition may claim a position at or above its own signer, §3). Roles
- * already above the floor cannot be rewritten by this actor, so they keep their
- * position and must lead the requested order — if `next` asks to overtake one,
- * the request needs a rank the actor does not have and this returns null.
- *
- * Numbering starts at the touchable roles' current lowest position rather than
- * at `floor`, so a roster that is already spread out barely moves, and repeated
- * normalizing does not inflate positions.
+ * `floor` = lowest position the actor may claim (rank + 1, or 1 for the owner).
+ * Roles above it stay put and must lead `next`, else null. Numbering starts at
+ * the movable roles' lowest position so repeated normalizing doesn't inflate.
  */
 export function normalizeOrder(next: Role[], floor: number): Role[] | null {
   const fixed = next.filter((r) => r.position < floor);
-  // Untouchable roles outrank every position the actor can write, so they must
-  // already occupy the leading slots, in their own display order.
+  // Untouchable roles must already occupy the leading slots.
   const lead = next.slice(0, fixed.length);
   if (lead.some((r) => r.position >= floor)) return null;
   if ([...lead].sort(byDisplayOrder).some((r, i) => r.roleId !== lead[i].roleId)) return null;
 
   const movable = next.slice(fixed.length);
   if (movable.length === 0) return null; // nothing this actor may rewrite
-  // Every movable role already sits at or below the floor in authority, so the
-  // lowest of them is itself a position the actor may claim.
   const base = Math.min(...movable.map((r) => r.position));
   return [...lead, ...movable.map((role, i) => ({ ...role, position: base + i }))];
 }
@@ -307,12 +250,9 @@ export interface MemberGrant {
   member: string;
   roleIds: string[];
   /**
-   * The staff write key riding the Grant (CORD-04 §3): the current
-   * `control_root` NIP-44-encrypted under the granter↔member pairwise
-   * conversation key, base64 — delivery, never authority. Its plaintext is
-   * fixed-width, `epoch_be[8] ‖ control_root[32]`, and the recipient adopts
-   * the secret only if it derives to exactly the `control_pk` they hold for
-   * the named epoch. Opaque pairwise ciphertext to every other reader.
+   * Staff write key riding the Grant (CORD-04 §3): `epoch_be[8] ‖ control_root[32]`
+   * NIP-44 under the granter↔member pairwise key, base64. Delivery, never
+   * authority; adopted only if it derives to the held `control_pk`.
    */
   controlWrap?: string;
 }
@@ -356,8 +296,6 @@ export function grantFromJSON(json: string): MemberGrant | undefined {
   }
 }
 
-// ── The aggregated role graph ────────────────────────────────────────────────
-
 export interface CommunityRoles {
   roles: Role[];
   grants: MemberGrant[];
@@ -388,10 +326,9 @@ export function effectivePermissions(roles: CommunityRoles, memberHex: string): 
 }
 
 /**
- * Effective permissions for an action TARGETING one channel: server-scope
- * Roles plus Roles scoped to that channel. The fold stays scope-agnostic
- * (every implementation folds the same union, CORD-04 §3), so this narrows
- * only what THIS client offers its user, never what it honors from others.
+ * Effective permissions for an action in one channel: server roles plus that
+ * channel's roles. Narrows only what THIS client offers, never what it honors
+ * (the fold is scope-agnostic, CORD-04 §3).
  */
 export function effectivePermissionsIn(roles: CommunityRoles, memberHex: string, channelIdHex: string): bigint {
   return rolesOf(roles, memberHex).reduce(
@@ -426,11 +363,7 @@ export function isStaff(roles: CommunityRoles, memberHex: string, ownerHex: stri
   return (effectivePermissions(roles, memberHex) & STAFF_MASK) !== 0n;
 }
 
-/**
- * Whether a grant's role set leaves its member staff, judged against `roles`'
- * definitions — the granter-side trigger for delivering the `control_root`
- * inside the Grant itself (CORD-04 §3).
- */
+/** Whether a grant's roles make its member staff — triggers delivering `control_root` in the Grant. */
 export function rolesMakeStaff(roles: CommunityRoles, roleIds: string[]): boolean {
   return roleIds.some((rid) => {
     const r = roleById(roles, rid);
@@ -472,27 +405,17 @@ export function isAuthorized(
 }
 
 /**
- * The position a new Role signed by `actorHex` may claim, or `undefined` when
- * they may claim none (CORD-04 §3).
- *
- * "No edition may claim a position at or above its own signer" — so the rank a
- * client mints at is a function of the signer's rank, never a constant. The
- * owner is position 0 and mints at 1 (no Role may ever claim 0 itself).
- *
- * `undefined` is the important return. A roleless member is "effectively
- * last", so every position is at or above them and there is nothing they may
- * mint; the same holds when the roster has not folded yet, because absence of
- * evidence of rank is not evidence of supremacy. Collapsing either case to
- * rank 0 mints an edition every verifier drops for self-promotion, while the
- * minting client reports success — the failure is silent on both sides.
+ * The position a new Role signed by `actorHex` may claim, or `undefined` if none
+ * (CORD-04 §3: never at or above the signer). Owner mints at 1. Roleless or
+ * unfolded roster → `undefined`, never rank 0: that would mint an edition every
+ * verifier silently drops.
  */
 export function mintablePosition(
   roles: CommunityRoles | undefined,
   actorHex: string,
   ownerHex: string | undefined,
 ): number | undefined {
-  // Owner supremacy comes from the community_id commitment, not the fold, so
-  // it holds even before the roster loads.
+  // Owner supremacy comes from the community_id, so it holds before the roster loads.
   if (ownerHex === actorHex) return 1;
   if (!roles) return undefined;
   const rank = highestPosition(roles, actorHex);
@@ -500,24 +423,10 @@ export function mintablePosition(
 }
 
 /**
- * The position to mint a Role that confers READ ACCESS and nothing else — the
- * BOTTOM of the hierarchy rather than {@link mintablePosition}'s top.
- *
- * `mintablePosition` answers "how high may this signer reach", which is the
- * right question for an authority Role and the wrong one for an access Role.
- * A member's rank is the LOWEST position among their Roles (CORD-04 §3) and
- * rank is independent of permission bits, so a zero-permission Role minted at
- * the signer's own ceiling PROMOTES whoever is granted it to the signer's
- * rank. Granting read access to an owner-created channel would seat a plain
- * member at position 1 — peer to every Admin, and "equal cannot act on equal"
- * then locks Admins out of moderating them AND out of granting the Role at
- * all.
- *
- * So this returns one below the lowest-ranked Role in the community (or the
- * signer's own floor, whichever is deeper). Two access Roles sharing a
- * position is fine and expected — "two Roles MAY share a position, they are
- * peers" — because peers at the bottom act on nobody. `undefined` when the
- * signer may mint none, for {@link mintablePosition}'s reasons.
+ * Position for a Role conferring READ ACCESS only: one below the lowest Role
+ * (or the signer's floor, if deeper). Minting it at the signer's ceiling like
+ * {@link mintablePosition} would promote grantees to the signer's rank, locking
+ * out Admins. Bottom peers are fine. `undefined` if the signer may mint none.
  */
 export function accessRolePosition(
   roles: CommunityRoles | undefined,
@@ -543,15 +452,9 @@ export function outranks(
 }
 
 /**
- * Why this Grant would be dropped by its verifiers, or `undefined` when it is
- * publishable (CORD-04 §2/§3): the signer must strictly outrank the member
- * they are editing AND every Role the grant hands out. The owner's grants are
- * always admitted — including one targeting the owner (a cosmetic self-grant;
- * their authority is position 0 with or without roles).
- *
- * A conforming client checks this BEFORE publishing: the fold applies the
- * same rules network-wide, so an edition that fails them is silently ignored
- * by every verifier while its author sees success.
+ * Why verifiers would drop this Grant, or `undefined` if publishable (CORD-04
+ * §2/§3): the signer must strictly outrank the member and every Role granted;
+ * owner grants always pass. Check BEFORE publishing — failures are silent.
  */
 export function grantRefusal(
   roles: CommunityRoles,
@@ -575,14 +478,9 @@ export function grantRefusal(
 }
 
 /**
- * Does `actorHex` strictly outrank the member `memberHex`? The owner outranks
- * everyone and is outranked by no one; a roleless member is effectively last
- * (CORD-04 §3), so any ranked actor outranks them.
- *
- * This is the target-side half of an authority check on its own — for the
- * places where the required permission bit is verified separately (a rekey's
- * rotation filter, CORD-06 §Authority: "the Rotator must strictly outrank
- * every removed target").
+ * Does `actorHex` strictly outrank member `memberHex`? Owner outranks all; a
+ * roleless member is last. The target-side half only (e.g. CORD-06 rekey
+ * authority, where the bit is checked separately).
  */
 export function outranksMember(
   roles: CommunityRoles,

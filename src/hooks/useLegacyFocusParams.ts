@@ -4,23 +4,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { chatRoute, type ChatRoute } from "@/lib/routes";
 
 /**
- * Translate the pre-path `?thread=<rootId>` and `?m=<eventId>` links into the
- * route shapes that replaced them.
- *
- * These spellings cannot be retired by shipping a build that stops producing
- * them, because the things that produce them live outside it and outlast it:
- * an Android tray notification carries its `armada://open/...` PendingIntent
- * across an app update, a web-push subscription's stored payload sits on the
- * relay until the client next re-registers, and a link someone copied and sent
- * is permanent. The same reasoning keeps `/dms` redirecting in `AppRouter`.
- *
- * Redirecting (rather than consuming the params in place) means there is still
- * exactly one representation of an open thread or a focused message — the
- * path — so nothing downstream has to know both spellings.
- *
- * `base` is the room the caller is in; pass `undefined` while it is still
- * resolving. Any other query parameter rides along untouched, which is what
- * keeps `?ticket=` working.
+ * Redirect legacy `?thread=` / `?m=` links to their path routes. They can't be retired:
+ * Android notifications, stored web-push payloads and copied links outlive builds (same as `/dms`
+ * in `AppRouter`). `base` is `undefined` while resolving; other params (e.g. `?ticket=`) ride along.
  */
 export function useLegacyFocusParams(base: ChatRoute | undefined): void {
   const navigate = useNavigate();
@@ -36,16 +22,13 @@ export function useLegacyFocusParams(base: ChatRoute | undefined): void {
     params.delete("thread");
     params.delete("m");
     const rest = params.toString();
-    // DMs have no thread panel, so a `?thread=` there names nothing and is
-    // dropped rather than encoded into a route that cannot render.
+    // DMs have no thread panel, so `?thread=` is dropped there.
     const path = chatRoute(
       base.kind === "dm" ? { ...base, messageId } : { ...base, threadRoot, messageId },
     );
     const target = `${path}${rest ? `?${rest}` : ""}${hash}`;
 
-    // `replace`: the reader asked for the destination, not for the spelling
-    // the link happened to use, so Back should leave the room rather than
-    // bounce through a URL that immediately redirects again.
+    // `replace` so Back doesn't bounce through a redirecting URL.
     navigate(target, { replace: true });
   }, [base, search, hash, navigate]);
 }

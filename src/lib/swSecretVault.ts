@@ -1,25 +1,8 @@
 /**
- * At-rest encryption for the small secret the Web Push service worker needs —
- * the DM gating config, whose `sk` field is the identity key it uses to unseal
- * gift wraps.
- *
- * The page can't hand the worker a raw key without leaving a second plaintext
- * copy on disk (Cache Storage is unencrypted at rest, same as the localStorage
- * the login already sits in). So the config is AES-GCM sealed under a
- * **non-extractable** WebCrypto key kept in IndexedDB: a stolen browser profile
- * or synced backup yields ciphertext plus a key that JS can't export, and the
- * page never persists a second readable copy of the nsec.
- *
- * What this does NOT defend: XSS. Same-origin script (page or worker) can still
- * ask the non-extractable key to decrypt in place — that's intrinsic to using a
- * key in a browser at all, and is unchanged from the nsec already living in
- * localStorage. Hardware isolation only exists on native (Keystore/Keychain),
- * which this web-only path never touches. This raises the at-rest bar; it does
- * not make a browser tab a secure enclave.
- *
- * Shared source: the page imports `sealConfig`/`clearVault` to write; the SW's
- * runtime bundle (`pushRuntime.ts`) imports `openSealedConfig` to read. One IndexedDB
- * key, created by the page, used by both contexts (they share origin storage).
+ * At-rest encryption for the Web Push worker's config (which holds the nsec):
+ * AES-GCM under a non-extractable WebCrypto key in IndexedDB, so no second
+ * plaintext nsec lands on disk. Does NOT defend against XSS. The page seals
+ * (`sealConfig`/`clearVault`); `pushRuntime.ts` reads (`openSealedConfig`).
  */
 
 import { openDB, type IDBPDatabase } from "idb";
@@ -29,8 +12,7 @@ const STORE = "keys";
 const KEY_ID = "dm-config";
 const IV_BYTES = 12;
 
-// One reused connection per context (page, worker). Opening a fresh connection
-// per call leaks handles and blocks any later deleteDB.
+// One reused connection per context; fresh ones leak handles and block deleteDB.
 let dbPromise: Promise<IDBPDatabase> | undefined;
 
 function vaultDb(): Promise<IDBPDatabase> {
@@ -63,8 +45,6 @@ async function getOrCreateKey(): Promise<CryptoKey> {
   return key;
 }
 
-// ── Pure core (key in hand) — unit-tested without IndexedDB ───────────────────
-
 /** AES-GCM seal an arbitrary JSON value; output is `iv || ciphertext`. */
 export async function sealWithKey(key: CryptoKey, value: unknown): Promise<Uint8Array<ArrayBuffer>> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
@@ -81,8 +61,7 @@ export async function sealWithKey(key: CryptoKey, value: unknown): Promise<Uint8
 /** Inverse of {@link sealWithKey}. Returns null on any tamper/format error. */
 export async function openWithKey(key: CryptoKey, blob: Uint8Array): Promise<unknown | null> {
   try {
-    // Copy into a fresh ArrayBuffer-backed view: the incoming array may be
-    // SharedArrayBuffer-backed, which WebCrypto's BufferSource rejects.
+    // Copy: a SharedArrayBuffer-backed input is rejected by WebCrypto.
     const bytes = new Uint8Array(blob);
     if (bytes.length <= IV_BYTES) return null;
     const iv = bytes.subarray(0, IV_BYTES);
@@ -93,8 +72,6 @@ export async function openWithKey(key: CryptoKey, blob: Uint8Array): Promise<unk
     return null;
   }
 }
-
-// ── Vault-backed wrappers ─────────────────────────────────────────────────────
 
 /** Seal a config under the (created-on-demand) vault key. */
 export async function sealConfig(value: unknown): Promise<Uint8Array<ArrayBuffer>> {

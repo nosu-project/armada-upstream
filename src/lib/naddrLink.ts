@@ -9,17 +9,12 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 /** At most this many relay hints ride in a shared naddr. */
 const MAX_RELAY_HINTS = 3;
 
-/** A decoded `naddr`: the event's coordinates plus its relay hints. */
 export interface NaddrAddress {
   addr: AddrCoords;
   relays: string[];
 }
 
-/**
- * The naddr of an addressable event (30000-39999), or undefined for anything
- * else. Addressed rather than by id so a link keeps pointing at the author's
- * latest edit.
- */
+/** naddr of an addressable event (30000-39999), else undefined. Addressed so links follow later edits. */
 export function eventNaddr(event: NostrRumor, relays: readonly string[] = []): string | undefined {
   if (event.kind < 30000 || event.kind >= 40000) return undefined;
   const identifier = event.tags.find(([n]) => n === "d")?.[1] ?? "";
@@ -31,11 +26,7 @@ export function eventNaddr(event: NostrRumor, relays: readonly string[] = []): s
   });
 }
 
-/**
- * The in-app path of an naddr's direct view. A bare `/<naddr>` segment, the
- * same NIP-19 convention the profile route (`/<npub>`) and Ditto follow, so
- * the link unfolds in any client that routes one.
- */
+/** In-app path of an naddr: bare `/<naddr>` (NIP-19 convention, like `/<npub>`). */
 export function naddrPath(naddr: string): string {
   return `/${naddr}`;
 }
@@ -45,10 +36,7 @@ export function naddrShareUrl(naddr: string): string {
   return `${shareOrigin()}${naddrPath(naddr)}`;
 }
 
-/**
- * Decode a route segment as an naddr. Non-throwing, since it is a URL param:
- * anything that isn't an naddr is null.
- */
+/** Decode a route segment as an naddr, or null (non-throwing). */
 export function parseNaddr(segment: string | undefined): NaddrAddress | null {
   if (!segment || !/^naddr1/i.test(segment)) return null;
   try {

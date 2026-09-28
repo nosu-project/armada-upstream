@@ -9,10 +9,6 @@ import {
   dmChatTags,
   dmDeleteTags,
   dmExpiresAt,
-  dmConvKey,
-  dmConvPeers,
-  dmPeersOf,
-  isDmGroupKey,
   dmReactionTags,
   dmTimerSeconds,
   dmTimerTags,
@@ -33,6 +29,7 @@ import {
   wrapDmSealEphemeral,
   type Dm17Signer,
 } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers, dmPeersOf, isDmGroupKey } from "@/lib/nip17/conversation";
 
 /** A raw-key signer exposing the abstract surface NIP-17 sends/opens need. */
 function rawSigner(sk: Uint8Array): Dm17Signer {

@@ -10,7 +10,6 @@ import type { NostrEvent } from "@nostrify/nostrify";
 const KIND_POLL = 1068;
 const SEARCH_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
 
-/** Substring match over a message's content (case-insensitive). */
 function localMatches(events: NostrEvent[], query: string, limit: number): NostrEvent[] {
   const q = query.toLowerCase();
   return events
@@ -20,19 +19,15 @@ function localMatches(events: NostrEvent[], query: string, limit: number): Nostr
 }
 
 /**
- * Search messages within a single NIP-29 group. Runs a NIP-50 `search` query
- * scoped to the group (`#h`) on its host relay, and merges in matches from the
- * already-loaded timeline cache so search still works on relays without NIP-50.
- * Results are newest-first.
+ * NIP-50 `search` scoped to the group (`#h`) on its host relay, merged with local timeline
+ * matches for relays without NIP-50. Newest-first.
  */
 export function useGroupSearch(
   relayUrl: string | undefined,
   groupId: string | undefined,
   query: string,
   opts?: {
-    /** Message kinds to search (default: NIP-29 chat + polls). */
     kinds?: number[];
-    /** Cache key of the loaded timeline to merge local matches from. */
     messagesKey?: readonly unknown[];
   },
 ) {
@@ -48,16 +43,12 @@ export function useGroupSearch(
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
-      // Relay-side NIP-50 search, scoped to this group. Relays without NIP-50
-      // ignore the `search` field (returning recent #h events) — harmless,
-      // since we re-filter locally below.
+      // Relays without NIP-50 ignore `search`; we re-filter locally.
       const events = await nostr.relay(relayUrl!).query(
         [{ kinds, "#h": [groupId!], search: debounced, limit: 100 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
 
-      // Merge with the locally-cached timeline so already-seen messages are
-      // searchable offline / on non-NIP-50 relays.
       const cached = queryClient.getQueryData<NostrEvent[]>(messagesKey) ?? [];
 
       const kindSet = new Set(kinds);

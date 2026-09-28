@@ -1,10 +1,7 @@
 /**
- * Pixel-stable anchoring for normal-flow chat scrollers.
- *
- * WebKit does not implement CSS scroll anchoring, while message rows routinely
- * change height after mount (images, embeds, reactions). These helpers keep a
- * short run of DOM rows and their viewport offsets, then compensate by the
- * measured delta after React or asynchronous content changes the layout.
+ * Pixel-stable anchoring for normal-flow chat scrollers: WebKit lacks CSS
+ * scroll anchoring and rows change height after mount, so restore a captured
+ * row's viewport offset by the measured delta.
  */
 
 /** Attribute placed on stable normal-flow rows that can anchor a viewport. */
@@ -14,14 +11,12 @@ export const SCROLL_ANCHOR_ATTR = "data-scroll-anchor";
 const FALLBACK_ROWS = 4;
 
 interface ScrollAnchorRow {
-  /** The live element makes the common restore O(1), even in a long history. */
   element: HTMLElement;
   key: string;
   /** Row top relative to the scroller's visible top edge. */
   offset: number;
 }
 
-/** A leading row plus a few following fallbacks in case that row disappears. */
 export interface ScrollAnchor {
   rows: ScrollAnchorRow[];
 }
@@ -58,12 +53,8 @@ function rowOffset(scroller: HTMLElement, row: HTMLElement): number {
 }
 
 /**
- * Find the first stable row touching/following the viewport.
- *
- * Once an anchor exists this walks only neighbouring rows, so a momentum-scroll
- * event does not query and scan hundreds of already-rendered messages. The one
- * cold capture uses a selector; subsequent captures and every normal restore
- * retain direct DOM references.
+ * First stable row touching/following the viewport. After the first (selector)
+ * capture this walks only neighbouring rows.
  */
 export function captureScrollAnchor(
   scroller: HTMLElement,
@@ -76,10 +67,7 @@ export function captureScrollAnchor(
   )?.element ?? null;
 
   if (row) {
-    // Walk toward the current viewport from the last known row. Ordinary
-    // scroll events move by only a neighbour or two; a scrollbar drag still
-    // remains bounded by the rendered window rather than doing a selector plus
-    // a second scan.
+    // Scroll events move a row or two, so walk from the last known row.
     while (row.getBoundingClientRect().bottom <= scrollerTop) {
       const next = nextAnchorRow(row);
       if (!next) return null;
@@ -109,9 +97,8 @@ export function captureScrollAnchor(
 }
 
 /**
- * Restore the first captured row that survived to the same viewport pixel.
- * Returns false only when every captured row is gone. Sub-pixel/no movement is
- * deliberately a no-op: needless `scrollTop` writes cancel iOS momentum.
+ * Restore the first surviving captured row to the same pixel; false only when
+ * all are gone. Sub-pixel moves are skipped (writes cancel iOS momentum).
  */
 export function restoreScrollAnchor(
   scroller: HTMLElement,

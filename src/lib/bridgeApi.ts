@@ -1,24 +1,11 @@
 /**
- * Client for the Discord bridge portal's JSON API (`armada-discord-bridge`).
+ * Client for the Discord bridge portal's JSON API (`armada-discord-bridge`),
+ * driven from the import wizard so founding events are signed by the user's
+ * existing signer.
  *
- * The portal owns everything that needs a Discord secret: the OAuth app, the
- * bot token, guild and channel reads. Armada drives that API from the import
- * wizard so the user never leaves the app — and, more importantly, so the
- * founding events are signed by the signer they are *already* logged in with,
- * instead of a second NIP-07 login on someone else's origin.
- *
- * ## Why a bearer token and not the session cookie
- *
- * The portal's cookie is `httpOnly; SameSite=Lax`, which a cross-origin fetch
- * never sends. Relaxing it to `SameSite=None` would work only while third-party
- * cookies do, and `VITE_BRIDGE_PORTAL_URL` explicitly allows the portal to live
- * on a domain unrelated to the client's — exactly the case Safari's ITP blocks
- * outright. So the portal hands this client a token and we present it
- * explicitly. A token the browser does not attach on its own is also the safer
- * shape: no ambient authority, nothing for a hostile page to ride.
- *
- * The token is a portal session id. It lives in `sessionStorage`, so it dies
- * with the tab and never syncs anywhere.
+ * Auth is a bearer token, not the portal cookie: an `httpOnly; SameSite=Lax`
+ * cookie isn't sent cross-origin and Safari ITP blocks third-party cookies.
+ * No ambient authority either. Stored in `sessionStorage` (dies with the tab).
  */
 
 import { bridgePortalUrl } from "@/lib/platform";
@@ -51,16 +38,11 @@ export function setBridgeToken(token: string | null): void {
     if (token) sessionStorage.setItem(TOKEN_KEY, token);
     else sessionStorage.removeItem(TOKEN_KEY);
   } catch {
-    // Private-mode storage failures shouldn't crash the wizard; the session
-    // just won't survive a reload.
+    // Private-mode failures: the session just won't survive a reload.
   }
 }
 
-/**
- * One JSON call against the portal. Throws {@link BridgeApiError} on any
- * non-2xx, carrying the portal's `error` string when it sent one — those
- * strings are written for humans and are surfaced directly in the wizard.
- */
+/** One JSON call against the portal; throws {@link BridgeApiError} with the portal's human-readable `error`. */
 export async function bridgeApi<T>(path: string, init?: RequestInit): Promise<T> {
   const base = bridgePortalUrl("/");
   if (!base) throw new BridgeApiError("This build has no Discord bridge portal configured.", 0);
@@ -89,7 +71,7 @@ export async function bridgeApi<T>(path: string, init?: RequestInit): Promise<T>
   return body;
 }
 
-// ── Wire types (mirror packages/portal/web/src/api.ts) ───────────────────────
+// Wire types (mirror packages/portal/web/src/api.ts).
 
 export interface BridgeMe {
   user: { id: string; username: string; avatarUrl?: string } | null;
@@ -157,8 +139,6 @@ export type PreviewResult =
   | { present: false; installUrl: string }
   | { present: true; importId: string; plan: ImportPlanView; defaultRelays: string[] };
 
-// ── Calls ───────────────────────────────────────────────────────────────────
-
 export const getBridgeMe = () => bridgeApi<BridgeMe>("/api/me");
 
 export const previewImport = (guildId: string) =>
@@ -192,28 +172,11 @@ export const retryImport = (importId: string) =>
 export const rerunImportHistory = (importId: string) =>
   bridgeApi<{ ok: true }>(`/api/imports/${importId}/rerun-history`, { method: "POST" });
 
-// ── Discord sign-in (popup + postMessage) ───────────────────────────────────
-
 /**
- * Sign in to the portal with Discord, in a popup.
- *
- * OAuth cannot happen inside our own page: the redirect has to land on the
- * portal's registered `redirect_uri`. So the portal opens in a popup and
- * finishes the exchange there. Getting the session token BACK is the subtle
- * part: Discord's pages carry `Cross-Origin-Opener-Policy:
- * same-origin-allow-popups`, which severs the popup's `window.opener` the
- * moment it navigates to the login page — so the callback's postMessage
- * usually has no one to talk to. The reliable channel is polling: we mint a
- * random nonce, hand it to the portal in the auth URL, and poll
- * `/api/auth/claim` until the callback has landed and the portal releases the
- * token (the nonce is single-use, spent by the first successful claim).
- * postMessage is kept as a fast path for the runs where the opener survives,
- * verified against the portal origin before trusting anything.
- *
- * Resolves once the token is stored. Rejects if the popup is blocked, or on
- * timeout; a CLOSED popup only starts a short grace period, because in the
- * successful flow the callback closes the popup itself and the claim may
- * still be a poll away.
+ * Sign in to the portal with Discord in a popup. Discord's COOP severs
+ * `window.opener`, so the reliable channel is polling `/api/auth/claim` with a
+ * single-use nonce; postMessage (origin-checked) is a fast path. A closed popup
+ * only starts a grace period, since the callback closes it itself.
  */
 export function connectDiscord({ timeoutMs = 5 * 60_000, pollMs = 2_000, closeGraceMs = 15_000 } = {}): Promise<void> {
   const base = bridgePortalUrl("/");
@@ -246,7 +209,7 @@ export function connectDiscord({ timeoutMs = 5 * 60_000, pollMs = 2_000, closeGr
     };
 
     const onMessage = (event: MessageEvent) => {
-      // Same-origin check first: any page can postMessage at us.
+      // Any page can postMessage at us.
       if (event.origin !== new URL(base).origin) return;
       const data = event.data as { type?: string; token?: string } | null;
       if (!data || data.type !== BRIDGE_SESSION_MESSAGE) return;
@@ -274,9 +237,7 @@ export function connectDiscord({ timeoutMs = 5 * 60_000, pollMs = 2_000, closeGr
     };
     const claimTimer = setInterval(() => void claim(), pollMs);
 
-    // The callback page closes the popup itself, possibly before our next
-    // claim poll — so a closed popup means "cancelled" only once a grace
-    // period of polling has also come up empty.
+    // The callback closes the popup itself; treat closed as cancelled only after a grace period.
     let closedAt = 0;
     const closedTimer = setInterval(() => {
       if (!popup.closed) return;

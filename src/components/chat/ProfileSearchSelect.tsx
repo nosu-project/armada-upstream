@@ -14,11 +14,8 @@ import { resolvePubkey } from "@/lib/resolvePubkey";
 import { cn } from "@/lib/utils";
 
 /**
- * A name/nip05 user picker built on the NIP-50 profile search (routed to the
- * search relays), with people you follow sorted first and badged. Mirrors
- * Ditto's left-sidebar account search, scoped down to a single-select picker
- * for flows like the Concord direct-invite. Inline (not a portal dropdown) so
- * it lives naturally inside a dialog.
+ * Single-select user picker on NIP-50 profile search (follows first). Inline,
+ * not a portal dropdown, so it sits naturally inside a dialog.
  */
 export function ProfileSearchSelect({
   onSelect,
@@ -27,7 +24,6 @@ export function ProfileSearchSelect({
   autoFocus,
 }: {
   onSelect: (profile: SearchProfile) => void;
-  /** When set, the matching row shows a spinner (e.g. an invite is sending). */
   busyPubkey?: string | null;
   placeholder?: string;
   autoFocus?: boolean;
@@ -36,25 +32,19 @@ export function ProfileSearchSelect({
   const { data: profiles, isFetching, followedPubkeys } = useSearchProfiles(query);
 
   const trimmed = query.trim();
-  // A pasted npub/nprofile/hex names the person directly — the NIP-50 search
-  // only covers profiles the search relays know by text, which is useless for
-  // an exact key handoff (the Private community's whole growth path).
+  // A pasted npub/nprofile/hex names the person directly (text search can't).
   const pastedPubkey = resolvePubkey(trimmed);
   const results = trimmed.length >= 1 ? profiles ?? [] : [];
 
-  // Clearing the query collapses the popover (its open state is derived from
-  // `trimmed`), so a pick dismisses the dropdown; the caller surfaces its own
-  // "invite sent" confirmation, and re-searching re-opens it.
+  // Clearing the query closes the popover (open is derived from `trimmed`).
   const handleChoose = (profile: SearchProfile) => {
     setQuery("");
     onSelect(profile);
   };
 
   return (
-    // Results live in a portaled popover anchored to the input, so the dialog
-    // keeps its resting height instead of growing (or scrolling) as you type.
-    // It dismisses only when the query clears or on Escape; outside clicks are
-    // ignored so clicking back into the input doesn't wipe the search.
+    // Portaled so the dialog keeps its height. Outside clicks are ignored so
+    // clicking back into the input doesn't wipe the search.
     <Popover open={trimmed.length >= 1} onOpenChange={(o) => { if (!o) setQuery(""); }}>
       <PopoverAnchor asChild>
         <div className="relative">
@@ -82,9 +72,7 @@ export function ProfileSearchSelect({
         sideOffset={6}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
-        // Clamped to the space Radix measured, not a flat 15rem: inside a
-        // dialog the content box is the popover's clipping ancestor, so rows
-        // past its edge would be cut off rather than reachable by scrolling.
+        // Clamped to Radix's measured space: the dialog would clip rows past its edge.
         className="w-[var(--radix-popover-trigger-width)] max-h-[min(15rem,var(--radix-popover-content-available-height))] overflow-y-auto p-1"
       >
         {pastedPubkey ? (
@@ -114,12 +102,7 @@ export function ProfileSearchSelect({
   );
 }
 
-/**
- * The row for an exact pasted key: fetch that author's profile for display and
- * hand the caller the same SearchProfile shape a search hit would carry. A
- * pubkey with no published kind-0 still gets a row (stub event) — the key is
- * the invitation, not the profile.
- */
+/** Row for an exact pasted key; a pubkey without a kind-0 still gets a stub row. */
 function PastedPubkeyRow({
   pubkey,
   isFollowed,

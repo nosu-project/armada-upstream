@@ -9,26 +9,16 @@ import { useEmojiSource } from "@/hooks/useEmojiSource";
 import { toast } from "@/hooks/useToast";
 
 /**
- * Attribution footer for a custom emoji: which NIP-30 pack it came from, plus a
- * one-tap add so seeing an emoji you like — as a reaction or inline in a
- * message — is enough to get it.
- *
- * While the author-scoped relay lookup is in flight it shows a skeleton rather
- * than an empty gap — that lookup is several relay round-trips, so the answer
- * can arrive a beat after the popover opens. Renders nothing only once it
- * settles with no pack — a reaction tag (and an inline `emoji` tag) carries only
- * `[emoji, code, url]`, so a pack we've never seen stays unnamed rather than
- * being guessed at. When `authorPubkey` (who typed the message / left the
- * reaction) is known, an unknown pack is chased down over THAT author's own
- * relays before giving up.
+ * Which NIP-30 pack a custom emoji came from, plus one-tap add. An unknown pack
+ * is looked up over `authorPubkey`'s relays (skeleton meanwhile); renders
+ * nothing if unresolved, since emoji tags carry no pack reference.
  */
 export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPubkey?: string }) {
   const { user } = useCurrentUser();
   const { source, isLoading } = useEmojiSource(url, authorPubkey);
   const alreadyAdded = useHasEmojiPack(source?.coord);
   const { mutateAsync: addPack, isPending } = useAddEmojiPack();
-  // Flip the button the moment the publish lands, rather than waiting for the
-  // list re-read to settle (mirrors EmojiPackCard).
+  // Flip instantly on success (mirrors EmojiPackCard).
   const [justAdded, setJustAdded] = useState(false);
 
   const onAdd = useCallback(async () => {
@@ -52,8 +42,7 @@ export function EmojiSourceFooter({ url, authorPubkey }: { url: string; authorPu
 
   if (!source) {
     if (!isLoading) return null;
-    // Author-scoped lookup in flight — mirror the resolved footer's layout so
-    // the popover doesn't jump when the name lands.
+    // Mirror the resolved layout so the popover doesn't jump.
     return (
       <div className="flex items-center gap-2 border-t border-border/60 px-3 py-2">
         <div className="min-w-0 flex-1 space-y-1">

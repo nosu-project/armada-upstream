@@ -7,13 +7,7 @@ import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { SUBJECT_MAX_BYTES, subjectBytes } from "@/concord/lib/forum";
 import { cn } from "@/lib/utils";
 
-/**
- * Write a forum post (CORD-03 §3) in the channel pane itself, laid out like
- * the page it will become: the title in the heading's slot, the body in the
- * composer's document layout beneath it — attachments, emoji, mentions and
- * drafts included — and a Post button. It takes the feed's place while open,
- * and the result is ONE kind-9 message carrying a `subject` tag.
- */
+/** Write a forum post (CORD-03 §3) in-pane: ONE kind-9 message with a `subject` tag. */
 export function NewPostPane({
   channelName,
   groupId,
@@ -26,14 +20,11 @@ export function NewPostPane({
   className,
 }: {
   channelName: string;
-  /** The channel id, scoping the composer's draft and mention lookups. */
   groupId: string;
   mentionPubkeys?: string[];
   canMentionEveryone?: boolean;
   conversationRelays?: string[];
-  /** The channel's pre-flight send gate (rate limit, pause). */
   canSend?: () => string | null;
-  /** Publish the post; the composer's content-derived tags ride along. */
   onSubmit: (title: string, content: string, tags: string[][]) => Promise<void>;
   onCancel: () => void;
   className?: string;
@@ -47,9 +38,7 @@ export function NewPostPane({
   const over = bytes > SUBJECT_MAX_BYTES;
   const remaining = SUBJECT_MAX_BYTES - bytes;
 
-  // The composer asks this exactly once per send, before it clears itself, so
-  // a missing title blocks the send with the reason shown, instead of
-  // publishing an untitled message the feed would never list.
+  // Block send on a missing title, or the feed would never list it.
   const gate = useCallback((): string | null => {
     if (!title.trim()) return "Give your post a title first.";
     if (over) return `Titles are limited to ${SUBJECT_MAX_BYTES} bytes.`;
@@ -60,9 +49,7 @@ export function NewPostPane({
     async (content: string, tags: string[][]) => {
       setError(null);
       try {
-        // The raw title; the page's handler runs it through `subjectTags`
-        // (fold + validate) as the single canonical step, so it isn't done
-        // twice. The `gate` above already blocks an empty or over-long one.
+        // The handler's `subjectTags` is the single canonical fold/validate step.
         await onSubmit(title, content, tags);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Couldn't publish the post.");
@@ -99,7 +86,6 @@ export function NewPostPane({
               over && "text-destructive",
             )}
             onKeyDown={(event) => {
-              // Enter moves on to the body; a post has no one-line form.
               if (event.key === "Enter") {
                 event.preventDefault();
                 bodyRef.current?.querySelector("textarea")?.focus();

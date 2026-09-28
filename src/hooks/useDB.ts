@@ -13,9 +13,7 @@ import type { ArmadaDB } from "@/lib/db/types";
  * const cursor = await db.kv.get<number>(`cursor:${concordId}`);
  * ```
  *
- * The database itself is returned, not a promise — every method waits for its
- * own storage internally. `tenant(id)` returns the same store for the same id,
- * so it's safe to call inline in a render or an effect.
+ * Returns the database itself (methods await storage); `tenant(id)` is stable per id.
  */
 export function useDB(): ArmadaDB {
   const db = useContext(ArmadaDBContext);

@@ -12,24 +12,13 @@ import type { ImetaEntry } from "@/lib/imeta";
 import { cn } from "@/lib/utils";
 
 /**
- * A pinned message's attachments, rendered INLINE.
- *
- * A pin is often the only place a keyless reader can reach this content: they
- * hold none of the Channel's history, so jump-to-context is unavailable to
- * them and the message exists nowhere else they can look. The blob's own
- * decryption key rides in the message's `imeta` tags, which sit INSIDE the
- * proof — so a reader who cannot decrypt a single chat message can still fetch
- * and open this file, and know it is the file the author attached.
- *
- * Deliberately capped: a pin bar is a summary, not a gallery.
+ * A pin's attachments INLINE: keyless readers can't jump to context, but the
+ * blob key rides in `imeta` inside the proof. Capped.
  */
 
-/** At most this many attachments render; the rest are counted. */
 const MAX_INLINE = 4;
-/** Preview box height — enough to recognise an image, not enough to take over. */
 const PREVIEW_CLASS = "max-h-32 max-w-full rounded object-contain";
 
-/** One image, decrypted client-side when the imeta carried a key, walked across mirrors like the timeline's. */
 function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void }) {
   const [revealed, setRevealed] = useState(false);
   const { resolved, onError, failed } = useMediaWithFallback({
@@ -41,10 +30,7 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
   const src = resolved.status === "ready" ? resolved.src : undefined;
 
   if (failed) {
-    // Never a dead end: fall back to the download affordance, which fetches
-    // and decrypts by the same route. That is also the right landing place for
-    // an oversized blob — a pin preview is not worth tens of megabytes unasked,
-    // but the card makes the whole file one deliberate tap away.
+    // Fall back to the download card (also for oversized blobs).
     return (
       <FileAttachment
         url={entry.url}
@@ -55,9 +41,7 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
       />
     );
   }
-  // A spoiler stays covered in the pin bar as it does in the timeline: the
-  // bar opens for every member, unprompted, so it is the last place to show
-  // what the sender hid.
+  // The bar opens for everyone unprompted, so keep spoilers covered.
   const cover = entry.spoiler && !revealed
     ? <MediaSpoilerCover compact onReveal={() => setRevealed(true)} />
     : null;
@@ -78,13 +62,8 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
       onError={onError}
     />
   );
-  // The shared gallery when the bar offers one — the same surface an in-chat
-  // image opens (swipe, zoom, download) — and a plain link otherwise. The link
-  // goes to the remote URL, never the resolved blob: a blob carries the mime
-  // the SENDER chose and opens same-origin, so navigating to one hands them a
-  // document in our own origin.
-  // While covered, the cover is the only way in: no click or tab stop on the
-  // gallery button, and no href on the link (one without is not focusable).
+  // Link to the remote URL, never the blob: a blob with a sender-chosen mime
+  // opens same-origin. While covered, the cover is the only way in.
   return onOpen ? (
     <button
       type="button"
@@ -115,7 +94,6 @@ export function PinAttachments({
 }: {
   content: string;
   tags: string[][];
-  /** Open the shared gallery at this pin's Nth image. */
   onOpenImage?: (indexWithinPin: number) => void;
 }) {
   const entries = pinAttachmentEntries(content, tags);

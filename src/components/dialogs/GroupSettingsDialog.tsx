@@ -34,10 +34,7 @@ function randomInviteCode(): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * Admin controls for a channel: edit NIP-29 metadata (kind 9002) and mint
- * invite codes (kind 9009). The relay enforces permissions by role.
- */
+/** Channel admin: edit NIP-29 metadata (kind 9002) and mint invite codes (kind 9009). */
 export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: GroupSettingsDialogProps) {
   const { editMetadata, createInvite } = useGroupModeration(relayUrl, group.id);
   const [name, setName] = useState(group.name);
@@ -49,7 +46,6 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
   const [copied, setCopied] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  // Re-seed form state whenever the dialog opens for (possibly updated) group data.
   useEffect(() => {
     if (open) {
       setName(group.name);

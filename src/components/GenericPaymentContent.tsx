@@ -12,24 +12,14 @@ interface GenericPaymentContentProps {
   target: PaymentTarget;
 }
 
-/**
- * Renders a non-native payment method (Monero, Ethereum, Nano, Cash App, …) in
- * the zap dialog: a QR code of the preferred URI, a copyable address, and a
- * clickable button that opens the native URI (e.g. `monero:<addr>`) where one
- * exists. We never generate `payto:` URIs — the native scheme is preferred and
- * custodial handles fall back to their web payment page.
- */
+/** Non-native payment method (Monero, Ethereum, Cash App, …): QR, address and native-URI button. Never `payto:`. */
 export function GenericPaymentContent({ method, target }: GenericPaymentContentProps) {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 
   const uri = useMemo(() => method.uri(target.authority), [method, target.authority]);
-  // QR encodes the native URI when there is one (so wallet apps can scan it),
-  // otherwise the bare address/handle.
   const qrValue = uri ?? target.authority;
 
-  // Truncate long addresses (e.g. Monero) the same way the wallet page does;
-  // short handles (Cash App, etc.) are shown in full.
   const displayAddress = useMemo(() => {
     const addr = target.authority;
     return addr.length > 24 ? `${addr.slice(0, 12)}...${addr.slice(-8)}` : addr;

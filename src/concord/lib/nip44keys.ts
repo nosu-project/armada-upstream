@@ -1,17 +1,11 @@
 /**
  * NIP-44 v2 per-message key disclosure — the primitive Pins are built on
- * (CORD-04 §7).
+ * (CORD-04 §7). Per-message keys are `hkdf-expand(conversation_key, nonce, 76)`
+ * = `chacha_key[32] || chacha_nonce[12] || hmac_key[32]`, one-way, so disclosing
+ * them exposes exactly one message.
  *
- * NIP-44 v2 never encrypts two messages under the same key: it derives
- * per-message keys as `hkdf-expand(conversation_key, nonce, 76)`, split
- * `chacha_key[32] || chacha_nonce[12] || hmac_key[32]`. That expansion is
- * one-way, so disclosing ONE message's 76 bytes exposes exactly that message —
- * never the conversation key, the epoch, or the author's other traffic.
- *
- * nostr-tools keeps `getMessageKeys` and the payload decoder internal, so both
- * are reproduced here byte-for-byte against its implementation (verified by
- * round-trip tests against its own `encrypt`). This file is wire format: a
- * divergence here silently breaks pin verification across clients.
+ * nostr-tools keeps `getMessageKeys` and the decoder internal, so they're
+ * reproduced here byte-for-byte. Wire format: divergence breaks pin verification.
  */
 
 import { chacha20 } from "@noble/ciphers/chacha.js";
@@ -32,10 +26,7 @@ export interface MessageKeys {
 /** Serialized disclosure length: 32 + 12 + 32. */
 export const MESSAGE_KEYS_BYTES = 76;
 
-/**
- * The per-message expansion. Requires the conversation key, so only a member
- * holding the channel key at that epoch can produce a disclosure.
- */
+/** The per-message expansion; needs the conversation key (i.e. a member at that epoch). */
 export function getMessageKeys(conversationKey: Uint8Array, nonce: Uint8Array): MessageKeys {
   const keys = hkdfExpand(sha256, conversationKey, nonce, MESSAGE_KEYS_BYTES);
   return {
@@ -117,15 +108,9 @@ function calcPaddedLen(len: number): number {
 }
 
 /**
- * Open a NIP-44 v2 payload using DISCLOSED keys instead of the conversation
- * key — the reader half of a pin's proof. Returns undefined on any failure
- * (malformed payload, MAC mismatch, bad padding), never throwing: a hostile
- * entry is dropped, not an exception.
- *
- * The MAC is `hmac(sha256, hmac_key, nonce || ciphertext)`, and both the nonce
- * and ciphertext ride in the payload itself, so the disclosed keys are the only
- * secret input — which is exactly what makes a pin verifiable by a member who
- * holds none of the channel's history.
+ * Open a NIP-44 v2 payload with DISCLOSED keys (a pin's proof). Returns
+ * undefined on any failure, never throws. Nonce and ciphertext ride in the
+ * payload, so a member with no channel history can verify.
  */
 export function decryptWithDisclosedKeys(payload: string, keys: MessageKeys): string | undefined {
   const decoded = decodePayload(payload);
@@ -141,10 +126,7 @@ export function decryptWithDisclosedKeys(payload: string, keys: MessageKeys): st
   return unpad(padded);
 }
 
-/**
- * Produce the disclosure for one already-encrypted payload. Requires the
- * conversation key — i.e. the caller can read the message they are pinning.
- */
+/** Produce the disclosure for one payload; needs the conversation key. */
 export function discloseKeysFor(payload: string, conversationKey: Uint8Array): MessageKeys | undefined {
   const decoded = decodePayload(payload);
   if (!decoded) return undefined;

@@ -13,7 +13,7 @@ import {
   discoverRelayListWithStatus,
   KIND_RELAY_LIST,
   newestRelayList,
-  publishRelayListEvent,
+  publishSignedEventToRelays,
   queryExplicitRelaysWithStatus,
   relayListIsNewerThanMetadata,
   type RelayListDiscovery,
@@ -32,7 +32,6 @@ import { KIND_INVITE_LIST } from "@/concord/lib/kinds";
 import type { RelayMetadata } from "@/contexts/AppContext";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Whether phase-one preseed observed a pointer newer than its local baseline. */
 export function relayPointerChangedDuringPreseed(
   metadata: RelayMetadata,
   pubkey: string,
@@ -49,11 +48,7 @@ export function relayPointerChangedDuringPreseed(
     );
 }
 
-/**
- * Thrown by `publish` when the account has no local NIP-65 list but the
- * pre-sign refresh found one on the wire: publishing would shadow a list the
- * user already has, so the caller should adopt `discovery` instead.
- */
+/** No local NIP-65 list but one exists on the wire: adopt `discovery` instead of shadowing it. */
 export class ExistingRelayListError extends Error {
   constructor(readonly discovery: RelayListDiscovery) {
     super("Your account already has a NIP-65 relay list; review it instead of creating a new one");
@@ -61,10 +56,7 @@ export class ExistingRelayListError extends Error {
   }
 }
 
-/**
- * Thrown by `publish` when the account has no local NIP-65 list and too few
- * relays answered to rule one out: an empty read is not proof of absence.
- */
+/** No local list and too few relays answered to rule one out. */
 export class RelayListAbsenceUnconfirmedError extends Error {
   constructor() {
     super("Couldn't reach enough relays to confirm your account has no saved relay list yet; nothing was published");
@@ -73,11 +65,8 @@ export class RelayListAbsenceUnconfirmedError extends Error {
 }
 
 /**
- * Whether an EMPTY discovery read is strong enough to treat "no relay list"
- * as a fact rather than an outage: every required relay (each one a new list
- * would be written to) must have reached EOSE, and so must a majority of the
- * dedicated discovery indexes that aren't also required. An empty read is
- * otherwise indistinguishable from a failed one.
+ * An empty read is fact only if every required relay and a majority of other discovery
+ * indexes reached EOSE.
  */
 export function relayListAbsenceConfirmed(
   answered: Iterable<string>,
@@ -94,10 +83,8 @@ export function relayListAbsenceConfirmed(
 }
 
 /**
- * Discover, adopt and explicitly publish the logged-in user's NIP-65 list.
- * Discovery never signs. Publishing signs one event and fans those exact bytes
- * to every declared/app/discovery relay, so replaceable-event ordering cannot
- * diverge across destinations.
+ * Discovery never signs. Publishing signs once and fans the exact bytes everywhere so
+ * replaceable ordering can't diverge.
  */
 export function useNip65RelaySetup() {
   const { nostr } = useNostr();
@@ -129,9 +116,7 @@ export function useNip65RelaySetup() {
         },
       };
     });
-    // The general pool changes on the next render. Invalidate the self-owned
-    // caches then; their refetches and NostrSync's restarted standing REQ will
-    // ask the newly-adopted relays.
+    // Invalidate once the pool has changed on the next render.
     setTimeout(() => {
       for (const queryKey of SELF_SYNC_OWNER_QUERY_KEYS) {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
@@ -149,7 +134,7 @@ export function useNip65RelaySetup() {
     );
   }, [discoveryRelays, nostr, user]);
 
-  /** `discover`, plus which relays reached EOSE, for callers that must tell empty from offline. */
+  /** Also reports which relays reached EOSE. */
   const discoverWithStatus = useCallback(async (bootstrapRelays: string[] = []) => {
     if (!user) throw new Error("User is not logged in");
     return discoverRelayListWithStatus(
@@ -182,9 +167,8 @@ export function useNip65RelaySetup() {
     ]);
     const timeout = publishTimeoutMs(user.method);
 
-    // Two-phase relay rotation: the old/source set remains authoritative until
-    // every proposed write relay has accepted the exact signed portable
-    // records. Only then publish the 10002 pointer that makes the new set live.
+    // Two-phase rotation: the source set stays authoritative until every new write relay accepts
+    // the portable records; only then publish the 10002.
     const sourceRelays = uniqueRelayUrls([
       ...oldSelfRelays,
       ...config.appRelays,
@@ -199,9 +183,7 @@ export function useNip65RelaySetup() {
     );
     const ownsPointer = config.relayMetadata.pubkey === user.pubkey;
 
-    // With no local list, this publish CREATES one — sound only once the wire
-    // affirmatively has none. That absence read is the whole precondition;
-    // nothing is signed before it.
+    // Creating a list is sound only once the wire affirmatively has none.
     if (!ownsPointer) {
       const existing = await discoverRelayListWithStatus(
         nostr,
@@ -218,10 +200,7 @@ export function useNip65RelaySetup() {
       }
     }
 
-    // Phase one exists to move state off an old pointer before other devices
-    // stop following it. A first list replaces no pointer: the state already
-    // lives on the app relays, which keep carrying it, and the declared write
-    // set is filled by ordinary settings sync once it is live.
+    // A first list replaces no pointer, so phase one is unnecessary.
     let refreshed: RelayListDiscovery | undefined;
     if (ownsPointer) {
       const store = await eventStore;
@@ -256,11 +235,8 @@ export function useNip65RelaySetup() {
         localSingletons,
       );
 
-      // Phase one can take several signer/relay round-trips. Re-read both the
-      // pointer and every portable coordinate until two consecutive snapshots
-      // agree. This is the bounded optimistic-transaction available on Nostr:
-      // a sibling write that lands during phase one is re-mirrored, never left
-      // only on a relay the new pointer is about to remove.
+      // Re-read until two consecutive snapshots agree, so a sibling write during phase one is
+      // re-mirrored rather than stranded.
       const pointerRefreshRelays = uniqueRelayUrls([...sourceRelays, ...proposedWrites]);
       const refreshPointer = async () => {
         const read = await discoverRelayListWithStatus(
@@ -338,28 +314,21 @@ export function useNip65RelaySetup() {
     if (event.pubkey !== user.pubkey) {
       throw new Error("The signer returned a different account");
     }
-    // Refuse the pointer fan-out if its exact bytes and destinations could not
-    // first be made durable. Partial delivery without that retry record can
-    // strand old devices on the previous relay set.
+    // Must be durably queued first, or a partial delivery could strand old devices.
     await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
-    const result = await publishRelayListEvent(nostr, event, targets, timeout);
+    const result = await publishSignedEventToRelays(nostr, event, targets, timeout);
     await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
     if (result.accepted.length === 0) {
       throw new Error("No relay accepted your signed relay list");
     }
     const rejected = new Set(result.rejected);
-    // Only the write relays named by the previous authoritative pointer are
-    // the compatibility bridge for an old device. App/discovery relays remain
-    // best-effort (and durably queued above): treating one dead public index as
-    // authoritative would make an otherwise safe relay rotation impossible.
+    // Only the previous pointer's write relays are authoritative; app/discovery relays are
+    // best-effort.
     if (oldDeclaredWrites.some((url) => rejected.has(url))) {
       throw new Error("An existing account-state relay missed the new relay list; retry before switching");
     }
 
-    // ACK means only that a relay received these bytes, not that they remain
-    // the NIP-01 winner. A sibling can publish between the pre-sign refresh and
-    // this fan-out. Re-read every old/new authoritative write relay and adopt
-    // only if our exact event is still the aggregate winner.
+    // An ACK doesn't mean we're still the NIP-01 winner; re-read and adopt only if we are.
     const confirmed = await discoverRelayListWithStatus(
       nostr,
       user.pubkey,

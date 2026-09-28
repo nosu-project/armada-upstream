@@ -5,29 +5,12 @@ import { FallbackImage } from "@/components/ui/FallbackImage";
 import { captureMirrors, captureUrl } from "./captures";
 
 /**
- * The app itself, under the landing's pitch: a display and a phone floating in
- * the sea's space, showing whichever community the pitch has dealt. Every
- * screen is the real routed app on seeded data —
- * regenerate them with `e2e/landing-screenshots.spec.ts` rather than editing
- * the images, so they keep tracking the UI.
- *
- * Each device is a FLAT element with its own `perspective()` pose, and its
- * thickness is a stack of flat layers pushed back along Z under the same pose.
- * Deliberately not `transform-style: preserve-3d` with real edge faces:
- * Chrome rasterizes a plane inside a 3D rendering context at about 1x, which
- * turned the screenshots to mush on a 2x screen, while a flat element under a
- * perspective transform rasterizes at full density. With no 3D context there
- * is no depth sorting either, so paint order does it: layers back to front,
- * the screen last, the phone after the display.
- *
- * On a real pointer each device leans toward the cursor by its own amount.
- * The pointer writes two custom properties onto the stage inside one animation
- * frame and every pose reads them, so a hover is a style pass on this subtree
- * and a composite, never a React render. Nothing moves otherwise.
- *
- * Lazy and below the fold, so the landing's first frame never waits on them.
- * Under `sm` only the phone shows: a desktop capture scaled to a phone's width
- * is unreadable, and a hidden lazy `<img>` is never fetched.
+ * Display and phone showing real app captures (regenerate with
+ * `e2e/landing-screenshots.spec.ts`). Each device is a flat element under its
+ * own `perspective()`, with thickness as stacked layers: preserve-3d makes
+ * Chrome raster at ~1x (blurry on 2x). Paint order stands in for depth sort.
+ * Pointer lean is via custom properties, never React renders. Under `sm`
+ * only the phone shows.
  */
 
 /** Pointer offset from the stage's centre, -0.5..0.5 on each axis. */
@@ -38,24 +21,17 @@ interface Pose {
   ry: number;
   rx: number;
   rz: number;
-  /** How far the pointer can push each, degrees per unit of offset. */
+  /** Pointer push, degrees per unit of offset. */
   leanY: number;
   leanX: number;
-  /**
-   * Viewing distance, px. The display needs the longer one: at 1600px a panel
-   * that wide shrinks its back layers inward by about as much as the turn
-   * pushes them out, so its edge nets to nothing — the way a wide object seen
-   * up close hides its own side.
-   */
+  /** Viewing distance, px. Wide panels need more, or back layers shrink in enough to hide the edge. */
   perspective: number;
   /** Body thickness in px, and how many layers draw it. */
   depth: number;
   layers: number;
 }
 
-/** Turned toward the phone, tipped back a touch. */
 const DISPLAY: Pose = { ry: 16, rx: 4, rz: 0, leanY: 10, leanX: 6, perspective: 3200, depth: 30, layers: 15 };
-/** Turned toward the display, with a slight roll. */
 const PHONE: Pose = { ry: -24, rx: 6, rz: 3, leanY: 18, leanX: 10, perspective: 1600, depth: 26, layers: 13 };
 
 function transformAt(p: Pose, z: number): string {
@@ -65,13 +41,7 @@ function transformAt(p: Pose, z: number): string {
   );
 }
 
-/**
- * The body's layers, back to front, each shaded a little lighter than the one
- * behind it so the edge reads as a lit metal rim rather than a flat band. Kept
- * well above the sea's own lightness: a body as dark as the background is a
- * body nobody can see. Built once
- * per device at module load, so React never sees new style objects.
- */
+/** Body layers back to front, progressively lighter; built once per device at load. */
 function bodyLayers(p: Pose, radius: number): React.CSSProperties[] {
   return Array.from({ length: p.layers }, (_, i) => {
     const t = i / (p.layers - 1); // 0 = back, 1 = just behind the screen
@@ -90,7 +60,6 @@ const PHONE_BODY = bodyLayers(PHONE, PHONE_RADIUS);
 const DISPLAY_FACE = { transform: transformAt(DISPLAY, 0), borderRadius: DISPLAY_RADIUS } as React.CSSProperties;
 const PHONE_FACE = { transform: transformAt(PHONE, 0), borderRadius: PHONE_RADIUS } as React.CSSProperties;
 
-/** Shared by every layer and face: the lean eases rather than snaps. */
 const MOVES = "transition-transform duration-700 ease-out motion-reduce:transition-none";
 
 function Body({ layers }: { layers: React.CSSProperties[] }) {
@@ -103,12 +72,7 @@ function Body({ layers }: { layers: React.CSSProperties[] }) {
   );
 }
 
-/**
- * One device's screen: the capture for `slugs[index]`, crossfading from the
- * one before it. Only the current capture and its two neighbours are mounted,
- * so the next one is already decoded when it is dealt and the rest are never
- * fetched until they are close.
- */
+/** Crossfading capture; only the current one and its neighbours are mounted. */
 function Screen({
   slugs,
   index,
@@ -156,15 +120,12 @@ export function ProductShots({
 }: {
   /** Capture slugs, as keyed in `captures.ts`. */
   slugs: readonly string[];
-  /** Which capture is on screen. */
   index: number;
-  /** What the current capture shows, for its alt text. */
   label: string;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
 
-  // Lean toward a real pointer. Touch has no hover to follow, and reduced
-  // motion asked for the stage to hold still, so both keep the resting poses.
+  // Touch and reduced motion keep resting poses.
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -184,8 +145,7 @@ export function ProductShots({
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(apply);
     };
-    // Measured once per visit rather than per move: reading layout on every
-    // pointer event is what turns a hover into a stream of forced reflows.
+    // Measure once per visit, not per move, to avoid forced reflows.
     const onEnter = () => {
       rect = stage.getBoundingClientRect();
     };
@@ -215,7 +175,6 @@ export function ProductShots({
 
   return (
     <div ref={stageRef} style={STAGE_STYLE} className="relative flex w-full items-center justify-center py-10">
-      {/* ── Display ── */}
       <div className="relative hidden w-[74%] sm:block">
         <Body layers={DISPLAY_BODY} />
         <div
@@ -233,7 +192,7 @@ export function ProductShots({
         </div>
       </div>
 
-      {/* ── Phone ── After the display, so it paints over the display's edge. */}
+      {/* After the display, so it paints over the display's edge. */}
       <div className="relative w-60 shrink-0 sm:-ml-[5%] sm:mt-[12%] sm:w-[21%]">
         <Body layers={PHONE_BODY} />
         <div

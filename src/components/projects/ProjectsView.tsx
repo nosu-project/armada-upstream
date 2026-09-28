@@ -32,11 +32,6 @@ import {
 type Filter = "all" | "repositories" | "prs" | "issues";
 type ViewMode = "grid" | "list";
 
-// ---------------------------------------------------------------------------
-// People
-// ---------------------------------------------------------------------------
-
-/** Resolve a pubkey to its scoped display name. */
 function useName(pubkey: string): string {
   const author = useAuthor(pubkey);
   return useScopedDisplayName(pubkey, author.data?.metadata);
@@ -90,9 +85,7 @@ function PeopleStack({ pubkeys }: { pubkeys: string[] }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Contribution graph (GitHub-style activity heatmap for the last 26 weeks)
-// ---------------------------------------------------------------------------
+// Contribution graph: last 26 weeks.
 
 const DAYS_PER_WEEK = 7;
 const LEVEL_CLASSES = [
@@ -206,10 +199,6 @@ function ContributionGraph({ data }: { data: Record<string, number> }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Work-item visuals
-// ---------------------------------------------------------------------------
-
 const WORK_VISUALS: Record<ProjectWorkKind, { icon: typeof CircleDot; badge: string; icclass: string }> = {
   issue: { icon: CircleDot, badge: "bg-orange-500/10", icclass: "text-orange-500" },
   pr: { icon: GitPullRequest, badge: "bg-success/10", icclass: "text-success" },
@@ -242,12 +231,10 @@ function StatusChip({ status }: { status: ProjectWorkItem["status"] }) {
   );
 }
 
-/** A feed/list row for a single issue / patch / PR. */
 function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWorkItem; repoName?: string; onOpen?: () => void; onLabelClick?: (label: string) => void }) {
   const Comp = onOpen ? "button" : "article";
   const labels = item.labels ?? [];
-  // Rows are ordered by last activity, so a stale opening date beside a
-  // freshly bumped item would read as a sorting bug.
+  // Rows are ordered by last activity, so show that date.
   const activityAt = workItemActivityAt(item);
   const bumped = activityAt > item.createdAt;
   return (
@@ -278,9 +265,7 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
             <span aria-hidden>·</span>
             <span>by <AuthorName pubkey={item.author} /></span>
             {labels.slice(0, 3).map((label) => (
-              // Plain spans: the row is already a button, so a nested control
-              // would be invalid. Clicking is a pointer shortcut; the status
-              // filter bar remains the accessible filtering surface.
+              // Plain spans: the row is already a button, so no nested controls.
               <span
                 key={label}
                 onClick={onLabelClick ? (e) => { e.stopPropagation(); onLabelClick(label); } : undefined}
@@ -308,10 +293,6 @@ function WorkItemRow({ item, repoName, onOpen, onLabelClick }: { item: ProjectWo
     </Comp>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Repository card / row
-// ---------------------------------------------------------------------------
 
 function RepoIcon() {
   return (
@@ -350,7 +331,6 @@ function safeWeb(webUrl?: string): string | null {
   }
 }
 
-/** Segmented PRs/issues distribution bar. */
 function ActivityBar({ summary }: { summary: ProjectRepoSummary }) {
   const items = [
     { count: summary.prCount, bar: "bg-primary", label: summary.prCount === 1 ? "PR" : "PRs" },
@@ -409,9 +389,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
         selected && "ring-1 ring-primary/60",
       )}
     >
-      {/* A full-card overlay rather than a wrapping button: the card holds a
-          link and copy control, which may not nest inside one. Anything that
-          needs its own pointer target sits above it. */}
+      {/* Full-card overlay, not a wrapping button: the card holds controls that can't nest in one. */}
       {onOpen && (
         <button
           type="button"
@@ -467,12 +445,7 @@ function RepoCard({ repo, summary, people, selected, onOpen }: {
   );
 }
 
-/**
- * The denser repository layout. Its columns stack rather than compete for one
- * line: viewport breakpoints would keep every column mounted inside a narrow
- * community pane and crush the repository name — the one thing the row exists
- * to show — to zero width.
- */
+/** Columns stack (not viewport breakpoints) so a narrow pane doesn't crush the repo name. */
 function RepoRow({ repo, summary, people, selected, onOpen }: {
   repo: ProjectRepo;
   summary: ProjectRepoSummary;
@@ -527,10 +500,6 @@ function RepoRow({ repo, summary, people, selected, onOpen }: {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Tabs, stat pills, overview
-// ---------------------------------------------------------------------------
 
 const TABS: Array<{ label: string; value: Filter }> = [
   { label: "Overview", value: "all" },
@@ -603,20 +572,17 @@ function Overview({
   people: string[];
   onSelect: (f: Filter) => void;
   onOpenItem?: (item: ProjectWorkItem) => void;
-  /** The tab is part of the request: the overview cannot show a label filter. */
+  /** The overview can't show a label filter, so the click names a tab. */
   onLabelClick?: (label: string, target: Filter) => void;
 }) {
   const graph = useMemo(() => activityByDay(repos, items), [repos, items]);
   const prCount = items.filter((i) => i.kind !== "issue").length;
   const issueCount = items.filter((i) => i.kind === "issue").length;
   const repoNameByCoord = useMemo(() => new Map(repos.map((r) => [r.coord, r.name])), [repos]);
-  // "Recent activity" means exactly that: a long-quiet issue that just got a
-  // comment belongs above a newer one nobody has touched.
   const feed = useMemo(() => sortProjectWorkItems(items, "updated").slice(0, 20), [items]);
 
   return (
     <div className="space-y-6">
-      {/* Stat pills */}
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr))]">
         <StatPill count={repos.length} icon={FolderGit2} label="Repositories" onClick={() => onSelect("repositories")} />
         <StatPill count={prCount} icon={GitPullRequest} label="Pull requests" onClick={() => onSelect("prs")} />
@@ -625,7 +591,6 @@ function Overview({
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-        {/* Activity feed */}
         <section className="min-w-0 space-y-3">
           <h3 className="text-base font-semibold text-foreground">Recent activity</h3>
           {feed.length > 0 ? (
@@ -647,7 +612,6 @@ function Overview({
           )}
         </section>
 
-        {/* Rail: people + contribution graph */}
         <div className="min-w-0 space-y-6">
           <section className="space-y-3">
             <h3 className="text-base font-semibold text-foreground">People</h3>
@@ -671,12 +635,7 @@ function Overview({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Loading / empty
-// ---------------------------------------------------------------------------
-
-// The view renders inside panes narrower than the viewport (a community's main
-// area), so column counts derive from available width, not viewport breakpoints.
+// Width-derived columns: the view renders in panes narrower than the viewport.
 const CARD_GRID = "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))]";
 
 function CardsSkeleton() {
@@ -696,7 +655,6 @@ function FilteredOutNotice({ onShowAll }: { onShowAll: () => void }) {
   );
 }
 
-/** A dismissable "you are filtered" pill. Clicking anywhere on it clears. */
 function FilterChip({ label, clearLabel, onClear }: { label: string; clearLabel: string; onClear: () => void }) {
   return (
     <Button variant="secondary" size="sm" className="h-7 max-w-48 gap-1 px-2 text-xs" aria-label={clearLabel} onClick={onClear}>
@@ -753,17 +711,7 @@ function EmptyState({ icon: Icon, title, hint }: { icon: typeof FolderGit2; titl
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main view
-// ---------------------------------------------------------------------------
-
-/**
- * The shared Projects surface: tabbed Overview / Repositories / Pull Requests /
- * Issues, a stat-pill summary, a GitHub-style contribution graph, a people
- * roster and an activity feed. Purely presentational — callers supply the
- * repos and work items (Buzz from relay-wide NIP-34 scans, Concord from the
- * community's attached repositories) and optionally receive row clicks.
- */
+/** Shared presentational Projects surface; callers supply repos and work items. */
 export function ProjectsView({
   repos,
   items: workItems,
@@ -790,8 +738,7 @@ export function ProjectsView({
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // A repository can be detached while it is the active scope; falling back to
-  // the whole workspace beats showing an empty view with no way out.
+  // A repo detached while scoped falls back to the whole workspace.
   const activeRepo = useMemo(
     () => (repoFilter && repos.some((repo) => repo.coord === repoFilter) ? repoFilter : null),
     [repoFilter, repos],
@@ -809,8 +756,7 @@ export function ProjectsView({
     [repos, activeRepo],
   );
 
-  // Summaries stay workspace-wide: the repository cards keep their real counts
-  // while one of them is the active scope.
+  // Workspace-wide so repo cards keep real counts while scoped.
   const summaries = useMemo(() => repoSummaries(workItems), [workItems]);
   const people = useMemo(() => projectPeople(scopedRepos, items), [scopedRepos, items]);
   const repoNameByCoord = useMemo(() => new Map(repos.map((r) => [r.coord, r.name])), [repos]);
@@ -824,12 +770,10 @@ export function ProjectsView({
 
   const prs = useMemo(() => items.filter((i) => i.kind !== "issue"), [items]);
   const issues = useMemo(() => items.filter((i) => i.kind === "issue"), [items]);
-  // Empty-vs-filtered is judged workspace-wide: a repository scope that hides
-  // every pull request is a filter to clear, not an empty tracker.
+  // Judged workspace-wide: a scope hiding every PR is a filter, not an empty tracker.
   const anyPrs = useMemo(() => workItems.some((item) => item.kind !== "issue"), [workItems]);
   const anyIssues = useMemo(() => workItems.some((item) => item.kind === "issue"), [workItems]);
-  // Drafts count as open (they are unresolved work), matching the trackers
-  // people come from.
+  // Drafts count as open.
   const matchesFilters = useCallback((item: ProjectWorkItem) => {
     const unresolved = item.status === "open" || item.status === "draft";
     if (statusFilter === "open" && !unresolved) return false;
@@ -841,8 +785,7 @@ export function ProjectsView({
   const filteredPrs = useMemo(() => sortProjectWorkItems(prs.filter(matchesFilters), sort), [prs, matchesFilters, sort]);
   const filteredIssues = useMemo(() => sortProjectWorkItems(issues.filter(matchesFilters), sort), [issues, matchesFilters, sort]);
   const toggleLabel = useCallback((label: string) => setLabelFilter((current) => (current === label ? null : label)), []);
-  // From the overview a label click has to land somewhere it is visible, so it
-  // opens the matching tab with the status gate released.
+  // From the overview, open the matching tab with the status gate released.
   const openLabel = useCallback((label: string, target: Filter) => {
     setLabelFilter(label);
     setStatusFilter("all");
@@ -859,8 +802,7 @@ export function ProjectsView({
     setQuery("");
   }, []);
 
-  // "/" jumps to the search box, the way every tracker does. Editable targets
-  // and any open dialog keep the key, since they own the keyboard.
+  // "/" focuses search, except in editable targets or open dialogs.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -887,10 +829,7 @@ export function ProjectsView({
         {headerExtra}
       </div>
 
-      {/* Tabs + controls. Wrapping is measured from each item's content width,
-          so the controls drop to their own line the moment the tabs stop
-          fitting beside them — rather than squeezing the tabs, which no
-          viewport breakpoint could detect inside a narrow pane. */}
+      {/* flex-wrap so controls drop to their own line when tabs stop fitting (no breakpoint can detect this in a narrow pane). */}
       <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
         <Tabs filter={filter} onChange={setFilter} />
         {(filter !== "all" || activeRepo) && (
@@ -933,8 +872,6 @@ export function ProjectsView({
                 <option value="name">Name</option>
               </select>
             )}
-            {/* Repositories are the only list with two layouts; work items
-                always read as rows, so the toggle would be inert there. */}
             {filter === "repositories" && (
               <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
                 <Button

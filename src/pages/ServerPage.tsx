@@ -25,33 +25,23 @@ import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { activateScope, nip29Scope } from "@/wire/activation";
 
-/**
- * Server home (drill-down level 1). On mobile the server rail + channel list
- * fill the screen; the welcome/info pane only appears on desktop. Tapping a
- * channel pushes to the chat screen.
- */
+/** Server home (drill-down level 1); the info pane is desktop-only. */
 export function ServerPage() {
   const { server } = useParams<{ server: string }>();
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
-  // Session activation: being navigated into makes this server "live" for
-  // the rest of the session — the wire stops deferring its groups under the
-  // unread-dot rule (see wire/activation.ts).
+  // Being navigated into activates this server for the session (wire/activation.ts).
   useEffect(() => {
     if (relayUrl) activateScope(nip29Scope(relayUrl));
   }, [relayUrl]);
-  // Shared with the mobile channel-sidebar header menu. Called unconditionally
-  // (rules of hooks) with a placeholder before the `relayUrl` guard below; the
-  // returned actions are only invoked once a real server is resolved.
+  // Called unconditionally (rules of hooks); actions only run once a server resolves.
   const { serverMuted, isRemovable, toggleMute, copyLink, removeServer } =
     useServerActions(relayUrl ?? "");
 
   const { data: groups, isLoading, isError, relayInfo } = useRelayGroups(relayUrl);
-  // Buzz relays: hide DM channels (hidden groups) from the public channel
-  // grid, and drop the "Invite-only" badge (Buzz stamps `closed` on every
-  // channel; open ones are still joinable at runtime).
+  // Buzz: hide DM (hidden) groups and the "Invite-only" badge (Buzz marks every channel `closed`).
   const { isBuzz } = useIsBuzzRelay(relayUrl);
   const visibleGroups = isBuzz ? groups?.filter((g) => !g.isHidden) : groups;
 
@@ -62,18 +52,11 @@ export function ServerPage() {
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
       <ServerRail />
-      {/*
-        Channel list. Desktop: a fixed-width sidebar next to the welcome pane.
-        Mobile: it fills the screen and is where landing on a server stops (we
-        no longer auto-dive into a channel on mobile), so show it right away —
-        including its own loading skeleton — rather than a blank background.
-      */}
       <ChannelSidebar
         relayUrl={relayUrl}
         className="flex-1 sidebar:flex-none"
       />
 
-      {/* Welcome / server info pane — desktop only. */}
       <main className="hidden sidebar:block flex-1 min-w-0 overflow-y-auto">
         <div className="max-w-3xl mx-auto p-8 space-y-6">
           <div className="flex items-start gap-4">

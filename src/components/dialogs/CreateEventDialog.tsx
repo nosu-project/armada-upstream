@@ -29,7 +29,6 @@ interface CreateEventDialogProps {
 
 type Mode = "time" | "date";
 
-/** The browser's IANA timezone (e.g. "America/New_York"). */
 function localTzid(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -38,44 +37,34 @@ function localTzid(): string {
   }
 }
 
-/** Format an epoch (seconds) as a `datetime-local` value in local time. */
 function toLocalInput(epochSec: number): string {
   const d = new Date(epochSec * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** Parse a `datetime-local` value into epoch seconds (local time). */
 function fromLocalInput(value: string): number | undefined {
   if (!value) return undefined;
   const ms = new Date(value).getTime();
   return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
 }
 
-/**
- * Create or edit a NIP-52 calendar event (time-based 31923 or date-based 31922)
- * inside a NIP-29 group. Admins/moderators only — the relay enforces it; the
- * caller should also gate the entry point.
- */
+/** Create or edit a NIP-52 calendar event (31923 time / 31922 date) in a NIP-29 group. Relay enforces admin-only. */
 export function CreateEventDialog({ calendar, open, onOpenChange, editing }: CreateEventDialogProps) {
   const { save, isSaving } = calendar;
 
   const [mode, setMode] = useState<Mode>("time");
   const [detailsOpen, setDetailsOpen] = useState(false);
-  /** True while a date/time picker take-over panel is open (hides the dialog X). */
   const [pickerOpen, setPickerOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("");
   const [hashtags, setHashtags] = useState("");
-  // Time-based inputs (datetime-local strings).
   const [startAt, setStartAt] = useState("");
   const [endAt, setEndAt] = useState("");
-  // Date-based inputs (YYYY-MM-DD strings).
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
-  // Seed from the editing event (or reset) whenever the dialog opens.
   useEffect(() => {
     if (!open) return;
     if (editing) {
@@ -83,7 +72,6 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
       setDescription(editing.description);
       setLocation(editing.location ?? "");
       setHashtags(editing.hashtags.join(" "));
-      // Reveal the details section up front if the event already uses any of it.
       setDetailsOpen(
         Boolean(editing.end || editing.location || editing.description || editing.hashtags.length),
       );
@@ -101,7 +89,6 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
         setEndAt("");
       }
     } else {
-      // Default a new event to start at the next round hour, one hour long.
       const now = new Date();
       now.setMinutes(0, 0, 0);
       now.setHours(now.getHours() + 1);
@@ -125,9 +112,7 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
     return Boolean(startDate);
   }, [title, mode, startAt, startDate]);
 
-  // When the user moves the start, keep the end sensible: shift it to preserve
-  // the existing duration (or default to +1h) so it never lands before start
-  // and the user doesn't hit a spurious "end must be after start".
+  // Shift the end to preserve duration so it never lands before start.
   const handleStartAt = (next: string) => {
     const nextSec = fromLocalInput(next);
     const prevStartSec = fromLocalInput(startAt);
@@ -202,7 +187,7 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
       toast({ title: editing ? "Event updated" : "Event created", description: title.trim() });
       onOpenChange(false);
     } catch {
-      // useCalendarEvents surfaces the relay error in a toast.
+      // useCalendarEvents toasts the relay error.
     }
   };
 
@@ -228,8 +213,6 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
           }}
           className="mt-6 space-y-4"
         >
-          {/* The essentials: what, and when. Everything else is optional and
-              tucked behind "Add details" to keep the first glance simple. */}
           <div className="space-y-1.5">
             <Label htmlFor="event-title" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               What
@@ -265,7 +248,6 @@ export function CreateEventDialog({ calendar, open, onOpenChange, editing }: Cre
             )}
           </div>
 
-          {/* Progressive disclosure: end time, location, description, tags. */}
           <button
             type="button"
             onClick={() => setDetailsOpen((v) => !v)}

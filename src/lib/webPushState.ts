@@ -1,5 +1,5 @@
 /**
- * Cross-context state shared by the page and `public/sw.js` through Cache
+ * Cross-context state shared by the page and `src/sw/worker.ts` through Cache
  * Storage. It contains no plaintext or keys: only event ids created on this
  * device that may be echoed back through Web Push.
  */
@@ -30,8 +30,7 @@ export async function markOwnWebPushEvent(eventId: string): Promise<void> {
   try {
     await cache.put(cacheUrl(`${OWN_EVENT_PREFIX}${encodeURIComponent(eventId)}`), new Response("1"));
 
-    // Keep this bounded for long-running installs. Cache.keys() preserves the
-    // cache's insertion order, so the oldest markers are discarded first.
+    // Bounded; Cache.keys() is insertion-ordered, so oldest go first.
     const prefix = cacheUrl(OWN_EVENT_PREFIX);
     const own = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
     if (own.length > MAX_OWN_EVENTS) {

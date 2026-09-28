@@ -14,17 +14,12 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 
 /**
- * Card for a Cashu ecash token pasted into chat.
- *
- * The token is a bearer instrument — the card only displays it and offers a
- * copy, so it can be pasted into a wallet. Nothing here redeems: Armada has no
- * ecash wallet, and auto-claiming on render would silently spend a token every
- * viewer can see.
+ * Card for a Cashu ecash token: display + copy only. Never redeems — auto-claiming
+ * on render would spend a token every viewer can see.
  */
 export function CashuToken({ raw, className }: { raw: string; className?: string }) {
   const info = useMemo(() => parseCashuToken(raw), [raw]);
 
-  // Undecodable payload: fall back to the raw string rather than an empty card.
   if (!info) return <span className="break-all">{raw}</span>;
 
   return <CashuTokenCard info={info} token={stripCashuScheme(raw)} className={className} />;
@@ -44,10 +39,8 @@ function CashuTokenCard({
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<CheckStatus>("checking");
 
-  // Ask the mint whether the token is still spendable (NUT-07). The request
-  // goes to a URL that came out of a chat message, which is the same exposure
-  // the timeline already accepts for inline images; it is read-only and sends
-  // nothing that could spend the token.
+  // NUT-07 spendability check: read-only, to a URL from the message (the same
+  // exposure as inline images).
   useEffect(() => {
     let cancelled = false;
     checkCashuTokenState(info).then((result) => {
@@ -70,15 +63,13 @@ function CashuTokenCard({
   return (
     <div
       className={cn(
-        // No border: the chamfer clips it into a broken outline, so the
-        // cut-corner chrome elsewhere is fill-only too.
+        // No border: the chamfer clips it into a broken outline.
         "relative block max-w-sm w-full clip-corner-lg bg-secondary/40 overflow-hidden my-1.5",
         className,
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* The chamfer cuts the top-left and bottom-right corners, so the
-          top-right is square and safe to hang the controls in. */}
+      {/* The chamfer spares the top-right corner, so controls go there. */}
       <Popover>
         <PopoverTrigger asChild>
           <button
@@ -120,8 +111,7 @@ function CashuTokenCard({
       </Popover>
 
       <div className="px-3.5 py-3 space-y-2.5 text-center">
-        {/* Symmetric inset keeps the centered amount clear of the info button's
-            44px touch target in the corner. */}
+        {/* Symmetric inset clears the info button's 44px touch target. */}
         <div className="flex items-baseline justify-center gap-2 min-w-0 px-10">
           <span className="text-xl font-semibold text-amber-500 truncate">
             {formatCashuAmount(info.amount, info.unit)}

@@ -15,7 +15,6 @@ export interface Account {
   metadata: NostrMetadata;
 }
 
-/** Parse a kind-0 event's content into metadata (empty object on failure). */
 function parseMetadata(event: NostrRumor | undefined): NostrMetadata {
   try {
     return metadataSchema.parse(event?.content);
@@ -24,22 +23,15 @@ function parseMetadata(event: NostrRumor | undefined): NostrMetadata {
   }
 }
 
-/** A login identity to resolve a kind-0 profile for. */
 interface LoginRef {
   id: string;
   pubkey: string;
 }
 
 /**
- * Resolve each login to an {@link Account}, using the freshest available kind-0
- * with the cache as a floor: prefer the relay's fresh event, else the previous
- * result, else the locally cached event, else empty metadata. This is what
- * keeps the account switcher from blanking a name/avatar on a slow/offline read
- * (the bug: it only ever used a single tight-timeout relay query).
- *
- * `cachedFor(pubkey)` returns the locally-stored kind-0 for a pubkey (or
- * undefined); it's a callback so the store read only happens for the logins the
- * relay actually missed.
+ * Freshest kind-0 per login with the cache as a floor: relay event, else previous result,
+ * else local store, else empty — so the switcher never blanks on a slow read. `cachedFor` is only
+ * called for logins the relay missed.
  */
 export async function mergeAccounts(
   logins: readonly LoginRef[],
@@ -70,11 +62,8 @@ export function useLoggedInAccounts() {
 
   const queryKey = ['nostr', 'logins', logins.map((l) => l.id).join(';')];
 
-  // Cache-first seed: hydrate each account's kind-0 from the local event store
-  // (where NostrBatcher mirrors every profile that flows through) so the account
-  // switcher renders names/avatars instantly on reload — including offline —
-  // instead of collapsing to bare pubkeys while the relay round-trips. Without
-  // this the switcher was the ONE profile surface that ignored offline storage.
+  // Cache-first seed from the local event store so the switcher renders names/avatars instantly,
+  // including offline.
   useEffect(() => {
     if (logins.length === 0) return;
     let cancelled = false;
@@ -109,11 +98,9 @@ export function useLoggedInAccounts() {
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
 
-      // Persist whatever the relays returned so the cache stays warm.
       for (const event of events) void store.event(event);
 
-      // Merge with the cache as a floor: never blank an account we already have
-      // a name/avatar for just because this relay read was slow/empty/offline.
+      // Never blank an account we already have just because this read was slow/empty.
       const prev = queryClient.getQueryData<Account[]>(queryKey) ?? [];
       return mergeAccounts(logins, events, prev, async (pubkey) => {
         const [cached] = await store.query([{ kinds: [0], authors: [pubkey] }]);
@@ -125,7 +112,6 @@ export function useLoggedInAccounts() {
     retry: 3,
   });
 
-  // Current user is the first login
   const currentUser: Account | undefined = (() => {
     const login = logins[0];
     if (!login) return undefined;
@@ -133,7 +119,6 @@ export function useLoggedInAccounts() {
     return { metadata: {}, ...author, id: login.id, pubkey: login.pubkey };
   })();
 
-  // Other users are all logins except the current one
   const otherUsers = (authors || []).slice(1) as Account[];
 
   return {

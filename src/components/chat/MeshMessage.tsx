@@ -9,30 +9,18 @@ import type { MeshPeer } from "@/lib/bluetoothMesh";
 
 interface MeshMessageProps {
   event: ChatMsg;
-  /** Resolved author identity (name/color/suffix) for this peer. */
   identity: MessageIdentity;
-  /** Nearby peers, for coloring mention chips. */
   peers: MeshPeer[];
-  /** Our own peer id, so a mention of us highlights the row. */
   myPeerID: string | null;
-  /** Render compactly as a continuation of the previous same-author message. */
   continuation?: boolean;
-  /**
-   * Open the Noise XX DM with this message's author. Omitted when the author is
-   * us or when we're already viewing that DM, which hides the "Message" action.
-   */
+  /** Open the Noise XX DM; omitted for our own messages or inside that DM. */
   onMessage?: (peerID: string) => void;
-  /** Insert an @-mention of this message's author into the composer. */
   onMention?: (peerID: string) => void;
 }
 
 /**
- * A single Bluetooth-mesh message. Mesh chat has no reactions/replies/threads/
- * polls/edits/moderation, so this is a thin shell over the shared `MessageRow`
- * (rather than the full Nostr `ChatMessage`): it renders the colored author via
- * `identityOverride`, the plain-text body with `@name#suffix` mention chips, the
- * `/me` action form, and emphasizes a message that mentions us. The author
- * avatar/name open a mesh profile popover (Message / Mention) via `meshActions`.
+ * A Bluetooth-mesh message: a thin shell over `MessageRow` (mesh has no
+ * reactions/threads/edits), with `identityOverride` and a profile popover.
  */
 export function MeshMessage({ event, identity, peers, myPeerID, continuation, onMessage, onMention }: MeshMessageProps) {
   const mentionsMe = meshMentionsMe(event.content, myPeerID);
@@ -60,8 +48,7 @@ export function MeshMessage({ event, identity, peers, myPeerID, continuation, on
       identityOverride={identity}
       meshActions={{ peerID: event.pubkey, isSelf, onMessage, onMention }}
       createdAt={event.created_at}
-      // A mention needs the full header (avatar + name), not a collapsed
-      // continuation, so it reads as directed at someone.
+      // A mention needs the full header to read as directed at someone.
       continuation={continuation && !mentionsMe}
       className={cn(mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2")}
       containerProps={{ "data-event-id": event.id } as React.HTMLAttributes<HTMLDivElement>}

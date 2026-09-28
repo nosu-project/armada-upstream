@@ -11,49 +11,27 @@ import { ArmadaPush, hasIosPush } from "@/lib/nativePush";
 import { signalDeepLinkNavigated } from "@/lib/webReady";
 
 /**
- * Route WARM deep links (app already running) to the in-app chat via
- * React Router — never a full document reload.
- *
- * Two sources land here while the app is running: notification taps (the
- * Android PendingIntent carries an `armada://open<path>` data URI) and
- * verified App Links (`https://armada.buzz/<path>`, e.g. a tapped invite
- * link). Capacitor's @capacitor/app plugin fires `appUrlOpen` with the URL; we
- * parse the path and `navigate(path)` — a soft navigation that reuses the warm
- * IndexedDB, query cache, and live subscriptions (vs. `window.location.href`,
- * which reloads the document and cold-boots the whole app).
- *
- * COLD launches (process swiped out) are handled separately by
- * {@link coldLaunchDeepLink} + `HomeRedirect`: the launch URL resolves async and
- * would race the router's default redirect, so it's read once at startup and
- * `HomeRedirect` waits for it. Keeping cold-launch ownership there (not here)
- * avoids a double navigation.
- *
- * Must be rendered inside the router so `useNavigate` resolves.
+ * Route WARM deep links (notification taps' `armada://open<path>`, verified App Links) through
+ * React Router — never a reload. Cold launches belong to {@link coldLaunchDeepLink} + `HomeRedirect`.
+ * Must be rendered inside the router.
  */
 
-/** Old worst case for the crest gate; the JS-side bound when the router never
- * visibly commits the deep link (a no-op navigate the equality check missed,
- * a guard redirecting back to the same location). Below the native cap so the
- * gate still lifts on our schedule, not the deadline's. */
+/**
+ * JS-side bound for the crest gate when the router never visibly commits the link; below the
+ * native cap.
+ */
 const GATE_FALLBACK_MS = 2500;
 
 export function useNotificationNavigation(): void {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // The current location, readable inside long-lived listeners without
-  // re-registering them per navigation.
+  // Readable in long-lived listeners without re-registering.
   const locationRef = useRef(location);
   locationRef.current = location;
 
-  // True between a deep-link navigate() and the router COMMITTING it.
-  // MainActivity throws the native crest gate over the WebView on a warm
-  // deep-link intent, and it lifts on signalDeepLinkNavigated — but signalling
-  // when navigate() merely RETURNED lifted it onto the previous view
-  // mid-transition, because the commit can trail the call by a lazy chunk
-  // load or a heavy destination mount. This flag defers the signal to the
-  // location change (the commit); signalDeepLinkNavigated's own double-rAF
-  // then lands it after that commit has painted.
+  // Between navigate() and the router COMMIT: signalling on return lifted the native crest gate
+  // onto the previous view, so the signal waits for the location change.
   const gatePending = useRef(false);
   useEffect(() => {
     if (!gatePending.current) return;
@@ -66,22 +44,15 @@ export function useNotificationNavigation(): void {
     let cancelled = false;
 
     const applyDeepLink = (path: string) => {
-      // Drop any editor focus held over from before the app was backgrounded.
-      // Android re-shows the IME for a still-focused editor the moment the
-      // window regains focus (SHOW_AUTO_EDITOR_FORWARD_NAV), so a composer
-      // left focused in the previous room pops the keyboard over the
-      // deep-link transition — on top of a destination that hasn't mounted.
+      // Android re-shows the IME for a still-focused editor on window focus, over the transition.
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
-      // Mark before the navigate so the destination's SwipeReveal, mounting
-      // in this very commit, sees it and skips its entrance slide.
+      // Before navigate so the destination's SwipeReveal skips its entrance slide.
       markDeepLinkNavigation();
       const { pathname, search, hash } = locationRef.current;
       if (path === pathname + search + hash) {
-        // Already there: navigate() would commit nothing, so the location
-        // effect above would never fire and the gate would sit out the
-        // native cap. Release it now.
+        // Already there: nothing will commit, so release the gate now.
         signalDeepLinkNavigated();
         return;
       }
@@ -99,8 +70,7 @@ export function useNotificationNavigation(): void {
     CapacitorApp.addListener("appUrlOpen", ({ url }) => {
       const path = pathFromDeepLinkUrl(url);
       if (cancelled || !path) {
-        // Parsed to nothing (or this hook instance is gone): signal anyway,
-        // so the gate never sits out its full timeout.
+        // Signal anyway so the gate never sits out its timeout.
         signalDeepLinkNavigated();
         return;
       }
@@ -112,25 +82,17 @@ export function useNotificationNavigation(): void {
       })
       .catch(() => undefined);
 
-    // A cold-launch URL that resolved only after the guard had released
-    // HomeRedirect to the default route: apply it like a warm deep link
-    // instead of dropping the tap on the floor.
+    // Late-resolving cold-launch URL: apply like a warm link instead of dropping it.
     const offLate = onLateColdLaunchDeepLink((path) => {
       if (!cancelled) applyDeepLink(path);
     });
 
-    // iOS push taps arrive on the notification delegate rather than as a URL,
-    // so they are their own listener rather than another `appUrlOpen` source.
-    // Only the WARM case is here: a tap that launched the process is read by
-    // coldLaunchDeepLink, together with the launch URL, so both settle the one
-    // race against HomeRedirect. (There is no Android crest gate on iOS; the
-    // signal calls inside applyDeepLink are no-ops there.)
+    // iOS push taps arrive via the notification delegate; warm only (cold taps are read by
+    // coldLaunchDeepLink).
     let pushHandle: { remove: () => void } | undefined;
     if (hasIosPush()) {
       ArmadaPush.addListener("pushOpened", ({ path }) => {
-        // The gateway chooses this field, so it is re-checked here as it is on
-        // the cold path (nativePush.ts) and natively — a protocol-relative
-        // "path" names another origin rather than a route.
+        // The gateway picks this field; a protocol-relative "path" would name another origin.
         if (!cancelled && path && isRouterPath(path)) applyDeepLink(path);
       })
         .then((h) => {
@@ -148,27 +110,19 @@ export function useNotificationNavigation(): void {
     };
   }, [navigate]);
 
-  // Desktop (Electron): a link to our own public host clicked INSIDE the app —
-  // a copied message or invite link — is caught by the shell's navigation
-  // handlers (which would otherwise open it in the browser) and handed back
-  // here as an already-parsed router path. No Capacitor, no crest gate, and the
-  // window is by definition up: a plain soft navigate that reuses the warm
-  // store, query cache and subscriptions, the same landing Android/iOS give it.
+  // Desktop: in-app clicks on our own host arrive as router paths from the shell.
   useEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
     const off = onDesktopDeepLink((path) => {
-      // The shell already applied the same host + router-path checks
-      // internalAppLinkPath mirrors from pathFromDeepLinkUrl, but re-guard the
-      // shape here rather than trust an IPC value to name a route.
+      // Re-guard rather than trust an IPC value to name a route.
       if (cancelled || !path || !isRouterPath(path)) return;
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
       const { pathname, search, hash } = locationRef.current;
       if (path === pathname + search + hash) return;
-      // Mark before the navigate so the destination's SwipeReveal, mounting in
-      // this commit, skips its entrance slide.
+      // Before navigate so SwipeReveal skips its entrance slide.
       markDeepLinkNavigation();
       navigate(path);
     });

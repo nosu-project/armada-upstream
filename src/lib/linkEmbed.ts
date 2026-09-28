@@ -12,15 +12,12 @@ export function extractYouTubeId(url: string): string | null {
     if (u.hostname === "youtu.be") {
       return u.pathname.slice(1) || null;
     }
-  } catch {
-    // not a valid URL
-  }
+  } catch { /* ignore */ }
   return null;
 }
 
 /** A YouTube watch target: a single video, a playlist, or both. */
 export interface YouTubeTarget {
-  /** Video id, when the link points at a specific video. */
   videoId?: string;
   /** Playlist id, when the link includes one (`list=` or `/playlist`). */
   playlistId?: string;
@@ -29,17 +26,13 @@ export interface YouTubeTarget {
 }
 
 /**
- * Parse a YouTube URL into a watch target, recognising videos AND playlists.
- * Returns null if it isn't a usable YouTube link. Handles `watch?v=`,
- * `watch?v=…&list=…`, `youtu.be/…`, `/embed/…`, `/shorts/…`, and
- * `/playlist?list=…`. A bare 11-char video id or a `PL…`/`UU…`-style playlist id
- * is also accepted, so users can paste just an id.
+ * Parse a YouTube URL (watch, youtu.be, embed, shorts, playlist) into a video
+ * and/or playlist target. Bare video/playlist ids are accepted too.
  */
 export function parseYouTubeTarget(input: string): YouTubeTarget | null {
   const raw = input.trim();
   if (!raw) return null;
 
-  // Bare id shortcuts.
   if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) return { videoId: raw };
   if (/^(PL|UU|LL|FL|RD|OL)[a-zA-Z0-9_-]{10,}$/.test(raw)) return { playlistId: raw };
 
@@ -77,11 +70,8 @@ export function parseYouTubeTarget(input: string): YouTubeTarget | null {
 }
 
 /**
- * Extract a tweet/post ID from a Twitter or X URL, or null if not a tweet
- * link. Handles `twitter.com`, `x.com`, their `www.`/`mobile.` variants, and
- * the privacy front-ends people paste in their place (nitter, fxtwitter,
- * vxtwitter and the `fixupx`/`fixvx` domains), all of which mirror the
- * `/{user}/status/{id}` path — so a rewritten link still renders as a tweet.
+ * Tweet id from a Twitter/X URL, including privacy front-ends (nitter,
+ * fxtwitter, vxtwitter, fixupx/fixvx) that mirror `/{user}/status/{id}`.
  */
 export function extractTweetId(url: string): string | null {
   try {
@@ -105,9 +95,8 @@ export function extractTweetId(url: string): string | null {
 
 /** Spotify embed info extracted from an open.spotify.com URL. */
 export interface SpotifyEmbedInfo {
-  /** Content type: track, album, playlist, episode, show. */
+  /** track, album, playlist, episode, or show. */
   type: string;
-  /** Spotify content ID. */
   id: string;
 }
 
@@ -124,12 +113,7 @@ export function extractSpotifyEmbed(url: string): SpotifyEmbedInfo | null {
   }
 }
 
-/**
- * Extract a Streamable video id from a streamable.com URL, or null if it isn't
- * one. Handles the share form `streamable.com/<id>` and the embed form
- * `streamable.com/e/<id>` (with an optional trailing path/query). The id is
- * alphanumeric.
- */
+/** Streamable video id from `streamable.com/<id>` or `/e/<id>`. */
 export function extractStreamableId(url: string): string | null {
   try {
     const u = new URL(url);
@@ -142,13 +126,8 @@ export function extractStreamableId(url: string): string | null {
 }
 
 /**
- * Extract an Instagram post shortcode from an instagram.com URL, or null if it
- * isn't an embeddable post link. Handles posts (`/p/…`), reels (`/reel/…` and
- * `/reels/…`) and IGTV (`/tv/…`), including the `/<user>/p/…` and
- * `/<user>/reel/…` profile-prefixed forms, plus the `ddinstagram`/`instagramez`
- * front-ends people paste in Instagram's place — all of which resolve through
- * Instagram's own `/p/<shortcode>/embed/` page. The shortcode is base64url
- * (letters, digits, `-`, `_`).
+ * Instagram shortcode from post/reel/IGTV URLs (incl. profile-prefixed forms
+ * and ddinstagram/instagramez front-ends), or null if not embeddable.
  */
 export function extractInstagramShortcode(url: string): string | null {
   try {
@@ -169,11 +148,8 @@ export function extractInstagramShortcode(url: string): string | null {
 }
 
 /**
- * The post text of a `rich` oEmbed whose `html` is a blockquote of paragraphs
- * (Bluesky, and the fx-style mirrors that copy its shape). oEmbed has no
- * description field, so this is the only place the post body travels. Parsed
- * with DOMParser, which neither runs the embed's `<script>` nor fetches
- * anything, and only the TEXT leaves it — the html itself is never rendered.
+ * Post text from a `rich` oEmbed blockquote (Bluesky and mirrors). DOMParser
+ * neither runs scripts nor fetches; only the text is used, never the html.
  */
 export function oembedDescription(html: string | undefined): string | undefined {
   if (!html || typeof DOMParser === "undefined") return undefined;

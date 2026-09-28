@@ -7,8 +7,6 @@ import { normalizeRelayUrl } from "@/lib/platform";
 
 /** NIP-34 repository announcement. */
 export const GIT_REPOSITORY_ANNOUNCEMENT_KIND = 30617;
-/** NIP-34 repository state announcement. */
-export const GIT_REPOSITORY_STATE_KIND = 30618;
 /** NIP-34 pull request. */
 export const GIT_PULL_REQUEST_KIND = 1618;
 /** NIP-34 issue. */
@@ -43,7 +41,6 @@ export interface GitRepositoryAddress {
   owner: string;
   identifier: string;
   coordinate: string;
-  /** Normalized relay hint from the NIP-34 `a` tag, when present. */
   relayHint?: string;
 }
 
@@ -120,12 +117,10 @@ export interface GitTicket {
   content: string;
   labels: string[];
   /**
-   * The FIRST repository the ticket tags. Prefer {@link matchGitTicketRepository}
-   * when deciding whether a ticket belongs to a repository you hold: tag order
-   * carries no meaning, so this is not reliably the one you attached.
+   * The FIRST tagged repository; tag order is meaningless, so prefer
+   * {@link matchGitTicketRepository} to test membership.
    */
   repositoryAddress?: GitRepositoryAddress;
-  /** EVERY repository the ticket tags, in tag order. */
   repositoryAddresses: GitRepositoryAddress[];
   branches?: GitPullRequestBranches;
   author: string;
@@ -133,13 +128,8 @@ export interface GitTicket {
 }
 
 /**
- * The ticket's repository that `known` holds, if any.
- *
- * A NIP-34 ticket carries one `a` tag per repository announcement — the
- * canonical repo AND every fork/maintainer that adopted it — and relays match
- * `#a` against any of them. Matching only the first tag therefore drops real
- * activity for a repository you hold whenever another fork happens to be
- * listed ahead of it.
+ * The ticket's repository that `known` holds. Tickets carry an `a` tag per
+ * fork/maintainer announcement, so checking only the first misses real activity.
  */
 export function matchGitTicketRepository(
   ticket: GitTicket,
@@ -148,7 +138,6 @@ export function matchGitTicketRepository(
   return ticket.repositoryAddresses.find((address) => known.has(address.coordinate));
 }
 
-/** Parse a NIP-34 issue or pull request. */
 export function parseGitTicket(event: NostrRumor): GitTicket | undefined {
   if (!isGitTicketKind(event.kind) || !isNostrId(event.pubkey)) return undefined;
 
@@ -211,7 +200,6 @@ export interface GitComment {
   createdAt: number;
 }
 
-/** Parse a NIP-22 comment rooted in a regular NIP-34 ticket. */
 export function parseGitComment(event: NostrRumor): GitComment | undefined {
   if (event.kind !== NIP22_COMMENT_KIND || !isNostrId(event.pubkey)) return undefined;
   const ticketId = rootEventId(event, "E");
@@ -304,18 +292,13 @@ export function attachGitRepository(
   ]);
 }
 
-/** An unsigned event body ready for the caller's signer. */
 export interface GitEventTemplate {
   kind: number;
   content: string;
   tags: string[][];
 }
 
-/**
- * A top-level NIP-22 comment on an issue or pull request. The root and parent
- * scopes coincide because the ticket itself is the parent. `media` carries
- * NIP-92 imeta tags for attachment URLs embedded in the content.
- */
+/** Top-level NIP-22 comment on a ticket (root and parent coincide). `media` → NIP-92 imeta tags. */
 export function buildGitCommentTemplate(
   ticket: GitTicket,
   content: string,
@@ -363,14 +346,9 @@ export function buildGitIssueTemplate(
 
 /** Longest label we will publish; longer entries are meaningless as filters. */
 export const MAX_GIT_LABEL_LENGTH = 40;
-/** Most labels one ticket may carry. */
 export const MAX_GIT_LABELS = 8;
 
-/**
- * Normalize labels for publication: lowercased and de-duplicated to match how
- * `parseGitTicket` reads them back, whitespace collapsed, and both length and
- * count bounded so a typo can't publish an unusable tag.
- */
+/** Lowercase, dedupe, collapse whitespace, and cap length/count (matches how `parseGitTicket` reads them). */
 export function normalizeGitLabels(labels: readonly string[]): string[] {
   const seen = new Set<string>();
   for (const value of labels) {
@@ -393,11 +371,7 @@ export function buildGitDeletionTemplate(target: Pick<NostrRumor, "id" | "kind">
   };
 }
 
-/**
- * Deleted event ids by requester. A deletion only counts when its author is
- * the target's author, so callers key acceptance on the pair — anyone can
- * publish a kind 5 naming someone else's event.
- */
+/** Deleted ids by requester; only self-deletions count since anyone can publish a kind 5. */
 export function collectGitDeletions(events: readonly NostrRumor[]): Map<string, Set<string>> {
   const deletions = new Map<string, Set<string>>();
   for (const event of events) {
@@ -412,7 +386,6 @@ export function collectGitDeletions(events: readonly NostrRumor[]): Map<string, 
   return deletions;
 }
 
-/** True when the event's own author has requested its deletion. */
 export function isGitEventDeleted(deletions: ReadonlyMap<string, ReadonlySet<string>>, id: string, author: string): boolean {
   return deletions.get(id)?.has(author) ?? false;
 }
@@ -461,21 +434,18 @@ export function buildGitTimelineActivities(
   }
   const deletions = collectGitDeletions(events);
   const tickets = new Map<string, GitTicket>();
-  // Which ATTACHED repository each ticket belongs to — not necessarily its
-  // first `a` tag, since a ticket tags every fork that adopted it.
+  // A ticket tags every fork that adopted it, so match the attached one, not the first `a`.
   const ticketRepository = new Map<string, GitRepositoryAddress>();
   for (const event of events) {
     const ticket = parseGitTicket(event);
     if (!ticket) continue;
-    // A ticket its own author retracted drops with its whole thread.
     if (isGitEventDeleted(deletions, ticket.id, ticket.author)) continue;
     const repository = matchGitTicketRepository(ticket, attached);
     if (!repository) continue;
     tickets.set(ticket.id, ticket);
     ticketRepository.set(ticket.id, repository);
   }
-  // Newest announcement wins regardless of array order — a stale duplicate
-  // must not resurrect a removed maintainer's status authority.
+  // Newest announcement wins regardless of order, so a stale one can't restore a removed maintainer.
   const repositoryByAddress = new Map<string, (typeof repositories)[number]>();
   for (const repository of repositories) {
     const existing = repositoryByAddress.get(repository.address.coordinate);
@@ -512,12 +482,8 @@ export function buildGitTimelineActivities(
     const trust = new Set([ticket.author, announced?.owner ?? repository.owner, ...(announced?.maintainers ?? [])]);
     if (trust.has(status.author)) activity.push({ type: "status-change", status, ticket, repository, createdAt: status.createdAt });
   }
-  // CI runs are assembled across events (a result plus the job results it
-  // quotes), so they are collapsed first and then gated like anything else —
-  // a run outside the attachment's interval is not this channel's history.
-  // Deliberately NOT trust-filtered: the extension leaves signer policy to
-  // clients and no on-relay designation exists, so the signer is rendered
-  // instead (see lib/ci.ts).
+  // CI runs are assembled across events, then interval-gated. Not trust-filtered:
+  // no on-relay signer designation exists, so the signer is shown (see lib/ci.ts).
   for (const run of assembleCIRuns(events)) {
     const repository = matchCIRepository(run, attached);
     if (!repository) continue;
@@ -576,8 +542,7 @@ function firstContentLine(content: string): string | undefined {
 }
 
 function rootEventId(event: NostrRumor, tagName = "e"): string | undefined {
-  // NIP-22 encodes root references in uppercase tags. Unlike NIP-10's `e`
-  // tags, the fourth value is the root author's pubkey, not a "root" marker.
+  // NIP-22 root tags are uppercase; the fourth value is the root author's pubkey, not a marker.
   const roots = event.tags.filter(([name]) => name === tagName);
   return roots.length === 1 ? roots[0][1] : undefined;
 }

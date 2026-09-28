@@ -1,52 +1,18 @@
 /**
- * The app-wide event store — the local cache of signed events fetched from
- * relays (profiles, git activity, sealed Concord outers), and the router that
- * files relay-relative events under the relay that served them instead.
+ * The app-wide event store: local cache of relay events, routed by scope
+ * (see `relayScope.ts`):
+ *  - `main`: true whoever served it (profiles, own lists, git, ciphertext).
+ *  - `nip29:<relay>`: only true on one relay; group ids and even relay keys can
+ *    be shared across servers, so the relay is structural in the tenant id.
+ * `event()` takes the source relay and `query()` the target relay; relay-relative
+ * events with no known relay are DROPPED.
  *
- * TWO KINDS OF SCOPE, and the split is the whole design (see `relayScope.ts`):
+ * Signatures are dropped (ArmadaDB stores rumors). Verification happens at
+ * ingest, but anything re-publishing verbatim must get the event from a relay or
+ * the outbox, never here (`useRepublish` refuses unsigned events).
  *
- *  - **`main`** holds what is true whoever served it: a profile, the user's own
- *    group list, git activity, ciphertext addressed to them.
- *  - **`nip29:<relay>`** holds what is only true ON one relay. A NIP-29 group is
- *    named by an `h`/`d` value that means nothing without its relay, and relay
- *    identities can be SHARED between servers, so neither the id nor the signing
- *    key separates two servers' channels. The relay is in the tenant id, so the
- *    separation is structural: a query against one relay's tenant cannot see
- *    another's rows.
- *
- * So `event()` takes the relay it came from, and `query()` takes the relay it is
- * asking about. A relay-relative event with no known relay is DROPPED rather
- * than filed under a guess — `relayScope.ts` explains why that loses nothing.
- *
- * This used to be one tenant and its own storage stack besides: a
- * hand-written SQLite schema and NIP-01 filter compiler running on the native
- * Android database (shared with the notification service) or SQLite-WASM over
- * OPFS, with `NIndexedDB` as a degraded fallback. All of it is gone; the store
- * is now an ordinary ArmadaDB tenant like every other subsystem, so there is
- * exactly one database interface in the app and swapping its backing engine is
- * a decision made once, in `armadaDB.ts`, for everything at once.
- *
- * ONE KNOWN REGRESSION, accepted deliberately:
- *
- *  - **Signatures are dropped.** ArmadaDB stores rumors, and these events
- *    arrive signed. Every signature CHECK in the app runs on the relay ingest
- *    path, before the store, so no verification depends on the stored `sig` —
- *    but a consumer that needs to re-publish an event verbatim must get it from
- *    a relay or the publish outbox, never from here.
- *
- *    That rule was stated when this store was written and was already being
- *    broken: the chat timelines merge the store's copy over the signed
- *    optimistic copy of a just-sent message, and "retry failed message"
- *    re-published the result — an empty signature every relay rejects. The
- *    merges now keep the signed copy (`useGroupMessages`, `useBuzzMessages`)
- *    and `useRepublish` refuses an unsigned event outright.
- *
- * The Android notification service used to be a second regression here — it
- * wrote into a private SQLite file the WebView didn't read, so NIP-29 and DM
- * traffic it received while the app was down stayed invisible. That is what the
- * Kotlin port fixed: the service writes through the same tenants this store
- * reads, routing by the same rule (`ServiceStore.kt`), so those events are
- * simply here on open (see `armadaDB.ts`).
+ * The Android service writes through the same tenants by the same rule
+ * (`ServiceStore.kt`).
  */
 import { NKinds } from "@nostrify/nostrify";
 
@@ -60,22 +26,16 @@ import type { NRumorStore } from "./types";
 
 class MainEventStore implements ArmadaEventStore {
   /**
-   * The tenant handle for an id.
-   *
-   * Resolved per call rather than memoized here: the adapters already keep one
-   * handle per tenant, and a purge REPLACES the whole ArmadaDB instance — so a
-   * handle cached at this level would outlive the connection it belongs to and
-   * keep reading a database that has been deleted.
+   * Resolved per call: a purge REPLACES the ArmadaDB instance, so a cached
+   * handle would outlive its connection.
    */
   private tenant(id: string): NRumorStore {
     return getArmadaDB().tenant(id);
   }
 
   /**
-   * Where a read is aimed: one relay's NIP-29 tenant when `relay` is given,
-   * `main` otherwise. An unusable relay URL resolves to no tenant at all rather
-   * than falling back to `main`, so a malformed URL reads empty instead of
-   * reading every relay's data at once.
+   * `main`, or one relay's NIP-29 tenant; an unusable relay URL reads empty
+   * rather than falling back to `main`.
    */
   private scoped(opts?: EventScope): NRumorStore | undefined {
     if (!opts?.relay) return this.tenant(ARMADA_TENANTS.main);
@@ -84,11 +44,9 @@ class MainEventStore implements ArmadaEventStore {
   }
 
   event(event: NostrEvent, opts?: EventScope): Promise<void> {
-    // Ephemeral kinds are by definition not storable (NIP-01), and the relay
-    // pool hands them to the store like anything else.
+    // Ephemeral kinds aren't storable (NIP-01).
     if (NKinds.ephemeral(event.kind)) return Promise.resolve();
-    // Relay-relative data with no relay to file it under is dropped, not
-    // guessed at: see `relayScope.ts`.
+    // No relay for relay-relative data: drop (see `relayScope.ts`).
     const id = tenantForEvent(event, opts?.relay, ARMADA_TENANTS.main);
     if (!id) return Promise.resolve();
     const { sig: _sig, ...rumor } = event;
@@ -113,11 +71,7 @@ class MainEventStore implements ArmadaEventStore {
     return this.scoped(opts)?.remove(filters, opts) ?? Promise.resolve();
   }
 
-  /**
-   * No-op: the connection belongs to the app-wide ArmadaDB instance, which
-   * non-React code shares. Closing it here would break the sync loops.
-   * `purgeArmadaDB` is what closes and deletes on logout.
-   */
+  /** No-op: the shared connection is closed by `purgeArmadaDB`. */
   close(): Promise<void> {
     return Promise.resolve();
   }
@@ -125,11 +79,7 @@ class MainEventStore implements ArmadaEventStore {
 
 let store: ArmadaEventStore | undefined;
 
-/**
- * The app-wide event store. Resolved lazily but synchronously available — the
- * `Promise` is kept because {@link ArmadaEventStore} consumers await it, and
- * opening the underlying tenant is itself lazy.
- */
+/** The app-wide event store (a Promise because consumers await it). */
 export function appEventStore(): Promise<ArmadaEventStore> {
   store ??= new MainEventStore();
   return Promise.resolve(store);

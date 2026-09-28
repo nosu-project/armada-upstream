@@ -14,11 +14,8 @@ const HEARTBEAT_MS = 30_000;
 export type BuzzPresenceState = "online" | "away";
 
 /**
- * Live presence for a Buzz relay: ephemeral kind-20001 heartbeats (content
- * "online"/"away", never stored, 90s TTL). Holds ONE live subscription while
- * mounted, decays entries past the window, and — when the viewer is signed in
- * — publishes their own "online" heartbeat every 30s so other Buzz clients
- * see them too. Presence fills in as members heartbeat (≤30s after mount).
+ * Live presence for a Buzz relay (ephemeral kind-20001 heartbeats, 90s TTL),
+ * plus the signed-in viewer's own "online" heartbeat every 30s.
  */
 export function useBuzzPresence(relayUrl: string | undefined): Record<string, BuzzPresenceState> {
   const { nostr } = useNostr();
@@ -77,7 +74,7 @@ export function useBuzzPresence(relayUrl: string | undefined): Record<string, Bu
     };
   }, [nostr, relayUrl]);
 
-  // The viewer's own heartbeat (visible tab = online; hidden pauses).
+  // Visible tab = online; hidden pauses.
   useEffect(() => {
     if (!relayUrl || !user) return;
     let cancelled = false;

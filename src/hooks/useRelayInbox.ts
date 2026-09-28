@@ -16,47 +16,33 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 const KIND_POLL = 1068;
 
 /**
- * Kinds that can @-mention you inside a group: NIP-29 chat + polls + threaded
- * comments (NIP-22), plus the Buzz "new content" set (stream v2, forum
- * posts/comments). Kinds absent from a relay simply never match.
+ * Kinds that can @-mention you in a group: NIP-29 chat, polls, NIP-22 comments, and the Buzz
+ * "new content" set.
  */
 const MENTION_KINDS = [
   ...new Set([KIND_GROUP_CHAT, KIND_POLL, KIND_COMMENT, ...BUZZ_UNREAD_KINDS]),
 ];
 
-/** Newest mention events scanned per relay. */
 const SCAN_LIMIT = 200;
 
-/** One inbox entry: a message elsewhere on this server that mentions you. */
 export interface InboxItem {
-  /** The mentioning event. */
   event: NostrRumor;
   /** The group (`h` tag) the event belongs to. */
   groupId: string;
-  /** Whether you haven't yet read past it in that channel. */
+  /** Not yet read past in its channel. */
   unread: boolean;
 }
 
 export interface RelayInbox {
-  /** Mentions across the server, newest first. */
   items: InboxItem[];
-  /** How many of them are unread. */
   unreadCount: number;
 }
 
 const EMPTY: RelayInbox = { items: [], unreadCount: 0 };
 
 /**
- * The server "inbox": every message across a relay's NIP-29 groups that
- * `#p`-tags the current user — the same mention signal the channel list shows
- * as an "@" pill, gathered into one mail-client-style list.
- *
- * Sourced from the shared IndexedDB event store (which the wire keeps fed), with
- * a throttled relay top-up for mentions older than the wire's live window. A
- * mention reads as unread until you've read past it in its channel
- * (`useReadState`), so opening the channel clears it — no separate read store.
- * Self-authored events never appear. Re-derived when the wire ingests activity
- * for any of the watched groups.
+ * Server "inbox": messages across a relay's groups that `#p`-tag the user. From the store plus a
+ * throttled relay top-up; unread until read past in the channel (`useReadState`).
  */
 export function useRelayInbox(
   relayUrl: string | undefined,
@@ -85,9 +71,7 @@ export function useRelayInbox(
         { kinds: MENTION_KINDS, "#p": [user!.pubkey], "#h": ids, limit: SCAN_LIMIT },
       ]);
 
-      // Top-up from the relay for mentions the wire's live window missed (older
-      // history, or channels only just discovered). Best-effort: a slow/AUTH-
-      // gated relay never blocks the cached result.
+      // Best-effort top-up for mentions older than the wire's live window.
       try {
         const fresh = await nostr.relay(relayUrl!).query(
           [{ kinds: MENTION_KINDS, "#p": [user!.pubkey], limit: SCAN_LIMIT }],
@@ -106,7 +90,6 @@ export function useRelayInbox(
     refetchOnWindowFocus: true,
   });
 
-  // Re-derive as soon as the wire ingests activity for any watched group.
   useWireScopes((scopes) => {
     if (!idsKey) return;
     for (const id of idsKey.split(",")) {
@@ -125,9 +108,7 @@ export function useRelayInbox(
 
     for (const event of mentions ?? []) {
       if (event.pubkey === user.pubkey) continue; // your own message isn't inbox
-      // Filtered here rather than at render so the unread badge agrees with the
-      // list: a muted mention that still counted would leave a dot on the inbox
-      // nothing in it could ever clear.
+      // Filtered here so the unread badge agrees with the list.
       if (mutedPubkeys.has(event.pubkey)) continue;
       const h = event.tags.find(([n]) => n === "h")?.[1];
       if (!h || !groupSet.has(h)) continue;

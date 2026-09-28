@@ -34,7 +34,6 @@ import {
   type ReportTarget,
 } from "@/lib/report";
 
-/** How long a report comment may be. Long enough to explain, short enough to read. */
 const MAX_COMMENT = 500;
 
 interface ReportDialogProps {
@@ -45,19 +44,8 @@ interface ReportDialogProps {
 }
 
 /**
- * The one report dialog, used by every surface that can raise one: a message's
- * action menu, a member list, a profile card, a DM thread header.
- *
- * It asks for exactly two things — a reason, and optionally what happened — and
- * states in one line who will read the answer. It does NOT ask where the report
- * should go: {@link reportDestination} already answered that from the surface,
- * and a chooser would only ask the reporter to reason about three trust models
- * before they can flag a message.
- *
- * Muting rides along because it is what someone reporting a person almost
- * always also wants, and making them find it separately afterwards is the
- * difference between "handled" and "still there". It is checked by default and
- * omitted entirely for someone already muted.
+ * The one report dialog for every surface. Doesn't ask where the report goes
+ * ({@link reportDestination} decides). Mute is checked by default, omitted if already muted.
  */
 export function ReportDialog({ open, onOpenChange, target, destination }: ReportDialogProps) {
   const author = useAuthor(target.pubkey);
@@ -74,7 +62,7 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
 
   const alreadyMuted = mutedPubkeys.has(target.pubkey);
 
-  // A fresh open is a fresh report — never inherit the last one's reason.
+  // Never inherit the last report's reason.
   useEffect(() => {
     if (!open) return;
     setReason("");
@@ -108,8 +96,7 @@ export function ReportDialog({ open, onOpenChange, target, destination }: Report
       return;
     }
 
-    // The report landed. A mute failure from here is its own, smaller problem —
-    // reporting it as a failed report would be a lie that invites a duplicate.
+    // The report landed; a mute failure mustn't read as a failed report (invites duplicates).
     if (alsoMute && !alreadyMuted) {
       try {
         await muteUser.mutateAsync(target.pubkey);

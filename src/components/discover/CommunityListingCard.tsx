@@ -46,44 +46,27 @@ import { cn } from "@/lib/utils";
 interface CommunityListingCardProps {
   invite: DiscoveredInvite;
   className?: string;
-  /**
-   * A search needle to match against the RESOLVED community name — the
-   * announcement itself carries no metadata, so filtering can only happen
-   * here, after the bundle decrypts. A non-matching card renders nothing.
-   */
+  /** Matched against the RESOLVED name, since the announcement has no metadata. Non-matches render nothing. */
   filter?: string;
   /**
-   * Reports the bundle's self-certified `community_id` and verified `owner`
-   * once the bundle resolves, so the grid can fold two different links to the
-   * SAME community into one card and rank listings by who owns them. The
-   * announcement carries no community identity of its own — a tag would be an
-   * unverifiable claim — so this resolution is the only place either fact
-   * becomes knowable.
+   * Reports the bundle's self-certified `community_id` and verified `owner`, so
+   * the grid can dedupe links to the same community and rank by owner. The
+   * announcement itself carries no verifiable identity.
    */
   onResolved?: (linkSigner: string, communityId: string, owner: string) => void;
-  /**
-   * Reports the stream-author probe target for the batched Discover last-active
-   * REQ (guestbook / control / vended private channels, plus public channels
-   * when this viewer is a member and holds the Control fold), or `null` to
-   * withdraw it when this card stops being listed.
-   */
+  /** Reports the probe target for the batched last-active REQ, or `null` to withdraw it. */
   onActivityTarget?: (linkSigner: string, target: DiscoverActivityTarget | null) => void;
   /** Newest kind-1059 wrap `created_at` (unix seconds) from the batched probe. */
   lastActiveAt?: number;
 }
 
 /**
- * What "Active" actually measures, for the reader who reasonably assumes it
- * means chat. The probe is the newest wrap across the stream addresses this
- * invite can derive — which is every channel for a member, but for a listing
- * is the guestbook and Control planes plus whatever channels the bundle vends
- * or the Control peek turned up. So it is community activity, not message
- * activity, and a community whose channels are all private still registers.
+ * "Active" is the newest wrap across derivable stream addresses (guestbook,
+ * Control, vended/peeked channels): community activity, not message activity.
  */
 const ACTIVITY_HINT =
   "Newest activity on the streams this invite can see — channel messages, join requests and admin changes.";
 
-/** The card-shaped placeholder shown while a listing's bundle resolves. */
 export function CommunityListingCardSkeleton({ className }: { className?: string }) {
   return (
     <div
@@ -110,12 +93,9 @@ export function CommunityListingCardSkeleton({ className }: { className?: string
 }
 
 /**
- * A public Concord community discovered from an announcement, rendered as a
- * card: the resolved banner, icon and name (fetched from the invite bundle
- * using the link's own secret, so they track the community as it changes),
- * the person who shared it, and a Join button that routes to the invite
- * (which resolves + joins, prompting sign-in). Skeleton-shaped until the
- * bundle settles, so no placeholder name ever flashes.
+ * A public Concord community from an announcement: resolved banner/icon/name
+ * (decrypted from the invite bundle with the link's secret), sharer and Join.
+ * Skeleton until the bundle settles.
  */
 export function CommunityListingCard({
   invite,
@@ -130,11 +110,8 @@ export function CommunityListingCard({
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
   const [copied, setCopied] = useState(false);
 
-  // Resolve the community from its bundle (the link carries the secret, so we
-  // can decrypt the preview). The home-relay second hop runs in the
-  // background — the card paints the bootstrap copy a full round trip sooner,
-  // and a fresher copy (or a revocation) lands via the callback. Joining
-  // re-resolves with full blocking semantics on the invite route.
+  // The home-relay second hop runs in the background; a fresher copy or a
+  // revocation lands via the callback.
   const queryClient = useQueryClient();
   const { data: bundle, isLoading: bundleLoading, isError: bundleError } = useQuery({
     queryKey: ["discover", "invite-bundle", invite.linkSigner],
@@ -146,19 +123,14 @@ export function CommunityListingCard({
         onSecondHop: (result) => {
           const key = ["discover", "invite-bundle", invite.linkSigner];
           if (result.bundle) queryClient.setQueryData(key, result.bundle);
-          // A revocation re-runs the resolve, which now trips over the
-          // tombstoned floor and errors the query — hiding the card.
+          // Re-resolving hits the tombstoned floor and errors, hiding the card.
           else if (result.revoked) void queryClient.invalidateQueries({ queryKey: key });
         },
       }),
   });
 
-  // Instant warm paint: the persisted newest-copy floor from an earlier
-  // resolve renders the card in milliseconds while the live resolve above
-  // refreshes it. Seeded STALE (`updatedAt: 0`) so the network fetch still
-  // runs — a seeded card is never how a revocation goes unnoticed — and never
-  // over a result the network already delivered. A tombstoned/expired floor
-  // reads as null, so a known-dead link stays skeleton-then-hidden as before.
+  // Warm paint from the persisted floor, seeded STALE (`updatedAt: 0`) so the
+  // network fetch (and any revocation) still runs; never over a network result.
   useEffect(() => {
     if (!parsed) return;
     let cancelled = false;
@@ -174,20 +146,15 @@ export function CommunityListingCard({
     };
   }, [parsed, invite.linkSigner, queryClient]);
 
-  // Attribute the community to its OWNER — the bundle's `owner` is verified
-  // (the self-certifying community_id must reproduce from it), unlike the
-  // announcement's author, who is merely whoever shared it. Fall back to the
-  // sharer only when the bundle can't resolve at all.
+  // Attribute to the verified bundle `owner`, not the announcement author (just the sharer).
   const attributedPubkey = bundle?.owner ?? invite.source.pubkey;
   const attributionLabel = bundle?.owner ? "owned by" : "shared by";
   const author = useAuthor(attributedPubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, attributedPubkey);
 
-  // A dissolved community is not a listing. Its links keep resolving — the
-  // grave touches no link coordinate — so the bundle alone would list it
-  // forever. The dissolved address derives from the community_id, so a
-  // non-member can check it too; the probes batch per relay across the grid.
+  // Dissolved communities' links keep resolving, so check the dissolved address
+  // (derived from community_id, so non-members can check it too).
   const { data: dissolvedAtMs, isPending: dissolvedPending } = useQuery({
     queryKey: ["discover", "dissolved", bundle?.community_id],
     enabled: !!bundle?.community_id && !!bundle.owner,
@@ -201,13 +168,10 @@ export function CommunityListingCard({
       })) ?? null,
   });
   const dissolved = dissolvedAtMs != null;
-  // Held as a skeleton until the check answers, so a dissolved community's
-  // card never paints and then vanishes. The probe answers within a short
-  // budget (and at once for a grave already known), so this is bounded.
+  // Hold the skeleton until answered so a dissolved card never paints then vanishes.
   const dissolvedChecking = !!bundle?.community_id && !!bundle.owner && dissolvedPending;
 
-  // The listing's own author may take it down. Only theirs: a NIP-09 delete
-  // counts from an event's author alone, so nobody else is offered one.
+  // NIP-09 deletes only count from the event's author.
   const { user } = useCurrentUser();
   const isAuthor = !!user && user.pubkey === invite.source.pubkey;
   const { unlistLinks } = useUnlistAnnouncements();
@@ -216,25 +180,16 @@ export function CommunityListingCard({
   const memberEntry = useCommunityEntry(bundle?.community_id);
   const isMember = !!memberEntry;
 
-  // A member holds the community's keys, so the AUTHORITATIVE metadata (the
-  // control fold — the same name/icon/banner the community page and sidebar
-  // render) is available locally. Prefer it over the bundle's preview, which
-  // is only as fresh as the link creator's last re-post: for a member, the
-  // card then shows the current images no matter what any relay vends. A
-  // non-member has no keys and keeps the bundle preview.
+  // Members prefer the authoritative control fold over the bundle preview,
+  // which is only as fresh as the link creator's last re-post.
   const memberCommunity = useCommunity(memberEntry?.community_id);
   const { data: folded } = useControlFold(memberCommunity);
 
-  // A Control peek is a whole plane read plus its decrypt, and the queue below
-  // runs them one at a time — so a card that has never been scrolled to must
-  // not hold a card that has. Latched: scrolling away mid-peek doesn't cancel
-  // it, and scrolling back doesn't ask again.
+  // Peeks are serialized, so only cards that have been on screen queue one. Latched.
   const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
   const onScreen = useSeenOnScreen(cardEl);
 
-  // Background Control peek for non-members: channel count + public channel
-  // ids for last-active. Serialized globally so the grid does one community
-  // at a time; members already hold the fold and skip this.
+  // Non-member Control peek for channel count + public channel ids. Serialized globally.
   const controlPeekKey = ["discover", "control-peek", bundle?.community_id] as const;
   const { data: controlPeek } = useQuery({
     queryKey: controlPeekKey,
@@ -245,9 +200,7 @@ export function CommunityListingCard({
       enqueueDiscoverControlPeek(() => peekDiscoverControl(nostr, bundle!, signal)),
   });
 
-  // Same warm-seed pattern as invite bundles / the Discover directory: last
-  // session's peek paints channel count immediately; seeded STALE so the
-  // live peek above still refreshes.
+  // Warm-seed last session's peek, STALE so the live peek still refreshes.
   useEffect(() => {
     if (!bundle?.community_id || isMember || !onScreen) return;
     let cancelled = false;
@@ -270,14 +223,10 @@ export function CommunityListingCard({
   const bannerUrl = useDecryptedImage(banner);
   const name =
     folded?.metadata?.name?.trim() || bundle?.name?.trim() || "Encrypted community";
-  // Like name/icon: a member's authoritative fold wins; a non-member sees the
-  // bundle's capped preview copy.
   const description = folded?.metadata?.description?.trim() || bundle?.description?.trim() || "";
   const initial = name.charAt(0).toUpperCase() || "·";
-  // The fold is authoritative, the peek is the non-member's version of it, and
-  // the bundle's vended channels are the floor both fall back to — a member
-  // waiting on their fold showed a count before this probe existed and must
-  // not now count down to zero while it loads.
+  // Fold > peek > bundle's vended channels as floor, so a member's count doesn't
+  // drop to zero while the fold loads.
   const bundleChannelCount = Array.isArray(bundle?.channels) ? bundle.channels.length : 0;
   const channelCount = folded
     ? [...folded.channels.values()].filter((c) => !c.deleted).length
@@ -303,10 +252,7 @@ export function CommunityListingCard({
     if (bundle?.community_id) onResolved?.(invite.linkSigner, bundle.community_id, bundle.owner);
   }, [bundle?.community_id, bundle?.owner, invite.linkSigner, onResolved]);
 
-  // Whether this card is actually in the grid. A listing that resolved and
-  // then lost the search, or whose link never resolved at all, renders nothing
-  // below — and must stop being probed too, or the REQ keeps asking about
-  // communities no one is looking at for as long as the tab is open.
+  // Unlisted cards must stop being probed, or the REQ keeps asking about them.
   const needle = filter?.trim().toLowerCase();
   const listed =
     !bundleLoading
@@ -316,8 +262,7 @@ export function CommunityListingCard({
     && !dissolvedChecking
     && !dissolved
     && (!needle || name.toLowerCase().includes(needle));
-  // A dissolved community stays visible to the one person who can clean the
-  // listing up — its author — as a husk with nothing but the remove action.
+  // A dissolved community stays visible to its listing author as a remove-only husk.
   const husk =
     dissolved
     && isAuthor
@@ -326,10 +271,8 @@ export function CommunityListingCard({
     && !!bundle
     && (!needle || name.toLowerCase().includes(needle));
 
-  // Probe target for the tab-level batched last-active REQ. Public chat
-  // stream authors land once the fold (member) or Control peek (listing)
-  // knows channel ids. The cleanup withdraws it: on unmount that is the prune,
-  // and on a dep change it is batched with the re-report in the same commit.
+  // Cleanup withdraws the target: on unmount that's the prune; on dep change
+  // it's batched with the re-report.
   useEffect(() => {
     if (!onActivityTarget) return;
     if (!listed || !bundle) {
@@ -349,8 +292,7 @@ export function CommunityListingCard({
   const onRemove = async () => {
     setRemoving(true);
     try {
-      // Every copy of this link the viewer announced, not just this one:
-      // Discover keeps the newest per link, so an older copy would take its place.
+      // Discover keeps the newest copy per link, so unlist every copy.
       await unlistLinks([invite.linkSigner], [invite]);
       toast({ title: "Removed from Discover", description: `${name} is no longer listed by you.` });
     } catch (e) {
@@ -373,14 +315,10 @@ export function CommunityListingCard({
     }
   };
 
-  // No real name to show until the bundle settles — hold the card's shape
-  // instead of flashing the "Encrypted community" fallback.
   if (bundleLoading || dissolvedChecking) return <CommunityListingCardSkeleton className={className} />;
 
-  // A link that doesn't resolve (revoked, expired, dead relays) is not a
-  // joinable community — hide it rather than list a junk placeholder card.
-  // This is also what makes revoking a shared link an effective un-listing.
-  // `listed` folds in the search miss; `bundle` is re-tested for the narrowing.
+  // Unresolvable links (revoked, expired, dead relays) are hidden; this is what
+  // makes revoking a shared link an un-listing.
   if ((!listed && !husk) || !bundle) return null;
 
   return (
@@ -391,12 +329,7 @@ export function CommunityListingCard({
         className,
       )}
     >
-      {/* Banner (from the bundle preview, decrypted with the link's secret),
-          at the community sidebar's desktop ratio (240×80 → 3:1). A
-          bannerless community still gets the strip: the icon blown up as a
-          blurred backdrop, or a faint oversized initial — so the grid keeps
-          one rhythm instead of mixing two card heights. For a member the
-          strip doubles as an "open" affordance. */}
+      {/* Bannerless communities still get the 3:1 strip (blurred icon or initial) so card heights match. */}
       {(() => {
         const bannerContent = bannerUrl ? (
           <img src={bannerUrl} alt="" className="size-full object-cover" />
@@ -417,8 +350,6 @@ export function CommunityListingCard({
                 {initial}
               </span>
             )}
-            {/* The placeholder carries the name as words, like the sidebar's
-                title-over-banner treatment. */}
             <span className="absolute inset-0 flex items-center justify-center px-4">
               <span className="min-w-0 truncate text-lg font-bold text-foreground/90 drop-shadow-sm">
                 {name}
@@ -442,7 +373,6 @@ export function CommunityListingCard({
         );
       })()}
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
-        {/* Header: icon + name */}
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-success">
             {iconUrl ? (
@@ -463,8 +393,6 @@ export function CommunityListingCard({
             ) : (
               <p className="font-semibold truncate leading-tight">{name}</p>
             )}
-            {/* The shield alone carries "encrypted"; the stats append as their
-                background peeks land, without reshaping the row. */}
             <p className="text-[11px] leading-snug text-muted-foreground">
               <ShieldCheck className="mr-1 inline size-3 align-[-0.125em]" />
               {stats.map((stat, i) => (
@@ -481,7 +409,6 @@ export function CommunityListingCard({
           <p className="text-xs text-muted-foreground line-clamp-2 break-words">{description}</p>
         )}
 
-        {/* Whose community it is */}
         <ProfilePreviewCard pubkey={attributedPubkey}>
           <button
             type="button"
@@ -516,7 +443,6 @@ export function CommunityListingCard({
               <ArrowRight className="size-4" />
             </Button>
           )}
-          {/* A dissolved community's link leads nowhere worth sharing. */}
           {!husk && (
             <Button
               variant="ghost"
@@ -560,12 +486,7 @@ export function CommunityListingCard({
 
 /**
  * Latches true the first time `el` comes within a screenful of the viewport.
- *
- * Deliberately one-way, like {@link DeferredRow}'s mount gate: the point is to
- * stop a grid of listings from all paying for an off-screen probe at once, not
- * to un-do work when the reader scrolls past. Without an observer at all
- * (jsdom, an old WebView) it reports true, so the gate can only ever delay
- * work, never remove it.
+ * Without IntersectionObserver it reports true, so the gate only ever delays work.
  */
 function useSeenOnScreen(el: Element | null): boolean {
   const [seen, setSeen] = useState(false);
@@ -584,8 +505,6 @@ function useSeenOnScreen(el: Element | null): boolean {
           io.disconnect();
         }
       },
-      // A screenful of lead time, so the peek is usually done by the time the
-      // card is actually looked at.
       { rootMargin: "300px" },
     );
     io.observe(el);

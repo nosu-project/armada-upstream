@@ -2,7 +2,6 @@ import { useRef } from "react";
 
 import { useReadState } from "@/hooks/useReadState";
 
-/** The metadata required to place an unread divider in any channel timeline. */
 export interface ReadableTimelineEntry {
   id: string;
   createdAt: number;
@@ -10,17 +9,9 @@ export interface ReadableTimelineEntry {
 }
 
 /**
- * Computes where the red "NEW" unread divider belongs for a conversation: the
- * id of the oldest message that arrived after the user last read it.
- *
- * The last-read timestamp is captured synchronously on the first render for a
- * given `readKey` — *before* the mark-read effect stamps the channel as read —
- * and the divider is then frozen for the rest of the visit (Discord behavior:
- * the marker stays put while you read, and clears when you come back later).
- * Messages arriving while the channel is open never spawn a divider, and the
- * user's own messages never count as unread.
- *
- * Returns the message id to render the divider above, or `undefined`.
+ * Where the "NEW" divider belongs: the oldest message after last read. The last-read stamp is
+ * captured on the first render per `readKey` (before mark-read) and frozen for the visit. Own
+ * messages never count.
  */
 export function useNewMessagesDivider(
   readKey: string,
@@ -36,17 +27,14 @@ export function useNewMessagesDivider(
     settled: boolean;
   } | null>(null);
 
-  // New conversation: capture the pre-visit last-read stamp before any
-  // mark-read effect can bump it.
+  // Capture before any mark-read effect bumps it.
   if (!stateRef.current || stateRef.current.key !== readKey) {
     stateRef.current = { key: readKey, lastRead: getLastRead(readKey), settled: false };
   }
 
   const state = stateRef.current;
 
-  // Settle once, on the first render with history present. A never-read
-  // conversation (lastRead 0) shows no divider — flagging the entire history
-  // of a just-joined channel as "new" is noise, not signal.
+  // A never-read conversation shows no divider.
   if (!state.settled && messages.length > 0) {
     state.settled = true;
     if (state.lastRead > 0) {

@@ -1,18 +1,17 @@
 import type { RefObject } from "react";
 
 /**
- * Keyboard routing for auto-focusing composers: stray printable keys land in
- * the newest registered composer, and a conversation switch puts the caret
- * back in it — each only while nothing else has a better claim to the keyboard.
+ * Keyboard routing for auto-focusing composers: stray printable keys and
+ * conversation switches put the caret in the newest composer, unless something
+ * else has a better claim to the keyboard.
  */
 
 const OVERLAY_SELECTOR = "[role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']";
 
 /**
- * Whether something other than `own` holds the keyboard: a text field, an open
- * dialog/menu `own` isn't inside, or `own` isn't somewhere the user can see and
- * reach — hidden, under an `inert` page (an overlay drawn over it), or outside
- * the element that has the screen to itself in fullscreen.
+ * Something other than `own` holds the keyboard: a text field, an open
+ * dialog/menu outside `own`, or `own` is hidden, `inert`, or outside the
+ * fullscreen element.
  */
 export function keyboardOwnedElsewhere(own: HTMLElement | null): boolean {
   const active = document.activeElement as HTMLElement | null;
@@ -27,12 +26,7 @@ export function keyboardOwnedElsewhere(own: HTMLElement | null): boolean {
   return false;
 }
 
-/**
- * Whether the focused element was reached by the keyboard — Tab or arrow keys
- * through the channel list, say. A switch made that way leaves focus where the
- * user is navigating; one made by a click (a mouse-focused link or button, or
- * Safari's focus-on-click-nothing) still hands the caret to the composer.
- */
+/** Focus reached by keyboard (Tab/arrows through the channel list) stays put on a switch. */
 function keyboardNavigating(own: HTMLElement | null): boolean {
   const active = document.activeElement as HTMLElement | null;
   if (!active || active === document.body || active === document.documentElement) return false;
@@ -40,30 +34,22 @@ function keyboardNavigating(own: HTMLElement | null): boolean {
   try {
     return active.matches(":focus-visible");
   } catch {
-    // No `:focus-visible` support: assume a focused navigation control is
-    // being driven from the keyboard.
+    // No `:focus-visible` support: assume a focused navigation control is keyboard-driven.
     return !!active.closest("nav, [role='navigation'], [role='tree'], [role='treeitem'], a, button");
   }
 }
 
-/** Whether a conversation switch may move the caret into `own`. */
 export function mayFocusOnSwitch(own: HTMLElement | null): boolean {
   return !!own && !keyboardOwnedElsewhere(own) && !keyboardNavigating(own);
 }
 
-/**
- * Composers that take stray keystrokes, newest last. One document listener
- * serves them all and hands the key to the newest, so an auto-focusing thread
- * panel wins over the channel composer behind it.
- */
+/** Newest last; one document listener hands keys to the newest (a thread panel beats the channel composer). */
 const typeToFocusTargets: RefObject<HTMLTextAreaElement | null>[] = [];
 
 function onStrayKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented || e.isComposing || e.metaKey) return;
-  // AltGr reports as Ctrl+Alt on Windows, and types characters (`@`, `€`, `{`)
-  // on most non-US layouts; a real Ctrl/Alt chord is a shortcut.
+  // AltGr reports as Ctrl+Alt on Windows and types characters on non-US layouts.
   if ((e.ctrlKey || e.altKey) && !e.getModifierState?.("AltGraph")) return;
-  // A single character is a printable key; "Enter", "Tab", "ArrowUp" etc. aren't.
   if (e.key.length !== 1) return;
   const active = document.activeElement as HTMLElement | null;
   // Space activates a focused button or link; leave that alone.

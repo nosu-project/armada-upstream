@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 
-/** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
+/** Lazy: keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() =>
   import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })),
 );
@@ -40,18 +40,15 @@ const LONG_PRESS_SLOP_PX = 10;
 const TABBABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 
-/** Keyboard-reachable elements inside `root`, in tab order (DOM order; positive tabindex isn't used here). */
+/** Tabbable elements in DOM order (positive tabindex isn't used here). */
 function tabbablesIn(root: ParentNode): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(TABBABLE)).filter(
     (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
   );
 }
 
-/** Focus the next tabbable element after `from` in the document, skipping anything inside `skip`. */
 function focusAfter(from: HTMLElement, skip: HTMLElement) {
-  // By document position rather than by `from`'s index in the list: `from`
-  // may not be tabbable itself (hidden, or taken out of the order), and an
-  // index of -1 would send focus to the top of the document.
+  // By document position: `from` may not be tabbable itself.
   const next = tabbablesIn(document).find(
     (el) =>
       !skip.contains(el) &&
@@ -62,7 +59,6 @@ function focusAfter(from: HTMLElement, skip: HTMLElement) {
   else from.focus();
 }
 
-/** Renders the visual content of a reaction key (custom image or emoji glyph). */
 export function ReactionGlyph({
   emojiKey,
   url,
@@ -72,10 +68,7 @@ export function ReactionGlyph({
   url?: string;
   className?: string;
 }) {
-  // What to show when there's no (working) image: the key if it's a short,
-  // renderable glyph or a `:shortcode:`, otherwise a neutral placeholder so a
-  // junk key (e.g. a raw URL pasted as the reaction content) never renders as a
-  // long line of text.
+  // Junk keys (e.g. a raw URL) render as a placeholder, not a line of text.
   const shortcode = emojiKey.startsWith(":") && emojiKey.endsWith(":");
   const label = isRenderableReactionKey(emojiKey) || shortcode ? emojiKey : "❓";
   const glyphText = (
@@ -96,7 +89,6 @@ export function ReactionGlyph({
   return glyphText;
 }
 
-/** A single reactor row (avatar + display name) inside the detail popover. */
 function ReactorRow({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -116,7 +108,6 @@ function ReactorRow({ pubkey }: { pubkey: string }) {
   );
 }
 
-/** The pill's detail popover: who reacted, and where the emoji came from. */
 function ReactionDetail({ tally }: { tally: ReactionTally }) {
   return (
     <>
@@ -137,12 +128,8 @@ function ReactionDetail({ tally }: { tally: ReactionTally }) {
 }
 
 /**
- * A reaction pill.
- *
- * Click TOGGLES the reaction — the one-click path every other chat client has.
- * The reactor list is supplementary: it opens on hover (pointer devices, after
- * a short dwell so scrubbing across a row doesn't flash popovers) or on
- * press-and-hold (touch), and is where a custom emoji's source pack is named.
+ * Click TOGGLES the reaction; the reactor list opens on hover dwell or touch
+ * press-and-hold.
  */
 function ReactionPill({
   tally,
@@ -161,14 +148,11 @@ function ReactionPill({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressOrigin = useRef<{ x: number; y: number } | null>(null);
-  // Set when a long-press opened the popover, so the click that ends the press
-  // doesn't also toggle the reaction.
+  // Keeps the click ending a long-press from also toggling.
   const longPressed = useRef(false);
   const pillRef = useRef<HTMLButtonElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  // Set by Escape, so the close hands focus back to the pill instead of
-  // letting it fall to <body> (the anchor isn't a Radix Trigger, so Radix has
-  // nothing to restore it to).
+  // Escape returns focus to the pill (an Anchor, so Radix has nothing to restore).
   const restoreFocus = useRef(false);
   const suppressFocusOpen = useRef(false);
 
@@ -190,8 +174,7 @@ function ReactionPill({
     closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_MS);
   };
 
-  // A row can unmount mid-gesture (the timeline virtualises and reactions
-  // stream in), so pending timers must not outlive it.
+  // Rows can unmount mid-gesture; clear pending timers.
   useEffect(
     () => () => {
       for (const ref of [openTimer, closeTimer, pressTimer]) {
@@ -210,24 +193,15 @@ function ReactionPill({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      {/*
-        ANCHOR, not Trigger: the pill's click is the reaction toggle, and
-        Trigger would additionally open the popover on every click. The detail
-        view is opened deliberately (hover dwell, long-press, keyboard focus),
-        so this component owns `open` outright.
-      */}
+      {/* ANCHOR, not Trigger: a Trigger would open the popover on every toggle click. */}
       <PopoverAnchor asChild>
         <button
           type="button"
           aria-pressed={tally.mine}
           aria-label={`${tally.key}, ${tally.count} ${tally.count === 1 ? "reaction" : "reactions"}`}
           className={cn(
-            // `select-none` + `[-webkit-touch-callout:none]` + descendant
-            // `pointer-events-none` keep the button itself the pointer target: a
-            // long-press landing on the nested emoji glyph/image would otherwise
-            // trigger the browser's native text-selection / image-drag gesture,
-            // which fires `pointercancel` and clears the long-press timer before
-            // the popover opens.
+            // Keep the button as the pointer target: native selection/drag on the nested
+            // glyph fires `pointercancel` and kills the long-press.
             "select-none [-webkit-touch-callout:none] [&_*]:pointer-events-none",
             "flex items-center gap-1.5 rounded-full border px-2.5 py-1 touch:px-3.5 touch:py-2.5 text-sm leading-none transition-colors",
             tally.mine
@@ -252,9 +226,7 @@ function ReactionPill({
           }}
           onPointerDown={(e) => {
             if (e.pointerType !== "touch") return;
-            // Own the press: the row is wrapped in a ContextMenu whose trigger
-            // arms its own long-press on touch, and swipe-to-reply listens on
-            // the row. Both would fight this gesture.
+            // The row's ContextMenu long-press and swipe-to-reply would fight this gesture.
             e.stopPropagation();
             longPressed.current = false;
             pressOrigin.current = { x: e.clientX, y: e.clientY };
@@ -267,9 +239,7 @@ function ReactionPill({
           onPointerUp={() => clearTimer(pressTimer)}
           onPointerCancel={() => clearTimer(pressTimer)}
           onPointerMove={(e) => {
-            // Only a real drag (a scroll starting on the pill) cancels the
-            // hold — a finger never rests perfectly still, so cancelling on any
-            // movement at all would make long-press fail most of the time.
+            // Only a real drag cancels the hold (fingers never stay perfectly still).
             if (e.pointerType !== "touch" || !pressTimer.current) return;
             const origin = pressOrigin.current;
             if (!origin) return;
@@ -278,8 +248,7 @@ function ReactionPill({
             }
           }}
           onFocus={(e) => {
-            // Keyboard focus reveals the detail the way hover does; a focus that
-            // merely follows a click does not.
+            // Keyboard focus opens like hover; a click's focus doesn't.
             if (suppressFocusOpen.current) return;
             try {
               if (!e.currentTarget.matches(":focus-visible")) return;
@@ -289,14 +258,10 @@ function ReactionPill({
             setOpen(true);
           }}
           onBlur={(e) => {
-            // Tabbing into the popover's own controls keeps it open; focus
-            // going anywhere else closes it.
             if (!contentRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
           }}
           onKeyDown={(e) => {
-            // The popover is portalled to the end of <body>, so its controls
-            // are not next in the natural tab order. Tab steps into them
-            // explicitly; with none to reach, Tab moves on as usual.
+            // The popover is portalled to <body>, so Tab steps into it explicitly.
             if (!open || e.key !== "Tab" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
             const first = contentRef.current ? tabbablesIn(contentRef.current)[0] : undefined;
             if (!first) return;
@@ -314,21 +279,16 @@ function ReactionPill({
         align="start"
         sideOffset={8}
         ref={contentRef}
-        // The popover never takes focus: a hover/press open would scroll the
-        // timeline and pull the caret from the composer, and a keyboard open
-        // would strand focus in a portalled layer whose FocusScope swallows
-        // Tab when it holds nothing tabbable. Focus stays on the pill.
+        // Never takes focus: it would scroll the timeline or steal the composer caret,
+        // and an empty FocusScope swallows Tab.
         onOpenAutoFocus={(e) => e.preventDefault()}
         onEscapeKeyDown={(e) => {
-          // Hand focus back to the pill only when the keyboard was on the pill
-          // or in the popover. A hover-opened one closes where focus is — an
-          // Escape typed in the composer must not pull the caret out of it.
+          // Only when focus was on the pill or popover; don't steal the composer's caret.
           const active = document.activeElement;
           restoreFocus.current =
             !!active && (active === pillRef.current || !!contentRef.current?.contains(active));
           if (restoreFocus.current) return;
-          // Nor may it swallow that Escape: the one press closes this and still
-          // reaches the composer (dropping a reply target).
+          // Let the same Escape still reach the composer (dropping a reply target).
           passThroughEscape(e);
           clearTimer(openTimer);
           clearTimer(closeTimer);
@@ -339,18 +299,14 @@ function ReactionPill({
           if (!restoreFocus.current) return;
           restoreFocus.current = false;
           if (document.activeElement === pillRef.current) return;
-          // A refocus that follows Escape must not reopen what it just closed.
           suppressFocusOpen.current = true;
           pillRef.current?.focus();
           suppressFocusOpen.current = false;
         }}
         onFocusOutside={(e) => {
-          // Shift+Tab from the popover's first control lands back on the pill.
           if (e.target === pillRef.current) e.preventDefault();
         }}
         onKeyDown={(e) => {
-          // Walk out of the popover's controls back into the page's tab order
-          // at the pill, rather than looping inside the popover.
           if (e.key !== "Tab" || e.altKey || e.ctrlKey || e.metaKey) return;
           const pill = pillRef.current;
           const items = tabbablesIn(e.currentTarget);
@@ -377,21 +333,13 @@ function ReactionPill({
 
 interface ReactionBarProps {
   tallies: ReactionTally[];
-  /** Whether the current user may toggle reactions (group membership). */
   canReact: boolean;
   onReact: (input: ReactInput) => void;
-  /**
-   * Optional node rendered first in the pill row (the zap total chip), so it
-   * sits inline with the reaction pills instead of on its own line.
-   */
+  /** Rendered first in the pill row (the zap total chip). */
   leading?: React.ReactNode;
 }
 
-/**
- * Renders the NIP-25 reaction tally pills beneath a message. Clicking a pill
- * adds or removes the current user's reaction; hover (or press-and-hold)
- * reveals who reacted.
- */
+/** NIP-25 tally pills; click toggles, hover/press-and-hold reveals who reacted. */
 export function ReactionBar({ tallies, canReact, onReact, leading }: ReactionBarProps) {
   if (tallies.length === 0 && !leading) return null;
 
@@ -407,28 +355,15 @@ export function ReactionBar({ tallies, canReact, onReact, leading }: ReactionBar
 
 interface ReactionActionsProps {
   onReact: (input: ReactInput) => void;
-  /**
-   * The message's current tallies, so a quick button or a picker selection
-   * that repeats an existing reaction retracts it instead of republishing it.
-   */
+  /** Current tallies, so repeating an existing reaction retracts it. */
   tallies?: ReactionTally[];
-  /**
-   * How many one-click quick reactions to show before the picker button. Pass
-   * 0 in cramped surfaces (the thread panel) to render just the picker.
-   */
+  /** Quick reactions before the picker; 0 in cramped surfaces (thread panel). */
   quickSlots?: number;
 }
 
 const NO_TALLIES: ReactionTally[] = [];
 
-/**
- * The reaction controls on a message's hover/tap action toolbar: a row of the
- * user's most-used emoji for one-click reacting, then the full picker.
- *
- * The quick row is the point — reacting is overwhelmingly a repeat of
- * something you've reacted with before, and routing every one of those through
- * a picker popover is the slow path.
- */
+/** Toolbar reaction controls: most-used emoji for one-click reacting, then the picker. */
 export function ReactionActions({
   onReact,
   tallies = NO_TALLIES,

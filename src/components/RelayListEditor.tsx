@@ -9,7 +9,6 @@ import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { toast } from "@/hooks/useToast";
 import { normalizeRelayUrl } from "@/lib/platform";
 
-/** Hostname for a relay URL. */
 function relayHost(url: string): string {
   try {
     return new URL(url).host;
@@ -18,10 +17,7 @@ function relayHost(url: string): string {
   }
 }
 
-/**
- * One relay row showing its NIP-11 identity (icon, name, host) and notable
- * NIP badges (NIP-42 AUTH, NIP-50 search). Adapted from Ditto's RelayIdentity.
- */
+/** Relay row with NIP-11 identity and NIP-42/50 badges (adapted from Ditto). */
 function RelayIdentity({ url }: { url: string }) {
   const { data: info } = useRelayInfo(url);
   const host = relayHost(url);
@@ -49,30 +45,19 @@ function RelayIdentity({ url }: { url: string }) {
 }
 
 export interface RelayListEditorProps {
-  /** Editable relay URLs. */
   relays: string[];
-  /** Persist a new relay list. Omit (with `readOnly`) for a display-only list. */
+  /** Omit (with `readOnly`) for a display-only list. */
   onChange?: (relays: string[]) => void;
   /** Read-only, non-removable relays shown first (e.g. the app defaults). */
   pinned?: string[];
-  /** Trailing label on pinned rows. */
   pinnedLabel?: string;
-  /** Reset the editable list to defaults. */
   onReset?: () => void;
-  /** Empty-state message when there are no editable relays. */
   emptyText?: string;
-  /** Add-input placeholder. */
   placeholder?: string;
-  /** Render every relay as a non-removable row with no add/reset controls. */
   readOnly?: boolean;
 }
 
-/**
- * Reusable relay list editor — pinned (read-only) entries, an editable list
- * with remove buttons, an add form, and an optional reset. Mirrors the layout
- * of Ditto's RelayListManager (NIP-11 identity rows + NIP-50/42 badges), in
- * Armada's simpler `string[]` format (no per-relay read/write markers).
- */
+/** Relay list editor mirroring Ditto's RelayListManager, as a plain `string[]` (no read/write markers). */
 export function RelayListEditor({
   relays,
   onChange,

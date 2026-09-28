@@ -1,145 +1,42 @@
 /**
  * Concord direct-invite inbox — the decrypted giftwrap-invite cache.
  *
- * The invite inbox is the indexed lookup CORD-05 §6 defines:
- * `{ kinds: [1059], "#p": [me], "#k": ["3313"] }` — exactly the user's
- * invites, never the whole giftwrap backlog. Opening each wrap is still two
- * NIP-44 decrypts (costly with a bunker signer), so the DECRYPTED rumor is
- * persisted once and read back from IndexedDB with no re-decrypt, and a
- * persisted cursor means only wraps newer than the last sync are fetched.
+ * CORD-05 §6 lookup `{ kinds: [1059], "#p": [me], "#k": ["3313"] }`. Unwrapping
+ * is two NIP-44 decrypts, so the decrypted rumor is persisted in one ArmadaDB
+ * tenant PER RECIPIENT (`invites:<pubkey>`), keyed by wrap id. Per-account
+ * tenants keep one account's invites from surfacing for another. Wiped on logout.
  *
- * Backed by one ArmadaDB tenant PER RECIPIENT (`invites:<pubkey>`). Stored
- * records are keyed by the WRAP id (the inbox dedup key) and carry the seal
- * author (sender) and the wrap's `created_at`.
- *
- * The per-recipient tenant is what keeps accounts apart. A decrypted invite
- * persisted while account A was active must never be read back — and parked —
- * for account B after an account switch, which would flood B with A's
- * community invites. This used to be a shared database with every read scoped
- * by an `#p` recipient tag; the tenant makes the isolation structural, so a
- * read has no way to reach another account's invites even if it forgets to
- * ask. Every tenant is still wiped on final logout.
- *
- * The `since` cursor resumes from the newest wrap already scanned. NIP-59
- * backdates the outer `created_at` up to two days, so the cursor rewinds that
- * window on every resume — cheap, because the `#k` filter keeps the overlap to
- * invites alone and the store dedups re-fetched wraps before decrypting.
- *
- * Trust note: this persists decrypted invite metadata at rest — the same
- * device-trust level as the folded caches already in use. Wiped on logout.
+ * The `since` cursor rewinds NIP-59's two-day backdate window on each resume.
  */
 
-import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { UnwrappedInvite } from "@/concord/lib/directInvite";
 import { KIND_DIRECT_INVITE } from "@/concord/lib/kinds";
 
-/** The shared pre-tenant database, drained into the tenants on first read. */
-const LEGACY_DB_NAME = "armada-concord-invites";
-
 /** NIP-59's outer-timestamp backdate window (the cursor rewinds this much). */
 export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
 
-/** The invite tenant for one account (opens in the background on first use). */
 export function inviteInbox(recipient: string): NRumorStore {
   return getArmadaDB().tenant(`invites:${recipient}`);
 }
 
-/**
- * Warm an account's invite tenant so the first inbox read hits a hot store,
- * and drain anything the pre-tenant shared database still holds for it.
- */
-export function warmInviteInbox(recipient: string): void {
-  void migrateLegacyInvites(recipient).catch(() => undefined);
-}
-
-// ── Legacy drain ────────────────────────────────────────────────────────────
-//
-// Invites used to live in one shared database scoped by an `#p` tag. Dropping
-// it on upgrade would empty the invite list for good: the sync cursor is
-// already past those wraps, so nothing would refetch them. So the first read
-// per account copies that account's records across, once, and records that it
-// did in ArmadaDB's KV. The legacy database is left in place (it is small, and
-// another account may not have migrated yet); logout deletes it either way.
-
-const LEGACY_MIGRATION_KEY = (recipient: string) => `invites:migrated:${recipient}`;
-
-/** In-flight/settled drains, so concurrent reads share one pass. */
-const drains = new Map<string, Promise<void>>();
-
-/**
- * Copy `recipient`'s invites out of the shared database. Idempotent, memoised,
- * and REJECTS on failure — the startup gate deletes the shared database once
- * every drain has resolved for every account, so a swallowed error here would
- * read as a finished copy and take the invites with it.
- */
-export function migrateLegacyInvites(recipient: string): Promise<void> {
-  let drain = drains.get(recipient);
-  if (!drain) {
-    drain = drainLegacyInvites(recipient).catch((err: unknown) => {
-      // Drop the memo so a later read retries: writes are keyed by wrap id, so
-      // recopying what already landed costs nothing.
-      drains.delete(recipient);
-      throw err;
-    });
-    drains.set(recipient, drain);
-  }
-  return drain;
-}
-
-async function drainLegacyInvites(recipient: string): Promise<void> {
-  const db = getArmadaDB();
-  const key = LEGACY_MIGRATION_KEY(recipient);
-  if (await db.kv.get<boolean>(key)) return;
-  // `NIndexedDB` CREATES the database on its first query, which would leave a
-  // device that never had one with the very database the startup gate scans
-  // for. See `skipLegacyDrain`.
-  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
-
-  const legacy = new NIndexedDB(LEGACY_DB_NAME);
-  try {
-    const events = await legacy.query([{ kinds: [KIND_DIRECT_INVITE], "#p": [recipient] }]);
-    const tenant = db.tenant(`invites:${recipient}`);
-    for (const event of events) {
-      const { sig: _sig, ...rumor } = event;
-      await tenant.event(rumor);
-    }
-  } finally {
-    await legacy.close().catch(() => undefined);
-  }
-
-  await db.kv.set(key, true);
-}
-
-// ── Codec ─────────────────────────────────────────────────────────────────────
-
 /** A decrypted invite record read back from the store. */
 export interface StoredDirectInvite {
-  /** Gift-wrap event id (stable key + dedup). */
   wrapId: string;
   /** The seal author — the verified sender of the gift wrap. */
   sender: string;
-  /** The decrypted inner rumor. */
   rumor: UnwrappedInvite["rumor"];
 }
 
 /**
- * Build the stored record for an unwrapped invite.
- *
- * The record is keyed by the WRAP id (the inbox's dedup key) and carries the
- * verified sender as `pubkey` — which is the inner rumor's author too, since
- * the seal's signer IS the author. Its kind, content and tags are the rumor's,
- * untouched: those tags are the bytes the rumor's id commits to, and every
- * value that used to be folded into them is either already a field of this
- * record (the wrap id, the sender) or read by nothing (the wrap's own
- * `created_at` — the inbox cursor advances from the wraps in hand, not from
- * the store) or answered by the tenant (the recipient).
+ * Build the stored record: keyed by wrap id, `pubkey` = verified sender (the
+ * seal signer is the rumor author). Kind/content/tags stay untouched, since the
+ * rumor id commits to them.
  */
 export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite): NostrRumor {
   return {
@@ -152,7 +49,6 @@ export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite):
   };
 }
 
-/** Reconstruct a StoredDirectInvite from a stored record. */
 export function storedToInvite(ev: NostrRumor): StoredDirectInvite {
   return {
     wrapId: ev.id,
@@ -167,18 +63,11 @@ export function storedToInvite(ev: NostrRumor): StoredDirectInvite {
   };
 }
 
-// ── Reads / writes ──────────────────────────────────────────────────────────
-
-/**
- * The cached direct-invite rumors (kind 3313) addressed to `recipient`, newest
- * first. Read from that account's own tenant, so another logged-in profile's
- * invites are not merely filtered out — they are not in the database at all.
- */
+/** Cached direct-invite rumors (kind 3313) for `recipient`, newest first, from its own tenant. */
 export async function queryStoredInvites(
   recipient: string,
   opts?: { signal?: AbortSignal },
 ): Promise<StoredDirectInvite[]> {
-  await migrateLegacyInvites(recipient).catch(() => undefined);
   const rumors = await inviteInbox(recipient).query([{ kinds: [KIND_DIRECT_INVITE] }], {
     signal: opts?.signal,
   });
@@ -186,11 +75,8 @@ export async function queryStoredInvites(
 }
 
 /**
- * Persist decrypted invites addressed to `recipient`. Failures are swallowed.
- *
- * Returns the settling promise so a caller that must re-read the store right
- * after (the live wire wake) can await the write and see its own row; existing
- * fire-and-forget callers simply don't await it.
+ * Persist decrypted invites for `recipient`; failures are swallowed. Returns the
+ * promise so the live wake can await its own write before re-reading.
  */
 export function writeStoredInvites(
   recipient: string,
@@ -204,12 +90,6 @@ export function writeStoredInvites(
     .then(() => undefined)
     .catch(() => undefined);
 }
-
-// ── Sync cursor ───────────────────────────────────────────────────────────────
-//
-// Per-user resume state: the newest wrap `created_at` ingested. Persisted in
-// the folded cache. Resumes {@link WRAP_BACKDATE_SECS} behind the newest wrap
-// already scanned, covering NIP-59's backdate window.
 
 const cursorKey = (pubkey: string) => `concord2-invites-cursor:${pubkey}`;
 
@@ -225,21 +105,10 @@ export async function advanceInviteInboxCursor(pubkey: string, newestWrapCreated
   if (newestWrapCreatedAt > prev) await writeFolded(cursorKey(pubkey), newestWrapCreatedAt);
 }
 
-// ── Live invite-wrap buffer ───────────────────────────────────────────────────
-//
-// The wire's standing DM subscription (`{kinds:[1059], "#p":[me]}`) delivers
-// direct-invite wraps too — they are the same kind, distinguished only by the
-// outer `#k`=3313 hint. The wire can't decrypt them (that needs the user's
-// NIP-44 + the consent gate, both owned by the invite hook), so it BUFFERS the
-// in-hand wrap here and rings `c2inv:wrap`, exactly as it buffers a live DM wrap
-// and rings `dm:wrap`. The invite hook drains and decrypts directly — no relay
-// re-fetch (which re-pays NIP-42 auth) — so a received invite lands ~instantly
-// instead of waiting on the 5-minute poll. Ciphertext only, never persisted.
-//
-// A session-seen id set makes buffering idempotent: the wrap filter rewinds
-// `since` by the NIP-59 backdate window, so every fresh round replays recent
-// wraps and only genuinely new arrivals ring the doorbell.
-
+// Live invite-wrap buffer: the wire's DM subscription also delivers invite wraps
+// (`#k`=3313) but can't decrypt them, so it buffers them here and rings
+// `c2inv:wrap` for the invite hook to drain without a relay re-fetch. Ciphertext
+// only, never persisted. The seen-set dedupes wraps replayed by the backdate rewind.
 /** Cap on buffered live invite wraps (a burst past this falls back to the poll). */
 const LIVE_INVITE_CAP = 256;
 /** Cap on remembered wrap ids (oldest halves are shed — the poll dedupes deeper). */
@@ -278,8 +147,7 @@ export function bufferLiveInviteWraps(wraps: NostrEvent[]): NostrEvent[] {
   const fresh: NostrEvent[] = [];
   const now = Math.floor(Date.now() / 1000);
   for (const w of wraps) {
-    // A dead handoff is dropped on arrival — never buffered, never decrypted,
-    // never allowed to ring the doorbell for an invite that no longer exists.
+    // An expired handoff is never buffered or decrypted.
     if (wrapExpired(w.tags, now)) continue;
     if (liveInviteSeen.has(w.id)) continue;
     if (liveInviteWraps.size >= LIVE_INVITE_CAP) continue;
@@ -291,9 +159,8 @@ export function bufferLiveInviteWraps(wraps: NostrEvent[]): NostrEvent[] {
 }
 
 /**
- * Put drained wraps BACK (a consent-gate decline deferred the decrypt). This
- * bypasses the session-seen skip — the ids were marked seen when first
- * buffered — so a later allow / the poll backstop can drain them again.
+ * Put drained wraps back after a consent-gate decline, bypassing the seen-skip
+ * so a later allow or the poll can drain them.
  */
 export function rebufferLiveInviteWraps(wraps: NostrEvent[]): void {
   for (const w of wraps) {
@@ -302,12 +169,10 @@ export function rebufferLiveInviteWraps(wraps: NostrEvent[]): void {
   }
 }
 
-/** Whether any live invite wraps are currently buffered awaiting a drain. */
 export function hasBufferedLiveInviteWraps(): boolean {
   return liveInviteWraps.size > 0;
 }
 
-/** Take (and clear) the buffered live invite wraps for decryption by the hook. */
 export function drainLiveInviteWraps(): NostrEvent[] {
   if (liveInviteWraps.size === 0) return [];
   const out = [...liveInviteWraps.values()];

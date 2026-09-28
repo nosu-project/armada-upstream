@@ -40,17 +40,12 @@ import type { BitcoinRecipientOverride } from '@/hooks/useOnchainZap';
 import type { CurrencyDisplay } from '@/contexts/AppContext';
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * Amount presets, one row per display currency. The sats row is hand-picked
- * round numbers rather than a live conversion of the USD row, so sats users
- * get "5k" instead of "4,731".
- */
+/** The sats row is hand-picked round numbers, not a conversion of the USD row. */
 const PRESETS: AmountPresetSet = {
   usd: [1, 5, 20, 50, 100],
   sats: [1_000, 5_000, 20_000, 50_000, 100_000],
 };
 
-/** Opening amount for a fresh form, in the user's display currency. */
 function defaultAmount(currency: CurrencyDisplay): number {
   return currency === 'sats' ? 5_000 : 5;
 }
@@ -105,8 +100,6 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
   const esploraApis = useEsploraApis();
   const loginType = logins[0]?.type;
 
-  // Amount is denominated in the user's display-currency preference. In USD
-  // mode it's converted to sats via the BTC price; in sats mode it *is* sats.
   const currency: CurrencyDisplay = config.currencyDisplay ?? 'usd';
   const [amount, setAmount] = useState<number | string>(() => defaultAmount(currency));
   const [comment, setComment] = useState('');
@@ -154,7 +147,6 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
     return getRateForSpeed(feeRates, feeSpeed);
   }, [feeRates, feeSpeed]);
 
-  // Convert the display-currency amount to sats.
   const amountSats = useMemo(
     () => amountInputToSats(amount, currency, btcPrice),
     [amount, currency, btcPrice],
@@ -207,13 +199,11 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
     onSuccess?.({ txid: result.txid, amountSats: result.amountSats });
   }, bitcoinTarget, sendOnchainZap);
 
-  // For large amounts, require a two-tap confirmation on the primary button.
-  // This catches fat-finger sends without nagging on normal amounts.
+  // Two-tap confirmation for large amounts.
   const isLarge = isLargeAmount(totalSats, btcPrice);
   const [confirmArmed, setConfirmArmed] = useState(false);
 
-  // Re-arm (i.e. clear confirmation) whenever the amount, fee rate, or price
-  // moves — so editing after arming forces another deliberate click.
+  // Re-arm whenever amount, fee rate or price moves.
   useEffect(() => {
     setConfirmArmed(false);
   }, [amountSats, currentFeeRate, btcPrice]);
@@ -222,14 +212,12 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
     setError('');
     if (!user) { setError('You must be logged in.'); return; }
     if (user.pubkey === target.pubkey) { setError("You can't zap yourself."); return; }
-    // Only USD input needs a price to become sats; a sats amount is payable
-    // as-is even when the price endpoint is down.
+    // Only USD input needs a price; sats are payable when the price endpoint is down.
     if (currency === 'usd' && !btcPrice) { setError('Waiting for BTC price…'); return; }
     if (amountSats <= 0) { setError('Enter an amount.'); return; }
     if (!utxos?.length) { setError("You don't have any Bitcoin yet."); return; }
     if (insufficient) { setError('Not enough Bitcoin.'); return; }
 
-    // Two-tap safety for large amounts: first click arms, second click sends.
     if (isLarge && !confirmArmed) {
       setConfirmArmed(true);
       return;
@@ -244,9 +232,7 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
     }
   }, [user, target.pubkey, currency, btcPrice, amountSats, utxos, insufficient, zapAsync, comment, feeSpeed, isLarge, confirmArmed]);
 
-  // Total (amount + fee) rendered in the user's display currency for the send
-  // button and confirmation label. Falls back to the raw input while the price
-  // is still loading in USD mode.
+  // Falls back to the raw input while the price loads in USD mode.
   const totalDisplay = totalSats > 0
     ? formatMoneyAmount(totalSats, currency, btcPrice)
     : formatAmountInput(amount, currency);
@@ -270,7 +256,6 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
 
   return (
     <div className="grid gap-4 px-4 py-4 w-full overflow-hidden">
-      {/* Amount — big number on top, editable by clicking, plus preset chips. */}
       <div className="grid gap-4 pt-2">
         <AmountField
           value={amount}
@@ -285,8 +270,6 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
-      {/* Optional comment — carried into the zap announcement. Revealed by the
-          icon on the Send row so it costs no space until wanted. */}
       {showComment && (
         <Input
           type="text"
@@ -334,7 +317,6 @@ export function OnchainZapContent({ target, bitcoinTarget, sendOnchainZap, onSuc
         </Button>
       </div>
 
-      {/* Fee line — click to open speed picker */}
       {amountSats > 0 && (
         <div className="flex items-center justify-center gap-3 -mt-1 text-xs">
           <Popover open={feePopoverOpen} onOpenChange={setFeePopoverOpen}>
@@ -394,8 +376,6 @@ function progressLabel(progress: 'idle' | 'building' | 'signing' | 'broadcasting
   }
 }
 
-// ── Unsupported-signer QR fallback ──────────────────────────────────────────
-
 interface UnsupportedSignerQRProps {
   recipientAddress: string;
   truncatedRecipient: string;
@@ -403,21 +383,14 @@ interface UnsupportedSignerQRProps {
   isSilentPayment?: boolean;
   amountSats: number;
   btcPrice: number | undefined;
-  /** Raw amount input, denominated in `currency`. */
   amount: number | string;
   setAmount: (v: number | string) => void;
-  /** The user's display-currency preference. */
   currency: CurrencyDisplay;
   loginType: string | undefined;
   onClose?: () => void;
 }
 
-/**
- * Fallback shown when the user's signer can't sign PSBTs locally. Renders a
- * BIP-21 QR the user can scan with any external Bitcoin wallet. Because we
- * never see the resulting tx, we skip publishing the zap announcement and
- * explicitly warn the user about that.
- */
+/** BIP-21 QR fallback for signers that can't sign PSBTs. We never see the tx, so no zap announcement is published. */
 function UnsupportedSignerQR({
   recipientAddress,
   truncatedRecipient,
@@ -433,10 +406,7 @@ function UnsupportedSignerQR({
   const { toast } = useToast();
   const [copied, setCopied] = useState<'address' | 'uri' | null>(null);
 
-  // BIP-21 URI. Include `amount` (in BTC, 8 decimals) only when > 0 so an
-  // empty-amount placeholder QR doesn't include `?amount=0`. Silent-payment
-  // codes go in the `sp=` parameter (the URI has no on-chain path) so
-  // BIP-352-aware wallets pick them up.
+  // Omit `amount` when 0; silent-payment codes go in `sp=` for BIP-352 wallets.
   const bip21 = useMemo(() => {
     if (!recipientAddress) return '';
     const params = new URLSearchParams();
@@ -483,7 +453,6 @@ function UnsupportedSignerQR({
         {explanation} You can still zap by scanning this QR from any Bitcoin wallet.
       </p>
 
-      {/* Amount presets, in the user's display currency */}
       <ToggleGroup
         type="single"
         value={activePresets.includes(Number(amount)) ? String(amount) : ''}
@@ -523,7 +492,6 @@ function UnsupportedSignerQR({
         />
       </div>
 
-      {/* QR / placeholder */}
       <div className="flex justify-center">
         {hasAmount && bip21 ? (
           <div className="bg-white p-3 rounded-xl" aria-label="Bitcoin payment QR code">
@@ -538,8 +506,6 @@ function UnsupportedSignerQR({
         )}
       </div>
 
-      {/* Amount summary. In USD mode show the dollar value alongside the exact
-          sats; in sats mode the preset row already says it all. */}
       {hasAmount && (
         <div className="text-center text-sm">
           {!isSats && btcPrice && (
@@ -553,7 +519,6 @@ function UnsupportedSignerQR({
         </div>
       )}
 
-      {/* Recipient */}
       {recipientAddress && (
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -564,7 +529,6 @@ function UnsupportedSignerQR({
         </div>
       )}
 
-      {/* Copy buttons */}
       <div className="grid grid-cols-2 gap-2">
         <Button
           type="button"
@@ -590,7 +554,6 @@ function UnsupportedSignerQR({
         </Button>
       </div>
 
-      {/* Warning: no zap announcement will be published */}
       <Alert>
         <AlertTriangle className="size-4" />
         <AlertDescription className="text-xs">

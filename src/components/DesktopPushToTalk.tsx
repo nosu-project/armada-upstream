@@ -11,19 +11,10 @@ import {
   usePushToTalkPreferences,
 } from "@/lib/pushToTalk";
 
-/**
- * How many times a key-up mute is retried before giving up. Muting is the
- * safety-critical direction, but a track that refuses to close will keep
- * refusing; the call UI's override is the backstop past this.
- */
+/** Key-up mute retries; the call UI's override is the backstop past this. */
 const MUTE_ATTEMPTS = 3;
 
-/**
- * Owns push-to-talk for the connected LiveKit room. The Electron main process
- * watches the physical shortcut even while Armada is unfocused; this component
- * is the only place that turns those press/release events into microphone
- * publication changes.
- */
+/** Turns the Electron main process's global push-to-talk events into mic publication changes. */
 export function DesktopPushToTalk() {
   const { localParticipant } = useLocalParticipant();
   const preferences = usePushToTalkPreferences();
@@ -41,8 +32,7 @@ export function DesktopPushToTalk() {
     let applied: boolean | null = null;
     let applying = false;
 
-    // Serialize LiveKit toggles so a quick tap cannot leave the microphone on
-    // if setMicrophoneEnabled(true) resolves after the key-up request.
+    // Serialize toggles so a quick tap can't leave the mic on if enable resolves after key-up.
     const applyDesired = async () => {
       if (applying) return;
       applying = true;
@@ -58,15 +48,12 @@ export function DesktopPushToTalk() {
           } catch (error) {
             console.warn("push-to-talk microphone toggle failed", error);
             if (next) {
-              // The unmute failed, so the track is still closed. Record that
-              // truth and wait for the next key event: looping here would spin
-              // for as long as the key is held.
+              // Unmute failed; don't loop, which would spin while the key is held.
               applied = false;
               stalled = true;
             } else if ((muteFailures += 1) >= MUTE_ATTEMPTS) {
-              // Leave `applied` unknown so a later event tries again. Claiming
-              // the mute succeeded is what leaves the microphone live while the
-              // UI reports the shortcut released.
+              // Leave `applied` unknown so a later event retries; claiming success would
+              // leave the mic live while the UI shows released.
               applied = null;
               stalled = true;
             }
@@ -85,8 +72,6 @@ export function DesktopPushToTalk() {
       void applyDesired();
     };
 
-    // The call UI's mic button stands push-to-talk down and closes the track,
-    // for a press whose release never arrived.
     const unsubscribeOverride = onPushToTalkOverride(() => {
       overridden = true;
       desired = false;
@@ -99,8 +84,7 @@ export function DesktopPushToTalk() {
       const status = await configureDesktopPushToTalk(preferences.binding);
       if (disposed || overridden || !status.supported) return;
       const bindingLabel = status.bindingLabel || preferences.binding.label;
-      // Subscribe and force mute before the main process starts forwarding
-      // global events. This makes activation fail closed.
+      // Force mute before the main process forwards global events, so activation fails closed.
       unsubscribe = onDesktopPushToTalkState((pressed) => setPressed(pressed, bindingLabel));
       desired = false;
       await applyDesired();
@@ -116,7 +100,6 @@ export function DesktopPushToTalk() {
       unsubscribe();
       unsubscribeOverride();
       void setDesktopPushToTalkActive(false);
-      // Always leave the old room muted when changing bindings or unmounting.
       void localParticipant.setMicrophoneEnabled(false).catch(() => {});
       setPushToTalkRuntime({ ready: false, pressed: false, bindingLabel: null });
     };

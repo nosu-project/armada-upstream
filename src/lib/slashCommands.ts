@@ -3,23 +3,15 @@ import { nip19 } from "nostr-tools";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Slash commands for the chat composer. Typing `/` at the very start of an
- * empty composer opens an autocomplete menu; picking (or sending) a command
- * runs it locally instead of sending a literal "/command" message.
- *
- * Commands fall into three categories:
- *  - "text":       rewrite the outgoing message text (e.g. /me, /shrug).
- *  - "action":     trigger a composer side-effect (e.g. /poll, /thread).
- *  - "moderation": map to a NIP-29 moderation action; admin-only.
+ * Composer slash commands, run locally instead of sent. "text" rewrites the
+ * message, "action" triggers a composer side-effect, "moderation" maps to a
+ * NIP-29 admin action.
  */
 export type SlashCommandKind = "text" | "action" | "moderation";
 
 /**
- * A composer capability a command depends on. The composer advertises which it
- * supports (e.g. NIP-29 group chat has all of them; Concord's encrypted send
- * path has none of the group-only ones), and commands needing an unsupported
- * capability are hidden from the menu and rejected on send. Universal commands
- * (e.g. /me, /shrug, /mention) declare no requirement and work everywhere.
+ * A composer capability a command needs; commands needing one the composer
+ * doesn't advertise are hidden and rejected (Concord's encrypted send has none).
  */
 export type SlashCapability = "poll" | "thread" | "moderation";
 
@@ -59,23 +51,14 @@ export interface SlashCommand {
   /** Usage hint shown in the menu, e.g. "/kick @user". */
   usage?: string;
   kind: SlashCommandKind;
-  /**
-   * Composer capabilities this command needs. Omitted/empty means universal
-   * (works in any composer, including Concord's delegated send). The composer
-   * filters the menu and guards execution by its advertised capabilities.
-   */
+  /** Required composer capabilities; omitted means universal. */
   requires?: SlashCapability[];
   /**
-   * Whether picking this command from the menu (Tab/Enter/click) should run it
-   * immediately. True for commands that need no argument (e.g. /poll, /thread,
-   * /shrug); false for ones that take a target/text (e.g. /kick, /me), which
-   * instead insert "/name " so the user can type the argument.
+   * Run immediately when picked from the menu (no-argument commands); otherwise
+   * insert "/name " for the user to type the argument.
    */
   runsOnSelect?: boolean;
-  /**
-   * Run the command. `arg` is everything after the command word (trimmed).
-   * Returns what the composer should do next.
-   */
+  /** `arg` is everything after the command word, trimmed. */
   run: (arg: string, ctx: SlashCommandContext) => SlashRunResult;
 }
 
@@ -89,7 +72,6 @@ const requireTarget = (
   if (!trimmed) return { type: "error", message: "Specify a user, e.g. by @mention or npub." };
   const pubkey = ctx.resolvePubkey(trimmed);
   if (!pubkey) return { type: "error", message: "Couldn't find that user. Mention them with @ or paste their npub." };
-  // The rest of the arg after the resolved target (a reason, for /ban).
   const rest = trimmed.replace(/^\S+\s*/, "").trim();
   return build(pubkey, rest);
 };
@@ -158,12 +140,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     runsOnSelect: true,
     run: (arg) => {
       const rest = arg.trim();
-      // Picked from the menu with no target yet: open the @ picker seeded with
-      // "/slap " so the resolved mention re-runs this command on send.
+      // No target: open the @ picker seeded with "/slap " so the mention re-runs this.
       if (!rest) return { type: "action", action: { kind: "openMention", prefix: "/slap " } };
-      // The target is the first token (a resolved nostr: mention or raw name);
-      // anything after it is the user's own action text. Default to the classic
-      // "around a bit with a large trout" when they appended nothing.
       const [target, ...tail] = rest.split(/\s+/);
       const suffix = tail.length ? tail.join(" ") : "around a bit with a large trout";
       return { type: "send", text: `${ME_ACTION_PREFIX}slaps ${target} ${suffix}` };
@@ -207,46 +185,23 @@ export function parseSlashCommand(content: string): { command: SlashCommand; arg
   return { command, arg: match[2] ?? "" };
 }
 
-/**
- * Host callbacks for {@link executeSlashCommand}. A chat surface (the Nostr
- * group composer, the Bluetooth mesh, …) supplies whichever of these it
- * supports; the shared runner maps a command's {@link SlashRunResult} onto
- * them. This is the single place command results are dispatched — surfaces
- * differ only in *how* they send/act, never in the result-handling logic.
- */
+/** Host callbacks a chat surface supplies for {@link executeSlashCommand}. */
 export interface SlashCommandHandlers {
   /** Send the (rewritten) message text. */
   send: (text: string) => void | Promise<void>;
-  /**
-   * Open the `@` mention picker, optionally seeding the draft with `prefix`
-   * (e.g. "/slap ") so the resolved mention re-runs that command on send.
-   */
+  /** Open the `@` picker, optionally seeding the draft with `prefix` (e.g. "/slap "). */
   openMention: (prefix?: string) => void;
   /** Clear the composer/draft (a `noop`/`clearDraft` outcome). */
   clearDraft?: () => void;
   /** Surface a recoverable error to the user (e.g. a toast). */
   onError: (message: string) => void;
-  /**
-   * Handle a non-mention {@link SlashAction} (open poll/thread, moderation, …).
-   * Surfaces that don't support a given action should reject (or simply not
-   * provide this), and the runner reports it as unavailable.
-   */
+  /** Non-mention actions; without it, they're reported as unavailable. */
   onAction?: (action: SlashAction) => void | Promise<void>;
-  /**
-   * Optional gate: return false for commands this surface doesn't support, to
-   * produce a friendly "isn't available here" error instead of running them.
-   * Should match the menu's `commandFilter` so typed and picked commands agree.
-   */
+  /** Gate for unsupported commands; should match the menu's `commandFilter`. */
   isAllowed?: (command: SlashCommand) => boolean;
 }
 
-/**
- * Run a slash command and dispatch its result onto the host's handlers. Used by
- * every chat composer (group, mesh, …) so the run → result → side-effect logic
- * lives in exactly one place. Mention actions go to `openMention`; `openPoll`/
- * `openThread`/moderation go to `onAction`; text rewrites and `/me`-style sends
- * go to `send`.
- */
+/** Run a slash command and dispatch its result onto the host's handlers. */
 export async function executeSlashCommand(
   command: SlashCommand,
   arg: string,
@@ -278,7 +233,6 @@ export async function executeSlashCommand(
         handlers.clearDraft?.();
         return;
       }
-      // openPoll / openThread / moderation — delegated to the surface.
       if (!handlers.onAction) {
         handlers.onError(`/${command.name} isn't available here.`);
         return;
@@ -297,7 +251,6 @@ export function matchSlashCommands(
   const q = query.toLowerCase();
   return SLASH_COMMANDS.filter((c) => {
     if (c.kind === "moderation" && !canModerate) return false;
-    // Hide commands needing a capability this composer doesn't advertise.
     if (capabilities && c.requires?.some((r) => !capabilities.has(r))) return false;
     if (!q) return true;
     return c.name.startsWith(q) || c.aliases?.some((a) => a.startsWith(q));

@@ -14,17 +14,11 @@ import type { EmojiSelection } from '@/components/chat/EmojiPicker';
 import { sanitizeUrl } from '@/lib/sanitizeUrl';
 import { useMediaSrc } from '@/hooks/useMediaPolicy';
 
-/**
- * Lazy-loaded EmojiPicker — keeps emoji-mart and its ~420 KB data file out of
- * whatever chunk this card lands in (same reason as StatusDialog). It is only
- * ever mounted behind the "Set avatar shape" dialog, so nothing that merely
- * renders a profile card pays for it.
- */
+/** Lazy so emoji-mart (~420 KB data) stays out of this chunk; only used behind the avatar-shape dialog. */
 const LazyEmojiPicker = lazy(() =>
   import('@/components/chat/EmojiPicker').then((m) => ({ default: m.EmojiPicker })),
 );
 
-/** Shared classes for all editable fields — static muted bg when idle, border on hover/focus */
 const editableBase = [
   'rounded-lg px-2',
   'border-2 border-transparent',
@@ -98,13 +92,11 @@ export interface ProfileCardProps {
   metadata: Partial<NostrMetadata>;
   onChange?: (patch: Partial<NostrMetadata>) => void;
   onPickImage?: (field: 'picture' | 'banner') => void;
-  /** Called when user picks an avatar shape (emoji string, or empty to clear). */
+  /** Called with an emoji string, or empty to clear. */
   onAvatarShape?: (shape: string) => void;
-  /** Called when user removes their avatar picture. */
   onRemoveAvatar?: () => void;
-  /** Show NIP-05 row (default true) */
   showNip05?: boolean;
-  /** When provided, render an editable profile fields section below bio */
+  /** When provided, render an editable profile fields section below bio. */
   extraFields?: ProfileField[];
   onExtraFieldsChange?: (fields: ProfileField[]) => void;
 }
@@ -129,21 +121,16 @@ export function ProfileCard({
   const initial = displayName[0]?.toUpperCase() ?? '?';
   const patch = (key: keyof NostrMetadata) => (v: string) => onChange?.({ [key]: v });
 
-  // Sanitize banner URL from untrusted metadata before CSS url() interpolation,
-  // then load it under the media policy like any other kind-0 image (a CSS
-  // `url()` is a fetch from this device to the host the profile named).
+  // Sanitize before CSS url() interpolation, and load under the media policy.
   const bannerUrl = useMediaSrc(sanitizeUrl(metadata.banner));
 
-  // Read shape from metadata (it's a custom property passed through the loose schema)
   const rawShape = (metadata as { shape?: unknown }).shape;
   const shape: AvatarShape | undefined = isValidAvatarShape(rawShape) ? rawShape : undefined;
   const isEmojiShape = !!shape && isEmoji(shape);
   const hasCustomShape = isEmojiShape;
 
-  // State for async-loaded mask URL for the hover overlay
   const [overlayMaskUrl, setOverlayMaskUrl] = useState<string>('');
 
-  // Load mask URL asynchronously when shape changes
   useEffect(() => {
     if (!hasCustomShape || !shape) {
       setOverlayMaskUrl('');
@@ -162,7 +149,6 @@ export function ProfileCard({
     };
   }, [hasCustomShape, shape]);
 
-  // Memoized mask style for the hover overlay on shaped avatars
   const overlayMaskStyle = useMemo<React.CSSProperties | undefined>(() => {
     if (!overlayMaskUrl) return undefined;
     return {
@@ -187,7 +173,6 @@ export function ProfileCard({
   return (
     <div className="bg-card rounded-xl overflow-hidden">
 
-      {/* Banner */}
       <div
         className={cn('relative h-36 bg-secondary', editable && 'cursor-pointer group')}
         style={
@@ -205,9 +190,7 @@ export function ProfileCard({
         )}
         {editable && (
           <>
-            {/* Hover affordances only — on touch the card is obviously
-                tappable (Plus placeholder when empty) and pencils are
-                redundant clutter. */}
+            {/* Hover affordances only; on touch the card is obviously tappable. */}
             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
               <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 text-white text-xs font-medium bg-black/50 rounded-full px-3 py-1.5 backdrop-blur-sm">
                 <Pencil className="size-3.5" /> {metadata.banner ? 'Change banner' : 'Add banner'}
@@ -222,10 +205,8 @@ export function ProfileCard({
         )}
       </div>
 
-      {/* Profile info */}
       <div className="px-4 pb-4">
 
-        {/* Avatar */}
         <div className="flex justify-between items-start -mt-12 mb-3">
           {editable ? (
             <>
@@ -317,7 +298,6 @@ export function ProfileCard({
           )}
         </div>
 
-        {/* Name */}
         {editable ? (
           <EditableInput
             value={metadata.name ?? ''}
@@ -331,7 +311,6 @@ export function ProfileCard({
           </h2>
         )}
 
-        {/* NIP-05 */}
         {showNip05 && (editable || nip05) && (
           <div className="flex items-center gap-1 mt-2 min-w-0 text-sm text-muted-foreground ml-2">
             <CheckCircle2 className="size-3.5 text-primary shrink-0" />
@@ -362,7 +341,6 @@ export function ProfileCard({
           </div>
         )}
 
-        {/* Bio */}
         <div className="mt-2">
           {editable ? (
             <EditableTextarea
@@ -377,7 +355,6 @@ export function ProfileCard({
           ) : null}
         </div>
 
-        {/* Extra profile fields — collapsible, only when prop provided */}
         {extraFields !== undefined && (
           <Collapsible open={fieldsOpen} onOpenChange={setFieldsOpen} className="mt-3">
             <div className="flex items-center justify-between">
@@ -389,7 +366,6 @@ export function ProfileCard({
               </CollapsibleTrigger>
             </div>
             <CollapsibleContent className="space-y-2 pt-2">
-              {/* Website always first */}
               <div className="grid grid-cols-[1fr,2fr] gap-2 items-center">
                 <span className="text-sm text-muted-foreground px-1">Website</span>
                 <Input

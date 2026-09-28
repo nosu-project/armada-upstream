@@ -6,11 +6,8 @@ import { normalizeRelayUrl } from "@/lib/platform";
 const GITWORKSHOP_ORIGIN = "https://gitworkshop.dev";
 
 /**
- * Encode one normalized relay URL as one GitWorkshop route segment.
- *
- * Secure relays omit their scheme for readable host-only routes. Plain
- * websocket relays keep a slash-free `ws:` marker so parsing can distinguish
- * them from wss relays after the URL is decoded.
+ * One GitWorkshop route segment for a relay. wss relays omit the scheme;
+ * ws relays keep a slash-free `ws:` marker.
  */
 export function gitworkshopRelaySegment(relayUrl: string): string | undefined {
   const normalized = normalizeRelayUrl(relayUrl);

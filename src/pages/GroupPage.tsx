@@ -69,20 +69,15 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
   const join = useJoinGroup(relayUrl, groupId);
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const [searchParams] = useSearchParams();
-  // Accept Armada's `?code=`, Flotilla/Coracle's `?c=`, and the standardized
-  // NIP-29 `?invite=` (the naddr invite-code suffix, see buildGroupNaddr).
+  // Armada `?code=`, Flotilla/Coracle `?c=`, NIP-29 naddr `?invite=`.
   const inviteCode = searchParams.get("code") ?? searchParams.get("c") ?? searchParams.get("invite") ?? "";
   const [code, setCode] = useState(inviteCode);
 
-  // An invite link only pre-fills the code: joining signs to this relay and
-  // adds it to the user's 10009 list, so it waits for the click, with the
-  // server named beside the button.
+  // Invite links only pre-fill the code; joining waits for the click.
   const handleJoin = useCallback(async () => {
     try {
       await join.mutateAsync({ code: code.trim() || undefined });
-      // Joining a channel is the explicit intent that brings this server onto
-      // the rail: `add-group` carries the server into the 10009 list, which is
-      // the only place the rail reads NIP-29 communities from.
+      // Joining is the explicit intent that puts the server in the 10009 list (the rail's source).
       updateList({ type: "add-group", ref: { id: groupId, relay: relayUrl } }).catch(() => undefined);
       toast({ title: "Join request sent", description: "The relay will admit you automatically or after review." });
     } catch (e) {
@@ -132,22 +127,14 @@ export function GroupPage() {
   const { config, updateConfig } = useAppContext();
   const navigate = useNavigate();
   const { data: details, isLoading } = useGroup(relayUrl, groupId);
-  // Community-level (NIP-43, kind 13534) roster. On Buzz relays a member's
-  // owner/admin role is granted for the whole community and applies in every
-  // channel — separate from the per-channel NIP-29 admin list in `details`.
+  // Community-level roles (NIP-43, kind 13534): on Buzz, owner/admin applies to every channel.
   const { data: relayMemberRoles } = useRelayMembers(relayUrl);
   const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
-  // Buzz relays (NIP-29-based, detected via NIP-11) swap the chat surface for
-  // BuzzChat and drop the NIP-29-only extras their relay doesn't speak
-  // (pins/calendar/polls); they gain a canvas panel + typing indicators.
-  // `ready` gates the chat SURFACE, not the extras: until the NIP-11 doc has
-  // answered, a Buzz relay is indistinguishable from a plain NIP-29 one, and
-  // GroupChat's composer would publish the plain shapes — a root-only NIP-10
-  // reply (top-level on Buzz, threaded nowhere) and a kind-1111 thread reply
-  // (an unknown kind there, rejected). Neither is undoable once published.
+  // Buzz relays get BuzzChat and drop pins/calendar/polls. `ready` gates the
+  // chat SURFACE: before NIP-11 answers, GroupChat would publish plain NIP-29
+  // reply shapes Buzz mishandles or rejects — not undoable.
   const { isBuzz, ready: relayModeReady } = useIsBuzzRelay(relayUrl);
-  // Live Buzz presence (ephemeral heartbeats; also publishes the viewer's).
   const buzzPresence = useBuzzPresence(isBuzz ? relayUrl : undefined);
   const openBuzzDm = useBuzzOpenDm(isBuzz ? relayUrl : undefined);
   const handleBuzzMessage = useCallback(
@@ -171,48 +158,35 @@ export function GroupPage() {
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const { data: userGroupList } = useUserGroupList();
   const { mutedChannels, isCommunityMuted, toggleChannelMute, toggleCommunityMute } = useMutes();
-  // Individual mute states (not the cascaded isChannelMuted view): the ⋮ menu
-  // shows "Mute channel" and "Mute server" side by side, so each item must
-  // reflect only its own scope — a muted server must not flip the channel item
-  // to "Unmute channel" (toggling it would add a pointless channel mute).
+  // Individual (not cascaded) mute states: the menu shows channel and server
+  // mute side by side, each reflecting only its own scope.
   const channelMuted = Boolean(relayUrl && groupId && mutedChannels.has(channelMuteKey(relayUrl, groupId)));
   const serverMuted = Boolean(relayUrl && isCommunityMuted(relayUrl));
   const { activeCall, joinCall } = useCall();
   const isTouchDevice = useIsTouch();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
-  /** Whether the desktop member roster is shown (toggled from the header),
-   * persisted in app config (`memberListVisible`). Defaults OFF on touch devices
-   * (phones/tablets — including a landscape phone that crosses the 900px sidebar
-   * breakpoint but is too short to spare the roster width); the user can still
-   * open it from the header toggle. On real desktop it stays on by default. Once
-   * the user hides or shows it, that choice is remembered across visits. */
+  /** Desktop member roster visibility (`memberListVisible`); defaults off on touch devices. */
   const membersVisible = config.memberListVisible ?? !isTouchDevice;
   const toggleMembersVisible = () =>
     updateConfig((c) => ({ ...c, memberListVisible: !(c.memberListVisible ?? !isTouchDevice) }));
-  /** Whether the header search bar is expanded, and its current query text. */
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  /** Whether the pinned-messages bar is expanded below the header. */
   const [pinsOpen, setPinsOpen] = useState(false);
-  /** Whether the events bar is expanded below the header, and the create/edit dialog. */
   const [eventsOpen, setEventsOpen] = useState(false);
   const [createEventOpen, setCreateEventOpen] = useState(false);
   const [serverProfileOpen, setServerProfileOpen] = useState(false);
 
   const isAdmin = useMemo(() => {
     if (!user) return false;
-    // Per-channel NIP-29 admin (39001), OR a community-wide owner/admin (NIP-43
-    // kind 13534) — the relay authorizes the latter to moderate every channel.
+    // Per-channel admin (39001) or community-wide owner/admin (NIP-43 13534).
     if (details?.admins.some((a) => a.pubkey === user.pubkey)) return true;
     const communityRole = relayMemberRoles?.[user.pubkey.toLowerCase()];
     return communityRole === "owner" || communityRole === "admin";
   }, [user, details?.admins, relayMemberRoles]);
 
-  // Roster shown in the member panel: fold the community owner/admins (NIP-43)
-  // into the per-channel admins (39001) so a community admin surfaces with the
-  // right badge even when they aren't in this channel's admin event. A role
-  // present in both wins the higher rank (owner > admin).
+  // Fold community owner/admins (NIP-43) into the channel admins (39001);
+  // the higher rank wins (owner > admin).
   const mergedAdmins = useMemo<Nip29Admin[]>(() => {
     const roles = new Map<string, Set<string>>();
     for (const a of details?.admins ?? []) {
@@ -227,7 +201,6 @@ export function GroupPage() {
     return [...roles.entries()].map(([pubkey, set]) => ({ pubkey, roles: [...set] }));
   }, [details?.admins, relayMemberRoles]);
 
-  // Let `#channel-name` hashtags in chat jump to that channel on this server.
   const { data: relayGroups } = useRelayGroups(relayUrl);
   const navChannels = useMemo(
     () =>
@@ -240,8 +213,7 @@ export function GroupPage() {
     [relayGroups, relayUrl, navigate],
   );
   const channelNav = useChannelNavValue(navChannels);
-  // One object per room: every message row reads this context, and an inline
-  // value re-rendered all of them on every render of this page.
+  // Memoized: every message row reads this context.
   const chatScope = useMemo(
     () => (relayUrl && groupId ? { kind: "nip29" as const, relayUrl, groupId } : undefined),
     [relayUrl, groupId],
@@ -253,25 +225,17 @@ export function GroupPage() {
   const calendar = useNip29CalendarTransport(relayUrl, groupId, isAdmin);
   const hasEvents = calendar.events.length > 0;
 
-  // Header action overflow. Pins + Events are the lower-priority toggles; on a
-  // narrow phone (e.g. iPhone SE) where the bar can't fit everything alongside
-  // the channel name, they fold into the channel-info (⋮) menu. Events folds
-  // first, then pins. Measured (not breakpoint'd) because the action set is
-  // conditional, so a fixed breakpoint would mis-collapse. Must be called
-  // before any early return (rules-of-hooks).
-  // Buzz relays don't speak the pins (9010/39005) or calendar (NIP-52) extensions,
-  // so those toggles are dropped there; the canvas panel takes their place.
+  // Pins/Events fold into the ⋮ menu (events first) when the header overflows,
+  // measured rather than breakpointed since the action set varies. Buzz lacks
+  // pins (9010/39005) and calendar (NIP-52). Must precede any early return.
   const showEvents = !isBuzz && (hasEvents || isAdmin);
   const showPins = !isBuzz && hasPins;
-  /** Whether the Buzz canvas bar is expanded below the header. */
   const [canvasOpen, setCanvasOpen] = useState(false);
   const collapsibleCount = (showEvents ? 1 : 0) + (showPins ? 1 : 0);
   const { ref: headerActionsRef, overflowCount } = useHeaderOverflow(collapsibleCount);
-  // Collapse order: events first (overflowCount >= 1), then pins (>= 2).
   const eventsCollapsed = showEvents && overflowCount >= 1;
   const pinsCollapsed = showPins && overflowCount >= (showEvents ? 2 : 1);
 
-  // Collapse the pinned bar if everything gets unpinned while it's open.
   useEffect(() => {
     if (pinsOpen && !hasPins) setPinsOpen(false);
   }, [pinsOpen, hasPins]);
@@ -280,31 +244,21 @@ export function GroupPage() {
     setSearchQuery("");
   }, []);
 
-  // Discord-style "back": slide the chat away to reveal this server's channel
-  // list (the parent drill-down level), and HOLD it open so the user can pick a
-  // channel. Driven by the left-edge swipe and the header chevron. Tapping a
-  // channel navigates and closes; the list stays put otherwise.
+  // Mobile "back": reveal and HOLD this server's channel list until a channel is tapped.
   const [channelsOpen, setChannelsOpen] = useState(false);
-  // Closing on navigation away from this group (a channel tap pushes a new
-  // route → this component re-renders for the new groupId) keeps the freshly
-  // opened chat flush instead of leaving the list revealed.
+  // Close on group change so the new chat opens flush.
   useEffect(() => {
     setChannelsOpen(false);
   }, [groupId]);
-  // The mobile member overlay covers the chat; switching groups, revealing the
-  // channel list, or back closes it.
   const [membersOpen, setMembersOpen] = useMobileMembersOverlay(
     `${relayUrl ?? ""}|${groupId ?? ""}`,
     channelsOpen,
   );
-  // Session activation: being navigated into makes this server "live" for
-  // the rest of the session — the wire stops deferring its groups under the
-  // unread-dot rule (see wire/activation.ts).
+  // Being navigated into activates this server for the session (wire/activation.ts).
   useEffect(() => {
     if (relayUrl) activateScope(nip29Scope(relayUrl));
   }, [relayUrl]);
-  // Remember this as the server's last-opened channel, so returning to the
-  // server re-opens it (see ServerPage's auto-open). Local-only preference.
+  // Last-opened channel for ServerPage's auto-open (local-only).
   useEffect(() => {
     if (!relayUrl || !groupId) return;
     updateConfig((c) =>
@@ -317,68 +271,41 @@ export function GroupPage() {
     );
   }, [relayUrl, groupId, updateConfig]);
 
-  // NOTE: visiting this route deliberately does NOT put the server on the
-  // rail. It used to, writing a local-only cache that the kind 10009 list knew
-  // nothing about — and because this effect fires on any mount the user didn't
-  // choose (a notification tap, the last-channel restore, back-navigation, the
-  // quick switcher), it silently undid removals, which is what the removed
-  // tombstone hack existed to veto. The rail now shows exactly the 10009 list,
-  // and a server enters it only by explicit action: joining a channel here
-  // (`add-group` carries the server) or adding it in Settings/Add/invite.
+  // Visiting deliberately does NOT add the server to the rail: passive mounts
+  // (notifications, restores, back-nav) silently undid removals. The rail is
+  // exactly the 10009 list, changed only by explicit action.
 
   const group = details?.group;
-  // Buzz channel type (stream/forum/dm/workflow) from the 39000 `t` tag.
   const buzzType = isBuzz && group ? buzzChannelType(group.event) : undefined;
   const buzzTopic = isBuzz && group ? buzzChannelTopic(group.event) : undefined;
-  // The user's own kind 10009 list (NIP-51) is the locally-persisted,
-  // cross-device source of truth for "groups I joined". Unlike the relay's
-  // membership signals (kind 9000/9001, kind 39002 members), it's cached in the
-  // folded plaintext IndexedDB store and survives an app reopen, so it resolves
-  // instantly and offline. The relay queries, by contrast, run cold on reopen
-  // and can come back empty/slow/AUTH-gated — which previously flipped a real
-  // member back to the "Join channel" prompt. Treating presence in the user's
-  // own list as a membership signal fixes that.
+  // The user's own 10009 list counts as membership: it's cached locally and
+  // resolves instantly/offline, while relay membership queries can be
+  // cold/empty/AUTH-gated on reopen and flash "Join channel" at members.
   const joinedLocally = Boolean(
     userGroupList?.groups.some((g) => g.id === groupId && g.relay === relayUrl),
   );
-  // Admins may only appear in the kind 39001 admins list (e.g. the group
-  // creator), not in 39002 members or via 9000 put-user events, so treat
-  // admin status as membership too.
+  // Admins may appear only in 39001, so they count as members.
   const isMember =
     isAdmin ||
     joinedLocally ||
     Boolean(membership?.isMember) ||
     Boolean(user && details?.members.includes(user.pubkey));
-  // NIP-29 relays generally only accept writes from members (relay29 always
-  // does), so gate the composer on membership.
+  // NIP-29 relays generally accept writes only from members.
   const canWrite = Boolean(user) && isMember;
-  // The ⋮ channel-info menu renders for any logged-in user (identity + mute
-  // actions), and also whenever a pins/events action has overflowed into it
-  // (so a logged-out visitor still reaches the collapsed toggle).
+  // Also shown when pins/events overflowed into it, even for logged-out visitors.
   const showChannelMenu = Boolean(user) || pinsCollapsed || eventsCollapsed;
-  // Membership is a TRI-STATE: while the group details or the membership query
-  // are still resolving and we don't yet have a positive membership signal, the
-  // member-vs-not answer is UNKNOWN — not "not a member". Surfacing the "join to
-  // message" prompt during this window flashes it at actual members. When a
-  // logged-in user is in this ambiguous window, the composer area shows a
-  // skeleton instead of the join prompt.
+  // Membership is TRI-STATE: while unresolved, show a skeleton instead of the
+  // join prompt (which would flash at real members).
   const membershipPending = Boolean(user) && !isMember && (isLoading || membershipLoading);
-  // NOTE: there is deliberately NO automatic `add-server` publish here. The
-  // kind 10009 list is only ever written by an explicit user action (joining a
-  // channel — `add-group` carries the server along — or adding a server in
-  // Settings/Add/invite accept). A membership-gated auto-sync used to live
-  // here and twice destroyed users' lists: it fired on passive visits (deep
-  // links, last-channel restore) and its read-modify-write could race a cold
-  // relay pool into rebuilding the list from empty.
+  // Deliberately NO automatic `add-server` publish: an auto-sync here fired
+  // on passive visits and raced cold pools into rebuilding lists from empty.
 
   if (!relayUrl || !groupId) {
     return <Navigate to="/" replace />;
   }
 
-  // Voice is available when the group is tagged `livekit` or the relay
-  // advertises the NIP-29 LiveKit extension for all its groups.
+  // `livekit`-tagged group, or the relay advertises the NIP-29 LiveKit extension.
   const hasVoice = Boolean(group?.hasLivekit || relayHasLivekit);
-  // Whether the active app-level call is this channel's room.
   const inThisCall = activeCall?.relayUrl === relayUrl && activeCall?.groupId === groupId;
 
   const handleLeave = async () => {
@@ -414,8 +341,7 @@ export function GroupPage() {
 
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
-      {/* Member kind-0s often live only on the server's own relay, which the
-          pool's general routing never asks. */}
+      {/* Member kind-0s often live only on this relay, which general routing never asks. */}
       <ProfileRelayHints relays={relayUrl ? [relayUrl] : undefined} />
       <SwipeReveal
         open={channelsOpen}
@@ -423,12 +349,8 @@ export function GroupPage() {
         onClose={() => setChannelsOpen(false)}
         underlay={
           <>
-            {/* The rail navigates to *other* servers/communities, so it must
-                NOT close this server's channel list on click: that slides the
-                chat pane back in for a frame before the route changes — the
-                "flash of the previous chat" glitch. The ChannelSidebar below
-                (same-server channel taps) does close it. (DMsPage omits the
-                rail prop for the same reason.) */}
+            {/* The rail must NOT close the channel list on click (it'd flash the
+                previous chat before the route changes). */}
             <ServerRail />
             <ChannelSidebar
               relayUrl={relayUrl}
@@ -439,14 +361,10 @@ export function GroupPage() {
         }
       >
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-        {/* Channel header — detached floating command bar, matching the right
-            roster: same margin, cut-corner card, and recessed chrome shade. */}
         <header
           ref={headerActionsRef}
           className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome"
         >
-          {/* Mobile back → slides the chat away to reveal the channel list.
-              (The same reveal is also driven by a left-edge swipe.) */}
           <Button
             variant="ghost"
             size="icon"
@@ -462,9 +380,7 @@ export function GroupPage() {
             : group?.hasLivekit
               ? <Volume2 className="size-5 text-muted-foreground shrink-0" />
               : <Hash className="size-5 text-muted-foreground shrink-0" />}
-          {/* Title keeps a min-width floor so the action buttons can't squeeze
-              it to nothing — instead the row overflows, which is what
-              useHeaderOverflow measures to fold pins/events into the ⋮ menu. */}
+          {/* Min-width floor: the row overflows instead, which useHeaderOverflow measures. */}
           <div className="min-w-[5rem] flex-1">
             <h1 className="font-semibold truncate leading-tight">
               {isLoading
@@ -501,7 +417,6 @@ export function GroupPage() {
               <TooltipContent>Join voice</TooltipContent>
             </Tooltip>
           )}
-          {/* Buzz canvas — toggles the shared-document bar below the header. */}
           {isBuzz && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -519,8 +434,6 @@ export function GroupPage() {
               <TooltipContent>Canvas</TooltipContent>
             </Tooltip>
           )}
-          {/* Pinned messages — toggles the browse bar below the header. Folds
-              into the ⋮ menu when the header runs out of room (pinsCollapsed). */}
           {showPins && !pinsCollapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -538,8 +451,6 @@ export function GroupPage() {
               <TooltipContent>Pinned messages</TooltipContent>
             </Tooltip>
           )}
-          {/* Calendar events — toggles the events bar below the header. Folds
-              into the ⋮ menu first when space is tight (eventsCollapsed). */}
           {showEvents && !eventsCollapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -557,7 +468,6 @@ export function GroupPage() {
               <TooltipContent>Events</TooltipContent>
             </Tooltip>
           )}
-          {/* Search messages in this channel — expands inline below. */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -573,7 +483,6 @@ export function GroupPage() {
             </TooltipTrigger>
             <TooltipContent>Search messages</TooltipContent>
           </Tooltip>
-          {/* Mobile members button → opens the member sheet. */}
           <Button
             variant="ghost"
             size="icon"
@@ -584,7 +493,6 @@ export function GroupPage() {
           >
             <Users className="size-4" />
           </Button>
-          {/* Desktop members toggle → shows/hides the roster panel. */}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -619,9 +527,7 @@ export function GroupPage() {
                 <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
                   {group?.name ?? "Channel"}
                 </DropdownMenuLabel>
-                {/* Pins / Events overflow here when the header is too narrow to
-                    show them inline. They keep their toggle behavior + active
-                    state (a check-style highlight when the browse bar is open). */}
+                {/* Pins/Events overflowed from the header. */}
                 {(pinsCollapsed || eventsCollapsed) && (
                   <>
                     {pinsCollapsed && (
@@ -720,15 +626,12 @@ export function GroupPage() {
           />
         </header>
 
-        {/* Channel banner — the kind-39000 `banner` tag, a header image above
-            the group content (Discord-style community branding). */}
         {group?.banner && (
           <div className="mx-2 mt-2 h-24 shrink-0 overflow-hidden clip-corner-lg">
             <GroupBannerImage src={group.banner} className="size-full object-cover" />
           </div>
         )}
 
-        {/* Buzz canvas bar — the channel's shared document, below the header. */}
         {isBuzz && (
           <BuzzCanvasBar
             open={canvasOpen}
@@ -738,23 +641,18 @@ export function GroupPage() {
           />
         )}
 
-        {/* Pinned messages bar — slides open below the header. */}
         <PinnedMessagesBar
           open={pinsOpen}
           pinnedRefs={pinnedRefs}
           relayUrl={relayUrl}
           canModerate={isAdmin}
-          // Jumping from a pin is a navigation, not a scroll: `/m/<id>` names
-          // where the reader ends up, so Back returns them to where they were
-          // and the chat surface's own permalink handling does the seeking —
-          // including pulling older pages for a pin above the loaded window,
-          // which a bare `scrollToMessage` could only no-op on.
+          // A navigation (`/m/<id>`), not a scroll, so Back works and the chat's
+          // permalink handling can load older pages.
           onJump={(id) => navigate(chatRoute({ kind: "nip29", relayUrl, groupId, messageId: id }))}
           onUnpin={(id) => { void unpin(id); }}
           onClose={() => setPinsOpen(false)}
         />
 
-        {/* Calendar events bar — slides open below the header. */}
         <CalendarEventsBar
           open={eventsOpen}
           calendar={calendar}
@@ -763,28 +661,15 @@ export function GroupPage() {
           onDelete={(event) => { void calendar.remove(event); }}
         />
 
-        {/* Top-of-chat call stage: the active call's participants + video tiles
-            portal in here (dismissable, toggled from the corner call panel)
-            when this channel is the one in call. */}
         <CallStageSlot active={inThisCall} />
 
-        {/* Top-of-chat app stage: a running in-chat app (YouTube watchalong,
-            webxdc) portals in here when this channel is the one it's open in. */}
         <AppStageSlot scope={{ kind: "nip29", relayUrl, groupId }} />
 
-        {/* Join banner. Buzz relays always stamp `closed` on kind-39000 (open
-            channels are still joinable at runtime, and Buzz has no NIP-29
-            invite codes), so the closed/invite-code affordance is NIP-29-only. */}
+        {/* Buzz stamps `closed` on every channel, so the closed/invite-code affordance is NIP-29-only. */}
         {user && !isMember && !isLoading && (
           <JoinBanner relayUrl={relayUrl} groupId={groupId} isClosed={Boolean(group?.isClosed) && !isBuzz} />
         )}
 
-        {/* The active voice call (if any) renders as a persistent docked bar in
-            MainLayout, so it survives navigation between channels/servers. */}
-
-        {/* Chat + members. The member panel mirrors the thread panel: in-flow
-            animated-width on desktop, full-screen floating card overlay on
-            mobile (no drawer/backdrop). */}
         <ChatScopeContext.Provider value={chatScope}>
         <CustomEmojisProvider>
         <ChannelNavContext.Provider value={channelNav}>
@@ -823,7 +708,6 @@ export function GroupPage() {
               membersVisible && "sidebar:w-[16.5rem]",
             )}
           >
-            {/* Mobile backdrop: fades in/out in sync with the panel slide. */}
             <div
               className={cn(
                 "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
@@ -833,7 +717,6 @@ export function GroupPage() {
             <div
               className={cn(
                 "relative h-full flex w-full sidebar:w-[16.5rem] transition-transform duration-200 ease-out",
-                // Mobile: driven by membersOpen. Desktop: driven by membersVisible.
                 membersOpen ? "translate-x-0" : "translate-x-full",
                 membersVisible ? "sidebar:translate-x-0" : "sidebar:translate-x-full",
               )}

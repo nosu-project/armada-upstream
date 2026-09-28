@@ -12,18 +12,9 @@ export interface UseAcceptedDmsReturn {
 }
 
 /**
- * Read/write the DM peers that have been let out of the request tier,
- * persisted to app config and synced across devices.
- *
- * NOT a user-facing action. There is no accept button: writing to someone is
- * accepting them, so this is only ever recorded when the viewer replies to a
- * request or picks a recipient in the compose pane. The cross-plane `mine`
- * flag would eventually say the same thing on its own, but it lags the
- * conversation queries — this is what moves the row in the same frame.
- *
- * Deliberately decoupled from following — see `acceptedDms` in AppConfig.
- * There is no inverse: blocking is the NIP-51 mute list (`useMuteUser`), which
- * removes the peer from both DM planes outright.
+ * DM peers let out of the request tier (app config, synced). No accept button:
+ * recorded when the viewer replies or composes, so the row moves immediately.
+ * Decoupled from following; blocking is the NIP-51 mute list.
  */
 export function useAcceptedDms(): UseAcceptedDmsReturn {
   const { config, updateConfig } = useAppContext();

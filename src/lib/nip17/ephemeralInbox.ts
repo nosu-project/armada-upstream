@@ -1,26 +1,14 @@
 /**
- * One standing `{kinds:[21059], "#p":[me]}` REQ per relay, shared by every
- * consumer of the DM plane's ephemeral wraps (today: typing indicators).
- *
- * The filter names the RECIPIENT, never a conversation, so a per-conversation
- * subscription was the same REQ closed and reopened on every conversation
- * switch — a measured 120 REQs across 60 switches, each a radio wake on a
- * phone. Here a line is keyed by (relay, recipient), consumers register a
- * handler, and the REQ outlives its last consumer by {@link LINGER_MS} so a
- * switch (unmount old, mount new) never reaches the socket at all.
- *
- * The same wrap arrives once per relay that carries it; it is fanned out once,
- * so a consumer decrypts it once rather than once per relay.
- *
- * Ephemeral wraps are never stored, so there is nothing to replay across a
- * reopen: a signal lost in a gap is a heartbeat the sender resends. A dropped
- * socket is re-REQ'd by the relay layer, as for `concord/lib/ephemeralSub.ts`.
+ * One shared `{kinds:[21059], "#p":[me]}` REQ per (relay, recipient) for DM
+ * ephemeral wraps (typing indicators). The filter names the recipient, not a
+ * conversation, so lingering {@link LINGER_MS} after the last consumer keeps
+ * conversation switches off the socket. Wraps are deduped across relays.
+ * Nothing is stored, so nothing is replayed after a reopen.
  */
 import { KIND_DM_WRAP_EPHEMERAL } from "@/lib/nip17/protocol";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
-/** What this module needs of the app's Nostr client. */
 interface EphemeralNostr {
   relay(url: string): {
     req(
@@ -41,7 +29,7 @@ interface Line {
 
 /** How long a line with no consumers stays open, to absorb a conversation switch. */
 export const LINGER_MS = 30_000;
-/** Wrap ids already fanned out, per recipient, to drop the other relays' copies. */
+/** Per-recipient cap on remembered wrap ids, used to drop other relays' copies. */
 const SEEN_CAP = 256;
 
 const lines = new Map<string, Line>();
@@ -80,9 +68,7 @@ function open(nostr: EphemeralNostr, relay: string, recipient: string, key: stri
         }
       }
     } catch (err) {
-      // Teardown aborts the sub; only a real failure is worth reporting. A
-      // relay that rejects kind 21059 (or the filter) surfaces here, and
-      // silence made that indistinguishable from "nobody is typing".
+      // Only a real failure is worth reporting: a relay rejecting kind 21059 otherwise looks like nobody typing.
       if (!signal.aborted) console.warn(`[dm-ephemeral] subscription to ${relay} ended:`, err);
     } finally {
       // A line whose REQ ended on its own is rebuilt by the next subscribe.
@@ -92,10 +78,7 @@ function open(nostr: EphemeralNostr, relay: string, recipient: string, key: stri
   return line;
 }
 
-/**
- * Receive the ephemeral DM wraps addressed to `recipient` on `relay`. Returns
- * an unsubscribe. Handlers get the raw wrap and do their own unwrapping.
- */
+/** Receive raw ephemeral DM wraps for `recipient` on `relay`. Returns an unsubscribe. */
 export function subscribeDmEphemeral(
   nostr: EphemeralNostr,
   relay: string,

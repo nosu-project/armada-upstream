@@ -11,16 +11,13 @@ export function stopHevcCapturedMedia(stream: MediaStream): void {
   for (const track of stream.getTracks()) {
     try {
       track.stop();
-    } catch {
-      // Continue stopping every sibling track.
-    }
+    } catch { /* ignore */ }
   }
 }
 
 /**
- * The custom encoder connects as a second LiveKit participant because the
- * server SDK owns its encoded track. It is media belonging to the presenter,
- * not another caller, and must be omitted from rosters/mute/join reporting.
+ * The HEVC encoder joins as a second LiveKit participant (the server SDK owns
+ * its track); it's the presenter's media and must be hidden from rosters/mute/join.
  */
 export function isHevcScreenShareParticipant(
   participant: Participant,
@@ -40,9 +37,8 @@ export function isHevcScreenShareParticipant(
 }
 
 /**
- * Correlates asynchronous shell status events with the one renderer capture
- * that owns them. Retired IDs stay rejected after a replacement begins, so a
- * delayed `stopped`/`error` from the prior process cannot cancel its successor.
+ * Correlates shell status events with the capture that owns them. Retired IDs
+ * stay rejected so a late `stopped`/`error` can't cancel the successor.
  */
 export class HevcScreenShareSessionTracker {
   private activeSessionId: string | null = null;
@@ -78,8 +74,7 @@ export class HevcScreenShareSessionTracker {
 
     const terminal = status.state === "error" || status.state === "stopped";
     if (terminal) {
-      // Terminal events must name the active session. An uncorrelated terminal
-      // event is necessarily stale or from a shell older than session IDs.
+      // Uncorrelated terminal events are stale or from a pre-session-ID shell.
       return Boolean(sessionId && sessionId === this.activeSessionId);
     }
     if (!sessionId && captureActive) return false;

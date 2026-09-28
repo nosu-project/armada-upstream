@@ -9,16 +9,10 @@ interface ThemeBuilderFieldsProps {
   onColorsChange: (colors: CoreThemeColors) => void;
   title: string;
   onTitleChange: (title: string) => void;
-  /** Placeholder for the name field. Omitted where the name is pre-filled. */
   placeholder?: string;
 }
 
-/**
- * The custom-theme builder body: a live preview, the three core color pickers,
- * and the name field. Shared verbatim by the Settings → Appearance builder and
- * the Discover theme creator so the two cannot drift apart. The surrounding
- * dialog frame and its actions belong to each caller.
- */
+/** Custom-theme builder body, shared by Settings → Appearance and the Discover creator so they can't drift. */
 export function ThemeBuilderFields({
   colors,
   onColorsChange,
@@ -33,7 +27,6 @@ export function ThemeBuilderFields({
 
   return (
     <div className="space-y-5">
-      {/* Live preview */}
       <div
         className="clip-corner-lg p-4 space-y-3"
         style={{ backgroundColor: `hsl(${tokens.background})`, color: `hsl(${tokens.foreground})` }}

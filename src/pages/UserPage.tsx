@@ -18,35 +18,20 @@ import { tryNpubEncode } from "@/lib/safeNip19";
 import { NotFound } from "@/pages/NotFound";
 
 /**
- * A person, at `/<npub>`, `/<nprofile>`, `/<name@domain>` or `/<domain>` (the
- * NIP-05 root user, `_@domain`). The bare NIP-19 path is the convention the
- * Nostr ecosystem already links to and that other clients already route, so
- * this deliberately has no prefix segment of its own to make it Armada's.
- *
- * What it shows depends on who's looking, because the same link serves two
- * purposes. Signed out it's a share link — it says who you'd be talking to and
- * offers you an account. Signed in it's the person's profile, opened as a
- * dialog over the app so closing it puts you back where you were rather than
- * anywhere this had to pick.
- *
- * This is the only single-segment dynamic route in the app, so it sits in
- * front of the `*` 404 for every unclaimed one-segment path. That's why an
- * identifier is only recognized when it DECODES (npub/nprofile/hex) or is
- * shaped like a NIP-05 address — a dot in the domain is what separates
- * `/ditto.pub` from `/setttings`, and everything else falls through to the
- * same 404 the splat route would have rendered.
+ * A person at `/<npub>`, `/<nprofile>`, `/<name@domain>` or `/<domain>`
+ * (NIP-05 `_@domain`), matching the bare NIP-19 convention. Signed out: a share
+ * link offering an account; signed in: a profile dialog over the app. As the
+ * only single-segment dynamic route, it only claims identifiers that decode or
+ * look like NIP-05 (a dot in the domain); everything else is the 404.
  */
 export function UserPage() {
   const { user: identifier = "" } = useParams<{ user: string }>();
   const { user } = useCurrentUser();
-  // Closing the profile is a step back, not a destination — the dialog is
-  // always opened from somewhere. A cold load has nowhere in the app to go
-  // back TO, so that one lands home.
+  // Closing steps back; a cold load lands home.
   const closeProfile = useBackOrHome();
 
   const direct = useMemo(() => resolvePubkey(identifier), [identifier]);
-  // Only reached for a segment that didn't decode, so a valid npub never costs
-  // a well-known fetch.
+  // Only for segments that didn't decode, so npubs never cost a fetch.
   const address = useMemo(
     () => (direct ? undefined : parseNip05Address(identifier)),
     [direct, identifier],
@@ -58,13 +43,11 @@ export function UserPage() {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
 
-  // Never "Anonymous": until the kind 0 lands, the address the visitor followed
-  // is a truer name for this person than a placeholder is.
+  // Until kind 0 lands, show the followed address rather than "Anonymous".
   const shortNpub = npub ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : "";
   const displayName =
     metadata?.name || metadata?.display_name || address?.display || shortNpub;
 
-  // Not a person's identifier at all: this is an ordinary unrouted path.
   if (!direct && !address) {
     return <NotFound />;
   }
@@ -101,8 +84,6 @@ export function UserPage() {
     <DetailPage
       title={displayName}
       icon={icon}
-      // Signed in, the profile covers the pane (and stops at the rail, which
-      // stays lit and clickable beside it); there is nothing to say behind it.
       overlay={user ? <ProfileDialog pubkey={pubkey} onClose={closeProfile} /> : undefined}
     >
       {!user && (

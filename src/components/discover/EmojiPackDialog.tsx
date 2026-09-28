@@ -26,21 +26,17 @@ interface Entry {
 }
 
 /**
- * Sanitize what someone is *typing* into a shortcode. Deliberately does not
- * trim leading/trailing underscores: doing that per-keystroke makes `foo_bar`
- * impossible to type (the `_` is eaten the moment it lands at the end).
- * Trimming happens once, in `finalShortcode()`, at validation/publish time.
+ * Sanitize a shortcode as typed. Doesn't trim underscores (that would eat a
+ * trailing `_` per keystroke); `finalShortcode()` trims at publish time.
  */
 function sanitizeShortcode(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9_]+/g, "_").slice(0, 32);
 }
 
-/** The shortcode as it will be published. */
 function finalShortcode(raw: string): string {
   return raw.replace(/^_+|_+$/g, "");
 }
 
-/** Seed a shortcode from an uploaded file's name (extension dropped). */
 function shortcodeFromFilename(name: string): string {
   return finalShortcode(sanitizeShortcode(name.replace(/\.[a-z0-9]+$/i, "")));
 }
@@ -50,11 +46,7 @@ function slugify(title: string): string {
   return base || "pack";
 }
 
-/**
- * Create (and publish) a NIP-30 emoji pack (kind 30030): name it, upload emoji
- * images, give each a shortcode. Publishing makes it discoverable and usable by
- * anyone. Only ever runs on an explicit user action.
- */
+/** Create and publish a NIP-30 emoji pack (kind 30030). */
 export function EmojiPackDialog({
   open,
   onOpenChange,
@@ -86,15 +78,11 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dragging, setDragging] = useState(false);
   const [addToMine, setAddToMine] = useState(true);
-  // Spans the whole publish handler. `publishing` (the publishEvent mutation)
-  // only covers the event write; the list read-modify-write in `addPack` after
-  // it can run for seconds with no other signal, leaving the button looking
-  // idle while work is still in flight.
+  // Covers the whole handler, including `addPack`'s slow list read-modify-write
+  // after `publishing` (the event write) finishes.
   const [submitting, setSubmitting] = useState(false);
 
-  // The pack's cover image (`picture`/`image` tags). Other clients — Ditto
-  // among them — show this as the pack icon and fall back to nothing without
-  // it, so a pack published with none looks bare everywhere but here.
+  // Cover image (`picture`/`image` tags); other clients (Ditto) show nothing without it.
   const addIcon = async (file: File | null | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
     setIconUploading(true);
@@ -145,8 +133,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
 
   const uploading = entries.filter((e) => e.uploading).length;
   const uploaded = entries.filter((e) => !e.uploading && e.url);
-  // Shortcodes must be present and unique — publishing a pack that silently
-  // drops colliding entries leaves people with a pack missing emojis.
+  // Shortcodes must be present and unique, or colliding entries get dropped.
   const counts = new Map<string, number>();
   for (const e of uploaded) {
     const code = finalShortcode(e.shortcode);
@@ -177,10 +164,8 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
     if (!canPublish) return;
     setSubmitting(true);
     const identifier = `${slugify(name)}-${Math.random().toString(36).slice(2, 6)}`;
-    // `title` and `name` both carry the human name: some clients (Ditto) read
-    // `name` and fall back to the raw `d` slug without it, so emit both. `image`
-    // and `picture` both carry the cover so icon-reading clients (either tag)
-    // resolve it. `about` is the description.
+    // Emit both `title` and `name` (Ditto reads `name`, else the `d` slug), and
+    // both `image` and `picture` for the cover.
     const tags: string[][] = [
       ["d", identifier],
       ["title", name.trim()],
@@ -196,11 +181,9 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
     try {
       const event = await publishEvent({ kind: KIND_EMOJI_SET, content: "", tags });
 
-      // Show the new pack by seeding the cache rather than refetching. An
-      // immediate refetch races relay indexing on a 6s budget, so it can come
-      // back with LESS than is already on screen — the browse list appearing to
-      // empty itself the moment you publish. The stale mark (without a refetch)
-      // lets the next natural fetch reconcile with the relays.
+      // Seed the cache instead of refetching: an immediate refetch races relay
+      // indexing and can return LESS than is on screen. Stale mark lets the next
+      // fetch reconcile.
       queryClient.setQueriesData<NostrEvent[]>(
         { queryKey: ["discover", "emoji-packs"], predicate: (q) => q.queryKey[3] === "" },
         (prev) => (prev ? [event, ...prev.filter((e) => e.id !== event.id)] : prev),
@@ -210,10 +193,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         refetchType: "none",
       });
 
-      // Your own pack in your own emoji list — an explicit opt-in on this
-      // click, never automatic. A failure here (the read-modify-write refuses
-      // rather than risk clobbering the list) must not read as a failed
-      // publish: the pack itself is already out.
+      // Explicit opt-in. A failure here must not read as a failed publish.
       if (addToMine && user) {
         try {
           await addPack({ pubkey: user.pubkey, identifier });
@@ -266,7 +246,6 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
       />
 
       <div className="flex items-end gap-3">
-        {/* Pack icon — the cover other clients render beside the name. */}
         <button
           type="button"
           onClick={() => iconInput.current?.click()}
@@ -358,7 +337,6 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         </div>
 
         {entries.length === 0 ? (
-          // Drop target — the primary affordance while the pack is empty.
           <button
             type="button"
             onClick={() => fileInput.current?.click()}

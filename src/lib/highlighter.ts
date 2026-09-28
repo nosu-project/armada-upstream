@@ -1,11 +1,6 @@
 /**
- * Syntax highlighting for fenced code blocks: highlight.js through lowlight,
- * which returns a hast tree rather than an HTML string, so the renderer builds
- * React elements from it and never touches `innerHTML`.
- *
- * This module carries the grammars. UI code reaches it only through
- * `codeHighlight.ts`, which imports it on demand so the grammars stay out of
- * the main bundle until the first code block that names a language.
+ * Code highlighting via lowlight (hast, never `innerHTML`). Load only through
+ * `codeHighlight.ts`, which imports this on demand to keep grammars out of the main bundle.
  */
 import dart from "highlight.js/lib/languages/dart";
 import dockerfile from "highlight.js/lib/languages/dockerfile";
@@ -22,16 +17,11 @@ import { common, createLowlight } from "lowlight";
 
 import type { Root } from "hast";
 
-/** highlight.js's `common` set (JS/TS, JSON, Python, Rust, Go, shell, …) plus
- *  a few grammars chat tends to see that it leaves out. */
+/** highlight.js `common` plus a few extra grammars. */
 const lowlight = createLowlight(common);
 lowlight.register({ dart, dockerfile, elixir, erlang, haskell, julia, nix, ocaml, powershell, protobuf, scala });
 
-/**
- * Fence names people write that highlight.js has no alias for, mapped onto a
- * grammar it does have. Names it already aliases (`js`, `ts`, `py`, `sh`,
- * `yml`, `jsx`, `tsx`, `html`, `c++`, `golang`, …) resolve without help.
- */
+/** Fence names highlight.js has no alias for, mapped to a grammar it has. */
 const ALIASES: Readonly<Record<string, string>> = {
   cjs: "javascript",
   cts: "typescript",
@@ -65,16 +55,10 @@ export function resolveLanguage(lang: string | undefined): string | null {
   return lowlight.registered(mapped) ? mapped : null;
 }
 
-/** Largest block that gets highlighted. Highlighting is synchronous on the
- *  main thread, so a pasted log beyond this renders plain instead of stalling
- *  the message list. */
+/** Highlighting is synchronous on the main thread; larger blocks render plain. */
 export const MAX_HIGHLIGHT_CHARS = 20_000;
 
-/**
- * Highlight `code` as `lang`. Null when the language is unknown, the block is
- * over `MAX_HIGHLIGHT_CHARS`, or the grammar throws — callers then show the
- * code plain, which is what every block looked like before.
- */
+/** Highlight `code` as `lang`; null (render plain) when unknown, too large, or the grammar throws. */
 export function highlightCode(lang: string | undefined, code: string): Root | null {
   const name = resolveLanguage(lang);
   if (!name || code.length > MAX_HIGHLIGHT_CHARS) return null;

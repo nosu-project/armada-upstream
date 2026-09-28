@@ -1,28 +1,11 @@
 /**
- * In-chat app coordination plane for a NIP-17 DM, scoped to one app session
- * (`uuid`). The DM twin of `useConcordAppSync`, and the same two planes:
- *
- *  - **state** (`sendUpdate`) is a DURABLE kind-3310 rumor carrying an `i` tag
- *    = the session id, gift-wrapped like every other DM rumor. Read back by
- *    {@link queryDm17Webxdc} — its OWN query, not a slice of the thread's page,
- *    because a thread read is one filter with one `limit` and a chatty game
- *    would otherwise evict the conversation from its own window.
- *  - **realtime** (`joinRealtimeChannel`) does NOT ride Nostr at all. Frames go
- *    peer to peer over iroh gossip, the transport Vector uses, so the two
- *    clients share one game rather than two that cannot see each other. The DM
- *    plane carries only the peer signals that let the parties find each other.
- *    Without the transport there is no realtime: a relay fallback would put
- *    half the room on a plane the other half never reads.
- *
- * Peer signals are Vector's DM spelling — a kind-30078 rumor whose CONTENT is
- * the operation and whose tags carry the topic and node address — sealed and
- * wrapped to every participant. They are never stored; the receiving side is
- * `openAndStore` → `dispatchDmPeerSignal` in `useDm17.ts`.
- *
- * Addressed by CONVERSATION, not by a peer: a NIP-17 room is its participant
- * set (`dmConvKey`), and a wrap has to be minted per recipient. Handing a
- * conversation key to a function expecting a pubkey is exactly how the group
- * path used to fail — NIP-44 rejects it, so realtime silently never came up.
+ * In-chat app coordination for a NIP-17 DM, scoped to one app session (`uuid`).
+ * The DM twin of `useConcordAppSync`:
+ * - state: durable kind-3310 rumors (`i` tag = session id), read by their own query
+ *   {@link queryDm17Webxdc} so a chatty app can't evict the thread window.
+ * - realtime: iroh gossip only (Vector's transport); the DM plane carries only peer
+ *   signals (kind-30078, never stored). No relay fallback — it would split the room.
+ * Addressed by conversation key (`dmConvKey`), not a pubkey; wraps are minted per recipient.
  */
 
 import { useNostr } from "@nostrify/react";
@@ -43,13 +26,13 @@ import { queryDm17Webxdc } from "@/lib/nip17/dm17Store";
 import { logSync } from "@/lib/syncLog";
 import {
   buildDmRumor,
-  dmConvPeers,
   KIND_DM_PEER_SIGNAL,
   sealDmRumor,
   wrapDmSeal,
   type Dm17Signer,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmConvPeers } from "@/lib/nip17/conversation";
 import { dmThreadScope } from "@/wire/bus";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -76,19 +59,13 @@ import type {
   AppSync,
 } from "@/hooks/useWebxdcApi";
 
-/** How many dials one session keeps in flight at once. */
 const MAX_DIAL_PEERS = 4;
 
 function tagValue(tags: string[][], name: string): string | undefined {
   return tags.find(([n]) => n === name)?.[1];
 }
 
-/**
- * In-chat app coordination plane for one NIP-17 conversation and one app
- * session. `conversation` is a conversation KEY (see `dmConvKey`).
- *
- * Requires a signed-in user with NIP-44 capability (the DM plane is sealed).
- */
+/** `conversation` is a conversation KEY (see `dmConvKey`). Requires NIP-44. */
 export function useDmAppSync(
   conversation: string | undefined,
   uuid: string,
@@ -103,22 +80,17 @@ export function useDmAppSync(
     () => (conversation ? dmConvPeers(conversation) : []),
     [conversation],
   );
-  // Who a wrap actually has to be minted for: everyone but us. Empty for Note
-  // to Self, which has no second party to coordinate with.
+  // Everyone but us; empty for Note to Self.
   const recipients = useMemo(
     () => peers.filter((peer) => peer !== self),
     [peers, self],
   );
   const enabled = Boolean(conversation && uuid && self);
 
-  // Publishing rides the thread's own send path, so the seal/wrap/expiry rules
-  // are written once. Its query key is the one the page already mounted, so
-  // react-query serves this from cache rather than issuing a second read.
+  // Reuses the thread's send path; its query key is already mounted, so this hits cache.
   const { sendWebxdc } = useDm17Thread(conversation);
 
   const inboxRelays = useDmRelaysForAll(recipients);
-
-  // ── Durable state plane ────────────────────────────────────────────────────
 
   const stateKey = useMemo(
     () => ["dm17", "app-state", self, conversation, uuid] as const,
@@ -127,8 +99,7 @@ export function useDmAppSync(
   const { data: opened } = useQuery<OpenedDm[]>({
     queryKey: stateKey,
     enabled,
-    // State arrives live off the wire bus (below); this is the slow healing
-    // backstop for a missed ring.
+    // Live via the wire bus; this is the healing backstop.
     refetchInterval: 60_000,
     queryFn: ({ signal }) => queryDm17Webxdc(self!, peers, uuid, { signal }),
   });
@@ -159,8 +130,6 @@ export function useDmAppSync(
     [sendWebxdc, uuid, queryClient, stateKey],
   );
 
-  // ── Gossip session (realtime plane) ────────────────────────────────────────
-
   const gossip = useRef<
     { node: RealtimeTransport; topic: Uint8Array; key: Uint8Array } | undefined
   >(undefined);
@@ -172,13 +141,10 @@ export function useDmAppSync(
 
   const sendRealtime = useCallback((data: Uint8Array) => {
     const g = gossip.current;
-    // Gossip or nothing. There is no relay path for realtime: a frame that
-    // reached only the members who happen to share our transport would make
-    // one game look like two, each convinced the other player is idle.
+    // Gossip or nothing: a relay path would make one game look like two.
     if (!g) return;
     seq.current += 1;
-    // Vector's frame, so its receivers strip the trailer and drop their own
-    // echoes exactly as they do for another Vector.
+    // Vector's frame, so its receivers strip the trailer and drop their own echoes.
     void g.node
       .send(g.topic, frame(data, seq.current, g.key))
       .catch(() => undefined);
@@ -186,17 +152,13 @@ export function useDmAppSync(
 
   const listenersRef = useRef(new Set<(data: Uint8Array) => void>());
 
-  // The signals this CONVERSATION has carried for this topic. Scoped to the
-  // room, not just the topic: who is playing is a question about a room, and a
-  // signal that arrived in one DM must not put its author into a session
-  // opened from another.
+  // Scoped to the conversation, not just the topic.
   const [peerSignals, setPeerSignals] = useState<PeerSignalEvent[]>([]);
   const readPeerSignals = useCallback(() => {
     if (!conversation || !isTopicId(uuid)) return;
     setPeerSignals(getDmPeerSignals(conversation, uuid));
   }, [conversation, uuid]);
 
-  // Whatever arrived while this session was closed is already in hand.
   useEffect(readPeerSignals, [readPeerSignals]);
 
   useWireScopes((scopes) => {
@@ -207,17 +169,12 @@ export function useDmAppSync(
     ) {
       readPeerSignals();
     }
-    // Durable state arrives on the thread's own ring.
     if (scopes.has(dmThreadScope(conversation))) {
       void queryClient.invalidateQueries({ queryKey: stateKey });
     }
   });
 
-  /**
-   * Advertise (or retract) our iroh node address to every participant, in
-   * Vector's DM shape: a kind-30078 rumor whose content is the operation,
-   * sealed and wrapped per recipient like any other DM rumor.
-   */
+  /** Advertise (or retract) our iroh node address, in Vector's DM shape. */
   const sendPeerSignal = useCallback(
     async (topic: string, nodeAddr?: string) => {
       if (!self || !user?.signer.nip44 || recipients.length === 0) return;
@@ -226,8 +183,7 @@ export function useDmAppSync(
       const rumor = buildDmRumor({
         kind: KIND_DM_PEER_SIGNAL,
         content: dmPeerSignalContent(nodeAddr),
-        // The `p` set is what makes this rumor name its conversation on the
-        // other side (`dmPeersOf`), exactly as a message does.
+        // The `p` set names the conversation on the other side (`dmPeersOf`).
         tags: [
           ...dmPeerSignalTags(topic, nodeAddr),
           ...peers.map((peer) => ["p", peer]),
@@ -254,19 +210,13 @@ export function useDmAppSync(
     [self, user, peers, recipients, config, nostr, inboxRelays],
   );
 
-  // Held in a ref so the join effect can keep its narrow dependency list: it is
-  // keyed on the session, and must not tear the mesh down because a relay list
-  // resolved.
+  // Ref keeps the join effect keyed on the session only.
   const signalRef = useRef(sendPeerSignal);
   signalRef.current = sendPeerSignal;
 
   /**
-   * Bring up the mesh for this app, if the attachment named a topic and the
-   * transport is available.
-   *
-   * The order matters and is Vector's: join first, then advertise. Advertising
-   * an address before the topic is subscribed invites a dial that arrives for
-   * a topic gossip has not registered, and the frames it carries are dropped.
+   * Order matters (Vector's): join first, then advertise, or early dials hit an
+   * unregistered topic and their frames are dropped.
    */
   useEffect(() => {
     if (!enabled || !isTopicId(uuid) || !conversation) return;
@@ -293,12 +243,10 @@ export function useDmAppSync(
         [],
         (bytes) => {
           const got = unframe(bytes);
-          // Gossip echoes our own broadcasts back; the trailer is how we know.
+          // Gossip echoes our own broadcasts back; the trailer identifies them.
           if (!got || got.sender === node!.publicKeyHex()) return;
           for (const cb of listenersRef.current) cb(got.payload);
         },
-        // A mesh that never formed and one where nobody spoke are the same
-        // silence, and only these tell them apart.
         (msg) => logSync("dm", `webxdc gossip: ${msg}`),
       );
       if (cancelled) {
@@ -307,7 +255,6 @@ export function useDmAppSync(
       }
       gossip.current = { node, topic, key };
       void signalRef.current(uuid, encodeNodeAddr(node.nodeAddrJson()));
-      // Announce readiness so the dial pass runs.
       setMeshReady((n) => n + 1);
     })();
 
@@ -316,17 +263,12 @@ export function useDmAppSync(
       const g = gossip.current;
       gossip.current = undefined;
       if (!g) return;
-      // Tell the room before dropping the mesh.
       void signalRef.current(uuid);
       g.node.leave(g.topic);
       dialled.clear();
     };
   }, [enabled, uuid, conversation]);
 
-  /**
-   * Dial the peers this conversation has advertised, whenever the signals
-   * change or the mesh finishes coming up.
-   */
   useEffect(() => {
     const g = gossip.current;
     if (!g || !isTopicId(uuid)) return;

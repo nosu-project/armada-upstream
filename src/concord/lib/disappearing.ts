@@ -1,20 +1,10 @@
 /**
- * Concord disappearing messages — CORD-08.
- *
- * The timer is COMMUNITY state, never a per-message choice: one
- * `message_expiration` field (seconds; absent/0 = off) in the vsk-0 metadata
- * entity, edited like any versioned edition under MANAGE_METADATA. While set,
- * every durable chat-plane rumor carries a NIP-40 `expiration` of its send
- * time plus the timer, and the OUTER wrap carries the same tag so relays purge
- * the ciphertext itself (CORD-08 §2). Two chat kinds are exempt: deletes
- * (an expiring delete would let a longer-lived target come back) and the timer
- * notice itself (the notice documents the policy; the policy must not erase
- * it).
- *
- * Enforcement is the DM plane's trio (CORD-08 §3): ingest refusal + read
- * filter + physical sweep, in `rumorStore.ts`; the tag rides inside the signed
- * rumor, so a timer change is never retroactive and the tag as signed always
- * governs.
+ * Concord disappearing messages — CORD-08. The timer is COMMUNITY state: one
+ * `message_expiration` field (seconds; absent/0 = off) in vsk-0 metadata, under
+ * MANAGE_METADATA. While set, every durable chat rumor and its OUTER wrap carry a
+ * NIP-40 `expiration` of send time + timer (§2), except deletes and the timer
+ * notice itself. Enforcement (ingest refusal, read filter, sweep) lives in
+ * `rumorStore.ts`; the signed tag always governs, so changes aren't retroactive.
  */
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -35,10 +25,8 @@ const DAY = 86_400;
 export const DEFAULT_MESSAGE_EXPIRATION_SECS = 30 * DAY;
 
 /**
- * The offered community timers. Longer-lived than the DM presets (Signal's
- * set) on purpose: a community's history is a shared artifact, and sub-day
- * timers there mostly punish whoever was asleep. "Off" leads because turning
- * the feature off is the one choice staff may need in a hurry.
+ * Offered community timers. Longer than the DM presets on purpose (sub-day timers
+ * punish whoever was asleep); "Off" leads for staff in a hurry.
  */
 export const COMMUNITY_TIMER_PRESETS: ReadonlyArray<{ seconds: number; label: string }> = [
   { seconds: 0, label: "Off" },
@@ -50,9 +38,8 @@ export const COMMUNITY_TIMER_PRESETS: ReadonlyArray<{ seconds: number; label: st
 ];
 
 /**
- * The community's timer in seconds, 0 = off. Absent, zero, or malformed reads
- * as OFF — a reader MUST NOT guess a default from garbage (CORD-08 §1) — so
- * this is the ONLY way the field should be read.
+ * The community's timer in seconds, 0 = off. Malformed reads as OFF — never guess
+ * a default (CORD-08 §1). The only sanctioned reader of the field.
  */
 export function messageExpirationOf(metadata: CommunityMetadata | undefined): number {
   const raw = metadata?.message_expiration;
@@ -63,21 +50,13 @@ export function messageExpirationOf(metadata: CommunityMetadata | undefined): nu
 /** The chat kinds that MUST NOT expire (CORD-08 §2): deletes and timer notices. */
 export const NEVER_EXPIRING_CHAT_KINDS: ReadonlySet<number> = new Set([KIND_DELETE, KIND_TIMER_NOTICE]);
 
-/**
- * The NIP-40 deadline (unix seconds) an outgoing chat rumor of `kind`, sent at
- * `sendMs`, must carry under `timerSecs` — or undefined when it carries none
- * (timer off, or an exempt kind).
- */
+/** The NIP-40 deadline (unix seconds) for an outgoing rumor, or undefined (off or exempt kind). */
 export function chatExpiresAt(kind: number, sendMs: number, timerSecs: number): number | undefined {
   if (timerSecs <= 0 || NEVER_EXPIRING_CHAT_KINDS.has(kind)) return undefined;
   return Math.floor(sendMs / 1000) + timerSecs;
 }
 
-/**
- * A community timer in words. Prefers this module's preset labels ("30 days" —
- * which the DM formatter would render as "4 weeks 2 days"), falling back to
- * the composed form for a value another client set.
- */
+/** A community timer in words, preferring preset labels ("30 days", not "4 weeks 2 days"). */
 export function formatCommunityTimer(seconds: number): string {
   const preset = COMMUNITY_TIMER_PRESETS.find((p) => p.seconds === seconds && p.seconds > 0);
   return preset ? preset.label : formatDisappearingDuration(seconds);
@@ -91,9 +70,8 @@ export function communityTimerNotice(seconds: number, byMe: boolean, name: strin
 }
 
 /**
- * The timer (seconds; 0 = off) a kind-1740 notice announces, or undefined when
- * the tag is missing/malformed — an unreadable notice must not be mistaken for
- * "turned it off". Same `["timer", "<seconds>"]` tag as the DM notice.
+ * The timer a kind-1740 notice announces (`["timer", "<seconds>"]`), or
+ * undefined if malformed — never mistaken for "off".
  */
 export function timerNoticeSeconds(rumor: { tags: readonly string[][] }): number | undefined {
   return dmTimerSeconds(rumor);
@@ -105,14 +83,9 @@ interface NoticeRelayPool {
 }
 
 /**
- * Post one kind-1740 timer notice into each of `channels` (CORD-08 §4) —
- * called by the staff mutation right after the metadata edition publishes.
- * Sealed and wrapped like any chat rumor under each channel's CURRENT stream
- * key; written to the local store first (so the actor's own timelines show the
- * notice immediately), then broadcast best-effort. Notices are informational —
- * the fold is the authority — so a channel that fails here is simply a channel
- * without the courtesy line, and readers gate display on the author holding
- * MANAGE_METADATA regardless.
+ * Post a kind-1740 timer notice into each channel (CORD-08 §4) after the metadata
+ * edition publishes: written locally first, then broadcast best-effort. Purely
+ * informational; readers gate display on the author holding MANAGE_METADATA.
  */
 export async function publishTimerNotices(
   nostr: NoticeRelayPool,

@@ -2,25 +2,12 @@ import { parseYouTubeTarget } from "@/lib/linkEmbed";
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
 
 /**
- * The "Watch together" app's shared state and the pure rules around it.
+ * "Watch together" shared state and rules.
  *
- * WIRE FORMAT. A {@link WatchSnapshot} is broadcast verbatim over the app's
- * {@link AppSync} coordination plane, and every Armada build in the channel
- * reads it — including builds that predate direct-video support. So the shape
- * only ever GROWS, with optional fields:
- *
- * - `QueueItem.url` (a direct video file) was added beside `videoId` /
- *   `playlistId`. An older build sees an entry with neither id: it titles the
- *   row "Video" and hands the YouTube embed no id, which renders an empty
- *   player and emits no state changes — nothing throws, and its own edits
- *   spread the entry back unchanged.
- * - `WatchSnapshot.rate` (playback speed) is read only by the direct-video
- *   player; an older build ignores it and preserves it when it re-broadcasts,
- *   since every commit spreads the previous snapshot.
- *
- * The app kind stays `{ type: "youtube" }` for the same reason: the session id
- * is derived from it (`defaultSessionId`), so renaming it would split a
- * channel's watchalong between old and new builds.
+ * WIRE FORMAT: {@link WatchSnapshot} is broadcast verbatim over {@link AppSync}
+ * to every build, including older ones — the shape may only GROW with optional
+ * fields (`QueueItem.url`, `rate`; old builds ignore and preserve them). The
+ * app kind stays `{ type: "youtube" }` since the session id derives from it.
  */
 
 /** One entry in the shared watch queue. */
@@ -32,22 +19,15 @@ export interface QueueItem {
   /** A YouTube playlist, when the entry is a whole playlist (played natively). */
   playlistId?: string;
   /**
-   * A direct video file (http/https), when the entry is not YouTube. Added
-   * after the YouTube-only format; see the module comment for how older builds
-   * treat it. Sender-named, so it is re-validated on receipt
-   * ({@link queueItemPlayer}) and only ever loaded through the media policy.
+   * A direct http(s) video file. Sender-named, so re-validated on receipt
+   * ({@link queueItemPlayer}) and only loaded through the media policy.
    */
   url?: string;
   /** Hex pubkey of whoever added it. */
   addedBy?: string;
 }
 
-/**
- * The full shared watchalong state, broadcast as a snapshot on every change.
- * Latest `rev` wins, so anyone can edit the queue / control playback and
- * everyone converges. (A snapshot model — rather than per-action commands — is
- * what keeps a *shared ordered queue* consistent across peers.)
- */
+/** Shared state, broadcast as a whole snapshot per change; highest `rev` wins. */
 export interface WatchSnapshot {
   queue: QueueItem[];
   /** Index into `queue` of the now-playing item, or -1 when nothing's playing. */
@@ -56,10 +36,7 @@ export interface WatchSnapshot {
   playing: boolean;
   /** Playback position (seconds) of the now-playing item at time `at`. */
   time: number;
-  /**
-   * Playback speed for direct-video entries; absent means 1. YouTube entries
-   * ignore it (the embed's speed menu stays per-viewer, as it always was).
-   */
+  /** Direct-video speed (absent = 1); YouTube ignores it. */
   rate?: number;
   /** Monotonic revision + wall-clock; higher `rev` wins, `at` extrapolates play position. */
   rev: number;
@@ -76,10 +53,8 @@ const MIN_RATE = 0.25;
 const MAX_RATE = 4;
 
 /**
- * Whether a peer's payload is a snapshot this build can apply. Every number is
- * required to be finite: `JSON.parse` turns `1e400` into `Infinity`, which a
- * `<video>` refuses as a `currentTime` (it throws) and which, as a `rev`, would
- * outrank every later edit and freeze the room.
+ * Whether a peer payload is applicable. Numbers must be finite: `1e400` parses
+ * to Infinity, which `<video>` rejects and which as `rev` would freeze the room.
  */
 export function isSnapshot(v: unknown): v is WatchSnapshot {
   if (!v || typeof v !== "object") return false;
@@ -100,10 +75,7 @@ export function snapshotRate(s: Pick<WatchSnapshot, "rate">): number {
   return typeof r === "number" && Number.isFinite(r) && r >= MIN_RATE && r <= MAX_RATE ? r : 1;
 }
 
-/**
- * Where the now-playing item should be at `now`: the committed `time`, plus the
- * wall-clock elapsed since it was committed (scaled by `rate`) while playing.
- */
+/** Where playback should be at `now`: `time` plus elapsed wall-clock × `rate` while playing. */
 export function targetPlaybackTime(s: WatchSnapshot, now: number, rate = 1): number {
   return s.playing ? s.time + Math.max(0, (now - s.at) / 1000) * rate : s.time;
 }
@@ -122,11 +94,7 @@ export type WatchLink =
 
 const NOT_A_VIDEO = "Paste a YouTube link or a direct link to a video file (.mp4, .webm, …)";
 
-/**
- * Classify a pasted link. YouTube links (and bare ids) keep the YouTube embed
- * path; an http(s) link to a video file (by extension, or a Blossom blob) plays
- * in a `<video>`. Everything else is refused with a reason for the input.
- */
+/** Classify a pasted link: YouTube embed, direct `<video>` (by extension or Blossom path), or invalid. */
 export function classifyWatchLink(input: string): WatchLink {
   const yt = parseYouTubeTarget(input);
   if (yt) return { kind: "youtube", videoId: yt.videoId, playlistId: yt.playlistId };
@@ -139,8 +107,7 @@ export function classifyWatchLink(input: string): WatchLink {
     return { kind: "invalid", reason: NOT_A_VIDEO };
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") return { kind: "invalid", reason: NOT_A_VIDEO };
-  // Never loaded by the media policy either; refuse up front rather than queue
-  // an entry nobody in the room can play.
+  // The media policy won't load these either; refuse up front.
   if (isLocalNetworkUrl(u.href)) return { kind: "invalid", reason: "Local network links can't be shared" };
   if (HLS_EXT.test(u.pathname)) return { kind: "invalid", reason: "Live streams (.m3u8) aren't supported" };
   if (DIRECT_VIDEO_EXT.test(u.pathname) || BLOSSOM_PATH.test(u.pathname)) return { kind: "video", url: u.href };
@@ -148,10 +115,8 @@ export function classifyWatchLink(input: string): WatchLink {
 }
 
 /**
- * Which player a (possibly peer-sent) queue entry plays in, or `null` when this
- * build has none for it — an entry from a newer build, or a `url` that fails
- * the same checks a pasted link does. YouTube wins when both are present, so an
- * entry means the same thing here as on a build that only knows YouTube.
+ * Which player a (possibly peer-sent) entry uses, or `null` if none here.
+ * YouTube wins when both are present, matching YouTube-only builds.
  */
 export function queueItemPlayer(item: QueueItem | undefined): "youtube" | "video" | null {
   if (!item) return null;
@@ -175,12 +140,7 @@ export function directVideoTitle(url: string): string {
 /** The subset of `HTMLVideoElement` the sync drives — mockable in tests. */
 export type SyncableVideo = Pick<HTMLVideoElement, "currentTime" | "paused" | "playbackRate" | "play" | "pause">;
 
-/**
- * Whether a `<video>` already shows what the snapshot says — same play state,
- * same speed, position within {@link DRIFT_TOLERANCE}. An element event in that
- * state is an echo of an applied snapshot (a slow `seeked`, say), not a change
- * worth broadcasting.
- */
+/** Whether a `<video>` already matches the snapshot (so its event is an echo, not a change). */
 export function videoMatchesSnapshot(
   video: Pick<SyncableVideo, "currentTime" | "paused" | "playbackRate">,
   s: WatchSnapshot,
@@ -193,10 +153,8 @@ export function videoMatchesSnapshot(
 }
 
 /**
- * Push a snapshot's play/seek/rate state onto a `<video>`: set the speed, seek
- * only past {@link DRIFT_TOLERANCE}, then play or pause. Returns the `play()`
- * promise when playback was requested, so the caller can see an autoplay
- * refusal (a browser won't start sound without a gesture on this page).
+ * Push a snapshot's rate/seek/play state onto a `<video>`. Returns the `play()`
+ * promise so callers can see autoplay refusals.
  */
 export function applySnapshotToVideo(
   video: SyncableVideo,

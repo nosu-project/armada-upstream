@@ -1,17 +1,9 @@
 /**
- * Recognize a URL that points back into this app — a copied message link or a
- * channel/server share built by `chatUrl()`, or a bare profile link
- * (`<origin>/<npub>`) — so the renderer can treat it as the in-app location it
- * names instead of an external website: navigated with the router rather than
- * a new tab, and rendered as the thing it points at.
- *
- * "Ours" is a set of origins, not one: the page's own origin (a self-hosted
- * deployment's links stay on that deployment) plus the public deployment,
- * which is what native and desktop builds put in every link they generate
- * (`shareOrigin()`) — so an armada.buzz link pasted into a self-hosted web
- * client still reads as internal. Anything that doesn't parse to a known
- * shape falls through to ordinary link rendering; this never claims a URL it
- * can't route.
+ * Recognize a URL pointing back into this app (a `chatUrl()` link or a bare
+ * `<origin>/<npub>` profile link) so it's routed in-app instead of opened
+ * externally. "Ours" is the page origin plus the public deployment, which
+ * native/desktop builds use in every link (`shareOrigin()`). Never claims a URL
+ * it can't route.
  */
 
 import { nip19 } from "nostr-tools";
@@ -56,18 +48,15 @@ export function parseSelfLink(url: string): SelfLink | null {
   if (u.protocol !== "https:" && u.protocol !== "http:") return null;
   if (!ownOrigins().has(u.origin)) return null;
 
-  // `new URL("https://a//x").pathname` is "//x" — a protocol-relative URL when
-  // handed to the router, not a path. Same guard the deep-link path applies.
+  // `new URL("https://a//x").pathname` is "//x" — protocol-relative to the router.
   const path = u.pathname + u.search + u.hash;
   if (!isRouterPath(path)) return null;
 
   const route = parseChatRoute(u.pathname);
   if (route) return { kind: "chat", route, path };
 
-  // The `/:user` route: a single path segment that decodes as a profile id.
-  // A NIP-05 name (or any other single segment) is left alone — it can't be
-  // resolved to a pubkey without a fetch, and over-claiming would swallow
-  // static pages.
+  // `/:user`: only npub/nprofile. NIP-05 names would need a fetch, and
+  // over-claiming would swallow static pages.
   const seg = u.pathname.split("/").filter(Boolean);
   if (seg.length === 1) {
     try {

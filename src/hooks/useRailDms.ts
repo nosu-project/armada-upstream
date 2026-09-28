@@ -10,7 +10,7 @@ import {
 } from "@/lib/railLayout";
 
 export interface UseRailDmsReturn {
-  /** Peer pubkeys currently on the rail, in the rail's visual order. */
+  /** Peer pubkeys on the rail, in visual order. */
   railDms: string[];
   isOnRail: (peer: string) => boolean;
   addToRail: (peer: string) => void;
@@ -19,21 +19,9 @@ export interface UseRailDmsReturn {
 }
 
 /**
- * Put a DM conversation on the community rail, and take it off again.
- *
- * Unlike a server or a community, a DM has no membership list behind it — the
- * rail arrangement itself is the record that the user wanted this person
- * there, so adding writes a `dm:` key into `railLayout` and removing takes it
- * back out. From that point the icon is an ordinary rail item: it drags,
- * folders and reorders like any other, and rides the rail's encrypted NIP-78
- * document to the user's other devices.
- *
- * New entries go to the TOP of the rail, directly under the DMs button. The
- * end is not available to us: the stored arrangement holds only what the user
- * has actually arranged, and `mergeLayout` appends every live server and
- * community it doesn't yet know AFTER it — so appending here puts the icon
- * ahead of all of those, i.e. in the middle. The top is the one position that
- * is the same before and after that append.
+ * Put a DM on the community rail (a `dm:` key in `railLayout`, synced via NIP-78) and take it
+ * off. New entries go to the TOP: `mergeLayout` appends unknown live items after the stored
+ * arrangement, so the top is the only stable position.
  */
 export function useRailDms(): UseRailDmsReturn {
   const { config, updateConfig } = useAppContext();

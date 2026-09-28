@@ -1,10 +1,6 @@
 /**
- * Buzz-specific timeline rows: relay-signed system messages (40099), diff
- * cards (40008) and huddle session cards (48100). Chat-like kinds
- * (9/40001/40002, forum posts/comments) render through the shared ChatMessage
- * instead — as do agent-job lifecycle events (43001–43006): Buzz treats an
- * agent as a member, so its job output is an ordinary message from it, not a
- * muted system line.
+ * Buzz-specific timeline rows: system messages (40099), diffs (40008), huddle
+ * cards (48100), workflows. Chat-like kinds and agent-job events render via ChatMessage.
  */
 
 import { AudioLines, GitBranch, Workflow } from "lucide-react";
@@ -24,7 +20,6 @@ import { cn } from "@/lib/utils";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Resolve a pubkey to its scoped display name (per-server nickname aware). */
 function Name({ pubkey }: { pubkey: string | undefined }) {
   if (!pubkey) return null;
   return (
@@ -34,7 +29,6 @@ function Name({ pubkey }: { pubkey: string | undefined }) {
   );
 }
 
-/** The muted centered chrome every non-conversational row shares. */
 function SystemLine({ icon, children, createdAt }: {
   icon?: React.ReactNode;
   children: React.ReactNode;
@@ -99,7 +93,6 @@ function formatDuration(seconds: number): string {
   return `${seconds}s`;
 }
 
-/** How many diff lines show before the card collapses behind "Show more". */
 const DIFF_COLLAPSE_LINES = 16;
 
 /** Kind 40008: a diff message — unified diff rendered as its own card. */
@@ -201,7 +194,6 @@ export function BuzzWorkflowDefinitionRow({ event }: { event: NostrRumor }) {
   const [expanded, setExpanded] = useState(false);
   const author = useAuthor(event.pubkey);
   const name = useScopedDisplayName(event.pubkey, author.data?.metadata);
-  // Best-effort display name: a top-level `name:` key in the YAML, else the d tag.
   const label = useMemo(() => {
     const m = event.content.match(/^name:\s*["']?(.+?)["']?\s*$/m);
     if (m) return m[1];
@@ -243,7 +235,6 @@ export function BuzzHuddleRow({ event, lifecycle }: {
   const author = useAuthor(event.pubkey);
   const name = useScopedDisplayName(event.pubkey, author.data?.metadata);
 
-  // The huddle's ephemeral channel id links lifecycle events to this card.
   const huddleId = useMemo(() => {
     try {
       const raw = JSON.parse(event.content) as { ephemeral_channel_id?: string };

@@ -1,83 +1,29 @@
 /**
- * Visual flood suppression for the Chat Plane.
+ * Visual flood suppression for the Chat Plane. Chat write access is key
+ * possession (CORD-04 §1) and invite links are unlimited-use, so anyone can flood
+ * a public channel. This only answers the RENDER question — which messages fold
+ * into one expandable row. NOT a security boundary: nothing here drops a message
+ * or feeds moderation; the Banlist remains the only author-identity drop.
  *
- * Chat write access is key possession (CORD-04 §1) and an invite link is
- * unlimited-use, so a public community's channel can be filled by anyone who
- * ever opened the link — with one key hammering, a handful sharing the load, or
- * a fresh key per message. This module answers only the RENDER question: which
- * messages are part of a wall of noise and should fold into a single row.
+ * Shape rules bucket by CONTENT first (so 1×100 and 100×1 need one rule), with
+ * near-duplicate clustering ({@link normalizeTokens}) because real campaigns
+ * rotate templates. A message folds if ANY rule fires:
  *
- * It is not a security boundary and must never be used as one. Nothing here
- * drops a message, refuses a write, or feeds a moderation decision: the Banlist
- * remains the only author-identity drop an honest client performs (see
- * `ChatModeration` in `chat.ts`), and a heuristic must not quietly become the
- * second one. Being wrong here costs a collapsed row the reader can expand.
- *
- * The shape rules bucket by CONTENT first and only then look at who sent it,
- * which is what lets one test cover every flood shape: bucketing by author
- * would need a different rule for 1×100 than for 100×1, and the second is free
- * to mint. For those rules an author count is a description of the flood, not
- * its trigger. The trust rule (6) is the deliberate exception — it triggers on
- * WHO, because who-the-reader-trusts is the one input a flood cannot mint — and
- * it only ever spares, never newly condemns beyond the drown rule it gates.
- *
- * ## What a real flood looked like
- *
- * A live campaign (15 keys, 153 messages, one hour) is the fixture this file
- * is shaped around, and it defeated an exact-template rule completely:
- *
- * - **The template ROTATES.** ~15 different pitches, each posted 3-14 times, so
- *   no single template ever reached a dense-window threshold. Hence
- *   {@link normalizeTokens} + near-duplicate clustering: `hi, i'm sarah from
- *   official support…` and `hi, i'm cryptoking from official support…` are one
- *   campaign, and only a similarity measure says so.
- * - **The keys speak more than once.** Any "author who has not spoken before
- *   this window" test is satisfied for the FIRST burst and never again — the
- *   second wave from the same keys looked established. Hence the cross-author
- *   echo rule below, which needs no notion of newness at all.
- *
- * A message folds if ANY of the rules below fires. The first five read the
- * flood's SHAPE — its content, arrival and pace — and each closes a gap the
- * previous one left:
- *
- * 1. **Density** — one template repeated {@link FLOOD_MIN_MESSAGES} times
- *    inside {@link FLOOD_WINDOW_MS}, by at most two authors or by authors none
- *    of whom had spoken before the window opened. This is the one-key hammer
- *    and the all-at-once swarm.
- * 2. **Echo** — a substantial template posted {@link FLOOD_ECHO_MIN} times
- *    across {@link FLOOD_ECHO_MIN_AUTHORS} or more keys inside
- *    {@link FLOOD_ECHO_WINDOW_MS}. People converge on short phrases (`gm`,
- *    `+1`, `lol`) constantly and on eight-word sentences essentially never,
- *    which is why the rule is gated on length; and one pitch on many keys is
- *    what a sybil set is FOR, which is why it is gated on spread.
- * 3. **Arrival burst** ({@link markArrivalBurst}) — a crowd of first-time keys
- *    arriving at once, each speaking once and vanishing.
+ * 1. **Density** — one template {@link FLOOD_MIN_MESSAGES} times in
+ *    {@link FLOOD_WINDOW_MS}, by ≤2 authors or all first-time authors.
+ * 2. **Echo** — a substantial template {@link FLOOD_ECHO_MIN} times across
+ *    ≥{@link FLOOD_ECHO_MIN_AUTHORS} keys in {@link FLOOD_ECHO_WINDOW_MS}.
+ * 3. **Arrival burst** ({@link markArrivalBurst}) — many first-time keys at once.
  * 4. **Cohort** ({@link markCohortFlood}) — a crowd that arrived together and
- *    then drowned the channel, content ignored.
- * 5. **Gibberish** ({@link markGibberish}) — one key spending its messages on
- *    low-originality noise (`ggg`, room-foreign single words).
+ *    drowned the channel, content ignored.
+ * 5. **Gibberish** ({@link markGibberish}) — one key posting low-originality noise.
+ * 6. **Untrusted drown** ({@link markUntrustedDrown}) — keys the reader has no
+ *    earned trust in ({@link computeTrusted}: reachable from the reader via
+ *    replies/quotes/mentions) who together drown the channel. This closes the
+ *    shape rules' arms race (established keys posting fluent, unique spam).
  *
- * ## Why shape is not enough, and what replaces it
- *
- * Every shape rule is an arms race the flood can win by changing shape: rotate
- * the pitch (density), post from one key (echo), warm the keys first (arrival,
- * cohort), write fluent sentences (gibberish). The end state, observed live, is
- * two or three ESTABLISHED keys taking turns posting unique, grammatical spam
- * at pace — invisible to all five, and able to fake a conversation or paste a
- * regular's line to defeat any further shape heuristic.
- *
- * The one thing a sender cannot forge is what OTHER people have independently
- * directed at them. So {@link computeTrusted} derives, per reader and rooted at
- * the reader, the authors the reader has earned reason to trust — reachable
- * through replies, quotes and mentions FROM the already-trusted — and:
- *
- * 6. **Untrusted drown** ({@link markUntrustedDrown}) — the keys the reader has
- *    no earned reason to trust who TOGETHER drown the channel (the cohort rule's
- *    share + pace + precedent, restated over the untrusted subset, minus its
- *    arrived-together gate). A clique vouching for itself builds no trust, so
- *    faking a conversation does not help; and a trusted author's rows are
- *    exempt from every rule at once, so pasting a regular's line folds only the
- *    spammer's copy. Earning one trusted reply, quote or mention clears a key.
+ * Trusted authors (incl. self and staff) are exempt from every rule, so pasting a
+ * regular's line folds only the spammer's copy.
  */
 
 import type { OpenedChat } from "@/concord/lib/chat";
@@ -88,21 +34,13 @@ export const FLOOD_MIN_MESSAGES = 8;
 /** How close together those messages must fall. */
 export const FLOOD_WINDOW_MS = 300_000;
 /**
- * A flood carried by one or two keys is the same nuisance whether or not those
- * keys are known, so density alone condemns it past this author count. Above
- * it, the authors must ALL be strangers — a dozen regulars converging on one
- * phrasing is a conversation.
+ * Above this author count, density requires ALL authors to be strangers (a dozen
+ * regulars converging on a phrase is a conversation).
  */
 export const FLOOD_MAX_FAMILIAR_AUTHORS = 2;
 /**
- * Words a template needs before the density rule judges it at the ordinary
- * threshold; below it, {@link FLOOD_SHORT_FACTOR} times as many are required.
- *
- * One word is a chorus, not a template. A dozen newcomers saying `gm` over a
- * couple of minutes satisfies every density condition there is — dense,
- * identical, nobody has spoken before — and folding that hides the friendliest
- * thing a community does. Sixty of them inside thirty seconds is a wall
- * whatever the word is, so the bar rises rather than disappearing.
+ * Words a template needs for the ordinary density threshold; shorter ones need
+ * {@link FLOOD_SHORT_FACTOR}× as many (a chorus of `gm` isn't a flood).
  */
 export const FLOOD_MIN_WORDS = 2;
 /** How much denser a sub-{@link FLOOD_MIN_WORDS} template must be to fold. */
@@ -111,36 +49,19 @@ export const FLOOD_SHORT_FACTOR = 3;
 /** Copies of one substantial template, from ≥2 authors, before it reads as an echo. */
 export const FLOOD_ECHO_MIN = 4;
 /**
- * Distinct keys a template must be spread across before it reads as a campaign.
- *
- * Spreading ONE pitch across MANY keys is the whole purpose of a sybil set, and
- * it is what an honest repetition never does: two colleagues who both say
- * `just pushed the fix, should be live shortly` are a team with one job, and no
- * count of repetitions makes them a campaign. The observed flood put each pitch
- * on 7-9 keys.
+ * Distinct keys before a template reads as a campaign: one pitch across many keys
+ * is what sybil sets are for; honest repetition doesn't do that.
  */
 export const FLOOD_ECHO_MIN_AUTHORS = 3;
 /** The echo rule's window — long, because a rotating campaign is not dense. */
 export const FLOOD_ECHO_WINDOW_MS = 3_600_000;
 /**
- * Words a template needs before the echo rule will look at it.
- *
- * The whole safety of that rule lives here, and the number is measured rather
- * than chosen: every template in the observed campaign ran 8-13 words
- * (`hey, check your dms, i sent you something` is the shortest), while the
- * phrases people genuinely repeat at each other — `gm`, `+1`, `same here`,
- * `thoughts on subject a today` — are short. Placeholders (`@` for a URL, `#`
- * for a number) don't count, so rotating the domain or the dollar amount buys
- * a spammer no length.
- *
- * A pitch carrying a LINK is held to a lower bar, because that is the shape
- * whose whole point is to be clicked and whose honest twin (four people
- * posting the identical sentence plus a URL within an hour) is vanishingly
- * rare. It is still a template match, not a URL match: the campaign rotated
- * domains per message.
+ * Words a template needs before the echo rule judges it — the rule's whole
+ * safety. Measured: campaign templates ran 8-13 words; honest repeated phrases
+ * are short. Placeholders (`@` URL, `#` number) don't count.
  */
 export const FLOOD_ECHO_MIN_WORDS = 8;
-/** The lower bar for a template that carries a link. */
+/** Lower bar for linked templates (their honest twin is rare); still a template match, not a URL match. */
 export const FLOOD_ECHO_MIN_WORDS_LINKED = 5;
 /** Token overlap at which two templates are treated as one campaign. */
 export const FLOOD_SIMILARITY = 0.6;
@@ -150,54 +71,24 @@ export interface FloodOptions {
   windowMs?: number;
   echoMin?: number;
   echoWindowMs?: number;
-  /**
-   * The reading user's pubkey. Their own messages are never folded: a person
-   * pasting a list line by line trips every density rule there is, and hiding
-   * what someone just typed reads as the client having eaten it.
-   */
+  /** The reader's pubkey; their own messages never fold. */
   self?: string;
   /**
-   * When each author was first heard IN THIS CHANNEL, from the store
-   * (`queryChannelFirstSeen`) rather than from this batch.
-   *
-   * The batch is a rendering window, not the channel's life, and the cohort
-   * rule's whole question — was this crowd already here — is unanswerable from
-   * a window a flood has filled. Supplied values only ever move an author's
-   * arrival EARLIER than the batch shows, or add authors the window pushed
-   * out; an author the store hasn't got is still dated by the batch, so a
-   * partial answer is safe.
+   * When each author was first heard IN THIS CHANNEL (`queryChannelFirstSeen`),
+   * since a flood fills the batch window. Can only move arrivals earlier or add
+   * authors, so partial answers are safe.
    */
   firstSeen?: ReadonlyMap<string, number>;
   /**
-   * Whether an author is community STAFF — the owner or a roster member holding
-   * any staff permission (`STAFF_MASK`). Staff are never folded: authority to
-   * moderate is the community's own strongest statement of trust, it outranks
-   * anything this heuristic infers, and a muzzled moderator is worse than a
-   * visible flood. They join the trusted set ({@link computeTrusted}) rather
-   * than getting a check of their own, so the same immunity pass covers them.
-   * Absent in bare lib folds (tests); the app path supplies it from the
-   * control fold.
+   * Whether an author is STAFF (owner or `STAFF_MASK` holder). Staff never fold;
+   * they join the trusted set ({@link computeTrusted}). Absent in bare lib folds.
    */
   staff?: (author: string) => boolean;
   /**
-   * A lower bound (ms) on when this room existed, used only by the drown rule as
-   * an alternative source of precedent. The drown rule otherwise declines to
-   * fire unless someone OUTSIDE the flood spoke before it ("a room of nothing
-   * but strangers is a launch, not an invasion") — but that speaker signal is
-   * empty in a TOTAL nuke, where every early speaker is itself a drowner. This
-   * closes that hole: if the room existed before the wave by {@link
-   * FLOOD_COHORT_PRECEDENT_MS}, it is an existing room being invaded, not a
-   * launch, whatever the chat plane looks like.
-   *
-   * The app prefers an UNFORGEABLE source — the oldest control-plane rotation
-   * time it holds (`HeldRoot.retiredAt`, a staff-only rekey publish time) — and
-   * falls back to the earliest activity the store has observed in the channel
-   * when no rotation time exists (the common case). That fallback is chat-plane
-   * derived, so best-effort: a flood can only push it EARLIER (adding
-   * precedent), and hiding it needs every `created_at` clamped into one
-   * sub-{@link FLOOD_COHORT_PRECEDENT_MS} window, which collapses the very
-   * timespan the pace gate reads. Absent in bare lib folds, in which case the
-   * drown rule falls back to speaker-precedent alone.
+   * Lower bound (ms) on the room's existence, an alternative precedent for the drown
+   * rule when a TOTAL nuke leaves no non-drowner speaker. Prefer an unforgeable
+   * source (`HeldRoot.retiredAt`); the chat-plane fallback can only be pushed
+   * EARLIER by a flood. Absent in bare lib folds.
    */
   establishedSinceMs?: number;
 }
@@ -212,14 +103,9 @@ const INVISIBLE = /[\u200b-\u200f\u2060\ufeff]/g;
 const WORD = /[\p{L}][\p{L}\p{N}_]*/gu;
 
 /**
- * A template fingerprint: what two copies of one broadcast share once the parts
- * that vary per copy are collapsed.
- *
- * The trailing nonce is found POSITIONALLY, by the `>` / `!` scaffolding the
- * observed campaigns put in front of it, rather than by looking random. Roughly
- * one base36 suffix in seven is all letters, so a composition test leaks about
- * that fraction of a campaign; widening it to "few vowels" starts eating words
- * like `thanks`.
+ * A template fingerprint with per-copy variations collapsed. The trailing nonce
+ * is found POSITIONALLY (the `>`/`!` scaffolding campaigns use), not by looking
+ * random, which would leak or eat real words.
  */
 export function shapeKey(content: string): string {
   return content
@@ -230,21 +116,16 @@ export function shapeKey(content: string): string {
     .replace(URL_RUN, "@")
     .replace(TRAILING_NONCE, "$1#")
     .replace(DIGIT_TOKEN, "#")
-    // A letter run is one keypress held down: `ggg` and `gggggg` are the same
-    // message, and `noooo` is `no`. Two is a word (`gg`), three is a run.
+    // A letter run is one held key: `ggg` = `g`, `noooo` = `no`.
     .replace(LETTER_RUN, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 /**
- * The words of a template, for the similarity measure and the echo rule's
- * length gate. Placeholders are already `@`/`#` by then, and neither is a word,
- * so a message that is nothing but a link or a photo has NO words — which is
- * what keeps a shared album out of the echo rule and out of the density rule
- * both. (A link-only flood is left to the Banlist; it is the one flood shape
- * this file deliberately declines to guess at, because the honest version of it
- * is someone posting ten holiday pictures.)
+ * The words of a template. Placeholders aren't words, so link/photo-only messages
+ * have none and are ignored by density and echo (an album isn't a flood; a
+ * link-only flood is left to the Banlist).
  */
 export function normalizeTokens(shape: string): string[] {
   return shape.match(WORD) ?? [];
@@ -265,12 +146,8 @@ function echoEligible(wordCount: number, linked: boolean): boolean {
 }
 
 /**
- * Jaccard overlap of two token sets pre-interned to SORTED integer ids
- * ({@link internWords}). This is the fold's hot path on a rotating campaign
- * (tens of thousands of comparisons between 20-30-word templates), where a
- * `Set<string>` measure spent all its time hashing strings in `Set.has`; a
- * linear merge of two sorted `Int32Array`s is branch-predictable and
- * allocation-free.
+ * Jaccard overlap of sorted interned token ids ({@link internWords}); a linear
+ * merge, since this is the hot path on rotating campaigns.
  */
 function similarityIds(a: Int32Array, b: Int32Array): number {
   let i = 0;
@@ -290,12 +167,7 @@ function similarityIds(a: Int32Array, b: Int32Array): number {
   return shared / (a.length + b.length - shared);
 }
 
-/**
- * Intern each eligible bucket's word set to a sorted `Int32Array` of ids for
- * {@link similarityIds}. Returned as a dense array indexed by bucket id (holes
- * for the ineligible), so the merge's hot comparison loop indexes rather than
- * hashes a Map key on every one of its tens of thousands of calls.
- */
+/** Intern eligible buckets' words to sorted `Int32Array`s, indexed by bucket id. */
 function internWords(buckets: Bucket[], ids: Iterable<number>): (Int32Array | undefined)[] {
   const wordId = new Map<string, number>();
   const out: (Int32Array | undefined)[] = new Array(buckets.length);
@@ -312,22 +184,14 @@ function internWords(buckets: Bucket[], ids: Iterable<number>): (Int32Array | un
   return out;
 }
 
-/**
- * Document frequency above which a word is useless for finding candidates.
- * `the` appears in every bucket; indexing it would make every message a
- * candidate for every other and turn the merge into an O(n²) scan.
- */
+/** Document frequency above which a word isn't used to find candidates (avoids O(n²)). */
 const DF_CAP = 64;
 /** Most candidate buckets one bucket will be compared against. */
 const CANDIDATE_CAP = 48;
 
 /**
- * Merge near-duplicate buckets into campaigns, returning a parent array
- * (union-find roots) over `buckets`.
- *
- * Only buckets long enough for the echo rule take part: a campaign is what we
- * are trying to see through, and short templates are exactly the ones where
- * "similar" stops meaning "the same message" (`gm all` vs `gm alice`).
+ * Merge near-duplicate buckets into campaigns (union-find parents). Only
+ * echo-eligible buckets take part; short templates make "similar" meaningless.
  */
 function mergeSimilar(buckets: Bucket[]): number[] {
   const parent = buckets.map((_, i) => i);
@@ -365,11 +229,8 @@ function mergeSimilar(buckets: Bucket[]): number[] {
     }
   };
 
-  // Shared-word count per candidate bucket, in a reused typed array rather than
-  // a fresh Map per bucket: this loop runs O(eligible × words × df) times on a
-  // rotating campaign (thousands of near-unique templates over a small
-  // vocabulary), where the Map's per-entry overhead dominated. `touched` lists
-  // the ids to reset, so clearing stays O(touched).
+  // Reused typed array rather than a Map per bucket (hot loop); `touched` keeps
+  // clearing O(touched).
   const count = new Int32Array(buckets.length);
   const touched: number[] = [];
   for (const i of eligible) {
@@ -385,13 +246,8 @@ function mergeSimilar(buckets: Bucket[]): number[] {
         if (c > maxShared) maxShared = c;
       }
     }
-    // At most {@link CANDIDATE_CAP} candidates are compared. Below the cap the
-    // order is irrelevant — union is commutative, so the connected components
-    // are the same whichever order the edges are added — and the selection is
-    // skipped entirely. Above it, the survivors are the ones sharing the most
-    // words, chosen by a counting sort (O(touched), not an O(c·log c) comparison
-    // sort per bucket): the cap then bites on candidates that were never going
-    // to clear the threshold anyway. Both branches examine the same set.
+    // At most CANDIDATE_CAP candidates. Below the cap order is irrelevant (union is
+    // commutative); above it, keep the most-shared via a counting sort.
     if (touched.length <= CANDIDATE_CAP) {
       for (const j of touched) examine(i, j);
     } else {
@@ -424,19 +280,10 @@ function normalize(ev: OpenedChat): { shape: string; words: string[]; gibberish:
 }
 
 /**
- * The rumor ids belonging to a visual flood.
- *
- * `messages` is expected in ms order (what `foldTimeline` returns). An author is
- * a STRANGER to a window when their earliest message in this timeline falls
- * inside it — they had not spoken before it opened. That is deliberately
- * relative rather than an absolute age: any fixed "must have N hours of
- * history" makes the opening messages of a channel unjudgeable, since at the
- * start of a batch nobody has history and everyone reads as new. It is also
- * only half the rule, because it is satisfied exactly once per key; the echo
- * rule is what still sees the second wave.
- *
- * The whole signal is derived from the batch, so this needs no store read, no
- * roster, and no membership state synced first.
+ * The rumor ids belonging to a visual flood. `messages` must be ms-ordered. An
+ * author is a STRANGER to a window if their first message falls inside it
+ * (relative, not an absolute age, so a channel's opening stays judgeable). Needs
+ * no store read or roster.
  */
 export function floodClusters(messages: readonly OpenedChat[], opts: FloodOptions = {}): Set<string> {
   const minMessages = opts.minMessages ?? FLOOD_MIN_MESSAGES;
@@ -447,17 +294,13 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   const flagged = new Set<string>();
   if (messages.length < Math.min(minMessages, echoMin)) return flagged;
 
-  // First-seen is over EVERY message, the reader's own included: what it
-  // answers is "had this key spoken yet", which is not a question about
-  // whose timeline it is.
+  // First-seen spans every message, the reader's included.
   const firstSeen = new Map<string, number>();
   for (const ev of messages) {
     const seen = firstSeen.get(ev.author);
     if (seen === undefined || ev.ms < seen) firstSeen.set(ev.author, ev.ms);
   }
-  // The store knows the channel; the batch only knows the window. Merged
-  // entries can only move an arrival earlier or add an author the window
-  // pushed out — never date anyone later — so a partial map is safe.
+  // Merged store entries can only move arrivals earlier; partial maps are safe.
   if (opts.firstSeen) {
     for (const [author, ms] of opts.firstSeen) {
       const seen = firstSeen.get(author);
@@ -470,13 +313,8 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
     const ev = messages[i];
     if (opts.self !== undefined && ev.author === opts.self) continue;
     const { shape, words } = normalize(ev);
-    // A shape with no WORDS in it is a message with nothing to repeat: an
-    // attachment, a bare link, a row of emoji. Twelve of those in a row is
-    // someone sharing an album, and the shape they share is the placeholder
-    // this file put there — so neither rule may judge them. It leaves a
-    // link-only flood visible, which is the Banlist's problem and not a
-    // heuristic's: the honest version of that pattern is too common and too
-    // valuable to fold.
+    // No words (attachment, bare link, emoji): nothing to repeat, so neither rule
+    // judges it.
     if (!shape || words.length === 0) continue;
     let bucket = byShape.get(shape);
     if (!bucket) {
@@ -495,9 +333,7 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   }
   const buckets = [...byShape.values()];
 
-  // Campaigns: near-duplicate templates folded together, so rotating the pitch
-  // (or just the fake support agent's name) doesn't split one flood into
-  // fifteen innocent-looking buckets.
+  // Fold near-duplicate templates so a rotating pitch is one campaign.
   const parent = mergeSimilar(buckets);
   const campaigns = new Map<number, number[]>();
   for (let b = 0; b < buckets.length; b++) {
@@ -509,8 +345,6 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   }
 
   for (const members of campaigns.values()) {
-    // Message indices ascend within a bucket, so a merged campaign only needs a
-    // sort when it actually merged something.
     let idx = buckets[members[0]].idx;
     if (members.length > 1) {
       idx = members.flatMap((b) => buckets[b].idx).sort((a, b) => a - b);
@@ -524,16 +358,12 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
       firstSeen,
       flagged,
     );
-    // A campaign is echo-eligible when any of its templates is: the merge only
-    // ever joins templates that were each eligible on their own.
+    // Eligible if any member template is (merging only joins eligible ones).
     if (members.some((b) => echoEligible(buckets[b].wordCount, buckets[b].linked))) {
       markEcho(messages, idx, echoMin, echoWindowMs, flagged);
     }
   }
-  // Trust is rooted at the reader and flows only through inbound attention, so
-  // it is computed once and shared: the drown rule reads it to judge share by
-  // stranger volume, and the immunity pass below reads it to protect the keys
-  // the reader has vouched for from every rule at once.
+  // Trust is computed once: the drown rule reads it and the immunity pass applies it.
   const trusted = computeTrusted(messages, opts.self, opts.staff);
 
   markArrivalBurst(messages, firstSeen, flagged, opts.self);
@@ -542,12 +372,8 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   markGibberish(messages, flagged, opts.self);
   sweepParticipants(messages, flagged, opts.self);
 
-  // Earned-trust immunity, applied LAST so it overrides every rule. A key the
-  // reader has replied to, quoted or mentioned (transitively) is never folded —
-  // which is what defeats the copy-a-regular attack: pasting a trusted author's
-  // sentence lands the copy in a content bucket, but only the SPAMMER's copy
-  // folds, because the regular's own row is cleared here. `self` is in
-  // `trusted`, so this also subsumes the per-rule self-exemption.
+  // Earned-trust immunity, LAST, overriding every rule (defeats copy-a-regular;
+  // `self` is in `trusted`).
   if (trusted.size > 0) {
     for (const ev of messages) if (trusted.has(ev.author)) flagged.delete(ev.rumorId);
   }
@@ -561,36 +387,12 @@ const quarantineCache = new WeakMap<
 >();
 
 /**
- * The flood quarantine for one channel's cached batch, memoized on the batch's
- * IDENTITY.
- *
- * The community-wide derived views (unread badges, mounted on the rail and the
- * page at once) re-derive on inputs that cannot change this answer — read
- * state, mute lists — and each mounted instance re-derives alone. But the
- * shared scan (`useCommunityRumors`) hands out one array per channel and
- * replaces it only when that channel actually ingested a rumor, so the array
- * IS the question's identity: the same batch folds the same way, whoever asks.
- * A read-state change is a cache hit; a delta scan recomputes exactly the
- * channels it replaced.
- *
- * Pure — no store read, so no `firstSeen`: this is the BADGE path, and it sees
- * only what the batch shows (the render path's store-backed map is
- * {@link FloodOptions.firstSeen}). The sort is here because `floodClusters`
- * expects ms order and the batch does not promise it.
- *
- * `staff` is threaded through for the same reason the render path carries it: a
- * moderator's messages must never fold a channel's badge either. It is part of
- * the cache key — a fold before the control roster resolved saw no staff and
- * must recompute once it does — and the caller passes a STABLE reference
- * (memoized on the roster) so a badge recompute is driven by real change, not a
- * fresh closure each render.
- *
- * The raw batch also carries SIDE-EVENTS — reactions, votes, deletes, edits —
- * which render no row and are dropped before judging. A reaction must not
- * date its author as present (reacting to your own spam is free warming, and
- * was used as exactly that) and must not count in a wave's share. The
- * timeline path gets the same behavior structurally: `foldTimeline` consumes
- * side-events into their targets before its fold runs.
+ * Flood quarantine for one channel's cached batch, memoized on the batch's
+ * IDENTITY (the shared scan replaces a channel's array only when it changes), so
+ * read-state changes are cache hits. The BADGE path: pure, no `firstSeen`; sorts
+ * since the batch isn't ms-ordered. `staff` is part of the cache key and must be a
+ * stable reference. Side events are dropped first: a reaction must not date its
+ * author as present or count toward a wave's share.
  */
 const SPEECH_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_POLL, KIND_COMMENT]);
 
@@ -611,27 +413,11 @@ export function quarantinedIn(
 
 /** Keys arriving within this of the previous one chain into a single cohort. */
 export const FLOOD_COHORT_WINDOW_MS = 600_000;
-/**
- * Keys a wave needs before it folds on BREADTH alone, at any pace.
- *
- * A slow, broad cohort is a flood too — fifteen keys trickling through an hour
- * while nobody else speaks — so this path asks nothing about rate.
- */
+/** Keys a wave needs to fold on BREADTH alone, at any pace. */
 export const FLOOD_COHORT_AUTHORS = 8;
 /**
- * …or, for a wave running at {@link FLOOD_COHORT_RATE_PER_MIN}, this many.
- *
- * Breadth alone is far too slow to be the only trigger, and measuring it
- * against the live campaign is what showed why: its share was 1.00 and its
- * pace ~19 messages a minute from the very first message, but its keys were
- * introduced one every forty seconds, so an eight-key bar was not met until
- * eighty messages and four and a half minutes had gone by. The whole flood was
- * unmistakable within thirty seconds and the rule sat silent through it.
- *
- * Pace is what makes it adaptive. Three keys that arrived together, sustaining
- * ten messages a minute, drowning everyone else, in a channel that existed
- * before them — that is not a conversation, and waiting for the eighth key to
- * confirm it only costs the reader the five minutes it takes to arrive.
+ * …or this many at {@link FLOOD_COHORT_RATE_PER_MIN}. Breadth alone was too slow:
+ * a live campaign introducing a key every 40s wasn't caught for 4.5 minutes.
  */
 export const FLOOD_COHORT_RATE_AUTHORS = 3;
 /** The pace that lets {@link FLOOD_COHORT_RATE_AUTHORS} stand in for breadth. */
@@ -639,88 +425,35 @@ export const FLOOD_COHORT_RATE_PER_MIN = 10;
 /** Messages one wave of a cohort must carry before it reads as a flood. */
 export const FLOOD_COHORT_MESSAGES = 24;
 /**
- * Messages a cohort member must itself have carried in the wave before its own
- * rows fold. The drowning is collective; the fold is individual.
- *
- * This is where the honest newcomer lives. Someone who follows an invite into a
- * channel that happens to be under attack arrives inside the cohort's window
- * and cannot be told apart from it by arrival alone — but they say one thing,
- * or two, and a key that said two things has not flooded anything. Without this
- * the rule folds exactly the person it most needs to keep, on their first
- * message, which is the worst row in the timeline to get wrong.
- *
- * It leaves a gap: a cohort where every key posts once or twice is not folded
- * here. That gap is {@link markArrivalBurst}'s shape and is deliberately its
- * job — many keys, one message apiece, gone again — and the division is what
- * lets each rule keep a bar the other would have to lower.
+ * Messages a cohort member must itself carry in the wave before its rows fold
+ * (drowning is collective, the fold individual), sparing honest newcomers who
+ * arrive mid-attack. Keys posting once each are {@link markArrivalBurst}'s job.
  */
 export const FLOOD_COHORT_MIN_PER_AUTHOR = 3;
 /**
- * Share of the channel a cohort's wave must occupy before it folds.
- *
- * THE discriminator between a flood and an influx, and the reason this rule can
- * be content-free. When an invite is posted somewhere busy the regulars are
- * still talking — the newcomers are a fraction of the room. When a sybil set
- * arrives the room is drowned: the live campaign this rule is measured against
- * ran 368 of the channel's 370 messages.
+ * Share of the channel a cohort's wave must occupy to fold — THE discriminator
+ * between a flood and an influx (regulars keep talking during an influx).
  */
 export const FLOOD_COHORT_SHARE = 0.75;
 /** Silence that ends a cohort's wave — the "until it stops" of the rule. */
 export const FLOOD_COHORT_TAIL_MS = 3_600_000;
 /**
- * How long before a cohort's arrival someone OUTSIDE it must have spoken — the
- * precedent that makes the cohort judgeable at all.
- *
- * The boundary {@link markArrivalBurst} guards with `lo === 0`, restated per
- * cohort: with no one here first, a crowd of first-time keys is a launch, not
- * an invasion, and the rule stays silent. It is a RELATIVE test against each
- * cohort on purpose. An earlier draft anchored it to the earliest message the
- * scan could see and exempted everyone near that "origin" as a founder — and
- * a flood hitting a channel that had been quiet for a day WAS the origin, so
- * its first ten minutes of keys inherited founder immunity and the fold sat
- * dead until enough history was scrolled in to push them out. Precedent has no
- * anchor to corrupt: the founder who said anything ten minutes before the
- * crowd arrived is precedent enough, at any window depth, live.
+ * How long before a cohort's arrival someone OUTSIDE it must have spoken, else
+ * it's a launch, not an invasion. Relative per cohort on purpose: anchoring to the
+ * batch's earliest message gave a flood hitting a quiet channel founder immunity.
  */
 export const FLOOD_COHORT_PRECEDENT_MS = 600_000;
 
 /**
- * Rule 4: a crowd of keys that arrived together and then drowned the channel.
+ * Rule 4: a crowd of keys that arrived together and then drowned the channel —
+ * for per-message generated content where no template repeats. Reads no content;
+ * asks how much of the channel comes from keys that hadn't earned a place.
  *
- * The rule for a flood whose CONTENT is machine-generated per message. A
- * slot-filling grammar (`hey gang! my {relation} would not stop talking about
- * {topic}`) emits no two identical messages — the live campaign this is
- * measured against produced 370 distinct shapes from 370 messages, so every
- * bucket in this file was a singleton, no template ever repeated, and rules 1
- * and 2 could not fire at all. Improving the text costs the attacker one more
- * phrase list; there is no version of content matching that stays ahead of that
- * for long.
- *
- * So this rule reads none of it. It asks how much of the channel is coming from
- * keys that had not earned a place in it, which is a question the generator
- * cannot answer differently by writing better sentences. Evading it costs
- * either patience (warm the keys first — see the note on an adaptive attacker
- * below) or silence, and silence is the outcome we want.
- *
- * Three things keep it off an honest influx:
- *
- * - The cohort must be a CROWD ({@link FLOOD_COHORT_AUTHORS}) that arrived
- *   together, chained arrival-to-arrival so a conveyor that introduces a key
- *   every 40 seconds for half an hour is one cohort rather than thirty
- *   unremarkable singletons.
- * - Its wave must DROWN the channel ({@link FLOOD_COHORT_SHARE}) — the
- *   discriminator described there.
- * - Someone outside it must have spoken before it arrived
- *   ({@link FLOOD_COHORT_PRECEDENT_MS}), or this is a launch.
- *
- * Unlike {@link markArrivalBurst} this does NOT require a key's whole presence
- * to sit inside the arrival window. That test is satisfied exactly once per
- * key, which is what let the observed campaign through: its keys each talked
- * for five to seven minutes, so by the time they were flooding they were no
- * longer new. Cohort membership is fixed at ARRIVAL and the wave is bounded by
- * the cohort going quiet ({@link FLOOD_COHORT_TAIL_MS}) instead — so a key that
- * comes back tomorrow to say something ordinary is outside the wave and renders
- * normally. Nothing here brands a key permanently, and nothing here is a drop.
+ * Kept off honest influxes by: a CROWD ({@link FLOOD_COHORT_AUTHORS}) chained
+ * arrival-to-arrival; a wave that DROWNS the channel ({@link FLOOD_COHORT_SHARE});
+ * and precedent ({@link FLOOD_COHORT_PRECEDENT_MS}). Membership is fixed at
+ * ARRIVAL and waves end at {@link FLOOD_COHORT_TAIL_MS} silence, so a key returning
+ * tomorrow renders normally.
  */
 function markCohortFlood(
   messages: readonly OpenedChat[],
@@ -728,22 +461,17 @@ function markCohortFlood(
   flagged: Set<string>,
   self: string | undefined,
 ): void {
-  // Only authors with rows in THIS batch can join a cohort (an author the
-  // store remembers but the window doesn't hold has nothing to fold), but
-  // their arrival time is the merged map's — a regular caught inside a flood
-  // window arrives at their real, old first-seen and chains into no cohort.
+  // Only batch authors can join a cohort, but arrival comes from the merged map, so
+  // a regular inside a flood window chains into none.
   const inBatch = new Set<string>();
   for (const ev of messages) inBatch.add(ev.author);
   const arrivals = [...firstSeen]
     .filter(([author]) => author !== self && inBatch.has(author))
     .sort((a, b) => a[1] - b[1]);
-  // The lower of the two bars — whether a wave clears the breadth path or the
-  // pace one is decided per wave, in markCohortWaves.
+  // The lower bar; breadth vs pace is decided per wave in markCohortWaves.
   if (arrivals.length < FLOOD_COHORT_RATE_AUTHORS) return;
 
-  // Every arrival, batch-held or store-remembered: the precedent scan below
-  // needs the authors the window pushed out, which is exactly the reading a
-  // flood corrupts when precedent is judged from the batch alone.
+  // Precedent must include store-remembered authors the window pushed out.
   const allArrivals = [...firstSeen.values()].sort((a, b) => a - b);
 
   for (let start = 0; start < arrivals.length; ) {
@@ -756,8 +484,7 @@ function markCohortFlood(
     }
     if (end - start + 1 >= FLOOD_COHORT_RATE_AUTHORS) {
       const cohort = new Set(arrivals.slice(start, end + 1).map(([a]) => a));
-      // Precedent: anyone at all — the reader included — arrived early enough
-      // before this cohort to prove the channel existed without it.
+      // Anyone (reader included) arriving early enough proves the channel predates the cohort.
       const bar = arrivals[start][1] - FLOOD_COHORT_PRECEDENT_MS;
       if (allArrivals[0] <= bar) {
         markCohortWaves(messages, cohort, flagged);
@@ -780,9 +507,8 @@ function lowerBound(messages: readonly OpenedChat[], ms: number): number {
 }
 
 /**
- * Fold each of a cohort's waves that both carries enough messages and drowns
- * the channel while it runs. A wave ends where the cohort falls silent for
- * {@link FLOOD_COHORT_TAIL_MS}.
+ * Fold each cohort wave that carries enough messages and drowns the channel; a
+ * wave ends at {@link FLOOD_COHORT_TAIL_MS} of cohort silence.
  */
 function markCohortWaves(
   messages: readonly OpenedChat[],
@@ -800,19 +526,15 @@ function markCohortWaves(
     waveStart = k;
     if (wave.length < FLOOD_COHORT_MESSAGES) continue;
 
-    // Everything the channel carried while the wave ran, the cohort included.
     const from = messages[wave[0]].ms;
     const to = messages[wave[wave.length - 1]].ms;
     const total = lowerBound(messages, to + 1) - lowerBound(messages, from);
     if (wave.length < total * FLOOD_COHORT_SHARE) continue;
 
-    // The wave is the evidence; each key's own volume is what folds it.
     const carried = new Map<string, number>();
     for (const i of wave) carried.set(messages[i].author, (carried.get(messages[i].author) ?? 0) + 1);
 
-    // Breadth OR pace (see FLOOD_COHORT_RATE_AUTHORS). A wave spanning no time
-    // at all is every message sharing one timestamp — treated as infinitely
-    // fast rather than dividing by zero, which is the right reading of it.
+    // Breadth OR pace; a zero-span wave counts as infinitely fast.
     const minutes = (to - from) / 60_000;
     const perMinute = minutes > 0 ? wave.length / minutes : Number.POSITIVE_INFINITY;
     const broad = carried.size >= FLOOD_COHORT_AUTHORS;
@@ -827,39 +549,14 @@ function markCohortWaves(
 }
 
 /**
- * Which authors this reader has EARNED reason to trust — computed locally, per
- * reader, from the batch. There are two kinds of root. The reading user is one
- * (nothing a stranger sends can fake being replied to by YOU). Community STAFF
- * are the other: the owner and permission-holders the community itself vouches
- * for, whose authority to moderate outranks anything this heuristic could
- * infer. Trust then flows outward from every root through inbound attention:
- * an edge `src → dst` when `src` replied to / quoted / mentioned `dst`. It is
- * the one signal a flood cannot manufacture, because it is not about what a key
- * did — volume, tenure, reacting to its own sybils are all free — but about
- * what an independently-trusted party chose to direct AT it.
+ * Authors this reader has EARNED reason to trust, from the batch. Roots: the
+ * reader and community STAFF. Trust flows from the reader through inbound
+ * attention (reply/quote/mention edges src → dst) — the one signal a flood can't
+ * manufacture. Directed, so a spammer mentioning a regular grants nothing.
  *
- * The graph is directed and rooted, so a spammer naming a regular (or the
- * reader) in a `p` tag makes an edge FROM the spammer, whose source is
- * untrusted, and grants nothing; the closure only ever widens through a party
- * already inside it.
- *
- * Staff differ from the reader in one deliberate way: they are seeded as
- * trusted (never folded) but are NOT propagation roots — their outbound
- * attention does not spread trust. The reader replying to someone is a clean
- * vouch, but a moderator's reply is not: moderating a flood MEANS replying to
- * it, quoting it to call it out, `p`-mentioning the spammer — so an outbound
- * staff edge would whitelist the flooder (and, transitively, every sybil it
- * had linked) the instant a mod pushed back. Immunity for a moderator's own
- * messages is the whole of the guarantee; vouching outward from it is the hole.
- * Only `self` spreads.
- *
- * Reactions would be an even stronger signal (the reader hearting a message),
- * but they are side-events consumed into tallies before the fold runs and are
- * not in `messages` — replies/quotes/mentions are what a speech row carries.
- *
- * With no `self` AND no staff (a bare lib fold) the set is empty: everyone is a
- * stranger, and the drown rule falls back to pace + share + precedent, which is
- * the intended trustless-room behavior.
+ * Staff are trusted but NOT propagation roots: moderating means replying to and
+ * mentioning spammers, which must not whitelist them. With neither self nor staff
+ * the set is empty (trustless-room behavior).
  */
 function computeTrusted(
   messages: readonly OpenedChat[],
@@ -872,18 +569,12 @@ function computeTrusted(
     trusted.add(self);
     roots.push(self); // the reader is the one root that spreads trust outward
   }
-  // Staff are seeded as trusted regardless of `self`, so a moderator is immune
-  // on the badge path too — but NOT as a root: a mod replying to a spammer to
-  // moderate them must not whitelist the flood. Only authors present in the
-  // batch need seeding (an absent one folds nothing), which also keeps the
-  // predicate call count to the roster members actually speaking.
+  // Seed speaking staff as trusted (not roots).
   if (staff) for (const ev of messages) if (staff(ev.author)) trusted.add(ev.author);
-  // No root spreads (a badge-path/staff-only fold) ⇒ the seeds ARE the whole
-  // set; skip building the attention graph.
+  // No spreading root: the seeds are the whole set.
   if (roots.length === 0) return trusted;
 
-  // author → the pubkeys they directed attention at (reply/quote target's
-  // author, or a `p`-mention). Rumor refs are resolved through the batch.
+  // author → pubkeys they directed attention at (resolved through the batch).
   const authorOf = new Map<string, string>();
   for (const ev of messages) authorOf.set(ev.rumorId, ev.author);
   const attends = new Map<string, Set<string>>();
@@ -905,7 +596,6 @@ function computeTrusted(
     }
   }
 
-  // Reachability from every root over the attention edges.
   const queue = [...roots];
   while (queue.length) {
     const src = queue.pop()!;
@@ -917,51 +607,17 @@ function computeTrusted(
 }
 
 /**
- * Rule 6: the UNTRUSTED speakers who together drown the channel.
+ * Rule 6: UNTRUSTED speakers who together drown the channel — the case every
+ * shape rule loses (a few aged keys posting fluent, distinct spam, faking chatter
+ * among themselves). Asks only how much of the channel comes from keys with no
+ * earned trust ({@link computeTrusted}); cliques can't vouch for themselves.
  *
- * The blind spot the shape rules share, and the arms race they lose: density
- * needs a repeated template (a per-message generator repeats none); echo,
- * arrival-burst and the cohort rule need a CROWD that ARRIVED together
- * (established keys don't); gibberish needs low-originality words (a fluent
- * pitch isn't). Two-or-three aged keys taking turns posting distinct, fluent
- * spam hit none of them — observed live as 3 keys at ~96% of the channel, and
- * the natural next move (fake a conversation between themselves, paste a
- * regular's line to drag them into a content bucket) defeats any rule that
- * reads the flood's SHAPE.
- *
- * So this rule reads none of the shape. It asks how much of the channel is
- * coming from keys the reader has earned no reason to trust ({@link
- * computeTrusted}), which is the one question better sentences and staged
- * chatter cannot answer differently. The flood's accomplices vouching for each
- * other builds no trust — the closure is rooted at the reader — so a clique
- * stays untrusted however much it interacts, and the copy-a-regular attack only
- * folds the spammer's own copy, because a trusted author's rows are exempt
- * (applied in {@link floodClusters}).
- *
- * The cohort rule's discriminators, restated over the untrusted subset, are
- * what keep this off an honest room:
- *
- * - **Drown.** The untrusted wave must be {@link FLOOD_COHORT_SHARE} of
- *   everything the channel carried while it ran. A real conversation with some
- *   spam in it keeps trusted voices talking, so the untrusted share stays low
- *   and nothing folds; only when strangers drown the room does it fire.
- * - **Pace.** Sustained at {@link FLOOD_COHORT_RATE_PER_MIN}, faster than
- *   people at keyboards hold across two dozen messages.
- * - **Precedent.** Someone OUTSIDE the wave spoke {@link
- *   FLOOD_COHORT_PRECEDENT_MS} before it, OR the room itself provably predates
- *   the wave by that margin ({@link FloodOptions.establishedSinceMs}) — else a
- *   room of nothing but strangers is a launch, not an invasion. The room-age
- *   source is what catches a TOTAL nuke, whose every early speaker is a drowner
- *   so the speaker source is empty (see that option for how the app sources it
- *   and the limits of the chat-plane fallback).
- *
- * A wave is bounded by the untrusted group's own silence
- * ({@link FLOOD_COHORT_TAIL_MS}); a key that returns tomorrow to say one
- * ordinary thing is outside it. Each key folds only once it has itself carried
- * {@link FLOOD_COHORT_MIN_PER_AUTHOR} of the wave, so a stranger who says two
- * things while a flood happens around them is left alone. Still a DISPLAY fold,
- * never a drop; one trusted reply, quote or mention clears a key that earned
- * it, on the next fold.
+ * Same discriminators as the cohort rule, over the untrusted subset: **drown**
+ * ({@link FLOOD_COHORT_SHARE}), **pace** ({@link FLOOD_COHORT_RATE_PER_MIN}), and
+ * **precedent** (an outside speaker {@link FLOOD_COHORT_PRECEDENT_MS} earlier, or
+ * {@link FloodOptions.establishedSinceMs} for a TOTAL nuke). Waves end at
+ * {@link FLOOD_COHORT_TAIL_MS}; each key must carry
+ * {@link FLOOD_COHORT_MIN_PER_AUTHOR}. One trusted reply clears a key.
  */
 function markUntrustedDrown(
   messages: readonly OpenedChat[],
@@ -971,7 +627,6 @@ function markUntrustedDrown(
   self: string | undefined,
   establishedSinceMs: number | undefined,
 ): void {
-  // The untrusted wave's messages, in ms order (already sorted in `messages`).
   const idx: number[] = [];
   for (let i = 0; i < messages.length; i++) {
     const a = messages[i].author;
@@ -990,43 +645,26 @@ function markUntrustedDrown(
     const from = messages[wave[0]].ms;
     const to = messages[wave[wave.length - 1]].ms;
 
-    // Drown: the untrusted wave is most of what the channel carried while it
-    // ran. If trusted voices are still getting a word in, this fails and the
-    // room is judged a conversation, not a flood.
+    // Drown: if trusted voices still get a word in, it's a conversation.
     const total = lowerBound(messages, to + 1) - lowerBound(messages, from);
     if (wave.length < total * FLOOD_COHORT_SHARE) continue;
 
-    // Pace: sustained faster than a person plausibly holds. A wave spanning no
-    // time at all is one timestamp's worth — treated as infinitely fast rather
-    // than dividing by zero.
+    // Pace; a zero-span wave counts as infinitely fast.
     const minutes = (to - from) / 60_000;
     const perMinute = minutes > 0 ? wave.length / minutes : Number.POSITIVE_INFINITY;
     if (perMinute < FLOOD_COHORT_RATE_PER_MIN) continue;
 
-    // The GROUP is the keys actually carrying the wave — each past
-    // {@link FLOOD_COHORT_MIN_PER_AUTHOR}. A stranger swept into the window who
-    // said one or two things is neither folded nor counted as a drowner.
+    // The group is keys past FLOOD_COHORT_MIN_PER_AUTHOR; bystanders aren't counted.
     const carried = new Map<string, number>();
     for (const i of wave) carried.set(messages[i].author, (carried.get(messages[i].author) ?? 0) + 1);
     const group = new Set<string>();
     for (const [a, n] of carried) if (n >= FLOOD_COHORT_MIN_PER_AUTHOR) group.add(a);
     if (group.size === 0) continue;
 
-    // Precedent: proof the channel existed before this wave, so folding it is
-    // catching an invasion rather than an honest launch. EITHER source suffices:
-    //
-    //  - A SPEAKER outside the drowning group was heard a clear margin before
-    //    the wave. Read from `firstSeen` (the store's 7-day map, not this
-    //    window), so the quiet before a flood is visible even when the flood has
-    //    filled the render batch. Light and early speakers count; only the heavy
-    //    hitters are excluded from being their own precedent, which is what lets
-    //    a room of otherwise-untrusted regulars still supply it.
-    //
-    //  - The ROOM itself predates the wave (`establishedSinceMs`; see its doc
-    //    for the source and its limits). This is the only precedent a TOTAL
-    //    nuke leaves: when every early speaker is itself a drowner the speaker
-    //    source is empty, and a channel that already had history drowned
-    //    end-to-end would otherwise read as a launch and never fold.
+    // Precedent, either source: a non-drowner speaker a clear margin before the wave
+    // (from the store's `firstSeen`, so the pre-flood quiet is visible), or the room
+    // itself predating the wave (`establishedSinceMs`, the only precedent a TOTAL
+    // nuke leaves).
     const cutoff = from - FLOOD_COHORT_PRECEDENT_MS;
     let othersEarliest = Number.POSITIVE_INFINITY;
     for (const [a, ms] of firstSeen) if (!group.has(a) && ms < othersEarliest) othersEarliest = ms;
@@ -1046,23 +684,10 @@ export const FLOOD_BURST_AUTHORS = 6;
 export const FLOOD_BURST_WINDOW_MS = 120_000;
 
 /**
- * Rule 3: a crowd of keys that have never spoken before, arriving at once.
- *
- * The shape content clustering cannot see, and the cheapest one to mint: ONE
- * message per key, each a different pitch. No template repeats, so no bucket
- * is ever dense and no pitch is ever echoed — the live channel went to
- * twenty-two keys with one message each, and the content rules folded eight of
- * twenty-five. What is left to notice is the arrival itself.
- *
- * Two things keep this off honest readers. It only ever folds the FIRST-TIMERS
- * in the window, so a regular talking through the wave keeps their row; and it
- * needs history to exist before the window at all, because at the head of a
- * loaded batch nobody has spoken yet and everyone reads as new — that boundary
- * would otherwise fold the oldest screenful of every channel.
- *
- * A genuine influx — an invite posted somewhere busy — folds too. That is the
- * accepted cost of the whole file: it is one click, and the alternative is a
- * rule that guesses at intent.
+ * Rule 3: many never-before-seen keys arriving at once, one message each (no
+ * template repeats). Folds only FIRST-TIMERS, and only with history before the
+ * window (the batch head reads as all-new). A genuine influx folds too — an
+ * accepted one-click cost.
  */
 function markArrivalBurst(
   messages: readonly OpenedChat[],
@@ -1073,9 +698,8 @@ function markArrivalBurst(
   const lastSeen = new Map<string, number>();
   for (const ev of messages) lastSeen.set(ev.author, ev.ms);
 
-  // A key's first message, by index. `firstIdx[i] === i` marks the message that
-  // introduced its author — so counting those inside the window counts the
-  // keys that arrived during it, incrementally, without a per-position Set.
+  // Mark each author's introducing message, so arrivals in a window are counted
+  // incrementally.
   const introduces = new Uint8Array(messages.length);
   const seen = new Set<string>();
   for (let i = 0; i < messages.length; i++) {
@@ -1089,24 +713,16 @@ function markArrivalBurst(
   for (let hi = 0; hi < messages.length; hi++) {
     arrivals += introduces[hi];
     while (messages[hi].ms - messages[lo].ms > FLOOD_BURST_WINDOW_MS) arrivals -= introduces[lo++];
-    // Nothing before the window means no established voice to be new relative
-    // to — the head of the batch, where this rule has nothing to say.
+    // Nothing before the window: the batch head, nothing to judge.
     if (lo === 0) continue;
-    // Cheap necessary condition, false for essentially every window of an
-    // ordinary channel, which is what keeps this pass linear.
+    // Cheap necessary condition that keeps this pass linear.
     if (arrivals < FLOOD_BURST_AUTHORS) continue;
 
     const from = messages[lo].ms;
     const to = messages[hi].ms;
     /**
-     * A key whose ENTIRE presence in this timeline is inside the window: it
-     * arrived, spoke, and was never heard from again.
-     *
-     * "New" alone is not enough, and the 20 000-message fixture is why — at
-     * the head of any loaded batch every author is speaking for the first
-     * time, and a rule that only asked about arrival folded the first minutes
-     * of an ordinary channel. Someone who arrives and stays is a member; the
-     * shape being folded here is the burner key.
+     * A key whose ENTIRE presence is inside the window (arrived, spoke, vanished) — the
+     * burner shape. "New" alone would fold the start of every batch.
      */
     const burner = (a: string) => a !== self && (firstSeen.get(a) ?? 0) >= from && (lastSeen.get(a) ?? 0) <= to;
 
@@ -1121,27 +737,17 @@ function markArrivalBurst(
 /** Distinct letters at or under which a message reads as low-originality. */
 export const FLOOD_GIBBERISH_MAX_LETTERS = 2;
 /**
- * Low-originality messages ONE key may post inside the window before the run
- * folds — the allowance ends on this one.
- *
- * Chosen against the honest twins rather than the attack: elongation, a laugh,
- * a `hmm`, a `gg` after a match are all low-originality and all fine in the
- * amounts a person actually produces. A dozen inside an hour from one key is a
- * habit the channel is being made to scroll past.
+ * Low-originality messages one key may post in the window before the run folds;
+ * sized against honest laughs and `gg`s.
  */
 export const FLOOD_GIBBERISH_MIN = 12;
 /** Long, like the echo window: mash is a drizzle, not a burst. */
 export const FLOOD_GIBBERISH_WINDOW_MS = 3_600_000;
 
 /**
- * Does this shape draw on too few letters to be saying anything?
- *
- * Letter originality is the property keyboard mash cannot vary: a generator
- * can rephrase a pitch forever, but `g`, `ggg`, `aaa`, `nn` are low-diversity
- * by being what they are. One distinct letter is mash at any length. Two
- * distinct letters is mash from three letters up (`lol`, `haha`, `hmm`,
- * `kkkk`, `jajaja`) — but at exactly two letters it is the language itself
- * (`no`, `ok`, `gm`, `hi`, `ty`) and is never counted.
+ * Does this shape draw on too few letters to be saying anything? One distinct
+ * letter is mash at any length; two is mash from three letters up (`lol`,
+ * `kkkk`), but exactly two letters (`ok`, `gm`) is language and never counts.
  */
 export function isGibberish(shape: string): boolean {
   const letters = shape.match(/\p{L}/gu);
@@ -1152,44 +758,22 @@ export function isGibberish(shape: string): boolean {
 }
 
 /**
- * Rule 5: one key spending its messages on noise rather than language.
+ * Rule 5: one key spending its messages on noise — the lone-key wall the other
+ * rules can't see. Noise is either LETTERS ({@link isGibberish}) or VOCABULARY: a
+ * single word no other author in the batch uses (random strings are foreign to
+ * the room; real one-word messages are shared vocabulary). Vocabulary is judged
+ * only when another author is present.
  *
- * The lone-key wall the other four rules are structurally blind to: each
- * message its own singleton bucket (no density), one word (never
- * echo-eligible), one key (never a burst or a cohort). Two ways a message
- * reads as noise, and both spend the same allowance:
- *
- * - LETTERS ({@link isGibberish}): it draws on almost no alphabet — `g`,
- *   `ggg`, `aaa`, `nn`.
- * - VOCABULARY: it is a single word NO OTHER author in the batch uses —
- *   `fhuhacx`, `sfoe`, `chrl`. The adaptation that followed the letter rule
- *   was mash with more letters in it, and this is the property it cannot
- *   shed: a random string is foreign to the room by construction, while the
- *   room's real one-word messages (`ok`, `gm`, `lol`, `same`) are its SHARED
- *   vocabulary. Joining that vocabulary means repeating what the room says,
- *   which is the shape the density and echo rules already own. Judged only
- *   when the batch holds a second author at all — with no one else speaking,
- *   "words nobody shares" would describe every word.
- *
- * The policy is an allowance, and it is deliberate: a little low-originality
- * is a person being a person, and {@link FLOOD_GIBBERISH_MIN} of it inside
- * {@link FLOOD_GIBBERISH_WINDOW_MS} from one key is spamming, whatever the
- * intent behind it. That knowingly folds a heavy laugher — `kkkk`, `jajaja`,
- * `hhhh` are exactly low-originality — and, through {@link sweepParticipants},
- * the ordinary messages the wall interleaves. Accepted casualties: the fold is
- * one click to expand, and the row it collapses was a wall either way.
- *
- * Per key on purpose. Cross-key mash is the chorus (`gm`, `🎉`) this file has
- * repeatedly declined to fold, and the crowd-shaped rules already own the
- * crowd-shaped attacks.
+ * An allowance: {@link FLOOD_GIBBERISH_MIN} within {@link FLOOD_GIBBERISH_WINDOW_MS}
+ * from one key folds (knowingly including heavy laughers). Per key on purpose:
+ * cross-key choruses aren't folded.
  */
 function markGibberish(
   messages: readonly OpenedChat[],
   flagged: Set<string>,
   self: string | undefined,
 ): void {
-  // Each token's sole author, or null once a second author uses it. Built
-  // over every row, the reader's included: their words are room vocabulary.
+  // Each token's sole author (null once shared); the reader's words count as room vocabulary.
   const soleUser = new Map<string, string | null>();
   const authors = new Set<string>();
   for (const ev of messages) {
@@ -1228,31 +812,13 @@ function markGibberish(
 }
 
 /**
- * A key that carried this much of a flood is folded for the whole wave — every
- * message of theirs between their first and last flood message, whatever it
- * says.
- *
- * This is the one author-shaped rule in the file, and it is what makes the
- * fold usable rather than merely correct. A campaign's every-15th message is
- * an off-template one-off (a bare link, an `[ALERT]` nobody else reposted),
- * and each one splits the wall into another row: 138 live messages folded by
- * content alone still rendered as a dozen separate notices with slivers of
- * spam between them, which is the shape a reader experiences as "the client
- * did nothing". Once a key has spent this many messages on a campaign, its
- * off-template ones are the same wave.
- *
- * It is still a DISPLAY fold, and the wave's edges are its own messages: the
- * key is not muted, nothing before or after the wave is touched, and one click
- * shows all of it. An author-identity DROP remains the Banlist's alone.
+ * A key that carried this much of a flood is folded for its whole wave (first to
+ * last flood message), so off-template one-offs don't split the wall into many
+ * rows. Still a DISPLAY fold; nothing outside the wave is touched.
  */
 export const FLOOD_AUTHOR_MESSAGES = 4;
 
-/**
- * Fold the rest of what a flood's participants said during their own wave.
- *
- * The wave is bounded by each key's own first and last flagged message, so a
- * spammer who returns tomorrow to say something ordinary is outside it.
- */
+/** Fold the rest of what participants said within their own wave (bounded by their first/last flagged message). */
 function sweepParticipants(
   messages: readonly OpenedChat[],
   flagged: Set<string>,
@@ -1292,8 +858,7 @@ function markDensity(
 ): void {
   if (idx.length < minMessages) return;
   let lo = 0;
-  // Every id below this index is already flagged; marking is O(n) per campaign
-  // rather than O(n²) across overlapping windows.
+  // Everything below this index is already flagged, keeping marking O(n).
   let marked = 0;
   for (let hi = 0; hi < idx.length; hi++) {
     while (messages[idx[hi]].ms - messages[idx[lo]].ms > windowMs) lo++;
@@ -1315,14 +880,9 @@ function markDensity(
 }
 
 /**
- * Rule 2: the same substantial template from two or more different authors,
- * {@link FLOOD_ECHO_MIN} times inside a long window.
- *
- * No density and no newness — this is the rule that survives a campaign that
- * paces itself, rotates its pitch, and warms its keys up first. What it costs
- * is that a genuinely shared long phrase (a pinned announcement everyone
- * re-posts) folds; what it buys is that copying the same sentence from a
- * second key stops being free.
+ * Rule 2: the same substantial template from ≥2 authors {@link FLOOD_ECHO_MIN}
+ * times in a long window — survives paced, rotating, warmed-up campaigns. Cost: a
+ * widely reposted long phrase folds.
  */
 function markEcho(
   messages: readonly OpenedChat[],

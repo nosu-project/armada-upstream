@@ -17,12 +17,7 @@ function useAppRelayHints(): string[] {
   );
 }
 
-/**
- * An addressable event's naddr (hinted with the app relays, which is where
- * Discover finds it) and a copy action for its shareable URL. `copied` flips
- * for a moment after a successful copy — the button's check mark is the
- * confirmation, so only a failure toasts.
- */
+/** `copied` flips briefly after a copy; only failures toast. */
 export function useNaddrLink(event: NostrRumor) {
   const relays = useAppRelayHints();
   const naddr = useMemo(() => eventNaddr(event, relays), [event, relays]);
@@ -45,13 +40,7 @@ export function useNaddrLink(event: NostrRumor) {
   return { naddr, copied, copy };
 }
 
-/**
- * {@link useNaddrLink}'s link for an event that isn't on screen yet — one just
- * published, whose success toast offers it. Returns a copy action for the
- * event's shareable URL (same relay hints as the cards), or undefined for an
- * event that has no naddr. There is no button left to carry a check mark once
- * the toast's action dismisses it, so success toasts too.
- */
+/** For an event not on screen yet (just published); success toasts too since there's no button. */
 export function useCopyNaddrLink() {
   const relays = useAppRelayHints();
   return useCallback(

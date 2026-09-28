@@ -6,8 +6,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
-import { seedAuthorCache } from "@/hooks/useAuthor";
-import { metadataSchema } from "@/lib/authorCache";
+import { metadataSchema, seedAuthorCache } from "@/lib/authorCache";
 
 import type { NostrMetadata } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -18,13 +17,7 @@ export interface SearchProfile {
   event: NostrRumor;
 }
 
-/**
- * Token-based match: every whitespace-separated word in the query must appear
- * somewhere in the profile's combined searchable text (name + display_name +
- * nip05). This is far more forgiving than a single contiguous-substring check —
- * it matches regardless of word order, across fields (query "sillie bear" hits
- * name="sillie", display_name="bear"), and tolerates extra/trailing spaces.
- */
+/** Every query word must appear somewhere in name + display_name + nip05 (any order, any field). */
 export function profileMatches(p: SearchProfile, query: string): boolean {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return false;
@@ -39,11 +32,7 @@ export function profileMatches(p: SearchProfile, query: string): boolean {
   return tokens.every((t) => haystack.includes(t));
 }
 
-/**
- * Search cached author profiles in the TanStack Query cache.
- * Scans all ['author', pubkey] entries for name/display_name/nip05 matches.
- * Followed pubkeys sort first, then alphabetically.
- */
+/** Scan cached ['author', pubkey] entries; follows first, then alphabetical. */
 function searchCachedProfiles(
   queryClient: ReturnType<typeof useQueryClient>,
   query: string,
@@ -76,21 +65,14 @@ function searchCachedProfiles(
 }
 
 /**
- * Prefetch the kind-0 profiles of everyone the current user follows, so the
- * follow-prioritized search can match against them directly — even people the
- * NIP-50 search relays don't index or return, and even before they've been
- * rendered anywhere else this session. Reads from the local event store first
- * (instant), then fills gaps from relays in one batched query, and writes each
- * profile into the shared `['author', pubkey]` cache so the rest of the app
- * benefits too. Keyed only on the follow-set identity so it doesn't refetch per
- * keystroke.
+ * Prefetch followed users' kind-0s (store first, then one batched relay query) so follow
+ * matches work even when NIP-50 relays don't return them. Keyed on the follow set only.
  */
 function useFollowProfiles(followedPubkeys: string[]) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
 
-  // Stable key: sorted set of follows. Changes only when the follow list does.
   const key = useMemo(() => [...followedPubkeys].sort().join(","), [followedPubkeys]);
 
   return useQuery<SearchProfile[]>({
@@ -99,7 +81,6 @@ function useFollowProfiles(followedPubkeys: string[]) {
       if (followedPubkeys.length === 0) return [];
       const store = await eventStore;
 
-      // 1) Instant: whatever the local store already has.
       const cached = await store.query([{ kinds: [0], authors: followedPubkeys }]);
       const byPubkey = new Map<string, NostrRumor>();
       for (const ev of cached) {
@@ -107,7 +88,6 @@ function useFollowProfiles(followedPubkeys: string[]) {
         if (!prev || ev.created_at > prev.created_at) byPubkey.set(ev.pubkey, ev);
       }
 
-      // 2) Fill gaps from relays in one batched query (best-effort).
       const missing = followedPubkeys.filter((pk) => !byPubkey.has(pk));
       if (missing.length > 0) {
         try {
@@ -127,14 +107,12 @@ function useFollowProfiles(followedPubkeys: string[]) {
         }
       }
 
-      // Parse + seed the shared author cache so avatars/names resolve elsewhere.
       const profiles: SearchProfile[] = [];
       for (const [pubkey, event] of byPubkey) {
         try {
           const metadata = metadataSchema.parse(event.content);
           profiles.push({ pubkey, metadata, event });
-          // Seed the shared author cache newest-wins, never downgrading a
-          // fresher profile another path already resolved.
+          // Newest-wins, never downgrading a fresher profile.
           seedAuthorCache(queryClient, pubkey, event);
         } catch {
           // Skip unparseable metadata.
@@ -148,15 +126,8 @@ function useFollowProfiles(followedPubkeys: string[]) {
 }
 
 /**
- * Search for profiles by name/nip05 (NIP-50). Used by the @-mention
- * autocomplete and the direct-invite picker.
- *
- * People the current user follows are surfaced aggressively: their profiles are
- * prefetched (see {@link useFollowProfiles}) and matched LOCALLY, then MERGED
- * ahead of the NIP-50 relay results (deduped). This is the key difference from a
- * plain relay search — a followed contact appears for a name query even when the
- * search relays don't index or return them. `followedPubkeys` is returned so
- * callers can badge follows.
+ * NIP-50 profile search for @-mention autocomplete and the invite picker. Follows are matched
+ * LOCALLY and merged ahead of relay results, so they appear even when relays don't index them.
  */
 export function useSearchProfiles(query: string) {
   const { nostr } = useNostr();
@@ -169,7 +140,6 @@ export function useSearchProfiles(query: string) {
   );
   const { data: followProfiles } = useFollowProfiles(followData?.pubkeys ?? []);
 
-  // Debounce the query so we don't hammer the relay on every keystroke
   const debouncedQuery = useDebounce(query, 300);
 
   const relayResults = useQuery<SearchProfile[]>({
@@ -177,7 +147,7 @@ export function useSearchProfiles(query: string) {
     queryFn: async ({ signal }) => {
       if (!debouncedQuery.trim()) return [];
 
-      // NIP-50 profile search. Relays that don't support search ignore it.
+      // Relays without NIP-50 ignore `search`.
       const events = await nostr.query(
         [{ kinds: [0], search: `${debouncedQuery.trim()} autocomplete:true sort:top`, limit: 10 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) },
@@ -194,7 +164,6 @@ export function useSearchProfiles(query: string) {
         }
       }
 
-      // Deduplicate by pubkey (keep latest event)
       const seen = new Map<string, SearchProfile>();
       for (const profile of profiles) {
         const existing = seen.get(profile.pubkey);
@@ -210,14 +179,11 @@ export function useSearchProfiles(query: string) {
     placeholderData: (prev) => prev,
   });
 
-  // Merge: followed contacts that match the query come FIRST (matched locally,
-  // so they surface even if the relay never returned them), then relay results,
-  // deduped. Falls back to the broader cache scan when nothing matches at all.
+  // Follows first, then relay results; falls back to a cache-wide scan when nothing matches.
   const data = useMemo(() => {
     const q = debouncedQuery.trim().toLowerCase();
     if (q.length < 1) return relayResults.data;
 
-    // Local follow matches, alphabetical.
     const followMatches = (followProfiles ?? [])
       .filter((p) => profileMatches(p, q))
       .sort((a, b) => {
@@ -229,11 +195,9 @@ export function useSearchProfiles(query: string) {
     const relayData = relayResults.data ?? [];
 
     if (followMatches.length === 0 && relayData.length === 0) {
-      // Nothing from follows or relays — widen to the general author cache.
       return searchCachedProfiles(queryClient, q, followedPubkeys);
     }
 
-    // Follows first, then relay hits not already present.
     const merged: SearchProfile[] = [...followMatches];
     const have = new Set(followMatches.map((p) => p.pubkey));
     for (const p of relayData) {
@@ -245,9 +209,7 @@ export function useSearchProfiles(query: string) {
     return merged;
   }, [relayResults.data, followProfiles, followedPubkeys, debouncedQuery, queryClient]);
 
-  // Applied to the MERGED result rather than to each of the three sources
-  // (follow matches, relay hits, the cache-wide widen), so no path can put a
-  // muted person back into an autocomplete or an invite picker.
+  // Muting applied to the MERGED result so no source path can reintroduce a muted person.
   const visible = useMemo(
     () => (mutedPubkeys.size === 0 ? data : data?.filter((p) => !mutedPubkeys.has(p.pubkey))),
     [data, mutedPubkeys],
@@ -261,11 +223,8 @@ export function useSearchProfiles(query: string) {
 }
 
 /**
- * Resolve a fixed set of pubkeys (e.g. a room's members) to profiles for the
- * @-mention autocomplete, filtered by `query`. Reads cached author metadata
- * from the Query cache; pubkeys without cached metadata still appear (matched
- * by their npub/hex) so any room member can be mentioned. Used to scope the
- * mention menu to people in the room instead of searching all of Nostr.
+ * A fixed member set for scoped @-mention autocomplete; members without cached metadata still
+ * match by npub/hex.
  */
 export function useMemberProfiles(pubkeys: string[], query: string) {
   const queryClient = useQueryClient();
@@ -275,12 +234,8 @@ export function useMemberProfiles(pubkeys: string[], query: string) {
     const lowerQuery = query.trim().toLowerCase();
 
     const profiles: SearchProfile[] = pubkeys.filter((pk) => !mutedPubkeys.has(pk)).map((pubkey) => {
-      // `getQueryData` hashes the key once and looks it up by hash. The
-      // equivalent `getQueryCache().find({ queryKey })` copies the whole cache
-      // into an array and `JSON.stringify`s every entry's key looking for a
-      // match — O(members × cached queries) per render, and the author cache
-      // holds a query per profile the session has ever seen. It was the single
-      // hottest app-code frame in a profile of the hosted client.
+      // `getQueryData` hashes once; `getQueryCache().find` stringifies every key (was the hottest
+      // app frame in a profile).
       const data = queryClient.getQueryData(["author", pubkey]) as
         | { event?: NostrRumor; metadata?: NostrMetadata }
         | undefined;

@@ -61,11 +61,7 @@ const ROLE_MODERATOR = "moderator";
 const ROLE_BOT = "bot";
 const ROLE_GUEST = "guest";
 
-/**
- * The menu primitives shared by the ⋮ dropdown and the right-click context
- * menu — Radix's DropdownMenu and ContextMenu items have compatible props, so
- * the member actions are defined once and rendered through either family.
- */
+/** Menu primitives shared by the ⋮ dropdown and right-click menu (compatible Radix props). */
 interface MenuParts {
   Item: ComponentType<{ className?: string; onSelect?: (e: Event) => void; children?: ReactNode }>;
   Separator: ComponentType<{ className?: string }>;
@@ -85,28 +81,12 @@ interface MenuParts {
 
 const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
 
-/** Approx height of one member row (avatar size-8 + py-2), for the gate placeholder. */
 const ROW_MIN_H = 48;
 /**
- * Offscreen rows are viewport-gated whatever the roster's size.
- *
- * Each mounted row stands up ~4 query hooks + two profile-card popovers + a
- * context menu, so on a large server that DOM is the member panel's whole cost
- * — which is why rows the reader can't see aren't built until they scroll near
- * the viewport.
- *
- * The gate used to apply only above a 60-member threshold, on the reasoning
- * that a small roster's DOM is already cheap. Its DOM is; its NETWORK is not.
- * Every row calls `useAuthor`, which declares profile demand for the life of
- * the mount, and `demandProfiles` batches a mount burst into ONE round fired
- * immediately — so opening a room with a sub-threshold roster put a kind-0 REQ
- * for the entire member list on the wire in the same breath as that room's
- * first chat REQ. The member list is not what the reader is waiting for, and
- * it was visibly filling in ahead of the messages beside it.
- *
- * A search still renders every row: `useMemberSearch` reads each member's
- * resolved name out of the query cache, which a row populates only once
- * mounted. A search is user-initiated, so it never races a room open.
+ * Offscreen rows are viewport-gated at every roster size: each row's `useAuthor`
+ * demands a profile, so ungated rows put a kind-0 REQ for the whole roster on
+ * the wire alongside the room's first chat REQ. Searches render every row (the
+ * matcher reads names a row populates once mounted).
  */
 
 interface MemberRowProps {
@@ -115,37 +95,29 @@ interface MemberRowProps {
   /** Live presence dot (Buzz relays). Undefined = unknown (no dot). */
   presence?: "online" | "away";
   canModerate: boolean;
-  /** Whether the viewer is an admin (required to grant the admin role). */
   viewerIsAdmin: boolean;
-  /** The viewer's own pubkey, to suppress self-moderation. */
   currentUserPubkey?: string;
   onRemove?: (pubkey: string) => void;
   onSetRole?: (pubkey: string, roles: string[]) => void;
-  /** Concord: cooperatively kick (honest clients drop them; they can rejoin). */
+  /** Concord: cooperative kick (honest clients drop them; they can rejoin). */
   onKick?: (pubkey: string) => void;
   /** Concord: ban + read-cut (rotate keys to lock them out). */
   onBan?: (pubkey: string) => void;
-  /** Menu label for the ban action (a ban without a read-cut is just "Ban"). */
+  /** A ban without a read-cut is just "Ban". */
   banLabel?: (pubkey: string) => string;
-  /** Concord: unban a currently-banned member. */
   onUnban?: (pubkey: string) => void;
-  /** Concord: whether this member is currently banned. */
   isBanned?: boolean;
-  /** Open the per-server nickname/label editor (shown only on the viewer's own row). */
+  /** Per-server nickname/label editor (viewer's own row only). */
   onEditProfile?: () => void;
-  /** Start a direct message with this member (Buzz relays: kind 41010). */
+  /** Buzz relays: kind 41010. */
   onMessage?: (pubkey: string) => void;
-  /** Concord: every custom role, for the per-member "Roles" picker submenu. */
   roleCatalog?: RolePickerOption[];
-  /** Concord: role ids this member currently holds. */
   customRoleIds?: string[];
-  /** Concord: whether the viewer outranks this member (may edit their roles). */
+  /** Viewer outranks this member (may edit their roles). */
   canEditRoles?: boolean;
-  /** Concord: grant/revoke one custom role. */
   onToggleRole?: (pubkey: string, roleId: string, on: boolean) => void;
-  /** True while a toggle for this member+role is still publishing. */
   isRoleToggling?: (pubkey: string, roleId: string) => boolean;
-  /** A custom-role chip for members without a tier badge (name + tint). */
+  /** Custom-role chip for members without a tier badge. */
   customBadge?: { name: string; color: number };
 }
 
@@ -177,31 +149,24 @@ const MemberRow = memo(function MemberRow({
   const { displayName, color } = useScopedIdentity(pubkey, metadata);
   const status = useUserStatus(pubkey).data?.status;
   const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
-  // Hide a music status whose NIP-40 expiration has passed (track ended).
+  // NIP-40 expiration passed: the track ended.
   const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const [statusOpen, setStatusOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  // Where a report from this list goes — the surrounding room decides, and a
-  // legacy Concord epoch (no staff-only address) offers none.
+  // A legacy Concord epoch (no staff-only address) offers no report.
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
   const isOwner = roleSet.has(ROLE_OWNER);
-  // The owner holds every permission implicitly, so treat them as an admin for
-  // moderation gating (e.g. don't offer "Make admin" on the owner) even if the
-  // explicit "admin" role string isn't present.
+  // The owner holds every permission implicitly, even without the "admin" role string.
   const isAdmin = isOwner || roleSet.has(ROLE_ADMIN);
   const isModerator = roleSet.has(ROLE_MODERATOR);
   const isSelf = currentUserPubkey === pubkey;
-  // Moderation acts on others only; the owner is never a valid target (they're
-  // supreme and unremovable — mirrors canActOnMember in the roster engine).
+  // The owner is never a valid target (mirrors canActOnMember in the roster engine).
   const canActOnUser = canModerate && !isSelf && !isOwner;
-  // Reporting is the affordance for everyone ELSE — it needs no permission,
-  // only somewhere to send it and someone other than yourself to send it about.
   const canReport = Boolean(reportTo && currentUserPubkey && !isSelf);
-  // Muting is available on every roster, room or not: it writes to the user's
-  // own list rather than to anyone the room would have to provide.
+  // Writes to the user's own list, so available everywhere.
   const mute = useMuteToggle(pubkey);
 
   const copyNpub = () => {
@@ -215,7 +180,6 @@ const MemberRow = memo(function MemberRow({
 
   const showRolePicker = Boolean(onToggleRole && canEditRoles && roleCatalog && roleCatalog.length > 0);
 
-  // Shared between the ⋮ dropdown and the right-click context menu.
   const renderMenuItems = ({ Item, Separator, Label, Sub, SubTrigger, SubContent, CheckboxItem }: MenuParts) => (
     <>
       <Item className="gap-3 px-3 py-2.5" onSelect={() => requestMention(pubkey)}>
@@ -251,8 +215,7 @@ const MemberRow = memo(function MemberRow({
         <>
           <Separator />
           <Label className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-            {/* The picker can stand alone on the viewer's own row (an owner
-                self-assigning a cosmetic role) — no moderation implied. */}
+            {/* Can stand alone on the viewer's own row (owner self-assigning a cosmetic role). */}
             {canActOnUser ? "Moderation" : "Roles"}
           </Label>
 
@@ -346,8 +309,6 @@ const MemberRow = memo(function MemberRow({
         </>
       )}
 
-      {/* Mute and report close the menu as one group, so the separator belongs
-          to whichever of them is present rather than to either individually. */}
       {(mute.canMute || canReport) && <Separator />}
       {mute.canMute && (
         <Item
@@ -532,9 +493,7 @@ interface MemberListProps {
   admins: Nip29Admin[];
   members: string[];
   canModerate: boolean;
-  /** Whether the viewer is an admin (required to grant the admin role). */
   viewerIsAdmin?: boolean;
-  /** The viewer's own pubkey, to suppress self-moderation. */
   currentUserPubkey?: string;
   onRemove?: (pubkey: string) => void;
   onSetRole?: (pubkey: string, roles: string[]) => void;
@@ -543,50 +502,30 @@ interface MemberListProps {
   onBan?: (pubkey: string) => void;
   banLabel?: (pubkey: string) => string;
   onUnban?: (pubkey: string) => void;
-  /** Concord: the set of currently-banned pubkeys (hex). */
   bannedPubkeys?: Set<string>;
-  /** Per-member role labels (Buzz: member/guest/bot) for badge rendering. */
+  /** Per-member role labels (Buzz: member/guest/bot). */
   memberRoles?: Record<string, string>;
   /** Live presence (Buzz: ephemeral kind-20001 heartbeats). */
   presence?: Record<string, "online" | "away">;
-  /** Close the panel (mobile overlay close button). */
   onClose?: () => void;
-  /** Open the per-server nickname/label editor for the current user. */
   onEditProfile?: () => void;
-  /** Start a direct message with a member (Buzz relays: kind 41010). */
+  /** Buzz relays: kind 41010. */
   onMessage?: (pubkey: string) => void;
-  /** Concord: every custom role, position-ordered, for the "Roles" picker. */
   roleCatalog?: RolePickerOption[];
-  /** Concord: pubkey → the custom role ids that member holds. */
   memberRoleIds?: Record<string, string[]>;
-  /** Concord: whether the viewer outranks a member (may edit their roles). */
   canEditMemberRoles?: (pubkey: string) => boolean;
-  /** Concord: grant/revoke one custom role on one member. */
   onToggleRole?: (pubkey: string, roleId: string, on: boolean) => void;
-  /** True while a toggle for this member+role is still publishing. */
   isRoleToggling?: (pubkey: string, roleId: string) => boolean;
-  /**
-   * Hoisted role sections, in display order: each renders as its own named
-   * group above Admins, and its members are pulled out of the Admins/Members
-   * groups below (a member appears exactly once).
-   */
+  /** Hoisted role sections above Admins; their members appear only there. */
   roleSections?: Array<{ id: string; name: string; color: number; members: string[] }>;
-  /**
-   * Concord: open the add-members flow for the active private channel. Set
-   * only when the viewer may grant the channel's access role, so the panel
-   * carries the affordance exactly where the access it changes is shown.
-   */
+  /** Concord: add-members for the active private channel; set only when the viewer may grant access. */
   onAddMembers?: () => void;
-  /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
   className?: string;
 }
 
 /**
- * Right-hand member panel: admins (with roles) first, then regular members.
- *
- * Memoized: it hangs off a page that re-renders on every store write it reads
- * (each message, each synced history page), and a roster re-render walks a
- * DeferredRow per member even when no row inside it changes.
+ * Right-hand member panel. Memoized: the page re-renders on every store write
+ * and a roster render walks a row per member.
  */
 export const MemberList = memo(function MemberList({
   admins,
@@ -617,12 +556,10 @@ export const MemberList = memo(function MemberList({
 }: MemberListProps) {
   const { mutedPubkeys } = useMutedPubkeys();
   const [query, setQuery] = useState("");
-  // The field is revealed by a button, mirroring the channel/DM header search.
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Focus the field when it expands. `preventScroll` matters: it starts parked
-  // off the right edge, so a default focus() would scroll the panel to reveal it.
+  // `preventScroll`: the field starts off the right edge.
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
   }, [searchOpen]);
@@ -633,30 +570,23 @@ export const MemberList = memo(function MemberList({
   }, []);
 
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
-  // Stable per-member arrays: `[memberRoles[pubkey]]` inline would hand the
-  // memoized MemberRow a fresh `roles` identity every render.
+  // Stable arrays so memoized rows get stable `roles` identities.
   const buzzRoles = useMemo(() => {
     const m = new Map<string, string[]>();
     for (const [pubkey, role] of Object.entries(memberRoles ?? {})) m.set(pubkey, [role]);
     return m;
   }, [memberRoles]);
-  // Members already shown under a hoisted role section render nowhere else.
   const sectioned = new Set((roleSections ?? []).flatMap((s) => s.members));
-  // The chip for a member with no tier badge: their first (highest-position)
-  // server-scope custom role. Tier badges out-prioritize it in MemberRow.
+  // First (highest-position) server-scope custom role; tier badges win in MemberRow.
   const customBadgeOf = (pubkey: string): { name: string; color: number } | undefined => {
     const held = memberRoleIds?.[pubkey];
     if (!held?.length || !roleCatalog) return undefined;
     return roleCatalog.find((r) => r.channelName === undefined && held.includes(r.id));
   };
-  // NIP-29 relays don't guarantee a stable order for the `p` tags in the
-  // members/admins events, so each 30s refetch could otherwise reshuffle the
-  // roster. Sort the owner first, then by pubkey for a stable order.
+  // NIP-29 `p` tag order isn't stable across refetches; sort owner first, then pubkey.
   const isOwnerRole = (a: Nip29Admin) => a.roles.some((r) => r.toLowerCase() === "owner");
-  // Muted people leave the roster entirely — admin, regular or role section
-  // alike. Applied to the three source arrays rather than at the row, so the
-  // section counts, the "no matches" state and the virtualization threshold
-  // all agree with what is actually rendered.
+  // Muted people leave the roster entirely, filtered at the source so counts and
+  // empty states agree.
   const sortedAdmins = [...admins]
     .filter((a) => !mutedPubkeys.has(a.pubkey))
     .sort((a, b) => {
@@ -668,8 +598,6 @@ export const MemberList = memo(function MemberList({
     .filter((pubkey) => !adminMap.has(pubkey) && !mutedPubkeys.has(pubkey))
     .sort((a, b) => a.localeCompare(b));
 
-  // One pass over the whole roster: every section filters against the same
-  // match set, so a name only has to be resolved once.
   const roster = useMemo(
     () => [...sortedAdmins.map((a) => a.pubkey), ...allRegulars],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -677,13 +605,8 @@ export const MemberList = memo(function MemberList({
   );
   const matched = useMemberSearch(roster, query);
   const searching = matched !== null;
-  // Gate offscreen rows at every roster size, but never while searching (the
-  // matcher reads each member's resolved name from the query cache, which a
-  // row populates only once mounted).
   const virtualize = !searching;
 
-  // A member hoisted into a role section renders only there; when a query is
-  // active every section is also narrowed to the matches.
   const visibleAdmins = sortedAdmins.filter(
     (a) => !sectioned.has(a.pubkey) && (!matched || matched.has(a.pubkey)),
   );
@@ -702,9 +625,7 @@ export const MemberList = memo(function MemberList({
     regulars.length === 0 &&
     visibleSections.every((section) => section.members.length === 0);
 
-  // The reveal toggle rides whichever section header renders first — admins, else
-  // the first non-empty role section, else the members header — so it shares that
-  // row instead of taking one of its own.
+  // The reveal toggle rides the first rendered section header.
   const firstSection = visibleSections.find((s) => !searching || s.members.length > 0);
   const toggleHost: string | null =
     visibleAdmins.length > 0
@@ -715,14 +636,11 @@ export const MemberList = memo(function MemberList({
           ? "members"
           : null;
 
-  // Same icon/component as the channel/DM header search. Hidden once the field is
-  // open — the field's own X closes it.
   const searchToggle = searchOpen ? null : (
     <Button
       variant="ghost"
       size="icon"
       aria-label="Search members"
-      // Negative margin keeps the taller tap target from growing the label row.
       className="-my-1 size-6 touch:size-10 shrink-0 text-muted-foreground"
       onClick={() => setSearchOpen(true)}
     >
@@ -733,15 +651,11 @@ export const MemberList = memo(function MemberList({
   return (
     <aside
       className={cn(
-        // Floating roster: detached by a margin, cut-corner card, same recessed
-        // chrome shade as the rail/console/header. No border. Matches the thread
-        // panel: full-screen card overlay on mobile, in-flow card on desktop.
         "flex flex-col flex-1 min-w-0 overflow-hidden",
         "m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
         className,
       )}
     >
-      {/* Mobile close affordance (desktop hides via the header toggle). */}
       {onClose && (
         <div className="flex items-center justify-between px-2 py-1 shrink-0 sidebar:hidden">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Members</h3>
@@ -764,10 +678,7 @@ export const MemberList = memo(function MemberList({
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-      {/* The reveal expands this field and pushes the roster below it down;
-          grid-rows 0fr→1fr animates the height without hardcoding it. The field
-          is borderless on the panel's chrome — same components as the header
-          search. */}
+      {/* grid-rows 0fr→1fr animates the height without hardcoding it. */}
       <div
         className={cn(
           "grid transition-[grid-template-rows] duration-150 ease-in-out",
@@ -779,8 +690,7 @@ export const MemberList = memo(function MemberList({
             <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <Input
               ref={searchInputRef}
-              // Deliberately not type="search": WebKit/Blink render their own
-              // cancel button for it, which would sit beside ours.
+              // Not type="search": WebKit/Blink add their own cancel button.
               type="text"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -891,8 +801,6 @@ export const MemberList = memo(function MemberList({
         ) : null,
       )}
 
-      {/* While searching, an empty Members section is just "no hits here" —
-          the no-matches line above already says so. */}
       {(!searching || regulars.length > 0) && (
         <div className={cn("flex items-center gap-1 px-2 py-1", (visibleAdmins.length > 0 || firstSection) && "mt-2")}>
           <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

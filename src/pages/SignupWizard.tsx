@@ -26,33 +26,11 @@ import { useLoginActions } from "@/hooks/useLoginActions";
 import { toast } from "@/hooks/useToast";
 
 /**
- * The full-page account-creation wizard, in the style of Ditto's onboarding
- * (full-screen takeover, top progress bar, one animated step at a time):
- *
- *   1. generate — a secret key is your identity; generate it.
- *   2. download — save the key, or reveal and copy it. Continue does not exist
- *      until an explicit backup has actually succeeded — a Copy, keyring save,
- *      or file export — so a new user can't skip past saving their only
- *      login; then log in.
- *   3. profile  — a name and one of twelve faces ({@link ProfileStepBody}), so
- *      a new user is recognisable before entering any community. Skippable.
- *
- * The three step bodies are the shared ones in `signupSteps.tsx`, the same the
- * in-app {@link SignupDialog} renders; what this file adds is the landing-only
- * chrome and behavior — the progress bar, a `/join` referral confirmation step
- * ahead of all three, the default kind-10002 relay-list seed, and an exit onto
- * /discover.
- *
- * The wizard exits onto /discover: a new user browses live communities first
- * (and the Discover grid leads with a create-your-own tile), rather than
- * being pushed straight into founding a community of one.
- *
- * Nothing blocks a new user: every step past key-save is skippable.
- *
- * Split out of the landing route and loaded lazily: this pulls nostr-tools,
- * the login actions and the profile step's publish/upload path, none of
- * which a signed-out visitor reading the landing page needs. The landing is in
- * the entry chunk; this arrives on the first tap of "Create account".
+ * Full-page account-creation wizard (Ditto-style): generate key → save it
+ * (Continue only after a successful backup) → profile (skippable). Step bodies
+ * are shared with {@link SignupDialog} (`signupSteps.tsx`); this adds the
+ * progress bar, a `/join` referral confirmation, the kind-10002 relay-list seed,
+ * and an exit onto /discover. Lazy-loaded: the landing doesn't need its deps.
  */
 
 const WIZARD_STEPS = ["generate", "download", "profile"] as const;
@@ -82,10 +60,7 @@ function SignupShell({ step, maxWidth, onBack, onClose, children }: {
 }
 
 export interface SignupWizardProps {
-  /**
-   * Leave the wizard without finishing it — a back arrow off the first step, a
-   * close button, or declining a join link. The landing route returns.
-   */
+  /** Leave without finishing (back off step one, close, or declining a join link). */
   onExit: () => void;
 }
 
@@ -96,33 +71,25 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   const navigate = useNavigate();
   const login = useLoginActions();
   const signupKey = useSignupKey();
-  // A pending referral/join link (a `/join` deep link stashed it before routing
-  // here): the operator's relay set to seed this new account onto. Read once on
-  // mount; its confirmation screen sits ahead of the key-generation step.
+  // A stashed `/join` link: the operator's relays to seed onto. Its
+  // confirmation screen precedes key generation.
   const [join, setJoin] = useState<JoinLink | undefined>(() => peekPendingJoin());
-  // Wizard position. `null` is the join confirmation — reachable only with a
-  // pending link, which is why that is where a link starts it.
+  // `null` is the join confirmation step.
   const [step, setStep] = useState<WizardStep | null>(() => (peekPendingJoin() ? null : "generate"));
   const dismissJoin = () => {
     clearPendingJoin();
     setJoin(undefined);
     onExit();
   };
-  // True while `login.nsec` is persisting the new login. The save step stays
-  // rendered throughout: leaving it before the login is durable renders
-  // nothing at all (neither the `!user` nor the `user` branch matches).
+  // Keeps the save step rendered while `login.nsec` persists (otherwise
+  // neither branch matches and nothing renders).
   const [loggingIn, setLoggingIn] = useState(false);
 
-  // Whatever exit the wizard takes (finish, skip, or navigating onto a
-  // community), it unmounts — so clear the onboarding flag here. Setting it is
-  // done synchronously at login (see handleContinue) to beat the race.
+  // Clear on any exit; it's set synchronously at login (handleContinue) to beat the race.
   useEffect(() => () => setOnboardingActive(false), []);
 
-  // A default NIP-65 relay list, signed for a key WE JUST MINTED, waiting to be
-  // fanned to its relays once that key is the active login. Published post-login
-  // (not inline in handleContinue) so relays that gate writes behind NIP-42 AUTH
-  // get an answer from the now-active signer. See handleContinue for why this
-  // one auto-publish is safe.
+  // Relay list for the just-minted key, published post-login so NIP-42 AUTH
+  // relays get the now-active signer. See handleContinue for why it's safe.
   const pendingRelayList = useRef<{ pubkey: string; event: NostrEvent; relays: string[] } | null>(null);
   useEffect(() => {
     const pending = pendingRelayList.current;
@@ -136,55 +103,33 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     setStep("download");
   };
 
-  // The wizard's exit: land the new user on Discover, where they can browse
-  // live communities before committing to anything — the create-your-own tile
-  // there is the first thing in the grid, so founding a community stays one
-  // click away. Seeing the network beats being asked to build one from a
-  // blank form (the classic dead-first-server trap).
+  // Exit onto Discover: browsing live communities beats a blank create form.
   const finishOnboarding = () => {
     navigate("/discover");
   };
 
-  // Leave the save step: log in as the new account and move to profile setup.
-  // Only reachable once the key is backed up.
+  // Log in as the new account (only reachable once the key is backed up).
   const handleContinue = async () => {
     if (loggingIn) return;
     const { identity, nsec } = signupKey;
-    // Brand-new account: nothing to catch up on, so skip the post-login sync
-    // gate. Otherwise its full-screen overlay paints over the profile/add
-    // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
-    // sync runs — on a slow phone that looks like onboarding was skipped.
+    // Brand-new account: skip the post-login SyncGate, whose overlay (z-100)
+    // would cover the wizard (z-50).
     if (identity) {
       suppressNextSyncGate(identity.pubkey);
-      // A brand-new account has nothing on any relay to recover, so never show
-      // it the "restore your setup" prompt.
       markRelayRecoveryPromptShown(identity.pubkey);
     }
 
-    // Where this brand-new account will live: an operator's set from a join
-    // link, otherwise the app's default relays.
     const homeRelays = uniqueRelayUrls(join ? join.relays : config.appRelays);
 
-    // Everything this step settles about the new account's config is written to
-    // THAT account's own scoped blob, below, rather than through `updateConfig`
-    // — which would still be pointed at the outgoing account (or at no account
-    // at all) until the login commits. Config is per-account now, so an
-    // existing account's relays are never rewritten by construction; the
-    // previous version had to special-case `logins.length` to get that.
+    // Seed THIS account's scoped config directly; `updateConfig` still points
+    // at the outgoing account until the login commits.
     const configSeed: Record<string, unknown> = { appRelays: homeRelays };
 
     if (join) clearPendingJoin();
 
-    // Publish a default NIP-65 relay list for the key we just generated. This
-    // is the ONE safe exception to the never-auto-publish rule: a key minted
-    // moments ago has provably never published anything, so there is no
-    // existing list an empty/failed read could be mistaken for and overwrite —
-    // the ambiguity the rule guards against cannot arise. It only ever runs
-    // here (the login path for EXISTING keys must never reach this), and it
-    // makes the new account discoverable on its home relays instead of relying
-    // on shared app-relay defaults. Signed now with the key in hand; fanned
-    // out post-login by the effect above. Skipped when there is nothing to
-    // declare (e.g. a build with empty app-relay defaults).
+    // The ONE exception to never-auto-publish: a key minted moments ago has
+    // provably no existing list to overwrite. Must never run for existing keys.
+    // Signed now; fanned out post-login by the effect above.
     if (identity && homeRelays.length > 0) {
       try {
         const sk = nip19.decode(nsec).data as Uint8Array;
@@ -205,26 +150,20 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
           pubkey: identity.pubkey,
         };
       } catch {
-        // Best effort: the account still works on its local app relays.
+        // best effort; the account still works on the app relays
       }
     }
 
     if (identity) {
       seedAccountConfig(APP_CONFIG_STORAGE_KEY, identity.pubkey, configSeed);
     }
-    // Mark onboarding in progress BEFORE login so it's already true on the
-    // commit that first exposes the user — otherwise the headless web-push
-    // opt-in (and the native notification step) would enqueue and paint over
-    // the profile step. Cleared when this wizard unmounts.
+    // Set BEFORE login so the first commit exposing the user already suppresses
+    // the web-push opt-in and native notification step.
     setOnboardingActive(true);
     setLoggingIn(true);
     try {
-      // Awaited: `login.nsec` persists the login asynchronously (and, with an
-      // account already active, performs the whole switch). Advancing before
-      // it resolves moves to a step that renders on `user` — so the wizard
-      // blanks until the login commits — and leaves a rejected persist with no
-      // handler at all, for a key whose only copy the user was just told to
-      // back up.
+      // Awaited: advancing before the login persists blanks the wizard and
+      // leaves a rejected persist unhandled for a key only just backed up.
       await login.nsec(nsec);
     } catch {
       setLoggingIn(false);
@@ -240,7 +179,6 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     setStep("profile");
   };
 
-  // ── Wizard step 1: generate the key ─────────────────────────────────────
   if (!user && step === "generate") {
     return (
       <SignupShell step="generate" onBack={onExit} onClose={onExit}>
@@ -249,7 +187,6 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     );
   }
 
-  // ── Wizard step 2: save the key ─────────────────────────────────────────
   if (!user && step === "download") {
     return (
       <SignupShell
@@ -262,10 +199,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     );
   }
 
-  // ── Wizard step 3: profile setup ────────────────────────────────────────
-  // No back arrow: the previous step created the account, and there is no
-  // un-creating it. A back arrow here could only return to a key screen whose
-  // own back leads forward again — a loop, not a step back.
+  // No back arrow: the account exists now, and back would loop.
   if (user && step === "profile") {
     return (
       <SignupShell step="profile" onClose={onExit}>
@@ -277,10 +211,8 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     );
   }
 
-  // ── Referral / join link: confirm before seeding the new account ────────
-  // Reached only signed-out with a stashed `/join` link. Name the operator and
-  // their relay(s) plainly, then hand off to the normal key-generation wizard;
-  // relays are adopted at account creation, never here.
+  // Join link: name the operator and relays, then hand off to key generation
+  // (relays are adopted at account creation, not here).
   if (!user && join && step === null) {
     const host = (url: string) => url.replace(/^wss?:\/\//i, "").replace(/\/+$/, "");
     return (
@@ -326,9 +258,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     );
   }
 
-  // No step matches the current auth state — the wizard has nothing to show
-  // (e.g. it was closed, or login landed while it sat on a signed-out step).
-  // Hand back to the landing route, which re-decides where this user belongs.
+  // Nothing matches (closed, or login landed mid signed-out step): the landing route re-decides.
   return null;
 }
 

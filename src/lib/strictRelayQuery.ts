@@ -1,18 +1,8 @@
 /**
- * A one-relay query that can tell "the relay has nothing" from "the relay
- * refused to answer".
- *
- * `NRelay1.query()` means to throw on CLOSED, but `req()` ends its stream at a
- * CLOSED without yielding it, so the throw is unreachable and a refused REQ
- * (`auth-required:`, `rate-limited: too many subscriptions`, a relay that only
- * serves a kind to its authenticated author) resolves to `[]` exactly as an
- * empty EOSE does. A caller that treats a completed empty answer as proof of
- * absence then acts on a read it never got — the DM conversation index
- * republished every coordinate to such a relay on every pull, forever.
- *
- * `req()` ends in exactly three ways: after the EOSE this loop stops at, by
- * throwing (abort), or silently at CLOSED. So a stream that ends with no EOSE
- * and no throw was CLOSED, and this rejects rather than resolving empty.
+ * One-relay query that distinguishes "nothing stored" from "refused". NRelay1's
+ * `req()` ends silently at CLOSED (auth-required, rate-limited…), so
+ * `query()` resolves `[]` as if empty. A stream ending without EOSE or a throw
+ * was CLOSED, so this rejects.
  */
 
 import type { NostrEvent, NostrFilter, NostrRelayCLOSED, NostrRelayEOSE, NostrRelayEVENT } from "@nostrify/types";
@@ -33,10 +23,8 @@ export class RelaySubscriptionClosedError extends Error {
 }
 
 /**
- * Collect a relay's stored events up to EOSE, like `NRelay1.query()`, but
- * reject with {@link RelaySubscriptionClosedError} when the relay CLOSED the
- * subscription instead of answering it. Events are deduplicated by id and
- * returned in arrival order.
+ * Like `NRelay1.query()`, but rejects with {@link RelaySubscriptionClosedError}
+ * on CLOSED. Deduplicated by id, in arrival order.
  */
 export async function queryRelayStrict(
   relay: ReqRelay,
@@ -54,8 +42,7 @@ export async function queryRelayStrict(
     }
     if (msg[0] === "CLOSED") break;
     if (msg[0] === "EVENT") events.set(msg[2].id, msg[2]);
-    // Hitting the combined limit is as good as EOSE: the relay has answered
-    // everything this read asked for, and NRelay1.query() stops here too.
+    // Reaching the combined limit counts as answered (as in NRelay1.query()).
     if (events.size >= limit) {
       answered = true;
       break;

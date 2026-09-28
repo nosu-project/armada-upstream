@@ -12,13 +12,11 @@ import { syncEmojiMartCategories } from "@/lib/emojiMartCategories";
 
 import type { CustomEmoji } from "@/hooks/useCustomEmojis";
 
-/** A native Unicode emoji selection. */
 export interface NativeEmojiSelection {
   type: "native";
   emoji: string;
 }
 
-/** A custom NIP-30 emoji selection. */
 export interface CustomEmojiSelection {
   type: "custom";
   shortcode: string;
@@ -31,20 +29,12 @@ interface EmojiPickerProps {
   onSelect: (selection: EmojiSelection) => void;
   /** NIP-30 custom emojis to display in a dedicated tab. */
   customEmojis?: CustomEmoji[];
-  /**
-   * Show a footer linking to Discover's emoji packs. Opt-in: the link leaves
-   * the current page, so only hosts that close with it (the chat surfaces) use
-   * it. Called before navigating so the host can dismiss itself.
-   */
+  /** Footer linking to Discover's emoji packs (opt-in; called before navigating). */
   onBrowsePacks?: () => void;
-  /**
-   * The host carries its own compact packs link (the composer's tab row), so
-   * the footer is kept only as the empty state for a user with no custom emoji.
-   */
+  /** The host has its own packs link; keep the footer only as the no-custom-emoji empty state. */
   packsLinkInHost?: boolean;
 }
 
-/** An entry in an emoji-mart `custom` category. */
 interface EmojiMartCustomEmoji {
   id: string;
   name: string;
@@ -57,17 +47,12 @@ interface EmojiMartEmoji {
   native?: string;
   shortcodes?: string;
   unified?: string;
-  /** Present for custom emojis — the image URL from `skins[0].src`. */
   src?: string;
 }
 
 /**
- * Emoji picker that manages the emoji-mart Picker (a Web Component) imperatively.
- *
- * We bypass `@emoji-mart/react` because it creates `new Picker()` inside a
- * `useEffect`, which can trigger "Illegal constructor" when React unmounts
- * and remounts the component. Custom NIP-30 emojis are added via emoji-mart's
- * `custom` prop in a dedicated tab.
+ * Manages the emoji-mart Picker web component imperatively: `@emoji-mart/react`
+ * constructs it in an effect, which throws "Illegal constructor" on remount.
  */
 export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkInHost }: EmojiPickerProps) {
   const isMobile = useIsMobile();
@@ -76,7 +61,6 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
   const pickerRef = useRef<InstanceType<typeof Picker> | null>(null);
   const onSelectRef = useRef(onSelect);
 
-  // Keep callback ref up to date without re-creating the picker.
   onSelectRef.current = onSelect;
 
   const handleSelect = useCallback((emoji: EmojiMartEmoji) => {
@@ -96,11 +80,8 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
     }
   }, [user?.pubkey]);
 
-  // Build emoji-mart custom categories from the NIP-30 emoji list — ONE
-  // CATEGORY PER SOURCE PACK, so the picker's sticky heading and nav answer
-  // "which pack is this emoji from?" the same way Discord separates each
-  // server's emoji. Emojis inlined on the kind-10030 list have no pack and
-  // fall into a generic "Custom" group.
+  // One custom category PER SOURCE PACK (like Discord per server); list-inlined
+  // emojis go in a generic "Custom" group.
   const customCategories = useMemo(() => {
     if (!customEmojis || customEmojis.length === 0) return undefined;
 
@@ -112,8 +93,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
         groups.set(
           key,
           (group = {
-            // emoji-mart keys DOM ids and its category index off this, so keep
-            // it to a safe charset rather than passing a raw `kind:pubkey:d`.
+            // Used for DOM ids, so keep a safe charset.
             id: key ? `custom-${key.replace(/[^a-zA-Z0-9]+/g, "-")}` : "custom-nostr",
             name: (key && e.packName) || "Custom",
             emojis: [],
@@ -128,12 +108,8 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
       });
     }
 
-    // Deliberately NO per-category `icon`: emoji-mart gives every custom
-    // category with one its own nav button, and the bottom nav is a single
-    // non-scrolling row — a handful of packs overflows it. Without an icon it
-    // chains each pack onto the first one's button (module.js filters nav
-    // entries to categories without a `target`), so the packs share one entry
-    // while keeping their own labelled sections in the scroll area.
+    // No per-category `icon`: each would get its own nav button and overflow the
+    // single-row nav. Without one, packs share the first's nav entry.
     return [...groups.values()];
   }, [customEmojis]);
 
@@ -156,9 +132,8 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
     };
 
     if (customCategories) {
-      // Must run before the Picker constructor: it reconciles emoji-mart's
-      // module-global category table, which the `categories` ordering below is
-      // filtered from (see syncEmojiMartCategories).
+      // Before the constructor: reconciles emoji-mart's global category table (see
+      // syncEmojiMartCategories).
       syncEmojiMartCategories(customCategories);
       pickerOptions.custom = customCategories;
       pickerOptions.categories = [
@@ -177,8 +152,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
     const picker = new Picker(pickerOptions);
     pickerRef.current = picker;
 
-    // Inject overrides into the shadow DOM so the picker fills its container
-    // and matches the app theme.
+    // Shadow-DOM style overrides for sizing and theme.
     requestAnimationFrame(() => {
       const shadowRoot = (container.firstChild as HTMLElement)?.shadowRoot;
       if (shadowRoot) {
@@ -219,8 +193,7 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
     };
   }, [handleSelect, customCategories, isMobile]);
 
-  // The footer lives INSIDE the fixed height rather than adding to it: hosts
-  // such as the reaction popover size themselves to the picker and clip.
+  // Inside the fixed height: some hosts size to the picker and clip.
   return (
     <div className="flex w-full flex-col h-[min(360px,55dvh)] min-h-[220px] max-h-full">
       <div
@@ -241,11 +214,6 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
   );
 }
 
-/**
- * Footer pointing at Discover's emoji packs. In a host with its own link
- * (`packsLinkInHost`) it is only the empty state, for a user with no custom
- * emoji, for whom packs are otherwise invisible.
- */
 function BrowsePacksFooter({ hasCustom, onBrowse }: { hasCustom: boolean; onBrowse: () => void }) {
   const navigate = useStableNavigate();
   return (

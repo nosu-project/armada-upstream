@@ -17,62 +17,30 @@ import type {
   SerialisedRequest,
 } from "@/lib/sandbox";
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 export interface SandboxFrameProps
   extends Omit<IframeHTMLAttributes<HTMLIFrameElement>, "src" | "id" | "sandbox"> {
   /** HMAC-derived subdomain identifier. */
   id: string;
-  /**
-   * Resolve a pathname to file content.
-   * Return a `FileResponse` to serve the file, or `null` for a 404.
-   */
+  /** Resolve a pathname to file content, or `null` for a 404. */
   resolveFile: (pathname: string) => Promise<FileResponse | null>;
-  /**
-   * Handle non-fetch, non-lifecycle JSON-RPC methods (e.g. `webxdc.*`).
-   * Receives the method name, params, and a `post` function for sending
-   * arbitrary messages back into the sandbox (e.g. push notifications).
-   * Return the result value to send as the JSON-RPC response.
-   */
+  /** Handle non-fetch JSON-RPC methods (e.g. `webxdc.*`); `post` pushes messages into the sandbox. */
   onRpc?: (
     method: string,
     params: unknown,
     post: (msg: Record<string, unknown>) => void,
   ) => Promise<unknown>;
-  /**
-   * Virtual scripts to inject into HTML responses.
-   * Each entry is served at its `path` and a `<script src="...">` tag is
-   * prepended into `<head>` of every HTML response.
-   */
+  /** Served at `path` and prepended as a `<script>` into every HTML response's `<head>`. */
   injectedScripts?: InjectedScript[];
-  /** Optional Content-Security-Policy header added to every response. */
   csp?: string;
-  /**
-   * Called when the sandbox sends `ready`, **before** `init` is sent back.
-   * If the returned promise is pending, `init` is deferred until it resolves,
-   * which prevents fetch requests from arriving before the consumer is ready
-   * to serve files (e.g. while an archive is still being downloaded).
-   */
+  /** Called on `ready`; `init` is deferred until it resolves so fetches don't arrive early. */
   onReady?: () => void | Promise<void>;
 }
 
-/** Imperative handle exposed via ref. */
 export interface SandboxFrameHandle {
-  /** Send a postMessage to the sandbox iframe. */
   postMessage: (msg: Record<string, unknown>, transfer?: Transferable[]) => void;
-  /** Focus the iframe element. */
   focus: () => void;
 }
 
-// ---------------------------------------------------------------------------
-// Shared fetch request handler
-// ---------------------------------------------------------------------------
-
-/**
- * Build a serialised HTTP response and call `respond` with it.
- */
 async function handleFetchRequest(
   pathname: string,
   resolveFile: (pathname: string) => Promise<FileResponse | null>,
@@ -81,7 +49,6 @@ async function handleFetchRequest(
   respond: (result: Record<string, unknown>) => void,
   respondError: (code: number, message: string) => void,
 ): Promise<void> {
-  // Check if the request is for a virtual injected script.
   const virtualScript = scripts.find(
     (s) => pathname === `/${s.path}` || pathname === s.path,
   );
@@ -101,7 +68,6 @@ async function handleFetchRequest(
     return;
   }
 
-  // Delegate to the consumer's file resolver.
   try {
     const file = await resolveFile(pathname);
 
@@ -118,7 +84,6 @@ async function handleFetchRequest(
       return;
     }
 
-    // For HTML responses, inject script tags.
     let bodyBase64: string;
     if (file.contentType === "text/html" && scripts.length > 0) {
       const html = new TextDecoder().decode(file.body);
@@ -136,7 +101,6 @@ async function handleFetchRequest(
       "Cache-Control": "no-cache",
     };
     if (activeCsp) headers["Content-Security-Policy"] = activeCsp;
-    // Include Content-Length for non-HTML (binary) responses.
     if (file.contentType !== "text/html") {
       headers["Content-Length"] = String(file.body.byteLength);
     }
@@ -152,18 +116,10 @@ async function handleFetchRequest(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Permissions Policy — capabilities delegated to the sandbox iframe
-// ---------------------------------------------------------------------------
-
 /**
- * Broad permissions-policy grant for sandbox iframes. A cross-origin iframe is
- * blocked from most capability APIs unless the parent explicitly delegates them
- * via `allow="…"`. We grant the directives a general-purpose web app (or a
- * watchalong video) might legitimately use; capabilities with charge-the-user
- * or phishing risk (payment, WebAuthn, OTP, FedCM) are deliberately omitted,
- * as is `clipboard-write`: the frame runs sender-supplied code, which must not
- * be able to overwrite what the viewer copied.
+ * Permissions-policy grant for sandbox iframes. Omits payment, WebAuthn, OTP,
+ * FedCM (charge/phishing risk) and `clipboard-write` (sender-supplied code
+ * mustn't overwrite the viewer's clipboard).
  */
 const SANDBOX_ALLOW = [
   "accelerometer",
@@ -193,19 +149,9 @@ const SANDBOX_ALLOW = [
   "xr-spatial-tracking",
 ].join("; ");
 
-// ---------------------------------------------------------------------------
-// SandboxFrame — iframe.diy implementation
-// ---------------------------------------------------------------------------
-
 /**
- * Renders a sandboxed content frame.
- *
- * Creates an iframe on a unique subdomain (`<id>.<SANDBOX_DOMAIN>`) and
- * implements the iframe.diy handshake + fetch proxy protocol. The same
- * implementation runs on web and inside Capacitor's WebView, since the WebView
- * handles iframe.diy's Service Worker and cross-origin subdomain isolation the
- * same way a browser does. All file serving is delegated to `resolveFile`;
- * custom RPC methods are delegated to the optional `onRpc` callback.
+ * Sandboxed frame on a unique subdomain (`<id>.<SANDBOX_DOMAIN>`) implementing
+ * the iframe.diy handshake + fetch proxy. Same on web and Capacitor.
  */
 export const SandboxFrame = forwardRef<SandboxFrameHandle, SandboxFrameProps>(
   function SandboxFrame(
@@ -216,8 +162,6 @@ export const SandboxFrame = forwardRef<SandboxFrameHandle, SandboxFrameProps>(
 
     const origin = useMemo(() => `https://${id}.${SANDBOX_DOMAIN}`, [id]);
 
-    // Keep latest callbacks in refs so the message handler always sees
-    // current values without re-registering the listener.
     const resolveFileRef = useRef(resolveFile);
     const onRpcRef = useRef(onRpc);
     const injectedScriptsRef = useRef(injectedScripts);
@@ -268,13 +212,11 @@ export const SandboxFrame = forwardRef<SandboxFrameHandle, SandboxFrameProps>(
         const msg = event.data;
         if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return;
 
-        // Notification: ready -> await onReady, then respond with init
         if (msg.method === "ready" && msg.id === undefined) {
           handleReady();
           return;
         }
 
-        // Requests (have an `id`)
         if (msg.id !== undefined && msg.method) {
           if (msg.method === "fetch") {
             handleFetch(msg.id, msg.params);
@@ -348,15 +290,9 @@ export const SandboxFrame = forwardRef<SandboxFrameHandle, SandboxFrameProps>(
         ref={iframeRef}
         src={`${origin}/`}
         allow={SANDBOX_ALLOW}
-        // Defense-in-depth on top of the cross-origin subdomain isolation.
-        // allow-scripts + allow-same-origin let apps run JS and use origin-keyed
-        // storage and register the iframe.diy Service Worker; because the iframe
-        // lives on a distinct HMAC-derived subdomain it is still a different
-        // origin from the parent app. allow-pointer-lock lets games (e.g.
-        // webxdc first-person shooters) capture the mouse via
-        // requestPointerLock(); it's escapable with Esc and gated on a user
-        // gesture, so it's safe to delegate. Notably omits allow-top-navigation
-        // (prevents window.top.location phishing redirects).
+        // Defense-in-depth on top of subdomain isolation. allow-same-origin is
+        // needed for storage and the iframe.diy Service Worker; allow-top-navigation
+        // is omitted to prevent phishing redirects.
         sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock"
         {...iframeProps}
       />

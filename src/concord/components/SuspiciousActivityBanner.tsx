@@ -6,13 +6,7 @@ import type { FoldedControl } from "@/concord/lib/control";
 import type { Channel, Community } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
 
-/**
- * The sidebar alert for the control-plane watchdog + the playful time-traveler
- * flag. It only decides whether there is anything worth showing and, if so,
- * renders the entry button; the detail lives in the `suspicious` PANE
- * ({@link SuspiciousActivityView}), which `onOpen` navigates to. Sits above the
- * community's nav rows.
- */
+/** Sidebar entry for the control-plane watchdog and time-traveler flag; details live in {@link SuspiciousActivityView}. */
 export function SuspiciousActivityBanner({
   community,
   channels,
@@ -27,8 +21,7 @@ export function SuspiciousActivityBanner({
   const { actors, alert } = useSuspiciousActivity(community, folded);
   const travelers = useTimeTravelers(community, channels);
 
-  // The playful time-traveler flag opens the panel on its own: it is the one
-  // signal here that can be present with no control-plane abuse behind it.
+  // Time travelers can appear without any control-plane abuse.
   if (!alert && travelers.length === 0) return null;
   const count = actors.length + travelers.length;
 

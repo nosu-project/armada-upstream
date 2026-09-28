@@ -17,18 +17,10 @@ import { toast } from "@/hooks/useToast";
 import { parseInviteRoute } from "@/concord/lib/invite";
 
 /**
- * Landing page for a Concord invite link — `/invite/<naddr>#<fragment>`
- * (CORD-05). The path names the bundle's addressable coordinate; the fragment
- * carries the 16-byte unlock token + bootstrap relays and never reaches any
- * server.
- *
- * The link resolves its sealed bundle and renders the SAME consent surface a
- * gift-wrapped Direct Invite gets ({@link InviteDetail}) — the community's
- * name, artwork, channel count, relays and current members — and asks before
- * joining. It used to auto-join the moment the link was opened while signed in;
- * now Accept is an explicit act, so what the keys grant is on screen first.
- * Accepting fetches the bundle, verifies the self-certifying owner commitment,
- * records the keys, and announces the Guestbook Join.
+ * Landing page for a Concord invite link — `/invite/<naddr>#<fragment>` (CORD-05).
+ * The fragment (token + bootstrap relays) never reaches a server. Resolves the
+ * bundle and shows the same consent surface as a Direct Invite
+ * ({@link InviteDetail}); Accept is explicit.
  */
 export function InvitePage() {
   const { naddr } = useParams<{ naddr: string }>();
@@ -44,8 +36,7 @@ export function InvitePage() {
   const fragment = (location.hash || window.location.hash).replace(/^#/, "").trim();
   const invite = naddr && fragment ? parseInviteRoute(naddr, fragment) : undefined;
 
-  // Look before you leap: resolve the bundle even before sign-in, so the
-  // consent surface can paint the community's face while the account is added.
+  // Resolve the bundle even before sign-in, so the consent surface can paint.
   useEffect(() => {
     if (!naddr || !fragment) {
       setError("This invite link is missing its secret. Ask for a fresh link.");
@@ -75,9 +66,8 @@ export function InvitePage() {
   const handleAccept = async () => {
     if (!invite || !resolved) return;
     try {
-      // Optimistic: the preview's bundle is passed along, so this resolves
-      // immediately and the durable join chain runs in the background (its
-      // failure surfaces as a toast from useCommunityActions).
+      // Optimistic: the durable join chain runs in the background (failures toast
+      // via useCommunityActions).
       const { communityId, name } = await join({ invite, bundle: resolved.bundle });
       toast({ title: "Joined", description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });

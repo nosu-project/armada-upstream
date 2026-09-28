@@ -26,11 +26,8 @@ const ROOT_DISCOVERY_TIMEOUT_MS = 8_000;
 const ROOT_FILTER_CHUNK_SIZE = 100;
 
 /**
- * Cache-first root discovery for every actively attached repository.
- *
- * Roots deliberately ignore attachment intervals: an issue opened before an
- * attachment is not channel activity, but its id is still needed to subscribe
- * to comments and statuses posted while the repository is attached.
+ * Cache-first root discovery for every actively attached repository. Ignores
+ * attachment intervals: older roots' ids are still needed to subscribe to new children.
  */
 export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireInput[]): NostrRumor[] {
   const { nostr } = useNostr();
@@ -85,10 +82,8 @@ export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireIn
         if (ticket && matchGitTicketRepository(ticket, activeAddresses)) roots.set(event.id, event);
       }
 
-      // The standing child filters are installed only after this root discovery
-      // query completes. Their cursor-based replay cannot recover comments that
-      // predate the relay cursor, so backfill children for every discovered root
-      // directly before returning it to the wire spec.
+      // Standing child filters' cursor replay can't recover children predating
+      // the relay cursor, so backfill children for every root directly.
       await Promise.all([...addressesByRelay].map(async ([relay, atRelay]) => {
         const rootIds = [...roots.values()]
           .filter((root) => {
@@ -118,8 +113,7 @@ export function useWireGitTicketRoots(repositories: readonly GitRepositoryWireIn
           }
         }
       }));
-      // The direct backfill bypasses wire ingestion, so explicitly refresh
-      // channel activity queries after it has populated the shared event store.
+      // Backfill bypasses wire ingestion, so refresh activity queries explicitly.
       await queryClient.invalidateQueries({ queryKey: ["git", "channel-activity"] });
       return [...roots.values()].sort((a, b) => a.id.localeCompare(b.id));
     },

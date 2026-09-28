@@ -1,8 +1,4 @@
-/**
- * Message contract between the composer and the video processing worker.
- * Kept in its own module so the main thread can import these types without
- * pulling mediabunny into the main bundle.
- */
+/** Composer ↔ video worker message contract; separate so the main bundle skips mediabunny. */
 
 /** The outcome of processing an attached video. */
 export interface ProcessedVideo {

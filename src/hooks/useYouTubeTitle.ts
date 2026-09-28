@@ -1,11 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-/**
- * Fetch a YouTube video's title (and channel) via the keyless oEmbed endpoint —
- * no API key or quota needed. Used to label queued videos in the watchalong.
- * Returns `undefined` while loading or on failure (the caller falls back to the
- * raw id).
- */
+/** Fetch a YouTube video's title/channel via the keyless oEmbed endpoint; null on failure. */
 export function useYouTubeTitle(videoId: string | undefined) {
   return useQuery({
     queryKey: ["youtube-oembed", videoId],

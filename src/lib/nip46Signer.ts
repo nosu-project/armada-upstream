@@ -1,34 +1,10 @@
 /**
- * Nip46Signer — a NIP-46 remote signer built for reliability.
- *
- * Replaces Nostrify's `NConnectSigner` for the bunker session. The stock
- * signer opens a brand-new subscription per RPC and has three failure modes
- * that made remote signing feel broken next to other clients:
- *
- *  1. Kind-24133 traffic is EPHEMERAL: relays only deliver it to
- *     subscriptions that are live at publish time. A per-RPC sub that is
- *     torn down and rebuilt for every call (and rebuilt after every socket
- *     flap) has windows where the bunker's response has nowhere to land —
- *     the RPC then hangs until timeout even though the bunker answered.
- *  2. Its response promise never settles when the subscription ends without
- *     a matching event, so callers had to race it against an outer timer —
- *     and the loser of that race kept its subscription alive as a zombie
- *     that kept receiving (and decrypting) every response for up to a
- *     minute.
- *  3. EVERY failure was retried, including explicit bunker error responses —
- *     so a user tapping "reject" in their signer got re-prompted 15s later.
- *
- * This signer instead keeps ONE persistent response subscription for the
- * whole session (the transport re-issues it after every reconnect) and
- * dispatches incoming responses to pending RPCs by request id. Each RPC:
- *
- *  - signs + publishes a fresh request event per attempt,
- *  - is fenced by a per-attempt timeout, and ONLY silence/publish-failure is
- *    retried — an explicit error response from the bunker fails immediately,
- *  - always cleans up its pending entry (no zombies, ever).
- *
- * Requests are NIP-44 encrypted; responses are decrypted as NIP-44 with a
- * NIP-04 fallback for legacy bunkers (decryption is local and cheap).
+ * NIP-46 remote signer, replacing Nostrify's `NConnectSigner`, whose per-RPC
+ * subscriptions missed ephemeral kind-24133 responses, left zombie subs, and
+ * retried explicit rejections. This keeps ONE session-lived response
+ * subscription and dispatches by request id. Only silence/publish failure is
+ * retried; bunker error responses fail immediately. Requests are NIP-44;
+ * responses fall back to NIP-04 for legacy bunkers.
  */
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
@@ -39,9 +15,7 @@ import type { Nip46Transport } from "@/lib/nip46Transport";
 import { logSync } from "@/lib/syncLog";
 
 export interface Nip46SignerOpts {
-  /** Dedicated plain-WebSocket transport to the bunker relays. */
   transport: Nip46Transport;
-  /** The remote signer's (bunker's) pubkey. */
   bunkerPubkey: string;
   /** Local ephemeral client signer (the pairing's client key). */
   clientSigner: NostrSigner;
@@ -57,11 +31,8 @@ const NIP46_KIND = 24133;
 class BunkerResponseError extends Error {}
 
 /**
- * Heuristics for detecting whether a NIP-46 `sign_psbt` error reflects a
- * missing-capability rejection (e.g. "method not supported", "unknown
- * command") versus a transient operational failure (network, user rejection,
- * malformed input). NIP-46 errors are plain strings without structured
- * codes, so we match on text.
+ * Text patterns marking a `sign_psbt` error as missing capability rather than a
+ * transient failure (NIP-46 errors are unstructured strings).
  */
 const CAPABILITY_ERROR_PATTERNS = [
   /unknown\s+(method|command)/i,
@@ -104,8 +75,6 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     this.ready = this.subscribe();
   }
 
-  // --- response plumbing ----------------------------------------------------
-
   /** Open the session-lived response subscription and pump it forever. */
   private async subscribe(): Promise<void> {
     this.clientPubkey = await this.clientSigner.getPublicKey();
@@ -113,8 +82,7 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       [{ kinds: [NIP46_KIND], authors: [this.bunkerPubkey], "#p": [this.clientPubkey] }],
       { signal: this.abort.signal },
     );
-    // Detached pump: runs for the signer's lifetime. The transport only ends
-    // the iterator on abort, which we never fire — swallow any exit.
+    // Detached pump for the signer's lifetime; the transport only ends it on abort, which never fires.
     void (async () => {
       for await (const msg of iter) {
         if (msg[0] === "EVENT") await this.dispatch(msg[2]);
@@ -122,7 +90,6 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     })().catch(() => undefined);
   }
 
-  /** Decrypt an incoming response event and hand it to the waiting RPC. */
   private async dispatch(event: NostrEvent): Promise<void> {
     let plaintext: string;
     try {
@@ -148,10 +115,7 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     rpc.resolve(response);
   }
 
-  // --- RPC core ---------------------------------------------------------------
-
-  /** High-level RPC. Retries ONLY on silence/publish failure, never on an
-   *  explicit bunker error (a user rejection must not re-prompt). */
+  /** RPC with retries on silence/publish failure only — a user rejection must not re-prompt. */
   private async cmd(method: string, params: string[]): Promise<string> {
     await this.ready;
     let lastErr: unknown;
@@ -177,7 +141,6 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     throw lastErr;
   }
 
-  /** One RPC attempt: sign + publish the request, await its matched response. */
   private async attemptOnce(method: string, params: string[]): Promise<string> {
     const request: NostrConnectRequest = { id: crypto.randomUUID(), method, params };
     const event = await this.clientSigner.signEvent({
@@ -198,8 +161,7 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       );
     });
     try {
-      // Publish first (bounded by its own abort), then wait for the bunker.
-      // The persistent sub is already live — the response can't miss us.
+      // The persistent sub is already live, so the response can't be missed.
       await this.transport.event(event, { signal: AbortSignal.timeout(this.attemptTimeoutMs) });
       const { result, error } = await Promise.race([response, timeout]);
       if (error) throw new BunkerResponseError(error);
@@ -210,8 +172,6 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       this.pending.delete(request.id);
     }
   }
-
-  // --- NostrSigner surface ----------------------------------------------------
 
   getPublicKey(): Promise<string> {
     return this.cmd("get_public_key", []);
@@ -249,8 +209,6 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       this.cmd("nip44_decrypt", [pubkey, ciphertext]),
   };
 
-  // --- NIP-46 session methods ---------------------------------------------------
-
   /** `connect` handshake used when pairing via a bunker:// URI. */
   connect(secret?: string): Promise<string> {
     const params = [this.bunkerPubkey];
@@ -258,18 +216,13 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     return this.cmd("connect", params);
   }
 
-  /** Liveness probe. */
   ping(): Promise<string> {
     return this.cmd("ping", []);
   }
 
-  // --- BtcSigner ------------------------------------------------------------
-
   /**
-   * NIP-46 `sign_psbt`. Capability failures (the bunker doesn't know the
-   * method) are re-wrapped with the message that flips the UI into the
-   * unsupported state; everything else (timeouts, rejections, malformed
-   * input) propagates unchanged so the caller surfaces the real error.
+   * NIP-46 `sign_psbt`. Capability failures are re-wrapped to flip the UI into
+   * the unsupported state; other errors propagate unchanged.
    */
   async signPsbt(psbtHex: string): Promise<string> {
     try {

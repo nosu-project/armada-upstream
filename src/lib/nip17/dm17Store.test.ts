@@ -1,4 +1,3 @@
-import { NIndexedDB } from "@nostrify/indexeddb";
 import { IDBFactory } from "fake-indexeddb";
 import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
@@ -6,10 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   conversationFilters,
   countUnreadDm17Messages,
-  DM17_DRAIN_PAGE,
   dm17Store,
   dm17ToStored,
-  migrateLegacyDms,
   queryDm17Conversations,
   queryDm17Rumor,
   queryDm17Thread,
@@ -28,9 +25,7 @@ import {
   DM_RUMOR_KINDS,
   DM_THREAD_KINDS,
   dmChatTags,
-  dmConvKey,
   dmDeleteTags,
-  dmPeersOf,
   dmReactionTags,
   dmTimerTags,
   dmWebxdcTags,
@@ -42,6 +37,7 @@ import {
   KIND_DM_WEBXDC,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmConvKey, dmPeersOf } from "@/lib/nip17/conversation";
 import { dmThreadScope, onWireScopes, resetWireBus } from "@/wire/bus";
 
 // A clean IndexedDB for the suite (the store singleton opens against it lazily).
@@ -502,62 +498,6 @@ describe("dm17Store note to self", () => {
     expect(await queryDm17Timer(me, [friend])).toBe(3600);
     expect(await queryDm17Timer(me, [me])).toBeUndefined();
   });
-});
-
-describe("dm17Store legacy drain", () => {
-  // The pre-tenant database was global: it recorded `peer`, never which
-  // account opened the rumor. So the drain has to attribute each record from
-  // the rumor itself, or it hands one profile another's messages.
-  const ana = getPublicKey(generateSecretKey());
-  const ben = getPublicKey(generateSecretKey());
-  const carla = getPublicKey(generateSecretKey());
-
-  it("moves only the reading account's messages out of the global store", async () => {
-    const legacy = new NIndexedDB("armada-dm17-rumors");
-
-    // Ana ↔ Carla, both directions.
-    const anaSent = opened({ author: ana, peer: carla, content: "ana to carla", tags: dmChatTags([carla]) });
-    const anaGot = opened({ author: carla, peer: carla, content: "carla to ana", tags: dmChatTags([ana]) });
-    // Ben ↔ Carla, from the same device. Ana must never see these.
-    const benSent = opened({ author: ben, peer: carla, content: "ben to carla", tags: dmChatTags([carla]) });
-    const anaReacted = opened({
-      author: ana,
-      peer: carla,
-      kind: KIND_DM_REACTION,
-      content: "👍",
-      tags: dmReactionTags([carla], anaGot.rumorId, KIND_DM_CHAT),
-    });
-    for (const o of [anaSent, anaGot, benSent, anaReacted]) {
-      await legacy.event({ ...dm17ToStored(o), sig: "" });
-    }
-    await legacy.close();
-
-    const drained = await queryDm17Thread(ana, [carla], { limit: 50 });
-    const ids = new Set(drained.map((r) => r.rumorId));
-    expect(ids.has(anaSent.rumorId)).toBe(true);
-    expect(ids.has(anaGot.rumorId)).toBe(true);
-    expect(ids.has(anaReacted.rumorId)).toBe(true);
-    expect(ids.has(benSent.rumorId)).toBe(false);
-  });
-
-  it("pages past the scan window instead of copying only the newest slice", async () => {
-    // The drain used to read the store with one `limit`-capped query. Anything
-    // past the cap was left behind — and then deleted with the database, since
-    // the drain resolved either way. Re-decrypting is not a recovery path: it
-    // needs gift wraps the relays have long since dropped.
-    const dana = getPublicKey(generateSecretKey());
-    const total = DM17_DRAIN_PAGE + 50;
-
-    const legacy = new NIndexedDB("armada-dm17-rumors");
-    for (let i = 0; i < total; i++) {
-      const o = opened({ author: dana, peer: carla, content: `msg-${i}`, tags: dmChatTags([carla]) });
-      await legacy.event({ ...dm17ToStored(o), sig: "" });
-    }
-    await legacy.close();
-
-    await migrateLegacyDms(dana);
-    expect((await dm17Store(dana).count([{ kinds: [KIND_DM_CHAT] }])).count).toBe(total);
-  }, 60_000);
 });
 
 // Slower than the unit tests above on purpose: these are IndexedDB round-trips

@@ -1,38 +1,16 @@
 /**
- * BIP-374 Discrete Log Equality (DLEQ) proofs.
- *
- * Used by BIP-375 to prove that ECDH shares attached to a PSBT were derived
- * from the same private keys that signed the corresponding inputs, without
- * revealing those keys. Lets co-signers (and our prompt UI, in principle)
- * verify silent-payment outputs without trust.
- *
- * Implements `GenerateProof(a, B, r, G, m)` and `VerifyProof(A, B, C, proof, G, m)`
- * from BIP-374 v0.2.0. The optional generator point `G` defaults to
- * secp256k1's standard generator. The optional message `m` is a 32-byte
- * commitment included in both the `rand` and `challenge` hashes; pass
- * `undefined` (or omit) to commit to an empty message.
- *
- * Tested against `bip-0374/test_vectors_{generate,verify}_proof.csv` at
- * `src/test/fixtures/bip374_*.csv`.
- *
- * Backed by `@noble/curves/secp256k1` for EC arithmetic and `@noble/hashes`
- * for SHA-256 — no `bitcoinjs-lib` / `@bitcoinerlab/secp256k1` dependency.
+ * BIP-374 Discrete Log Equality (DLEQ) proofs, used by BIP-375 to prove PSBT
+ * ECDH shares came from the input keys without revealing them. Implements
+ * `GenerateProof(a, B, r, G, m)` / `VerifyProof(A, B, C, proof, G, m)` from
+ * BIP-374 v0.2.0 (`G` defaults to secp256k1's generator; omitted `m` commits to
+ * an empty message). Tested against `src/test/fixtures/bip374_*.csv`.
  */
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha256';
 
-/**
- * secp256k1 Point class. `@noble/curves` v1 exposes the projective-point
- * constructor as `secp256k1.ProjectivePoint`; v2 moved it to
- * `schnorr.Point`. We use the v1 export to match the rest of the codebase.
- */
+/** secp256k1 Point class (`schnorr.Point`). */
 const Point = schnorr.Point;
-/** Point at infinity sentinel. */
 const POINT_ZERO = Point.ZERO;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 /** secp256k1 group order. */
 const SECP_N =
@@ -43,14 +21,8 @@ const SECP256K1_G_COMPRESSED = hexToBytes(
   '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
 );
 
-// ---------------------------------------------------------------------------
-// Tagged hashing (BIP-340 style; tag is hashed once and prepended twice)
-// ---------------------------------------------------------------------------
-
 function taggedHash(tag: string, msg: Uint8Array): Uint8Array {
-  // Copy the TextEncoder output into a fresh Uint8Array so noble's `u8a`
-  // check passes under jsdom (see silentPayments.ts taggedHash for the
-  // same workaround).
+  // Fresh Uint8Array so noble's `u8a` check passes under jsdom (as in silentPayments.ts).
   const tagBytes = new Uint8Array(new TextEncoder().encode(tag));
   const tagHash = sha256(tagBytes);
   const data = new Uint8Array(tagHash.length * 2 + msg.length);
@@ -59,10 +31,6 @@ function taggedHash(tag: string, msg: Uint8Array): Uint8Array {
   data.set(msg, tagHash.length * 2);
   return sha256(data);
 }
-
-// ---------------------------------------------------------------------------
-// Byte / scalar helpers
-// ---------------------------------------------------------------------------
 
 function hexToBytes(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) throw new Error('hexToBytes: odd-length string.');
@@ -134,11 +102,7 @@ function isStandardG(g: Uint8Array): boolean {
   return true;
 }
 
-/**
- * Parse a 33-byte compressed point. Returns `null` on any error (wrong shape,
- * not on curve, etc.). Used by the verifier, which must never throw on
- * malformed input.
- */
+/** Parse a 33-byte compressed point; `null` on any error (the verifier must never throw). */
 function tryDecodePoint(bytes: Uint8Array): InstanceType<typeof Point> | null {
   if (bytes.length !== 33) return null;
   if (bytes[0] !== 0x02 && bytes[0] !== 0x03) return null;
@@ -149,24 +113,14 @@ function tryDecodePoint(bytes: Uint8Array): InstanceType<typeof Point> | null {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 export interface DLEQProveInput {
   /** Secret scalar `a` (32 bytes, 0 < a < n). */
   a: Uint8Array;
   /** Public point `B` (33-byte compressed). */
   B: Uint8Array;
-  /**
-   * Auxiliary randomness `r` (32 bytes). Should be freshly random per call;
-   * see BIP-374 footnote. The caller is responsible for sourcing entropy.
-   */
+  /** Auxiliary randomness `r` (32 bytes), fresh per call (BIP-374 footnote); caller supplies entropy. */
   auxRand: Uint8Array;
-  /**
-   * Optional generator `G` (33-byte compressed). Defaults to the standard
-   * secp256k1 generator.
-   */
+  /** Optional generator `G` (33-byte compressed); defaults to secp256k1's. */
   G?: Uint8Array;
   /** Optional 32-byte message commitment. */
   message?: Uint8Array;
@@ -182,13 +136,8 @@ export interface DLEQProveResult {
 }
 
 /**
- * BIP-374 `GenerateProof(a, B, r, G, m)`.
- *
- * Throws on any of the abort conditions defined in the BIP:
- *   - `a = 0` or `a >= n`,
- *   - `B` is the point at infinity (encoded as all-zero / invalid bytes),
- *   - the derived `k` is zero,
- *   - the verification step on the produced proof fails (sanity check).
+ * BIP-374 `GenerateProof(a, B, r, G, m)`. Throws on the BIP's aborts (a out of
+ * range, invalid B, k = 0) or if self-verification fails.
  */
 export function generateDLEQProof(input: DLEQProveInput): DLEQProveResult {
   const a = ensure32(input.a, 'a');
@@ -197,15 +146,12 @@ export function generateDLEQProof(input: DLEQProveInput): DLEQProveResult {
   const G = input.G ? ensure33(input.G, 'G') : SECP256K1_G_COMPRESSED;
   const message = input.message ? ensure32(input.message, 'message') : new Uint8Array(0);
 
-  // Validate a ∈ (0, n).
   const aScalar = bytesToScalar(a);
   if (aScalar === 0n || aScalar >= SECP_N) {
     throw new Error('DLEQ: secret scalar `a` is out of range.');
   }
 
-  // Decode B (and G if non-standard). `Point.fromBytes` rejects points that
-  // are not on the curve or that fail the compression prefix check, which
-  // collapses the BIP's "B = infinity" abort into a thrown error.
+  // `Point.fromBytes` rejects off-curve points, covering the BIP's "B = infinity" abort.
   let BPoint: InstanceType<typeof Point>;
   try {
     BPoint = Point.fromBytes(B);
@@ -228,7 +174,7 @@ export function generateDLEQProof(input: DLEQProveInput): DLEQProveResult {
     }
   }
 
-  // A = a·G, C = a·B. `multiply` rejects 0 / ≥ n scalars; we already validated.
+  // A = a·G, C = a·B
   const A = GPoint.multiply(aScalar).toBytes(true);
   const C = BPoint.multiply(aScalar).toBytes(true);
 
@@ -278,22 +224,13 @@ export interface DLEQVerifyInput {
   C: Uint8Array;
   /** 64-byte proof produced by {@link generateDLEQProof}. */
   proof: Uint8Array;
-  /**
-   * Optional generator `G` (33-byte compressed). Defaults to the standard
-   * secp256k1 generator. Must match the value used during proof generation.
-   */
+  /** Optional generator `G`; must match the one used to generate. */
   G?: Uint8Array;
   /** Optional 32-byte message commitment. */
   message?: Uint8Array;
 }
 
-/**
- * BIP-374 `VerifyProof(A, B, C, proof, G, m)`.
- *
- * Returns `true` iff the proof is valid. Never throws on a bad proof —
- * input-shape errors (wrong byte lengths, invalid points) return `false`
- * to mirror the BIP's "fail" semantics.
- */
+/** BIP-374 `VerifyProof(A, B, C, proof, G, m)`. Never throws; malformed input returns `false`. */
 export function verifyDLEQProof(input: DLEQVerifyInput): boolean {
   try {
     if (input.proof.length !== 64) return false;
@@ -315,9 +252,7 @@ export function verifyDLEQProof(input: DLEQVerifyInput): boolean {
     const sScalar = bytesToScalar(input.proof.subarray(32, 64));
     if (sScalar >= SECP_N) return false;
 
-    // R1 = s·G - e·A
-    // `multiplyUnsafe` accepts 0 (returns ZERO) and is appropriate here since
-    // we operate on public points only.
+    // R1 = s·G - e·A (`multiplyUnsafe` accepts 0; public points only)
     const R1Point = GPoint.multiplyUnsafe(sScalar).add(
       APoint.multiplyUnsafe(eScalar).negate(),
     );
@@ -336,8 +271,7 @@ export function verifyDLEQProof(input: DLEQVerifyInput): boolean {
       'BIP0374/challenge',
       concatBytes(input.A, input.B, input.C, G, R1, R2, message),
     );
-    // The canonical encoding of `e` in the proof is the unreduced 32-byte
-    // hash. Compare raw bytes.
+    // `e` is encoded as the unreduced hash; compare raw bytes.
     const eBytes = input.proof.subarray(0, 32);
     if (expected.length !== eBytes.length) return false;
     for (let i = 0; i < expected.length; i++) {
@@ -349,15 +283,10 @@ export function verifyDLEQProof(input: DLEQVerifyInput): boolean {
   }
 }
 
-// `POINT_ZERO` is intentionally referenced so tree-shakers keep the Point
-// class' `ZERO` static available for `multiplyUnsafe(0n)`. Without this the
-// reference may be dropped in aggressive prod builds.
+// Keep `POINT_ZERO` referenced so aggressive tree-shaking can't drop `Point.ZERO`.
 void POINT_ZERO;
 
-/**
- * Constants exposed for tests / advanced callers.
- * @internal
- */
+/** @internal Constants exposed for tests. */
 export const _internal = {
   SECP256K1_G_COMPRESSED,
   SECP_N,

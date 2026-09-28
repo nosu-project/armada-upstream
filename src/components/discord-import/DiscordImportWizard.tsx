@@ -38,17 +38,9 @@ const errText = (e: unknown) =>
   e instanceof BridgeApiError || e instanceof Error ? e.message : "Something went wrong.";
 
 /**
- * Import a Discord server into Armada, in-app.
- *
- * The portal does everything requiring a Discord secret (OAuth, bot reads, the
- * publish pipeline); this drives it over {@link bridgeApi}. The reason it lives
- * here rather than being a link to the portal: step 3 signs the community's
- * founding events, and the signer the user is already logged in with is right
- * here. Sending them to another origin to re-authenticate a Nostr identity they
- * have already proven is both worse UX and a worse habit to teach.
- *
- * The wizard is resumable only within a tab — the portal keeps the import row
- * server-side, but the token lives in `sessionStorage`.
+ * Import a Discord server via the bridge portal ({@link bridgeApi}). Lives
+ * in-app because step 3 signs the founding events with the logged-in signer.
+ * Resumable only within a tab (token is in `sessionStorage`).
  */
 export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
@@ -75,8 +67,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<ImportStatus | null>(null);
   const [joining, setJoining] = useState(false);
 
-  // ── Session ───────────────────────────────────────────────────────────────
-
   const loadMe = useCallback(async () => {
     try {
       const res = await getBridgeMe();
@@ -87,7 +77,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     }
   }, []);
 
-  // A token from earlier in this tab means we can skip the connect step.
   useEffect(() => {
     if (bridgeToken()) void loadMe();
     else void getBridgeMe().then(setMe).catch(() => {});
@@ -106,8 +95,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     }
   }
 
-  // ── Preview ───────────────────────────────────────────────────────────────
-
   async function preview(gid: string) {
     setBusy(true);
     setError("");
@@ -115,9 +102,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     try {
       const res = await previewImport(gid);
       if (!res.present) {
-        // The bot-install link is chosen by the bridge portal, not by us, so it
-        // gets the same scheme check as any other URL we did not author before
-        // it reaches an href.
+        // Install link comes from the portal, so sanitize before it reaches an href.
         const url = sanitizeUrl(res.installUrl);
         if (!url) {
           setError("The bridge returned an invalid bot-install link.");
@@ -146,8 +131,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
             ...prev,
             channels: prev.channels.map((c) => {
               if (c.discordId !== discordId) return c;
-              // Each flag implies the one above it: history needs a live
-              // bridge, a live bridge needs the channel itself.
+              // Each flag implies the one above: history needs a bridge, a bridge needs the channel.
               if (field === "selected") {
                 const selected = !c.selected;
                 return { ...c, selected, bridge: selected && c.bridge, history: selected && c.history };
@@ -161,8 +145,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
           },
     );
   }
-
-  // ── Sign + confirm ────────────────────────────────────────────────────────
 
   async function startImport() {
     if (!plan || !user) return;
@@ -198,8 +180,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     }
   }
 
-  // ── Progress polling ──────────────────────────────────────────────────────
-
   const importIdRef = useRef(importId);
   importIdRef.current = importId;
   useEffect(() => {
@@ -217,7 +197,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
           return;
         }
       } catch {
-        // Transient (the portal restarts mid-import); keep polling.
+        // Transient (portal restart); keep polling.
       }
       if (!stop) timer = setTimeout(() => void tick(), 2000);
     };
@@ -238,11 +218,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     }
   }
 
-  /**
-   * Open the finished community. The owner signed its genesis, but this client
-   * still has no local membership state for it — so this is the same join any
-   * invite does, just without making them copy a link between tabs.
-   */
+  /** Join the finished community like any invite: the owner signed genesis but has no local membership yet. */
   async function openCommunity() {
     if (!status?.inviteUrl) return;
     setJoining(true);
@@ -252,8 +228,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
       if (!invite) throw new Error("The portal returned an invite link Armada couldn't read.");
       const { communityId, name } = await join({ invite });
       toast({ title: "Imported from Discord", description: name });
-      // Navigating away IS the close: the wizard is the route. Calling onClose
-      // as well would race a history pop against this push.
+      // Navigating away IS the close (the wizard is the route); onClose would race a history pop.
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
       setError(errText(e));
@@ -261,8 +236,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
       setJoining(false);
     }
   }
-
-  // ── Derived ───────────────────────────────────────────────────────────────
 
   const guilds = me?.guilds ?? [];
   const selected = plan?.channels.filter((c) => c.selected) ?? [];
@@ -276,7 +249,7 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     if (step === 1 && installUrl) return () => setInstallUrl("");
     if (step === 1) return () => setStep(0);
     if (step === 2) return () => { setPlan(null); setStep(1); };
-    return undefined; // Past the point of no return: the import is running.
+    return undefined;
   }, [step, installUrl]);
 
   return (
@@ -377,8 +350,6 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     </WizardShell>
   );
 }
-
-// ── Steps ───────────────────────────────────────────────────────────────────
 
 const glyph = <DiscordMark className="size-14 text-[#5865F2]" />;
 
@@ -636,8 +607,6 @@ function ReviewStep(props: {
         )}
       </Section>
 
-      {/* Only once they've actually ticked one: a warning about a thing you
-          didn't choose is noise, and teaches people to skip the real ones. */}
       {plan.channels.some((c) => c.private && c.selected && c.bridge) && (
         <Alert variant="destructive">
           <Lock className="size-4" />

@@ -13,37 +13,13 @@ import type { ChatMsg, ChatTransport, MessageReactions, ReactInput, ReactionTall
 import type { DecryptedDM } from "@/hooks/useDirectMessages";
 import type { OpenedDm } from "@/lib/nip17/protocol";
 
-/** Shared empty tally array, so messages with no reactions keep a stable prop. */
 const EMPTY_TALLIES: ReactionTally[] = [];
 
 /**
- * The merged timeline's skeleton gate.
- *
- * A DM thread is two INDEPENDENTLY-loading planes merged into one list, and
- * the skeleton replaces the scroller outright — so OR-ing the two `isLoading`
- * flags let either plane hide the other's messages. In practice that was
- * one-directional and constant: a modern conversation lives entirely on the
- * NIP-17 plane, its kind-4 half therefore reads zero rows locally, and the
- * kind-4 half's `isLoading` used to stay true for the whole of its first relay
- * pull. Every rumor could be folded and ready and the view still showed a
- * placeholder thread until a network round for messages that do not exist
- * finished — worst on a cold Android launch from a notification tap, where the
- * relays are unauthenticated and the pull runs to its 8s timeout.
- *
- * So: whatever is painted, paint it. The skeleton means "nothing to show yet
- * and a local read is still running", which is the only claim it can honestly
- * make — a plane still reading will drop its rows into the merge when it lands.
- *
- * One extra hold, and only one: until NIP-17's first LOCAL paint has resolved
- * (`dm17FirstPaintReady`). The two planes seed their first frame asymmetrically
- * — kind-4 from a SYNCHRONOUS localStorage snapshot (frame 0), NIP-17 from an
- * async KV prewarm a hop later — so a thread living on both planes would flash
- * its kind-4 half alone and then reflow as the NIP-17 rows dropped in beneath
- * it. Holding the merged skeleton across that one hop lets both snapshots paint
- * together. It is bounded by the PREWARM's single KV read (hit or miss), never
- * the store read's first-of-session legacy drain — the flag flips the moment
- * the prewarm settles, so this can never resurrect the stuck-skeleton the rest
- * of this gate exists to prevent.
+ * The merged timeline's skeleton gate. Paint whatever is ready: OR-ing both planes'
+ * `isLoading` let an empty kind-4 relay pull hide ready NIP-17 rows for up to 8s.
+ * The one extra hold is NIP-17's first local paint (`dm17FirstPaintReady`, one KV read),
+ * so a two-plane thread doesn't flash its synchronously seeded kind-4 half alone.
  */
 export function shouldShowDmTimelineLoading(
   mergedMessageCount: number,
@@ -57,10 +33,8 @@ export function shouldShowDmTimelineLoading(
 }
 
 /**
- * Thrown by {@link useDmTransport}'s `send` when the peer isn't reachable over
- * NIP-17 and the caller hasn't opted into the legacy kind-4 downgrade. The DM
- * page catches this to surface an explicit "send with legacy encryption"
- * affordance instead of silently downgrading.
+ * Thrown by `send` when the peer isn't NIP-17-reachable and the caller hasn't opted into
+ * the kind-4 downgrade; the DM page offers an explicit legacy-send affordance.
  */
 export class LegacyFallbackRequired extends Error {
   constructor() {
@@ -71,36 +45,10 @@ export class LegacyFallbackRequired extends Error {
 
 
 /**
- * Build a {@link ChatTransport} for a DM thread, so DMs render through the
- * same `MessageTimeline` / `ChatMessage` path as NIP-29 groups and Concord
- * communities instead of a bespoke timeline.
- *
- * A GROUP conversation is NIP-17 only: kind-4 is a pairwise cipher with no
- * group form, so the legacy plane is not merged, not offered, and cannot be
- * fallen back to — `legacyPeer` is undefined for anything with more than one
- * participant and every kind-4 input below degenerates to empty.
- *
- * The thread is the MERGE of two planes:
- *
- *   - Legacy kind-4 (NIP-04) events — Armada's historical DM plane, still
- *     read/written for peers that haven't published a NIP-17 inbox.
- *   - NIP-17 gift-wrapped rumors (kind 14/15) — the modern plane, with
- *     reactions (kind-7 rumors), deletes (kind-5 rumors), and optional NIP-17
- *     replacement edits in-band.
- *
- * Sends prefer NIP-17 whenever the peer has published a kind-10050 DM-relay
- * list (the spec's "ready to receive" signal) and the signer does NIP-44.
- * When the peer is NOT NIP-17-reachable, the legacy kind-4 plane is the only
- * option — but it's a privacy downgrade (kind-4 leaks who's talking and when),
- * so it is NEVER used silently: `send` refuses with `LegacyFallbackRequired`
- * and the caller must opt in explicitly (`send(text, tags, { allowLegacy })`)
- * after telling the user. Reactions/deletes/edits exist only on the NIP-17 plane.
- *
- * Two kind-4-specific concerns the shared timeline can't model are surfaced
- * alongside the transport for the page's `renderMessage` to handle:
- *   - `encryptedIds`: kind-4 ids whose plaintext hasn't been decrypted yet
- *     (NIP-17 rumors are stored decrypted — never placeholders).
- *   - `decryptVisible`: decrypt a placeholder by id (IntersectionObserver).
+ * {@link ChatTransport} for a DM thread, merging legacy kind-4 (NIP-04) with NIP-17 rumors
+ * (kind 14/15 plus in-band reactions, deletes, edits). Groups are NIP-17 only.
+ * Sends prefer NIP-17; kind-4 leaks metadata, so it's never used silently — `send` throws
+ * `LegacyFallbackRequired` unless `{ allowLegacy }`.
  */
 export function useDmTransport(
   conversation: string,
@@ -108,65 +56,33 @@ export function useDmTransport(
   focusedRumorId?: string,
 ): {
   transport: ChatTransport;
-  /**
-   * The merged timeline as generalized entries: chat rows plus the
-   * disappearing-messages timer changes, chronologically interleaved. Passed
-   * to `MessageTimeline`'s `entries` so the notices render in the feed the way
-   * Signal's do.
-   */
+  /** Chat rows plus timer-change notices, chronologically interleaved. */
   entries: ChannelTimelineEntry[];
   /**
-   * Whether a catch-up is still running over an EMPTY thread, so "no messages"
-   * isn't a verdict yet. Deliberately not part of `transport.isLoading` (the
-   * skeleton stands for the local read alone): the timeline takes this as its
-   * own prop and says "Catching up…" in place of the empty state, exactly as a
-   * Concord channel does.
+   * Catch-up still running over an EMPTY thread; separate from `transport.isLoading`
+   * (local read only) so the timeline says "Catching up…".
    */
   syncing: boolean;
-  /**
-   * The conversation's disappearing-messages timer in seconds (0 = off), and
-   * the setter either participant uses to change it. NIP-17 plane only —
-   * legacy kind-4 has no in-band channel for conversation state.
-   */
+  /** Timer in seconds (0 = off); NIP-17 plane only. */
   disappearingTimer: number;
   setDisappearingTimer: (seconds: number) => void;
-  /** Ids of kind-4 messages still awaiting lazy decryption (placeholder rows). */
   encryptedIds: Set<string>;
   /** Ids of NIP-17 rumors (unsigned; the page passes the `rumor` menu prop). */
   dm17Ids: Set<string>;
-  /**
-   * Whether sends go over NIP-17. True when the private plane is usable and
-   * the per-conversation preference isn't pinned to legacy NIP-04.
-   */
   dm17Enabled: boolean;
-  /** Decrypt a placeholder message by id (on scroll into view). */
   decryptVisible: (id: string) => void;
-  /** Explicitly decrypt one message (per-message "Decrypt" button). */
   decryptOne: (id: string) => void;
-  /** Explicitly decrypt every encrypted row + grant consent ("Decrypt all"). */
   decryptAll: () => void;
-  /** Whether the user declined bulk decryption (drives the manual controls). */
   decryptDeclined: boolean;
-  /** Whether any row is still an encrypted placeholder. */
   hasEncrypted: boolean;
-  /** Whether the peer can receive private NIP-17 DMs (published a kind-10050 inbox). */
   canDm17: boolean;
-  /**
-   * Whether this conversation is deliberately pinned to legacy NIP-04 (the
-   * per-conversation preference). Sends go over kind-4 without the
-   * LegacyFallbackRequired opt-in, and the page skips the downgrade notice.
-   */
+  /** Deliberately pinned to NIP-04: sends skip the LegacyFallbackRequired opt-in. */
   legacyPinned: boolean;
-  /**
-   * Sign + optimistically send a DM; resolves once rendered (relay in bg).
-   * Routes NIP-17 when the peer is reachable; otherwise throws
-   * {@link LegacyFallbackRequired} unless `opts.allowLegacy` opts into kind-4.
-   */
+  /** Resolves once rendered. Throws {@link LegacyFallbackRequired} unless `opts.allowLegacy`. */
   send: (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => Promise<void>;
 } {
   const { user } = useCurrentUser();
-  // The one peer the legacy plane can address. Undefined for a group, which
-  // takes every kind-4 branch below to its empty case.
+  // Undefined for a group, taking every kind-4 branch to its empty case.
   const legacyPeer = peers.length === 1 ? peers[0] : undefined;
   const {
     messages,
@@ -186,15 +102,11 @@ export function useDmTransport(
 
   const dm17 = useDm17Thread(conversation, focusedRumorId);
   const self = user?.pubkey;
-  // A group has no legacy plane to pin to, so it is never "pinned to NIP-04"
-  // however the first participant's own 1:1 preference happens to be set.
+  // A group is never "pinned to NIP-04".
   const { pref: peerPref } = useDmProtocolPref(legacyPeer ?? "");
   const pref = legacyPeer ? peerPref : "auto";
 
-  // Adapt DecryptedDM → ChatMsg, preserving object identity for unchanged
-  // messages so React.memo on the rows holds (a fresh array lands on every
-  // poll/decrypt). Key the cache on content + status, the only fields that
-  // affect the rendered row.
+  // Preserve object identity for unchanged messages so React.memo on rows holds.
   const adaptCache = useRef(new Map<string, { sig: string; msg: ChatMsg }>());
   const kind4Messages = useMemo<ChatMsg[]>(() => {
     const cache = adaptCache.current;
@@ -223,7 +135,6 @@ export function useDmTransport(
     return out;
   }, [messages]);
 
-  // Adapt NIP-17 rumors → ChatMsg with the same identity-caching discipline.
   const dm17AdaptCache = useRef(new Map<string, { sig: string; msg: ChatMsg }>());
   const dm17Messages = useMemo<ChatMsg[]>(() => {
     const cache = dm17AdaptCache.current;
@@ -253,21 +164,16 @@ export function useDmTransport(
   }, [dm17.messages]);
 
   const dm17Ids = useMemo(() => new Set(dm17Messages.map((m) => m.id)), [dm17Messages]);
-  // Read through a ref by the per-message actions below. `dm17Ids` is rebuilt
-  // with every page of history, and an action that depended on it changed
-  // identity with it — handing every own row a new `onDelete` (and the rest)
-  // on each scroll-back page, which re-rendered the whole loaded thread.
+  // Via a ref: `dm17Ids` changes every history page, which would re-render every row.
   const dm17IdsRef = useRef(dm17Ids);
   dm17IdsRef.current = dm17Ids;
-  /** Rumor kind by id, for reaction/delete targets (`k` tags). */
   const dm17KindById = useMemo(() => {
     const out = new Map<string, number>();
     for (const m of dm17.messages) out.set(m.rumorId, m.kind);
     return out;
   }, [dm17.messages]);
 
-  // The merged, ascending timeline. Ids never collide across planes (event
-  // ids vs rumor hashes), so this is a pure sort-merge.
+  // Ids never collide across planes, so this is a pure sort-merge.
   const chatMessages = useMemo<ChatMsg[]>(() => {
     if (dm17Messages.length === 0) return kind4Messages;
     if (kind4Messages.length === 0) return dm17Messages;
@@ -276,9 +182,6 @@ export function useDmTransport(
     );
   }, [kind4Messages, dm17Messages]);
 
-  // Chat rows + timer-change notices, chronologically. Built here rather than
-  // in the page so the two planes' merge stays in one place; a thread that has
-  // never had a timer produces no extra entries at all.
   const dm17TimerChanges = dm17.timerChanges;
   const entries = useMemo<ChannelTimelineEntry[]>(() => {
     const out: ChannelTimelineEntry[] = chatMessages.map((message) => ({
@@ -289,8 +192,7 @@ export function useDmTransport(
     }));
     for (const change of dm17TimerChanges) {
       const seconds = dmTimerSeconds(change);
-      // A timer rumor we can't read is not a change to show — never guess
-      // "off", which would misreport the conversation's state to the user.
+      // An unreadable timer rumor is skipped — never guess "off".
       if (seconds === undefined) continue;
       out.push({
         type: "dm-timer",
@@ -308,8 +210,6 @@ export function useDmTransport(
     [messages],
   );
 
-  // Optimistic send status: kind-4 rows embed theirs; NIP-17 tracks pending
-  // rumors in the thread hook.
   const kind4StatusById = useMemo(() => {
     const out = new Map<string, SendStatus>();
     for (const m of messages) {
@@ -340,9 +240,7 @@ export function useDmTransport(
     [dm17.discard], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  // ── Reactions (NIP-17 plane only) ─────────────────────────────────────────
-  // Tally kind-7 rumors per target: one reaction per (pubkey, key), latest
-  // wins; retracting publishes a kind-5 delete of the own reaction rumor.
+  // Reactions (NIP-17 only): one per (pubkey, key), latest wins.
   const talliesById = useMemo(() => {
     const out = new Map<string, ReactionTally[]>();
     for (const [targetId, reactions] of dm17.reactionsByTarget) {
@@ -378,18 +276,13 @@ export function useDmTransport(
 
   const dm17React = dm17.react;
   const dm17RemoveReaction = dm17.removeReaction;
-  // Both caches outlive a recompute of `talliesById`, which rebuilds EVERY
-  // tally array whenever any reaction in the thread changes (and whenever a
-  // page of history lands). Rebuilding the per-row objects with it handed every
-  // memoized message row a new `reactions` prop, so one reaction — or one
-  // scroll-back page — re-rendered the whole thread.
+  // Caches outlive `talliesById` recomputes so rows keep a stable `reactions` prop.
   const reactDeps = useRef({ dm17React, dm17RemoveReaction, dm17KindById });
   reactDeps.current = { dm17React, dm17RemoveReaction, dm17KindById };
   const reactCache = useRef(new Map<string, (input: ReactInput) => void>());
   const reactionCache = useRef(new Map<string, MessageReactions>());
   const reactionsFor = useMemo(() => {
-    // The react fn reads its collaborators through a ref, so it is stable per
-    // message id for the life of the transport.
+    // Reads collaborators through a ref, so it's stable per message id.
     const reactFor = (id: string) => {
       let fn = reactCache.current.get(id);
       if (!fn) {
@@ -412,9 +305,7 @@ export function useDmTransport(
     };
   }, [talliesById]);
 
-  // Handed to every own message row, so read through a ref with `[]` deps: the
-  // underlying senders change identity with pending state, and a new prop per
-  // render re-rendered each of those rows.
+  // Ref with `[]` deps: senders change identity with pending state.
   const dm17WritersRef = useRef({ deleteMessage: dm17.deleteMessage, editMessage: dm17.editMessage });
   dm17WritersRef.current = { deleteMessage: dm17.deleteMessage, editMessage: dm17.editMessage };
   const deleteMessage = useCallback((event: ChatMsg) => {
@@ -428,7 +319,6 @@ export function useDmTransport(
     await dm17WritersRef.current.editMessage(original.id, content);
   }, []);
 
-  // ── Backfill: both planes page independently; sum what they prepend. ──────
   const dm17LoadOlder = dm17.loadOlder;
   const loadOlder = useCallback(async () => {
     const [a, b] = await Promise.all([loadOlderKind4(), dm17LoadOlder()]);
@@ -438,31 +328,22 @@ export function useDmTransport(
   const isLoadingOlder = isLoadingOlderKind4 || dm17.isLoadingOlder;
 
   const dm17Send = dm17.send;
-  // NIP-17 is the plane whenever the private path is usable AND the peer isn't
-  // pinned to legacy NIP-04 for this conversation. When pinned to legacy we
-  // treat NIP-17 as disabled so the UI (composer vs notice, reactions, etc.)
-  // reflects the kind-4 plane the user chose.
+  // When pinned to legacy, NIP-17 is treated as disabled so the UI reflects kind-4.
   const dm17Usable = dm17.canSend;
   const dm17Enabled = dm17Usable && pref !== "nip04";
   const sendText = useCallback(
     async (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => {
-      // Explicit per-conversation pin to legacy NIP-04: a deliberate, persisted
-      // choice, so route kind-4 directly (no LegacyFallbackRequired dance).
+      // A persisted pin to NIP-04: route kind-4 directly, no LegacyFallbackRequired.
       if (pref === "nip04" && legacyPeer) {
         await sendKind4(text);
         return;
       }
       if (dm17Usable) {
-        // Drop group-scoping tags the composer builds for relay chats, and the
-        // composer's own `p` mentions — the rumor's `p` set IS the room under
-        // NIP-17, so a mention smuggled in there would silently move the
-        // message into a different conversation. Content tags (imeta/q/emoji)
-        // ride inside the sealed rumor unchanged.
+        // Drop `h` group tags and composer `p` mentions: under NIP-17 the `p` set IS the room.
         const extraTags = (tags ?? []).filter(([name]) => name !== "h" && name !== "p");
         await dm17Send(text, extraTags);
       } else if (opts?.allowLegacy && legacyPeer) {
-        // Explicit user opt-in only: kind-4 is a privacy downgrade, never the
-        // silent default (see LegacyFallbackRequired).
+        // Explicit user opt-in only (see LegacyFallbackRequired).
         await sendKind4(text);
       } else {
         throw new LegacyFallbackRequired();

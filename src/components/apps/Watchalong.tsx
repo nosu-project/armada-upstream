@@ -39,17 +39,9 @@ function newId(): string {
 }
 
 /**
- * A watchalong with a shared queue. Anyone can add YouTube videos (or a
- * playlist) or direct video-file links by pasting them, reorder/skip, and
- * play/pause; the player plays the queue in order and stays synchronised across
- * everyone in the chat via the {@link AppSync} coordination plane (the same
- * plane that backs webxdc apps). YouTube entries play in the IFrame embed;
- * direct links in a `<video>` ({@link DirectVideoPlayer}) driven by the same
- * snapshot. The snapshot's wire format is documented in `lib/watchalong.ts`.
- *
- * Ads: the embedded player serves ads per-viewer and exposes no ad controls, so
- * they can't be skipped and they desync playback during breaks; the drift guard
- * resyncs everyone once the break ends.
+ * A watchalong with a shared queue (YouTube or direct video links), synced via
+ * the {@link AppSync} plane. Wire format: `lib/watchalong.ts`. Embedded YouTube
+ * ads can't be skipped and desync playback; the drift guard resyncs after.
  */
 export function Watchalong({ sync }: { sync: AppSync }) {
   const api = useWebxdcApi(sync);
@@ -75,7 +67,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
   const currentKey = current ? current.id : "";
   const currentPlayer = queueItemPlayer(current);
 
-  // ── Broadcast a new snapshot (and apply it locally) ──────────────────────
   const commit = useCallback(
     (next: Omit<WatchSnapshot, "rev" | "at">) => {
       const snapshot: WatchSnapshot = { ...next, rev: snapRef.current.rev + 1, at: Date.now() };
@@ -85,7 +76,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
     [api],
   );
 
-  // ── Apply an incoming snapshot if it's newer ─────────────────────────────
   const applySnapshot = useCallback((incoming: WatchSnapshot) => {
     if (incoming.rev <= snapRef.current.rev) return;
     setSnap(incoming);
@@ -120,17 +110,13 @@ export function Watchalong({ sync }: { sync: AppSync }) {
     else commit({ ...s, playing: false });
   }, [commit]);
 
-  // ── (Re)build the player when the now-playing entry changes ──────────────
   useEffect(() => {
     if (nativeIosPlayer || currentPlayer !== "youtube" || !current || !containerRef.current) return;
     let destroyed = false;
     let player: YTPlayer | null = null;
     const entry = current;
 
-    // The API REPLACES the node it is given with its iframe, so it gets a node
-    // created here rather than the React-owned container: React can then
-    // unmount the container (say, for a direct video) whether or not the
-    // player's cleanup has run yet.
+    // The API REPLACES the node it's given, so give it one React doesn't own.
     const host = containerRef.current;
     const mount = document.createElement("div");
     mount.className = "h-full w-full";
@@ -140,7 +126,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
       if (destroyed) return;
       player = new YT.Player(mount, {
         videoId: entry.videoId,
-        // The iframe takes the mount's place inside the full-bleed container.
         width: "100%",
         height: "100%",
         host: "https://www.youtube-nocookie.com",
@@ -176,7 +161,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
       } catch {
         /* ignore */
       }
-      // Whatever the API left behind (its iframe, if destroy threw).
       host.replaceChildren();
       playerRef.current = null;
       setReady(false);
@@ -191,7 +175,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.playing, snap.time, snap.at, ready]);
 
-  // ── Queue mutations ──────────────────────────────────────────────────────
   const addToQueue = useCallback(() => {
     const link = classifyWatchLink(urlInput);
     if (link.kind === "invalid") {
@@ -292,7 +275,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Add-to-queue bar — link only (no in-app search). */}
       <div>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
@@ -320,8 +302,7 @@ export function Watchalong({ sync }: { sync: AppSync }) {
         {inputError && <p className="mt-1 px-1 text-xs text-destructive">{inputError}</p>}
       </div>
 
-      {/* Player. Capped to ~45vh so the queue below stays on-screen (the stage
-          isn't scrollable; an unbounded 16:9 box would push the queue off). */}
+      {/* Capped to ~45vh so the queue stays on-screen (the stage isn't scrollable). */}
       {current ? (
         <div className="mx-auto w-full max-h-[45vh] aspect-video overflow-hidden clip-corner-lg bg-black relative">
           {currentPlayer === "video" && current.url ? (
@@ -373,7 +354,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
         </div>
       )}
 
-      {/* Transport: prev / next across the queue. */}
       {hasQueue && (
         <div className="flex items-center justify-center gap-1">
           <Tooltip>
@@ -409,7 +389,6 @@ export function Watchalong({ sync }: { sync: AppSync }) {
         </div>
       )}
 
-      {/* Queue */}
       {hasQueue && (
         <div className="clip-corner-lg bg-chrome p-1.5">
           <div className="flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
@@ -438,15 +417,9 @@ export function Watchalong({ sync }: { sync: AppSync }) {
 }
 
 /**
- * A direct video-file entry, played in a `<video>` driven by the shared
- * snapshot the same way the YouTube embed is: the snapshot is applied on load
- * and on every change ({@link applySnapshotToVideo}), and the viewer's own
- * play/pause/seek/speed changes on the native controls are committed back.
- * Changes this component makes itself are ignored for a short window, as the
- * embed path does, so applying a snapshot never echoes as a new one.
- *
- * The URL is peer-supplied, so it loads through the media policy
- * (`useMediaWithFallback`, as `VideoPlayer` does) — proxied when a proxy is set.
+ * A direct video entry, driven by the shared snapshot like the YouTube embed;
+ * self-made changes are ignored briefly so applying never echoes. The URL is
+ * peer-supplied, so it loads through the media policy (`useMediaWithFallback`).
  */
 function DirectVideoPlayer({
   url,
@@ -469,12 +442,9 @@ function DirectVideoPlayer({
   }, [snap]);
   const applying = useRef(false);
   const applyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // The browser refused to start playback without a gesture on this page.
   const [blocked, setBlocked] = useState(false);
-  // Read by `report`: while a play this component asked for is unsettled or
-  // was refused, the element is paused only because the BROWSER said no, and
-  // a late `seeked` from the same apply must not broadcast that as the room
-  // pausing — which is what a late joiner with autoplay blocked would do.
+  // Set while a play we requested is unsettled or refused, so a late `seeked`
+  // doesn't broadcast a browser-forced pause as the room pausing.
   const playNotOurs = useRef(false);
 
   const apply = useCallback(() => {
@@ -513,7 +483,7 @@ function DirectVideoPlayer({
   }, [onPlayback]);
 
   const handlePause = useCallback(() => {
-    // The pause at the end of the file is `ended`'s to handle (it advances).
+    // `ended` handles the end-of-file pause (it advances).
     if (videoRef.current?.ended) return;
     report();
   }, [report]);
@@ -562,7 +532,7 @@ function DirectVideoPlayer({
   );
 }
 
-/** One row in the queue: thumbnail/title (resolved via keyless oEmbed) + controls. */
+/** One queue row; title resolved via keyless oEmbed. */
 function QueueRow({
   item,
   isCurrent,

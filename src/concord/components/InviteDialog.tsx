@@ -24,17 +24,9 @@ import { cn } from "@/lib/utils";
 import type { Community } from "@/concord/lib/types";
 
 /**
- * Invite people to a Concord community two ways (CORD-05): a direct
- * gift-wrapped key handoff to someone found by name (NIP-50 search, follows
- * first), or a shareable public link — the path carries the bundle's naddr
- * locator, the `#fragment` carries the unlock token, never sent to any server.
- * Links revoke without re-keying; a direct invite is unrevocable and keeps the
- * community Private.
- *
- * Presented as a full-screen bottom sheet on a phone and a centered modal on a
- * pointer device. The body is a tall stack — a search field with results, a
- * link row, a collapsible options panel and the live-link list — which a
- * centered card can only ever show a slice of on a 360px screen.
+ * Invite people (CORD-05): a direct gift-wrapped key handoff (community stays
+ * Private), or a public link whose `#fragment` unlock token never reaches a
+ * server. Bottom sheet on phones, modal on pointer devices.
  */
 export function InviteDialog({
   community,
@@ -45,17 +37,12 @@ export function InviteDialog({
   community: Community | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Owner/admin only. Members still invite people one by one, but the shareable
-      link section (mint/revoke/live links) is hidden from them. */
+  /** Owner/admin only; members can still invite directly. */
   canCreateLink: boolean;
 }) {
   const isMobile = useIsMobile();
-  // Radix's RemoveScroll allowlists the overlay subtree and the dialog's own
-  // content node (its `shards`) — nothing else. A popover portaled to <body>
-  // therefore has its wheel/touch scroll prevented, which is what left the
-  // search results list unscrollable. Portaling into the content node puts it
-  // back inside the allowlist, and on the phone it also lets vaul read the
-  // list as a scrollable child rather than a swipe on the sheet.
+  // Radix RemoveScroll only allows scrolling in the content node, so popovers
+  // portal into it (also lets vaul treat the list as scrollable).
   const [portalNode, setPortalNode] = useState<HTMLDivElement | null>(null);
 
   if (isMobile) {
@@ -66,8 +53,7 @@ export function InviteDialog({
           className="mt-0 h-[100dvh] max-h-[100dvh] rounded-t-none bg-chrome pt-[env(safe-area-inset-top)]"
         >
           <DrawerTitle className="sr-only">Invite people</DrawerTitle>
-          {/* A full-screen sheet has no visible edge to swipe from, so the
-              drag handle alone isn't a discoverable way out. */}
+          {/* A full-screen sheet has no visible edge to swipe, so offer a close button. */}
           <DrawerClose asChild>
             <Button
               type="button"
@@ -79,9 +65,7 @@ export function InviteDialog({
               <X className="size-5" />
             </Button>
           </DrawerClose>
-          {/* The container is the sheet, not this scroller: the popover is
-              position:fixed against the transformed sheet, so an overflow box
-              in between would clip it. */}
+          {/* The popover is fixed against the transformed sheet; an overflow box between would clip it. */}
           <div className="chrome-dialog flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6">
             <PortalContainerProvider value={portalNode ?? undefined}>
               <InviteBody community={community} canCreateLink={canCreateLink} />
@@ -136,11 +120,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     }
   };
 
-  /**
-   * My newest link that can still be joined. "Invite" reuses it instead of
-   * minting one per tap: every extra live link is another door to revoke later
-   * and they all lead to the same community.
-   */
+  /** Newest joinable link, reused so each tap doesn't mint another door to revoke. */
   const liveLink = (() => {
     const now = Math.floor(Date.now() / 1000);
     return (
@@ -150,11 +130,8 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     );
   })();
 
-  /** Mint a link with the options as set, confirming the two lines it crosses. */
   const mintLink = async (): Promise<string> => {
-    // The first live link flips the derived mode Public (CORD-05 §5). Whether
-    // bans still rotate is per-banner (foreign links gate rotations, own links
-    // don't) — the ban dialog's step list tells that truth case by case.
+    // The first live link flips the community Public (CORD-05 §5).
     if (
       !isPublic &&
       !confirm(
@@ -163,8 +140,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     ) {
       throw new Error("Cancelled");
     }
-    // Announcing publishes the full link (secret included) as a public note —
-    // a real privacy step, so confirm it explicitly.
+    // Announcing publishes the secret link publicly, so confirm.
     if (
       listPublicly &&
       !confirm(
@@ -181,10 +157,8 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
   };
 
   /**
-   * One tap: hand a live link straight to the system share sheet, minting one
-   * first ONLY when there is none to reuse. Reusing skips the relay round trip
-   * entirely — which is also what keeps the click's user activation alive, since
-   * `navigator.share` refuses to open once an await has swallowed it.
+   * Share a live link, minting only if none exists. Reuse skips the await that
+   * would otherwise consume the user activation `navigator.share` needs.
    */
   const handleInvite = async (forceNew = false) => {
     setError(null);
@@ -265,10 +239,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
         </div>
       </div>
 
-      {/* Direct invite — search by name, follows first. A key handoff: the
-          bundle giftwraps straight to them, and the community stays Private.
-          Deliberately NOT autofocused: on a phone that throws the keyboard up
-          over the rest of the sheet before the user has seen it. */}
+      {/* Not autofocused: on a phone the keyboard would cover the sheet. */}
       <div className="w-full space-y-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <UserPlus className="size-3.5" />
@@ -282,8 +253,6 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
         )}
       </div>
 
-      {/* Public link — the escape hatch / share-anywhere path. Owner/admin only;
-          a plain member invites people one by one above. */}
       {canCreateLink && (
       <div className="w-full space-y-2 border-t border-chrome pt-5">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -301,11 +270,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
             </PopoverContent>
           </Popover>
         </div>
-        {/* One button, one job, one shape: it hands a link to the share sheet.
-            It does not become a link row afterwards — the minted link is
-            already listed under "Your live links" below, and swapping the
-            control out from under the tap that just succeeded means the next
-            invite needs a different gesture than the last one. */}
+        {/* Stays a button after minting so the next invite uses the same gesture. */}
         <Button
           type="button"
           variant="secondary"
@@ -357,7 +322,6 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
               />
             </div>
 
-            {/* Opt-in public directory listing. */}
             <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
               <Label
                 htmlFor="list-publicly"
@@ -376,10 +340,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
               </Label>
             </div>
 
-            {/* "Invite" reuses the newest live link; these options only mean
-                anything for a link that doesn't exist yet, so they get their
-                own action rather than silently changing what the tap above
-                does. */}
+            {/* These options only apply to a new link, so they get their own action. */}
             <Button
               type="button"
               variant="ghost"

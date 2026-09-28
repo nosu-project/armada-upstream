@@ -7,19 +7,13 @@ import { nostrPubkeyToBitcoinAddress, fetchAddressData, fetchBtcPrice, fetchTran
 
 interface UseBitcoinWalletOptions {
   /**
-   * Whether to actually hit the network. Callers that stay mounted while their
-   * UI is hidden (e.g. a dialog rendered unconditionally with `open={false}`)
-   * must pass their visibility here — otherwise the polling below runs for the
-   * whole session against a third-party Esplora backend the user never asked
-   * to contact.
+   * Whether to hit the network. Always-mounted hidden UIs must pass visibility, or
+   * polling contacts a third-party Esplora backend all session.
    */
   enabled?: boolean;
 }
 
-/**
- * Derives a Bitcoin Taproot address from the current user's Nostr pubkey and
- * fetches the on-chain balance + tx history from Esplora.
- */
+/** Derive the user's Taproot address from their pubkey and fetch balance + history from Esplora. */
 export function useBitcoinWallet({ enabled = true }: UseBitcoinWalletOptions = {}) {
   const { user } = useCurrentUser();
   const esploraApis = useEsploraApis();
@@ -47,10 +41,7 @@ export function useBitcoinWallet({ enabled = true }: UseBitcoinWalletOptions = {
   const { data: btcPrice } = useQuery({
     queryKey: ['btc-price', esploraApis],
     queryFn: ({ signal }) => fetchBtcPrice(esploraApis, signal),
-    // Mempool.space refreshes its price feed roughly once a minute; there's
-    // no reason to refetch faster than that, and treating the value as fresh
-    // for the same window stops us from firing off a new request every time
-    // the wallet page mounts.
+    // Mempool.space's price feed refreshes about once a minute.
     enabled,
     refetchInterval: enabled ? 60_000 : false,
     refetchIntervalInBackground: false,
@@ -69,23 +60,15 @@ export function useBitcoinWallet({ enabled = true }: UseBitcoinWalletOptions = {
   });
 
   return {
-    /** The derived bc1p... Taproot address. */
     bitcoinAddress,
     /** Balance and transaction data (undefined while loading). */
     addressData,
-    /** Current BTC price in USD. */
     btcPrice,
-    /** Transaction history for the address. */
     transactions,
-    /** Whether the initial balance fetch is in progress. */
     isLoading,
-    /** Whether transactions are still loading. */
     isLoadingTxs,
-    /** Error from the balance query, if any. */
     error,
-    /** Manually trigger a balance refresh. */
     refetch,
-    /** The current user's hex pubkey (convenience). */
     pubkey: user?.pubkey ?? '',
   };
 }

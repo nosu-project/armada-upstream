@@ -25,53 +25,27 @@ const WRAP_SINCE_SLACK_SECS = 3600;
 /** Stored-replay cap for the DM gift-wrap filter on a session's FIRST round. */
 const DM_WRAP_REPLAY_LIMIT = 100;
 /**
- * Stored-replay cap once a relay's round has EOSEd this session. The wrap
- * filter's `since` rewinds the full backdate window every round (it must, for
- * LIVE delivery — see {@link stampRoundSince}), so each routine 90s quiet
- * rotation replayed the newest {@link DM_WRAP_REPLAY_LIMIT} wraps of a 2-day
- * window as pure duplicate ciphertext (~100-150 KB per rotation per DM relay).
- * After the first EOSE the store already holds that window; the small cap
- * keeps a short-gap overlap, and anything deeper (a burst missed while the
- * device slept) is recovered by the DM inbox poll's periodic full scan.
+ * Wrap replay cap once a relay has EOSEd this session. The wrap `since`
+ * rewinds the whole backdate window every round, so each 90s rotation
+ * replayed ~100 duplicate wraps; deeper gaps are the DM inbox poll's job.
  */
 const DM_WRAP_REPLAY_LIMIT_STEADY = 10;
 /**
- * Stored-replay cap for the Git child filters once a relay's round has EOSEd
- * this session, for the same reason as {@link DM_WRAP_REPLAY_LIMIT_STEADY}.
- *
- * A ticket's comment/status filters carry `limit: 4_000` so a newly discovered
- * root can pull its whole history on the round that installs it. That bound
- * then applies to EVERY later rotation too — and the wire re-REQs each relay
- * on a 90s quiet rotation, so a relay whose cursor sits behind the tickets it
- * serves re-delivers up to 4,000 stored children per rotation, per relay. A
- * live idle client measured 93% of NIP-34 deliveries as copies of an event
- * already in hand, across four relays carrying the same repositories.
- *
- * After EOSE the store already holds that window, so the cap only needs to
- * cover a short overlap. Anything deeper is recovered by the paths that exist
- * for it: `useWireGitTicketRoots`' child backfill and `useGitProjects`' deep
- * per-repository sync.
+ * Git child-filter replay cap after EOSE. The installing round's
+ * `limit: 4_000` would otherwise apply to every 90s rotation (93% duplicate
+ * deliveries measured). Deeper history: `useWireGitTicketRoots` backfill and
+ * `useGitProjects` sync.
  */
 const GIT_CHILD_REPLAY_LIMIT_STEADY = 100;
 /** Conservative relay-filter cardinality: keeps REQ frames comfortably small. */
 export const GIT_ROOT_FILTER_CHUNK_SIZE = 100;
 
-/**
- * Whether a filter is the wire's NIP-17 DM gift-wrap inbox filter
- * (`{kinds:[1059], "#p":[me]}`). Concord wrap filters share the kind but
- * are `authors`-scoped (stream addresses) and carry no `#p`.
- */
+/** The NIP-17 inbox filter (`{kinds:[1059], "#p":[me]}`); Concord wrap filters use `authors` and no `#p`. */
 function isDmWrapInboxFilter(f: NostrFilter): boolean {
   return !f.authors && f.kinds?.length === 1 && f.kinds[0] === KIND_GIFT_WRAP && Boolean(f["#p"]?.length);
 }
 
-/**
- * Whether a filter is one of the Git ticket CHILD filters built above
- * (`{kinds:[1111], "#E":[roots]}` / `{kinds:[1630..1633], "#e":[roots]}`).
- *
- * Matched on the exact kind set as well as the tag so an unrelated filter that
- * merely carries `#e` — a reaction or a thread read — is never re-capped.
- */
+/** A Git ticket CHILD filter, matched on the exact kind set so other `#e` filters aren't re-capped. */
 function isGitChildFilter(f: NostrFilter): boolean {
   if (f.kinds?.length === 1 && f.kinds[0] === NIP22_COMMENT_KIND && f["#E"]?.length) return true;
   return Boolean(
@@ -81,24 +55,12 @@ function isGitChildFilter(f: NostrFilter): boolean {
 }
 
 /**
- * Stamp a round's filters with their resume `since`.
- *
- * Every ordinary filter gets the cursor-derived `since`. The first round after
- * a Git child filter is added preserves its explicit root timestamp so a
- * relay-wide cursor cannot skip older comments. The NIP-17 gift-wrap inbox
- * filter also gets special treatment: a gift wrap's `created_at` is backdated
- * up to 2 days into the past (NIP-59 `tweakedPast`), and relays apply `since` to LIVE streamed
- * events too, so a cursor-derived `since` (≈ now − 60s) filters out virtually
- * every live wrap: only a backdate that randomly lands inside the overlap
- * window would pass (~0.03%). That deafness is exactly the "DMs only arrive on
- * the 30-60s poll" lag — the standing sub never received the wrap at all.
- *
- * So the wrap filter's `since` rewinds the full backdate window (+ slack)
- * behind `now`, and takes the cursor `since` when it reaches even deeper (a
- * device off for days replays what the window covers). The rewind means every
- * fresh round replays up to 2 days of stored wraps; `limit` bounds that replay
- * (newest-first), and ingest dedupes re-deliveries by wrap id — deeper catch-up
- * is the DM inbox poll's job (which already rewinds the same window).
+ * Stamp a round's filters with their resume `since`. A Git child filter's
+ * first round keeps its root timestamp (a relay-wide cursor would skip older
+ * comments). The NIP-17 wrap filter rewinds the full NIP-59 backdate window
+ * (+ slack): relays apply `since` to LIVE events too, and wraps are backdated
+ * up to 2 days, so a cursor `since` would drop virtually every live wrap.
+ * `limit` bounds the replay; ingest dedupes by wrap id.
  */
 export function stampRoundSince(filters: NostrFilter[], since: number, now: number, preserveExplicitSince = false, replayDone = false): NostrFilter[] {
   const wrapSince = Math.min(since, now - MAX_WRAP_BACKDATE_SECS - WRAP_SINCE_SLACK_SECS);
@@ -106,9 +68,7 @@ export function stampRoundSince(filters: NostrFilter[], since: number, now: numb
   return filters.map((f) => {
     if (isDmWrapInboxFilter(f)) return { ...f, since: wrapSince, limit: wrapLimit };
     const stamped = { ...f, since: preserveExplicitSince && f.since !== undefined ? f.since : since };
-    // Steady state only: the round that INSTALLS a child filter keeps the full
-    // bound, because that is the round expected to pull the ticket's history
-    // (it is also the round carrying the root-derived `since`).
+    // The round that INSTALLS a child filter keeps the full bound to pull history.
     if (replayDone && !preserveExplicitSince && isGitChildFilter(f) && (f.limit ?? 0) > GIT_CHILD_REPLAY_LIMIT_STEADY) {
       stamped.limit = GIT_CHILD_REPLAY_LIMIT_STEADY;
     }
@@ -117,18 +77,14 @@ export function stampRoundSince(filters: NostrFilter[], since: number, now: numb
 }
 
 /**
- * Everything the app needs listened-to, as plain data. This is the SAME shape
- * of information `useNativeNotifications` feeds the APK's persistent service —
- * one spec, two transports (web sockets / native service).
+ * Everything the app listens to, as plain data — the same spec
+ * `useNativeNotifications` feeds the APK service.
  */
 export interface WireInputs {
   /** The logged-in user (DM filters are addressed to them). */
   pubkey?: string;
   /**
-   * Joined NIP-29 groups. relay = the community host (one REQ per host).
-   * `buzz` marks channels on a Buzz relay (see src/buzz/), whose standing
-   * filter carries the wider Buzz kind set instead of the plain NIP-29 one.
-   */
+  /** Joined NIP-29 groups (one REQ per host); `buzz` selects the wider Buzz kind set. */
   groups: Array<{ id: string; relay: string; buzz?: boolean }>;
   /** DM inbox relays (kind-4 reads; NIP-42-authed where the relay gates them). */
   dmRelays: string[];
@@ -139,22 +95,12 @@ export interface WireInputs {
     relays: string[];
     channel: Channel;
     communityIdHex: string;
-    /**
-     * The community's folded set of banned authors (CORD-04). Carried per
-     * channel because that is the shape `useWireConcordChannels` produces, but
-     * it is a community-level fact — every channel of one community carries the
-     * same set. Used to keep a banned member's message from raising a
-     * notification, the same way `foldTimeline` keeps it off the timeline.
-     */
+    /** Community-level banned authors (CORD-04), carried per channel; suppresses notifications. */
     banned?: Set<string>;
   }>;
   /**
-   * Concord CONTROL planes (each carries its control-stream GroupKeys). A
-   * standing subscription to these authors lands new control editions —
-   * channel creations, roster/metadata changes — LIVE for every community, not
-   * only the one you have open, so a member added to a new channel sees it in
-   * the sidebar without waiting for the slow background sweep (or for someone
-   * to post the first message).
+   * Concord CONTROL planes, subscribed so new control editions (channels,
+   * roster) land live for every community, not only the open one.
    */
   concordControl?: Array<{
     relays: string[];
@@ -164,14 +110,8 @@ export interface WireInputs {
     refounded: boolean;
   }>;
   /**
-   * Concord GUESTBOOK planes (each carries its guestbook-stream GroupKeys).
-   *
-   * Here for one reason the control plane's entry doesn't share: a KICK is a
-   * guestbook directive and nothing else — it rotates no key, so it publishes
-   * no control edition and moves no epoch. Without a standing subscription the
-   * only things that ever fetch this plane are `useGuestbook`'s 60s poll and
-   * the 5-minute background sweep, which is why a kicked member kept reading
-   * and writing for up to a minute after being removed.
+   * Concord GUESTBOOK planes: a KICK rotates no key and publishes no control
+   * edition, so without this a kicked member kept access until the 60s poll.
    */
   concordGuestbook?: Array<{
     relays: string[];
@@ -223,18 +163,10 @@ export interface WireSpec {
 }
 
 /**
- * Build the wire's per-relay subscription spec.
- *
- * NIP-29 is relay-per-community: each host relay gets exactly one `#h` filter
- * covering the groups it hosts (NIP-42 AUTH is handled by the relay pool for
- * private groups — the pool signs kind-22242 with the user's signer, and
- * Concord stream keys are additionally authenticated via the stream-auth
- * registry, which matters on relays that gate kind-1059 REQs by `authors`).
- *
- * Muted channels are deliberately INCLUDED: the wire feeds the local stores
- * that timelines and badges hydrate from; muting is a notification/render
- * concern, not an ingestion one. (The APK service, which fires notifications,
- * keeps excluding muted channels in its own config.)
+ * Build the per-relay subscription spec. NIP-29 gets one `#h` filter per host
+ * (NIP-42 AUTH handled by the pool; Concord stream keys via stream-auth).
+ * Muted channels are deliberately INCLUDED: muting is a notification concern,
+ * not an ingestion one.
  */
 export function buildWireSpec(inputs: WireInputs): WireSpec {
   const byRelay = new Map<string, NostrFilter[]>();
@@ -246,11 +178,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     else byRelay.set(relay, [filter]);
   };
 
-  // ── NIP-29: one `#h` filter per host relay ────────────────────────────────
-  // Buzz relays (NIP-29-based, detected via NIP-11) get the wider Buzz kind
-  // set — stream messages v1/v2, edits, deletions, reactions, system rows,
-  // diffs, jobs, forum activity, huddle lifecycle — so Buzz timelines and
-  // unread badges stay live through the same standing subscription.
+  // NIP-29: one `#h` filter per host; Buzz relays get BUZZ_WIRE_KINDS.
   const groupsByRelay = new Map<string, Set<string>>();
   const buzzRelays = new Set<string>();
   for (const g of inputs.groups) {
@@ -268,7 +196,6 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds, "#h": [...ids].sort() });
   }
 
-  // ── DMs: sent + friends-only received, on the DM relays ──────────────────
   if (inputs.pubkey) {
     const follows = [...new Set(inputs.dmFollows)].sort();
     for (const url of inputs.dmRelays) {
@@ -276,22 +203,15 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
       if (follows.length > 0) {
         add(url, { kinds: [KIND_DM], authors: follows, "#p": [inputs.pubkey] });
       }
-      // NIP-17: every gift wrap addressed to the viewer. The wrap author hides
-      // the real sender, so this can't be `authors`-narrowed; useDm17 owns
-      // fetching + decrypting these wraps.
+      // NIP-17 wraps to the viewer; the wrap author hides the sender, so no `authors`.
       add(url, { kinds: [KIND_GIFT_WRAP], "#p": [inputs.pubkey] });
     }
   }
 
-  // ── Concord: merged wrap-author filter per community relay ────────────
-  // The STANDING subscription carries only each channel's CURRENT epoch: a
-  // retired epoch is sealed history with a hard read cutoff (its rotation's
-  // publish time), so nothing legitimate ever arrives there live — holding
-  // every old address open forever was a permanent writable side-channel for
-  // any ejected keyholder, plus unbounded filter growth. History still reaches
-  // the store through the scheduler's backfill, and `concordByPk` keeps EVERY held
-  // epoch so a straggler wrap already in flight (or parked) still decodes —
-  // the decode path enforces the cutoff either way.
+  // Concord chat: the standing sub carries only each channel's CURRENT epoch
+  // (retired epochs are sealed history; holding them open was a side-channel
+  // for ejected keyholders). `concordByPk` keeps every held epoch so stragglers
+  // still decode (the decoder enforces the cutoff).
   const concordByPk = new Map<string, Channel>();
   const concordCommunityByChannel = new Map<string, string>();
   const concordBannedByCommunity = new Map<string, Set<string>>();
@@ -312,11 +232,8 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
-  // ── Concord CONTROL: merged control-author filter per community relay ──
-  // Kept SEPARATE from the chat-wrap map above: control wraps decode with the
-  // control-stream keys (not any channel's) and wake the fold rather than a
-  // chat timeline (see ingest.ts). Filters coalesce with the chat-wrap filter
-  // on the same relay via the shared KIND_WRAP `add` merge — one round trip.
+  // Concord CONTROL: separate map (control keys, wakes the fold — see ingest.ts);
+  // filters still merge per relay.
   const concordCtlByPk = new Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>();
   const ctlPksByRelay = new Map<string, Set<string>>();
   for (const { relays, idHex, groups, refounded } of inputs.concordControl ?? []) {
@@ -333,13 +250,8 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
-  // ── Concord GUESTBOOK: merged guestbook-author filter per community relay ──
-  // A third author set for the same reason control is a second one: these wraps
-  // decode with the guestbook-stream keys and wake the memberlist rather than a
-  // timeline or the fold. Every HELD epoch is subscribed, as the control plane
-  // does — the sweep already reads all of them, so a live sub adds no address a
-  // retired keyholder couldn't already write to, and a Kick published moments
-  // before an epoch roll must still land.
+  // Concord GUESTBOOK: wakes the memberlist. Every HELD epoch is subscribed (as
+  // the sweep reads them) so a Kick just before an epoch roll still lands.
   const concordGbByPk = new Map<string, { idHex: string; groups: StreamKeyView[] }>();
   const gbPksByRelay = new Map<string, Set<string>>();
   for (const { relays, idHex, groups } of inputs.concordGuestbook ?? []) {
@@ -356,9 +268,8 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
-  // ── NIP-34 roots: one #a filter per repository activity relay ─────────────
-  // Detached intervals remain in gitByRepository for store/history filtering,
-  // but never keep a standing socket subscription alive.
+  // NIP-34 roots: one `#a` filter per activity relay; detached intervals stay
+  // in gitByRepository but hold no subscription.
   const gitByRepository = new Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>();
   const reposByRelay = new Map<string, Set<string>>();
   // Earliest live attachment per relay: the CI filter's bootstrap `since`.
@@ -384,23 +295,15 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   for (const [relay, addresses] of reposByRelay) {
     const sorted = [...addresses].sort();
     add(relay, { kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": sorted });
-    // CI runs carry the repository `a` tags directly, so they ride the same
-    // coordinate filter as roots — but they are activity, not announcements,
-    // so the discovery relay is excluded exactly as it is for children.
-    //
-    // The explicit `since` is the attachment time, honored on the bootstrap
-    // round (see stampRoundSince): without it the relay cursor (≈ now) would
-    // apply and runs published before the client started — everything the
-    // channel is entitled to show — would never be requested at all.
+    // CI runs ride the coordinate filter but are activity, so skip discovery
+    // relays. `since` = attachment time for the bootstrap round, or runs from
+    // before startup would never be requested.
     if (!isGitAnnouncementDiscoveryRelay(relay)) {
       add(relay, { kinds: [...CI_EVENT_KINDS], "#a": sorted, since: ciSinceByRelay.get(relay) ?? 0 });
     }
   }
 
-  // ── NIP-22 comments + NIP-34 statuses: dynamic root-id filters ───────────
-  // Child events do not carry the repository announcement. Route them only to
-  // the repository's activity relays, never a discovery relay. NIP-22 uses
-  // uppercase `#E`; NIP-34 status uses lowercase `#e`.
+  // NIP-22 comments (`#E`) + NIP-34 statuses (`#e`) by root id, activity relays only.
   const gitRootById = new Map<string, string>();
   const gitRootAuthorById = new Map<string, string>();
   const rootIdsByRelay = new Map<string, Set<string>>();
@@ -426,10 +329,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     const ids = [...rootIds].sort();
     for (let offset = 0; offset < ids.length; offset += GIT_ROOT_FILTER_CHUNK_SIZE) {
       const chunk = ids.slice(offset, offset + GIT_ROOT_FILTER_CHUNK_SIZE);
-      // A relay cursor is shared by every filter on that relay. A root discovered
-      // after a newer chat event would otherwise install its child filter with a
-      // `since` beyond existing comments. Preserve this root-based bootstrap on
-      // the first subscription round; subsequent rotations use the live cursor.
+      // Root-based `since` for the first round (the shared relay cursor could skip existing comments).
       const childSince = Math.min(...chunk.map((id) => inputs.gitTicketRoots?.find((root) => root.id === id)?.created_at ?? 0));
       add(relay, { kinds: [NIP22_COMMENT_KIND], "#E": chunk, since: childSince, limit: 4_000 });
       add(relay, { kinds: [...GIT_STATUS_KINDS], "#e": chunk, since: childSince, limit: 4_000 });

@@ -15,11 +15,7 @@ import { queryExplicitRelays, queryExplicitRelaysWithStatus } from "@/lib/nip65"
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * BUD-03 Blossom server list kind. A user publishes the media servers they
- * upload to as `server` tags in this plain replaceable event; other clients
- * (and Armada itself, cross-device) read it to know where their blobs live.
- */
+/** BUD-03 Blossom server list kind: `server` tags in a replaceable event. */
 export const KIND_BLOSSOM_SERVERS = 10063;
 
 export interface BlossomServerListQuery {
@@ -28,9 +24,8 @@ export interface BlossomServerListQuery {
 }
 
 /**
- * Read and write the user's Blossom server list (kind 10063). Mirrors
- * useDmRelayList: Settings edits publish the canonical list; NostrSync pulls
- * newer lists into `config.blossomServerMetadata`.
+ * Read/write the user's kind 10063 (like useDmRelayList): Settings publishes;
+ * NostrSync pulls newer lists into `config.blossomServerMetadata`.
  */
 export function useBlossomServerList() {
   const { nostr } = useNostr();

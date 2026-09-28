@@ -7,29 +7,15 @@ interface InsertAtCursorParams {
 }
 
 /**
- * Shared hook for inserting text at the cursor position within a textarea.
- *
- * Returns two helpers:
- * - `insertAtCursor` – splice a replacement string between explicit start/end
- *   offsets (used by autocomplete components like EmojiShortcodeAutocomplete).
- * - `insertEmoji` – insert text at the textarea's *current* selection
- *   (used by the EmojiPicker GUI button).
- *
- * Both restore focus and cursor position after the insertion.
- *
- * The current text is read live from `textareaRef.current.value` (not the
- * `content` argument) so the returned callbacks are STABLE across keystrokes.
- * This matters: these callbacks are passed as props to the autocomplete
- * children, and a fresh identity every keystroke would churn their event
- * listeners and re-run their effects, causing typing jank. `setContent` keeps
- * React state authoritative after the splice.
+ * Insert text in a textarea: `insertAtCursor` between explicit offsets (autocomplete),
+ * `insertEmoji` at the current selection. Reads the live `textareaRef.current.value` so the
+ * callbacks stay STABLE across keystrokes (avoids churning children's listeners).
  */
 export function useInsertText(
   textareaRef: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>,
   _content: string,
   setContent: (value: string) => void,
 ) {
-  /** Insert a replacement between explicit `start` and `end` offsets. */
   const insertAtCursor = useCallback(
     ({ start, end, replacement }: InsertAtCursorParams) => {
       const current = textareaRef.current?.value ?? '';
@@ -47,7 +33,7 @@ export function useInsertText(
     [setContent, textareaRef],
   );
 
-  /** Insert text at the textarea's current selection (or append if no ref). */
+  /** Inserts at the current selection (or appends if no ref). */
   const insertEmoji = useCallback(
     (emoji: string) => {
       const textarea = textareaRef.current;

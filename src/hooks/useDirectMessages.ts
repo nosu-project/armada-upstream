@@ -30,34 +30,25 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 export const KIND_DM = 4;
 
 /**
- * Minimum interval between relay top-up pulls. The wire delivers new DMs to
- * the shared store live; the queryFns' background pulls exist for history the
- * wire never covered and dead-socket healing — they must not re-fire on every
- * wire-bus invalidation.
+ * Minimum interval between relay top-up pulls. The wire delivers new DMs live;
+ * pulls cover uncovered history and dead sockets, not every bus invalidation.
  */
 const PULL_MIN_INTERVAL_MS = 30_000;
 /** How far below the last completed pull a periodic top-up reaches back. */
 const DM_TOPUP_SLACK_SECS = 10 * 60;
 
 /**
- * The `since` of a periodic kind-4 top-up: the start of the last pull that
- * completed, less a slack for publishers with skewed clocks. Anchored to the
- * last pull and not to the newest message held, because the newest message
- * held is often the user's OWN — sent a moment ago over a socket that had
- * silently stopped delivering — and a floor under it skips every message
- * received while the socket was wedged.
+ * `since` of a periodic kind-4 top-up: the last COMPLETED pull's start minus
+ * clock-skew slack. Not the newest message held — often our own, sent over a
+ * wedged socket, which would skip everything received meanwhile.
  */
 export function dmTopUpSince(lastPullStartedAtSecs: number): number {
   return Math.max(0, lastPullStartedAtSecs - DM_TOPUP_SLACK_SECS);
 }
 
 /**
- * When each thread's relay pull last started, per query client (so the
- * throttle lives exactly as long as the cache it fills). Keyed by thread, NOT
- * held in the hook: a per-mount ref re-pulled every time a conversation was
- * re-opened, so hopping between threads re-sent the same two REQs to every DM
- * relay on each visit. A pull that is aborted before it lands clears its entry,
- * so leaving a thread quickly never leaves it un-pulled.
+ * When each thread's pull last started, per query client and keyed by thread
+ * (a per-mount ref re-pulled on every revisit). Aborted pulls clear their entry.
  */
 const threadPullAt = new WeakMap<object, Map<string, number>>();
 function threadPulls(client: object): Map<string, number> {
@@ -75,15 +66,10 @@ export const DM_PAGE_SIZE = 500;
 /** The other participant of a DM event, from the viewer's perspective. */
 export function dmCounterparty(event: NostrRumor, self: string): string | undefined {
   if (event.pubkey !== self) return event.pubkey; // received: peer is the sender
-  // sent: peer is the first `p` tag
   return event.tags.find(([name]) => name === "p")?.[1];
 }
 
-/**
- * Preserve inbox previews only while the same account and decrypt-consent mode
- * move to a newer preview key. Carrying plaintext across either boundary could
- * briefly expose the previous account's previews.
- */
+/** Keep inbox previews across a preview-key change only within the same account and consent mode. */
 export function keepPreviousDmPreviews(
   previous: Record<string, string> | undefined,
   previousKey: readonly unknown[] | undefined,
@@ -99,12 +85,8 @@ export function keepPreviousDmPreviews(
 }
 
 /**
- * A pagination cursor for one direction of one relay's DM stream. `undefined`
- * means "start from the top (no `until`)"; a number is the `until` for the next
- * page; `null` means EXHAUSTED — that relay returned a short page, so there is
- * nothing older. The undefined-vs-null distinction matters: a relay that fails
- * or times out is left `undefined` (retryable next pass), never marked `null`,
- * so a flaky relay doesn't permanently hide older history.
+ * Per-relay, per-direction DM cursor: `undefined` = from the top, number = next
+ * `until`, `null` = EXHAUSTED. Failing relays stay `undefined` so they retry.
  */
 export type DirectionCursor = number | null | undefined;
 
@@ -118,15 +100,8 @@ export interface RelayCursor {
 export type RelayCursors = Record<string, RelayCursor>;
 
 /**
- * Compute the next `until` for a direction from the events a relay returned.
- * A short page (`< DM_PAGE_SIZE`) means we've reached the bottom → `null`
- * (exhausted). A full page means there may be more → the oldest event's
- * timestamp minus one second. An empty result is also exhausted.
- *
- * Per-relay, per-direction cursors (rather than a single global `until`) are
- * what keep pagination correct across heterogeneous relays: a single global
- * timestamp can skip ranges on a dense relay when a sparse relay returns much
- * older events. Each relay advances independently.
+ * Next `until` from a relay's page: short or empty page → `null`, full page →
+ * oldest minus 1s. Per-relay cursors avoid skipping ranges on dense relays.
  */
 export function nextDirectionCursor(events: NostrRumor[]): DirectionCursor {
   if (events.length < DM_PAGE_SIZE) return null;
@@ -140,16 +115,9 @@ export function hasMoreCursor(cursors: RelayCursors): boolean {
 }
 
 /**
- * Build the self-scoped kind-4 filters for one relay given its cursor.
- * Relays only serve the viewer's own DMs, so we query `authors:[self]` (sent)
- * and `#p:[self]` (received). The received direction is additionally scoped to
- * `authors:[...knownPeers]` so DMs from strangers are never fetched — only
- * people established through follows, accepts, 1:1 pins or an authored synced
- * conversation can reach them. A direction whose cursor is `null` (exhausted)
- * is omitted. `undefined` means no `until` (first page).
- *
- * When `knownPeers` is empty, the received filter is omitted entirely (an
- * empty `authors` would match nobody anyway, and some relays reject it).
+ * Self-scoped kind-4 filters for one relay: sent = `authors:[self]`, received =
+ * `#p:[self]` limited to `knownPeers` (strangers are never fetched; omitted when
+ * empty). Exhausted directions are omitted.
  */
 export function buildDmFilters(self: string, cursor: RelayCursor | undefined, knownPeers: string[]) {
   const filters: { kinds: number[]; authors?: string[]; "#p"?: string[]; limit: number; until?: number }[] = [];
@@ -170,42 +138,22 @@ export interface DecryptedDM {
   pubkey: string;
   created_at: number;
   content: string;
-  /**
-   * Delivery state for messages we sent. Absent for received messages and for
-   * sent messages that have been confirmed by the relay. `"sending"` while the
-   * publish is in flight (rendered immediately on sign), `"failed"` if the
-   * relay rejected it or the publish timed out (retryable).
-   */
+  /** Delivery state for our sends: `"sending"` in flight, `"failed"` if rejected/timed out; absent once confirmed. */
   status?: "sending" | "failed";
   /**
-   * True when this row's ciphertext has NOT been decrypted yet — a viewport
-   * placeholder. The thread eagerly decrypts only the newest screenful (the
-   * visible window); older messages are surfaced as placeholders so the list
-   * length and scroll position are correct, and each is decrypted lazily when
-   * it scrolls into view (see `decryptVisible`). `content` is empty until then.
+   * Not yet decrypted — a viewport placeholder. Only the newest screenful decrypts
+   * eagerly; others decrypt on scroll (`decryptVisible`). `content` is empty until then.
    */
   encrypted?: boolean;
-  /**
-   * Stable render key for a message whose `id` changes during its lifetime: an
-   * optimistic send starts with a placeholder id and adopts the signed event id
-   * once signing finishes. Set to the placeholder id at insert and carried
-   * across the swap, so the row is never remounted mid-send.
-   */
+  /** Stable render key carried across an optimistic send's id swap, so the row doesn't remount. */
   renderKey?: string;
 }
 
 /**
- * Whether an empty kind-4 thread is still waiting on its first relay pull —
- * i.e. "no messages" is not yet a verdict.
- *
- * This is a SYNC signal, not a loading one. It used to be OR'd into the hook's
- * `isLoading` (the timeline's skeleton), which made a relay round — up to the
- * 8s pull timeout, and reliably the whole of it on a cold Android launch
- * against unauthenticated relays — look like a disk read in progress. A
- * conversation carrying its entire history on the NIP-17 plane has no local
- * kind-4 rows at all, so this was true for every modern DM, and the merged
- * transport's `isLoading || dm17.isLoading` then held the skeleton over rumors
- * that were already read and folded. See `shouldShowDmTimelineLoading`.
+ * Whether an empty kind-4 thread is still waiting on its first relay pull. A
+ * SYNC signal, not loading: NIP-17-only threads have no kind-4 rows, so folding
+ * it into `isLoading` held skeletons over read rumors. See
+ * `shouldShowDmTimelineLoading`.
  */
 export function isEmptyThreadAwaitingPull(
   messageCount: number,
@@ -214,13 +162,7 @@ export function isEmptyThreadAwaitingPull(
   return messageCount === 0 && waitingForInitialPull;
 }
 
-/**
- * How many of the newest messages to decrypt eagerly. The thread is anchored to
- * the bottom (newest), so this is roughly one screenful plus headroom; older
- * messages are decrypted lazily as they scroll into view. Decryption is the
- * per-message signer round-trip, so bounding the eager set is what keeps opening
- * a long thread fast.
- */
+/** Newest messages decrypted eagerly (about a screenful); older ones decrypt lazily on scroll. */
 const EAGER_DECRYPT_COUNT = 40;
 
 /** Whether the current signer can do NIP-04 (required for DMs). */
@@ -230,12 +172,8 @@ export function useDMSupport(): boolean {
 }
 
 /**
- * Union raw kind-4 events with the previously-cached set, de-duplicated by id.
- *
- * This is the conversation-list merge floor: a sparse or empty relay read must
- * never SHRINK the list. Relays legitimately return partial pages or nothing on
- * a flaky connection — that doesn't mean conversations are gone. kind-4 events
- * are immutable, so a re-seen id is identical and last-write is harmless.
+ * Union raw kind-4 events with the cached set by id — a sparse relay read must
+ * never SHRINK the list.
  */
 export function mergeDmEvents(prev: NostrRumor[], incoming: NostrRumor[]): NostrRumor[] {
   const byId = new Map<string, NostrRumor>();
@@ -245,22 +183,16 @@ export function mergeDmEvents(prev: NostrRumor[], incoming: NostrRumor[]): Nostr
 }
 
 /**
- * Union a freshly-decrypted thread with the previously-cached thread,
- * de-duplicated by message id and sorted oldest-first.
- *
- * This is the thread merge floor: neither a sparse relay read nor a transient
- * mass-decrypt failure (a NIP-07 extension refusing a batch) may DROP messages
- * already decrypted and shown. Any optimistic `status` on a cached message is
- * preserved when the network echoes the same id back without one (the confirmed
- * publish path clears the badge explicitly).
+ * Union a freshly-decrypted thread with the cached one by id, oldest-first. Never
+ * drops shown messages on sparse reads or decrypt failures; cached `status` is
+ * kept when the echo lacks one.
  */
 export function mergeDmThread(prev: DecryptedDM[], incoming: DecryptedDM[]): DecryptedDM[] {
   const merged = new Map<string, DecryptedDM>();
   for (const m of prev) merged.set(m.id, m);
   for (const m of incoming) {
     const existing = merged.get(m.id);
-    // Never downgrade an already-decrypted row back to an encrypted placeholder:
-    // if we have plaintext for this id, keep it (but still take any fresh status).
+    // Never downgrade decrypted rows to placeholders (but take fresh status).
     if (existing && !existing.encrypted && m.encrypted) {
       merged.set(m.id, { ...existing, status: m.status ?? existing.status });
     } else {
@@ -271,13 +203,9 @@ export function mergeDmThread(prev: DecryptedDM[], incoming: DecryptedDM[]): Dec
 }
 
 /**
- * Build placeholder rows for a conversation's events, synchronously and with no
- * decryption. Already-memoized plaintext (`getRenderedPlaintext`) is filled in
- * immediately; everything else is an `encrypted: true` placeholder. This gives
- * the thread its full structure and correct scroll length on the very first
- * frame — the actual plaintext streams in afterwards (see `decryptThreadRows`).
- *
- * Returned oldest-first (render order).
+ * Placeholder rows for a conversation, synchronously: memoized plaintext filled
+ * in, the rest `encrypted: true`, so structure and scroll length are right on the
+ * first frame. Oldest-first.
  */
 export function buildThreadPlaceholders(events: NostrRumor[]): DecryptedDM[] {
   const rows: DecryptedDM[] = [];
@@ -289,12 +217,7 @@ export function buildThreadPlaceholders(events: NostrRumor[]): DecryptedDM[] {
   return rows.sort((a, b) => a.created_at - b.created_at);
 }
 
-/**
- * Patch a single decrypted message into the thread cache by id, sorted
- * oldest-first. Used to stream each message in as it decrypts. Never downgrades
- * an already-decrypted row, and only flips `encrypted` off (keeps existing
- * optimistic `status`).
- */
+/** Patch one decrypted message into the thread cache (never downgrading; keeps `status`). */
 function patchRow(
   queryClient: ReturnType<typeof useQueryClient>,
   queryKey: readonly unknown[],
@@ -313,15 +236,8 @@ function patchRow(
 }
 
 /**
- * Decrypt the newest `eager` placeholders of a conversation one at a time,
- * NEWEST-FIRST (the visible bottom), invoking `onRow` with each message the
- * instant its plaintext resolves so it can stream into the UI individually
- * instead of the whole batch appearing at once. Older messages are left as
- * placeholders for lazy, scroll-into-view decryption (`decryptVisible`).
- *
- * A decrypt failure is skipped (the row stays a placeholder and retries lazily),
- * so a transient signer hiccup never shrinks the thread. Cache hits are skipped
- * too (they're already plaintext from `buildThreadPlaceholders`).
+ * Decrypt the newest `eager` placeholders, streaming each via `onRow` as it
+ * resolves. Failures stay placeholders (retried lazily); cache hits are skipped.
  */
 export async function decryptThreadRows(
   events: NostrRumor[],
@@ -333,18 +249,11 @@ export async function decryptThreadRows(
   preflight?: (targets: { id: string; counterparty: string; ciphertext: string }[]) => Promise<boolean>,
   onAllFailed?: () => void,
 ): Promise<void> {
-  // Newest-first so the eager window is the newest messages (the visible
-  // bottom). Decrypts within the window are fired CONCURRENTLY — they are not
-  // serialized, so the thread fills in together rather than waterfalling one
-  // row at a time. Each row still streams into the UI the instant its own
-  // decrypt resolves (order of arrival is whatever the signer returns first).
+  // Newest-first; decrypts fire concurrently, each row streaming in as it resolves.
   const ordered = [...events].sort((a, b) => b.created_at - a.created_at);
   const window = ordered.slice(0, eager);
 
-  // Consent gate: the not-yet-shown rows are the only ones that could poke the
-  // signer. Ask the preflight whether we may decrypt them; if it declines, the
-  // rows stay encrypted placeholders (the UI offers manual "Decrypt"/"Decrypt
-  // all"). Already-shown rows are skipped either way — no signer contact.
+  // Consent gate: if declined, rows stay placeholders with manual Decrypt controls.
   if (preflight) {
     const pending = window
       .filter((event) => getRenderedPlaintext(event.id) === undefined)
@@ -367,25 +276,18 @@ export async function decryptThreadRows(
         const content = await decryptCached(counterparty, event, decrypt);
         onRow({ id: event.id, pubkey: event.pubkey, created_at: event.created_at, content });
       } catch {
-        // Keep as a placeholder; retried lazily when it scrolls into view.
+        // Stays a placeholder; retried lazily.
         failed++;
       }
     }),
   );
 
-  // A signer that rejects EVERY decrypt (e.g. an extension set to "never ask
-  // again → reject") would otherwise leave the thread lingering on skeletons
-  // and re-poke on every scroll. Treat a wholesale failure as the signer
-  // declining, so the UI flips to the manual "Decrypt" / "Decrypt all"
-  // affordances and stops auto-retrying. A partial failure is just transient.
+  // A wholesale failure is treated as the signer declining, flipping to manual
+  // controls instead of re-poking on every scroll.
   if (attempted > 0 && failed === attempted) onAllFailed?.();
 }
 
-/**
- * Convenience: build placeholders then fully resolve the eager window into a
- * single array (no streaming). Used where a batch result is wanted (the IDB
- * seed) or in tests. Returned oldest-first; failures stay placeholders.
- */
+/** Placeholders plus the resolved eager window as one array (IDB seed, tests). Oldest-first. */
 export async function buildThreadRows(
   events: NostrRumor[],
   self: string,
@@ -405,10 +307,8 @@ export async function buildThreadRows(
 type NostrPool = ReturnType<typeof useNostr>["nostr"];
 
 /**
- * Query ONE relay for the viewer's DMs given its cursor, returning the events
- * and the relay's advanced cursor (per direction). A relay that errors/times
- * out throws, so the caller can leave its cursor `undefined` (retryable) rather
- * than marking it exhausted.
+ * Query ONE relay for the viewer's DMs at its cursor. Errors throw so the caller
+ * leaves the cursor retryable.
  */
 async function queryRelayDmPage(
   nostr: NostrPool,
@@ -429,7 +329,6 @@ async function queryRelayDmPage(
     url,
     events,
     cursor: {
-      // A direction that was already exhausted (null) or had no filter stays put.
       sent: cursor?.sent === null ? null : nextDirectionCursor(sentEvents),
       received: cursor?.received === null ? null : nextDirectionCursor(receivedEvents),
     },
@@ -437,14 +336,8 @@ async function queryRelayDmPage(
 }
 
 /**
- * Query every relay individually (not as a pooled `group`), in parallel, and
- * merge all events by id. Returns the union plus each relay's advanced cursor.
- *
- * Per-relay querying (vs `nostr.group(relays).query`) is what lets the cursor
- * model work: a pooled query collapses all relays into one EOSE and one result,
- * so we can't tell which relay still has older pages. Querying each relay
- * separately lets a dense relay keep paging while a sparse one is already
- * exhausted. A failed relay is left with its previous cursor (retryable).
+ * Query each relay individually (so each keeps its own cursor) in parallel and
+ * merge by id. Failed relays keep their previous cursor.
  */
 export async function queryRelaysDmPage(
   nostr: NostrPool,
@@ -470,15 +363,13 @@ export async function queryRelaysDmPage(
       for (const e of result.value.events) byId.set(e.id, e);
       nextCursors[url] = result.value.cursor;
     } else {
-      // Failed/timed-out: keep the prior cursor (or undefined) so the next pass
-      // retries from where it was, never marking the relay exhausted.
+      // Failed: keep the prior cursor so the next pass retries.
       nextCursors[url] = cursors[url] ?? { sent: undefined, received: undefined };
     }
   });
 
-  // An all-relays failure is not an empty page. In particular, the first-sync
-  // caller uses successful completion as its durable watermark; blessing this
-  // as empty would keep a fresh device's DM list blank on every later launch.
+  // An all-relays failure is not an empty page: blessing it would latch the
+  // first-sync watermark and keep a fresh device's DM list blank.
   if (relays.length > 0 && successfulRelays === 0) {
     throw new Error("Every DM relay query failed");
   }
@@ -487,16 +378,9 @@ export async function queryRelaysDmPage(
 }
 
 /**
- * Query every relay individually for a fixed filter set and merge events by id.
- *
- * Same reason as {@link queryRelaysDmPage} but with no cursor bookkeeping (used
- * for thread history and older-page pulls): a pooled `group(relays).query`
- * aborts the WHOLE fan-out `eoseTimeout` ms (300 in this app) after the FIRST
- * relay EOSEs (NPool.query forces the pool's eoseTimeout), which guillotines an
- * auth-gated relay before it can finish its NIP-42 challenge→sign→re-REQ — so
- * its messages are silently dropped, worst on a cold/reconnecting mobile
- * socket. Per-relay `NRelay1.query` has no cross-relay timer: each relay gets
- * the full `signal` budget. Best-effort per relay: a failure contributes nothing.
+ * Query each relay individually for fixed filters and merge by id. A pooled
+ * query aborts all relays 300ms after the first EOSE, cutting off auth-gated
+ * relays mid NIP-42. Best-effort per relay.
  */
 async function queryRelaysMerged(
   nostr: NostrPool,
@@ -514,17 +398,10 @@ async function queryRelaysMerged(
   return [...byId.values()];
 }
 
-/**
- * The list of DM conversations for the current user: every distinct
- * counterparty with the latest message and its timestamp. Built client-side
- * from kind-4 events on the DM relay (no caching service, unlike Primal).
- */
+/** DM conversations: each counterparty with its latest kind-4 message, built client-side. */
 export function useDMConversations(options?: { decryptPreviews?: boolean }) {
-  // Previews decrypt each conversation's latest message, which is a signer
-  // round-trip (and the first thing that could open the decrypt-consent
-  // prompt). Only the explicitly-opened DMs list needs them, so previews are
-  // opt-in: always-mounted unread/activity consumers leave them off, and
-  // nothing pokes the signer — or the prompt — until the user opens DMs.
+  // Previews cost a signer round-trip each (and may open the consent prompt), so
+  // they're opt-in for the opened DMs list only.
   const decryptPreviews = options?.decryptPreviews ?? false;
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -537,52 +414,33 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
-  // Established peers: follows, explicit accepts/1:1 pins, plus participants
-  // recovered from a synced conversation in which this account wrote. Relay
-  // queries remain author-scoped, so a passive index row cannot promote a
-  // stranger request; the roster only lets a fresh device rediscover known
-  // legacy conversations that are no longer represented by the follow graph.
+  // Established peers: follows, accepts/1:1 pins, and participants of synced
+  // conversations this account wrote in. Relay queries stay author-scoped.
   const knownPeerKey = knownPeers.join(",");
-  // Read inside the queryFn (and the un-awaited background pull) so both always
-  // see the current set without making the array a queryFn dependency.
   const knownPeersRef = useRef(knownPeers);
   knownPeersRef.current = knownPeers;
 
-  // NOTE: `knownPeerKey` is deliberately NOT part of the query key. Its local
-  // sources resolve asynchronously, so on every cold load it goes empty → real,
-  // and keying on it made that transition swap TanStack to a fresh cache entry
-  // with no placeholder — dropping the merged event set back to the 30-item
-  // `initialData` snapshot and visibly collapsing/re-sorting the conversation
-  // list a beat after it painted. The roster is read from a ref instead, and a
-  // change re-runs THIS entry's queryFn (below), so the wider author set merges
-  // on top of what's already rendered.
+  // `knownPeerKey` is NOT in the query key: it resolves async on cold load, and a
+  // key change dropped to a fresh cache entry (visible list collapse). Read from a
+  // ref and re-run this entry's queryFn on change instead.
   const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
 
-  // Per-relay, per-direction pagination cursors for the "load older
-  // conversations" backfill. Kept in a ref (not state) so advancing them
-  // doesn't re-render; `loadMore` reads/writes them. Reset when the
-  // user/relays change.
+  // Per-relay pagination cursors for "load older" (a ref; reset on user/relay change).
   const cursorsRef = useRef<RelayCursors>({});
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastPullRef = useRef(0);
-  // When (unix seconds) the last pull that COMPLETED started; unset until this
-  // session's full first page has seeded the cursors. Once set, the periodic
-  // pull is a `since` top-up from it (see the queryFn and dmTopUpSince).
+  // Start time of the last COMPLETED pull; once set, periodic pulls are `since` top-ups.
   const pullFloorRef = useRef<number | undefined>(undefined);
-  // Tracks the established-peer set the cache was last fetched with. `undefined` means
-  // "this hook instance hasn't observed one yet" — the mount pass must not
-  // invalidate, since the query is already fetching with the current set.
+  // Established-peer set last fetched with; `undefined` = not yet observed (don't invalidate on mount).
   const fetchedKnownPeersRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     cursorsRef.current = {};
     lastPullRef.current = 0;
     pullFloorRef.current = undefined;
     setHasMore(true);
-    // Known peers aren't in the query key, so a roster change has to re-run the
-    // queryFn explicitly: the received-DM filters widen to the new authors
-    // and the results merge (append-only) into the rendered list.
+    // Roster changes re-run the queryFn so received filters widen and merge in.
     const previous = fetchedKnownPeersRef.current;
     fetchedKnownPeersRef.current = knownPeerKey;
     if (previous !== undefined && previous !== knownPeerKey && user?.pubkey) {
@@ -601,12 +459,8 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       // Newest established-peer set at execution time (not fetch scheduling).
       const scopedKnownPeers = knownPeersRef.current;
 
-      // 1. LOCAL-FIRST: the wire funnels every kind-4 into IndexedDB (and
-      //    NostrBatcher mirrors pull results), so the conversation list paints
-      //    from the store — the query stays pending until this read resolves,
-      //    so the list's first paint is already correctly ordered. Received DMs
-      //    are scoped to established authors, matching the relay
-      //    queries below.
+      // 1. LOCAL-FIRST: paint from the store (fed by the wire), scoped to
+      //    established authors like the relay queries.
       const cachedEvents = await store.query([
         { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
         ...(scopedKnownPeers.length > 0
@@ -616,23 +470,14 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       const prev = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
       const local = mergeDmEvents(prev, cachedEvents);
 
-      // 2. THROTTLED BACKGROUND refresh: query EACH relay individually (not a
-      //    pooled group) for its newest page, merge all in, and seed the
-      //    per-relay cursors so "load older" can page each relay
-      //    independently. NOT awaited — the network never gates the visible
-      //    list. Throttled so wire-bus invalidations stay local-only.
+      // 2. THROTTLED, un-awaited per-relay refresh that seeds the cursors.
       const pullDue = Date.now() - lastPullRef.current >= PULL_MIN_INTERVAL_MS;
       if (pullDue) lastPullRef.current = Date.now();
       const pull = (async () => {
         if (!pullDue || signal.aborted || relays.length === 0) return;
         const startedAt = Math.floor(Date.now() / 1000);
-        // After this session's first full page has seeded the per-relay
-        // cursors, the minute poll only has to catch what the live socket may
-        // have missed since the last pull: NIP-04 events carry their real
-        // timestamps, so a `since` just below that pull's start is complete.
-        // Re-reading the whole first page (500 per direction per relay) every
-        // minute re-downloaded the same history for as long as the DM list
-        // was mounted.
+        // After the first full page, top up with `since` (NIP-04 timestamps are
+        // real) instead of re-downloading the first page every minute.
         const floor = pullFloorRef.current;
         if (floor !== undefined) {
           const since = dmTopUpSince(floor);
@@ -649,8 +494,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
               AbortSignal.any([signal, AbortSignal.timeout(8000)]),
             );
             if (signal.aborted) return;
-            // Only an answered top-up moves the floor, so one that failed
-            // leaves the next reaching back over its window too.
+            // Only an answered top-up moves the floor.
             pullFloorRef.current = startedAt;
             if (events.length === 0) return;
             queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => mergeDmEvents(old, events));
@@ -672,23 +516,17 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
           cursorsRef.current = cursors;
           pullFloorRef.current = startedAt;
           setHasMore(hasMoreCursor(cursors));
-          // Completed without throwing: the store has now seen whatever the
-          // relays hold, so later loads may trust it and render store-first.
+          // Completed: later loads may trust the store.
           markDmSynced("nip04", pubkey);
           if (events.length === 0) return;
           queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => mergeDmEvents(old, events));
         } catch {
-          // Best-effort; the local-first list already rendered. Deliberately
-          // NOT marked synced — a timeout or offline start must not latch the
-          // flag, or the next load would paint a false empty list.
+          // NOT marked synced on failure, or the next load paints a false empty list.
         }
       })();
 
-      // On the FIRST sync this device has nothing local to show, so the network
-      // is the only source: await it rather than resolving to an empty list
-      // that the pull then re-orders under the user. The pull writes its merge
-      // through `setQueryData`, so re-read the cache and union it in — returning
-      // the pre-pull `local` here would clobber that write.
+      // First sync: nothing local, so await the network. Re-read the cache (the
+      // pull merges via `setQueryData`) rather than returning pre-pull `local`.
       if (firstSync) {
         await pull;
         return mergeDmEvents(local, queryClient.getQueryData<NostrRumor[]>(queryKey) ?? []);
@@ -697,26 +535,15 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       return local;
     },
     staleTime: 15_000,
-    // No `initialData`. A localStorage snapshot used to seed the first frame
-    // here, but it held only the newest 30 kind-4 events — a truncated,
-    // NIP-17-blind slice of the list — so every load painted a deterministically
-    // WRONG order that the store read then corrected a beat later. The
-    // IndexedDB read is fast enough to block on; the list now paints once, in
-    // its final order.
-    // Backstop the live socket: a backgrounded mobile WebSocket can wedge with
-    // no error and no event, silently stalling delivery. A periodic local-first
-    // re-read heals the gap (matches the NIP-29/Concord hooks, which DMs had
-    // been missing). Focus/reconnect catch up immediately rather than waiting
-    // out the interval.
+    // No `initialData`: the store read is fast enough to block on, so the list
+    // paints once in final order. Periodic local re-reads heal a wedged mobile
+    // WebSocket; focus/reconnect catch up immediately.
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
 
-  // Load an older page of conversations: advance each non-exhausted relay's
-  // cursor one page and merge. Because each relay pages independently, a dense
-  // relay keeps yielding history after a sparse one is exhausted — no global
-  // cursor can skip its range.
+  // Load older conversations: each non-exhausted relay advances its own cursor.
   const loadMore = useCallback(async (): Promise<number> => {
     if (!user?.pubkey || loadingMoreRef.current || !hasMore || relays.length === 0) return 0;
     if (!hasMoreCursor(cursorsRef.current)) {
@@ -754,9 +581,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, user?.pubkey, relayKey, knownPeerKey, hasMore, queryClient]);
 
-  // The wire holds the standing DM subscription and funnels every kind-4 into
-  // the shared store; re-read when it announces a change. (The queryFn's relay
-  // pull is independently throttled, so this stays a cheap local read.)
+  // Re-read when the wire announces a kind-4 change (the relay pull is throttled separately).
   useWireScopes((scopes) => {
     if (user?.pubkey && scopes.has("dm")) {
       void queryClient.invalidateQueries({ queryKey });
@@ -765,14 +590,8 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
 
   const self = user?.pubkey ?? "";
 
-  // Reduce raw events to one entry per counterparty (latest wins), dropping
-  // conversations with anyone on the user's mute list (NIP-51 kind 10000) so
-  // blocked people never show up in the DM list.
-  //
-  // Until the mute set is `ready` we return NOTHING (and report loading), so the
-  // list never paints muted conversations and then yanks them out from under
-  // the user. `ready` resolves instantly from the local cache for a returning
-  // user; only a true cold start (no cache + network in flight) actually waits.
+  // One entry per counterparty (latest wins), minus muted peers (NIP-51). Nothing
+  // until the mute set is `ready`, so muted rows never flash.
   const conversations = useMemo(() => {
     if (!muteReady) return [];
     const byPeer = new Map<string, { peer: string; latest: NostrRumor; mine: boolean }>();
@@ -791,8 +610,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     return [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
   }, [query.data, self, mutedPubkeys, muteReady]);
 
-  // Decrypt just the latest message of each conversation for the list preview.
-  // Sequential decrypt (see thread loop) to avoid NIP-07 concurrency rejections.
+  // Decrypt each conversation's latest message for the preview.
   const previewKey = conversations
     .map((c) => `${c.peer}:${c.latest.id}`)
     .join(",");
@@ -801,28 +619,20 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     queryKey: ["dm", "previews", self, previewKey, consent],
     enabled: decryptPreviews && !!self && !!user?.signer.nip04 && conversations.length > 0,
     staleTime: 60_000,
-    // A new latest kind-4 event changes `previewKey`. Keep the previous map
-    // while that one row decrypts instead of blanking every conversation's
-    // preview and making the whole inbox appear to reload.
+    // Keep the previous map while a new latest row decrypts (no inbox-wide blank).
     placeholderData: (previous, previousQuery) =>
       keepPreviousDmPreviews(previous, previousQuery?.queryKey, self, consent),
     queryFn: async () => {
       const nip04 = user!.signer.nip04!;
       const out: Record<string, string> = {};
 
-      // Consent gate: one decrypt per conversation would fan out across the
-      // whole list on entry. Only the previews that aren't already cached could
-      // poke the signer, so gate on those; a decline leaves previews blank
-      // (the list renders an "Encrypted message" placeholder) until the user
-      // opts in.
+      // Consent gate on uncached previews; a decline shows "Encrypted message".
       const targets = conversations.map(({ peer, latest }) => ({
         counterparty: peer,
         ciphertext: latest.content,
       }));
       if (!(await mayBulkDecrypt(user!.signer, "nip04", targets, signerNeedsApproval(user!.method)))) return out;
 
-      // Decrypt every conversation's latest message concurrently — the previews
-      // don't depend on each other and the signer handles overlapping calls.
       await Promise.all(
         conversations.map(async ({ peer, latest }) => {
           try {
@@ -839,12 +649,9 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   return {
     conversations,
     previews: previews.data ?? {},
-    /** All fetched kind-4 ciphertext events (both directions), newest-first.
-     *  Exposed so the conversation list can search across locally-decrypted
-     *  history (pairing each event with its render-cache plaintext). */
+    /** All fetched kind-4 events, newest-first (for searching locally-decrypted history). */
     events: query.data ?? [],
-    // Loading until the events query AND the mute set are both settled, so the
-    // list shows a spinner rather than an unfiltered flash on cold start.
+    // Loading until events and the mute set are settled (no unfiltered flash).
     isLoading: query.isLoading || knownPeersLoading || !muteReady,
     error: query.error,
     /** Fetch an older page of conversations (per-relay cursor pagination). */
@@ -855,24 +662,6 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   };
 }
 
-/**
- * Whether the user has any unread direct messages — the latest message in any
- * conversation (kind-4 or NIP-17) is from the peer and newer than the thread's
- * last-read stamp. Drives the unread dot on the DMs button in the server rail.
- *
- * BOTH planes are narrowed to KNOWN peers (see `useKnownDmPeers`) — an
- * unsolicited stranger's message must not light a dot for a conversation the
- * main list would never show. This is what keeps the request tier from being
- * an attention channel: a request is discovered by opening DMs, never by the
- * rail demanding it.
- *
- * The kind-4 half is narrowed HERE and not merely at fetch time. Its relay
- * queries are already scoped to established authors (`buildDmFilters`), but
- * that is a request a relay may answer as it likes, and the fetched set is an
- * append-only cache that outlives a peer's membership in the roster. Neither
- * is a property this dot can rest on, and the check is the same predicate the
- * list splits on, so a conversation the inbox holds can never fail it.
- */
 /** The least a kind-4 conversation row must expose to be judged unread. */
 export interface UnreadLegacyDmSource {
   peer: string;
@@ -889,12 +678,10 @@ export interface UnreadDm17Source {
 }
 
 /**
- * Whether either plane holds an unread conversation the INBOX would show.
- *
- * Pure, so the request-tier rule can be tested without a signer or a store —
- * the same reason `buildDmSwitcherEntries` is. Both planes apply `isKnown`
- * identically; see {@link useHasUnreadDMs} for why the kind-4 half does not
- * lean on its relay-side author scoping.
+ * Whether either plane holds an unread conversation the INBOX would show (peer
+ * sent the latest, newer than last-read). Both planes are narrowed to known peers
+ * by `isKnown` here — kind-4 relay author-scoping is only a request — so strangers
+ * never light the rail dot. Pure, for testing.
  */
 export function hasUnreadDmConversations(
   legacy: readonly UnreadLegacyDmSource[],
@@ -918,9 +705,7 @@ export function hasUnreadDmConversations(
   }
   return nip17.some(
     (c) =>
-      // A group is in the inbox only when EVERY participant is: one stranger
-      // in the room is enough to make it a request, exactly as a message from
-      // that stranger alone would be.
+      // A group is in the inbox only when EVERY participant is known.
       c.peers.every((peer) => isKnown(peer, c.mine)) &&
       c.latest.author !== self &&
       c.latest.createdAt > getLastRead(dmReadKey(c.key)),
@@ -945,18 +730,9 @@ export function useHasUnreadDMs(): boolean {
 }
 
 /**
- * Whether ONE conversation has unread messages, on the same terms as
- * {@link useHasUnreadDMs}: the peer sent the latest message and it is newer
- * than the thread's last-read stamp. Drives the dot on a DM pinned to the
- * community rail.
- *
- * The request-tier narrowing that hook applies to NIP-17 is deliberately
- * absent: a DM is only on the rail because the user put it there, which is a
- * stronger statement about the peer than following them, and a rail icon that
- * stayed dark for the one person the user singled out would be the bug.
- *
- * Both conversation queries are shared by key with the ones the rail already
- * mounts for its DMs button, so a rail full of DMs costs no extra fetching.
+ * Whether ONE conversation is unread (peer sent the latest, newer than last-read),
+ * for a DM pinned to the rail. No request-tier narrowing: pinning it is explicit.
+ * Queries are shared with the rail's DMs button.
  */
 export function useDmPeerUnread(peer: string | undefined): boolean {
   const { user } = useCurrentUser();
@@ -978,11 +754,7 @@ export function useDmPeerUnread(peer: string | undefined): boolean {
   }, [user, peer, conversations, dm17Conversations, getLastRead]);
 }
 
-/**
- * The decrypted message thread with a single peer, plus a `send` mutation.
- * Messages are kind-4 NIP-04 events on the DM relay, decrypted with the
- * signer's nip04 method.
- */
+/** The decrypted kind-4 (NIP-04) thread with one peer, plus a `send` mutation. */
 export function useDirectMessages(peer: string | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -993,12 +765,8 @@ export function useDirectMessages(peer: string | undefined) {
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
-  // The peer's published NIP-17 DM inbox relays (kind 10050), if any. We READ
-  // from our own relays (a relay only serves the viewer's own kind-4 events,
-  // so the peer's relays wouldn't return our copies), but we WRITE to the union
-  // of our relays and the peer's inbox — otherwise a message to someone who
-  // doesn't read our relays silently never reaches them. Falls back to our own
-  // relays when the peer has published no list.
+  // The peer's kind-10050 inbox. We READ from our relays (they serve our kind-4s)
+  // but WRITE to ours ∪ theirs so the message reaches them; ours if they have none.
   const peerDmRelays = useDmRelaysFor(peer);
   const writeRelays = useMemo(() => {
     const merged = [...relays, ...peerDmRelays];
@@ -1011,14 +779,10 @@ export function useDirectMessages(peer: string | undefined) {
     () => ["dm", "thread", self, peer, relayKey, consent] as const,
     [self, peer, relayKey, consent],
   );
-  // Last-known-good localStorage snapshot of this thread's newest decrypted
-  // rows (plaintext at rest — same trust level as the signer's persistent
-  // decrypt cache; see timelineSnapshot.ts).
+  // localStorage snapshot of the newest decrypted rows (plaintext at rest; see timelineSnapshot.ts).
   const threadSnapshotScope = self && peer ? dmThreadSnapshotScope(self, peer) : undefined;
-  // An empty first store read is not authoritative until the initial relay
-  // pull settles. Track that pull itself instead of a sticky "done" bit: a
-  // cached empty React Query result can be fresh on remount, in which case no
-  // queryFn runs and a reset done-bit would leave the skeleton up forever.
+  // An empty first store read isn't authoritative until the initial pull settles.
+  // Track the pull itself: a fresh cached result runs no queryFn.
   const [waitingForInitialPull, setWaitingForInitialPull] = useState(false);
   useEffect(() => {
     setWaitingForInitialPull(false);
@@ -1026,22 +790,15 @@ export function useDirectMessages(peer: string | undefined) {
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
-    // The queryFn returns on the store read and leaves the relay pull running
-    // behind it, so this is a store read and takes the store-read policy: no
-    // retry ladder held at `isPending` over on-disk history (see storeQuery).
+    // Resolves on the store read, so use the store-read policy (no retry ladder; see storeQuery).
     ...STORE_READ,
     enabled: !!self && !!peer && !!user?.signer.nip04,
     queryFn: async ({ signal }) => {
       const nip04 = user!.signer.nip04!;
       const store = await eventStore;
 
-      // 1. LOCAL-FIRST: read this thread's kind-4 set from the shared store
-      //    (fed by the wire; mirrored pulls land there too), narrow to this
-      //    peer, and return placeholders IMMEDIATELY so the thread structure
-      //    paints on the first frame. Decryption of the newest screenful
-      //    streams in via the plaintext cache. Both directions carry an
-      //    `authors` filter (self for sent, the peer for received) so a thread
-      //    never pulls in a stranger's kind-4 events.
+      // 1. LOCAL-FIRST: this thread's kind-4s from the store, as placeholders on
+      //    the first frame. Both directions are `authors`-scoped (no strangers).
       const localEvents = await store.query([
         { kinds: [KIND_DM], authors: [self!], "#p": [peer!], limit: 1000 },
         { kinds: [KIND_DM], authors: [peer!], "#p": [self!], limit: 1000 },
@@ -1062,11 +819,8 @@ export function useDirectMessages(peer: string | undefined) {
         );
       }
 
-      // 2. THROTTLED BACKGROUND refresh: query the relays for newer DMs, merge
-      //    into the cache, stream their decrypts in. NOT awaited; skipped
-      //    within the pull window so wire-bus invalidations stay local-only.
-      //    The waiting flag is raised only for a cold empty read with a pull
-      //    actually in flight; a throttle-skipped/cached empty read is settled.
+      // 2. THROTTLED, un-awaited relay refresh. The waiting flag is raised only
+      //    for a cold empty read with a pull actually in flight.
       const pulls = threadPulls(queryClient);
       const pullKey = `${self}|${peer}|${relayKey}`;
       const pullDue = Date.now() - (pulls.get(pullKey) ?? 0) >= PULL_MIN_INTERVAL_MS;
@@ -1081,10 +835,7 @@ export function useDirectMessages(peer: string | undefined) {
           return;
         }
         try {
-          // Recipient-scoped both ways (relays only serve the viewer's own
-          // kind-4 set): sent = `authors:[self] #p:[peer]`, received =
-          // `authors:[peer] #p:[self]`. The `authors` constraint keeps the query
-          // to this one conversation and never pulls a stranger's DMs.
+          // sent = `authors:[self] #p:[peer]`, received = `authors:[peer] #p:[self]`.
           const events = await queryRelaysMerged(
             nostr,
             relays,
@@ -1094,7 +845,6 @@ export function useDirectMessages(peer: string | undefined) {
             ],
             AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
-          // Cut short by a navigation away: the pull didn't happen.
           if (signal.aborted) {
             pulls.delete(pullKey);
             return;
@@ -1115,8 +865,7 @@ export function useDirectMessages(peer: string | undefined) {
             () => { if (signerNeedsApproval(user!.method)) setDecryptConsent("declined"); },
           );
         } catch {
-          // Best-effort background refresh; the local-first result already
-          // rendered. Let the next visit try again.
+          // Best-effort; the next visit retries.
           pulls.delete(pullKey);
         } finally {
           setWaitingForInitialPull(false);
@@ -1126,28 +875,21 @@ export function useDirectMessages(peer: string | undefined) {
       return localPlaceholders;
     },
     staleTime: 10_000,
-    // Seed with the last visit's decrypted screenful from the localStorage
-    // snapshot — a pure first-paint read cache. The snapshot rows also prime
-    // the plaintext render memo, so the queryFn's placeholder build keeps them
-    // decrypted (mergeDmThread never downgrades a decrypted row) and
-    // `decryptVisible` short-circuits instead of re-asking the signer.
+    // Seed from the snapshot, which also primes the plaintext memo so these rows
+    // stay decrypted and `decryptVisible` short-circuits.
     initialData: () => {
       const rows = readTimelineSnapshot<DecryptedDM>(threadSnapshotScope);
       if (rows) for (const r of rows) setRenderedPlaintext(r.id, r.content);
       return rows;
     },
     initialDataUpdatedAt: 0,
-    // Backstop the live socket (see the conversations query above): heal a
-    // wedged mobile WebSocket with a periodic local-first re-read, and catch up
-    // on focus/reconnect.
+    // Periodic local re-read heals a wedged socket; catch up on focus/reconnect.
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
 
-  // Keep the thread snapshot fresh with the newest DECRYPTED rows — encrypted
-  // placeholders are useless to persist, and a transient "sending"/"failed"
-  // badge must not be frozen into the next launch's first paint.
+  // Snapshot only DECRYPTED rows, without transient sending/failed status.
   const threadSnapshotItems = useMemo(() => {
     if (!query.data) return undefined;
     const rows = query.data
@@ -1157,24 +899,19 @@ export function useDirectMessages(peer: string | undefined) {
   }, [query.data]);
   useTimelineSnapshotWriter(threadSnapshotScope, threadSnapshotItems);
 
-  // The wire funnels this thread's kind-4s into the store; re-read on change.
-  // (The queryFn decrypts the newest rows and its pull is throttled.)
   useWireScopes((scopes) => {
     if (self && peer && scopes.has(dmThreadScope(peer))) {
       void queryClient.invalidateQueries({ queryKey });
     }
   });
 
-  // Backfill older history for this conversation. Because relays only serve
-  // your own DMs (self-scoped filters), we page the global self-DM stream with
-  // an `until` cursor and narrow to this peer client-side. `hasMore` flips off
-  // once a page comes back short.
+  // Older history: page the self-DM stream by `until` and narrow to this peer;
+  // `hasMore` flips off on a short page.
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const oldestRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
 
-  // Reset the cursor when the peer/relays change.
   useEffect(() => {
     oldestRef.current = undefined;
     setHasMore(true);
@@ -1185,7 +922,6 @@ export function useDirectMessages(peer: string | undefined) {
     if (loadingRef.current || !hasMore) return 0;
 
     const nip04 = user.signer.nip04;
-    // First backfill starts from the oldest message currently rendered.
     const current = queryClient.getQueryData<DecryptedDM[]>(queryKey) ?? [];
     const until =
       oldestRef.current ??
@@ -1209,7 +945,6 @@ export function useDirectMessages(peer: string | undefined) {
         return 0;
       }
 
-      // Advance the cursor from the raw page (oldest event minus one second).
       const oldestEvent = Math.min(...events.map((e) => e.created_at));
       oldestRef.current = oldestEvent - 1;
       if (events.length < 500) setHasMore(false);
@@ -1218,10 +953,7 @@ export function useDirectMessages(peer: string | undefined) {
       const existing = new Set(current.map((m) => m.id));
       const fresh = inThread.filter((e) => !existing.has(e.id));
 
-      // Backfilled history is older than what's shown, so it's all lazy
-      // placeholders (eager = 0) — each decrypts when it scrolls into view.
-      // Already-memoized messages still come back decrypted (buildThreadRows
-      // honors the cache regardless of position).
+      // Backfilled rows are lazy placeholders (eager = 0); memoized ones still come back decrypted.
       const rows = await buildThreadRows(
         fresh,
         self,
@@ -1256,22 +988,15 @@ export function useDirectMessages(peer: string | undefined) {
     [queryClient, queryKey],
   );
 
-  // Publish a signed DM in the background and reconcile its optimistic status.
-  // The message is already rendered (status "sending") before this runs, so the
-  // composer can clear immediately and the UI never blocks on the relay.
+  // Publish a signed, already-rendered DM in the background and reconcile its status.
   const publish = useCallback(
     async (event: NostrEvent) => {
       try {
-        // The content-blind push server also observes our own relay echo. Mark
-        // it before publish so this browser never presents an outgoing legacy
-        // DM as a new incoming message.
+        // Mark our own echo before publish so push never shows it as incoming.
         await markOwnWebPushEvent(event.id);
-        // Write to the union of our DM relays and the peer's published inbox
-        // relays (kind 10050), so the message reaches the recipient even when
-        // they don't read our relays.
+        // Write to our DM relays ∪ the peer's 10050 inbox.
         await nostr.group(writeRelays).event(event, { signal: AbortSignal.timeout(8000) });
-        // Confirmed: drop the "sending" badge. The live subscription may also
-        // echo this event back; dedup by id keeps it from duplicating.
+        // Confirmed; a live echo dedups by id.
         setMessageStatus(event.id, undefined);
         queryClient.invalidateQueries({ queryKey: ["dm", "conversations", user?.pubkey] });
       } catch (err) {
@@ -1283,17 +1008,10 @@ export function useDirectMessages(peer: string | undefined) {
   );
 
   const send = useMutation({
-    // Encrypt + sign, render immediately, then publish in the background. The
-    // mutation resolves as soon as the message is signed and shown (so the
-    // composer clears instantly); delivery success/failure is reflected via the
-    // message's `status` rather than by blocking the caller on the relay OK.
-    //
-    // Signing is serialized through `signChainRef`: NIP-07 extensions reject
-    // concurrent encrypt/signEvent calls, so when the user fires several
-    // messages in a row we must sign them one at a time. Each message is
-    // rendered as a "sending" placeholder up front (keyed by a temporary local
-    // id) so the queue is visible instantly, then reconciled to the real signed
-    // event id once its turn in the sign queue comes up.
+    // Encrypt + sign, render immediately, publish in the background; `status`
+    // reflects delivery. Signing is serialized via `signChainRef` (NIP-07
+    // extensions reject concurrent calls); each queued message renders as a
+    // "sending" placeholder under a temp id, swapped for the real id once signed.
     mutationFn: async (text: string) => {
       if (!user?.signer.nip04) throw new Error("NIP-04 encryption not supported by signer");
       if (!peer) throw new Error("No recipient");
@@ -1302,20 +1020,16 @@ export function useDirectMessages(peer: string | undefined) {
 
       const signer = user.signer;
       const self = user.pubkey;
-      // Temporary client-side id for the optimistic placeholder; swapped for the
-      // real event id after signing.
       const tempId = `pending:${crypto.randomUUID()}`;
       const createdAt = Math.floor(Date.now() / 1000);
 
-      // Render the queued message immediately, in order, before it even starts
-      // signing — so rapid-fire sends all appear at once.
+      // Render queued messages immediately, in order.
       queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
         [
           ...old,
           {
             id: tempId,
-            // Pinned for the row's whole life, including across the id swap
-            // below, so signing doesn't remount the row.
+            // Pinned across the id swap so the row doesn't remount.
             renderKey: tempId,
             pubkey: self,
             created_at: createdAt,
@@ -1324,13 +1038,8 @@ export function useDirectMessages(peer: string | undefined) {
           },
         ].sort((a, b) => a.created_at - b.created_at),
       );
-      // NOTE: deliberately do NOT invalidate the conversation-list query here.
-      // The optimistic thread render already shows the message, and invalidating
-      // would trigger a refetch + re-decrypt of every conversation's preview for
-      // no visible benefit; the conversation list re-orders on its next natural
-      // refetch / live event.
+      // Deliberately no conversation-list invalidation (would re-decrypt every preview).
 
-      // Encrypt + sign, then render the real id and publish in the background.
       try {
         const content = await signer.nip04!.encrypt(peer, trimmed);
         const event = await signer.signEvent({
@@ -1340,7 +1049,6 @@ export function useDirectMessages(peer: string | undefined) {
           created_at: createdAt,
         });
 
-        // Swap the placeholder for the real, signed event id (still "sending").
         queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
           old.map((m) =>
             m.id === tempId
@@ -1349,20 +1057,13 @@ export function useDirectMessages(peer: string | undefined) {
           ),
         );
 
-        // Seed the plaintext memo with what we just sent, keyed by the real
-        // event id, so when the relay echoes this message back through the live
-        // subscription (or a refetch) it's a cache hit — we never re-decrypt our
-        // own outgoing message.
+        // Seed the plaintext memo so the relay echo is a cache hit.
         setRenderedPlaintext(event.id, trimmed);
 
-        // Publish in the background; don't make the caller await the relay.
         void publish(event).catch(() => {
-          // Failure is surfaced via the message's "failed" status (and retry).
         });
       } catch {
-        // Encryption/signing failed (e.g. extension rejected) — mark the
-        // placeholder failed so it can be retried, and don't throw (the send is
-        // fire-and-forget from the composer's perspective).
+        // Encrypt/sign failed: mark failed for retry; don't throw (fire-and-forget).
         setMessageStatus(tempId, "failed");
       }
     },
@@ -1379,7 +1080,6 @@ export function useDirectMessages(peer: string | undefined) {
 
       void (async () => {
         try {
-          // Re-encrypt + re-sign, same as send.
           const content = await signer.nip04!.encrypt(peer, failed.content);
           const event = await signer.signEvent({
             kind: KIND_DM,
@@ -1387,7 +1087,7 @@ export function useDirectMessages(peer: string | undefined) {
             tags: [["p", peer]],
             created_at: failed.created_at,
           });
-          // The signed event id may differ from the placeholder id; reconcile.
+          // Reconcile the signed id with the placeholder id.
           if (event.id !== id) {
             queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
               old.map((m) => (m.id === id ? { ...m, id: event.id } : m)),
@@ -1403,28 +1103,20 @@ export function useDirectMessages(peer: string | undefined) {
   );
 
   /**
-   * Decrypt a placeholder message that has scrolled into view, filling its
-   * plaintext into the thread. Called by the render layer's IntersectionObserver
-   * for each `encrypted: true` row. Reads the raw ciphertext from the event
-   * store (where NostrBatcher mirrors it), decrypts through the memo, and
-   * patches just that row. Idempotent: a no-op once the id is decrypted, and
-   * concurrent calls for the same id share one signer round-trip (render-memo
-   * in-flight dedup).
+   * Decrypt a placeholder scrolled into view (IntersectionObserver), reading its
+   * ciphertext from the event store. Idempotent; concurrent calls share one decrypt.
    */
   const decryptVisible = useCallback(
     (id: string) => {
       if (!self || !peer || !user?.signer.nip04) return;
       if (hasRenderedPlaintext(id)) {
-        // Already decrypted this session — just make sure the row reflects it.
         const content = getRenderedPlaintext(id)!;
         queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
           old.map((m) => (m.id === id && m.encrypted ? { ...m, content, encrypted: false } : m)),
         );
         return;
       }
-      // Consent declined: never auto-decrypt on scroll — that would turn
-      // scrolling into the very storm the gate exists to prevent. The row stays
-      // a placeholder with its own "Decrypt" button (`decryptOne`).
+      // Consent declined: never auto-decrypt on scroll; use the row's "Decrypt" button.
       if (declined) return;
       const nip04 = user.signer.nip04;
       void (async () => {
@@ -1438,19 +1130,14 @@ export function useDirectMessages(peer: string | undefined) {
             old.map((m) => (m.id === id ? { ...m, content, encrypted: false } : m)),
           );
         } catch {
-          // Leave it as a placeholder; it'll retry next time it enters view.
+          // Stays a placeholder; retried next time it enters view.
         }
       })();
     },
     [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey, declined],
   );
 
-  /**
-   * Explicitly decrypt ONE message on the user's request (the per-message
-   * "Decrypt" button shown when consent was declined). This is a direct user
-   * action, so it bypasses the consent gate and touches the signer for exactly
-   * that message — no bulk fan-out.
-   */
+  /** Decrypt ONE message on explicit request (bypasses the consent gate). */
   const decryptOne = useCallback(
     (id: string) => {
       if (!self || !peer || !user?.signer.nip04) return;
@@ -1465,20 +1152,13 @@ export function useDirectMessages(peer: string | undefined) {
           queryClient.setQueryData<DecryptedDM[]>(queryKey, (old = []) =>
             old.map((m) => (m.id === id ? { ...m, content, encrypted: false } : m)),
           );
-        } catch {
-          // Leave it as a placeholder; the button stays available to retry.
-        }
+        } catch { /* ignore */ }
       })();
     },
     [self, peer, user?.signer.nip04, eventStore, queryClient, queryKey],
   );
 
-  /**
-   * Explicitly decrypt EVERY still-encrypted message in the thread (the
-   * "Decrypt all" banner shown when consent was declined). A direct user action:
-   * it bypasses the gate and — since the user has asked for it here — flips the
-   * global consent to allowed so future threads decrypt without re-asking.
-   */
+  /** "Decrypt all": decrypt every encrypted row and flip global consent to allowed. */
   const decryptAll = useCallback(() => {
     if (!self || !peer || !user?.signer.nip04) return;
     const nip04 = user.signer.nip04;
@@ -1502,26 +1182,19 @@ export function useDirectMessages(peer: string | undefined) {
               content,
             });
             ok++;
-          } catch {
-            // Skip; the row stays a placeholder with its own button.
-          }
+          } catch { /* ignore */ }
         }),
       );
-      // The signer refused everything (e.g. "never ask again → reject"): undo
-      // the optimistic "allowed" so the banner and per-message buttons return
-      // instead of the thread silently sitting on skeletons.
+      // The signer refused everything: undo the optimistic "allowed" so manual controls return.
       if (events.length > 0 && ok === 0 && signerNeedsApproval(user!.method)) setDecryptConsent("declined");
     })();
   }, [self, peer, user, eventStore, queryClient, queryKey]);
 
   return {
     messages: query.data ?? [],
-    // The skeleton stands for the LOCAL read and nothing else: the queryFn
-    // resolves on the store read and leaves the relay pull running behind it,
-    // so this clears as soon as there is something on disk to paint.
+    // The skeleton covers only the LOCAL read; the queryFn resolves before the relay pull.
     isLoading: query.isLoading,
-    // …and the pull it left running is reported separately, so an empty thread
-    // says "Catching up…" instead of a premature "No messages yet".
+    // The pending pull is reported separately ("Catching up…" vs "No messages yet").
     syncing: isEmptyThreadAwaitingPull(query.data?.length ?? 0, waitingForInitialPull),
     error: query.error,
     send: send.mutateAsync,

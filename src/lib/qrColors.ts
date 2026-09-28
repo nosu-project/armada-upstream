@@ -19,10 +19,7 @@ function readCssHsl(prop: string): { h: number; s: number; l: number } | null {
   return { h, s, l };
 }
 
-/**
- * Darken an HSL color until it reaches the minimum contrast against a reference RGB.
- * Returns the adjusted hex color.
- */
+/** Darken until the minimum contrast against `reference`; returns hex. */
 function darkenToContrast(
   hsl: { h: number; s: number; l: number },
   refRgb: [number, number, number],
@@ -38,10 +35,7 @@ function darkenToContrast(
   return rgbToHex(...rgb);
 }
 
-/**
- * Lighten an HSL color until it reaches the minimum contrast against a reference RGB.
- * Returns the adjusted hex color.
- */
+/** Lighten until the minimum contrast against `reference`; returns hex. */
 function lightenToContrast(
   hsl: { h: number; s: number; l: number },
   refRgb: [number, number, number],
@@ -58,11 +52,8 @@ function lightenToContrast(
 }
 
 /**
- * Choose the best module color from primary and foreground.
- *
- * Strongly prefers primary since it carries the theme's brand identity.
- * Only picks foreground if it is colorful (saturation > threshold) AND
- * has significantly better contrast (> 1.5x) against the QR background.
+ * Prefer primary (brand color); use foreground only if it's colorful and has
+ * >1.5x the contrast against the QR background.
  */
 function pickModuleColor(
   primary: { h: number; s: number; l: number },
@@ -81,18 +72,12 @@ function pickModuleColor(
   const primaryContrast = getContrastRatio(primaryRgb, bgRgb);
   const fgContrast = getContrastRatio(fgRgb, bgRgb);
 
-  // Foreground must be significantly better to override primary
   return fgContrast > primaryContrast * 1.5 ? foreground : primary;
 }
 
 /**
- * Derive QR module and background hex colors from the active theme.
- *
- * Light themes: white background, best themed color as modules (darkened if needed).
- * Dark themes: --background as QR background, best themed color as modules (lightened if needed).
- *
- * "Best themed color" is --primary by default. If --foreground is colorful
- * (saturation > 15%) and offers better contrast, it wins instead.
+ * QR module/background colors from the active theme. Light: white background;
+ * dark: `--background`. Modules use {@link pickModuleColor}, adjusted for contrast.
  */
 export function getThemedQRColors(): { dark: string; light: string } {
   const primary = readCssHsl("--primary");

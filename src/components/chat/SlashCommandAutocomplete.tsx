@@ -15,59 +15,41 @@ interface SlashCommandAutocompleteProps {
   canModerate: boolean;
   /** Composer capabilities; commands needing an unsupported one are hidden. */
   capabilities?: ReadonlySet<SlashCapability>;
-  /**
-   * Optional extra filter on which commands the menu offers (on top of the
-   * built-in moderation/capability gates). Used by surfaces that support only a
-   * subset — e.g. the Bluetooth mesh, which has no polls/threads/moderation.
-   */
+  /** Extra command filter on top of the built-in gates (e.g. mesh has no polls/threads). */
   commandFilter?: (command: SlashCommand) => boolean;
-  /** Replace the command word `/query` with `/<name> ` (keeps the menu intent). */
+  /** Replace the command word `/query` with `/<name> `. */
   onInsertCommand: (params: { start: number; end: number; replacement: string }) => void;
   /** Run a command immediately (for argument-less commands picked from the menu). */
   onRunCommand: (command: SlashCommand) => void;
 
-  /**
-   * Commands published by the bots in this conversation, from their `kind:10304`
-   * manifests. Omitted on surfaces with no bot discovery (the mesh), which then
-   * behave exactly as before.
-   */
+  /** Commands from this conversation's bots (`kind:10304` manifests). */
   botEntries?: BotCommandEntry[];
   /** Bots present, whether or not they publish a manifest — drives the loading copy. */
   botCount?: number;
-  /** A manifest lookup is in flight and no bot commands are known yet. */
   botsLoading?: boolean;
   /** Recently used bot commands, most recent first, as `<botHex>:<name>` keys. */
   botRecents?: string[];
-  /** Pick a bot command: run it now if it takes no arguments, else collect them. */
   onRunBotCommand?: (entry: BotCommandEntry) => void;
 }
 
-/** A selectable row. Section headers are not rows and never take focus. */
+/** Section headers are not rows and never take focus. */
 type Row =
   | { type: "local"; command: SlashCommand }
   | { type: "bot"; entry: BotCommandEntry };
 
 interface Section {
   key: string;
-  /** A bot's pubkey renders its avatar + name as the header. */
   bot?: string;
-  /** A plain text header (the recents group). */
   label?: string;
   rows: Row[];
 }
 
-/**
- * Argument names shown on a row before the rest collapse into a `+N`. A command
- * can declare eight; spelling them all out pushes the row past the menu's width,
- * and the row is a chooser, not a signature. The full list is one keystroke away
- * in the argument fields.
- */
+/** Argument names shown before collapsing into `+N`, so rows fit the menu. */
 const MAX_VISIBLE_ARGS = 2;
 
 const rowKey = (row: Row): string =>
   row.type === "local" ? `local:${row.command.name}` : `bot:${row.entry.bot}:${row.entry.command.name}`;
 
-/** A bot's avatar + display name, resolved from its profile. */
 function BotIdentity({ pubkey, avatarOnly }: { pubkey: string; avatarOnly?: boolean }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -89,15 +71,9 @@ function BotIdentity({ pubkey, avatarOnly }: { pubkey: string; avatarOnly?: bool
 }
 
 /**
- * Detects a leading `/command` at the very start of an empty-ish composer and
- * shows a command palette. Only triggers when the message begins with `/` and
- * the first token (the command word) is still being typed — so it never
- * interferes with URLs, file paths, or mid-message slashes.
- *
- * The palette lists this app's own commands first, then a section per bot in the
- * conversation carrying the commands that bot declares. Two bots may declare the
- * same command name, so a bot command is always identified by (bot, name) rather
- * than name alone.
+ * Command palette for a leading `/command` while the first token is typed (never
+ * URLs or mid-message slashes). Built-ins first, then a section per bot; bot
+ * commands are identified by (bot, name).
  */
 export function SlashCommandAutocomplete({
   textareaRef,
@@ -116,8 +92,7 @@ export function SlashCommandAutocomplete({
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
-  // Bottom-anchored so the menu hugs the top of the composer and grows upward;
-  // a short list sits right against the composer instead of floating with a gap.
+  // Bottom-anchored so the menu grows upward from the composer.
   const [dropdownPos, setDropdownPos] = useState<{ bottom: number; left: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -133,8 +108,7 @@ export function SlashCommandAutocomplete({
     if (!isOpen) return [];
     const out: Section[] = [];
 
-    // Substring match, prefix matches hoisted, manifest order kept within a tier:
-    // a bot's own ordering is meaningful, so it is preserved rather than sorted.
+    // Prefix matches hoisted; manifest order kept within a tier (it's meaningful).
     const q = query.toLowerCase();
     const matched = (botEntries ?? []).filter((e) => e.command.name.includes(q));
     const ranked = [
@@ -142,10 +116,7 @@ export function SlashCommandAutocomplete({
       ...matched.filter((e) => !e.command.name.startsWith(q)),
     ];
 
-    // Recently used leads: the command you keep reaching for should be the first
-    // thing under the cursor, ahead of the built-ins and every bot's catalog.
-    // Two bots' `/roll` are different commands, so each row wears its owner's
-    // face to tell them apart.
+    // Recents lead; each row shows its owner bot (two bots' `/roll` differ).
     const recentRows: Row[] = [];
     for (const key of botRecents ?? []) {
       const sep = key.indexOf(":");
@@ -163,8 +134,7 @@ export function SlashCommandAutocomplete({
     if (local.length > 0) {
       out.push({
         key: "local",
-        // Headed only once something can sit above it; on a surface with no bots
-        // this is the whole menu and needs no label.
+        // No label when it's the whole menu.
         label: recentRows.length > 0 || ranked.length > 0 ? "Built-in" : undefined,
         rows: local.map((command) => ({ type: "local", command })),
       });
@@ -185,17 +155,11 @@ export function SlashCommandAutocomplete({
 
   const rows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
 
-  // Say that bots are still resolving rather than showing a false empty: a bot's
-  // commands landing a beat later would otherwise look like the menu lying.
-  //
-  // Only once we know a bot is actually there, though. A room with none would
-  // otherwise put this menu on screen for every `/`-leading message — an emote, a
-  // path, a typo — with nothing in it to pick, and swallow the Enter that was
-  // meant to send.
+  // Show loading rather than a false empty, but only when a bot is present, or
+  // every `/`-leading message would open an empty menu that swallows Enter.
   const showLoading = isOpen && botsLoading && botCount > 0 && (botEntries?.length ?? 0) === 0;
 
-  // The row list can shrink underneath a stable draft (a manifest resolving, a
-  // bot leaving), so the cursor must never be left pointing past the end.
+  // Rows can shrink under a stable draft; keep the cursor in range.
   useEffect(() => {
     setSelectedIndex((prev) => (prev >= rows.length ? Math.max(rows.length - 1, 0) : prev));
   }, [rows.length]);
@@ -205,8 +169,7 @@ export function SlashCommandAutocomplete({
     if (!textarea) return;
     const value = textarea.value;
 
-    // Only when the whole message is a command word being typed: starts with
-    // "/" and no whitespace yet (once a space is typed we're entering args).
+    // Whole message is `/word` with no whitespace yet (a space starts arguments).
     const match = value.match(/^\/([\w-]*)$/);
     if (!match) {
       setIsOpen(false);
@@ -217,7 +180,6 @@ export function SlashCommandAutocomplete({
     setSelectedIndex(0);
     setIsOpen(true);
 
-    // Anchor the menu's bottom just above the composer's top edge.
     const rect = textarea.getBoundingClientRect();
     setDropdownPos({
       bottom: window.innerHeight - rect.top + 6,
@@ -236,8 +198,7 @@ export function SlashCommandAutocomplete({
       return;
     }
     const command = row.command;
-    // Argument-less commands run immediately on pick; others insert "/name "
-    // so the user can type the target/text next.
+    // Argument-less commands run on pick; others insert "/name ".
     if (command.runsOnSelect) {
       onRunCommand(command);
       return;
@@ -266,8 +227,7 @@ export function SlashCommandAutocomplete({
           break;
         case "Enter":
         case "Tab": {
-          // Never eat a key we cannot act on: with no row under the cursor this
-          // is an ordinary message and Enter belongs to the composer.
+          // With no row under the cursor, Enter belongs to the composer.
           const row = rows[selectedIndex];
           if (!row) return;
           e.preventDefault();
@@ -303,18 +263,12 @@ export function SlashCommandAutocomplete({
       className="fixed z-[300] w-[320px] max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover shadow-lg overflow-hidden animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150 pointer-events-auto"
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
-      {/* No padding on the TOP edge: a scroll container's padding insets the
-          rectangle a sticky child is constrained to, so `top-0` would park each
-          header just below the border and leave a slit for the rows to scroll
-          through. The headers carry their own `pt-2` for spacing at rest. */}
+      {/* No top padding: it would inset the sticky headers and leave a slit. */}
       <div ref={listRef} className="max-h-[260px] overflow-y-auto overflow-x-hidden pb-1">
         {sections.map((section) => (
           <div key={section.key}>
             {(section.bot || section.label) && (
-              // Sticky within its own section, so the header of whatever you are
-              // scrolled into stays pinned at the top of the list and is then
-              // pushed out by the next section's — you always know whose command
-              // you are looking at. Opaque, or the rows would scroll through it.
+              // Sticky per section so the current bot's header stays pinned. Opaque.
               <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-popover px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {section.bot ? <BotIdentity pubkey={section.bot} /> : section.label}
               </div>
@@ -330,15 +284,11 @@ export function SlashCommandAutocomplete({
                   key={rowKey(row)}
                   data-slash-item
                   className={cn(
-                    // scroll-mt clears the sticky header: without it, arrowing to
-                    // a row at the top of the viewport parks it underneath.
+                    // scroll-mt clears the sticky header when arrowing.
                     "w-full flex items-baseline gap-2 scroll-mt-8 px-3 py-2 text-left transition-colors cursor-pointer",
                     index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
                   )}
-                  // Select on pointer-down (not click): preventDefault keeps the
-                  // composer focused, and acting on pointer-down fires reliably on
-                  // touch, where a mousedown-preventDefault can swallow the synthetic
-                  // click (the menu would just close and nothing would prefill).
+                  // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
                   onPointerDown={(e) => {
                     e.preventDefault();
                     selectRow(row);
@@ -361,9 +311,6 @@ export function SlashCommandAutocomplete({
                     </span>
                   ))}
                   {args.length > MAX_VISIBLE_ARGS && (
-                    // A command with a long signature would otherwise push the row
-                    // wider than the menu. The count is enough to say "there is
-                    // more here"; picking it opens a field per argument anyway.
                     <span
                       className="shrink-0 font-mono text-xs text-muted-foreground/60"
                       title={args.slice(MAX_VISIBLE_ARGS).map((a) => a.name).join(" ")}
@@ -371,9 +318,7 @@ export function SlashCommandAutocomplete({
                       +{args.length - MAX_VISIBLE_ARGS}
                     </span>
                   )}
-                  {/* Absorbs the rest of the row and truncates, so no row can ever
-                      widen the menu (min-w-0 lets a flex item shrink below its
-                      content, which `truncate` needs to bite). */}
+                  {/* min-w-0 lets `truncate` bite so no row widens the menu. */}
                   <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                     {command.description}
                   </span>

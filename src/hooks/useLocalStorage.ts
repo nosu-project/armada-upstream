@@ -1,15 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 /**
- * Generic hook for managing localStorage state.
- *
- * The returned setter is REFERENCE-STABLE for the life of the hook (as long as
- * `key` doesn't change). That is load-bearing rather than cosmetic: this hook
- * backs `AppProvider`'s config, whose setter is handed to 67 files as
- * `updateConfig` and appears in ~15 `useEffect`/`useCallback` dependency
- * arrays. A setter recreated per render put a fresh identity in every one of
- * those, so effects that read as "run when the relay list changes" re-ran on
- * every render of their component instead.
+ * Generic localStorage state. The setter is REFERENCE-STABLE per `key`: it backs
+ * `AppProvider`'s `updateConfig`, which sits in many effect dependency arrays.
  */
 export function useLocalStorage<T>(
   key: string,
@@ -32,23 +25,15 @@ export function useLocalStorage<T>(
     }
   });
 
-  // The serializer, read by the stable `setValue` below without becoming a
-  // dependency of it — callers commonly pass a fresh `{ serialize, deserialize }`
-  // literal per render, which would otherwise make the setter unstable again.
+  // Via a ref: callers often pass a fresh `{ serialize, deserialize }` literal per render.
   const serializeRef = useRef(serialize);
   serializeRef.current = serialize;
 
   const setValue = useCallback((value: T | ((prev: T) => T)) => {
-    // Still React's functional setState, for the reason it always was: the
-    // updater receives the latest state even when several `setValue` calls are
-    // batched before a re-render, and even when the state was last moved by
-    // something other than this setter (the key-change re-read and the
-    // cross-tab `storage` listener below both call `setState` directly).
-    // Reading a ref here instead would miss those.
+    // Functional setState so batched calls and non-setter updates (key re-read, `storage`
+    // listener) are seen.
     setState((prev) => {
       const next = value instanceof Function ? value(prev) : value;
-      // Nothing changed — an updater that returned its input, or a direct
-      // write of the value already held.
       if (next === prev) return prev;
       try {
         localStorage.setItem(key, serializeRef.current(next));
@@ -59,9 +44,7 @@ export function useLocalStorage<T>(
     });
   }, [key]);
 
-  // Re-read from localStorage when the key changes (e.g. user-scoped keys
-  // switching to a different user). The useState initializer only runs once,
-  // so changing the key prop requires an explicit re-sync.
+  // The useState initializer runs once, so a key change (e.g. user-scoped keys) needs a re-read.
   useEffect(() => {
     try {
       const item = localStorage.getItem(key);
@@ -70,8 +53,7 @@ export function useLocalStorage<T>(
       console.warn(`Failed to load ${key} from localStorage:`, error);
       setState(defaultValue);
     }
-  // defaultValue is intentionally excluded — we only want to re-read when
-  // the key identity changes, not when a new default reference is passed.
+  // defaultValue is excluded: re-read only when the key changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 

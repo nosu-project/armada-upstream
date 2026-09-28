@@ -6,12 +6,8 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 /**
- * The inline message-search bar in every chat header. It slides in from the
- * right over the title and actions (a GPU-composited transform, so no
- * per-frame reflow) and focuses its input on open with `preventScroll`: the
- * input starts off-screen, so a plain `focus()` would jolt the page to reveal
- * it. The caller owns the state, since Concord's query is one field of a
- * `SearchFilters` struct and the others' is a bare string.
+ * Inline message-search bar sliding over the chat header. Focuses with
+ * `preventScroll` (the input starts off-screen). The caller owns the state.
  */
 export function ChatSearchBar({
   open,

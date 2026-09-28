@@ -11,10 +11,8 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Sanitize relay hints from untrusted content (nevent TLVs, q tags). Since the
- * WHATWG change, `new WebSocket("/")` resolves against the page URL instead of
- * throwing, so an empty/relative hint would otherwise open a socket to the
- * app's own origin.
+ * Since the WHATWG change, `new WebSocket("/")` resolves against the page URL, so an
+ * empty/relative hint would open a socket to our own origin.
  */
 function sanitizeRelayHints(relays: string[] | undefined): string[] {
   return (relays ?? [])
@@ -23,12 +21,8 @@ function sanitizeRelayHints(relays: string[] | undefined): string[] {
 }
 
 /**
- * Relay hints a SENDER named (an nevent/naddr TLV, an `e`/`q` tag, a shared
- * link), narrowed to what the client will dial on their say-so: `wss:` on a
- * public host. A hint is a socket opened from the viewer's address to wherever
- * the sender chose, so a loopback/LAN one is a blind probe of the viewer's
- * network. Not for relays the USER configured (a joined NIP-29 relay may well
- * be `ws://localhost` on a dev box) — those pass through `sanitizeRelayHints`.
+ * Sender-named relay hints narrowed to `wss:` on a public host: a loopback/LAN hint is a
+ * blind probe of the viewer's network. User-configured relays use `sanitizeRelayHints`.
  */
 export function publicRelayHints(relays: string[] | undefined): string[] {
   return sanitizeRelayHints(relays).filter(
@@ -36,10 +30,7 @@ export function publicRelayHints(relays: string[] | undefined): string[] {
   );
 }
 
-/**
- * Extract write relay URLs from a NIP-65 (kind 10002) relay list event.
- * Tags with no marker are both read+write; tags with "write" are write-only.
- */
+/** NIP-65 write relays: unmarked tags are read+write; "write" tags are write-only. */
 function extractWriteRelays(event: NostrEvent): string[] {
   const relays = new Set<string>();
   for (const [name, url, marker] of event.tags) {
@@ -58,15 +49,11 @@ function extractWriteRelays(event: NostrEvent): string[] {
 
 type Pool = ReturnType<typeof useNostr>["nostr"];
 
-/** Most relays one fallback step will connect to. */
 const MAX_FALLBACK_RELAYS = 5;
 
 /**
- * Query one relay the pool is NOT connected to, over a connection of its own
- * that answers no AUTH challenge and closes when done. The relays here come
- * from hints, other people's outboxes and references, and answering AUTH
- * would tell each of them who is looking. A relay that insists on AUTH to
- * read is a miss.
+ * Query a relay the pool isn't connected to, never answering AUTH (which would reveal who
+ * is looking). A relay requiring AUTH to read is a miss.
  */
 async function queryUnauthenticated(
   url: string,
@@ -85,10 +72,8 @@ async function queryUnauthenticated(
 }
 
 /**
- * Query a group of relays; the first match, or null on a miss or failure.
- * Relays the pool already holds a connection to are asked through it; the
- * rest through {@link queryUnauthenticated}, so a lookup never adds a relay to
- * the pool, which answers AUTH.
+ * Pool-connected relays go through the pool; the rest via {@link queryUnauthenticated},
+ * so a lookup never adds an AUTH-answering relay to the pool.
  */
 async function queryRelayGroup(
   nostr: Pool,
@@ -111,9 +96,8 @@ async function queryRelayGroup(
 }
 
 /**
- * The first non-null result among concurrent lookups, or null once all have
- * missed. A miss isn't a rejection (unlike `Promise.any`), and one slow
- * attempt can't hold back another's hit (unlike `Promise.all`).
+ * A miss isn't a rejection (unlike `Promise.any`), and a slow attempt can't hold back a
+ * hit (unlike `Promise.all`).
  */
 function firstMatch(attempts: Promise<NostrEvent | null>[]): Promise<NostrEvent | null> {
   if (attempts.length === 0) return Promise.resolve(null);
@@ -128,7 +112,6 @@ function firstMatch(attempts: Promise<NostrEvent | null>[]): Promise<NostrEvent 
   });
 }
 
-/** Query an author's NIP-65 write relays (read from the pool) for the filter. */
 async function queryAuthorRelays(
   nostr: Pool,
   pubkey: string,
@@ -149,11 +132,8 @@ async function queryAuthorRelays(
 }
 
 /**
- * Last resort for an id nothing pointed us at: events on the pool that
- * REFERENCE it (replies, quotes, reactions, zaps) carry relay hints and the
- * target author's pubkey in their `e`/`q` tags, and `p`-tag it or were written
- * by someone whose outbox likely holds it. Chase those — every relay here is
- * derived from the network, none is hardcoded.
+ * Last resort: events on the pool REFERENCING the id carry relay hints and author pubkeys;
+ * chase those. No hardcoded relays.
  */
 async function discoverViaReferences(
   nostr: Pool,
@@ -182,7 +162,6 @@ async function discoverViaReferences(
         }
       }
     }
-    // Weaker: `p` tags, then the referencing authors themselves.
     for (const ref of refs) {
       for (const [name, value] of ref.tags) {
         if (name === "p") addPubkey(value);
@@ -204,19 +183,9 @@ async function discoverViaReferences(
 }
 
 /**
- * Fetches a single Nostr event by its hex ID. Resolution order (the same depth
- * as Ditto's lookup):
- * 1. Local cache (events are immutable, so a hit is authoritative)
- * 2. The configured relay pool
- * 3. Concurrently: relay hints from the identifier, and the author's NIP-65
- *    write relays (`authorHint`, else `opts.fallbackAuthor` — e.g. the author
- *    of the message quoting it)
- * 4. With `opts.discover`: events on the pool that reference the id, and the
- *    hints they carry. Opt-in because it asks the public pool about the id —
- *    fine for a quoted public note, not for a NIP-29 group message.
- *
- * A miss returns null rather than throwing, so it is cached like a hit; a
- * caller offering "retry" refetches.
+ * Fetch one event by hex id: local cache, the pool, then concurrently identifier hints and
+ * the author's NIP-65 write relays; with `opts.discover`, referencing events (opt-in: it asks the
+ * public pool about the id — not for NIP-29 group messages). A miss returns null (cached like a hit).
  */
 export function useEvent(
   eventId: string | undefined,
@@ -236,10 +205,8 @@ export function useEvent(
       const filter: NostrFilter[] = [{ ids: [eventId], limit: 1 }];
 
       const store = await eventStore;
-      // The global cache. A NIP-29 event lives in its relay's own tenant instead,
-      // and an id alone doesn't say which relay that is — so a quoted group
-      // message misses here and is resolved from the relay below, which is the
-      // only place it authoritatively exists anyway.
+      // NIP-29 events live in their relay's own tenant, so a quoted group message misses here
+      // and resolves from the relay below.
       const [cached] = await store.query(filter);
       if (cached) return cached;
 
@@ -261,10 +228,8 @@ export function useEvent(
       const found = await firstMatch(attempts)
         ?? (discover ? await discoverViaReferences(nostr, eventId, filter, AbortSignal.timeout(15000)) : null);
       if (found) {
-        // A `group()` read has N candidate relays for one event, so it can't
-        // attribute a group-scoped result; the store drops those rather than
-        // file them under a guess (see db/relayScope.ts). Global kinds — the
-        // usual case for a quoted event — still cache.
+        // A `group()` read can't attribute group-scoped results, so the store drops those
+        // (see db/relayScope.ts); global kinds still cache.
         void store.event(found);
         return found;
       }
@@ -276,19 +241,16 @@ export function useEvent(
   });
 }
 
-/** Coordinates for an addressable event (naddr). */
 export interface AddrCoords {
   kind: number;
   pubkey: string;
   identifier: string;
 }
 
-/** Whether a kind is addressable (30000-39999) and thus identified by its d-tag. */
 function isAddressableKind(kind: number): boolean {
   return kind >= 30000 && kind < 40000;
 }
 
-/** Fetches a single addressable Nostr event by kind + pubkey + d-tag. */
 export function useAddrEvent(addr: AddrCoords | undefined, relays?: string[]) {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
@@ -310,8 +272,7 @@ export function useAddrEvent(addr: AddrCoords | undefined, relays?: string[]) {
         // fall through
       }
 
-      // An naddr always names its author, so their outbox is always a
-      // candidate beside whatever hints it carried. Concurrent; first hit wins.
+      // An naddr always names its author, so their outbox is always a candidate.
       const attempts = [queryAuthorRelays(nostr, addr.pubkey, filter, AbortSignal.timeout(8000))];
       if (relays && relays.length > 0) {
         attempts.push(queryRelayGroup(nostr, relays, filter, AbortSignal.timeout(6000)));
@@ -323,8 +284,7 @@ export function useAddrEvent(addr: AddrCoords | undefined, relays?: string[]) {
         return found;
       }
 
-      // Fall back to the locally cached copy (a replaceable miss is usually a
-      // relay hiccup, not a deletion).
+      // A replaceable miss is usually a relay hiccup, not a deletion.
       const cacheFilter: NostrFilter = { kinds: [addr.kind], authors: [addr.pubkey] };
       if (isAddressableKind(addr.kind)) {
         cacheFilter["#d"] = [addr.identifier];

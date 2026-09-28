@@ -2,21 +2,11 @@ import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
-/**
- * The quiz's off-ramp: once the answers blow away, the grid of the protocol
- * that made the joke true (concordprotocol.org) glows up behind the section,
- * and one quiet line says why nobody can read it, with the spec one link away.
- * The line and link stay in the landing's own caption register; only the grid
- * is borrowed.
- */
+/** The quiz's off-ramp: the Concord grid (concordprotocol.org) glows up behind one line and a spec link. */
 
 const MINT = "#24e8a3";
 
-/**
- * Grid lines under a radial glow, masked to the lines, as on concordprotocol.org.
- * The glow's radii are `--glow`, set per breakpoint: a fraction of a tall, narrow
- * phone section is a slim ellipse that fades out before the screen's edges.
- */
+/** Grid lines under a radial glow; radii come from `--glow`, set per breakpoint. */
 const GRID = {
   backgroundImage: `radial-gradient(var(--glow) at 50% 50%, ${MINT}40, ${MINT}10 55%, transparent 80%)`,
   maskImage: "linear-gradient(90deg, #000 1px, transparent 1px), linear-gradient(#000 1px, transparent 1px)",
@@ -25,7 +15,6 @@ const GRID = {
   WebkitMaskSize: "56px 56px",
 } as React.CSSProperties;
 
-/** The grid, spanning its positioned ancestor. */
 export function ConcordGrid({ shown }: { shown: boolean }) {
   return (
     <div
@@ -40,13 +29,8 @@ export function ConcordGrid({ shown }: { shown: boolean }) {
 }
 
 /**
- * The Concord mark as ASCII, one layer per stroke of the logo so each keeps its
- * colour. Sampled from the mark's own geometry (a 128-unit box: an inner ring,
- * a long arc open to the right, and a short arc closing it) at module load.
- *
- * Each inked cell gets a draw order: its angle round the mark, so the strokes
- * are traced like a pen going round, with a little jitter so the edge of the
- * line pixelates in rather than wiping.
+ * The Concord mark as ASCII, one layer per stroke, sampled from its geometry
+ * (128-unit box) at load. Cells draw in angular order with jitter.
  */
 const MARK = (() => {
   const COLS = 40;
@@ -56,14 +40,12 @@ const MARK = (() => {
   const SUB = 4;
   const deg = (x: number, y: number) => (Math.atan2(y, x) * 180) / Math.PI;
   const strokes = [
-    // Inner ring.
     (x: number, y: number) => Math.abs(Math.hypot(x, y) - 27.3) <= 6.25,
     // Long arc, open between -56° and 56.5°.
     (x: number, y: number) => {
       const a = deg(x, y);
       return Math.abs(Math.hypot(x, y) - 49) <= 6 && (a <= -56 || a >= 56.5);
     },
-    // Short arc closing it, with a gap either side.
     (x: number, y: number) => {
       const a = deg(x, y);
       return Math.abs(Math.hypot(x, y) - 49) <= 6 && a >= -43.5 && a <= 43.5;
@@ -86,7 +68,6 @@ const MARK = (() => {
         }
         const x = ((c + 0.5) / COLS) * 128 - 64;
         const y = ((r + 0.5) / ROWS) * 128 - 64;
-        // Clockwise from the top, the outer strokes a beat behind the ring.
         const turn = (((deg(x, y) + 90) % 360) + 360) % 360 / 360;
         glyphs.push(RAMP[Math.round((n / (SUB * SUB)) * (RAMP.length - 1))]);
         order.push(turn * 0.8 + layer * 0.08 + rnd() * 0.08);
@@ -99,15 +80,11 @@ const MARK = (() => {
 })();
 
 const MARK_COLORS = ["#5AFDB2", "#1DA57A", "#FFFFFF"];
-/** The pen: bright noise at the leading edge of the line being drawn. */
 const PEN = "@#%&$";
 const DRAW_MS = 1700;
 const DRAW_TICK = 40;
 
-/**
- * The mark above the punchline, drawn in when `shown`. The draw writes each
- * layer's text directly, never through state; reduced motion gets it whole.
- */
+/** Drawn in when `shown`, writing text directly (not state); reduced motion gets it whole. */
 export function ConcordMark({ shown }: { shown: boolean }) {
   const layersRef = useRef<(HTMLPreElement | null)[]>([]);
 
@@ -138,7 +115,6 @@ export function ConcordMark({ shown }: { shown: boolean }) {
       });
     };
     let id: ReturnType<typeof setInterval> | undefined;
-    // Wait out the dust, then draw.
     const wait = setTimeout(() => {
       draw();
       id = setInterval(() => {
@@ -179,7 +155,6 @@ export function ConcordMark({ shown }: { shown: boolean }) {
   );
 }
 
-/** Why it holds, and where to check. */
 export function ConcordReveal({ shown }: { shown: boolean }) {
   return (
     <div

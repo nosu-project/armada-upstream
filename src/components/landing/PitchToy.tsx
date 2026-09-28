@@ -4,17 +4,12 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { TvDrum } from "./TvDrum";
 
 /**
- * The pitch as a toy: "Armada is a group chat for your ___", where the blank
- * types itself out to name whichever community the slowly turning prism below
- * has brought round. Tapping the word nudges the prism on a face. It says what
- * Armada is by showing a community, not by describing one.
- *
- * Renders once per community, never per character: the typing writes the
- * word's text node directly. Reduced motion gets no spin and no typing, only
- * the tap.
+ * "Armada is a group chat for your ___": the word types itself to match the
+ * rotating prism's community; tapping nudges it. Typing writes the text node
+ * directly (no per-character renders).
  */
 
-/** Each word, and the capture of that community (`e2e/landing-screenshots.spec.ts`). */
+/** Word plus its capture (`e2e/landing-screenshots.spec.ts`). */
 const CREWS = [
   { word: "raid crew", slug: "raid-crew", label: "a gaming community's #general, with reactions, an inline reply and a thread" },
   { word: "book club", slug: "book-club", label: "a book club's #general, with a vote, reactions and a thread" },
@@ -30,16 +25,13 @@ function prefersReducedMotion() {
 }
 
 export const PitchToy = memo(function PitchToy() {
-  // Nudges asked for (the word, a neighbour); the prism turns by each change.
   const [step, setStep] = useState(0);
-  // Which community the prism has brought round; the word follows it.
   const [index, setIndex] = useState(0);
   const wordRef = useRef<HTMLSpanElement>(null);
 
   const tune = useCallback((delta: number) => setStep((s) => s + delta), []);
   const next = useCallback(() => tune(1), [tune]);
 
-  // Type the word in.
   useEffect(() => {
     const el = wordRef.current;
     if (!el) return;

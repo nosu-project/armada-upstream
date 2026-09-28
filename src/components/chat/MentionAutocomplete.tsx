@@ -15,22 +15,13 @@ interface MentionAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   content: string;
   onInsertMention: (params: { start: number; end: number; replacement: string }) => void;
-  /**
-   * When provided, restrict mention candidates to these pubkeys (the room's
-   * members) instead of searching all of Nostr. Used by group chat so `@`
-   * only suggests people in the room.
-   */
+  /** Restrict candidates to these pubkeys (room members) instead of all of Nostr. */
   restrictToPubkeys?: string[];
-  /** Offer the Concord mass-mention token. The caller has already checked the
-   * current user's channel-scoped MENTION_EVERYONE permission. */
+  /** Offer Concord's @everyone; the caller has checked MENTION_EVERYONE. */
   allowEveryone?: boolean;
 }
 
-/**
- * Detects `@query` at the cursor position in a textarea and shows
- * a profile autocomplete dropdown. On selection, replaces `@query`
- * with `nostr:npub1...` in the content (NIP-27).
- */
+/** `@query` profile autocomplete at the caret; inserts `nostr:npub1...` (NIP-27). */
 export function MentionAutocomplete({
   textareaRef,
   content,
@@ -42,7 +33,6 @@ export function MentionAutocomplete({
   const [mentionStart, setMentionStart] = useState(-1);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
-  // Bottom-anchored so a short list hugs the composer instead of floating.
   const [dropdownPos, setDropdownPos] = useState<{ bottom: number; left: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -62,7 +52,6 @@ export function MentionAutocomplete({
     && "everyone".startsWith(mentionQuery.trim().toLowerCase());
   const itemCount = (profiles?.length ?? 0) + (showEveryone ? 1 : 0);
 
-  // Detect @mention query at cursor.
   const detectMention = useCallback((text?: string, cursorPos?: number) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -70,7 +59,6 @@ export function MentionAutocomplete({
     const cursor = cursorPos ?? textarea.selectionStart;
     const value = text ?? textarea.value;
 
-    // Walk back from cursor to find an @ that starts a mention
     let atPos = -1;
     for (let i = cursor - 1; i >= 0; i--) {
       const ch = value[i];
@@ -104,8 +92,7 @@ export function MentionAutocomplete({
     setIsOpen(true);
     setSelectedIndex(0);
 
-    // Anchor the menu's bottom just above the composer's top edge so a short
-    // list hugs the composer; track the caret horizontally.
+    // Anchor the bottom just above the composer; track the caret horizontally.
     const caret = getCaretCoordinates(textarea, atPos);
     const rect = textarea.getBoundingClientRect();
     setDropdownPos({
@@ -114,7 +101,6 @@ export function MentionAutocomplete({
     });
   }, [textareaRef]);
 
-  // Listen for input/cursor changes on the textarea element.
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -140,7 +126,7 @@ export function MentionAutocomplete({
     };
   }, [textareaRef, detectMention, content]);
 
-  // Re-detect when content changes externally (e.g. emoji insertion).
+  // Re-detect on external content changes (e.g. emoji insertion).
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -171,7 +157,6 @@ export function MentionAutocomplete({
     setMentionStart(-1);
   }, [mentionStart, mentionQuery, textareaRef, onInsertMention]);
 
-  // Handle keyboard navigation within the dropdown
   useEffect(() => {
     if (!isOpen || itemCount === 0) return;
 
@@ -206,7 +191,6 @@ export function MentionAutocomplete({
     return () => textarea.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, itemCount, profiles, selectedIndex, textareaRef, selectProfile, selectEveryone, showEveryone]);
 
-  // Scroll selected item into view
   useEffect(() => {
     if (selectedIndex >= 0 && listRef.current) {
       const items = listRef.current.querySelectorAll("[data-mention-item]");
@@ -243,7 +227,7 @@ export function MentionAutocomplete({
     </div>
   );
 
-  // Portal to document.body so the dropdown escapes overflow clipping.
+  // Portal escapes overflow clipping.
   return renderPortal(dropdown, document.body);
 }
 
@@ -297,9 +281,7 @@ function MentionItem({
         "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
         isSelected ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
       )}
-      // Select on pointer-down so it fires reliably on touch (a
-      // mousedown-preventDefault can swallow the synthetic click); preventDefault
-      // keeps the composer focused.
+      // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
       onPointerDown={(e) => {
         e.preventDefault();
         onSelect();

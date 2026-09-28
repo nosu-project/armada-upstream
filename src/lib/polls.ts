@@ -1,13 +1,7 @@
 /**
- * Transport-agnostic NIP-88 poll logic, shared by the NIP-29 relay path and the
- * Concord sealed-rumor path (CORD.md "Polls").
- *
- * A poll is a kind-1068 event carrying its question in `content` and its options
- * as `["option", id, label]` tags; a vote is a kind-1018 event `e`-tagging the
- * poll and naming its choices in `["response", id]` tags. Everything here is
- * pure — parsing, tallying, tag building — so both transports agree bit-for-bit
- * on the result of a set of votes; only WHERE the votes come from (a relay query
- * vs the sealed chat fold) and how they're published differs.
+ * Transport-agnostic NIP-88 poll logic for NIP-29 and Concord (CORD.md "Polls").
+ * Poll: kind 1068, `["option", id, label]` tags. Vote: kind 1018 `e`-tagging
+ * the poll with `["response", id]`. Pure, so both transports tally identically.
  */
 
 /** NIP-88 poll kind (the poll itself; renders as a timeline message). */
@@ -22,7 +16,6 @@ export interface PollOption {
   label: string;
 }
 
-/** A poll's parsed shape (its options and settings). */
 export interface ParsedPoll {
   options: PollOption[];
   pollType: PollType;
@@ -30,11 +23,7 @@ export interface ParsedPoll {
   endsAt: number | undefined;
 }
 
-/**
- * A single voter's choice, normalized away from the underlying event shape so
- * the tally is identical for a relay-fetched NostrEvent (NIP-29) and a decoded
- * sealed rumor (Concord).
- */
+/** One voter's choice, normalized across NostrEvent (NIP-29) and sealed rumors (Concord). */
 export interface PollVote {
   pubkey: string;
   /** Selected option ids (filtered against the poll's valid ids by the tally). */
@@ -45,7 +34,7 @@ export interface PollVote {
 
 /** The tallied result of a poll's votes. */
 export interface PollTally {
-  /** option id → number of distinct voters who chose it. */
+  /** option id → distinct voters. */
   counts: Map<string, number>;
   /** Distinct voters (percentages are per-voter, so multi-choice can sum >100%). */
   totalVoters: number;
@@ -74,10 +63,8 @@ export function parsePoll(event: { tags: string[][] }): ParsedPoll {
 }
 
 /**
- * Tally a poll's votes deterministically: the latest vote per pubkey wins,
- * votes cast after `endsAt` are ignored, and responses naming an option the
- * poll never declared are dropped. Every client that sees the same votes folds
- * the same counts.
+ * Deterministic tally: latest vote per pubkey wins, votes after `endsAt` and
+ * undeclared options are dropped.
  */
 export function tallyPollVotes(
   votes: PollVote[],
@@ -107,12 +94,7 @@ export function tallyPollVotes(
   return { counts, totalVoters: latest.size, myVote };
 }
 
-/**
- * Build the poll's descriptive tags (options, type, optional end, alt) shared by
- * both publish paths. The channel/relay binding is NOT added here — each
- * transport prepends its own (NIP-29 an `h` + `relay`, Concord the sealed
- * `channel`/`epoch`).
- */
+/** Descriptive poll tags shared by both transports; each prepends its own channel binding. */
 export function buildPollTags(
   question: string,
   options: PollOption[],

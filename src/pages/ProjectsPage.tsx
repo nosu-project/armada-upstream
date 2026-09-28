@@ -11,10 +11,8 @@ import { Button } from "@/components/ui/button";
 import { routeParamToRelay } from "@/lib/platform";
 
 /**
- * A Buzz workspace's Projects view (drill-down alongside a channel): the
- * relay's NIP-34 repos with their issues/patches/PRs. Mirrors GroupPage's
- * mobile drill-down — the rail + channel list sit underneath and the projects
- * pane slides over them, revealed with the back chevron or an edge swipe.
+ * A Buzz workspace's NIP-34 Projects view; a mobile drill-down over the rail
+ * and channel list like GroupPage.
  */
 export function ProjectsPage() {
   const { server } = useParams<{ server: string }>();
@@ -43,7 +41,6 @@ export function ProjectsPage() {
         }
       >
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-          {/* Header — matches GroupPage's floating command bar. */}
           <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
             <Button
               variant="ghost"

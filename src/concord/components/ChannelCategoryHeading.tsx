@@ -12,31 +12,16 @@ interface ChannelCategoryHeading2Props {
   name: string;
   collapsed: boolean;
   onToggle: () => void;
-  /**
-   * Unread inside a collapsed category. Rendered as a dot on the heading so
-   * collapsing a category never hides the fact that something happened in it.
-   */
+  /** Dot on the heading so collapsing never hides unread. */
   hasUnread?: boolean;
-  /**
-   * Re-file every channel in the category under a new name. A category has no
-   * id, so this is the only thing "rename" can mean — and why it belongs here
-   * rather than as a per-channel edit repeated by hand.
-   *
-   * Undefined for a member without MANAGE_CHANNELS: no menu at all.
-   */
+  /** Re-file every channel under a new name (categories have no id). Undefined without MANAGE_CHANNELS. */
   onRename?: () => void;
-  /** Clear the category from every channel in it, dissolving the heading. */
   onUngroup?: () => void;
-  /**
-   * A drag is currently aimed inside this category — the rail's drop-target
-   * highlight, which is how "release here and it lands in this bucket" is
-   * said for a heading rather than an icon.
-   */
+  /** A drag is aimed inside this category. */
   highlight?: boolean;
   children?: React.ReactNode;
 }
 
-/** A collapsible category heading in the channel sidebar. */
 export function ChannelCategoryHeading({
   name,
   collapsed,
@@ -52,8 +37,7 @@ export function ChannelCategoryHeading({
       type="button"
       onClick={onToggle}
       aria-expanded={!collapsed}
-      // The dense desktop heading is ~28px tall; on touch the tap target grows
-      // to the 44px floor without moving the text (extra padding, same type).
+      // Touch grows the tap target to 44px without moving the text.
       className={cn(
         "flex w-full items-center gap-1 px-2 pt-3 pb-0.5 touch:pt-4 touch:pb-2.5 text-left text-[11px] font-semibold uppercase tracking-wider transition-colors",
         highlight ? "text-primary" : "text-muted-foreground/80 hover:text-foreground",
@@ -64,7 +48,6 @@ export function ChannelCategoryHeading({
         className={cn("size-3 shrink-0 transition-transform", collapsed && "-rotate-90")}
       />
       <span className="truncate">{name}</span>
-      {/* Only meaningful while collapsed — expanded, the channel rows say it. */}
       {collapsed && hasUnread && (
         <span className="ml-1 size-1.5 shrink-0 rounded-full bg-primary" aria-label="Unread" />
       )}
@@ -75,8 +58,7 @@ export function ChannelCategoryHeading({
   if (!onRename && !onUngroup) return heading;
   return (
     <ContextMenu>
-      {/* Right-click on a pointer device, press-and-hold on touch — Radix
-          drives both, so the heading needs no gesture handling of its own. */}
+      {/* Radix handles both right-click and press-and-hold. */}
       <ContextMenuTrigger asChild>{heading}</ContextMenuTrigger>
       <ContextMenuContent className="w-52">
         {onRename && (

@@ -6,28 +6,18 @@ import { cn } from '@/lib/utils';
 import type { NostrMetadata } from '@nostrify/nostrify';
 
 interface BotPillProps {
-  /**
-   * Resolve the bot flag from this pubkey's kind-0 metadata. Ignored when
-   * `metadata` is supplied.
-   */
+  /** Resolve the bot flag from this pubkey's kind-0. Ignored when `metadata` is supplied. */
   pubkey?: string;
-  /** Already-loaded metadata; skips the profile lookup when provided. */
   metadata?: NostrMetadata;
   className?: string;
 }
 
 /**
- * A small "Bot" pill shown next to a display name when the account's profile
- * metadata declares `bot: true` (NIP-24). Self-contained: pass a `pubkey` and
- * it resolves the flag via {@link useAuthor}, or pass already-loaded
- * `metadata` to skip the fetch (callers that render a name usually have it in
- * scope already). Renders nothing for non-bot or not-yet-known accounts, so it
- * can be dropped in next to any name unconditionally.
+ * "Bot" pill when the profile declares `bot: true` (NIP-24). Renders nothing
+ * for non-bot or unknown accounts.
  */
 export function BotPill({ pubkey, metadata, className }: BotPillProps) {
-  // Only look the profile up when metadata wasn't handed to us and there is a
-  // pubkey to look up. Even an inert `useAuthor(undefined)` is a query
-  // observer, and a timeline renders a pill beside every byline.
+  // Skip even an inert `useAuthor(undefined)`: a timeline renders one per byline.
   if (metadata || !pubkey) return <BotPillView metadata={metadata} className={className} />;
   return <ResolvedBotPill pubkey={pubkey} className={className} />;
 }

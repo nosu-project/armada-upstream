@@ -15,10 +15,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Edit a Buzz stream message: publish a kind-40003 edit whose content is the
- * FULL replacement text, `e`-tagged at the original. Unlike the NIP-29
- * delete-and-republish dance, the original event stays put — every client
- * folds the newest edit onto it (see protocol.ts collectEdits).
+ * Edit via kind-40003 (content = FULL replacement, `e`-tagged at the original).
+ * The original stays; clients fold the newest edit onto it.
  */
 export function useBuzzEditMessage(relayUrl: string, channelId: string) {
   const { mutateAsync: publish } = useNostrPublish();
@@ -42,14 +40,8 @@ export function useBuzzEditMessage(relayUrl: string, channelId: string) {
 }
 
 /**
- * Post a Buzz thread reply with NIP-10 MARKED `root`/`reply` tags (Buzz's
- * thread model — no kind-1111 comments). `composerTags` are the content-derived
- * tags (mentions/emoji/imeta/hashtags) the shared composer built; its own
- * `h`/`e` structure is replaced by the thread pointers.
- *
- * `replyKind` is the event kind to publish: a stream channel's threads are
- * kind-9 stream messages (the default); a forum channel's threads are kind
- * 45003 forum comments.
+ * Post a Buzz thread reply with NIP-10 marked `root`/`reply` tags. The
+ * composer's `h`/`e` tags are replaced. `replyKind`: 9 for stream, 45003 for forum.
  */
 export function useSendBuzzThreadReply(
   relayUrl: string,
@@ -59,9 +51,7 @@ export function useSendBuzzThreadReply(
   const { mutateAsync: publish } = useNostrPublish();
   return useCallback(
     async (root: NostrRumor, content: string, composerTags: string[][] = []) => {
-      // Replying "to a root" from the thread panel: the panel always replies
-      // to the thread ROOT, so parent = root unless the root is itself a
-      // broadcast reply belonging to a deeper thread.
+      // Parent = root unless the root is itself a broadcast reply in a deeper thread.
       const ref = buzzThreadRef(root.tags);
       const rootId = ref.rootId ?? root.id;
       const tags = buildBuzzReplyTags(channelId, root.pubkey, root.id, rootId);
@@ -87,9 +77,7 @@ const TYPING_WINDOW_MS = 8_000;
 const TYPING_THROTTLE_MS = 4_000;
 
 /**
- * Live "who is typing" for a Buzz channel: ephemeral kind-20002 events
- * (`h`-scoped, empty content, never stored). Subscription-only — a live
- * `req()` on the host relay feeds a decaying in-memory map — plus a throttled
+ * Live "who is typing" (ephemeral kind 20002, `h`-scoped) plus a throttled
  * publisher for the viewer's own signal.
  */
 export function useBuzzTyping(
@@ -142,7 +130,6 @@ export function useBuzzTyping(
       controller.abort();
       clearInterval(decay);
     };
-    // `user` is only read for self-suppression; keyed on the pubkey.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, relayUrl, channelId, user?.pubkey]);
 

@@ -1,44 +1,31 @@
 import { useMemo, useSyncExternalStore } from "react";
 
-/** A reaction the user has picked before, with how often and how recently. */
 export interface FrequentReaction {
   /** The display key (emoji, 👍/👎, or `:shortcode:`). */
   key: string;
-  /** Custom emoji image URL when the key is a `:shortcode:`. */
   url?: string;
-  /** emoji-mart id when this was selected from the composer emoji picker. */
+  /** emoji-mart id when picked from the composer emoji picker. */
   pickerId?: string;
-  /** How many times the user has reacted with this key. */
   count: number;
-  /** Unix seconds of the most recent use, as a tie-breaker. */
+  /** Unix seconds of last use, as a tie-breaker. */
   usedAt: number;
 }
 
 const STORAGE_PREFIX = "armada:frequent-reactions:";
 
-/** Cap on stored entries — the tail is pruned lowest-score-first on write. */
 const MAX_STORED = 32;
 
-/**
- * Seeds the quick row until the user has picked enough of their own. A fresh
- * account still gets a one-tap row rather than an empty gap next to the picker,
- * which is what makes the shortcut discoverable in the first place.
- */
+/** Seeds the quick row until the user has picked enough of their own. */
 const DEFAULT_KEYS = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
 
 const EMPTY: FrequentReaction[] = [];
 
-/**
- * Per-pubkey frequency table, cached in memory so `getSnapshot` returns a
- * referentially stable array (required by `useSyncExternalStore` — re-parsing
- * localStorage on every call would loop forever).
- */
+/** Cached so `getSnapshot` is referentially stable (`useSyncExternalStore` would loop). */
 const cache = new Map<string, FrequentReaction[]>();
 const listeners = new Set<() => void>();
 /**
- * Notified only after a USER-initiated record, never after a hydrate — the
- * cross-device sync publishes off this, and echoing an incoming merge straight
- * back out would have every device rewriting the settings event in turn.
+ * Only after USER-initiated records, never hydrates — echoing a merge would make every device
+ * rewrite the settings event in turn.
  */
 const dirtyListeners = new Set<(pubkey: string) => void>();
 
@@ -64,9 +51,8 @@ function save(pubkey: string, entries: FrequentReaction[]): void {
   cache.set(pubkey, entries);
   try {
     localStorage.setItem(`${STORAGE_PREFIX}${pubkey}`, JSON.stringify(entries));
-    // emoji-mart owns the visible "Frequently used" category. Seed its store
-    // from the account-scoped table so a remote encrypted-settings hydrate is
-    // reflected the next time the lazy picker module opens.
+    // Seed emoji-mart's "Frequently used" store from the account-scoped table so remote
+    // hydrates show up in the picker.
     const rawPicker = JSON.parse(localStorage.getItem("emoji-mart.frequently") ?? "{}") as Record<string, unknown>;
     const pickerCounts: Record<string, number> = {};
     for (const [id, count] of Object.entries(rawPicker)) {
@@ -88,15 +74,11 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/** Most-used first, ties broken by most-recent. */
 function byScore(a: FrequentReaction, b: FrequentReaction): number {
   return b.count - a.count || b.usedAt - a.usedAt;
 }
 
-/**
- * Record that the user reacted with `key`. Call this only when ADDING a
- * reaction — retracting one shouldn't promote it up the row.
- */
+/** Call only when ADDING a reaction — retracting shouldn't promote it. */
 export function recordReaction(
   pubkey: string | undefined,
   key: string,
@@ -117,15 +99,10 @@ export function recordReaction(
   for (const listener of dirtyListeners) listener(pubkey);
 }
 
-/** The stored table as-is (unpadded), for the cross-device sync to publish. */
 export function getFrequentReactions(pubkey: string): FrequentReaction[] {
   return load(pubkey);
 }
 
-/**
- * Subscribe to user-initiated reaction records. The callback receives the
- * pubkey whose table changed.
- */
 export function subscribeFrequentReactions(listener: (pubkey: string) => void): () => void {
   dirtyListeners.add(listener);
   return () => {
@@ -134,10 +111,8 @@ export function subscribeFrequentReactions(listener: (pubkey: string) => void): 
 }
 
 /**
- * Fold another device's table into this one: union of keys, highest count and
- * most recent use per key. A count is a monotonic tally, so max-wins converges
- * without a clock — unlike last-writer-wins, which would let a device that has
- * been offline for a week reset the row on every other device.
+ * Union of keys, max count and latest use per key. Counts are monotonic so max-wins converges
+ * without a clock (LWW would let a stale device reset the row).
  */
 export function hydrateFrequentReactions(pubkey: string, remote: FrequentReaction[]): void {
   if (!pubkey || remote.length === 0) return;
@@ -160,18 +135,13 @@ export function hydrateFrequentReactions(pubkey: string, remote: FrequentReactio
     merged.set(entry.key, { ...mine, url, pickerId, count, usedAt });
     changed = true;
   }
-  // A no-op merge must not write: `save` notifies every consumer, and this
-  // runs on each settings refetch.
+  // A no-op merge must not write: `save` notifies every consumer on each refetch.
   if (!changed) return;
   const next = [...merged.values()].sort(byScore).slice(0, MAX_STORED);
   save(pubkey, next);
 }
 
-/**
- * The user's most-used reactions, padded with defaults, for the quick-reaction
- * row on a message's action toolbar (the Discord/Slack shortcut that skips the
- * picker for the common case).
- */
+/** The user's most-used reactions, padded with defaults, for the quick-reaction row. */
 export function useFrequentReactions(pubkey: string | undefined, limit = 3): FrequentReaction[] {
   const stored = useSyncExternalStore(
     subscribe,
@@ -182,8 +152,7 @@ export function useFrequentReactions(pubkey: string | undefined, limit = 3): Fre
   return useMemo(() => {
     const top = [...stored].sort(byScore).slice(0, limit);
     if (top.length >= limit) return top;
-    // Pad with defaults the user hasn't already earned a slot for, so the row
-    // is always full-width and its buttons don't shift position as it fills in.
+    // Keep the row full-width so buttons don't shift as it fills in.
     const seen = new Set(top.map((e) => e.key));
     for (const key of DEFAULT_KEYS) {
       if (top.length >= limit) break;
@@ -195,7 +164,7 @@ export function useFrequentReactions(pubkey: string | undefined, limit = 3): Fre
   }, [stored, limit]);
 }
 
-/** Test seam: drops the in-memory table so a fresh read hits localStorage. */
+/** Test seam. */
 export function resetFrequentReactionsCache(): void {
   cache.clear();
 }

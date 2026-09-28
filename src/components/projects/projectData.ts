@@ -1,10 +1,6 @@
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * Plain data shapes for the shared Projects view. Buzz workspaces fill them
- * from relay-wide NIP-34 scans; Concord communities fill them from the
- * channels' attached repositories. The view itself never queries.
- */
+/** Plain data shapes for the Projects view (Buzz NIP-34 scans or Concord attached repos). The view never queries. */
 
 export interface ProjectRepo {
   coord: string;
@@ -16,9 +12,7 @@ export interface ProjectRepo {
   webUrl?: string;
   contributors: string[];
   createdAt: number;
-  /** The repository announcement, when one has been seen. */
   event?: NostrRumor;
-  /** Optional origin label (e.g. the channel a repo is attached to). */
   subtitle?: string;
 }
 
@@ -35,15 +29,9 @@ export interface ProjectWorkItem {
   repoCoord: string | null;
   status: ProjectWorkStatus;
   event: NostrRumor;
-  /** Lowercased `t` labels, when the source parses them. */
   labels?: string[];
-  /** Known discussion size; hidden when the source doesn't count. */
   commentCount?: number;
-  /**
-   * Newest comment or status change, absent when the source tracks no
-   * discussion. Comment edits keep their original timestamp so a thread does
-   * not reorder under readers, which means an edit alone never bumps this.
-   */
+  /** Newest comment or status change. Comment edits keep their timestamp, so an edit never bumps this. */
   updatedAt?: number;
 }
 
@@ -52,20 +40,12 @@ export interface ProjectRepoSummary {
   issueCount: number;
 }
 
-/** How a list is ordered: newest first, or alphabetically. */
 export type ProjectSort = "updated" | "name";
 
-/**
- * Universal starting vocabulary, offered only to fill gaps: a repository that
- * has settled on its own words (`enhancement`) should not be nudged toward
- * ours (`feature request`).
- */
+/** Offered only to fill gaps, so a repo's own words (`enhancement`) aren't overridden. */
 export const DEFAULT_LABEL_PRESETS = ["bug", "enhancement", "documentation", "question"] as const;
 
-/**
- * Labels to offer when filing against `repoCoord`: the repository's own, most
- * used first, then presets it hasn't already got a word for.
- */
+/** Repo's own labels by use, then presets it lacks a word for. */
 export function labelSuggestions(
   items: readonly ProjectWorkItem[],
   repoCoord: string | undefined,
@@ -82,12 +62,11 @@ export function labelSuggestions(
   return [...own, ...presets.filter((preset) => !uses.has(preset))];
 }
 
-/** When a work item last saw activity; its opening when nothing followed. */
 export function workItemActivityAt(item: ProjectWorkItem): number {
   return Math.max(item.updatedAt ?? 0, item.createdAt);
 }
 
-/** Order work items for display; ties break on id so the order is stable. */
+/** Ties break on id so the order is stable. */
 export function sortProjectWorkItems(items: readonly ProjectWorkItem[], sort: ProjectSort): ProjectWorkItem[] {
   return [...items].sort((a, b) => (
     sort === "name"
@@ -96,10 +75,7 @@ export function sortProjectWorkItems(items: readonly ProjectWorkItem[], sort: Pr
   ));
 }
 
-/**
- * Every whitespace-separated term must appear somewhere in the haystack, so
- * adding words narrows the result rather than widening it.
- */
+/** Every whitespace-separated term must match, so more words narrow. */
 function matchesTerms(haystack: readonly (string | undefined)[], query: string): boolean {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) return true;
@@ -107,12 +83,10 @@ function matchesTerms(haystack: readonly (string | undefined)[], query: string):
   return terms.every((term) => text.includes(term));
 }
 
-/** Free-text match over a work item's title, body, labels and repository. */
 export function workItemMatchesQuery(item: ProjectWorkItem, query: string, repoName?: string): boolean {
   return matchesTerms([item.title, item.content, repoName, ...(item.labels ?? [])], query);
 }
 
-/** Free-text match over a repository's name, identifier, description and origin. */
 export function repoMatchesQuery(repo: ProjectRepo, query: string): boolean {
   return matchesTerms([repo.name, repo.id, repo.description, repo.subtitle], query);
 }
@@ -138,7 +112,6 @@ export function dayKey(unix: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-/** Per-day event counts across repos + work items (the contribution heatmap). */
 export function activityByDay(repos: ProjectRepo[], items: ProjectWorkItem[]): Record<string, number> {
   const merged: Record<string, number> = {};
   for (const repo of repos) {
@@ -152,7 +125,6 @@ export function activityByDay(repos: ProjectRepo[], items: ProjectWorkItem[]): R
   return merged;
 }
 
-/** Everyone who owns, is tagged on, or has authored activity in a project space. */
 export function projectPeople(repos: ProjectRepo[], items: ProjectWorkItem[]): string[] {
   const set = new Set<string>();
   for (const repo of repos) {

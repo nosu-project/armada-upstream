@@ -3,18 +3,10 @@ import { createContext, useContext } from "react";
 import { pubkeyFromLivekitIdentity } from "@/hooks/useLivekit";
 
 /**
- * How a LiveKit participant identity maps to a Nostr pubkey for display.
- *
- * NIP-29 / DM rooms embed the pubkey in the identity itself
- * (`<64-hex-pubkey>-<rand>`), so the default resolver just extracts it and
- * every participant is trivially "verified".
- *
- * Concord AV rooms (CORD-07) assign fully-random identities, and the mapping
- * comes from signed presence instead: a participant resolves to a member only
- * when exactly ONE author's fresh presence claims that identity (§4). A
- * contested or unclaimed identity is UNVERIFIED — the call UI shows it as
- * such, and the room withholds its media key so unverified tracks don't
- * render (§7).
+ * How a LiveKit identity maps to a pubkey for display. NIP-29/DM identities embed
+ * it (`<64-hex-pubkey>-<rand>`). Concord (CORD-07) identities are random: a member
+ * only when exactly ONE fresh presence claims it (§4); otherwise UNVERIFIED and
+ * its media key withheld (§7).
  */
 export interface VoiceIdentityInfo {
   /** The pubkey to render the participant as (a stable fallback when unverified). */

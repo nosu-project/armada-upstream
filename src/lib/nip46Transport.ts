@@ -1,23 +1,10 @@
 /**
- * Dedicated NIP-46 transport — plain WebSockets, no pool machinery.
- *
- * The remote-signer channel used to ride the app's relay pool
- * (NRelay1 + websocket-ts + NPool.group). On Android that stack repeatedly
- * wedged into a state where new REQs never EOSE'd and new EVENTs were never
- * acked on a socket that still delivered old traffic — every remote sign then
- * hung and the send pipeline silently died (see the 2026-07-13 on-device
- * traces). Meanwhile every diagnostic probe that used a PLAIN WebSocket per
- * relay worked flawlessly against the same relays and the same bunker.
- *
- * So the signer gets exactly that: one bare WebSocket per bunker relay with
- * the three behaviors an RPC channel actually needs, and nothing else:
- *
- *  - reconnect on close/error with capped backoff, always
- *  - on (re)open: re-send active REQs and flush queued EVENTs
- *  - on native resume after a long background stint: force-recycle the
- *    sockets (Android leaves them half-open — readyState OPEN, TCP dead)
- *
- * Implements just the `req`/`event` surface NConnectSigner consumes.
+ * Dedicated NIP-46 transport: one plain WebSocket per bunker relay. The app's
+ * relay pool wedged on Android (REQs never EOSE'd, EVENTs never acked), while
+ * plain sockets worked. Behaviors: reconnect with capped backoff; on (re)open
+ * re-send REQs then flush queued EVENTs; force-recycle after a long background
+ * stint (Android leaves sockets half-open). Implements the `req`/`event`
+ * surface NConnectSigner consumes.
  */
 
 import { App as CapacitorApp } from "@capacitor/app";
@@ -31,7 +18,7 @@ type RelayMsg = ["EVENT", string, NostrEvent] | ["EOSE", string] | ["CLOSED", st
 interface ActiveSub {
   filters: NostrFilter[];
   push: (msg: RelayMsg) => void;
-  /** Response event ids already delivered (both relays carry every response). */
+  /** Response ids already delivered (every relay carries every response). */
   seen: Set<string>;
 }
 
@@ -75,11 +62,8 @@ class RelayConn {
     ws.onopen = () => {
       this.attempt = 0;
       logSync("nip46", `transport socket open: ${this.url}`);
-      // Re-issue active REQs BEFORE flushing queued frames. Kind-24133
-      // traffic is ephemeral — a response only reaches subscriptions that are
-      // live when it's published — so a queued request EVENT must never jump
-      // ahead of the response REQ it depends on. (Queued REQ dups for still-
-      // active subs are harmless: a relay just replaces the subscription.)
+      // Re-issue REQs BEFORE flushing queued frames: kind-24133 is ephemeral, so a
+      // request must never precede the subscription its response needs.
       this.onOpen(this.url);
       const queued = this.queue;
       this.queue = [];
@@ -93,7 +77,6 @@ class RelayConn {
       this.scheduleReconnect();
     };
     ws.onerror = () => {
-      // onclose follows; nothing to do here.
     };
   }
 
@@ -106,20 +89,16 @@ class RelayConn {
     }, wait);
   }
 
-  /** Send now if open, else queue for the next open. */
   send(frame: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(frame);
         return;
-      } catch {
-        // fall through to queue
-      }
+      } catch { /* ignore */ }
     }
     this.queue.push(frame);
   }
 
-  /** Force-close so the reconnect path builds a fresh socket (resume). */
   recycle(): void {
     try {
       this.ws?.close();
@@ -133,12 +112,9 @@ class RelayConn {
     if (this.timer) clearTimeout(this.timer);
     try {
       this.ws?.close();
-    } catch {
-      // already closed
-    }
+    } catch { /* ignore */ }
   }
 
-  /** Whether this connection's socket is currently OPEN. */
   get isOpen(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }
@@ -209,14 +185,11 @@ export class Nip46Transport {
         }
         return;
       }
-      // CLOSED/AUTH/NOTICE: deliberately ignored. Kind-24133 traffic is not
-      // auth-gated on the bunker relays, and a relay-initiated CLOSED is
-      // handled by the reconnect+resubscribe path, never surfaced to
-      // NConnectSigner (which treats CLOSED as fatal).
+      // CLOSED/AUTH/NOTICE ignored: 24133 isn't auth-gated on bunker relays, and a
+      // CLOSED is handled by reconnect+resubscribe (NConnectSigner treats it as fatal).
     }
   }
 
-  /** Re-issue every active REQ on a (re)opened socket. */
   private resubscribe(url: string): void {
     const conn = this.conns.find((c) => c.url === url);
     if (!conn) return;
@@ -305,10 +278,8 @@ export class Nip46Transport {
   }
 
   /**
-   * Tear the transport down: stop every socket (no reconnects) and drop the
-   * app-state listener. Used by the pairing handshakes (bunker:// and
-   * nostrconnect://), which run on a throwaway transport before the session
-   * transport exists. Any pending publish/req settles via its own abort path.
+   * Stop every socket (no reconnects) and drop the app-state listener. For the
+   * throwaway pairing transports; pending operations settle via their aborts.
    */
   close(): void {
     for (const c of this.conns) c.stop();
@@ -316,11 +287,7 @@ export class Nip46Transport {
     this.appStateHandle = undefined;
   }
 
-  /**
-   * Whether at least one relay socket is currently OPEN — i.e. the bunker is
-   * reachable in principle. The signer nudge checks this to choose between
-   * "approve in your signer app" and "signer relay unreachable".
-   */
+  /** Whether any bunker relay socket is OPEN (drives "approve in signer" vs "unreachable"). */
   isConnected(): boolean {
     return this.conns.some((c) => c.isOpen);
   }
@@ -329,11 +296,7 @@ export class Nip46Transport {
 /** One transport per bunker identity, shared by every signer that needs it. */
 const transports = new Map<string, Nip46Transport>();
 
-/**
- * Get (or create) the app-wide NIP-46 transport for a bunker login. Keyed by
- * the bunker pubkey + relay set so a re-pairing with different relays gets a
- * fresh transport.
- */
+/** App-wide transport per bunker pubkey + relay set (re-pairing with new relays gets a fresh one). */
 export function getNip46Transport(bunkerPubkey: string, relays: string[]): Nip46Transport {
   const key = `${bunkerPubkey}|${[...relays].sort().join(",")}`;
   let t = transports.get(key);

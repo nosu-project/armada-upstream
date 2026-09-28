@@ -36,24 +36,9 @@ import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 
 /**
- * Invite-link admin panel for a Concord community — CORD-05.
- *
- * Four sections, matching the two invite-link visibilities:
- *
- *   1. Public/Private status — whether ANY live public link exists (the
- *      community's Public flag) and which members minted the links that make
- *      it public. Derived from the aggregate control-plane registry (vsk 8).
- *   2. Discover listings — the public kind-3314 posts carrying one of those
- *      links, who posted them, and the act that takes each one down: its
- *      author can delete it, and its link's creator can revoke the link.
- *   3. My links — the CURRENT user's own links for this community, with full
- *      detail (URL, label, expiry) + copy/revoke. Only the creator holds a
- *      link's token + signer secret, so only their own links show a URL.
- *   4. Community registry — every creator who has live links and how many,
- *      identified by link-signer pubkey. Any member/admin can see WHO invited
- *      and HOW MANY, but never another creator's secret URL (by design).
- *
- * Rendered inline in the main content column, not as a modal.
+ * Invite-link admin panel (CORD-05): Public/Private status (registry, vsk 8),
+ * Discover listings, my links (only the creator holds a link's secrets, so
+ * only mine show URLs), and the community registry (who minted how many).
  */
 export function InvitesView({ community }: { community: Community }) {
   const { data: folded } = useControlFold(community);
@@ -71,16 +56,11 @@ export function InvitesView({ community }: { community: Community }) {
   const { data: linkEpochs } = useMyLinkEpochs(community);
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
-  // The revoke-all confirm dialog (in-app, matching the rest of the chrome).
   const [revokeAllOpen, setRevokeAllOpen] = useState(false);
-  // The link whose raw details we're inspecting (null = dialog closed). Live
-  // links always carry the CURRENT keys (re-posted on rekey, CORD-05 §2), so
-  // the epoch a link serves is the community's current `rootEpoch`.
+  // Live links always carry the CURRENT keys (re-posted on rekey, CORD-05 §2).
   const [inspecting, setInspecting] = useState<InviteListEntry | null>(null);
   const epoch = Number(community.rootEpoch);
 
-  // The link-signer pubkeys of MY live links, so I can mark them in the
-  // registry ("this one's mine") and avoid implying I can't see my own URL.
   const myLinkSigners = useMemo(() => {
     const set = new Set<string>();
     for (const e of myLinks) {
@@ -90,17 +70,13 @@ export function InvitesView({ community }: { community: Community }) {
     return set;
   }, [myLinks]);
 
-  // Registry coordinates of mine whose signing secret this account doesn't
-  // hold — links whose Invite List entry is gone (lost/unsynced 13303, a
-  // signer that can't decrypt it). They can't be revoked one by one, so the
-  // only handle on them is "Revoke all", which delists them from the registry.
+  // My registry coordinates whose secret this account lacks (lost 13303); only "Revoke all" delists them.
   const orphanCount = useMemo(() => {
     const mine = user ? folded?.registriesByCreator.get(user.pubkey) ?? [] : [];
     return mine.filter((s) => !myLinkSigners.has(s)).length;
   }, [folded, user, myLinkSigners]);
 
-  // creatorHex → count of that creator's live link signers (control-plane
-  // registry). This is the community-wide, admin-visible source of truth.
+  // creatorHex → live link count; the community-wide source of truth.
   const registry = useMemo(() => {
     const out: Array<{ creator: string; count: number; signers: string[] }> = [];
     if (folded) {
@@ -183,7 +159,6 @@ export function InvitesView({ community }: { community: Community }) {
         <h2 className="text-lg font-semibold">Invite links</h2>
       </div>
 
-      {/* 1. Public/Private status. */}
       <section
         className={`flex items-start gap-3 rounded-md px-3 py-3 text-sm ${
           isPublic ? "bg-primary/10" : "bg-foreground/5"
@@ -220,7 +195,6 @@ export function InvitesView({ community }: { community: Community }) {
         onRevoke={handleRevoke}
       />
 
-      {/* 2. My own links (full detail + revoke). */}
       <section className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Your live links
@@ -233,8 +207,7 @@ export function InvitesView({ community }: { community: Community }) {
         {myLinks.length > 0 && (
           <ul className="space-y-1.5">
             {myLinks.map((e) => {
-              // The epoch this link currently vends, once resolved. Undefined
-              // while loading or if it couldn't be fetched — treat as up to date.
+              // Undefined while loading or unfetchable: treat as up to date.
               const servedEpoch = linkEpochs?.[e.token];
               const behind = servedEpoch !== undefined && servedEpoch < epoch;
               return (
@@ -347,7 +320,6 @@ export function InvitesView({ community }: { community: Community }) {
         )}
       </section>
 
-      {/* 3. Community registry overview (who minted how many). */}
       <section className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           All invite links in this community
@@ -419,14 +391,7 @@ export function InvitesView({ community }: { community: Community }) {
   );
 }
 
-/**
- * A read-only JSON view of a link's stored details. The Invite List entry holds
- * the link's `token` (unlock secret + merge key) and `signer_sk` (the signing
- * secret) — anyone who reads them can mint/refresh/impersonate the link, so
- * they are REDACTED here: the whole point of the community registry is that a
- * link's secrets never leave its creator, and a "view details" affordance must
- * not casually leak them onto a screen-share or screenshot.
- */
+/** Read-only link details with `token` and `signer_sk` REDACTED (they'd let anyone impersonate the link). */
 function LinkDetailsDialog({
   entry,
   servedEpoch,
@@ -523,13 +488,8 @@ function RegistryRow({
 }
 
 /**
- * Where this community is advertised publicly. A Discover listing is a public
- * post carrying one of its invite links, secret included, so it is the widest
- * door the community has — and until now the only place to see it was Discover
- * itself. Each row offers whichever take-down the viewer actually holds:
- * deleting a listing is its AUTHOR's (NIP-09 counts no one else's delete), and
- * revoking the link under it is its CREATOR's, which takes down every listing
- * of that link, whoever posted it.
+ * Discover listings of this community's links. Deleting is the AUTHOR's
+ * (NIP-09); revoking the link is the CREATOR's and takes down every listing of it.
  */
 function DiscoverListingsSection({
   listings,
@@ -552,8 +512,7 @@ function DiscoverListingsSection({
   const { unlist } = useUnlistAnnouncements();
   const [unlisting, setUnlisting] = useState<string | null>(null);
 
-  // One row per (author, link): repeat posts of one link by one person are one
-  // listing on Discover, and deleting it must delete every copy.
+  // One row per (author, link); deleting must delete every copy.
   const rows = useMemo(() => {
     const byKey = new Map<string, DiscoveredInvite[]>();
     for (const listing of listings) {

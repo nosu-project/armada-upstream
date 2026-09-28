@@ -88,7 +88,6 @@ function RailTooltipContent({ className, ...props }: React.ComponentProps<typeof
   return <TooltipContent className={cn("rail-tooltip-content", className)} {...props} />;
 }
 
-/** Human-ish short name for a relay URL (hostname). */
 function relayHost(url: string): string {
   try {
     return new URL(url).host;
@@ -97,73 +96,45 @@ function relayHost(url: string): string {
   }
 }
 
-/**
- * A single entry in the unified community rail. NIP-29 servers, both flavours
- * of Concord community and any DM the user put here live in one list; each
- * carries a stable `key` used for drag/reorder, folders, and the persisted
- * layout.
- */
+/** A unified rail entry (NIP-29 server, Concord community, or DM); `key` is stable for drag, folders and the persisted layout. */
 type RailItem =
   | { kind: "server"; key: string; url: string }
   | { kind: "concord"; key: string; communityId: string; name: string }
   | { kind: "dm"; key: string; pubkey: string };
 
-/** Stable rail key for a Concord community. */
 const concordKey = (communityId: string) => `c2:${communityId}`;
 
-/**
- * Route for a DM on the rail. The PEER's thread, not the DM list: on mobile
- * both are the same route in two states, so `/dm` would drop the user on the
- * conversation list they used this icon to skip.
- */
+/** The peer's thread, not `/dm`: on mobile `/dm` would land on the list this icon skips. */
 const dmRoute = (pubkey: string) => `/dm/${nip19.npubEncode(pubkey)}`;
 
-/** A rail node resolved against the currently-live items (render model). */
 type RenderNode =
   | { type: "item"; item: RailItem }
   | { type: "folder"; id: string; name: string; items: RailItem[] };
 
 /**
- * Drag-related props shared by every rail entry (items and folders). The rail
- * attaches pointer listeners natively via a ref (Radix `asChild` Slots do not
- * reliably forward React pointer props), and tags each draggable node with
- * `data-rail-anchor` (+ `data-rail-parent` for folder children) so slot
- * geometry can be frozen at drag pickup.
+ * Drag props for rail entries. Pointer listeners attach natively via a ref
+ * (Radix `asChild` Slots don't reliably forward pointer props); nodes carry
+ * `data-rail-anchor` (+ `data-rail-parent`) for slot geometry at pickup.
  */
 interface RailDragProps {
-  /** Whether this entry can be drag-reordered. */
   draggable?: boolean;
-  /** This entry is the one currently being dragged (dims to placeholder). */
   dragging?: boolean;
-  /** Whether any drag is in progress (locks touch-action). */
+  /** Any drag in progress (locks touch-action). */
   reordering?: boolean;
-  /** This entry is the current drop target (combine / drop-into-folder). */
   highlight?: boolean;
-  /** Folder id when this entry is rendered inside an expanded folder. */
   dragParent?: string;
-  /** Begin a potential drag from this entry. */
   onDragPointerDown?: (e: PointerEvent) => void;
-  /** Returns true if a click should be suppressed (a drag just finished). */
+  /** True if a click should be suppressed (a drag just finished). */
   shouldSuppressClick?: () => boolean;
-  /**
-   * Optimistic active highlight: this entry was just tapped and its navigation
-   * is still rendering. Styled exactly like `isActive` so the destination
-   * lights up on the tap frame, not when the (startTransition-wrapped) route
-   * render finally commits.
-   */
+  /** Optimistic active highlight on the tap frame, before the transition-wrapped route commits. */
   pending?: boolean;
-  /** Report a (non-suppressed) tap for the optimistic highlight above. */
   onPressed?: () => void;
 }
 
-/** data-* attributes identifying a draggable node for slot hit-testing. */
 function dragAttrs(anchor: string, parent?: string): Record<string, string> {
   return { "data-rail-anchor": anchor, ...(parent ? { "data-rail-parent": parent } : {}) };
 }
 
-// ─── Mini icons (folder grids + drag ghosts) ────────────────────────────
-
-/** Tiny unread/mention dot for mini icons inside a collapsed folder. */
 function MiniUnreadDot({ mention, unread }: { mention: boolean; unread: boolean }) {
   if (!mention && !unread) return null;
   return (
@@ -185,7 +156,7 @@ function ServerMiniIcon({ url }: { url: string }) {
   const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
   const name = info?.name || relayHost(url);
   const initial = name.trim().charAt(0).toUpperCase() || "?";
-  // A relay's NIP-11 icon is whatever that relay says it is.
+  // NIP-11 icon is relay-controlled.
   const icon = sanitizeImageSrc(info?.icon);
   return (
     <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-secondary">
@@ -235,8 +206,6 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
       {noteToSelf ? (
         <NoteToSelfAvatar sizePx={16} className="size-full" />
       ) : (
-        // The shared Avatar, so a profile's emoji shape masks the icon here
-        // exactly as it does in the DM list (and round when it has none).
         <Avatar shape={getAvatarShape(metadata)} className="size-full">
           <AvatarImage src={metadata?.picture} alt="" draggable={false} />
           <AvatarFallback className="bg-primary/20 text-[9px] font-semibold leading-none text-primary">
@@ -244,8 +213,7 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
           </AvatarFallback>
         </Avatar>
       )}
-      {/* A DM has no channels to be mentioned in — the message IS the mention,
-          so it lights the same dot any unread does. */}
+      {/* A DM has no channels — the message IS the mention, so plain unread dot. */}
       <MiniUnreadDot mention={false} unread={unread} />
     </span>
   );
@@ -257,12 +225,8 @@ function RailMiniIcon({ item }: { item: RailItem }) {
   return <Concord2MiniIcon communityId={item.communityId} name={item.name} />;
 }
 
-// ─── Unread probes (folder-level notification rollup) ───────────────────
-//
-// A collapsed folder must light up when ANY member has activity — including
-// members beyond the four shown in its mini grid. Hooks can't be called in a
-// loop, so each member mounts an invisible probe component that runs its
-// kind's unread hooks and reports the result up to the folder.
+// A collapsed folder must light for ANY member, not just the four shown.
+// Hooks can't loop, so each member mounts an invisible probe that reports up.
 
 function ServerUnreadProbe({
   url,
@@ -322,7 +286,6 @@ function RailItemUnreadProbe({
   return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
 }
 
-/** Feed the account-level bell from a server's already-shared unread query. */
 function ServerMentionProbe({
   url,
   onChange,
@@ -339,7 +302,6 @@ function ServerMentionProbe({
   return null;
 }
 
-/** Feed the account-level bell from a Concord community's shared unread fold. */
 function ConcordMentionProbe({
   communityId,
   onChange,
@@ -349,10 +311,8 @@ function ConcordMentionProbe({
 }) {
   const community = useCommunity(communityId);
   const channels = useChannels(community, false);
-  // The account center follows the community's dedicated Mentions read stamp,
-  // not every channel's unread stamp. This is the same independence the
-  // in-community Mentions pane already has: clearing the aggregate must clear
-  // the Bell without pretending every mentioned channel was fully read.
+  // Follows the community's dedicated Mentions read stamp, so clearing the Bell
+  // doesn't mark every mentioned channel read.
   const { hasNew: mention } = useConcordMentions(community, channels);
   const key = concordKey(communityId);
   useEffect(() => onChange(key, mention), [key, mention, onChange]);
@@ -360,10 +320,6 @@ function ConcordMentionProbe({
   return null;
 }
 
-/**
- * Discord-style collapsed-folder face: a 2×2 grid of the first four member
- * icons inside the rail's cut-corner square.
- */
 function FolderMiniGrid({ items }: { items: RailItem[] }) {
   return (
     <span className="grid size-12 grid-cols-2 grid-rows-2 gap-1 clip-corner-lg bg-secondary/80 p-1.5">
@@ -374,13 +330,6 @@ function FolderMiniGrid({ items }: { items: RailItem[] }) {
   );
 }
 
-// ─── Drag ghosts ─────────────────────────────────────────────────────────
-
-/**
- * The floating "ghost" icon that follows the pointer while dragging a rail
- * item. Rendered in a portal-free fixed layer; mirrors the item's avatar so
- * the drag feels like you're physically carrying the icon.
- */
 function ServerDragGhost({ url }: { url: string }) {
   const { data: info } = useRelayInfo(url);
   const host = relayHost(url);
@@ -437,7 +386,6 @@ function DmDragGhost({ pubkey }: { pubkey: string }) {
   );
 }
 
-/** Fixed pointer-following layer carrying the dragged item or folder. */
 function DragGhost({
   item,
   folderItems,
@@ -469,15 +417,9 @@ function DragGhost({
   );
 }
 
-// ─── Rail entries ────────────────────────────────────────────────────────
-
 /**
- * Keeps a rail entry's real content MOUNTED while it is being dragged,
- * hiding it and overlaying the dashed slot placeholder instead. Swapping the
- * subtree out (the old approach) unmounted the exact DOM node the finger was
- * touching — and a detached touch target's events stop bubbling, so Chrome
- * cancelled the whole gesture (pointercancel) on the first movement. This is
- * why touch drags died the moment they were picked up.
+ * Keeps a dragged entry's content MOUNTED (hidden under the placeholder):
+ * unmounting the touched node makes Chrome fire pointercancel on first move.
  */
 function DragSlot({ dragging, children }: { dragging?: boolean; children: React.ReactNode }) {
   return (
@@ -510,9 +452,7 @@ const ServerButton = memo(function ServerButton({
   onNavigate?: () => void;
   /** When provided, selecting a server fires this instead of navigating. */
   onSelect?: (url: string) => void;
-  /** Active state when driven by `onSelect` (controlled mode). */
   selected?: boolean;
-  /** Whether the active voice call is on this server. */
   inCall?: boolean;
 } & RailDragProps) {
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -538,32 +478,24 @@ const ServerButton = memo(function ServerButton({
 
   const inner = (isActive: boolean) => (
     <>
-      {/* Active marker: a thin neon blade in the gutter. */}
       <span
         className={cn(
           "absolute -left-2 w-[3px] bg-primary transition-all",
           isActive ? "h-12 opacity-100" : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
         )}
       />
-      {/*
-        Angular crest. Glow lives on the wrapper as a drop-shadow so it
-        traces the fin silhouette (a box-shadow would be clipped away
-        by the child's clip-path). Restrained: one soft shadow.
-      */}
+      {/* Glow is a drop-shadow on the wrapper so it traces the clip-path (box-shadow would be clipped). */}
       <span
         className={cn(
           "relative block size-12 transition-all duration-150",
           isActive && "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
-          // Drop-combine target: dragging another item onto this one folders them.
           highlight && "rounded-xl ring-2 ring-primary scale-110",
         )}
       >
         <Avatar
           className={cn(
             "size-12 clip-corner-lg transition-all duration-150",
-            // Idle-dim + brighten-on-hover, matched to the Concord buttons so
-            // NIP-29 servers and encrypted communities share one rail feel.
-            // (saturate-50, not -75: 75 isn't on Tailwind's saturate scale.)
+            // (saturate-50: 75 isn't on Tailwind's scale.)
             "opacity-60 saturate-50 group-hover:opacity-100 group-hover:saturate-100",
             (isActive || highlight) && "opacity-100 saturate-100",
             isActive && "is-active",
@@ -579,13 +511,11 @@ const ServerButton = memo(function ServerButton({
             {initial}
           </AvatarFallback>
         </Avatar>
-        {/* Voice indicator: a headphones badge when a call is live here. */}
         {inCall && (
           <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
             <Headphones className="size-2.5" />
           </span>
         )}
-        {/* Unread / mention indicator (hidden while active — you're reading it). */}
         {!isActive && anyMention ? (
           <span
             className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
@@ -606,17 +536,13 @@ const ServerButton = memo(function ServerButton({
   const triggerClass = "group relative flex items-center justify-center shrink-0 touch-none";
 
   const dragClass = cn(
-    // No grab-on-hover cursor: entries read as normal links until actually
-    // picked up (the hover hand suggested HTML5 dragging and confused people).
-    // While a drag is live the body carries a global grabbing cursor.
+    // No grab cursor on hover: it suggested HTML5 dragging and confused people.
     dragging && "cursor-grabbing",
-    // While a reorder is in flight, lock touch-action so the browser can't
-    // steal the (mostly vertical) gesture as a pan and stop delivering moves.
+    // Lock touch-action mid-reorder so the browser can't steal the gesture as a pan.
     reordering && "touch-none",
   );
 
-  // Identify the draggable node for hit-testing; the pointerdown listener is
-  // attached natively via `triggerRef` (see useDragPointerDown).
+  // Pointerdown is attached natively via `triggerRef` (see useDragPointerDown).
   const interactionProps = draggable ? dragAttrs(itemAnchor(url), dragParent) : {};
 
   return (
@@ -651,11 +577,8 @@ const ServerButton = memo(function ServerButton({
                   onPressed?.();
                   onNavigate?.();
                 }}
-                // A STRING, not a function: this NavLink is cloned by the
-                // wrapping ContextMenuTrigger/TooltipTrigger (Radix Slot), which
-                // stringifies a function className into its source text — leaving
-                // the anchor with no `group`/layout classes, so hover did nothing.
-                // `isActive` still drives the icon via the render-prop children.
+                // A STRING, not a function: Radix Slot cloning stringifies a function
+                // className into its source text.
                 className={cn(triggerClass, dragClass)}
                 {...interactionProps}
               >
@@ -695,12 +618,7 @@ const ServerButton = memo(function ServerButton({
   );
 });
 
-/**
- * A rail button for an end-to-end-encrypted Concord community (CORD-02).
- * Visually distinguished from NIP-29 servers by the shield accent (different
- * trust model); navigates to `/c/…` and pulls its authoritative icon from the
- * folded Control Plane metadata.
- */
+/** Rail button for an E2EE Concord community (CORD-02); icon from the folded Control Plane. */
 const Concord2Button = memo(function Concord2Button({
   communityId,
   name,
@@ -723,22 +641,16 @@ const Concord2Button = memo(function Concord2Button({
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
   const community = useCommunity(communityId);
-  // Rail buttons only need the icon/name, which the fold serves from its
-  // persisted snapshot. Pass active=false so we DON'T fan out a control-plane
-  // REQ per relay for every community on pageload — the community's page
-  // (active=true) syncs it on navigation, sharing this query key.
+  // active=false: don't fan out a control-plane REQ per community on pageload;
+  // the community page syncs it, sharing this query key.
   const { data: folded } = useControlFold(community, false);
-  // Kicked/banned: the icon STAYS (only Leave/Dissolve remove it), but we mark
-  // it so the user isn't left wondering why the room went read-only.
+  // Kicked/banned: the icon stays (only Leave/Dissolve remove it), but is marked.
   const excluded = useIsExcluded(communityId);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
   const iconUrl = useDecryptedImage(folded?.metadata?.icon);
 
-  // Aggregate unread across the community's channels, computed purely from the
-  // local rumor cache (no extra relay fan-out — active=false shares the fold
-  // query key). Mirrors the NIP-29 rail badge. Muted channels (or a muted
-  // community) don't light the unread dot; unread mentions still badge.
+  // From the local rumor cache only. Muted channels don't light the dot; mentions still badge.
   const channels = useChannels(community, false);
   const { byChannel, markRead: markC2Read } = useConcordUnread(community, channels);
   const { isConcordChannelMuted } = useMutes();
@@ -755,8 +667,7 @@ const Concord2Button = memo(function Concord2Button({
     }
   }, [byChannel, markC2Read]);
 
-  // Leave from the rail's right-click menu (tombstone it locally; the Guestbook
-  // leave and the vault write follow in the background), then go home.
+  // Tombstone locally; Guestbook leave and vault write follow in the background.
   const navigate = useNavigate();
   const { leave } = useCommunityManagement(community);
   const handleLeave = async () => {
@@ -801,8 +712,6 @@ const Concord2Button = memo(function Concord2Button({
             return (
             <DragSlot dragging={dragging}>
               <>
-                {/* Active marker: the same neon blade servers get, so the
-                    open room keeps its left-bar highlight (incl. in folders). */}
                 <span
                   className={cn(
                     "absolute -left-2 w-[3px] bg-primary transition-all",
@@ -832,8 +741,6 @@ const Concord2Button = memo(function Concord2Button({
                       <span className="text-sm font-semibold">{initials}</span>
                     )}
                   </span>
-                  {/* Excluded (kicked/banned): a lock badge; the icon stays put
-                      until the user leaves or is re-included by a Refounding. */}
                   {excluded ? (
                     <span
                       className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-muted text-muted-foreground ring-2 ring-background"
@@ -842,7 +749,6 @@ const Concord2Button = memo(function Concord2Button({
                       <Lock className="size-2.5" />
                     </span>
                   ) : null}
-                  {/* Unread / mention indicator (hidden while active — you're reading it). */}
                   {!isActive && anyMention ? (
                     <span
                       className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
@@ -891,12 +797,7 @@ const Concord2Button = memo(function Concord2Button({
   );
 });
 
-/**
- * A rail button for a direct-message conversation the user pinned here from
- * the DM list. Round rather than the communities' cut-corner crest, because
- * it's a person; otherwise it is an ordinary rail item — it drags, folders and
- * reorders like the rest, and clicking it opens the THREAD (see `dmRoute`).
- */
+/** Rail button for a pinned DM; opens the thread (see `dmRoute`). */
 const DmButton = memo(function DmButton({
   pubkey,
   unreadCount,
@@ -915,7 +816,6 @@ const DmButton = memo(function DmButton({
   pubkey: string;
   unreadCount?: number;
   onNavigate?: () => void;
-  /** Whether the active voice call is this DM. */
   inCall?: boolean;
 } & RailDragProps) {
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
@@ -924,8 +824,7 @@ const DmButton = memo(function DmButton({
   const { user } = useCurrentUser();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  // The conversation with yourself is Note to Self, here as in the DM list:
-  // the viewer's own face on the rail would read as a message from them.
+  // Own conversation is Note to Self, not the viewer's face.
   const noteToSelf = pubkey === user?.pubkey;
   const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
   const unread = useDmPeerUnread(pubkey);
@@ -933,8 +832,6 @@ const DmButton = memo(function DmButton({
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { removeFromRail } = useRailDms();
 
-  // Idle-dim + brighten-on-hover, matched to the community buttons so a person
-  // and a community sit in one rail rather than two visual systems.
   const dimClass = (isActive: boolean) =>
     cn(
       "transition-all duration-150 opacity-60 saturate-50",
@@ -972,7 +869,6 @@ const DmButton = memo(function DmButton({
                 return (
                 <DragSlot dragging={dragging}>
                   <>
-                    {/* The same neon blade every rail entry gets. */}
                     <span
                       className={cn(
                         "absolute -left-2 w-[3px] bg-primary transition-all",
@@ -1000,13 +896,11 @@ const DmButton = memo(function DmButton({
                           </AvatarFallback>
                         </Avatar>
                       )}
-                      {/* Voice indicator: a headphones badge when this DM's call is live. */}
                       {inCall && (
                         <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
                           <Headphones className="size-2.5" />
                         </span>
                       )}
-                      {/* Unread count (hidden while active — you're reading it). */}
                       {!isActive && displayedUnreadCount > 0 ? (
                         <span
                           className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
@@ -1033,8 +927,7 @@ const DmButton = memo(function DmButton({
           level={dmLevel(pubkey)}
           onChange={(lvl) => setNotifLevel(dmScopeKey(pubkey), lvl)}
         />
-        {/* Takes the icon off the rail and nothing else: the conversation, its
-            history and its place in the DM list are untouched. */}
+        {/* Only removes the rail icon; the conversation is untouched. */}
         <ContextMenuItem className="gap-2" onSelect={() => removeFromRail(pubkey)}>
           <PanelLeftDashed className="size-4" />
           Remove from rail
@@ -1044,11 +937,7 @@ const DmButton = memo(function DmButton({
   );
 });
 
-/**
- * One automatic recent-conversation avatar. Unlike a pinned DM it is not part
- * of `railLayout` and cannot be dragged: recency owns this three-item strip,
- * while manual pins keep their existing arranged/foldered behavior below it.
- */
+/** Automatic recent-conversation avatar; not in `railLayout` and not draggable. */
 const RecentDmButton = memo(function RecentDmButton({
   item,
   onNavigate,
@@ -1140,12 +1029,7 @@ const RecentDmButton = memo(function RecentDmButton({
   );
 });
 
-/**
- * A Discord-style server folder in the rail. Collapsed it shows a 2×2 grid of
- * its members' icons; clicking expands it in place, listing the members
- * inside a tinted container. Right-click to rename or remove (dissolve) it.
- * The folder itself drags as one unit to reorder it in the rail.
- */
+/** Server folder: collapsed shows a 2×2 member grid; drags as one unit. */
 function RailFolder({
   id,
   name,
@@ -1167,7 +1051,6 @@ function RailFolder({
   name: string;
   items: RailItem[];
   open: boolean;
-  /** A member of this folder is the active route (shown while collapsed). */
   active: boolean;
   onToggle: () => void;
   onRenameRequest: () => void;
@@ -1179,10 +1062,7 @@ function RailFolder({
 
   const label = name.trim() || "Folder";
 
-  // Aggregate unread/mention across ALL members (not just the four visible
-  // in the mini grid), reported by the invisible per-member probes below.
-  // Shown on the folder face only while collapsed — expanded, the members'
-  // own buttons carry their badges.
+  // Rollup across ALL members, reported by the per-member probes; shown only while collapsed.
   const [memberUnread, setMemberUnread] = useState<
     Record<string, { unread: boolean; mention: boolean }>
   >({});
@@ -1226,7 +1106,6 @@ function RailFolder({
               )}
               {...(draggable ? dragAttrs(folderAnchor(id)) : {})}
             >
-              {/* Active blade while collapsed (a member is the open route). */}
               <span
                 className={cn(
                   "absolute -left-2 w-[3px] bg-primary transition-all",
@@ -1242,9 +1121,7 @@ function RailFolder({
                     highlight && "rounded-xl ring-2 ring-primary scale-110",
                   )}
                 >
-                  {/* Dimming lives on an inner wrapper so the notification
-                      badge outside it stays at full strength (mirrors how
-                      server buttons keep badges outside the dimmed avatar). */}
+                  {/* Dimming on an inner wrapper so the badge outside stays full strength. */}
                   <span
                     className={cn(
                       "block size-12 transition-all duration-150",
@@ -1260,7 +1137,6 @@ function RailFolder({
                       <FolderMiniGrid items={items} />
                     )}
                   </span>
-                  {/* Folder-level rollup: any member mentioned / unread. */}
                   {anyMention ? (
                     <span
                       className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
@@ -1306,8 +1182,7 @@ function RailFolder({
     <div
       className={cn(
         "flex flex-col items-center gap-4 sidebar:gap-5 shrink-0 rounded-2xl bg-secondary/40 px-1.5 py-1.5 transition-colors",
-        // While this folder itself is being dragged, dim it in place (its
-        // frozen slot geometry must not change mid-gesture).
+        // Frozen slot geometry must not change mid-gesture.
         dragging && "opacity-40",
       )}
     >
@@ -1318,23 +1193,8 @@ function RailFolder({
 }
 
 /**
- * Far-left vertical rail listing every community — NIP-29 servers and Concord
- * communities in one user-arranged list with Discord-style folders —
- * plus DMs, add-community and settings actions.
- *
- * Drag interactions (Discord semantics):
- * - Mouse: press and move a few pixels to pick an entry up immediately.
- * - Touch: press and hold (~300ms), then drag (a short tap navigates).
- * - Drop in a gap to reorder; drop onto another community to create a folder;
- *   drop onto a folder to move it inside; drag out of a folder to remove it.
- *   Folders holding a single item dissolve automatically.
- */
-/**
- * The side-by-side (desktop) layout — where the rail is a PERSISTENT left
- * column owned by {@link MainLayout} — versus the touch drill-down (<900px on a
- * touch device) where each page owns the rail inside its `SwipeReveal` underlay.
- * Mirrors `SwipeReveal`'s `swipeEnabled = isTouch && narrow`; this is its
- * negation, so the two agree on which layout is live at every width.
+ * Side-by-side (desktop) layout, where MainLayout owns the persistent rail,
+ * vs. touch drill-down. Negation of `SwipeReveal`'s `swipeEnabled`; must stay in sync.
  */
 function useSideBySideLayout(): boolean {
   const isTouch = useIsTouch();
@@ -1351,29 +1211,15 @@ function useSideBySideLayout(): boolean {
   return !(isTouch && narrow);
 }
 
-// ─── Persistent drill-down rail ──────────────────────────────────────────
-//
-// On the touch drill-down every page shows the rail inside its SwipeReveal
-// underlay, so switching sections (DMs ↔ a community) used to unmount and
-// rebuild the entire rail — its per-item hook fan-out AND the very button the
-// user had just tapped — as part of the route transition. That rebuild is a
-// large slice of the main-thread work that made the first tap after a section
-// switch feel dead. The fix mirrors what `variant="shell"` did for desktop,
-// except the rail's DOM has to LIVE inside each page's underlay (the chat
-// pane slides over it and the parallax translates it), so a shell sibling
-// won't do. Instead the drill-down rail is rendered ONCE — by MainLayout's
-// shell ServerRail, through a portal into this detached container — and each
-// page's plain `<ServerRail />` renders a slot that ADOPTS the container's
-// DOM node on mount. Moving a DOM node between slots is cheap and invisible
-// to React: the component tree, its hooks and their subscriptions survive
-// every section switch.
+// Drill-down rail persistence: rendered ONCE by MainLayout's shell rail into
+// this detached container, and each page's `<ServerRail />` slot ADOPTS the
+// DOM node on mount. Rebuilding the rail on every section switch made the
+// first tap after a switch feel dead; moving a DOM node is invisible to React.
 let railPortalNode: HTMLDivElement | null = null;
 function getRailPortalNode(): HTMLDivElement {
   if (!railPortalNode) {
     railPortalNode = document.createElement("div");
-    // Both this container and the slot are `display: contents`, so the rail's
-    // root element participates in the underlay's flex row exactly as if the
-    // page had rendered it inline.
+    // `display: contents` on both so the rail lays out as if inline.
     railPortalNode.style.display = "contents";
   }
   return railPortalNode;
@@ -1385,9 +1231,7 @@ function RailSlot() {
     const slot = ref.current;
     if (!slot) return;
     const node = getRailPortalNode();
-    // appendChild MOVES the node if something still holds it; in the normal
-    // route-switch commit the outgoing slot's cleanup has already run, so this
-    // is an append of a detached node before paint — no railless frame.
+    // appendChild MOVES the node; the outgoing slot's cleanup already ran, so no railless frame.
     slot.appendChild(node);
     return () => {
       if (node.parentNode === slot) slot.removeChild(node);
@@ -1398,21 +1242,10 @@ function RailSlot() {
 
 export interface ServerRailProps {
   onNavigate?: () => void;
-  /** When set, tapping a server fires this instead of navigating (drawer mode). */
   onServerSelect?: (url: string) => void;
-  /** The currently-selected server in drawer mode. */
   selectedServer?: string;
   className?: string;
-  /**
-   * `shell` = the single persistent rail MainLayout owns: rendered in place on
-   * the desktop side-by-side layout, and portaled into the shared drill-down
-   * container (see `getRailPortalNode`) on touch. `page` (default) = what a
-   * page renders inside its mobile drill-down underlay — a SLOT that adopts
-   * the persistent rail's DOM (or nothing on desktop). Either way the rail
-   * component itself survives navigation, so its whole per-item hook fan-out
-   * isn't rebuilt on every switch and the tap target the user is clicking
-   * stays mounted.
-   */
+  /** `shell`: MainLayout's persistent rail (in place on desktop, portaled on touch). `page`: a slot adopting it. */
   variant?: "shell" | "page";
 }
 
@@ -1420,23 +1253,14 @@ export function ServerRail({ variant = "page", ...props }: ServerRailProps) {
   const sideBySide = useSideBySideLayout();
   const { user } = useCurrentUser();
   if (variant === "shell") {
-    // Drill-down: host the ONE persistent rail; page slots adopt its DOM.
-    // No `user` gate here — the drill-down rail belongs to pages that manage
-    // their own logged-out state (it always rendered for them), and with no
-    // slot mounted (e.g. a page that renders none) the container simply stays
-    // detached.
+    // No `user` gate: drill-down pages manage their own logged-out state.
     if (!sideBySide) return createPortal(<ServerRailInner {...props} />, getRailPortalNode());
-    // The persistent shell rail is part of the logged-in app frame; a logged-out
-    // visitor on one of the public in-shell pages (/discover, /invite/…) has no
-    // communities and must not see the rail's +/Discover/Settings chrome.
+    // Logged-out visitors on public in-shell pages must not see the rail chrome.
     if (!user) return null;
     return <ServerRailInner {...props} />;
   }
-  // page variant lives only in the drill-down.
   if (sideBySide) return null;
-  // A page that customizes its rail (MeshPage's onNavigate, drawer mode) keeps
-  // a private instance; the plain `<ServerRail />` everywhere else shares the
-  // persistent one through a slot.
+  // Pages that customize the rail keep a private instance.
   if (props.onNavigate || props.onServerSelect) return <ServerRailInner {...props} />;
   return <RailSlot />;
 }
@@ -1455,32 +1279,21 @@ function ServerRailInner({
   const { mesh } = useMeshTransport();
   const hasUnreadDMs = useHasUnreadDMs();
   const { items: dmActivity } = useDmActivity();
-  // Received Concord invites (CORD-05 §6). The rail entry appears only while
-  // some are pending — there's no history to browse once they're all
-  // accepted/declined — and badges the count not yet seen in the inbox.
+  // Received Concord invites (CORD-05 §6); shown only while some are pending.
   const { items: inviteItems, unreadCount: inviteUnread } = useInviteInbox();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const concord = useLiveCommunities();
   const [addOpen, setAddOpen] = useState(false);
 
-  // Optimistic "this is where we're going" highlight. React Router v7 wraps
-  // every navigation in startTransition, so on a slow section switch the
-  // tapped entry wouldn't light until the whole destination page had rendered
-  // — reading as a dead tap. Set synchronously on click (a high-priority
-  // update that paints on the tap frame), cleared when the location actually
-  // changes; the timeout covers a tap whose navigation never moves the
-  // location (re-tapping the active entry).
+  // Optimistic highlight: React Router v7 wraps navigations in startTransition,
+  // so a slow switch looks like a dead tap. Timeout covers re-tapping the active entry.
   const [pendingNav, setPendingNav] = useState<string | null>(null);
   useEffect(() => {
     setPendingNav(null);
   }, [location]);
 
-  // The Settings button is a toggle. Normally Settings is an overlay over the
-  // page (`lib/settingsOverlay.ts`) and closing it steps back to that page —
-  // shown and hidden from the click, not from the navigation, so traffic in
-  // the page underneath can't hold it up. A `/settings` reached cold is a
-  // routed page with nothing under it; that one goes to the last location
-  // outside Settings the rail saw (it never unmounts), or home.
+  // Settings toggles its overlay directly (not via navigation). A cold
+  // `/settings` goes to the last non-settings location, or home.
   const settingsOverlay = useContext(SettingsOverlayContext);
   const onSettingsPage = location.pathname === SETTINGS_PATH;
   const inSettings = settingsOverlay.open || onSettingsPage;
@@ -1501,8 +1314,7 @@ function ServerRailInner({
     const timer = window.setTimeout(() => setPendingNav(null), 3000);
     return () => window.clearTimeout(timer);
   }, [pendingNav]);
-  // Cached per key so the memoized buttons keep their bailout (same reason as
-  // dragPointerDownFor below).
+  // Cached per key so memoized buttons keep their bailout.
   const pressedByKey = useRef(new Map<string, () => void>());
   const onPressedFor = (key: string) => {
     let fn = pressedByKey.current.get(key);
@@ -1513,16 +1325,10 @@ function ServerRailInner({
     return fn;
   };
 
-  // The NIP-29 half of the rail: the servers in the user's kind 10009 list, so
-  // the rail shows only servers the user actually added or joined.
-  // Order/grouping is applied by the layout below.
+  // Servers from the user's kind 10009 list.
   const servers = useNip29Servers();
 
-  // The Notification Center is intentionally narrower than generic channel
-  // unread: it collects mentions and invites. DMs have their own button and
-  // transient unread queue below. These invisible probes reuse the same unread
-  // queries every visible rail button already shares, then roll only the
-  // mention bit into the account-level bell.
+  // Notification Center collects mentions and invites only (DMs have their own).
   const [mentionBySpace, setMentionBySpace] = useState<Record<string, boolean>>({});
   const reportMention = useCallback((key: string, mention: boolean) => {
     setMentionBySpace((current) => {
@@ -1533,10 +1339,7 @@ function ServerRailInner({
   const hasUnreadNotifications =
     inviteUnread > 0 || Object.values(mentionBySpace).some(Boolean);
 
-  // DMs the user put on the rail. Unlike every other kind these have no source
-  // list to be live against — the arrangement IS the record — so they're read
-  // back out of it, which also means they can never be "not live yet" and get
-  // skipped at render the way a still-loading community can.
+  // Rail DMs have no source list — the arrangement IS the record.
   const railDms = useMemo(
     () => railDmPubkeys(config.railLayout),
     [config.railLayout],
@@ -1546,9 +1349,6 @@ function ServerRailInner({
     [dmActivity],
   );
   const recentDms = useMemo(() => {
-    // The whole-DM opt-out removes the strip along with everything else: the
-    // account is no longer listening for DMs, so a "recent unread" strip would
-    // be stale by construction.
     if (config.dmsDisabled || !config.showRecentRailDms) return [];
     const manuallyArranged = new Set(railDms);
     return dmActivity
@@ -1556,15 +1356,10 @@ function ServerRailInner({
       .slice(0, MAX_RAIL_RECENT_DMS);
   }, [dmActivity, railDms, config.showRecentRailDms, config.dmsDisabled]);
 
-  // Every live rail item (NIP-29 servers, Concord communities and pinned
-  // DMs) in discovery order. The persisted layout arranges these into the
-  // visible ordered list + folders.
   const items = useMemo<RailItem[]>(() => {
     const base: RailItem[] = [];
     base.push(...servers.map((url) => ({ kind: "server" as const, key: url, url })));
     if (user) {
-      // With DMs off the account isn't listening for them, so even manually
-      // pinned DM rail items drop — the master opt-out hides the whole surface.
       if (!config.dmsDisabled) {
         base.push(
           ...railDms.map((pubkey) => ({ kind: "dm" as const, key: dmRailKey(pubkey), pubkey })),
@@ -1584,10 +1379,8 @@ function ServerRailInner({
 
   const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
 
-  // The working layout: the synced `railLayout` with newly-discovered items
-  // appended. Keys the layout knows but that aren't live yet (still loading /
-  // since removed) are KEPT in the data — they're only skipped at render — so
-  // an early drag can't wipe another device's folders.
+  // Known-but-not-live keys are KEPT (only skipped at render) so an early drag
+  // can't wipe another device's folders.
   const layout = useMemo(
     () => mergeLayout(config.railLayout, items.map((it) => it.key)),
     [config.railLayout, items],
@@ -1595,7 +1388,6 @@ function ServerRailInner({
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
 
-  // Resolve the layout against live items for rendering.
   const renderNodes = useMemo<RenderNode[]>(() => {
     const out: RenderNode[] = [];
     for (const node of layout) {
@@ -1625,7 +1417,6 @@ function ServerRailInner({
     [updateConfig],
   );
 
-  /** Whether a rail item is the active route / drawer selection. */
   const isItemActive = useCallback(
     (item: RailItem): boolean => {
       if (item.kind === "server" && onServerSelect) return selectedServer === item.url;
@@ -1640,17 +1431,13 @@ function ServerRailInner({
     [location.pathname, onServerSelect, selectedServer],
   );
 
-  /** Persist a layout change everywhere it needs to go. */
   const persistLayout = useCallback(
     (nodes: RailLayoutNode[]) => {
       const normalized = normalizeLayout(nodes);
       const keys = flattenLayout(normalized);
       updateConfig((current) => ({ ...current, railLayout: normalized }));
 
-      // Also sync the relative order of user-added relays to the kind 10009
-      // list (the cross-device source of truth for the added-server set).
-      // Only relay URLs qualify — every other kind's key would arrive there as
-      // a relay the user never added.
+      // Sync relay order to kind 10009 (cross-device source of truth). Relay URLs only.
       const addedOrder = keys.filter(
         (k) => !k.startsWith("c2:") && !k.startsWith("dm:"),
       );
@@ -1663,22 +1450,12 @@ function ServerRailInner({
     [updateConfig, updateList, user],
   );
 
-  // ─── Drag to reorder / fold (Discord semantics) ─────────────────────────
-  //
-  // Press and hold (~300ms) picks an entry up on every pointer type — the
-  // cursor flips to the grabbing hand at that moment, never on mere movement.
-  // Mouse movement during the hold neither triggers nor cancels the pickup
-  // (the long press still completes, at the cursor's current position); on
-  // touch, early movement converts the gesture to a scroll instead.
-  //
-  // The rendered DOM order never changes during a drag; slot geometry is
-  // frozen at pickup and a fixed-position indicator line / target highlight
-  // previews the drop (`planDrop`). On release the drop is applied to the
-  // layout (`applyDrop`) and persisted.
+  // Drag: press-and-hold (~300ms) picks up on every pointer type. On touch, early
+  // movement becomes a scroll. DOM order never changes mid-drag: slot geometry is
+  // frozen at pickup, `planDrop` previews, `applyDrop` applies on release.
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const [dropPlan, setDropPlan] = useState<RailDropPlan | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
-  // Frozen slot geometry + rail frame, captured once at pickup from clean DOM.
   const slotsRef = useRef<RailSlot[]>([]);
   const navRectRef = useRef<{ left: number; width: number } | null>(null);
   const dropPlanRef = useRef<RailDropPlan | null>(null);
@@ -1731,13 +1508,7 @@ function ServerRailInner({
   const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
 
-  // Whether there's list content scrolled off below the current view. The
-  // Settings footer's top divider only earns its keep as the seam over hidden
-  // content — with a short list, or once scrolled to the bottom, it's just a
-  // line under nothing. Measured, not guessed: item count, folder open/close
-  // and rail/viewport height move the overflow threshold (watched via the nav's
-  // own height and each child's, incl. folder expansion), and scrolling moves
-  // the seam (watched via the scroll event).
+  // The Settings footer divider only shows when content is scrolled off below.
   const [contentBelow, setContentBelow] = useState(false);
   useEffect(() => {
     const nav = navRef.current;
@@ -1756,7 +1527,6 @@ function ServerRailInner({
     };
   }, [renderNodes, user, mesh.available, inviteItems.length, recentDms.length]);
 
-  // What the floating ghost carries.
   const draggedItem =
     dragSource?.kind === "item" ? (liveByKey.get(dragSource.key) ?? null) : null;
   const draggedFolder =
@@ -1767,7 +1537,6 @@ function ServerRailInner({
         ) ?? null)
       : null;
 
-  // Folder rename dialog.
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const requestRename = useCallback(
@@ -1788,9 +1557,7 @@ function ServerRailInner({
     setRenameId(null);
   }, [renameId, renameValue, persistLayout]);
 
-  // Cached per item key: `begin` is render-stable and useDragPointerDown reads
-  // through a ref, so the only effect a fresh closure per render would have is
-  // to defeat the memoized rail buttons.
+  // Cached per item key so a fresh closure doesn't defeat memoized buttons.
   const dragDownByKey = useRef(new Map<string, (e: PointerEvent) => void>());
   const dragPointerDownFor = (key: string) => {
     let fn = dragDownByKey.current.get(key);
@@ -1852,15 +1619,6 @@ function ServerRailInner({
   return (
     <div
       className={cn(
-        // Chrome plane — deepest part of the recessed frame. Owns the rail's
-        // width and background. A flex column so the community list can scroll
-        // on its own while the Settings footer below stays pinned and reachable
-        // no matter how many communities push the list into overflow. The rail
-        // reaches both screen edges on mobile: the scroll region takes the top
-        // safe-area inset (status bar) and the footer takes the bottom inset.
-        // Slimmer + tighter on the mobile drill-down (where it shares the width
-        // with the channel/DM list) so it doesn't read as a squeezed desktop
-        // rail; widens to the full desktop rail at the `sidebar:` breakpoint.
         "flex flex-col items-center w-[60px] sidebar:w-[72px] shrink-0 overflow-hidden bg-chrome-deep select-none",
         className,
       )}
@@ -1868,26 +1626,15 @@ function ServerRailInner({
       <nav
         ref={railDrag.attachContainer}
         aria-label="Servers"
-        // Suppress the browser's native HTML5 drag (images and <a>/NavLink are
-        // draggable by default). Without this, a press-and-drag on a community
-        // icon starts a native image/link drag that hijacks our custom
-        // reorder gesture.
+        // Suppress native HTML5 drag, which hijacks the custom reorder gesture.
         onDragStart={(e) => e.preventDefault()}
         className={cn(
-          // The scroll region: fills the space above the pinned footer and
-          // scrolls internally. `min-h-0` lets it shrink below its content so
-          // the flex parent can actually clip + scroll it. `overflow-x-clip`
-          // is required: bare `overflow-y-auto` makes the browser compute
-          // overflow-x to `auto` too, which — once a vertical scrollbar eats
-          // into the narrow rail — produces an unwanted horizontal scrollbar.
-          // Hide the scrollbar entirely (Discord-style icon rail): it still
-          // scrolls by wheel/touch/drag. Touch/native already hide it globally
-          // (see index.css); these cover desktop web.
+          // `overflow-x-clip` is required: `overflow-y-auto` alone computes overflow-x
+          // to `auto`, giving a horizontal scrollbar in the narrow rail.
           "flex flex-col items-center gap-4 sidebar:gap-5 w-full flex-1 min-h-0",
           "overflow-y-auto overflow-x-clip [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
           "pb-2",
-          // Lock scrolling while dragging so the rail doesn't fight the gesture.
           reordering && "overflow-hidden",
         )}
       >
@@ -1902,11 +1649,7 @@ function ServerRailInner({
           />
         ))}
 
-        {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Only shown when
-            the platform can actually run it (Android with BLE hardware): a rail
-            entry that leads to a permanent "unavailable here" page on web/desktop
-            is dead weight. Hidden while the availability probe resolves; still
-            shown when supported-but-off (the page hosts the opt-in toggle). */}
+        {/* Mesh only where it can run (Android with BLE). */}
         {user && mesh.available && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1919,9 +1662,6 @@ function ServerRailInner({
                 }}
                 className="group relative flex items-center justify-center shrink-0"
               >
-                {/* Active marker: the same neon blade the community buttons use
-                    (see `inner`), so DMs/Mesh signal the active route identically.
-                    Driven by aria-current=page rather than an isActive prop. */}
                 <span
                   className={cn(
                     "absolute -left-2 w-[3px] bg-primary transition-all",
@@ -1956,9 +1696,6 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Account-level Notification Center: mentions across both community
-            transports and pending Concord invites. DMs stay in their own rail
-            queue immediately below. */}
         {user && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -2006,9 +1743,6 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Direct messages — account-level, above the servers (Discord-style).
-            Only shown when signed in (DMs require an account); hidden entirely
-            when the account has opted out of DMs (config.dmsDisabled). */}
         {user && !config.dmsDisabled && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -2021,10 +1755,7 @@ function ServerRailInner({
                 }}
                 className="group relative flex items-center justify-center shrink-0"
               >
-                {/* Active marker: the same neon blade the community buttons use
-                    (see `inner`), so DMs/Mesh signal the active route identically.
-                    Driven by aria-current=page rather than an isActive prop; the
-                    `pendingNav` classes are the optimistic tap highlight. */}
+                {/* `pendingNav` classes are the optimistic tap highlight. */}
                 <span
                   className={cn(
                     "absolute -left-2 w-[3px] bg-primary transition-all",
@@ -2050,13 +1781,11 @@ function ServerRailInner({
                   >
                     <MessageSquare className="size-5" />
                   </span>
-                  {/* Voice indicator: a headphones badge when a DM call is live. */}
                   {activeCall?.dmPeer && (
                     <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
                       <Headphones className="size-2.5" />
                     </span>
                   )}
-                  {/* Unread DM indicator (hidden on the active DMs view). */}
                   {hasUnreadDMs && (
                     <span
                       className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
@@ -2072,8 +1801,6 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Received encrypted-community invites (CORD-05 §6). Shown only while
-            some are pending; badges the count not yet seen in the inbox. */}
         {user && inviteItems.length > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -2111,7 +1838,6 @@ function ServerRailInner({
                   >
                     <MailPlus className="size-5" />
                   </span>
-                  {/* Unread invite count (hidden on the active invites view). */}
                   {inviteUnread > 0 && (
                     <span
                       className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
@@ -2129,11 +1855,6 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Newest unread conversations, automatic and recency-ordered, capped
-            at MAX_RAIL_RECENT_DMS and gated by the showRecentRailDms setting.
-            Reading one advances its shared read stamp and removes it from this
-            transient strip. Manually arranged 1:1 pins remain only at their
-            saved rail/folder position below, where they carry the same count. */}
         {user && recentDms.map((item) => (
           <RecentDmButton
             key={`recent:${item.key}`}
@@ -2145,7 +1866,6 @@ function ServerRailInner({
           />
         ))}
 
-        {/* Account activity above; arranged communities and manual pins below. */}
         {user && renderNodes.length > 0 && (
           <div
             className="h-px w-7 shrink-0 bg-chrome-divider"
@@ -2154,8 +1874,6 @@ function ServerRailInner({
           />
         )}
 
-        {/* One unified, user-arranged community list: NIP-29 servers and Concord
-            communities intermixed, with Discord-style folders. */}
         {renderNodes.map((node) =>
           node.type === "item" ? (
             renderItem(node.item)
@@ -2182,7 +1900,6 @@ function ServerRailInner({
           ),
         )}
 
-        {/* Separates the community list from the add action below. */}
         {renderNodes.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
 
         <Tooltip>
@@ -2200,8 +1917,6 @@ function ServerRailInner({
           <RailTooltipContent side="right">Add a server or chat</RailTooltipContent>
         </Tooltip>
 
-        {/* Discover — browse/search public communities, emoji packs and themes.
-            Public (no account needed), so it sits outside the `user &&` gate. */}
         <Tooltip>
           <TooltipTrigger asChild>
             <NavLink
@@ -2247,11 +1962,7 @@ function ServerRailInner({
         </Tooltip>
       </nav>
 
-      {/* Pinned footer: Settings stays visible regardless of how many
-          communities push the list into overflow — it lives outside the scroll
-          region above. The bottom safe-area padding lives here (not the scroll
-          region) so the icon lines up with the ChannelSidebar account switcher,
-          which sits inside pb-safe plus an extra 0.5rem. */}
+      {/* Bottom safe-area padding lives here so Settings lines up with ChannelSidebar's account switcher. */}
       <div
         className={cn(
           "flex flex-col items-center shrink-0 w-full pt-3 sidebar:pt-4",
@@ -2281,7 +1992,6 @@ function ServerRailInner({
 
       <AddDialog open={addOpen} onOpenChange={setAddOpen} />
 
-      {/* Folder rename dialog (from the folder context menu). */}
       <Dialog open={renameId !== null} onOpenChange={(open) => !open && setRenameId(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
@@ -2309,7 +2019,6 @@ function ServerRailInner({
         </DialogContent>
       </Dialog>
 
-      {/* Floating ghost that follows the pointer during a drag. */}
       {dragSource && dragPos && (draggedItem || draggedFolder) && (
         <DragGhost
           item={draggedItem ?? undefined}
@@ -2319,21 +2028,13 @@ function ServerRailInner({
         />
       )}
 
-      {/* While an entry is held, a full-viewport layer carries the grabbing
-          cursor. This is what makes the cursor actually flip at pickup:
-          Chromium does not re-evaluate a style-only cursor change while a
-          mouse button is down and the pointer is stationary (so the body
-          cursor set in the effect above is invisible until something else
-          forces it) — but a NEW element appearing under the pointer forces
-          the recompute. It also blocks hover states beneath the drag. It
-          must NOT be pointer-events-none (hit-test-transparent elements
-          don't contribute a cursor); the gesture's listeners live on window,
-          so events bubbling through it are still seen. */}
+      {/* Chromium doesn't re-evaluate cursor while a button is held and the pointer
+          is still, but a NEW element under the pointer forces it. Must NOT be
+          pointer-events-none (those don't contribute a cursor). */}
       {reordering && (
         <div data-rail-drag-overlay className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
       )}
 
-      {/* Insertion indicator: where a gap drop would land. */}
       {reordering && dropPlan?.indicatorY !== undefined && navRectRef.current && (
         <div
           className="pointer-events-none fixed z-[299] h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)]"

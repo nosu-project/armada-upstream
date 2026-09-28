@@ -1,7 +1,5 @@
 import type { ThemeTokens } from "@/themes";
 
-// ─── Conversion Utilities ────────────────────────────────────────────
-
 /** Parse an HSL string like "228 20% 10%" into { h, s, l } */
 export function parseHsl(hsl: string): { h: number; s: number; l: number } {
   const parts = hsl.trim().replace(/%/g, "").split(/\s+/).map(Number);
@@ -76,8 +74,6 @@ export function hslStringToHex(hsl: string): string {
   return rgbToHex(r, g, b);
 }
 
-// ─── Luminance & Detection ────────────────────────────────────────────
-
 /** Relative luminance per WCAG 2.1 (0 = black, 1 = white). */
 export function getLuminance(r: number, g: number, b: number): number {
   const sRGB = [r, g, b].map((v) => {
@@ -99,13 +95,6 @@ export function getContrastRatio(
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** Get contrast ratio between two HSL strings. */
-export function getContrastRatioHsl(hsl1: string, hsl2: string): number {
-  const c1 = parseHsl(hsl1);
-  const c2 = parseHsl(hsl2);
-  return getContrastRatio(hslToRgb(c1.h, c1.s, c1.l), hslToRgb(c2.h, c2.s, c2.l));
-}
-
 /** Determine if an HSL background string represents a "dark" theme. */
 export function isDarkTheme(backgroundHsl: string): boolean {
   const { h, s, l } = parseHsl(backgroundHsl);
@@ -120,8 +109,6 @@ export function getBackgroundThemeMode(): "dark" | "light" {
   if (!bg) return "dark";
   return isDarkTheme(bg) ? "dark" : "light";
 }
-
-// ─── Adjust HSL helpers ───────────────────────────────────────────────
 
 /** Lighten an HSL string by a given amount (0-100). */
 function lighten(hsl: string, amount: number): string {
@@ -139,20 +126,11 @@ function darken(hsl: string, amount: number): string {
 function contrastForeground(bgHsl: string): string {
   const { h, s, l } = parseHsl(bgHsl);
   const [r, g, b] = hslToRgb(h, s, l);
-  // Choose text color by the perceptual luminance midpoint (0.5): light
-  // backgrounds get dark text, dark backgrounds get white text. The previous
-  // `isDarkTheme` cutoff of 0.2 was tuned for picking page backgrounds and
-  // left saturated mid-tones (e.g. a vivid green at luminance ~0.34) with
-  // unreadable black text.
+  // Luminance midpoint 0.5 (not isDarkTheme's 0.2) so saturated mid-tones get readable text.
   return getLuminance(r, g, b) > 0.5 ? "222.2 84% 4.9%" : "0 0% 100%";
 }
 
-/**
- * Composite a translucent `overlay` color (at `alpha`) over an opaque `base`,
- * returning the resulting HSL string. Equivalent to a `bg-<overlay>/<alpha>`
- * layer painted on top of an opaque `base` background — used to reproduce the
- * old hardcoded chrome overlays exactly (black/30, black/40, white/10).
- */
+/** Composite a translucent `overlay` at `alpha` over an opaque `base` (like `bg-black/30`). */
 function overlayHsl(baseHsl: string, overlayHslStr: string, alpha: number): string {
   const b = parseHsl(baseHsl);
   const o = parseHsl(overlayHslStr);
@@ -164,8 +142,6 @@ function overlayHsl(baseHsl: string, overlayHslStr: string, alpha: number): stri
   const { h, s, l } = rgbToHsl(r, g, bl);
   return formatHsl(h, s, l);
 }
-
-// ─── Auto-Derive Full Token Set from Core Colors ──────────────────────
 
 /**
  * Derive all Tailwind theme tokens from 3 core colors. The Tailwind
@@ -183,7 +159,6 @@ export function deriveTokensFromCore(
   const dark = isDarkTheme(background);
   const primaryParsed = parseHsl(primary);
 
-  // Surface colors derived from background
   const card = dark ? lighten(background, 2) : background;
   const popover = dark ? lighten(background, 2) : background;
   const secondarySurface = dark ? lighten(background, 8) : darken(background, 4);
@@ -193,42 +168,26 @@ export function deriveTokensFromCore(
     : formatHsl(primaryParsed.h, primaryParsed.s * 0.5, 82);
   const input = border;
 
-  // Muted foreground: a dimmer version of the main text color. Scale the
-  // saturation down proportionally (rather than subtracting a flat amount,
-  // which can clamp low-saturation text to a dead grey) so it keeps the
-  // theme's hue and never reads as a neutral grey.
+  // Scale saturation proportionally so muted text keeps the theme's hue.
   const fg = parseHsl(text);
   const mutedFg = dark
     ? formatHsl(fg.h, Math.max(fg.s * 0.7, 12), Math.max(fg.l - 30, 40))
     : formatHsl(fg.h, Math.max(fg.s * 0.7, 18), Math.min(fg.l + 35, 55));
 
-  // Primary/accent foregrounds: auto-contrast
   const primaryFg = contrastForeground(primary);
 
-  // Destructive: standard red
   const destructive = dark ? "0 72% 51%" : "0 84.2% 60.2%";
   const destructiveFg = dark ? "0 0% 95%" : "210 40% 98%";
 
-  // Success: armada keeps a fixed green pair.
   const success = dark ? "142 60% 35%" : "142 72% 29%";
   const successFg = "138 60% 94%";
 
-  // Second neon: a phosphor-cyan counter-accent (the virtual sea's wake),
-  // fixed so it stays cold against any warm primary.
+  // Phosphor-cyan counter-accent, fixed so it stays cold against warm primaries.
   const accent2 = dark ? "180 90% 55%" : "190 85% 40%";
 
-  // Chrome: recessed framing planes (top bar, rails, sidebars, roster, call
-  // bar). Replaces the old hardcoded overlays.
-  //
-  // DARK: reproduce the original look *exactly* — the old chrome was an opaque
-  // background with a translucent black overlay (`bg-black/30`, rail `/40`) and
-  // a white hairline (`bg-white/10`). Compositing those over the background is
-  // pixel-identical to what shipped, so dark is unchanged (it darkens AND
-  // slightly desaturates, which the previous hue-preserving darken did not).
-  //
-  // LIGHT: a black overlay turns a near-white page into muddy grey, so instead
-  // darken the background while keeping/boosting the theme hue — a recessed,
-  // tinted plane with enough drop to separate from the page.
+  // Chrome planes (top bar, rails, sidebars). Dark: composite black/30, /40 and
+  // white/10 over the background (pixel-identical to the original look).
+  // Light: a black overlay looks muddy, so darken with a boosted theme hue.
   let chrome: string;
   let chromeDeep: string;
   let chromeDivider: string;

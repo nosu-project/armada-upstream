@@ -69,13 +69,7 @@ import { buildThemeVarStyle } from "@/themes";
 import type { CSSProperties } from "react";
 import type { ThemeBackground } from "@/lib/themeEvent";
 
-/**
- * Both editors are reachable from exactly one profile in the world — the
- * viewer's own — and only behind a click. Imported statically they rode along
- * with every profile anyone opened: the whole WYSIWYG profile editor and the
- * theme builder's Blossom upload path, fetched and parsed before the first
- * paint of a screen that is usually somebody else's.
- */
+/** Lazy: only reachable from the viewer's own profile, behind a click. */
 const ProfileSettings = lazy(
   lazyWithReload(() =>
     import("@/components/ProfileSettings").then((m) => ({ default: m.ProfileSettings })),
@@ -90,42 +84,19 @@ const ProfileThemeEditor = lazy(
 );
 
 /**
- * A person's full profile — `/<npub|nprofile|name@domain>`, opened by
- * `UserPage`. The Discord-style view of everything they publish about
- * themselves: kind-0 metadata (bio, custom fields, website, lightning
- * address), NIP-38 status, follow counts, NIP-58 badges, and — for the viewer
- * — shared communities and shared followers. No content feed; that stays on
- * Ditto.
+ * A person's full profile, opened by `UserPage`: kind-0 metadata, NIP-38
+ * status, follow counts, NIP-58 badges, shared communities/followers.
  *
- * Presented as a dialog, but a ROUTED one: it keeps a real URL (the bare
- * NIP-19 path every Nostr client shares), while closing is a step back through
- * history rather than a destination this has to guess at. That's what the
- * close button is — `onClose` is the caller's history step — and why there's
- * no Back button of its own.
- *
- * Deliberately NOT a Radix `Dialog`, though it reads as one. A Radix dialog
- * portals to `document.body` and, in modal mode, drops pointer events on
- * everything else — which would put this over the community rail and kill it,
- * when the rail is exactly what should stay live: it is how you leave. So this
- * is an overlay INSIDE the main pane, filling it (bar a margin from `md`), positioned
- * against the `relative` `<main>` that renders it. What Radix would have given
- * for free and is hand-wired below: Escape to close, and the backdrop as a
- * dismiss target. Focus is deliberately not trapped — nothing outside is
- * inert, so there is nothing to trap it from.
- *
- * The view inside wears the owner's Ditto profile theme (kind 16767): colors
- * as scoped CSS vars, body/title fonts, and the background image — the same
- * takeover Ditto's profile does globally, but scoped to this container, so the
- * app around it keeps its own theme and nothing needs restoring on unmount.
+ * A routed dialog: closing is a history step (`onClose`). Deliberately NOT a
+ * Radix `Dialog`, whose modal mode would kill the community rail; it's an
+ * overlay inside the `relative` `<main>`, with Escape and backdrop dismissal
+ * hand-wired. Wears the owner's Ditto profile theme (kind 16767), scoped here.
  */
 export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      // Anything stacked ON this owns Escape first — the self-profile's Edit
-      // profile / Edit theme dialogs, and the moderation dropdown. They portal
-      // to the body, so they're outside this subtree and would otherwise be
-      // dismissed alongside the profile they were opened from.
+      // Stacked dialogs/menus portal to body and own Escape first.
       if (document.querySelector("[data-radix-dialog-overlay], [data-radix-menu-content]")) return;
       onClose();
     };
@@ -135,8 +106,6 @@ export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: ()
 
   return (
     <>
-      {/* The backdrop reaches the edges of the pane and no further, so the
-          rail beside it stays lit and clickable. */}
       <div
         aria-hidden
         className="absolute inset-0 z-20 bg-black/50 backdrop-blur-sm animate-in fade-in-0"
@@ -146,11 +115,7 @@ export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: ()
         role="dialog"
         aria-modal="false"
         aria-label="Profile"
-        // Absolutely positioned, so the pane's `safe-area-top` padding doesn't
-        // reach it: the top inset is added here or the panel runs under the
-        // status bar. On a phone it IS the pane — a margin there only frames
-        // a narrower profile — and from `md` it floats, fill-only (a border
-        // would lose its cut corners to the clip).
+        // Absolute, so the pane's safe-area padding doesn't reach it; add the top inset here.
         className="absolute inset-0 pt-[var(--safe-area-inset-top,env(safe-area-inset-top,0px))] md:pt-0 md:inset-4 md:top-[calc(1rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))] md:clip-corner-lg z-30 overflow-hidden bg-background animate-in fade-in-0 zoom-in-95"
       >
         <ProfileView pubkey={pubkey} onClose={onClose} />
@@ -174,10 +139,7 @@ function parseProfileFields(content: string | undefined): [string, string][] {
   }
 }
 
-/**
- * `src` is the background's URL as the media policy resolved it (proxied for
- * a stranger's host), not `bg.url` — a CSS `url()` is a fetch like any other.
- */
+/** `src` is the media-policy-resolved URL, not `bg.url`: CSS `url()` is a fetch too. */
 function backgroundStyle(bg: ThemeBackground, src: string): CSSProperties {
   return bg.mode === "tile"
     ? { backgroundImage: `url("${src}")`, backgroundRepeat: "repeat", backgroundSize: "auto" }
@@ -192,17 +154,8 @@ function backgroundStyle(bg: ThemeBackground, src: string): CSSProperties {
 const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact" });
 
 /**
- * False for the first render, true from the frame after it paints.
- *
- * A commit is all-or-nothing, so the panel can't appear until React has
- * rendered everything in it. This splits that in two: the identity everyone
- * came to see (avatar, name, theme) commits on its own, and the rest — which
- * is mostly empty boxes waiting on relays anyway — arrives a frame later.
- *
- * The QUERIES deliberately don't move with it. They're declared at the top of
- * `ProfileView` and stay there, because gating a hook is gating the fetch it
- * starts, and delaying those by a frame would trade a faster paint for slower
- * data — the opposite of the problem.
+ * False for the first render, true from the frame after it paints, so the
+ * identity commits before the rest. Queries are NOT gated, so data isn't delayed.
  */
 function useAfterPaint(): boolean {
   const [painted, setPainted] = useState(false);
@@ -219,7 +172,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const { config } = useAppContext();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  // kind-0 is whatever its author typed.
+  // kind-0 is author-controlled.
   const banner = sanitizeImageSrc(metadata?.banner);
   const theme = useProfileTheme(pubkey).data?.theme;
   const nsite = useNsite(pubkey).data;
@@ -245,14 +198,12 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const { reopen } = useClosedDms();
   const { start } = useStartedDms();
 
-  // Counts: following from their own kind 3, followers from the NIP-85 stats
-  // provider (the same source Ditto reads).
+  // Followers come from the NIP-85 stats provider (Ditto's source).
   const followingQuery = useFollowingOf(pubkey);
   const followerQuery = useFollowerCount(pubkey);
   const followingData = followingQuery.data;
   const followerCount = followerQuery.data;
 
-  // "Followed by people you follow" — viewer-relative, so never for self.
   const { data: viewerFollows } = useFollowList();
   const sharedFollowersQuery = useSharedFollowers(
     user && !isSelf ? pubkey : undefined,
@@ -260,14 +211,9 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   );
   const sharedFollowers = sharedFollowersQuery.data;
 
-  // `isLoading`, not `isPending`: a disabled query is forever "pending" (it has
-  // no data and never will), which would leave a skeleton on screen for a
-  // section that is switched off — self has no shared anything.
+  // `isLoading`, not `isPending`: a disabled query is forever pending.
   const countsLoading = followingQuery.isLoading || followerQuery.isLoading;
-  // One skeleton for the whole sidebar rather than three. Each of these
-  // sections is legitimately empty for most people, so a per-section skeleton
-  // is mostly a placeholder for something that will never arrive — it would
-  // draw three cards and then take them away again.
+  // One skeleton for the sidebar: each section is usually empty.
   const sidebarLoading =
     badgesQuery.isLoading || sharedQuery.isLoading || sharedFollowersQuery.isLoading;
   const sidebarEmpty =
@@ -278,15 +224,11 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
-  // The owner's theme, scoped to this container: color vars + fonts. The
-  // fonts load by URL (fontLoader) and apply as plain inline CSS, so
-  // unmounting simply stops using them.
   const pageStyle = useMemo(() => {
     if (!theme) return undefined;
     const style: Record<string, string> = buildThemeVarStyle(theme.colors);
     const bodyFont = loadThemeFont(theme.font);
-    // The title font falls back to the body font, so a display name inherits
-    // the theme's face rather than the default (matching Ditto).
+    // Title font falls back to the body font (matching Ditto).
     const titleFont = loadThemeFont(theme.titleFont) ?? bodyFont;
     if (bodyFont) style.fontFamily = bodyFont;
     if (titleFont) style["--title-font-family"] = titleFont;
@@ -294,20 +236,13 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   }, [theme]);
 
   const background = theme?.background;
-  // A kind-16767 theme is whatever its author published; its background is
-  // loaded under the same media policy as their avatar.
+  // Theme background loads under the media policy.
   const backgroundSrc = useMediaSrc(background?.url);
-  // Over a background image the surfaces go translucent so it shows through.
   const card = background
     ? "bg-card/85 supports-[backdrop-filter]:bg-card/70 backdrop-blur-md"
     : "bg-card";
 
-  // Opening the conversation from here is the same commitment picking someone
-  // in the compose pane is — out of the request tier, out of the closed pile —
-  // plus keeping the row afterwards, so a person messaged from their profile
-  // is still in the DM list tomorrow. This is where the public chat link used
-  // to make that commitment, back when `/<npub>` redirected signed-in viewers
-  // straight into the thread.
+  // Messaging from here promotes the peer out of the request tier and keeps the row.
   const openDm = () => {
     if (!npub) return;
     reopen(pubkey);
@@ -333,8 +268,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
         <div aria-hidden className="absolute inset-0" style={backgroundStyle(background, backgroundSrc)} />
       )}
 
-      {/* Closing IS the back step — outside the scroller so it stays put, and
-          on its own scrim so it reads over the banner it floats on. */}
       <Button
         size="icon"
         variant="ghost"
@@ -346,17 +279,10 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       </Button>
 
       <div className="relative h-full overflow-y-auto">
-        {/* The banner runs edge to edge — the header is the page's top, not a
-            card sitting in it. */}
         <div className="h-36 md:h-52 bg-secondary">
           <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" decoding="async" />
         </div>
 
-        {/* Identity: avatar, actions, name, bio. Unboxed; over a background
-            image it gets a full-width band of the translucent card surface so
-            the text stays legible. The content, unlike the panel, is capped
-            and centred: a bio stretched across a wide monitor is a line
-            length nobody reads. */}
         <section className={background ? card : undefined}>
             <div className="mx-auto w-full max-w-4xl px-4 pb-5 md:px-8 md:pb-6">
               <div className="flex items-end justify-between gap-2 flex-wrap">
@@ -369,9 +295,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                   </Avatar>
                 </div>
 
-                {/* Action row, right of the avatar. Wraps rather than running
-                    off a narrow screen, where Message + Follow + the off-ramps
-                    are wider than the card. */}
                 <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 pt-2">
                   {isSelf ? (
                     <>
@@ -402,9 +325,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                           Message
                         </Button>
                       )}
-                      {/* Follow toggles in place (Ditto-style): Follow when
-                          not following, Following (click to unfollow) when
-                          already there. */}
                       {user && (
                         <Button
                           size="sm"
@@ -447,7 +367,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                     </>
                   )}
 
-                  {/* Off-ramps: this person on ditto.pub, and their nsite. */}
                   {dittoHref && (
                     <Button
                       size="icon"
@@ -481,7 +400,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 </div>
               </div>
 
-              {/* Name + identity lines. */}
               <div className="mt-2 flex items-center gap-2 min-w-0">
                 <h1
                   className="text-xl md:text-2xl font-bold truncate"
@@ -513,10 +431,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 </button>
               )}
 
-              {/* Follow counts. The lists themselves live on Ditto's profile
-                  (its followers/following views), so both link out there.
-                  Nearly everyone has these, so unlike the sidebar they're
-                  worth holding space for while they resolve. */}
               {countsLoading && !followingData && followerCount == null && (
                 <div className="mt-2 flex items-center gap-4">
                   <Skeleton className="h-4 w-24" />
@@ -540,7 +454,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 </div>
               )}
 
-              {/* NIP-38 status + now playing. */}
               {status?.content && (
                 <div className="mt-2 text-sm text-muted-foreground" title={status.content}>
                   {status.link ? (
@@ -567,7 +480,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
                 </div>
               )}
 
-              {/* Bio — full, no clamp. */}
               {metadata?.about && (
                 <p className="mt-3 text-sm whitespace-pre-wrap break-words">{metadata.about}</p>
               )}
@@ -576,11 +488,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
 
         <div className="mx-auto w-full max-w-4xl px-3 pb-6 md:px-8 md:pb-8">
 
-          {/* Below the header: fields on the left, badges/communities beside.
-              Held back one frame so the identity above commits — and paints —
-              without waiting for any of this to render. It is all below the
-              fold on a phone and mostly empty until the relays answer, so a
-              frame costs nothing here and buys the panel its first paint. */}
+          {/* Held back one frame so the identity above paints first. */}
           {painted && (
           <div className="mt-3 md:mt-4 grid gap-3 md:gap-4 lg:grid-cols-[1fr_18rem] items-start">
             <div className="space-y-3 md:space-y-4 min-w-0">
@@ -617,10 +525,6 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
             </div>
 
             <div className="space-y-3 md:space-y-4 min-w-0">
-              {/* One card standing in for whichever of badges, shared
-                  followers and shared communities turn out to exist — drawn
-                  only while nothing has arrived yet, so it gives way to real
-                  content rather than stacking above it. */}
               {sidebarLoading && sidebarEmpty && (
                 <section className={cn("clip-corner-lg p-4", card)}>
                   <Skeleton className="h-3 w-28" />
@@ -668,20 +572,13 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
         </div>
       </div>
 
-      {/* Both editors are mounted only once opened, and both are lazy. They
-          are reachable from ONE profile in the world — the viewer's own,
-          behind a click — but statically imported they rode along with every
-          profile anyone opened, which put the entire WYSIWYG profile editor
-          and the theme builder's upload path in front of the first paint. */}
+      {/* Mounted only once opened, and lazy. */}
       {isSelf && themeEditorOpen && (
         <Suspense fallback={null}>
           <ProfileThemeEditor open onOpenChange={setThemeEditorOpen} current={theme} />
         </Suspense>
       )}
       {isSelf && (
-        /* Edit the profile right here — the same WYSIWYG editor Settings
-           hosts, in a dialog, so nothing navigates away from the page it
-           is editing. */
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
           <ChromeDialogContent
             title="Edit profile"
@@ -700,19 +597,14 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   );
 }
 
-// ── Custom field rendering ───────────────────────────────────────────────────
-
 const IMAGE_EXT = /\.(gif|png|jpe?g|webp|avif)(\?|#|$)/i;
 const AUDIO_EXT = /\.(mp3|ogg|oga|wav|m4a|opus|flac|aac)(\?|#|$)/i;
 const VIDEO_EXT = /\.(mp4|webm|mov|m4v)(\?|#|$)/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * A custom field's value, rendered by what it IS (Ditto's profile-fields
- * treatment): images/gifs inline, audio as a player, video as a player,
- * emails as mailto, URLs as favicon links, anything else as text. Media only
- * embeds from public http(s) origins — a local-network URL in event data must
- * never become an <img>/<audio> fetch (see isLocalNetworkUrl).
+ * Custom field value rendered by type (image, audio, video, mailto, link, text).
+ * Media only embeds from public http(s) origins (see isLocalNetworkUrl).
  */
 function FieldValue({ value }: { value: string }) {
   const url = sanitizeUrl(value);
@@ -760,7 +652,6 @@ function FieldValue({ value }: { value: string }) {
   return <p className="mt-0.5 text-sm break-words">{value}</p>;
 }
 
-/** The site's favicon beside a link, vanishing (not breaking) on error. */
 function Favicon({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
   const src = faviconUrl(url);
@@ -777,17 +668,10 @@ function Favicon({ url }: { url: string }) {
   );
 }
 
-// ── Sidebar pieces ───────────────────────────────────────────────────────────
-
-/**
- * One badge, Ditto-showcase style: the artwork as a rounded square with the
- * name beneath, linking out to the badge's page on ditto.pub.
- */
 function BadgeTile({ badge }: { badge: ProfileBadge }) {
   const naddr = tryNaddrEncode({ kind: 30009, pubkey: badge.issuer, identifier: badge.identifier });
   const href = naddr ? dittoNip19Url(naddr) : undefined;
-  // Badge art is usually a content-addressed Blossom blob the issuer uploaded,
-  // so it is walked across the viewer's servers before the placeholder shows.
+  // Badge art is often a Blossom blob, so walk the viewer's servers first.
   const placeholder = (
     <div className="size-14 mx-auto rounded-lg border border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent flex items-center justify-center">
       <Award className="size-7 text-primary/30" />
@@ -816,10 +700,7 @@ function BadgeTile({ badge }: { badge: ProfileBadge }) {
   );
 }
 
-/**
- * Shared followers ("followed by people you follow"), best-ranked first per
- * the NIP-85 stats provider. Shows the top few; View all expands in place.
- */
+/** Shared followers, ranked by NIP-85; View all expands in place. */
 function SharedFollowersCard({
   shared,
   dittoHref,
@@ -864,7 +745,6 @@ function SharedFollowersCard({
   );
 }
 
-/** A compact person row linking to their profile view. */
 function PersonRow({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -873,8 +753,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
   const openProfile = useOpenProfile();
   return (
     <li>
-      {/* A button rather than a <Link>: opening this keeps the page behind the
-          profile mounted, which is a navigation STATE the href can't carry. */}
+      {/* A button, not <Link>: keeping the page behind mounted is navigation STATE. */}
       <button
         type="button"
         onClick={() => openProfile(npub ?? pubkey)}
@@ -892,11 +771,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
   );
 }
 
-/**
- * One shared community, wearing its real icon: the encrypted metadata icon
- * from the community's control fold (the same source the rail's icons use),
- * with the folded name preferred over the join-time preview name.
- */
+/** Shared community with its control-fold icon and name. */
 function SharedCommunityRow({ entry }: { entry: SharedCommunity }) {
   const community = useCommunity(entry.idHex);
   const { data: folded } = useControlFold(community, false);

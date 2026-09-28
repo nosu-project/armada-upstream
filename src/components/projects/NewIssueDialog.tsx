@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 
 import { labelSuggestions, type ProjectRepo, type ProjectWorkItem } from "@/components/projects/projectData";
 
-/** Open a new issue against one of the project's repositories. */
 export function NewIssueDialog({ repos, items, onCreate }: {
   repos: ProjectRepo[];
   /** Existing work items, mined for the repository's own label vocabulary. */
@@ -35,7 +34,6 @@ export function NewIssueDialog({ repos, items, onCreate }: {
   const { attach, isUploading, mediaFor } = useGitAttachmentUploads(appendUrl);
 
   const selected = repoCoord ?? repos[0]?.coord;
-  // Suggestions follow the chosen repository: label vocabulary is per project.
   const suggestions = useMemo(() => labelSuggestions(items, selected), [items, selected]);
   const toggleLabel = useCallback((label: string) => {
     setLabels((current) => current.includes(label)
@@ -58,7 +56,7 @@ export function NewIssueDialog({ repos, items, onCreate }: {
     if (!selected || !subject.trim() || sending || isUploading) return;
     setSending(true);
     const trimmedBody = body.trim();
-    // A label typed but not yet committed still counts as intent.
+    // A typed but uncommitted label still counts.
     const finalLabels = normalizeGitLabels([...labels, labelDraft]);
     onCreate(selected, subject.trim(), trimmedBody, mediaFor(trimmedBody), finalLabels)
       .then(() => {
@@ -86,7 +84,6 @@ export function NewIssueDialog({ repos, items, onCreate }: {
       <DialogContent
         className="sm:max-w-md"
         onEscapeKeyDown={(event) => {
-          // While the label field is open, Escape dismisses it, not the dialog.
           if (!addingLabel) return;
           event.preventDefault();
           cancelLabelDraft();
@@ -125,8 +122,6 @@ export function NewIssueDialog({ repos, items, onCreate }: {
             className="resize-none text-sm"
           />
 
-          {/* Labels. Chips wrap and the block scrolls, so a long vocabulary
-              never widens the dialog or pushes the actions off-screen. */}
           <div className="min-w-0 space-y-1.5">
             <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
               {suggestions.map((label) => {
@@ -149,7 +144,6 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   </button>
                 );
               })}
-              {/* Labels added by hand that aren't in the suggestion list. */}
               {labels.filter((label) => !suggestions.includes(label)).map((label) => (
                 <button
                   key={label}
@@ -164,8 +158,6 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                 </button>
               ))}
 
-              {/* Typing a new label is occasional, so it borrows a chip's
-                  space only while in use rather than holding a field open. */}
               {addingLabel ? (
                 <input
                   autoFocus
@@ -177,15 +169,13 @@ export function NewIssueDialog({ repos, items, onCreate }: {
                   disabled={sending}
                   onChange={(e) => setLabelDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    // Escape is handled by the dialog's own onEscapeKeyDown:
-                    // Radix listens for it at the document, above this field.
+                    // Escape is handled by the dialog's onEscapeKeyDown (Radix listens at the document).
                     if (e.key === "Enter" || e.key === ",") {
                       e.preventDefault();
                       if (labelDraft.trim()) commitLabelDraft();
                       else cancelLabelDraft();
                       return;
                     }
-                    // Erasing past the start of an empty field dismisses it.
                     if ((e.key === "Backspace" || e.key === "Delete") && !labelDraft) {
                       e.preventDefault();
                       cancelLabelDraft();

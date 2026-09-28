@@ -5,16 +5,11 @@ import { createPortal } from "react-dom";
 import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useSwipeToDismiss } from "@/hooks/useSwipeToDismiss";
 
-/** Fullscreen viewer for a single already-decrypted image URL.
- *
- * Escape / click closes; on touch, drag the image vertically to dismiss (see
- * `useSwipeToDismiss`) — the same gesture as the chat `Lightbox`, so
- * banner/avatar previews behave identically. */
+/** Fullscreen viewer for a decrypted image URL; swipe-to-dismiss like the chat `Lightbox`. */
 export function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   const { containerRef, handlers } = useSwipeToDismiss(onClose);
 
-  // System back (Android gesture/button, or the browser's) closes the
-  // lightbox instead of navigating the underlying screen.
+  // System back closes the lightbox instead of navigating.
   useOverlayBack(() => {
     onClose();
     return true;
@@ -37,10 +32,8 @@ export function ImageLightbox({ src, onClose }: { src: string; onClose: () => vo
       role="dialog"
       aria-modal="true"
     >
-      {/* Backdrop — fades in place, never translates. */}
       <div className="absolute inset-0 bg-black/90" />
 
-      {/* Content layer — translates together during swipe-to-dismiss. */}
       <div data-lightbox-content className="absolute inset-0 flex items-center justify-center">
         <button
           type="button"

@@ -14,8 +14,7 @@ import { ProfileOverlayContext } from "@/lib/profileOverlay";
 import { SettingsOverlayContext } from "@/lib/settingsOverlay";
 import { lazyWithReload } from "@/lib/chunkReload";
 
-// Loaded on first use like a route chunk: most sessions never open a profile,
-// and this pulls in the theme/badge/shared-community machinery behind it.
+// Lazy: most sessions never open a profile.
 const ProfileDialog = lazy(
   lazyWithReload(() =>
     import("@/components/profile/ProfileDialog").then((m) => ({ default: m.ProfileDialog })),
@@ -26,17 +25,8 @@ const SettingsPage = lazy(
 );
 
 /**
- * What stands in for the profile between the click and the panel: the
- * overlay's own backdrop with a spinner in it, in the same pane and at the
- * same z as the real thing, so the panel lands ON this rather than after a
- * flash of un-dimmed chat.
- *
- * It covers two different waits, which is why it isn't the lazy chunk's
- * Suspense fallback alone. First the navigation, which is a transition and so
- * commits only once the profile is ready to be shown — that stretch is the
- * whole reason `opening` is set urgently from the click. Then, behind it, the
- * chunk fetch, for a click that beat the idle warm or a cold cache after a
- * deploy.
+ * Profile overlay backdrop + spinner shown between click and panel. Covers the
+ * navigation transition (hence `opening` set urgently) as well as the chunk fetch.
  */
 function ProfileOverlayFallback({ onDismiss }: { onDismiss?: () => void }) {
   return (
@@ -49,14 +39,7 @@ function ProfileOverlayFallback({ onDismiss }: { onDismiss?: () => void }) {
   );
 }
 
-/**
- * Keep an in-session route chunk wait inside the main pane. The route-level
- * Suspense boundary used to sit above the whole route tree, so the first visit
- * to a lazy page replaced MainLayout — including the persistent server rail and
- * call/app providers — with the full-screen boot splash. That looked exactly
- * like a page reload. This fallback occupies only the Outlet's box while the
- * shell stays mounted around it.
- */
+/** Route chunk fallback inside the main pane, so the shell (rail, call providers) stays mounted. */
 function RoutePaneFallback() {
   return (
     <div
@@ -70,15 +53,9 @@ function RoutePaneFallback() {
 }
 
 /**
- * The box Settings draws in over the main pane (`lib/settingsOverlay.ts`).
- *
- * The page underneath stays mounted but is made `inert` by the layout, so
- * this is modal in fact and says so. On open it takes focus — otherwise focus
- * stays on whatever opened it (the quick switcher's input is gone, so the
- * body; Safari never focuses a clicked button at all), and the next keystroke
- * would go to the page under it. On close focus goes back where it was, if
- * that is still somewhere it can be. Escape closes it, after anything stacked
- * on it (its own dialogs and menus portal to the body) has had the key.
+ * Settings over the main pane (`lib/settingsOverlay.ts`); the page below is
+ * `inert`. Takes focus on open (Safari never focuses clicked buttons),
+ * restores it on close, and handles Escape after stacked dialogs.
  */
 function SettingsOverlayPanel({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -124,71 +101,40 @@ function SettingsOverlayPanel({ onClose, children }: { onClose: () => void; chil
 }
 
 /**
- * Application frame. Desktop renders the multi-pane Discord layout (server
- * rail + the routed page's own sidebars). On mobile each route is a single
- * full-screen drill-down level (servers/channels → chat → members), so the
- * shared frame here is intentionally thin — the panes manage their own
- * responsive visibility.
- *
- * The CallProvider and AppsProvider live here (the layout never unmounts on
- * navigation) so a voice call and an in-chat app persist across channel/server
- * changes; they wrap the routed content and dock their UI below it.
+ * App frame: multi-pane on desktop, full-screen drill-down on mobile.
+ * CallProvider and AppsProvider live here so calls and apps persist across navigation.
  */
 export function MainLayout() {
-  // Concord rides auth-gated kind-1059 streams: authenticate the connection
-  // as every live community's derived stream keys so its planes are readable.
+  // Authenticate as every live community's stream keys so auth-gated kind-1059 planes are readable.
   useRegisterAllStreamKeys();
-  // Android: keep the Direct Share suggestions (share-sheet conversation
-  // shortcuts) in step with the user's pinned + recent DMs. No-op elsewhere.
+  // Android Direct Share shortcuts. No-op elsewhere.
   useShareShortcuts();
   const navigate = useNavigate();
-  // `pubkey` is set only while a profile draws over a page that is still
-  // mounted; a `/<npub>` reached cold routes to UserPage instead and draws its
-  // own. `opening` is the click that hasn't become that navigation yet.
+  // `pubkey` is set only while a profile overlays a mounted page; `opening` is
+  // the click that hasn't navigated yet.
   const { pubkey: overlayPubkey, opening } = useContext(ProfileOverlayContext);
-  // Settings over the page it was opened from (`lib/settingsOverlay.ts`).
   const settings = useContext(SettingsOverlayContext);
   return (
     <CallProvider>
-      {/* DM call signaling (ring in/out, offer/answer rumors) sits inside
-          CallProvider so it can join/leave the room, and inside the router so
-          the Android Answer deep link (`?call=`) reaches it. */}
+      {/* Inside CallProvider to join/leave, and inside the router for the Android `?call=` deep link. */}
       <DmCallProvider>
       <AppsProvider>
-        {/* The ONE persistent server rail, owned here so navigating between
-            sections never unmounts and rebuilds it — its per-item hook fan-out
-            and the tap target — on every switch. On the desktop side-by-side
-            layout it renders in place as a sibling of the routed page
-            (`AppsProvider` passes children straight through, so this lands as
-            the first flex child of CallProvider's row). On the touch
-            drill-down it renders through a portal into a shared container
-            whose DOM each page's `<ServerRail />` slot adopts inside its
-            SwipeReveal underlay — see the note above `getRailPortalNode`. */}
+        {/* The ONE persistent rail, so navigation never rebuilds it. On touch it
+            portals into each page's SwipeReveal slot — see `getRailPortalNode`. */}
         <ServerRail variant="shell" />
-        {/* The main pane: everything beside the rail, as ONE positioned box.
-            It exists so the profile overlay has something to fill that stops
-            at the rail — the rail stays lit and clickable, because it is how
-            you leave. Desktop puts the rail outside this box; touch portals
-            the rail INTO the page, where a full-pane overlay is what's wanted
-            anyway. Always rendered, overlay or not, so opening one doesn't
-            reflow the page beneath it. */}
+        {/* One positioned box so the profile overlay stops at the rail. Always rendered to avoid reflow. */}
         <div className="relative flex min-w-0 flex-1">
-          {/* Inert while Settings covers it: still mounted, but out of the tab
-              order and the accessibility tree, and deaf to the keyboard. */}
           <div className="contents" inert={settings.open || undefined}>
             <Suspense fallback={<RoutePaneFallback />}>
               <Outlet />
             </Suspense>
           </div>
-          {/* Nothing to go back to yet — the navigation this is waiting on is
-              the one that would make a history step meaningful. */}
           {opening && !overlayPubkey && <ProfileOverlayFallback />}
           {overlayPubkey && (
             <Suspense fallback={<ProfileOverlayFallback onDismiss={() => navigate(-1)} />}>
               <ProfileDialog
                 pubkey={overlayPubkey}
-                // Closing is a history step, and the page underneath is the
-                // entry it steps back to — it never unmounted.
+                // The page underneath is the history entry we step back to; it never unmounted.
                 onClose={() => navigate(-1)}
               />
             </Suspense>

@@ -4,6 +4,29 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.63.0] - 2026-09-28
+
+Browser notifications while Armada is closed now go through a new push service
+that works with every way of signing in, including signer extensions and remote
+signers, and Armada running inside Tenna gets background notifications too.
+Long community channels scroll back faster, the desktop Flatpak offers a web
+update restart as a toast, and the Linux .deb installs cleanly on minimal
+systems.
+
+### Added
+- Background notifications when Armada runs inside Tenna
+
+### Changed
+- Browser notifications while Armada is closed use a new push service and work with every login type
+- The Flatpak app offers to restart for a web update with an in-app toast, checking once at startup
+- Scrolling back through long community channels loads older messages faster, and new messages no longer re-read the whole history
+- Typing indicators in direct messages use fewer relay connections
+- The landing page animates more smoothly and pauses animations that are off screen
+- Upgrading directly from versions older than 0.50.0 is no longer supported
+
+### Fixed
+- The Linux .deb declares the audio and graphics libraries it needs
+
 ## [0.62.3] - 2026-09-28
 
 A security and reliability release. The Flatpak desktop app verifies its web
