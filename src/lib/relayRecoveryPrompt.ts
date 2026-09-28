@@ -28,3 +28,15 @@ export function markRelayRecoveryPromptShown(pubkey: string): void {
     // Private mode / storage disabled — the prompt simply reappears next launch.
   }
 }
+
+/**
+ * Undo `markRelayRecoveryPromptShown`. Backing out of the prompt signs the
+ * account out, and the same key signing in again should be asked again.
+ */
+export function clearRelayRecoveryPromptShown(pubkey: string): void {
+  try {
+    localStorage.removeItem(key(pubkey));
+  } catch {
+    // Storage disabled — nothing was persisted to clear.
+  }
+}

@@ -7,8 +7,9 @@ import { BrandMark } from "@/components/brand/BrandMark";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RELAY_DICTIONARY } from "@/concord/lib/stockRelays";
+import { isDesktop } from "@/lib/desktop";
 import { ANDROID_STORES } from "@/lib/downloads";
-import { relayToHttpUrl } from "@/lib/platform";
+import { isNativeRuntime, relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
@@ -34,6 +35,12 @@ const LANDING_RELAYS: string[] = [3, 1, 4, 2].map((i) => RELAY_DICTIONARY[i]);
 /** The closer's devices hold one community rather than cycling like the pitch's. */
 const CLOSER_SHOT = ["raid-crew"];
 const CLOSER_LABEL = "a gaming community's #general, with reactions, an inline reply and a thread";
+
+/**
+ * Inside the Android/iOS app or the desktop shell the reader has already
+ * downloaded Armada, so the top-right "get armada" link is hidden there.
+ */
+const INSTALLED_APP = isNativeRuntime() || isDesktop();
 
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
@@ -81,15 +88,17 @@ export const LandingPage = memo(function LandingPage({
             {@link BrandMark}; no frame, so it's a link rather than a CTA
             competing with Join. The cyan disk-download glyph — same `$`-prompt
             cyan as the sign-off — carries the accent instead of a border. */}
-        <div className="absolute right-3 top-3 z-20 safe-area-top">
-          <Link
-            to="/downloads"
-            className="inline-flex h-10 items-center gap-2 px-3 font-mono text-sm lowercase tracking-tight text-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <HardDriveDownload className="size-4 shrink-0 text-[hsl(var(--accent2,180_90%_55%))]" />
-            get armada
-          </Link>
-        </div>
+        {!INSTALLED_APP && (
+          <div className="absolute right-3 top-3 z-20 safe-area-top">
+            <Link
+              to="/downloads"
+              className="inline-flex h-10 items-center gap-2 px-3 font-mono text-sm lowercase tracking-tight text-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <HardDriveDownload className="size-4 shrink-0 text-[hsl(var(--accent2,180_90%_55%))]" />
+              get armada
+            </Link>
+          </div>
+        )}
 
         {/* ── Hero ────────────────────────────────────────────────────── */}
         <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-10 px-6 py-16 safe-area-top">

@@ -9,9 +9,11 @@ import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useLoginActions } from "@/hooks/useLoginActions";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
 import {
+  clearRelayRecoveryPromptShown,
   markRelayRecoveryPromptShown,
   relayRecoveryPromptShown,
 } from "@/lib/relayRecoveryPrompt";
@@ -107,8 +109,13 @@ export function LoginSetup() {
   // otherwise a queued step paints over profile creation at z-[260].
   const onboarding = useOnboardingActive();
 
+  const { logout } = useLoginActions();
   const [queue, setQueue] = useState<StepId[]>([]);
   const [completed, setCompleted] = useState(0);
+  const [leaving, setLeaving] = useState(false);
+  // Backing out signs the account out, and logout wipes this device's copy of
+  // its data — so the arrow and Escape ask first rather than doing it.
+  const [confirmingBack, setConfirmingBack] = useState(false);
   const ownsRelayList = user
     ? !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user.pubkey
     : false;
@@ -215,8 +222,26 @@ export function LoginSetup() {
 
   const total = completed + queue.length;
 
+  // The recovery step is the first thing a login lands on, so going back from
+  // it means changing one's mind about the login: sign that account out. The
+  // marker goes with it, so the same key signing in again is asked again.
+  const backOutOfLogin = step === "relays" && completed === 0 && user && !leaving
+    ? () => {
+      setLeaving(true);
+      clearRelayRecoveryPromptShown(user.pubkey);
+      void logout().catch(() => setLeaving(false));
+    }
+    : undefined;
+  const requestBack = backOutOfLogin ? () => setConfirmingBack(true) : undefined;
+
   return (
-    <WizardShell index={completed} total={total} stepKey={step} zClassName="z-[260]">
+    <WizardShell
+      index={completed}
+      total={total}
+      stepKey={step}
+      zClassName="z-[260]"
+      onBack={requestBack}
+    >
       {step === "notifications" && (
         <NotificationsStep
           onDone={async (granted) => {
@@ -227,7 +252,15 @@ export function LoginSetup() {
           }}
         />
       )}
-      {step === "relays" && <RelayStep onDone={advance} />}
+      {step === "relays" && (
+        <RelayStep
+          onDone={advance}
+          onBack={requestBack}
+          confirmingBack={confirmingBack && !!backOutOfLogin}
+          onConfirmBack={backOutOfLogin}
+          onCancelBack={() => setConfirmingBack(false)}
+        />
+      )}
       {step === "webpush" && <WebPushStep onDone={advance} />}
       {step === "battery" && <BatteryStep onDone={advance} />}
       {step === "decrypt" && <DecryptStep onDone={advance} />}
@@ -235,7 +268,59 @@ export function LoginSetup() {
   );
 }
 
-function RelayStep({ onDone }: { onDone: () => void }) {
+function RelayStep({
+  onDone,
+  onBack,
+  confirmingBack,
+  onConfirmBack,
+  onCancelBack,
+}: {
+  onDone: () => void;
+  onBack?: () => void;
+  confirmingBack: boolean;
+  onConfirmBack?: () => void;
+  onCancelBack: () => void;
+}) {
+  // The shell binds Escape only to a close, which this step has none of;
+  // Escape here backs out of the login like the arrow does (or, at the
+  // confirmation, steps back from it) — unless it was spent dismissing a
+  // popover first (Radix prevents the default then), belongs to a field being
+  // typed in, or is ending an IME composition.
+  useEffect(() => {
+    if (!onBack) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+      if (!confirmingBack && isEditableTarget(e.target)) return;
+      if (confirmingBack) onCancelBack();
+      else onBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack, confirmingBack, onCancelBack]);
+
+  if (confirmingBack && onConfirmBack) {
+    return (
+      <WizardStepBody
+        glyph={
+          <StepGlyph>
+            <Waypoints className="size-9" />
+          </StepGlyph>
+        }
+        title="sign out?"
+        description="Going back signs this account out of Armada on this device, and removes what this device has stored for it. Your key and anything on your relays are not affected."
+      >
+        <div className="flex flex-col gap-2">
+          <Button variant="destructive" onClick={onConfirmBack}>
+            Sign out
+          </Button>
+          <Button variant="ghost" onClick={onCancelBack}>
+            Stay signed in
+          </Button>
+        </div>
+      </WizardStepBody>
+    );
+  }
+
   return (
     <WizardStepBody
       glyph={
@@ -249,6 +334,12 @@ function RelayStep({ onDone }: { onDone: () => void }) {
       <RelayBootstrapForm onDone={onDone} onSkip={onDone} />
     </WizardStepBody>
   );
+}
+
+/** Whether a key event belongs to a field the user is typing in. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && (target.isContentEditable || /^(input|textarea|select)$/i.test(target.tagName));
 }
 
 /** Circular glyph frame matching the signup wizard's brand marks. */
