@@ -140,6 +140,13 @@ export function useChannelDrag({
       // A plain wrapper div, not a Radix `asChild` Slot, so React's own
       // pointer prop is delivered — the rail's native-listener workaround
       // isn't needed here.
+      //
+      // React bubbles synthetic events through PORTALS along the component
+      // tree, so a press inside a menu the row opened (the channel's context
+      // menu, a roster participant's volume slider) arrives here too, from an
+      // element nowhere near the row in the DOM. Only a press on the row's own
+      // DOM subtree is a pickup.
+      if (!e.currentTarget.contains(e.target as Node)) return;
       if (enabled) drag.begin(idHex)(e.nativeEvent);
     },
     [enabled, drag],

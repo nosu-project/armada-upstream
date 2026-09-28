@@ -4,7 +4,9 @@ import { useState } from "react";
 import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { ToastAction } from "@/components/ui/toast";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCopyNaddrLink } from "@/hooks/useNaddrLink";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { useUserThemes } from "@/hooks/useUserThemes";
@@ -80,6 +82,7 @@ export function ThemeSelector() {
   const { data: userThemes, isLoading: userThemesLoading } = useUserThemes();
   const { user } = useCurrentUser();
   const { mutateAsync: publishEvent, isPending: sharing } = useNostrPublish();
+  const copyLinkFor = useCopyNaddrLink();
   const [builderOpen, setBuilderOpen] = useState(false);
 
   const presetKeys = Object.keys(themePresets);
@@ -100,10 +103,21 @@ export function ThemeSelector() {
   const shareTheme = async () => {
     if (!customTheme) return;
     try {
-      await publishEvent(
+      const event = await publishEvent(
         buildThemeDefinitionEvent(customTheme.title || "My theme", customTheme.colors),
       );
-      toast({ title: "Theme shared", description: "It's now discoverable by others." });
+      const copyLink = copyLinkFor(event);
+      toast({
+        title: "Theme shared",
+        description: "It's now discoverable by others.",
+        ...(copyLink && {
+          action: (
+            <ToastAction altText="Copy theme link" onClick={copyLink}>
+              Copy link
+            </ToastAction>
+          ),
+        }),
+      });
     } catch (e) {
       toast({
         title: "Couldn't share theme",

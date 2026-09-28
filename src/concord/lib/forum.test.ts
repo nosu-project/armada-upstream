@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   SUBJECT_MAX_BYTES,
+  forumImages,
   forumPosts,
   isTitledPost,
   subjectBytes,
@@ -139,5 +140,36 @@ describe("forumPosts", () => {
     const a = post("b-id", "A", 100);
     const b = post("a-id", "B", 100);
     expect(forumPosts([a, b], () => [], { sort: "newest" }).map((p) => p.root.id)).toEqual(["a-id", "b-id"]);
+  });
+});
+
+describe("forumImages", () => {
+  it("lists every image attachment in order, keeping dim, fallbacks and spoiler", () => {
+    const images = forumImages(msg({
+      id: "x",
+      tags: [
+        ["imeta", "url https://blossom.example/a.png", "m image/png", "dim 800x600", "fallback https://mirror.example/a.png"],
+        ["imeta", "url https://blossom.example/doc.pdf", "m application/pdf"],
+        ["imeta", "url https://blossom.example/b.jpg", "m image/jpeg", "content-warning spoiler"],
+      ],
+    }));
+    expect(images.map((i) => i.url)).toEqual(["https://blossom.example/a.png", "https://blossom.example/b.jpg"]);
+    expect(images[0]).toMatchObject({ dim: "800x600", fallbacks: ["https://mirror.example/a.png"] });
+    expect(images[1].spoiler).toBe(true);
+  });
+
+  it("never previews SVG or a local-network host", () => {
+    expect(forumImages(msg({
+      id: "x",
+      tags: [
+        ["imeta", "url https://blossom.example/a.svg", "m image/svg+xml"],
+        ["imeta", "url http://192.168.1.2/b.png", "m image/png"],
+      ],
+    }))).toEqual([]);
+  });
+
+  it("falls back to bare image URLs in the body when there is no imeta", () => {
+    expect(forumImages(msg({ id: "x", content: "look https://img.example/cat.webp and https://x.example/page" })))
+      .toEqual([expect.objectContaining({ url: "https://img.example/cat.webp" })]);
   });
 });

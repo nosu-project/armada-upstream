@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { ToastAction } from "@/components/ui/toast";
+import { useCopyNaddrLink } from "@/hooks/useNaddrLink";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { toast } from "@/hooks/useToast";
@@ -43,6 +45,7 @@ function ThemeCreatorForm({ onDone }: { onDone: () => void }) {
   const { mutateAsync: publishEvent, isPending: publishing } = useNostrPublish();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
+  const copyLinkFor = useCopyNaddrLink();
   const [colors, setColors] = useState<CoreThemeColors>(builderStarterColors);
   const [name, setName] = useState("");
   const [applyToMine, setApplyToMine] = useState(true);
@@ -99,7 +102,18 @@ function ThemeCreatorForm({ onDone }: { onDone: () => void }) {
 
     const applied = applyToMine ? " — applied as your theme" : "";
     const syncing = queued ? " (syncing when the network is back)" : "";
-    toast({ title: "Theme published", description: `${title}${applied}${syncing}` });
+    const copyLink = copyLinkFor(event);
+    toast({
+      title: "Theme published",
+      description: `${title}${applied}${syncing}`,
+      ...(copyLink && {
+        action: (
+          <ToastAction altText="Copy theme link" onClick={copyLink}>
+            Copy link
+          </ToastAction>
+        ),
+      }),
+    });
     onDone();
   };
 

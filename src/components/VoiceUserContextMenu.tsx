@@ -267,7 +267,10 @@ export function VoiceUserMenuButton({
           type="button"
           aria-label={`Actions for ${displayName}`}
           // Stop propagation so opening the menu from a row nested in another
-          // right-click/click surface doesn't also trigger that surface.
+          // right-click/click surface doesn't also trigger that surface —
+          // including the channel row's press-and-hold reorder, which would
+          // otherwise pick the channel up under a held press on this button.
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.stopPropagation()}
           className={cn(

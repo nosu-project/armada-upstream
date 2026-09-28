@@ -36,20 +36,29 @@ const DOT_INSET = CANVAS_SIZE * 0.02;
  */
 const DOT_RING = CANVAS_SIZE * 0.07;
 
+/**
+ * How long the icon gets to load. A load that never settles would otherwise
+ * hold the caller's in-flight render open for the life of the page, and every
+ * later message would wait on it rather than try again.
+ */
+const LOAD_TIMEOUT_MS = 10_000;
+
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`favicon load failed: ${src}`));
+    const timer = setTimeout(() => reject(new Error(`favicon load timed out: ${src}`)), LOAD_TIMEOUT_MS);
+    img.onload = () => { clearTimeout(timer); resolve(img); };
+    img.onerror = () => { clearTimeout(timer); reject(new Error(`favicon load failed: ${src}`)); };
     img.src = src;
   });
 }
 
 /**
- * The badged icon as a PNG `data:` URL, or `null` when it can't be produced
- * (no 2D context, an icon that won't load, a tainted canvas). Callers treat
- * `null` as "this platform gets no tab badge" — never as a reason to fall back
- * to decorating the document title.
+ * The badged icon as a PNG `data:` URL, or `null` when this platform can't
+ * produce one at all (no 2D context, a tainted canvas). Callers treat `null` as
+ * "this platform gets no tab badge" — never as a reason to fall back to
+ * decorating the document title. An icon that fails to load REJECTS instead:
+ * that is transient, and worth trying again.
  */
 export async function renderBadgedFavicon(baseHref: string): Promise<string | null> {
   if (typeof document === "undefined") return null;

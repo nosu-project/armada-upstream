@@ -29,8 +29,17 @@ function pointer(type: string, init: Record<string, unknown> = {}) {
   });
 }
 
-function press(y: number) {
-  return { nativeEvent: pointer("pointerdown", { clientY: y }) } as unknown as React.PointerEvent;
+/**
+ * A press delivered to the row's handler. `target` defaults to the row itself;
+ * pass a node outside it to model React bubbling a press out of a portal.
+ */
+function press(y: number, target?: Node) {
+  const row = document.createElement("div");
+  return {
+    currentTarget: row,
+    target: target ?? row,
+    nativeEvent: pointer("pointerdown", { clientY: y }),
+  } as unknown as React.PointerEvent;
 }
 
 function setup(enabled = true) {
@@ -105,6 +114,20 @@ describe("useChannelDrag", () => {
     });
     expect(onDrop).not.toHaveBeenCalled();
     expect(result.current.dragging).toBe(false);
+  });
+
+  it("ignores a press bubbled out of a portal the row opened", () => {
+    const { result, onDrop } = setup();
+    // e.g. a roster participant's volume slider, portaled to <body>.
+    const slider = document.createElement("span");
+    act(() => {
+      result.current.onPointerDown("chan-a")(press(100, slider));
+      vi.advanceTimersByTime(300);
+      window.dispatchEvent(pointer("pointermove", { clientY: 228 }));
+      window.dispatchEvent(pointer("pointerup", { clientY: 228 }));
+    });
+    expect(result.current.dragging).toBe(false);
+    expect(onDrop).not.toHaveBeenCalled();
   });
 
   it("does nothing at all for a member who can't rearrange", () => {

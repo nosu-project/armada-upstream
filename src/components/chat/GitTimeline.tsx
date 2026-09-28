@@ -750,7 +750,7 @@ function DiscussionMessage({ pubkey, createdAt, event, members, className, contr
         )}
       </div>
       {controls && !editing && (
-        <div className="absolute -top-1 right-0 flex gap-0.5 rounded-md border border-border bg-card p-0.5 opacity-0 shadow-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <div className="absolute -top-1 right-0 flex gap-0.5 rounded-md border border-border bg-card p-0.5 select-none opacity-0 shadow-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           <Button
             variant="ghost"
             size="icon"

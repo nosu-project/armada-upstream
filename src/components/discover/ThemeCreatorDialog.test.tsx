@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { nip19 } from "nostr-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThemeCreatorDialog } from "./ThemeCreatorDialog";
@@ -13,6 +14,7 @@ const h = vi.hoisted(() => ({
   publishEvent: vi.fn(),
   applyCustomTheme: vi.fn(),
   toast: vi.fn(),
+  writeClipboardText: vi.fn(),
 }));
 
 vi.mock("@/hooks/useNostrPublish", () => ({
@@ -22,13 +24,22 @@ vi.mock("@/hooks/useTheme", () => ({
   useTheme: () => ({ applyCustomTheme: h.applyCustomTheme }),
 }));
 vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({ config: { appRelays: ["wss://relay.example"] } }),
+}));
+vi.mock("@/lib/clipboard", () => ({ writeClipboardText: h.writeClipboardText }));
 // The color picker paints on a canvas, which jsdom does not implement. Its own
 // behaviour is not what this dialog is responsible for.
 vi.mock("@/components/ui/color-picker", () => ({
   ColorPicker: ({ label }: { label?: string }) => <button type="button">{label}</button>,
 }));
 
-const PUBLISHED = { id: "new-theme-event", kind: THEME_DEFINITION_KIND } as NostrRumor;
+const PUBLISHED = {
+  id: "new-theme-event",
+  kind: THEME_DEFINITION_KIND,
+  pubkey: "a".repeat(64),
+  tags: [["d", "sunset-x1"]],
+} as NostrRumor;
 
 /** The unsearched Discover themes key: [.., relays, authorFilter, query]. */
 const BROWSE_KEY = ["discover", "themes", ["wss://relay.example"], "all", ""];
@@ -126,10 +137,12 @@ describe("ThemeCreatorDialog", () => {
         expect.objectContaining({ title: "Sunset" }),
       ),
     );
-    expect(h.toast).toHaveBeenCalledWith({
-      title: "Theme published",
-      description: "Sunset — applied as your theme",
-    });
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Theme published",
+        description: "Sunset — applied as your theme",
+      }),
+    );
 
     vi.clearAllMocks();
     h.publishEvent.mockResolvedValue(PUBLISHED);
@@ -138,6 +151,34 @@ describe("ThemeCreatorDialog", () => {
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalled());
     expect(h.applyCustomTheme).not.toHaveBeenCalled();
+  });
+
+  it("offers the published theme's link from the success toast", async () => {
+    h.writeClipboardText.mockResolvedValue(undefined);
+    renderDialog();
+    fireEvent.change(nameField(), { target: { value: "Sunset" } });
+    fireEvent.click(publishButton());
+
+    await waitFor(() =>
+      expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Theme published" })),
+    );
+    const { action } = h.toast.mock.calls.find(([t]) => t.title === "Theme published")![0];
+    expect(action.props.children).toBe("Copy link");
+    action.props.onClick();
+
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith({ title: "Link copied" }));
+    const url: string = h.writeClipboardText.mock.calls[0][0];
+    expect(url.startsWith(`${window.location.origin}/naddr1`)).toBe(true);
+    const decoded = nip19.decode(url.slice(window.location.origin.length + 1));
+    expect(decoded).toEqual({
+      type: "naddr",
+      data: {
+        kind: THEME_DEFINITION_KIND,
+        pubkey: "a".repeat(64),
+        identifier: "sunset-x1",
+        relays: ["wss://relay.example"],
+      },
+    });
   });
 
   it("treats a queued offline publish as success, so the user does not retry into a second theme", async () => {
@@ -157,10 +198,12 @@ describe("ThemeCreatorDialog", () => {
     fireEvent.click(publishButton());
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(h.toast).toHaveBeenCalledWith({
-      title: "Theme published",
-      description: "Sunset — applied as your theme (syncing when the network is back)",
-    });
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Theme published",
+        description: "Sunset — applied as your theme (syncing when the network is back)",
+      }),
+    );
     expect(h.applyCustomTheme).toHaveBeenCalledWith(expect.objectContaining({ title: "Sunset" }));
     // Seeded from the signed event the error carries, exactly as on a live publish.
     expect(queryClient.getQueryData<NostrRumor[]>(BROWSE_KEY)).toEqual([

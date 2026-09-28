@@ -131,4 +131,38 @@ describe("browser tab attention", () => {
     expect(document.title).toBe("Armada");
     expect(iconHrefs()).toEqual([absolute("/favicon.svg"), absolute("/favicon.png")]);
   });
+
+  it("retries a render whose icon failed to load, after a delay", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    renderBadgedFavicon.mockRejectedValueOnce(new Error("favicon load failed"));
+    const { markTabAttention } = await loadTabAttention();
+
+    markTabAttention();
+    await flush();
+    markTabAttention();
+    await flush();
+    expect(renderBadgedFavicon).toHaveBeenCalledTimes(1);
+    expect(iconHrefs()).toEqual([absolute("/favicon.svg"), absolute("/favicon.png")]);
+
+    now.mockReturnValue(1_000_000 + 60_000);
+    markTabAttention();
+    await vi.waitFor(() => expect(iconHrefs()).toEqual([BADGE]));
+    expect(renderBadgedFavicon).toHaveBeenCalledTimes(2);
+  });
+
+  it("detaches the real icons before appending the badge", async () => {
+    // Brave ignores a stand-in appended while the real links are still present.
+    const presentAtAppend: string[][] = [];
+    const append = document.head.appendChild.bind(document.head);
+    vi.spyOn(document.head, "appendChild").mockImplementation(<T extends Node>(node: T): T => {
+      if (node instanceof HTMLLinkElement && node.href === BADGE) presentAtAppend.push(iconHrefs());
+      return append(node);
+    });
+    const { markTabAttention } = await loadTabAttention();
+
+    markTabAttention();
+    await vi.waitFor(() => expect(iconHrefs()).toEqual([BADGE]));
+
+    expect(presentAtAppend).toEqual([[]]);
+  });
 });
