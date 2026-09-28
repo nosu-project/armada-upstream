@@ -6,42 +6,29 @@ import { routeMediaCandidates } from "@/lib/mediaPolicy";
 import { useBlossomServers } from "./useBlossomServers";
 import { useMediaProxyRotation } from "./useMediaPolicy";
 
-// The server list lives in its own module (see there for why); re-exported so
-// the existing callers and tests keep their import.
+// Re-exported for existing callers.
 export { useBlossomServers } from "./useBlossomServers";
 
 /**
- * Cross-server media fallback, in three composable pieces.
- *
- * A Blossom URL is content-addressed (`/<sha256>`), and the uploader mirrors
- * every blob across the effective server list (BUD-04), so the same bytes are
- * usually reachable on several hosts. Everything that renders or fetches such a
- * URL should therefore try the other hosts before giving up — and should decide
- * the ORDER in exactly one place ({@link mediaCandidates}), whether the walk is
- * then driven by an `<img>`'s `onError` ({@link useSourceWalk}) or by a `fetch`
- * loop (`fetchCapped`).
- *
- * - {@link useBlossomServers}: the viewer's effective server list, memoized.
- * - {@link useBlossomCandidates}: that list applied to one URL.
- * - {@link useRoutedCandidates}: the candidates under the viewer's media
- *   policy — proxied when a proxy is set, loaded directly when it is not.
- * - {@link useSourceWalk}: an index over any candidate list, advanced by the
- *   element's error and reset by a manual retry.
- * - {@link useImageFallback}: the lot composed, for a plain `<img>`.
+ * Cross-server media fallback. Blossom URLs are content-addressed and mirrored
+ * (BUD-04), so renderers try other hosts; ORDER is decided only in
+ * {@link mediaCandidates}.
+ * - {@link useBlossomCandidates}: the server list applied to one URL.
+ * - {@link useRoutedCandidates}: those under the media policy (proxied or direct).
+ * - {@link useSourceWalk}: an index advanced by errors, reset on retry.
+ * - {@link useImageFallback}: all composed, for a plain `<img>`.
  */
 
 /**
- * The ordered sources for one media reference: the URL, the sender's declared
- * `fallback`s (sanitized), then the same blob on the viewer's other servers.
- * Memoized on the URLs' CONTENT, since callers routinely rebuild the fallback
- * array every render. Empty when there is no URL.
+ * Ordered sources for a media reference: URL, sanitized sender `fallback`s, then
+ * the blob on the viewer's servers. Memoized on URL content. Empty without a URL.
  */
 export function useBlossomCandidates(
   url: string | undefined,
   declaredFallbacks?: readonly string[],
 ): string[] {
   const servers = useBlossomServers();
-  // A URL cannot contain a newline, so joining on one is a faithful identity.
+  // URLs can't contain newlines, so joining on one is a faithful identity.
   const declaredKey = declaredFallbacks?.join("\n") ?? "";
   return useMemo(
     () => (url ? mediaCandidates(url, declaredKey ? declaredKey.split("\n") : undefined, servers) : []),
@@ -50,11 +37,8 @@ export function useBlossomCandidates(
 }
 
 /**
- * {@link useBlossomCandidates} under the viewer's media policy: the sources to
- * load, each in the form it loads in — proxied when a proxy is set, direct
- * otherwise. `bypass` skips the policy for a source the policy has no business
- * touching — a Buzz-hosted blob, whose signed GET header a proxy would not
- * forward and whose host is a relay the viewer joined.
+ * {@link useBlossomCandidates} under the media policy. `bypass` skips it for e.g.
+ * Buzz-hosted blobs, whose signed GET header a proxy wouldn't forward.
  */
 export function useRoutedCandidates(
   url: string | undefined,
@@ -84,12 +68,8 @@ export interface SourceWalk {
 }
 
 /**
- * An index over a candidate list, driven by whatever detects a failure.
- *
- * Resets to the first candidate whenever the PRIMARY changes, synchronously in
- * render, so a re-rendered or edited reference never paints one frame at a
- * stale index — the "broken image renders permanently as a link until refresh"
- * bug was a walk that inherited a previous URL's failure.
+ * An index over a candidate list. Resets synchronously in render when the
+ * PRIMARY changes, so a new URL never inherits a previous one's failure.
  */
 export function useSourceWalk(candidates: readonly string[]): SourceWalk {
   const [index, setIndex] = useState(0);
@@ -119,14 +99,9 @@ export function useSourceWalk(candidates: readonly string[]): SourceWalk {
 }
 
 /**
- * A plain `<img>`'s cross-server fallback: `src` to render, `onError` to wire,
- * `failed` once nothing is left to try. For an avatar, a badge, a banner, a
- * custom emoji — any image that is not a chat attachment (those go through
- * `useMediaWithFallback`, which also decrypts).
- *
- * Under the media policy: `src` is already the proxied form when a proxy is
- * set, so a caller that renders nothing without a `src` (every avatar and
- * emoji) keeps working unchanged.
+ * A plain `<img>`'s cross-server fallback (avatars, banners, emoji — not chat
+ * attachments, which use `useMediaWithFallback`). `src` is already
+ * policy-routed.
  */
 export function useImageFallback(
   url: string | undefined,

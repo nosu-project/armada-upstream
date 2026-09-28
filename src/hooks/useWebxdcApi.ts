@@ -12,21 +12,13 @@ import { useCurrentUserProfile } from "@/hooks/useCurrentUser";
 import { getDisplayName } from "@/lib/getDisplayName";
 
 /**
- * Transport-agnostic backend for an in-chat app's coordination plane. A
- * concrete sync (NIP-29 group, sealed Concord channel) implements this, and
- * {@link useWebxdcApi} wraps it into the standard webxdc `window.webxdc` API.
- *
- * The two planes mirror the webxdc spec:
- *  - **state** — durable, serial-ordered `sendUpdate()` payloads.
- *  - **realtime** — transient, best-effort `joinRealtimeChannel()` byte frames.
- *
- * Both are scoped to a single app session (a UUID), so multiple apps in the
- * same chat never see each other's traffic.
+ * Transport-agnostic backend for an in-chat app's coordination plane, wrapped
+ * by {@link useWebxdcApi} into `window.webxdc`. "state" = durable, serial-ordered
+ * `sendUpdate()`; "realtime" = transient best-effort frames. Scoped per app session.
  */
 export interface AppSync {
   /** Durable state updates seen so far, oldest-first (serials assigned by index). */
   stateUpdates: AppStateUpdate[];
-  /** Publish a durable state update. */
   sendState: (payload: unknown, opts?: AppStateMeta) => void;
   /** Publish a transient realtime frame (best-effort, not stored/ordered). */
   sendRealtime: (data: Uint8Array) => void;
@@ -37,7 +29,6 @@ export interface AppSync {
 /** A decoded durable state update from the coordination plane. */
 export interface AppStateUpdate {
   payload: unknown;
-  /** Optional webxdc metadata fields. */
   info?: string;
   document?: string;
   summary?: string;
@@ -50,14 +41,7 @@ export interface AppStateMeta {
   summary?: string;
 }
 
-/**
- * Adapt an {@link AppSync} backend into the standard webxdc `WebxdcAPI` that
- * {@link Webxdc} exposes to the sandboxed app as `window.webxdc`. This is the
- * single place the webxdc surface (`sendUpdate` / `setUpdateListener` /
- * `getAllUpdates` / `joinRealtimeChannel`) is mapped onto our Nostr-backed
- * coordination plane, so both the YouTube watchalong and arbitrary `.xdc` apps
- * share one implementation.
- */
+/** Adapt an {@link AppSync} backend into the standard webxdc API exposed to the sandboxed app. */
 export function useWebxdcApi(sync: AppSync): WebxdcAPI<unknown> {
   const { user, metadata } = useCurrentUserProfile();
 
@@ -71,14 +55,12 @@ export function useWebxdcApi(sync: AppSync): WebxdcAPI<unknown> {
     [metadata, selfPubkey],
   );
 
-  // Keep the latest backend in a ref so the stable callbacks below always reach
-  // current data without churning the api object on every poll.
+  // Ref so the stable callbacks reach current data without churning the api object.
   const syncRef = useRef(sync);
   useEffect(() => {
     syncRef.current = sync;
   }, [sync]);
 
-  // Convert state updates to webxdc ReceivedStatusUpdates with serial numbers.
   const updates = useMemo((): ReceivedStatusUpdate<unknown>[] => {
     return sync.stateUpdates.map((u, index) => ({
       payload: u.payload,
@@ -93,7 +75,6 @@ export function useWebxdcApi(sync: AppSync): WebxdcAPI<unknown> {
   const listenerRef = useRef<((update: ReceivedStatusUpdate<unknown>) => void) | null>(null);
   const lastSerialRef = useRef(0);
 
-  // Deliver newly-arrived updates to the registered listener.
   useEffect(() => {
     if (!listenerRef.current || !updates.length) return;
     const listener = listenerRef.current;

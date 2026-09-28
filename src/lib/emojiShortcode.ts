@@ -6,14 +6,9 @@ interface EmojiMartData {
 }
 
 /**
- * Index of the `:` that opens an in-progress `:shortcode` query ending at
- * `cursor`, or -1 if there isn't one.
- *
- * A colon starts a shortcode when it sits at the beginning of the text or
- * after anything that is not a shortcode character (`[A-Za-z0-9_]`). That
- * keeps `http://` / `3:30` / `word:foo` from matching, while still allowing
- * back-to-back native emojis (`👍:smile`) without a required space — the
- * previous whitespace-only rule rejected those.
+ * Index of the `:` opening an in-progress `:shortcode` ending at `cursor`, or
+ * -1. The colon must start the text or follow a non-`[A-Za-z0-9_]` char (so
+ * `http://`, `3:30` don't match, but `👍:smile` does).
  */
 export function findEmojiShortcodeColon(value: string, cursor: number): number {
   for (let i = cursor - 1; i >= 0; i--) {
@@ -27,11 +22,7 @@ export function findEmojiShortcodeColon(value: string, cursor: number): number {
   return -1;
 }
 
-/**
- * The native emoji a shortcode names exactly — an emoji-mart id (`v`, `tm`,
- * `+1`) or one of its aliases (`thumbsup`) — or undefined. Case-insensitive,
- * since every id in the data is lower case.
- */
+/** The native emoji an emoji-mart id or alias names (case-insensitive), or undefined. */
 export function nativeEmojiForShortcode(name: string): string | undefined {
   const { emojis, aliases } = data as EmojiMartData;
   const key = name.toLowerCase();
@@ -41,14 +32,9 @@ export function nativeEmojiForShortcode(name: string): string | undefined {
 }
 
 /**
- * The replacement for a `:shortcode:` whose closing colon sits just before
- * `cursor` — i.e. the one the user has just finished typing — or null when
- * there is nothing to convert. The composer applies it as the closing colon is
- * typed, so `:v:` becomes ✌️ in the input itself. The opening colon follows the same rule as the
- * autocomplete (`findEmojiShortcodeColon`), so `3:30:` or `http://a:` never
- * match. A name in `customShortcodes` is left alone: `:name:` is how a NIP-30
- * custom emoji is written, and converting it would swap it for an unrelated
- * native one.
+ * Replacement for a `:shortcode:` just completed before `cursor` (so `:v:`
+ * becomes ✌️ as typed), or null. Names in `customShortcodes` are skipped (NIP-30
+ * custom emoji).
  */
 export function completedShortcodeAt(
   value: string,

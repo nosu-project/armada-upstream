@@ -4,11 +4,8 @@ export interface MutedPubkeysResult {
   /** The set of pubkeys the user has muted. */
   mutedPubkeys: Set<string>;
   /**
-   * Whether the mute set is settled enough to filter on. False only during the
-   * very first cold load (no locally-cached list and the network query still in
-   * flight). Once a previously-cached list is read, or the network query
-   * resolves, this is true — so consumers can wait to render until muted
-   * content is already excluded, instead of showing it then hiding it.
+   * Whether the mute set is settled enough to filter on (false only during a cold
+   * first load), so consumers can avoid showing then hiding muted content.
    */
   ready: boolean;
   /**
@@ -28,18 +25,9 @@ export interface MutedPubkeysResult {
 const NO_MUTES: Set<string> = new Set();
 
 /**
- * The current user's mute list, resolved once for the whole app.
- *
- * A context rather than a hook each consumer runs, because "is this person
- * muted" is asked by nearly every component that renders another person — every
- * message row, member row, reaction pill, typing avatar. Running the query
- * subscription and the local-cache effect per row would put a per-row cost on
- * the two hot paths this codebase has perf tests for (channel switch, roster
- * paint) to answer one question with one answer.
- *
- * The default is "nobody is muted, and we know it", which is the safe reading
- * for a component rendered outside the provider: it shows everything rather
- * than hiding content on the strength of a set that was never loaded.
+ * The current user's mute list, resolved once app-wide: nearly every row asks,
+ * and a per-row query would hit the perf-tested hot paths. The default (outside
+ * the provider) is "nobody muted", which shows everything.
  */
 export const MutedPubkeysContext = createContext<MutedPubkeysResult>({
   mutedPubkeys: NO_MUTES,

@@ -7,12 +7,11 @@ import { routeParamToRelay } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Kinds a group timeline renders (mirrors useGroupMessages). */
+/** Mirrors useGroupMessages. */
 const TIMELINE_KINDS = [9, 1068];
-/** Mirrors useGroupMessages' PAGE_SIZE — the first page the room will want. */
+/** Mirrors useGroupMessages' PAGE_SIZE. */
 const PAGE_SIZE = 30;
 
-/** Sort ascending (oldest-first) and de-duplicate a message list by id. */
 function sortDedupe(events: NostrEvent[]): NostrEvent[] {
   const byId = new Map<string, NostrEvent>();
   for (const e of events) byId.set(e.id, e);
@@ -20,19 +19,9 @@ function sortDedupe(events: NostrEvent[]): NostrEvent[] {
 }
 
 /**
- * Cold-launch warmup for a notification deep link (headless, native-only in
- * practice — the web has no launch URL).
- *
- * As soon as the launch URL resolves to a NIP-29 room path, this opens the
- * room's host relay and requests its newest page — OVERLAPPING the WebSocket
- * connect + NIP-42 AUTH handshake and the first REQ with React still mounting
- * the route, instead of starting all of that only after GroupPage's query
- * runs. Results are merged append-only into the room's query cache (and
- * mirrored to IndexedDB by the batcher), so by the time the timeline mounts,
- * the fresh page is usually already there.
- *
- * Warm (appUrlOpen) navigations don't need this: the app is already running
- * with hot sockets and caches.
+ * Cold-launch warmup for a notification deep link (native only). Opens the
+ * room's relay and fetches its newest page while React is still mounting, and
+ * merges it into the room's query cache. Warm navigations don't need this.
  */
 export function DeepLinkWarmup() {
   const { nostr } = useNostr();
@@ -42,7 +31,6 @@ export function DeepLinkWarmup() {
     return onColdLaunchResolved(() => {
       const path = peekColdLaunchDeepLink();
       if (!path) return;
-      // NIP-29 room: /s/<server>/<groupId>
       const m = path.match(/^\/s\/([^/]+)\/([^/?#]+)/);
       if (!m) return;
       const relayUrl = routeParamToRelay(decodeURIComponent(m[1]));
@@ -60,9 +48,7 @@ export function DeepLinkWarmup() {
             ["nip29", "messages", relayUrl, groupId],
             (old = []) => sortDedupe([...old, ...events]),
           );
-        } catch {
-          // Best-effort: the room's own local-first query still loads normally.
-        }
+        } catch { /* ignore */ }
       })();
     });
   }, [nostr, queryClient]);

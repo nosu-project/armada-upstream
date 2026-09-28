@@ -20,18 +20,13 @@ export function useIsMobile(): boolean {
 }
 
 /**
- * True on touch-first devices that lack a hover pointer (phones, tablets), as
- * opposed to a merely narrow desktop window. Use this — not {@link useIsMobile}
- * — to gate touch-only interactions like tap-to-reveal, so a small desktop
- * window keeps its hover behaviour instead of switching to taps.
+ * Touch-first devices without hover. Use this — not {@link useIsMobile} — to gate touch-only
+ * interactions, so a narrow desktop window keeps hover behaviour.
  */
 const TOUCH_QUERY = "(hover: none) and (pointer: coarse)";
 
-// One query list and one listener for the whole app: every message row asks,
-// and a `matchMedia` per row per mount (plus a listener each) showed up in
-// timeline profiles.
-// Keyed on `window.matchMedia` itself so a replaced implementation (a test's
-// stub) is asked afresh rather than answered from the old one.
+// One shared query list + listener (per-row matchMedia showed up in profiles). Keyed on
+// `window.matchMedia` so a test stub is asked afresh.
 let touchQuery: { from: typeof window.matchMedia; mql: MediaQueryList } | undefined;
 const touchMql = () => {
   if (touchQuery?.from !== window.matchMedia) {

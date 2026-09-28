@@ -19,31 +19,19 @@ import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** The pack a custom emoji came from, enough to display it and add it. */
 export interface EmojiSource {
   /** `30030:pubkey:dtag`. */
   coord: string;
-  /** The pack's human name. */
   name: string;
-  /** Pack author, for the add mutation. */
   pubkey: string;
-  /** The pack's `d` identifier, for the add mutation. */
   identifier: string;
 }
 
-/** How many locally-cached packs to scan when resolving an emoji's origin. */
 const STORE_PACK_LIMIT = 500;
 
 /**
- * Index every kind-30030 pack in the local event store by emoji image URL.
- *
- * This is what lets us name the pack behind an emoji the user does NOT have:
- * packs shared in chat (rendered as an EmojiPackCard) and packs pulled in by
- * any other read are mirrored into the store, so a reaction using one of their
- * emojis can be traced back without a fresh relay round-trip. There is no
- * network query here on purpose — a reaction's `["emoji", code, url]` tag
- * carries no pack reference, and relays can't be filtered by emoji URL, so an
- * unknown emoji simply stays unattributed rather than triggering a fan-out.
+ * Index local kind-30030 packs by emoji URL. No network query on purpose: an emoji tag
+ * names no pack and relays can't filter by URL.
  */
 function usePackIndex() {
   const eventStore = useEventStore();
@@ -57,8 +45,7 @@ function usePackIndex() {
         .query([{ kinds: [KIND_EMOJI_SET], limit: STORE_PACK_LIMIT }])
         .catch(() => [] as NostrRumor[]);
 
-      // Newest event per coordinate wins, so a renamed/edited pack resolves to
-      // its current name rather than whichever revision the cursor hit first.
+      // Newest event per coordinate, so an edited pack resolves to its current name.
       const newest = new Map<string, NostrRumor>();
       for (const ev of events) {
         const identifier = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
@@ -77,8 +64,7 @@ function usePackIndex() {
           identifier,
         };
         for (const t of ev.tags) {
-          // First pack to claim a URL keeps it: an emoji copied into a later
-          // pack shouldn't reattribute the original.
+          // First pack to claim a URL keeps it.
           if (t[0] === "emoji" && t[2] && !index.has(t[2])) index.set(t[2], source);
         }
       }
@@ -87,23 +73,15 @@ function usePackIndex() {
   });
 }
 
-/** Overall budget for one on-demand author-scoped resolution. */
 const REMOTE_LOOKUP_TIMEOUT_MS = 6000;
 
 /**
- * Once the first relay in a fan-out answers, wait at most this long for the
- * rest before proceeding with whatever landed. Without it each hop below waits
- * for EVERY routed relay to EOSE (or the full deadline), so one cold/slow relay
- * in the set paces the whole lookup. A pack is a single addressable event, so
- * the first relay that has it is enough.
+ * After the first relay answers, wait at most this long for the rest; a pack is one
+ * addressable event.
  */
 const RELAY_GRACE_MS = 1200;
 
-/**
- * Newest kind-30030 per coordinate that CLAIMS `url`, as an `EmojiSource`. Pure;
- * takes whatever events have been gathered so far so the resolver can match
- * early and short-circuit the remaining network hops.
- */
+/** Pure, so the resolver can match early and skip remaining hops. */
 function matchPackUrl(
   events: (NostrEvent | NostrRumor)[],
   url: string,
@@ -125,31 +103,12 @@ function matchPackUrl(
 }
 
 /**
- * Resolve an emoji's pack over the network, scoped to the message/reaction
- * author's own relays rather than a blind pool fan-out.
- *
- * A `["emoji", code, url]` tag names no pack, so the only principled way to find
- * one is through the person who USED it: any custom emoji they typed comes from
- * a pack their kind-10030 list references OR a pack they authored themselves.
- *
- * Ordered for the common case in the fewest hops, matching the URL after each
- * step and returning the moment a pack claims it:
- *   1. ONE combined round — the local store plus a single fan-out to the seed
- *      (account-data + pool) relays for the author's relay list (10002), the
- *      packs they AUTHORED (30030) and their 10030 list. In a shared-relay
- *      community the author's own pack is usually right here, so this resolves
- *      the whole lookup in a single hop.
- *   2. On a miss, escalate to the author's declared WRITE relays (discovered in
- *      step 1) for their authored packs, if that set adds anything new.
- *   3. Still missing, resolve the 10030 refs: read each referenced pack from the
- *      author's write relays + the ref's own relay hint + seed, and only if
- *      THAT misses discover each pack author's write relays and read there.
- *
- * Every fan-out carries a grace window ({@link RELAY_GRACE_MS}) so a slow relay
- * can't pace a hop. Freshly-fetched packs are written into the local store so
- * the synchronous {@link usePackIndex} warms up and a repeat needs no network.
- * Returns undefined when nothing the author can be tied to claims `url` — the
- * caller then renders no attribution rather than a guess.
+ * Resolve an emoji's pack via its author's relays (their authored packs or 10030 refs),
+ * returning as soon as a pack claims `url`:
+ * 1. local store + seed relays for 10002, authored 30030s and 10030;
+ * 2. the author's NIP-65 write relays, if new;
+ * 3. the 10030 refs via write relays/hints/seed, then each pack author's write relays.
+ * Fetched packs are cached into the store. Undefined when nothing claims `url`.
  */
 async function resolveEmojiSourceFromAuthor(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -166,14 +125,12 @@ async function resolveEmojiSourceFromAuthor(
   const listFilter = { kinds: [KIND_USER_EMOJIS], authors: [authorPubkey], limit: 1 };
   const relayListFilter = { kinds: [KIND_RELAY_LIST], authors: [authorPubkey], limit: 1 };
 
-  // Persist any relay-fetched 30030 so the local index warms for next time.
   const cachePacks = (events: NostrEvent[]) => {
     for (const ev of events) {
       if (ev.kind === KIND_EMOJI_SET) void Promise.resolve(store.event(ev)).catch(() => {});
     }
   };
 
-  // 1. One combined round: seed relays + local store, in parallel.
   const [seedEvents, cachedOwn] = await Promise.all([
     queryExplicitRelays(
       nostr,
@@ -192,7 +149,6 @@ async function resolveEmojiSourceFromAuthor(
   const early = matchPackUrl(ownPacks(), url);
   if (early) return early;
 
-  // The author's declared write relays, from the 10002 the first round saw.
   const relayListEvent = newestRelayList(
     gathered.filter(
       (e): e is NostrEvent => e.kind === KIND_RELAY_LIST && e.pubkey === authorPubkey,
@@ -202,7 +158,6 @@ async function resolveEmojiSourceFromAuthor(
     ? parseRelayList(relayListEvent).filter((r) => r.write).map((r) => r.url)
     : [];
 
-  // 2. Their authored packs from any write relays the seed round didn't cover.
   const newWriteRelays = authorWriteRelays.filter((u) => !seedRelays.includes(u));
   if (newWriteRelays.length > 0) {
     const more = await queryExplicitRelays(nostr, newWriteRelays, [authoredFilter], deadline, grace)
@@ -213,7 +168,6 @@ async function resolveEmojiSourceFromAuthor(
     if (hit) return hit;
   }
 
-  // 3. The 10030 refs — packs the author ADDED but didn't author themselves.
   const list = gathered
     .filter((e) => e.kind === KIND_USER_EMOJIS && e.pubkey === authorPubkey)
     .sort((a, b) => b.created_at - a.created_at)[0];
@@ -230,10 +184,7 @@ async function resolveEmojiSourceFromAuthor(
     limit: 1,
   }));
 
-  // First try the relays we already know: the author's write relays, each ref's
-  // own NIP-51 relay hint, the seed set, and the local store — no extra
-  // discovery hop. This resolves an added pack whenever the hint is present or
-  // the pack lives where the author's account data does.
+  // Known relays first (author write relays, ref hints, seed, local store).
   const directReadSet = new Set<string>([...authorWriteRelays, ...seedRelays]);
   for (const r of refs) if (r.relayHint) directReadSet.add(r.relayHint);
   const [refDirect, cachedRefs] = await Promise.all([
@@ -247,9 +198,7 @@ async function resolveEmojiSourceFromAuthor(
   const direct = matchPackUrl(gathered, url);
   if (direct) return direct;
 
-  // Last resort: discover each referenced PACK author's write relays and read
-  // there. Only reached when the hint was absent and the pack isn't on any
-  // relay we already had.
+  // Last resort: each pack author's write relays.
   const packAuthors = [...new Set(refs.map((r) => r.addr!.pubkey))];
   const packAuthorRelayLists = await queryExplicitRelays(
     nostr,
@@ -274,27 +223,12 @@ async function resolveEmojiSourceFromAuthor(
 }
 
 /**
- * Resolve which NIP-30 pack a custom emoji came from, for the "from <pack>"
- * line and its Add button.
- *
- * Checks the user's own resolved palette first (which already carries pack
- * provenance and covers the community palette), then the local pack index.
- * When both miss and an `authorPubkey` is supplied — the person who typed the
- * message or left the reaction — it falls back to an on-demand, author-scoped
- * relay lookup ({@link resolveEmojiSourceFromAuthor}): their NIP-65 write
- * relays → their kind-10030 → the referenced packs. This runs only when a
- * popover is actually open (the hook lives in that popover's body), so it is a
- * per-click cost, never a fan-out on render.
- *
- * `source` is undefined for native emoji and for custom emoji whose pack cannot
- * be resolved from any of those sources. `isLoading` is true only while the
- * author-scoped relay lookup is actually in flight — a local hit never sets it,
- * and it lets the popover show a skeleton instead of an empty footer during the
- * multi-round-trip fetch.
+ * Which NIP-30 pack a custom emoji came from: own palette, then local index, then (with
+ * `authorPubkey`) an author-scoped relay lookup. Mounted only in an open popover, so it's a
+ * per-click cost.
  */
 export interface EmojiSourceResult {
   source: EmojiSource | undefined;
-  /** The on-demand author-scoped relay lookup is in flight. */
   isLoading: boolean;
 }
 
@@ -327,9 +261,7 @@ export function useEmojiSource(
     return index?.get(url);
   }, [url, emojis, index]);
 
-  // Only after the local index has settled and still missed — otherwise a cold
-  // index (undefined on first render) would fire the network for an emoji we
-  // already hold.
+  // Wait for the local index to settle, or a cold index would fire the network needlessly.
   const remoteEnabled = !!url && !!authorPubkey && !indexPending && !local;
   const { data: remote, isFetching, isFetched } = useQuery({
     queryKey: ["emoji-source-remote", url ?? "", authorPubkey ?? ""],
@@ -351,18 +283,8 @@ export function useEmojiSource(
 
   const source = local ?? remote ?? undefined;
 
-  // "Loading" is the WHOLE resolution effort with no answer yet, not just the
-  // remote fetch. Three traps this has to cover, each of which showed as an
-  // empty footer that later popped in:
-  //   - the shared `usePackIndex` is still building (`indexPending`), so the
-  //     remote query hasn't even been ENABLED yet;
-  //   - the remote query is enabled but hasn't settled its first fetch
-  //     (`!isFetched`) — react-query reports `isFetching` false for the render
-  //     on which `enabled` flips true, before the fetch is scheduled;
-  //   - a reopen holds a cached `null` and refetches in the BACKGROUND
-  //     (`isFetching`, but `isPending`/`isLoading` false).
-  // Once the remote query settles with no pack, all three are false and the
-  // footer collapses to nothing rather than a forever-skeleton.
+  // "Loading" covers: index still building, remote query enabled but not yet fetched
+  // (`isFetching` is false on the render `enabled` flips), and background refetch of a cached `null`.
   const wantsRemote = !!url && !!authorPubkey && !local;
   const isLoading =
     !source && wantsRemote && (indexPending || isFetching || (remoteEnabled && !isFetched));

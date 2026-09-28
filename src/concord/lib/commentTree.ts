@@ -1,13 +1,7 @@
 /**
- * The comment tree under a forum post — CORD-03 §3.
- *
- * A threaded reply is a kind-1111 comment whose uppercase `E` names the
- * thread root and whose lowercase `e` names its immediate parent: the root
- * itself for a top-level comment, or another comment for a reply to one
- * (`buildConcordCommentTags`). The transport buckets every comment by root,
- * so the flat list it hands out already holds the whole discussion; this
- * module only arranges it by parent. Pure, so the arrangement is testable
- * without a transport.
+ * The comment tree under a forum post (CORD-03 §3). A kind-1111 comment's
+ * uppercase `E` names the thread root and lowercase `e` its immediate parent
+ * (`buildConcordCommentTags`). This only arranges the transport's flat list by parent.
  */
 
 import type { ChatMsg } from "@/components/chat/transport";
@@ -25,11 +19,9 @@ export interface CommentNode {
 }
 
 /**
- * Arrange a root's comments (oldest-first, as the transport orders them) as
- * a tree. Order is preserved within each level. A comment whose parent is
- * neither the root nor a comment in the list — the parent was deleted, hidden
- * or muted away, or is a cycle — is placed at the top level rather than
- * dropped: the reader loses the indentation, never the words.
+ * Arrange a root's comments (oldest-first) as a tree, preserving order per level.
+ * A comment with an unknown parent (deleted, muted, or a cycle) goes top-level
+ * rather than being dropped.
  */
 export function buildCommentTree(rootId: string, comments: readonly ChatMsg[]): CommentNode[] {
   const nodes = new Map<string, CommentNode>();
@@ -44,10 +36,8 @@ export function buildCommentTree(rootId: string, comments: readonly ChatMsg[]): 
     else top.push(node);
   }
 
-  // Depths, and a reachability pass: a cycle among comments (A answers B, B
-  // answers A) is attached nowhere by the loop above, and would vanish. The
-  // walk also drops any child already placed — a back-edge into an
-  // ancestor — so what comes out is a tree the renderer can recurse into.
+  // Reachability pass: comments in a cycle are attached nowhere above and would
+  // vanish; back-edges are dropped so the output is a tree.
   const seen = new Set<string>();
   const walk = (node: CommentNode, depth: number) => {
     seen.add(node.comment.id);
@@ -63,8 +53,7 @@ export function buildCommentTree(rootId: string, comments: readonly ChatMsg[]): 
   for (const node of top) walk(node, 0);
   for (const comment of comments) {
     if (seen.has(comment.id)) continue;
-    // Break the cycle here: this comment becomes top-level and the rest of
-    // its ring hangs off it.
+    // Break the cycle: this comment becomes top-level.
     const node = nodes.get(comment.id)!;
     top.push(node);
     walk(node, 0);

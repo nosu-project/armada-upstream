@@ -12,7 +12,7 @@ const MINUTE = 60;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
-/** Average lengths. A one- or two-character label rounds away any calendar detail. */
+/** Average lengths; short labels round away calendar detail. */
 const MONTH = 30.44 * DAY;
 const YEAR = 365.25 * DAY;
 
@@ -59,11 +59,7 @@ export function shortClockTime(timestamp: number): string {
 
 let fullFormat: Intl.DateTimeFormat | undefined;
 
-/**
- * Format a unix-seconds timestamp as a full local date and time
- * ("Sep 12, 2026, 3:07 PM") — for surfaces without day dividers, where a
- * bare clock time would leave the day unsaid.
- */
+/** Full local date and time, for surfaces without day dividers. */
 export function fullDateTime(timestamp: number): string {
   fullFormat ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
   return fullFormat.format(new Date(timestamp * 1000));

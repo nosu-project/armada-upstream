@@ -10,24 +10,17 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 export type ProfileThemeResult = { event?: NostrRumor; theme?: DittoTheme };
 
-/** The query key holding a pubkey's active Ditto theme (kind 16767). */
 export function profileThemeQueryKey(pubkey: string): [string, string] {
   return ["profile-theme", pubkey];
 }
 
-/** Parse a kind-16767 event into { event, theme }, dropping the theme on parse failure. */
 function parseProfileThemeEvent(event: NostrRumor): ProfileThemeResult {
   return { event, theme: parseDittoTheme(event) ?? undefined };
 }
 
 /**
- * A given user's active Ditto profile theme (replaceable kind 16767), read from
- * the app relays and persisted to the local store. Lets us tint UI showing that
- * person (e.g. the profile hovercard) with the colors they chose in Ditto.
- * Returns an empty result when they have no theme.
- *
- * Seeds cache-first from IndexedDB so a repeat open is instant, and the query
- * is batched with other kind-16767 lookups by the replaceable collector.
+ * A user's active Ditto profile theme (replaceable kind 16767), for tinting UI about them.
+ * Cache-first from IndexedDB; batched by the replaceable collector.
  */
 export function useProfileTheme(pubkey: string | undefined) {
   const { nostr } = useNostr();
@@ -44,8 +37,7 @@ export function useProfileTheme(pubkey: string | undefined) {
   return useQuery<ProfileThemeResult>({
     queryKey: profileThemeQueryKey(pubkey ?? ""),
     enabled: !!pubkey,
-    // A theme rarely changes; a found one is cached long, a miss is re-checked
-    // on the next access (batched, cheap).
+    // Found themes cache long; misses are re-checked on next access.
     staleTime: (query) => (query.state.data?.event ? 5 * 60_000 : 60_000),
     gcTime: 10 * 60_000,
     refetchOnWindowFocus: false,
@@ -75,11 +67,7 @@ export function useProfileTheme(pubkey: string | undefined) {
   });
 }
 
-/**
- * Returns a callback that warms a user's Ditto theme into the query cache ahead
- * of time (e.g. on hover of the profile trigger), so the hovercard is already
- * tinted the instant it opens. A no-op if the theme is already fresh in cache.
- */
+/** Warm a theme ahead of time (e.g. on hover) so the hovercard opens tinted. */
 export function usePrefetchProfileTheme(): (pubkey: string) => void {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();

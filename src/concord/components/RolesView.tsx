@@ -34,17 +34,15 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import type { Community } from "@/concord/lib/types";
 import { cn } from "@/lib/utils";
 
-/** Fallback swatch for a role still on the theme default (`color === 0`). */
+/** Fallback swatch for a role on the theme default (`color === 0`). */
 const DEFAULT_SWATCH = "#5865f2";
 
-/** A member's display name, for naming the holders a revoke cannot reach. */
 function MemberLabel({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
   return <DisplayName pubkey={pubkey} name={name || pubkey.slice(0, 8)} />;
 }
 
-/** Comma-separated member names. */
 function MemberNames({ members }: { members: MemberGrant[] }) {
   return (
     <>
@@ -58,11 +56,7 @@ function MemberNames({ members }: { members: MemberGrant[] }) {
   );
 }
 
-/**
- * Role management for a Concord community: create roles, edit names and
- * permission bits. Each save publishes a version-chained Role (vsk 1) edition;
- * every member's fold re-checks MANAGE_ROLES + strict outrank (CORD-04).
- */
+/** Role management. Each save is a version-chained Role (vsk 1) edition; folds re-check MANAGE_ROLES + strict outrank (CORD-04). */
 export function RolesView({ community }: { community: Community }) {
   return (
     <div className="mx-auto w-full max-w-2xl p-4">
@@ -80,11 +74,7 @@ function RolesBody({ community }: { community: Community }) {
   const listRef = useRef<HTMLDivElement>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
-  /**
-   * A refused order, held as role ids rather than Roles: the fold can advance
-   * between the refusal and the click, and a plan computed against the old
-   * roster would write positions derived from roles that have since moved.
-   */
+  /** Held as role ids: the fold can advance between refusal and click. */
   const [evenOut, setEvenOut] = useState<string[] | null>(null);
 
   const roster = folded?.roster ?? emptyRoles();
@@ -96,10 +86,7 @@ function RolesBody({ community }: { community: Community }) {
     [folded],
   );
 
-  // Live channels a role can scope to; a role's channel is looked up here for
-  // the list row's "# name" hint. A deleted channel is not named anywhere in
-  // this view — the fold keeps its old definition (and name) flagged, which
-  // would otherwise surface as a hint for a channel that no longer exists.
+  // Deleted channels are excluded; the fold keeps their stale definitions.
   const channels = useMemo(
     () => [...(folded?.channels.values() ?? [])].filter((c) => !c.deleted),
     [folded],
@@ -109,8 +96,6 @@ function RolesBody({ community }: { community: Community }) {
     return c && !c.deleted ? c : undefined;
   };
 
-  // Per role, how many grants list it: Discord's member count, and the
-  // fastest read of "is this access role actually granting anyone anything".
   const holderCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const g of folded?.roster.grants ?? []) {
@@ -121,21 +106,11 @@ function RolesBody({ community }: { community: Community }) {
 
   const ownerHex = folded?.ownerHex ?? community.owner;
 
-  /**
-   * May the actor rewrite a Role sitting at `position`? Same gate the fold
-   * applies when judging a Role edition (CORD-04 §3 strict outrank), so
-   * publishing a move the network would drop fails HERE with a readable
-   * message instead.
-   */
+  /** Same gate the fold applies (CORD-04 §3 strict outrank), so illegal moves fail here readably. */
   const mayTouch = (position: number) =>
     Boolean(actor && canActOnPosition(roster, actor, ownerHex, position, Permissions.MANAGE_ROLES));
 
-  /**
-   * The lowest position this actor may claim: strictly below their own rank is
-   * forbidden, so rank + 1 — and 1 for the owner, who outranks everything but
-   * still may not mint position 0 (CORD-04 §3). null when they hold no role at
-   * all and so may not write any position.
-   */
+  /** Lowest claimable position: rank + 1 (owner: 1, never 0; CORD-04 §3). null without any role. */
   const writableFloor = useMemo(() => {
     if (!actor) return null;
     if (actor === ownerHex) return 1;
@@ -144,22 +119,13 @@ function RolesBody({ community }: { community: Community }) {
   }, [actor, ownerHex, roster]);
 
   /**
-   * May the actor rewrite THIS MEMBER's Grant? Outranking the role is not
-   * enough: a Grant edition hands out every role the member keeps, so stripping
-   * one role from someone who outranks the actor still publishes an edition
-   * claiming their higher-ranked roles, which every fold drops (CORD-04 §3).
-   * Relays accept it regardless, so nothing throws — the check has to be here.
+   * A Grant edition restates every role the member keeps, so the actor must
+   * outrank the MEMBER, not just the role, or every fold drops it (CORD-04 §3).
    */
   const mayStrip = (member: string) =>
     Boolean(actor && canActOnMember(roster, actor, ownerHex, member, Permissions.MANAGE_ROLES));
 
-  /**
-   * The grants holding `role`, split by whether the actor may rewrite them.
-   * `skippedOwner` separates the owner: `canActOnMember` refuses them as a
-   * target outright (supreme and never removable, CORD-04 §3), which is a
-   * different fact from "you don't outrank them" — and would read as nonsense
-   * when the owner is the one revoking.
-   */
+  /** Grants holding `role`, split by rewritability; the owner is separated (never removable, CORD-04 §3). */
   const holdersOf = (role: Role) => {
     const holders = roster.grants.filter((g) => g.roleIds.includes(role.roleId));
     const blocked = holders.filter((g) => !mayStrip(g.member));
@@ -172,12 +138,8 @@ function RolesBody({ community }: { community: Community }) {
   };
 
   /**
-   * Commit a reordering. The multiset of existing `position` values is REUSED,
-   * reassigned to roles in the new visual order, rather than renumbering 1..N:
-   * renumbering would try to write position 1, which an actor ranked at 1
-   * cannot claim (no edition may claim a position at or above its own signer),
-   * so a legal reshuffle of the lower ranks would fail for everyone but the
-   * owner. Only the roles whose position actually changed are republished.
+   * Commit a reorder by REUSING the existing position multiset (renumbering
+   * 1..N would claim positions only the owner may write). Only changed roles republish.
    */
   const commitOrder = async (next: Role[]) => {
     setError(null);
@@ -186,32 +148,20 @@ function RolesBody({ community }: { community: Community }) {
     const moved = next
       .map((role, i) => ({ role, position: landing[i].position }))
       .filter(({ role, position }) => role.position !== position);
-    // Reusing the position multiset cannot separate peers, so the request is
-    // either satisfiable or it is not — there is no partial version of it. Two
-    // shapes: the reassignment changes no position at all (a shuffle purely
-    // among peers), or it changes some but the §3 tie-break still renders an
-    // order other than the one dropped, as with A(3) B(3) C(5) dragging C to
-    // the top. Both are caught here, before anything is published.
+    // Reused positions can't separate peers, so an order is satisfiable or not;
+    // catch the unsatisfiable case (e.g. A(3) B(3) C(5), C to top) before publishing.
     const missed = rendered.findIndex((role, i) => role.roleId !== next[i].roleId);
     if (missed < 0 && moved.length === 0) return; // already in the order asked for
     if (moved.length === 0 || missed >= 0) {
       setError(unsatisfiable(next, landing, rendered, missed));
-      // The escape. Without it a roster where every role shares one position
-      // has no reachable order at all and no position control to fix it by
-      // hand. Offer it rather than applying it: it rewrites the position of
-      // roles the user did not drag.
+      // Offer (not apply) the even-out escape: it rewrites roles the user didn't drag.
       if (planEvenOut(next)) setEvenOut(next.map((r) => r.roleId));
       return;
     }
     await applyMoves(moved);
   };
 
-  /**
-   * Why a requested order cannot be reached, named in terms of the roles the
-   * user can see. "Move it past a role at a different position" is the wrong
-   * advice here — that is exactly what they just did; the point is that the
-   * position it would take is not free, so the tie-break decides instead.
-   */
+  /** Explains that the target position isn't free, so the tie-break decides. */
   const unsatisfiable = (next: Role[], landing: Role[], rendered: Role[], missed: number) => {
     const wanted = landing.find((r) => r.roleId === next[missed].roleId)!;
     const peers = landing.filter((r) => r.position === wanted.position && r.roleId !== wanted.roleId);
@@ -224,14 +174,9 @@ function RolesBody({ community }: { community: Community }) {
     }, not where you dropped it. Nothing was published.`;
   };
 
-  /**
-   * Publish a set of position rewrites. Each role is its own version-chained
-   * entity, so this is a sequence of independent publishes, not a transaction.
-   * There is no rollback to build — if one fails, say exactly how far it got.
-   */
+  /** Independent publishes, not a transaction; report how far it got on failure. */
   const applyMoves = async (moved: Array<{ role: Role; position: number }>) => {
-    // A move rewrites the role at both ends of the swap, so the actor must
-    // outrank where it sat AND where it lands.
+    // The actor must outrank both the old and new position.
     for (const { role, position } of moved) {
       if (!mayTouch(role.position) || !mayTouch(position)) {
         setError("That move crosses your own rank.");
@@ -247,11 +192,8 @@ function RolesBody({ community }: { community: Community }) {
       toast({ title: "Order updated" });
     } catch (e) {
       const why = e instanceof Error ? e.message : "Couldn't reorder roles.";
-      // A half-applied swap can leave two roles on one position — legal (§3
-      // permits peers) but confusing: the role_id tie-break may then render the
-      // list in its ORIGINAL order, so the move reads as fully undone, and
-      // dragging the pair again is a no-op. Name that landing instead of
-      // telling them to "reorder again to finish", which dead-ends there.
+      // A half-applied swap can leave peers the tie-break renders in the original
+      // order, so name that outcome rather than suggest re-dragging.
       const landed = new Map(roles.map((r) => [r.roleId, r.position]));
       for (let i = 0; i < done; i++) landed.set(moved[i].role.roleId, moved[i].position);
       const seen = new Set<number>();
@@ -266,22 +208,13 @@ function RolesBody({ community }: { community: Community }) {
     }
   };
 
-  /**
-   * A distinct position for every role, in the requested order — or null if
-   * this actor cannot write the positions it would take. Computed against the
-   * roster as it is right now, both when offering the escape and when applying
-   * it, so a fold that lands in between is caught rather than published over.
-   */
+  /** Distinct positions in the requested order, or null if unwritable; computed against the current roster. */
   const planEvenOut = (next: Role[]): Role[] | null => {
     if (writableFloor === null) return null;
     const plan = normalizeOrder(next, writableFloor);
     if (!plan) return null;
-    // Gate the roles whose position CHANGES, not the whole plan. The plan
-    // carries the lead roles it deliberately leaves alone, and a non-owner's
-    // own role sits at exactly their rank — always in that lead, and never
-    // touchable under strict outrank — so gating every entry refused every
-    // non-owner. normalizeOrder already keeps its rewrites above the floor;
-    // this re-checks them through mayTouch, which also carries MANAGE_ROLES.
+    // Gate only changed roles: the unchanged lead includes the actor's own role,
+    // which is never touchable, so gating all would refuse every non-owner.
     const rewrites = plan
       .map((planned, i) => ({ from: next[i].position, to: planned.position }))
       .filter(({ from, to }) => from !== to);
@@ -289,14 +222,11 @@ function RolesBody({ community }: { community: Community }) {
     return rewrites.every(({ from, to }) => mayTouch(from) && mayTouch(to)) ? plan : null;
   };
 
-  /** Take the offered escape: give every role its own position, in the order dropped. */
   const applyEvenOut = async () => {
     if (!evenOut) return;
     setEvenOut(null);
     setError(null);
-    // Rebuild the requested order from the CURRENT roster. A role revoked or
-    // added since the refusal means the order on screen is not the one this
-    // plan was for, and re-dragging is the honest recovery.
+    // Rebuild from the CURRENT roster; if roles changed, re-dragging is the recovery.
     const found = evenOut.map((roleId) => roles.find((r) => r.roleId === roleId));
     const next = found.filter((r): r is Role => r !== undefined);
     const plan = next.length === evenOut.length && next.length === roles.length ? planEvenOut(next) : null;
@@ -311,19 +241,9 @@ function RolesBody({ community }: { community: Community }) {
     await applyMoves(moved);
   };
 
-  /*
-   * Reordering is driven by POINTER events, not HTML5 drag-and-drop.
-   * `draggable` + `dragstart`/`drop` never fire on touch, so a drag-only list
-   * is simply unreorderable on Android and iOS — both first-class targets.
-   * Pointer events cover mouse, touch and pen in one path, which is the same
-   * reason `ServerRail` drives its rail reorder from `pointerdown`.
-   *
-   * The grip captures the pointer, so every move and the release retarget to
-   * it; `touch-none` on the grip stops the browser claiming the gesture as a
-   * scroll before the first move lands.
-   */
+  // Pointer events, not HTML5 DnD (which never fires on touch). The grip
+  // captures the pointer; `touch-none` stops the browser claiming a scroll.
 
-  /** The row index under `clientY`, or null when the pointer is off the list. */
   const rowIndexAt = (clientY: number): number | null => {
     const rows = listRef.current?.children;
     if (!rows) return null;
@@ -361,37 +281,23 @@ function RolesBody({ community }: { community: Community }) {
   };
 
   /**
-   * Revoke a role: strip it from every Grant holding it, then publish a final
-   * edition carrying no permissions. It confers nothing and is held by nobody.
-   *
-   * Deliberately NOT called deletion, in the UI or here. CORD-04 models no role
-   * tombstone — CORD-03:31 deletes a Channel with an explicit `"deleted": true`
-   * edition, a Role has no equivalent, and `roleToJSON` erases anything we
-   * invented. The role stays listed and keeps consuming one of the Community's
-   * 100 role slots (CORD-04 §2) forever. A real delete needs a spec change.
-   *
-   * Grants first, then the Role — CORD-04 §6 ordering: authority is revoked
-   * before the entity it hangs off changes.
+   * Revoke a role: strip it from every Grant, then publish it with no
+   * permissions. NOT deletion: CORD-04 has no Role tombstone, so it keeps a
+   * slot of the 100 (§2). Grants first (§6 ordering).
    */
   const revokeRole = async (role: Role) => {
     setError(null);
     setEvenOut(null);
     const { strippable, skipped, skippedOwner, skippedRank } = holdersOf(role);
-    // Like the reorder, a sequence of independent publishes with no rollback.
     let stripped = 0;
     try {
       for (const g of strippable) {
         await setMemberRoles({ member: g.member, roleIds: g.roleIds.filter((r) => r !== role.roleId) });
         stripped++;
       }
-      // `display` goes with the permissions. A hoisted section only vanishes
-      // once nobody holds the role, and a revoke cannot strip the holders it
-      // does not outrank (the owner, most of all) — so leaving the flag set
-      // keeps a named member-list section for a role that now confers nothing.
+      // Clear `display` too: un-outranked holders keep the role, so a hoisted section would linger.
       await saveRole({ role: { ...role, permissions: 0n, display: undefined } });
-      // Same split as the confirm screen: `canActOnMember` refuses the owner as
-      // a target outright, which is not "you don't outrank them" — and reads as
-      // nonsense when the owner is the one revoking their own role.
+      // Owner is separated: `canActOnMember` refuses them as a target outright.
       const stillHold = [
         skippedRank.length > 0
           ? `${skippedRank.length} member${skippedRank.length === 1 ? "" : "s"} you don't outrank`
@@ -443,11 +349,7 @@ function RolesBody({ community }: { community: Community }) {
               With no permissions left it confers nothing there either.
             </p>
           )}
-          {/* Why, in the user's terms: roles are control-plane editions every
-              member's fold replays (CORD-04 §2), and the protocol has no Role
-              tombstone. Reuse is offered only when no one still lists the role,
-              since new permissions would reach the members it couldn't be
-              taken from. */}
+          {/* No Role tombstone (CORD-04 §2); reuse only when nobody still holds it. */}
           <p className="text-sm text-muted-foreground">
             Roles can't be deleted: they're part of the community's signed history, which every member's app
             replays so that everyone sees the same list. So it stays here, holding one of the
@@ -626,8 +528,7 @@ function RolesBody({ community }: { community: Community }) {
         )}
       </div>
 
-      {/* The cap is CORD-04 §2's, and revoked roles count toward it: there is
-          no Role tombstone, so a revoked role is still an entity in the fold. */}
+      {/* CORD-04 §2 cap; revoked roles count (no tombstone). */}
       {roles.length >= MAX_ROLES_PER_COMMUNITY && (
         <p className="text-xs text-muted-foreground">
           This community has reached the limit of {MAX_ROLES_PER_COMMUNITY} roles. Roles can't be deleted —
@@ -635,11 +536,7 @@ function RolesBody({ community }: { community: Community }) {
           rename a revoked role that nobody holds and give it new permissions.
         </p>
       )}
-      {/*
-        The 100-role cap is read off the fold, so before it lands `roles` is
-        empty and the cap reads as 0/100 on a community that may already be
-        full. Wait for the fold rather than offering a create we can't check.
-      */}
+      {/* Wait for the fold: the cap reads 0/100 until it lands. */}
       <Button
         type="button"
         variant="secondary"
@@ -678,7 +575,6 @@ export function RoleEditor({
 }: {
   role: Role;
   channels: Array<{ idHex: string; name: string; isPrivate?: boolean }>;
-  /** How many grants list this role; 0 for a role being created. */
   holders: number;
   saving: boolean;
   error: string | null;
@@ -691,27 +587,20 @@ export function RoleEditor({
   const [perms, setPerms] = useState<bigint>(role.permissions);
   const [display, setDisplay] = useState(Boolean(role.display));
   const [color, setColor] = useState<number>(role.color);
-  // `0` is the spec's "theme default", so pure black and no-colour are the same
-  // wire value and the swatch cannot show the difference. Remember the pick so
-  // we can say why the colour appeared not to take.
+  // `0` is "theme default" on the wire, so black can't be distinguished; remember to explain.
   const [choseBlack, setChoseBlack] = useState(false);
-  // Select value: "server", or the channel id of a channel scope.
   const [scopeValue, setScopeValue] = useState(role.scope.kind === "channel" ? role.scope.channelId : "server");
 
   const toggle = (bit: bigint, on: boolean) => {
     setPerms((p) => (on ? p | bit : p & ~bit));
   };
 
-  // A role scoped to a since-deleted channel still edits cleanly, but the
-  // channel is not offered as a choice: `scopeValue` keeps its id, so a save
-  // that doesn't touch the scope writes it back unchanged rather than silently
-  // rescoping the role, and only the trigger says what it currently is.
+  // A deleted-channel scope keeps its id so saves don't silently rescope.
   const savedScopeId = role.scope.kind === "channel" ? role.scope.channelId : undefined;
   const deletedScope = savedScopeId && !channels.some((c) => c.idHex === savedScopeId) ? savedScopeId : undefined;
   const onDeletedScope = deletedScope !== undefined && scopeValue === deletedScope;
 
   const selectedChannel = scopeValue === "server" ? undefined : channels.find((c) => c.idHex === scopeValue);
-  // The channel this role gates TODAY (its saved scope), for the rescope guard.
   const savedChannel = savedScopeId ? channels.find((c) => c.idHex === savedScopeId) : undefined;
 
   return (
@@ -720,10 +609,8 @@ export function RoleEditor({
         e.preventDefault();
         const scope: RoleScope = scopeValue === "server" ? { kind: "server" } : { kind: "channel", channelId: scopeValue };
         const rescoped = role.scope.kind === "channel" && (scope.kind !== "channel" || scope.channelId !== role.scope.channelId);
-        // Scope doubles as a private channel's access list (CORD-04 §2): the
-        // roles scoped to a channel name who may read it. A save is not a key
-        // operation, so both directions leave custody where it was; say so
-        // before publishing rather than after members notice.
+        // Scope is a private channel's access list (CORD-04 §2); saving doesn't move
+        // keys, so warn before publishing.
         if (rescoped && savedChannel?.isPrivate) {
           const ok = confirm(
             `Move this role off #${savedChannel.name}?\n\n` +
@@ -779,7 +666,6 @@ export function RoleEditor({
         <Label htmlFor="role2-scope">Scope</Label>
         <Select value={scopeValue} onValueChange={setScopeValue}>
           <SelectTrigger id="role2-scope">
-            {/* No item carries the deleted channel's id, so name it here. */}
             <SelectValue>{onDeletedScope ? <span className="text-muted-foreground">A deleted channel</span> : undefined}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -819,12 +705,8 @@ export function RoleEditor({
       <div className="space-y-2">
         <Label>Permissions</Label>
         {selectedChannel && (
-          // CORD-04 defines `scope` on a Role (§2) and then never gives it a
-          // meaning: §3 unions a member's bits with no scope filter and §5's
-          // authorization has no scope step, so every conforming client honors
-          // these bits community-wide. Saying otherwise here (as this pane once
-          // did) walks an admin into granting community-wide power — and, for
-          // the six staff bits, into mailing the `control_root` (CORD-04 §3).
+          // CORD-04 defines Role `scope` but never applies it (§3/§5), so bits are
+          // community-wide; staff bits also mail the `control_root`.
           <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
             These bits are <span className="font-medium">community-wide</span>, not limited to
             #{selectedChannel.name} — the protocol has no channel-limited permissions. Ticking one

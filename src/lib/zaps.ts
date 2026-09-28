@@ -1,19 +1,8 @@
 /**
- * Zaps — shared pure helpers for both zap surfaces:
- *
- *  - NIP-29 group chat: standard NIP-57. The LNURL provider publishes a public
- *    kind-9735 receipt to our app relays; we aggregate receipts per message
- *    ({@link tallyZaps}), verifying the embedded request's signature and
- *    holding the bolt11 invoice as the single source of truth for amounts.
- *
- *  - Concord channels: CORD.md private zaps. No public event exists — the
- *    payer seals a kind-9735-shaped rumor (NIP-57 receipt shape + `preimage`
- *    tag) into the Chat Plane, and every member verifies the payment locally
- *    ({@link verifyZapRumor}): sha256(preimage) must equal the invoice's
- *    payment hash and the `amount` tag must match the invoice's amount.
- *
- * Everything here is pure (no React, no network) so it tests in isolation and
- * folds can call it synchronously.
+ * Pure zap helpers. NIP-29: public NIP-57 kind-9735 receipts aggregated by
+ * {@link tallyZaps} (bolt11 is the amount's source of truth). Concord: CORD.md
+ * private zaps — a sealed 9735-shaped rumor with a `preimage` tag, verified
+ * locally by {@link verifyZapRumor}.
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -72,8 +61,6 @@ function trimmed(n: number): string {
   return rounded % 1 === 0 ? String(Math.round(rounded)) : rounded.toFixed(1);
 }
 
-// ── bolt11 ────────────────────────────────────────────────────────────────────
-
 interface Bolt11Info {
   /** Millisats, or null for an amountless invoice. */
   amountMsats: number | null;
@@ -107,17 +94,13 @@ export function bolt11AmountSats(invoice: string): number | null {
   return amountMsats === null ? null : Math.floor(amountMsats / 1000);
 }
 
-// ── NIP-29: public kind-9735 receipts ────────────────────────────────────────
-
 function tagValue(ev: NostrRumor, name: string): string | undefined {
   return ev.tags.find((t) => t[0] === name)?.[1];
 }
 
 /**
- * The embedded kind-9734 zap request, or null. Its signature is verified —
- * the only self-authenticating part of a receipt; without it anyone could
- * attribute a zap to an arbitrary pubkey (including the viewer's own,
- * spoofing "you zapped this"). Cached per receipt id.
+ * The embedded kind-9734 request, signature-verified (the only
+ * self-authenticating part; prevents spoofed zappers). Cached per receipt id.
  */
 const requestCache = new Map<string, NostrEvent | null>();
 export function receiptZapRequest(receipt: NostrRumor): NostrEvent | null {
@@ -140,10 +123,8 @@ export function receiptZapRequest(receipt: NostrRumor): NostrEvent | null {
 }
 
 /**
- * A receipt's amount in sats. The bolt11 invoice is the source of truth
- * (NIP-57 receipts MUST carry one); a request amount that disagrees with the
- * invoice voids the receipt, and the receipt's own `amount` tag is never
- * trusted alone.
+ * Receipt amount in sats from the bolt11 invoice; a disagreeing request amount
+ * voids it, and the receipt's own `amount` tag is never trusted.
  */
 export function receiptAmountSats(receipt: NostrRumor, request: NostrEvent): number {
   const bolt11 = tagValue(receipt, "bolt11");
@@ -156,15 +137,10 @@ export function receiptAmountSats(receipt: NostrRumor, request: NostrEvent): num
 }
 
 /**
- * Fold public kind-9735 receipts for ONE target message into a tally. A relay
- * answering a `#e` query is trusted for routing, not content: dedupe by
- * receipt id AND payment hash (one payment counts once), drop receipts whose
- * request doesn't name `targetId`, fails signature verification, or claims an
- * amount its invoice doesn't carry. Residual trust: the receipt author isn't
- * pinned to the recipient's LNURL `nostrPubkey` (that fetch would leak every
- * reader's IP to every author's wallet provider), so a forger paying nothing
- * can still mint an unpaid invoice + self-signed request — what's closed here
- * is impersonation and free amount inflation.
+ * Fold kind-9735 receipts for ONE message. Dedupes by receipt id AND payment
+ * hash; drops mismatched targets, bad signatures, and inflated amounts.
+ * Residual trust: the author isn't pinned to the LNURL `nostrPubkey` (that
+ * fetch would leak readers' IPs), so unpaid self-made invoices remain possible.
  */
 export function tallyZaps(
   receipts: NostrRumor[],
@@ -198,14 +174,9 @@ export function tallyZaps(
   };
 }
 
-// ── NIP-29: public on-chain zap events (kind 8333) ──────────────────────────
-
 /**
- * Fold public kind-8333 on-chain zap events for ONE target message into a
- * tally. Unlike Lightning receipts, the proof is the Bitcoin transaction
- * itself (on a public ledger), so we validate only structural integrity and
- * dedup by txid (one tx = one zap). The sender's pubkey is the event author
- * (the event is self-signed); the amount comes from the `amount` tag.
+ * Fold kind-8333 on-chain zaps for ONE message. The tx on the public ledger is
+ * the proof, so only structure is validated; deduped by txid.
  */
 export function tallyOnchainZaps(
   events: NostrRumor[],
@@ -240,16 +211,10 @@ export function tallyOnchainZaps(
   };
 }
 
-// ── CORD.md: sealed zap rumors ────────────────────────────────────────────────
-
 /**
- * Verify a CORD.md zap rumor's payment proof (§4):
- *   - sha256(preimage) equals the bolt11 invoice's payment hash, and
- *   - the `amount` tag equals the invoice's encoded amount (millisats).
- * Returns the invoice's payment hash on success (the fold dedupes on it —
- * every settled payment counts at most once per channel, §4), null on any
- * failure. Channel/epoch binding is the plane decoder's job (it checks every
- * chat rumor); this checks only what is zap-specific. Never throws.
+ * Verify a CORD.md zap rumor (§4): sha256(preimage) = invoice payment hash and
+ * `amount` = invoice msats. Returns the payment hash (the fold's dedup key) or
+ * null. Channel/epoch binding is the plane decoder's job. Never throws.
  */
 export function verifyZapRumor(rumor: {
   kind: number;
@@ -273,11 +238,7 @@ export function verifyZapRumor(rumor: {
   }
 }
 
-/**
- * Build the CORD.md zap rumor tag set (binding tags are added by the send
- * path). `omitTarget` skips the `e` tag for senders whose transport appends
- * the target itself.
- */
+/** CORD.md zap rumor tags (binding tags added by the send path); `omitTarget` skips `e`. */
 export function zapRumorTags(opts: {
   targetId: string;
   targetKind: number;
@@ -297,18 +258,10 @@ export function zapRumorTags(opts: {
   ];
 }
 
-// ── CORD.md: on-chain zap rumors (kind 8333) ─────────────────────────────────
-
 /**
- * Verify a CORD.md on-chain zap rumor. Unlike Lightning zaps there is no
- * preimage proof — the "proof" is the Bitcoin transaction itself, which lives
- * on a public ledger anyone can check independently. Here we only validate
- * structural integrity: kind 8333, a well-formed `i` tag (`bitcoin:tx:<txid>`),
- * and a positive `amount` tag. The txid is the dedup key (one tx = one zap),
- * returned on success so the fold can count each tx at most once per channel.
- *
- * Channel/epoch binding is the plane decoder's job (it checks every chat
- * rumor); this checks only what is on-chain-zap-specific. Never throws.
+ * Verify a CORD.md on-chain zap rumor structurally (kind 8333, `i` =
+ * `bitcoin:tx:<txid>`, positive `amount`). Returns the txid (dedup key) or
+ * null. Never throws.
  */
 export function verifyOnchainZapRumor(rumor: {
   kind: number;

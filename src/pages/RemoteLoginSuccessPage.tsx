@@ -6,17 +6,10 @@ import { Capacitor } from "@capacitor/core";
 import { Button } from "@/components/ui/button";
 
 /**
- * Landing page for the `callback` URL embedded in nostrconnect:// URIs —
- * where a remote signer (Amber, Primal, …) sends the user back after
- * approving the connection. Without this route the callback falls through to
- * the 404 page, leaving the user stranded right after a successful approval.
- *
- * - Native app: the deep link re-opens Armada; navigate home automatically
- *   after a short delay so the NIP-46 handshake subscription (still live in
- *   the login dialog) has time to receive and persist the auth event.
- * - Web browser: the signer opened this URL in a new tab; the handshake in
- *   the original tab completes in the background, so the user can just close
- *   this one.
+ * Landing page for the nostrconnect:// `callback` URL after a remote signer
+ * approves. Native: navigate home after a delay so the NIP-46 handshake
+ * subscription can persist the auth event. Web: the original tab completes it;
+ * this tab can be closed.
  */
 export function RemoteLoginSuccessPage() {
   const navigate = useNavigate();

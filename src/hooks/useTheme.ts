@@ -13,16 +13,13 @@ import {
 import type { Theme } from "@/contexts/AppContext";
 
 /**
- * Theme read/write API. Mirrors Ditto's useTheme: switching synchronously
- * injects the new CSS variables before React re-renders to avoid flicker and
- * persists to AppConfig. The change is pushed to the user's encrypted NIP-78
- * settings centrally by NostrSync (which watches all synced AppConfig fields),
- * so this hook no longer syncs individual fields itself.
+ * Mirrors Ditto's useTheme: injects CSS variables synchronously to avoid flicker and persists
+ * to AppConfig; NostrSync publishes it to NIP-78.
  */
 export function useTheme() {
   const { config, updateConfig } = useAppContext();
 
-  /** Synchronously paint a set of core colors into <style id="theme-vars">. */
+  /** Synchronously paint core colors into <style id="theme-vars">. */
   const paint = useCallback((mode: Theme, custom?: ThemeConfig) => {
     const resolved = resolveTheme(mode);
     const colors =
@@ -30,7 +27,6 @@ export function useTheme() {
         ? (custom?.colors ?? config.customTheme?.colors ?? builtinThemes.dark)
         : resolveThemeColors(resolved);
 
-    // Suppress transitions for the swap so colors change instantly.
     const noTransition = document.createElement("style");
     noTransition.textContent = "*{transition:none !important}";
     document.head.appendChild(noTransition);
@@ -43,8 +39,7 @@ export function useTheme() {
     }
     el.textContent = buildThemeCssFromCore(colors);
 
-    // Retint the native status/navigation bars to contrast with the new theme
-    // background (no-op on web).
+    // Retint native status/navigation bars (no-op on web).
     syncNativeStatusBar(colors.background);
 
     requestAnimationFrame(() => {
@@ -52,13 +47,11 @@ export function useTheme() {
     });
   }, [config.customTheme]);
 
-  /** Switch between light / dark / system / custom. */
   const setTheme = useCallback((theme: Theme) => {
     paint(theme);
     updateConfig((current) => ({ ...current, theme }));
   }, [paint, updateConfig]);
 
-  /** Apply a custom theme (named preset or builder output). */
   const applyCustomTheme = useCallback((themeConfig: ThemeConfig) => {
     paint("custom", themeConfig);
     updateConfig((current) => ({ ...current, theme: "custom", customTheme: themeConfig }));

@@ -19,24 +19,17 @@ import { writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
 
 /**
- * localStorage keys that must survive a purge. `armada:login` is the nostrify
- * login store: it's mutated by `removeLogin` in the same tick we purge, and
- * blowing it away here would race that update and resurrect a stale session.
- * We clear it (and everything else) only as the final account logs out.
+ * localStorage keys that survive a purge. `armada:login` is mutated by
+ * `removeLogin` in the same tick; wiping it here would race that and
+ * resurrect a stale session.
  */
 const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>([
   "armada:login",
-  // The next account must still know whether the outgoing browser endpoint
-  // was actually retired after final logout's broad storage purge.
+  // The next account needs to know whether the old browser endpoint was retired.
   WEB_PUSH_RETIREMENT_KEY,
 ]);
 
-/**
- * Remove the OPFS directory the retired SQLite-WASM event store used. Nothing
- * writes it any more (the event cache is an ArmadaDB tenant), but a user
- * upgrading across that change still has the bytes on disk, and a logout must
- * not leave them.
- */
+/** Remove the retired SQLite-WASM store's OPFS directory, still present on upgraded devices. */
 async function purgeOrphanedOpfs(): Promise<void> {
   try {
     const root = await navigator.storage?.getDirectory?.();
@@ -50,16 +43,11 @@ async function purgeOrphanedOpfs(): Promise<void> {
 async function purgeIndexedDB(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
   try {
-    // `indexedDB.databases()` is unsupported on Firefox; fall back to the
-    // known Armada database names so we still wipe the bulk of the data.
+    // `indexedDB.databases()` is unsupported on Firefox; fall back to known names.
     const known = [
-      // ArmadaDB's KV database. Its tenant databases (`armada:t:<id>`) have
-      // dynamic names, so `purgeArmadaDB` deletes those — it can enumerate
-      // and, more importantly, close them first.
+      // Tenant DBs (`armada:t:<id>`) are deleted by `purgeArmadaDB`, which can close them first.
       `${ARMADA_DB_NAME}:kv`,
-      // Every pre-ArmadaDB database, from the migration catalogue rather than a
-      // second hand-maintained list: a purge has to delete them whether or not
-      // the migration has run yet.
+      // From the migration catalogue: delete them whether or not migration has run.
       ...legacyDatabaseNames(),
     ];
     const dbs =
@@ -110,60 +98,36 @@ function purgeLocalStorage(preservePushCleanup: boolean): void {
 }
 
 /**
- * Purge all client-side persistence so a fresh logout leaves nothing behind:
- * the event cache, Concord caches, the persistent decrypt cache, decrypted
- * image bytes, per-user read-state and drafts, relay-info, voice/notification
- * prefs, theme, and the added-server list. The in-memory DM render memo is
- * dropped too.
- *
- * `armada:login` is intentionally left for the caller's `removeLogin` to manage
- * in the same tick. A hash-only failed-push cleanup tombstone and its opaque
- * installation id also survive only while a gateway delete remains pending;
- * everything else (including `armada:app-config`) is wiped so the next session
- * starts truly clean.
+ * Purge all client-side persistence on logout (caches, decrypt cache, read
+ * state, drafts, prefs, …). `armada:login` is left to the caller's
+ * `removeLogin`; a hash-only push-cleanup tombstone and installation id survive
+ * only while a gateway delete is pending.
  */
 export async function purgeClientStorage(outgoingPubkey?: string | null): Promise<void> {
-  // The bounded gateway teardown can time out. Before its ordinary scoped
-  // registry is wiped, retain only this account/current installation's opaque
-  // ids under a hash-only tombstone so the same signer can retry after login.
+  // Keep this install's opaque ids in a hash-only tombstone so the same signer can retry cleanup after login.
   const preservePushCleanup = stagePushCleanupForPurge(outgoingPubkey);
   clearRenderedPlaintext();
-  // Decrypted plaintext and decoded community state held in memory in front
-  // of the stores purged below.
   clearRecentDecrypts();
   clearFoldedMemory();
   clearDeferredFoldMemory();
-  // Tags and cover art read out of decrypted audio attachments.
   clearAudioMetadata();
   clearPendingJoins();
   resetDecryptConsent();
-  // The shared DM ephemeral REQs outlive their last consumer by a linger;
-  // the outgoing account's must not.
+  // Shared DM ephemeral REQs linger past their last consumer; close them.
   closeDmEphemeralSubs();
-  // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
-  // their own copy in memory. Deleting the database underneath them would
-  // leave the next account reading the previous one's data straight out of it.
+  // KV-backed caches hold in-memory copies that would otherwise leak into the next account.
   resetKvCaches();
-  // The Android share sheet keeps what was published to it until it is told
-  // otherwise, so the suggestions would go on naming the previous account's
-  // conversations, wearing their avatars, and deep-linking into rooms the next
-  // account may not be in. Not awaited with the rest: it is a system call that
-  // can be rate-limited, and no other teardown step depends on it.
+  // Android share-sheet suggestions would keep naming the old account's rooms.
+  // Not awaited: a rate-limitable system call nothing else depends on.
   void clearShareShortcuts();
   purgeLocalStorage(preservePushCleanup);
-  // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
-  // not applied, so its databases have to be closed before the sweep runs.
+  // ArmadaDB first: `deleteDatabase` is blocked by open connections.
   await purgeArmadaDB();
   await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeOrphanedOpfs()]);
-  // Gateway records and a browser endpoint can outlive the bounded pre-logout
-  // cleanup. Recreate ONLY the worker's kill switch after Cache Storage was
-  // swept, so any late/stale push tears its endpoint down instead of notifying
-  // a logged-out browser. A later explicit enable clears this flag first.
+  // Recreate only the worker's kill switch, so a late push tears its endpoint
+  // down instead of notifying a logged-out browser.
   await writePushDisabledFlag();
-  // Again, afterwards. A cache warm already in flight when the first reset ran
-  // resolves against the OLD database and refills the map behind us; the reset
-  // is idempotent and costs nothing, and this is the last word. The same goes
-  // for a decrypt or fold read that was in flight during the purge.
+  // Again: in-flight warms/reads may have refilled caches from the old database.
   resetKvCaches();
   clearRecentDecrypts();
   clearFoldedMemory();

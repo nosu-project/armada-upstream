@@ -1,13 +1,6 @@
 /**
- * Haptics.
- *
- * On the native APK these route through Capacitor's Haptics plugin (the Android
- * System WebView does NOT implement the web Vibration API, so `navigator.vibrate`
- * silently no-ops there). On the web we fall back to the Vibration API when
- * present, and otherwise no-op.
- *
- * All calls are fire-and-forget: the native bridge is async, but callers treat
- * haptics as a side effect, so we swallow the promise and never block on it.
+ * Native uses Capacitor Haptics: the Android WebView doesn't implement
+ * `navigator.vibrate`. Web falls back to the Vibration API. Fire-and-forget.
  */
 
 import { Capacitor } from "@capacitor/core";
@@ -15,13 +8,10 @@ import { Haptics, ImpactStyle, NotificationType } from "@capacitor/haptics";
 
 const native = Capacitor.isNativePlatform();
 
-/** Web Vibration API fallback (no-ops in the Android WebView / when absent). */
 function webVibrate(pattern: number | number[]): void {
   try {
     navigator.vibrate?.(pattern);
-  } catch {
-    // Vibration API unavailable — no-op.
-  }
+  } catch { /* ignore */ }
 }
 
 /** A light selection tick — toggles, segmented controls, picking an item. */

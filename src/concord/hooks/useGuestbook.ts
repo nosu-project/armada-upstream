@@ -27,16 +27,9 @@ import { emitWireScopes, onWireScopes } from "@/wire/bus";
 
 /**
  * The Guestbook Plane (CORD-02 §5): membership motion, coalesced flat.
- * Off-consensus, so it polls lazily. Fetch/decrypt/cursor via
- * {@link sweepGuestbook}; wraps decrypted once into the opened-event cache.
- *
- * The poll is the FLOOR, not the delivery path. Live guestbook wraps arrive
- * through the wire's standing `c2gb` subscription (wire/spec.ts +
- * wire/ingest.ts), which decrypts them into the opened-event store and rings
- * `c2gb:<idHex>`; the effect below re-reads on that bus. That matters most for
- * a KICK, which rotates no key and publishes no control edition — so before the
- * live sub existed, the earliest a kicked member could learn of their own
- * removal was this query's 60s tick.
+ * Off-consensus, so it polls lazily via {@link sweepGuestbook}; the poll is the
+ * floor, live wraps arrive via the wire's `c2gb` sub and ring `c2gb:<idHex>`
+ * (which matters for a KICK, which rotates no key and has no control edition).
  */
 interface GuestbookWakeEntry {
   refs: number;
@@ -44,21 +37,12 @@ interface GuestbookWakeEntry {
 }
 
 /**
- * One `c2gb` bus listener per (queryClient, guestbook query key), refcounted
- * exactly like {@link useControlEvents}' store seed. Several components mount
- * useGuestbook for one community and share the one query key, so a ring must
- * do the store re-read + setQueryData ONCE, not once per mounted copy — the
- * consolidation the pre-fix `invalidateQueries` got for free from react-query
- * and this store-only wake would otherwise lose. WeakMap-keyed by the
- * QueryClient so a test's throwaway client can never share (or leak) a real
- * one's listeners.
+ * One refcounted `c2gb` bus listener per (queryClient, query key), so N mounts
+ * do one store re-read per ring. WeakMap-keyed so test clients never share listeners.
  *
- * The wake is a STORE-ONLY read merged straight into the query cache, exactly
- * like useControlEvents' c2ctl wake: NOT an invalidate, because the query's
- * queryFn kicks off a network sweepGuestbook, and an invalidate that awaited it
- * would strand the already-stored kick behind a live round-trip (NIP-42 auth +
- * the sweep's 25s timeout + single-flight). That is what made a kick take until
- * the 60s poll to land on both sides.
+ * The wake is a STORE-ONLY read merged into the cache, NOT an invalidate: the
+ * queryFn starts a network sweep, and awaiting it would strand an
+ * already-stored kick behind auth + a 25s timeout.
  */
 const guestbookWakeRegistries = new WeakMap<QueryClient, Map<string, GuestbookWakeEntry>>();
 
@@ -118,16 +102,9 @@ export function useGuestbook(community: Community | undefined) {
     staleTime: 30_000,
     refetchInterval: 60_000,
     queryFn: async () => {
-      // Read the STORE and return it; run the network sweep in the BACKGROUND,
-      // merging its fresh events into the cache via onFresh — exactly as
-      // useControlEvents keeps its query a pure store read with the sweep on a
-      // separate effect. Awaiting the sweep here stranded every read (including
-      // useSelfRemove's confirming refetch) behind a relay round-trip — up to
-      // the auth gate (8s) plus the query timeout (25s) — which is the ~20s a
-      // KICK took to actually remove the kickee AFTER their member list had
-      // already flipped. The live c2gb sub (and, for our own actions, the
-      // publisher's local seed) feed the store, so a background sweep loses no
-      // freshness a blocking one had.
+      // Return the STORE read; the network sweep runs in the background and merges
+      // via onFresh. Awaiting it stranded reads (incl. useSelfRemove's refetch)
+      // behind relay round-trips of up to ~30s.
       const stored = await queryPlane(community!.idHex, "guestbook");
       const merged = mergeOpened(queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [], stored);
       void sweepGuestbook(nostr, community!, {
@@ -142,11 +119,7 @@ export function useGuestbook(community: Community | undefined) {
     },
   });
 
-  // The wire (or this client's own publish) wrote fresh guestbook rumors into
-  // the store and rang `c2gb:<idHex>` — re-read them. Refcounted so N mounts of
-  // this hook for one community share ONE listener and ONE store re-read per
-  // ring (see acquireGuestbookWake for why it is a store read, not an
-  // invalidate).
+  // Refcounted store re-read on `c2gb:<idHex>` (see acquireGuestbookWake).
   const idHex = community?.idHex;
   useEffect(() => {
     if (!idHex) return;
@@ -156,22 +129,16 @@ export function useGuestbook(community: Community | undefined) {
   const coalesced = useMemo(() => {
     if (!community || !query.data) return new Map<string, CoalescedMember>();
     const opened = openGuestbookOpened(query.data);
-    // A snapshot is honored only from the npub whose Refounding minted the
-    // epoch carrying it (CORD-02 §5). The sweep spans EVERY held epoch's
-    // guestbook, so the authority is the set of recorded refounders — matching
-    // only the current one silently dropped every prior epoch's snapshot. At
-    // genesis (epoch 0) there is no snapshot; an epoch with no recorded
-    // refounder contributes no authority, so we accept NO snapshot for it
-    // rather than falling back to the owner.
+    // A snapshot is honored only from the npub whose Refounding minted its epoch
+    // (CORD-02 §5). The sweep spans every held epoch, so authority is the set of
+    // recorded refounders; an epoch with none accepts no snapshot (no owner fallback).
     const authorities = snapshotAuthorities(community);
     return coalesceGuestbook(opened, {
       nowMs: Date.now(),
       canKick: (actor, target, citation, atMs) =>
         Boolean(
-          // Death wins every race (CORD-02 §9) — an ORDERING rule, since the
-          // coalesce replays history: only a kick published AFTER the tombstone
-          // is refused, or every kick the community ever honored would un-kick
-          // the moment it was dissolved.
+          // Death wins every race (CORD-02 §9) — an ORDERING rule: only a kick published
+          // AFTER the tombstone is refused, or dissolving would un-kick everyone.
           !(dissolvedAtMs != null && atMs > dissolvedAtMs) &&
             folded &&
             canActOnMember(folded.roster, actor, folded.ownerHex, target, Permissions.KICK) &&
@@ -189,8 +156,7 @@ export function useGuestbook(community: Community | undefined) {
 
 /**
  * The Complete Memberlist: coalesced Guestbook ∪ observed authors − Banlist.
- * `observed` should map every author seen publishing (messages, editions) to
- * the newest ms they were seen.
+ * `observed` maps every author seen publishing to the newest ms seen.
  */
 export function useMembers(
   community: Community | undefined,
@@ -222,9 +188,8 @@ export function useGuestbookPublisher(community: Community | undefined) {
         | { type: "kick"; target: string; vac?: { eid: string; version: bigint; hash: string } },
     ) => {
       if (!user || !community) throw new Error("Not ready.");
-      // A dissolved community honors no new authority action (CORD-02 §9). A
-      // Leave stays open: it is self-signed housekeeping, not authority, and a
-      // member must always be able to walk away from a grave.
+      // A dissolved community honors no new authority action (CORD-02 §9); a Leave
+      // is self-signed housekeeping and stays allowed.
       if (dissolvedNow != null && action.type === "kick") {
         throw new Error("This community has been dissolved; it accepts no new moderation.");
       }
@@ -237,14 +202,9 @@ export function useGuestbookPublisher(community: Community | undefined) {
             ? buildLeaveRumor(user.pubkey, ms)
             : buildKickRumor(user.pubkey, action.target, ms, action.vac);
       const wrap = await sealGuestbook(rumor, group, user.signer);
-      // A Leave is owed to the other members however this attempt goes: the
-      // leaver is already gone locally and has no screen left to retry from.
-      // So its exact signed wrap goes into the publish outbox FIRST, targeted
-      // at the community relays, and each relay that takes it below is struck
-      // off — only the ones that refused are retried, on this launch or a
-      // later one. A queue that can't be written doesn't stop the attempt.
-      // Owed, but not forever: a community relay that never comes back would
-      // otherwise keep this entry retrying on every launch for good.
+      // The leaver has no screen left to retry from, so the signed wrap goes into
+      // the publish outbox FIRST; relays that accept it are struck off and the rest
+      // retry later (bounded by GUESTBOOK_LEAVE_RETRY_MS).
       const queued =
         action.type === "leave" &&
         (await queueSignedEvent(wrap, undefined, community.relays, {
@@ -263,17 +223,13 @@ export function useGuestbookPublisher(community: Community | undefined) {
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the update.");
       }
-      // Seed the store with our OWN just-published rumor, exactly as the wire's
-      // ingest does for a received one, then ring `c2gb`. Otherwise the actor's
-      // view only reflects the action once a network sweep reads it back off a
-      // relay — the kicker-side half of the "kick takes a minute" bug, since
-      // the publisher holds no standing echo of its own wrap.
+      // Seed the store with our own rumor (as ingest would) and ring `c2gb`; the
+      // publisher gets no echo of its own wrap otherwise.
       const opened = openPlaneWraps([wrap], [group]);
       if (opened.length > 0) await writeOpened(community.idHex, opened, "guestbook");
     },
     onSuccess: () => {
-      // Store-only re-read on every mounted useGuestbook (see its c2gb wake),
-      // NOT an invalidate — an invalidate awaits the network sweep first.
+      // Store-only re-read, NOT an invalidate (which awaits the network sweep).
       if (community) emitWireScopes([`c2gb:${community.idHex}`]);
     },
   });

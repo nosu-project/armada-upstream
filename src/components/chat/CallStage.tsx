@@ -69,18 +69,14 @@ import { isHevcScreenShareParticipant } from "@/lib/hevcScreenShare";
 import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
 import { PortalContainerProvider, usePortalContainer } from "@/hooks/usePortalContainer";
 
-// Back-compat re-export: the slot moved to its own (LiveKit-free) module so
-// pages can render it without pulling the voice stack into their chunks.
+// Back-compat re-export; the slot lives in a LiveKit-free module.
 export { CallStageSlot } from "@/components/chat/CallStageSlot";
 
-/** The tile aspect ratio (16:9) used for fit calculations. */
 const TILE_ASPECT = 16 / 9;
 
 /**
- * Compute the grid layout (column count + per-tile pixel size) that fits all
- * `count` 16:9 tiles inside a `width`×`height` box while maximizing tile size —
- * so tiles scale down to fit instead of overflowing into a scroll. Tries every
- * column count and keeps the one yielding the largest tiles.
+ * Column count + tile size that fits `count` 16:9 tiles in the box with the
+ * largest tiles (tiles shrink rather than scroll).
  */
 function fitGrid(
   count: number,
@@ -94,11 +90,9 @@ function fitGrid(
   let best = { cols: 1, tileW: 0, tileH: 0 };
   for (let cols = 1; cols <= count; cols++) {
     const rows = Math.ceil(count / cols);
-    // Available space per cell after gaps.
     const cellW = (width - gap * (cols - 1)) / cols;
     const cellH = (height - gap * (rows - 1)) / rows;
     if (cellW <= 0 || cellH <= 0) continue;
-    // Fit a 16:9 tile inside the cell.
     let tileW = cellW;
     let tileH = tileW / TILE_ASPECT;
     if (tileH > cellH) {
@@ -111,10 +105,8 @@ function fitGrid(
 }
 
 /**
- * Track an element's content-box size via ResizeObserver. Uses a callback ref
- * so the observer is (re)attached whenever the measured element mounts — the
- * grid container unmounts/remounts as focus/theater toggle, and a plain
- * useRef + useEffect([]) would leave a stale 0×0 size on the new element.
+ * Element content-box size via ResizeObserver. A callback ref, since the grid
+ * container remounts on focus/theater toggles.
  */
 function useElementSize<T extends HTMLElement>() {
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -125,8 +117,7 @@ function useElementSize<T extends HTMLElement>() {
       observerRef.current = null;
       return;
     }
-    // Seed immediately so the first paint after (re)mount has real dimensions,
-    // not 0×0 (the ResizeObserver callback is async).
+    // Seed synchronously; the ResizeObserver callback is async.
     const rect = el.getBoundingClientRect();
     setSize({ width: rect.width, height: rect.height });
     const ro = new ResizeObserver(([entry]) => {
@@ -139,11 +130,7 @@ function useElementSize<T extends HTMLElement>() {
   return [ref, size] as const;
 }
 
-/**
- * A stable key identifying a focusable tile: a participant's camera/screenshare
- * track, or an audio-only participant's avatar tile. Used to track which tile is
- * spotlighted across re-renders (track publications come and go).
- */
+/** Stable key for a focusable tile (camera/screenshare track or avatar tile). */
 function trackTileKey(trackRef: TrackReference): string {
   return `${trackRef.participant.identity}:${trackRef.source}`;
 }
@@ -153,13 +140,11 @@ function participantTileKey(participant: Participant): string {
 
 const LOCAL_HEVC_SCREEN_SHARE_KEY = "local:hevc-screen-share";
 
-/** Fullscreen controls disappear after this much input inactivity. */
 const FULLSCREEN_CONTROLS_IDLE_MS = 3_000;
 
 /**
- * Android WebView advertises parts of the Fullscreen API without supporting a
- * reliable arbitrary-element fullscreen experience. Its native call surface
- * already owns fullscreen, so don't expose a button that can strand the UI.
+ * Android WebView advertises the Fullscreen API without reliable element
+ * fullscreen, and its native call surface owns fullscreen anyway.
  */
 function supportsElementFullscreen(): boolean {
   if (typeof document === "undefined" || typeof HTMLElement === "undefined") return false;
@@ -169,11 +154,9 @@ function supportsElementFullscreen(): boolean {
 }
 
 /**
- * Reveal fullscreen chrome on input, then hide it after a quiet interval.
- * Pointer interaction, a hovered toolbar, a keyboard-visible focus ring, and
- * any open surface portaled into the fullscreen tile keep it visible. Checking
- * the DOM at timeout time is important: a mouse click may leave focus on a
- * button, but unlike keyboard `:focus-visible` that must not pin the bar.
+ * Reveal fullscreen chrome on input, hide after idle. Hover, keyboard
+ * `:focus-visible` and open portaled surfaces keep it up; mouse focus must not,
+ * hence checking the DOM at timeout time.
  */
 function useFullscreenControlsAutoHide(
   tile: HTMLElement | null,
@@ -232,8 +215,7 @@ function useFullscreenControlsAutoHide(
       reveal();
     };
 
-    // The controls mount hidden so this post-mount update also gives their
-    // opacity/translate transition a real visible entrance.
+    // Mounting hidden gives the controls a real entrance transition.
     reveal();
     tile.addEventListener("pointermove", reveal, { passive: true });
     tile.addEventListener("pointerdown", beginPointerInteraction, { passive: true });
@@ -270,7 +252,6 @@ function participantIdentityKey(
   return mapped.verified ? `pubkey:${mapped.pubkey}` : `identity:${identity}`;
 }
 
-/** Count people, not the auxiliary HEVC publisher or duplicate user sessions. */
 function uniqueParticipantCount(
   participants: readonly Participant[],
   resolve: ReturnType<typeof useVoiceIdentity>,
@@ -288,31 +269,20 @@ function uniqueParticipantCount(
 const nameplateClass =
   "absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white max-w-[calc(100%-0.75rem)]";
 
-/** How long an unclaimed Concord identity reads as "Verifying…" before "Unverified". */
 const VERIFY_GRACE_MS = 15_000;
 
 /**
- * How long after joining a call the first video track to appear still counts
- * as "video was already rolling when I joined" and auto-expands the stage.
- * Subscriptions to pre-existing tracks land asynchronously after connecting
- * (longer on the E2EE path), so this can't just check the first render.
+ * Window after joining in which the first video track still counts as "already
+ * rolling" and auto-expands the stage (subscriptions land async, slower on E2EE).
  */
 const JOIN_VIDEO_EXPAND_WINDOW_MS = 10_000;
 
-/**
- * How long the compact floating window keeps showing the current active
- * speaker before it's allowed to switch to a newly-loudest one. Long enough
- * that brief interjections ("mhm", a cough) and simultaneous talkers don't
- * make the single-content preview flicker between faces.
- */
+/** Minimum hold on the floating window's active speaker, so brief interjections don't flicker it. */
 const FLOATING_SPEAKER_HOLD_MS = 2_000;
 
 /**
- * Pick the single participant/track to show in the compact floating window,
- * by priority: (1) an active screen share, (2) the manually focused tile,
- * (3) the debounced active speaker, (4) a stable first-participant fallback.
- * The chosen key indexes into the same `tiles` list the grid uses, so the
- * compact view reuses the exact tile renderer (video or avatar fallback).
+ * The floating window's single tile, by priority: screen share, focused tile,
+ * debounced active speaker, stable fallback. Indexes into the grid's `tiles`.
  */
 function usePrimaryFloatingKey(args: {
   enabled: boolean;
@@ -322,9 +292,6 @@ function usePrimaryFloatingKey(args: {
   fallbackKey: string | null;
 }): string | null {
   const { enabled, focusKey, screenShareKey, speakingKey, fallbackKey } = args;
-  // The debounced active speaker: only adopt a new speaker after the hold
-  // window lapses since the last switch, so momentary/overlapping speech
-  // doesn't churn the preview.
   const [heldSpeaker, setHeldSpeaker] = useState<string | null>(null);
   const lastSwitch = useRef(0);
   useEffect(() => {
@@ -350,21 +317,14 @@ function usePrimaryFloatingKey(args: {
 
 
 /**
- * The name to render for a participant, folding in Concord's verification race
- * (CORD-07 §4): a participant's LiveKit connection and their signed presence
- * claim travel over independent channels (the SFU vs the Nostr relays), so a
- * just-joined participant is briefly unclaimed — and labeling that instant
- * "Unverified" reads as an integrity warning when nothing is wrong yet. While
- * the grace window is open the tile says "Verifying…"; only an identity that
- * stays unclaimed (or contested) past it earns "Unverified". The window is
- * anchored at the later of the participant's join and our own — a fresh viewer
- * has to rewarm its own presence fold too — so it's stable across tile
- * remounts (grid ↔ spotlight, camera on/off) and can't be reset remotely.
+ * Display name with Concord's verification race (CORD-07 §4): LiveKit and the
+ * presence claim arrive separately, so show "Verifying…" during a grace window
+ * before "Unverified". Anchored at the later of their join and ours, so it's
+ * stable across tile remounts and can't be reset remotely.
  */
 function useTileDisplayName(participant: Participant): {
   pubkey: string;
   displayName: string;
-  /** Whether `pubkey` is a claim we've verified — i.e. whether the name is theirs. */
   verified: boolean;
   metadata: NostrMetadata | undefined;
 } {
@@ -374,7 +334,6 @@ function useTileDisplayName(participant: Participant): {
   const metadata = author.data?.metadata;
   const scopedName = useScopedDisplayName(pubkey, metadata);
 
-  // Fallback anchor for the (transient) window before joinedAt is populated.
   const mountedAt = useRef(Date.now());
   const anchor =
     Math.max(participant.joinedAt?.getTime() ?? 0, room.localParticipant.joinedAt?.getTime() ?? 0) ||
@@ -382,7 +341,6 @@ function useTileDisplayName(participant: Participant): {
   const deadline = anchor + VERIFY_GRACE_MS;
   const [, setTick] = useState(0);
   const inGrace = !verified && Date.now() < deadline;
-  // Re-render when the grace window lapses so "Verifying…" flips to "Unverified".
   useEffect(() => {
     if (!inGrace) return;
     const timer = setTimeout(() => setTick((n) => n + 1), Math.max(0, deadline - Date.now()) + 50);
@@ -398,10 +356,8 @@ function useTileDisplayName(participant: Participant): {
 }
 
 /**
- * Keep a remote participant's microphone and screen-share playback gains
- * applied independently. LiveKit remembers source-specific values for tracks
- * that subscribe later, while this hook also re-applies after identity or
- * persisted-volume changes. No-ops for the local participant.
+ * Keep a remote participant's mic and screen-share gains applied independently,
+ * re-applying on identity or persisted-volume changes. No-op for local.
  */
 function useApplyPlaybackVolumes(participant: Participant, pubkey: string) {
   const [userVolume] = useUserVolume(pubkey);
@@ -415,11 +371,7 @@ function useApplyPlaybackVolumes(participant: Participant, pubkey: string) {
   }, [participant, userVolume, screenShareVolume, pubkey]);
 }
 
-/**
- * A dropdown anchored on a remote participant's tile nameplate with the
- * playback-volume slider, à la Discord. Shares the per-pubkey volume store
- * with the right-click menus, so all controls stay in sync.
- */
+/** Per-participant playback-volume menu on the tile nameplate; shares the right-click menus' store. */
 function VolumeMenu({
   pubkey,
   displayName,
@@ -477,14 +429,9 @@ function VolumeMenu({
   );
 }
 
-/**
- * A heavily blurred, darkened copy of the participant's avatar that fills the
- * whole tile behind the crisp centered avatar — the Signal "camera off" look.
- * When there's no picture we fall back to the plain black canvas.
- */
+/** Blurred avatar filling a camera-off tile (the Signal look). */
 function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
-  // kind-0, so the same checks the avatar itself gets — the URL sanitizer and
-  // the media policy (a stranger's host proxied, or not loaded at all).
+  // kind-0 content: same sanitizer and media policy as the avatar itself.
   const src = useMediaSrc(sanitizeImageSrc(picture));
   if (!src) return null;
   return (
@@ -492,8 +439,7 @@ function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
       <img
         src={src}
         alt=""
-        // Scale up so the blur's soft edges never reveal the tile background,
-        // then blur heavily and dim so the foreground avatar/nameplate stay legible.
+        // Scale up so blurred edges never reveal the tile background.
         className="h-full w-full scale-150 object-cover blur-2xl"
         draggable={false}
       />
@@ -502,11 +448,7 @@ function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
   );
 }
 
-/**
- * A small amber badge pinned to a tile's top-left corner while that
- * participant's hand is raised (Armada client feature; Concord calls only). The
- * raised-hand set is surfaced on the app-level call context by the Concord room.
- */
+/** Raised-hand badge on a tile (Concord calls only). */
 function RaisedHandBadge({ pubkey }: { pubkey: string }) {
   const { raisedHands } = useVoiceActivity();
   if (!raisedHands.has(pubkey)) return null;
@@ -520,18 +462,13 @@ function RaisedHandBadge({ pubkey }: { pubkey: string }) {
   );
 }
 
-/**
- * A deterministic horizontal jitter (−70..70px) keyed off the reaction
- * nonce, so several reactions in flight — now all sharing one start point —
- * fan out instead of stacking in an exact line.
- */
+/** Deterministic −70..70px jitter per nonce, so simultaneous reactions fan out. */
 function reactionOffset(nonce: string): number {
   let h = 0;
   for (let i = 0; i < nonce.length; i++) h = (h * 31 + nonce.charCodeAt(i)) | 0;
   return (h % 141) - 70;
 }
 
-/** A reaction's start point + travel distance within its stage box, both in px. */
 interface ReactionSpawn {
   x: number;
   y: number;
@@ -539,25 +476,14 @@ interface ReactionSpawn {
 }
 
 /**
- * Every reaction rises from the same spot — bottom-center of the stage box,
- * roughly where the reaction button itself sits in the controls row — rather
- * than from the sender's own tile. Tile position depends entirely on the
- * current grid layout (how many people are in the call, video vs. avatar,
- * join order), so it shifts under a viewer for reasons that have nothing to
- * do with the reaction and read as arbitrary; the avatar/name pill on the
- * floater already does 100% of the "who reacted" job, so the origin point
- * doesn't need to. One fixed origin is layout-agnostic and gives everyone
- * the exact same big, equal-length rise for free (no per-tile clipping case
- * to reason about).
+ * Every reaction rises from bottom-center of the stage box, not the sender's
+ * tile: tile position shifts with layout, and the floater's pill already says who.
  */
 const REACTION_RISE_RATIO = 0.7;
 const REACTION_RISE_MIN = 160;
 const REACTION_RISE_MAX = 420;
 const REACTION_BOTTOM_MARGIN = 24;
-// Keep the rise clear of the box top and the floater's centre clear of the
-// side edges: a short docked pane would otherwise fade the emoji out clipped
-// at the top, and a wide sender pill jittered near a side would be sheared by
-// the overlay's `overflow-hidden`.
+// Keep the floater clear of the top and side edges (`overflow-hidden` would clip it).
 const REACTION_TOP_MARGIN = 8;
 const REACTION_EDGE_MARGIN = 72;
 
@@ -567,22 +493,17 @@ function computeSpawnPoint(container: HTMLElement | null, nonce: string): Reacti
     return { x: 0, y: 0, rise: REACTION_RISE_MIN };
   }
   const y = box.height - REACTION_BOTTOM_MARGIN;
-  // Fixed fraction of the box height, clamped to a sane range, then capped so
-  // the floater never rises past the top edge on a tiny pane.
+  // Clamped fraction of box height, capped so it never rises past the top.
   let rise = Math.min(Math.max(box.height * REACTION_RISE_RATIO, REACTION_RISE_MIN), REACTION_RISE_MAX);
   rise = Math.min(rise, Math.max(y - REACTION_TOP_MARGIN, 0));
-  // Jitter the horizontal origin off centre (so simultaneous reactions fan
-  // out) but hold it within a margin of the sides.
   const margin = Math.min(REACTION_EDGE_MARGIN, box.width / 2);
   const x = Math.min(Math.max(box.width / 2 + reactionOffset(nonce), margin), box.width - margin);
   return { x, y, rise };
 }
 
 /**
- * A floating emoji + sender pill. Memoized because `entry`/`spawn` are stable
- * references for a reaction's whole ~4s life, so this skips re-rendering
- * every OTHER floater already on screen whenever `StageReactions` re-renders
- * (a new reaction, or its 2s decay tick).
+ * Memoized: `entry`/`spawn` are stable for a reaction's ~4s life, so other
+ * floaters skip re-renders.
  */
 const StageReactionFloater = memo(function StageReactionFloater({
   entry,
@@ -604,8 +525,7 @@ const StageReactionFloater = memo(function StageReactionFloater({
       } as CSSProperties}
     >
       <span className="font-emoji text-4xl leading-none drop-shadow shrink-0">{entry.emoji}</span>
-      {/* Matches the tile nameplate's width budget (not the old tight 96px
-          pill) so the same names that read in full on a tile don't clip here. */}
+      {/* Matches the tile nameplate's width budget so names don't clip. */}
       <span className="flex items-center gap-1 rounded-full bg-black/70 pl-0.5 pr-2 py-0.5 text-xs text-white shadow shrink-0 max-w-56">
         <Avatar className="size-4 shrink-0">
           <AvatarImage src={metadata?.picture} alt="" />
@@ -622,26 +542,16 @@ const StageReactionFloater = memo(function StageReactionFloater({
 });
 
 /**
- * The stage-wide emoji reaction overlay (à la Jitsi/Zoom): a reaction pops in
- * near the controls row and rises above the WHOLE stage, so everyone in the
- * call sees it — not just whoever's looking at a small tile. One instance
- * mounts per render branch (theater/floating/docked); `containerRef` is that
- * branch's own media-area ref, used both to size this overlay and as the
- * coordinate origin for `computeSpawnPoint`. Each reaction's spawn point is
- * computed once and cached by nonce for its ~4s life.
+ * Stage-wide emoji reaction overlay. One instance per render branch;
+ * `containerRef` sizes it and is the spawn coordinate origin.
  */
 function StageReactions({ containerRef }: { containerRef: React.RefObject<HTMLElement | null> }) {
   const { reactions } = useCallSignals();
-  // Spawn point per reaction, computed the first time a nonce is seen and
-  // cached for its ~4s life. Held in a ref (not state) so a just-arrived
-  // reaction gets its spawn synchronously in THIS render — with state it
-  // rendered null for one frame (its pop-in keyframe skipped) until the effect
-  // committed the spawn. The cached object stays a stable prop, so the
-  // `StageReactionFloater` memo still holds.
+  // A ref, not state, so a new reaction gets its spawn in THIS render (state
+  // skipped its pop-in frame). The cached object keeps the floater memo intact.
   const spawns = useRef(new Map<string, ReactionSpawn>());
 
-  // Drop spawns whose reaction has aged out, so the map can't grow unbounded
-  // over a long call.
+  // Drop aged-out spawns so the map stays bounded.
   useEffect(() => {
     const live = new Set(reactions.map((r) => r.nonce));
     for (const nonce of spawns.current.keys()) {
@@ -664,7 +574,6 @@ function StageReactions({ containerRef }: { containerRef: React.RefObject<HTMLEl
   );
 }
 
-/** A single video tile (camera or screenshare) for one participant track. */
 function VideoTile({
   trackRef,
   isSpeaking,
@@ -694,13 +603,10 @@ function VideoTile({
   const fullscreenNameplateClass = fullscreen && fullscreenControlsVisible
     ? "bottom-[calc(4rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]"
     : undefined;
-  // Show the avatar (not a black frame) unless there's a LIVE video track:
-  // a placeholder (track not subscribed yet) OR a muted publication — turning
-  // the camera/screen off mutes the track before its publication clears, and
-  // rendering that produced a black tile instead of reverting to the avatar.
+  // Avatar unless there's a LIVE track: turning video off mutes the track
+  // before the publication clears, which rendered a black tile.
   const hasVideo = Boolean(trackRef.publication?.track) && !trackRef.publication?.isMuted;
   const isLocal = participant.isLocal;
-  // Keep persisted microphone and screen-share gains applied independently.
   useApplyPlaybackVolumes(participant, pubkey);
   const hasVolumeMenu = !isLocal;
   const volumeTarget: PlaybackVolumeTarget = isScreenShare ? "screenShare" : "user";
@@ -749,8 +655,7 @@ function VideoTile({
       ref={tileRef}
       className={cn(
         "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full transition-shadow fullscreen:rounded-none fullscreen:ring-0",
-        // Active-speaker highlight, matching the avatar-tile visual language.
-        // Screenshare tiles never get the participant speaking ring.
+        // Screenshare tiles never get the speaking ring.
         !isScreenShare &&
           isSpeaking &&
           "ring-2 ring-success shadow-[0_0_0_4px_hsl(var(--success)/0.35)]",
@@ -759,9 +664,7 @@ function VideoTile({
       {hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
-          // Mirror your own camera (not screenshare) so it reads naturally. The
-          // video fills its (definite-height) tile and letterboxes via
-          // object-contain, so a tall screenshare fits without overflowing.
+          // Mirror your own camera (not screenshare).
           className={cn(
             "h-full w-full",
             isScreenShare || focused ? "object-contain" : "object-cover",
@@ -805,7 +708,6 @@ function VideoTile({
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {!isScreenShare && <RaisedHandBadge pubkey={pubkey} />}
-      {/* Remote nameplates open the matching mic or screen-share volume menu. */}
       {hasVolumeMenu ? (
         <VolumeMenu
           pubkey={pubkey}
@@ -1007,7 +909,6 @@ function LocalHevcScreenShareTile({
   );
 }
 
-/** Hover-revealed expand/shrink button overlaid on a tile's top-right corner. */
 function FocusButton({ focused, onClick }: { focused: boolean; onClick: () => void }) {
   return (
     <button
@@ -1016,7 +917,7 @@ function FocusButton({ focused, onClick }: { focused: boolean; onClick: () => vo
       onClick={onClick}
       className={cn(
         "absolute top-1.5 right-1.5 rounded-md bg-black/60 p-1 text-white/90 hover:bg-black/80 hover:text-white",
-        // Always visible on touch (no hover); fade in on hover for pointer devices.
+        // Always visible on touch (no hover).
         "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity [@media(hover:none)]:opacity-100",
       )}
     >
@@ -1025,12 +926,7 @@ function FocusButton({ focused, onClick }: { focused: boolean; onClick: () => vo
   );
 }
 
-/**
- * A tile for a participant who isn't sharing any video: a large centered avatar
- * on the same dark canvas as the video tiles, with a speaking ring and a
- * name/mute footer — so the stage shows *everyone* in the call (à la Discord),
- * not just cameras.
- */
+/** Avatar tile for a participant without video, so the stage shows everyone. */
 function AvatarTile({
   participant,
   isSpeaking,
@@ -1047,12 +943,9 @@ function AvatarTile({
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
   const muted = !participant.isMicrophoneEnabled;
-  // Keep persisted microphone and screen-share gains applied independently.
   useApplyPlaybackVolumes(participant, pubkey);
 
-  // For emoji-shaped avatars the speaking ring is a drop-shadow that hugs the
-  // silhouette (a box ring would clip against the mask); circular avatars get a
-  // plain ring + glow.
+  // Emoji-shaped avatars get a silhouette drop-shadow (a box ring would clip).
   const ringStyle: CSSProperties | undefined =
     hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined;
 
@@ -1090,7 +983,6 @@ function AvatarTile({
       </div>
       <FocusButton focused={focused} onClick={onToggleFocus} />
       <RaisedHandBadge pubkey={pubkey} />
-      {/* Remote nameplates open the per-user volume menu. */}
       {!isLocal ? (
         <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
           {nameplate}
@@ -1111,12 +1003,8 @@ function AvatarTile({
 }
 
 /**
- * Compact prev/next selector shown over the floating preview when more than one
- * screen share is active, letting the viewer cycle between them (the raw track
- * order can't be trusted — it differs per client and reorders on subscribe, so
- * selection is driven by a stable, sorted key list in the parent). Also labels
- * the currently-selected sharer by display name. Rendered inside the LiveKit
- * room context, so `useTileDisplayName` resolves the sharer's name/verification.
+ * Prev/next over the floating preview with several screen shares. Selection
+ * uses a stable sorted key list: raw track order differs per client.
  */
 function ShareSelector({
   participant,
@@ -1136,8 +1024,7 @@ function ShareSelector({
   return (
     <div
       className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded-md bg-black/70 px-1 py-0.5 text-[11px] text-white"
-      // Keep any pointer/click on the selector from bubbling to the underlying
-      // tile (which carries the focus toggle) or any wrapper handler.
+      // Don't let clicks reach the tile's focus toggle.
       onPointerDown={stop}
       onClick={stop}
     >
@@ -1180,11 +1067,7 @@ function ShareSelector({
   );
 }
 
-/**
- * Resolve a sharer's label for the share selector. Only a verified claim
- * resolves to a profile (and so to a name carrying custom emoji); the local and
- * unverified cases are fixed literals with no pubkey behind them.
- */
+/** Only a verified claim resolves to a profile; local/unverified are fixed literals. */
 function useShareSharerLabel(participant: Participant | null): {
   pubkey?: string;
   label: string;
@@ -1200,15 +1083,9 @@ function useShareSharerLabel(participant: Participant | null): {
 }
 
 /**
- * The compact media controls shown inside the call stage: mute/unmute, camera
- * on/off, screen share, reactions, and leave. Used by the floating window and
- * by theater mode (where the fixed call bar is hidden behind the overlay, so
- * this is the only way to control the call). Rendered inside the LiveKit room
- * context (it's part of the reparented CallStage), so it reuses the room's
- * existing local participant + publish state via `useLocalParticipant` — no
- * duplicate media state is created. Mirrors the VoiceBar's control behavior
- * (sounds, screen-share picker/cancellation + error handling) so the two stay
- * consistent.
+ * Compact media controls inside the stage (floating window and theater, where
+ * the call bar is hidden). Mirrors VoiceBar's behavior via the room's existing
+ * local participant state.
  */
 function StageControls({
   className,
@@ -1237,7 +1114,6 @@ function StageControls({
 const DOCKED_HEIGHT_KEY = "armada:call-stage:docked-height";
 const DOCKED_MIN = 220;
 
-/** The docked pane's max height: most of the viewport, leaving chat visible. */
 function dockedMax(): number {
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
   return Math.max(DOCKED_MIN, Math.round(vh * 0.85));
@@ -1255,7 +1131,6 @@ function loadDockedHeight(): number {
   } catch {
     // ignore malformed/blocked storage
   }
-  // Default ~42vh, matching the pane's previous fixed height.
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
   return clampDocked(Math.round(vh * 0.42));
 }
@@ -1269,15 +1144,8 @@ function saveDockedHeight(px: number): void {
 }
 
 /**
- * The call stage: a dismissable box, shown at the top of the chat window, that
- * presents *everyone* in the call as tiles — cameras and screenshares as video,
- * audio-only participants as avatars (with a speaking ring). It animates open
- * when expanded and collapses to zero height when closed. Opening/closing is
- * driven by `open` (toggled from the corner call panel); the close button
- * collapses it via the call context.
- *
- * Rendered inside a `LiveKitRoom` context and portaled into the matching chat
- * surface's top-of-chat slot by `CallProvider`.
+ * The call stage: every participant as a tile, at the top of the chat. Rendered
+ * inside `LiveKitRoom` and portaled into the chat's slot by `CallProvider`.
  */
 export function CallStage({
   callLabel,
@@ -1297,17 +1165,12 @@ export function CallStage({
     [speakingParticipants],
   );
 
-  // Which tile is spotlighted, tracked by its stable key (or null for the grid).
   const [focusKey, setFocusKey] = useState<string | null>(null);
 
-  // The media-area box the stage-wide reaction overlay sizes itself against —
-  // see `StageReactions`. Only one render branch (theater/floating/docked) is
-  // mounted at a time, but this one CallStage instance persists across
-  // switches between them, so a single ref stays valid throughout.
+  // One CallStage persists across the theater/floating/docked branches, so one
+  // ref serves the reaction overlay throughout.
   const stageBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // Video tracks (camera + screenshare) we've subscribed to — each a full
-  // TrackReference so `VideoTrack` has a real reference to render.
   const allVideoTracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: false },
@@ -1328,9 +1191,7 @@ export function CallStage({
       ),
   );
 
-  // Participants who already have a (camera) video tile shown; the rest get an
-  // avatar tile so everyone is represented exactly once (screenshares are extra
-  // tiles in addition to their owner's camera/avatar tile).
+  // Everyone gets exactly one camera or avatar tile; screenshares are extra.
   const withCamera = new Set(
     videoTracks.filter((t) => t.source === Track.Source.Camera).map((t) => t.participant.identity),
   );
@@ -1358,10 +1219,7 @@ export function CallStage({
       return true;
     });
 
-  // Auto-expand the stage when a screenshare *appears* and spotlight it (à la
-  // Discord). We compare against the previous render's screenshare keys so this
-  // fires only on a new share — not on every render, and not re-opening after
-  // the user manually closes the stage while a share is still running.
+  // Auto-expand and spotlight only on a NEW share, so a user-closed stage stays closed.
   const remoteScreenShareKeys = videoTracks
     .filter((t) => t.source === Track.Source.ScreenShare)
     .map(trackTileKey);
@@ -1381,13 +1239,8 @@ export function CallStage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenShareKeys.join("|")]);
 
-  // Auto-expand on join when video is already in use: if camera/screenshare
-  // tracks exist when we join (their subscriptions land moments after
-  // connecting), open the stage so the video is visible immediately — instead
-  // of a collapsed bar whose small toggle is easy to miss. One-shot: a camera
-  // turning on later must NOT reopen a stage the user closed (a *new*
-  // screenshare still does, above), so the first video sighting consumes the
-  // trigger whether or not it fell inside the join window.
+  // Auto-expand when video is already rolling on join. One-shot: the first video
+  // sighting consumes it, so a later camera doesn't reopen a closed stage.
   const mountedAt = useRef(Date.now());
   const sawVideo = useRef(false);
   const hasVideoTracks = videoTracks.length > 0 || Boolean(localHevcPreview);
@@ -1397,8 +1250,6 @@ export function CallStage({
     if (Date.now() - mountedAt.current <= JOIN_VIDEO_EXPAND_WINDOW_MS) setStageOpen(true);
   }, [hasVideoTracks, setStageOpen]);
 
-  // The ordered, keyed set of focusable tiles. A render fn per tile keeps the
-  // spotlight + thumbnail strip in sync without duplicating tile markup.
   const tiles = useMemo(() => {
     const list: { key: string; render: (focused: boolean) => React.ReactNode }[] = [];
     if (localHevcPreview && hevcScreenShare) {
@@ -1448,7 +1299,6 @@ export function CallStage({
       });
     }
     return list;
-    // `speakingIds`/identities change frequently; recompute is cheap.
   }, [
     videoTracks,
     avatarOnly,
@@ -1458,31 +1308,21 @@ export function CallStage({
     endToEndEncrypted,
   ]);
 
-  // If the focused tile goes away (e.g. its owner stopped sharing or left),
-  // drop back to the grid so we don't spotlight nothing.
+  // Focused tile gone: back to the grid.
   useEffect(() => {
     if (focusKey && !tiles.some((t) => t.key === focusKey)) setFocusKey(null);
   }, [focusKey, tiles]);
 
   const focused = focusKey ? tiles.find((t) => t.key === focusKey) : undefined;
 
-  // Compact floating window: choose ONE tile to show, by priority. Screen share
-  // wins; then the manually focused tile; then the debounced active speaker;
-  // then a stable fallback (first video tile, else first tile) so something
-  // meaningful shows even in a silent, camera-off call.
-  //
-  // All active screen-share tiles, in a STABLE order (by participant identity,
-  // not the track array's incidental order — which flips between clients and
-  // reorders on (re)subscribe). Keying the selection off this order keeps the
-  // selected share from jumping when the array churns.
+  // Share keys in a STABLE order (by identity): the track array order flips
+  // between clients and on resubscribe.
   const sortedShareKeys = useMemo(
     () => [...screenShareKeys].sort(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [screenShareKeys.join("|")],
   );
-  // The selected screen share (stable across track-array reordering). One share
-  // auto-selects; with several, the current pick is kept while it's still live,
-  // and we fall back to the first stable one when it ends or none is chosen.
+  // One share auto-selects; with several, keep the pick while live.
   const [selectedShareKey, setSelectedShareKey] = useState<string | null>(null);
   useEffect(() => {
     setSelectedShareKey((cur) => {
@@ -1491,8 +1331,7 @@ export function CallStage({
       return sortedShareKeys[0]; // auto-select (single) or recover (ended)
     });
   }, [sortedShareKeys]);
-  // Honor manual focus on a screen share: if the user focused a share tile,
-  // treat that as the selection so prev/next + preview agree with the grid.
+  // A manually focused share tile is the selection.
   useEffect(() => {
     if (focusKey && sortedShareKeys.includes(focusKey)) setSelectedShareKey(focusKey);
   }, [focusKey, sortedShareKeys]);
@@ -1509,19 +1348,13 @@ export function CallStage({
       const next = (base + dir + sortedShareKeys.length) % sortedShareKeys.length;
       const nextKey = sortedShareKeys[next];
       setSelectedShareKey(nextKey);
-      // Move focus with the cycle. Otherwise the focus-honoring effect above
-      // (which snaps the selection back to `focusKey` — pinned to the share
-      // that auto-expanded) would immediately revert this switch: the name and
-      // index would flip for a frame and then the preview would stay on the
-      // previously selected share. Keeping `focusKey` in step lets the switch
-      // stick. Only move focus if it was already on a share (don't create focus
-      // the user didn't ask for).
+      // Move focus with the cycle, or the effect above snaps the selection back.
+      // Only if focus was already on a share.
       setFocusKey((f) => (f && sortedShareKeys.includes(f) ? nextKey : f));
     },
     [sortedShareKeys, selectedShareKey],
   );
-  // Highest-priority current speaker that has a tile (speakingParticipants is
-  // ordered loudest-first by LiveKit).
+  // speakingParticipants is loudest-first.
   const speakingKey = useMemo(() => {
     for (const p of speakingParticipants) {
       const cam = tiles.find((t) => t.key === `${p.identity}:${Track.Source.Camera}`);
@@ -1531,7 +1364,6 @@ export function CallStage({
     }
     return null;
   }, [speakingParticipants, tiles]);
-  // Stable fallback: prefer any camera tile, else the first tile.
   const fallbackKey =
     tiles.find((t) => t.key.endsWith(`:${Track.Source.Camera}`))?.key ?? tiles[0]?.key ?? null;
 
@@ -1544,15 +1376,9 @@ export function CallStage({
   });
   const primaryTile =
     (primaryKey && tiles.find((t) => t.key === primaryKey)) || tiles[0] || undefined;
-  // Whether the compact preview is currently showing a screen share (so the
-  // floating window can render its prev/next share selector + sharer name).
   const showingShare = Boolean(screenShareKey && primaryKey === screenShareKey);
-  // The selected screen share's TrackReference (resolved DIRECTLY, not via the
-  // generic `tiles` list), plus the participant behind it for the name label.
-  // Rendering the share from its own TrackReference — keyed by publication SID —
-  // guarantees the compact <video> reattaches to the newly selected track when
-  // switching, independent of how the shared `tiles`/primary-key indirection
-  // reconciles.
+  // Render the selected share from its own TrackReference keyed by publication
+  // SID, so switching always reattaches the compact <video>.
   const selectedShareTrackRef = useMemo(
     () =>
       videoTracks.find(
@@ -1562,8 +1388,7 @@ export function CallStage({
   );
   const selectedShareParticipant = selectedShareTrackRef?.participant ?? null;
 
-  // Drag-resizable height for the docked pane (persisted). A thin handle at the
-  // pane's bottom edge drives it; clamped to [DOCKED_MIN, ~85vh].
+  // Persisted; clamped to [DOCKED_MIN, ~85vh].
   const [dockedHeight, setDockedHeight] = useState(() => loadDockedHeight());
   const dockedResize = useRef<{ startY: number; startH: number; pointerId: number } | null>(null);
   const onDockedResizeMove = useCallback((e: PointerEvent) => {
@@ -1597,7 +1422,6 @@ export function CallStage({
     },
     [dockedHeight, onDockedResizeMove, endDockedResize],
   );
-  // Clean up global listeners if we unmount mid-resize.
   useEffect(
     () => () => {
       window.removeEventListener("pointermove", onDockedResizeMove);
@@ -1607,13 +1431,10 @@ export function CallStage({
     [onDockedResizeMove, endDockedResize],
   );
 
-  // Theater mode: detach the stage into a full-viewport overlay.
   const [theater, setTheater] = useState(false);
-  // Leaving the call / closing the stage also exits theater.
   useEffect(() => {
     if (!open) setTheater(false);
   }, [open]);
-  // Esc exits theater mode.
   useEffect(() => {
     if (!theater) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1623,7 +1444,6 @@ export function CallStage({
     return () => window.removeEventListener("keydown", onKey);
   }, [theater]);
 
-  // Measure the grid area so tiles scale down to fit instead of overflowing.
   const [gridRef, gridSize] = useElementSize<HTMLDivElement>();
   const GRID_GAP = 8; // matches gap-2
   const grid = fitGrid(tiles.length, gridSize.width, gridSize.height, GRID_GAP);
@@ -1672,17 +1492,11 @@ export function CallStage({
     </div>
   );
 
-  // Wrapped in a relatively-positioned box so the stage-wide reaction overlay
-  // can size itself against exactly this media area (not the header/controls)
-  // and use it as the coordinate origin for each reaction's spawn point.
-  // Shared by both the theater and docked branches below (they render the
-  // identical media area, differing only in surrounding chrome).
+  // The reaction overlay sizes against this media area. Shared by theater and docked.
   const body = (
     <div ref={stageBoxRef} className="relative flex-1 min-h-0 flex flex-col">
       {focused ? (
-        // Spotlight: the focused tile fills the available height (the panel has
-        // a definite height now, so the video letterboxes via object-contain);
-        // the rest go in a horizontally-scrolling thumbnail strip below.
+        // Spotlight: focused tile fills the height, the rest in a scrolling strip.
         <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 pt-0">
           <div className="flex-1 min-h-0">{focused.render(true)}</div>
           {tiles.length > 1 && (
@@ -1698,9 +1512,6 @@ export function CallStage({
           )}
         </div>
       ) : (
-        // Auto-fit grid: tiles are sized to the largest 16:9 box that fits all
-        // of them in the measured area, so they scale down rather than
-        // overflowing.
         <div ref={gridRef} className="flex-1 min-h-0 overflow-hidden p-3 pt-0 flex items-center justify-center">
           <div
             className="grid place-content-center"
@@ -1723,10 +1534,8 @@ export function CallStage({
   );
 
   if (theater) {
-    // Full-viewport overlay; the docked box collapses (renders nothing here).
     return createPortal(
-      // A dialog to assistive tech, and to the composer's type-to-focus
-      // routing, which must not send keystrokes to the chat hidden under it.
+      // A dialog, so type-to-focus doesn't route keys to the chat underneath.
       <div
         role="dialog"
         aria-modal="true"
@@ -1735,8 +1544,7 @@ export function CallStage({
       >
         {header}
         {body}
-        {/* The fixed call bar is behind this overlay, so theater carries its own
-            control row (mic/camera/screen/reactions/leave). */}
+        {/* The fixed call bar is behind this overlay, so theater has its own controls. */}
         <StageControls className="pb-[max(0.375rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]" />
       </div>,
       document.body,
@@ -1744,37 +1552,16 @@ export function CallStage({
   }
 
   if (stageFloating) {
-    // Compact floating destination: a SINGLE primary tile (screen share >
-    // focused > active speaker > fallback, chosen above) — not the full grid.
-    // Same tile renderer as the grid, so active-speaker rings, screenshare, and
-    // the camera-off avatar fallback all behave identically. This is the SAME
-    // stage instance as the docked one — it just re-lays-out when CallProvider
-    // reparents its host into the floating destination, so no video
-    // subscription is torn down or duplicated.
-    //
-    // Two destinations share this branch, differing only in chrome:
-    //   - desktop: the draggable window supplies its header (drag/return/hide);
-    //     the stage adds the media control row (mic/cam/share/leave).
-    //   - mobile: the compact preview supplies its header (return/hide) and the
-    //     always-present MobileCallBar carries the media controls, so the stage
-    //     omits the control row here — only the primary content (and the share
-    //     switcher when several shares are live) render.
+    // Floating: ONE primary tile. Same stage instance, reparented — no subscription
+    // torn down. On mobile MobileCallBar carries the controls, so omit them here.
     const isMobileFloating = floatingVariant === "mobile";
     return (
       <div className="flex h-full w-full flex-col overflow-hidden">
-        {/* Both floating variants are width-constrained (their panels are
-            resized by width), so the media area is a 16:9 box of the panel
-            width — it scales with the panel and always preserves the aspect. */}
+        {/* Both floating variants resize by width, so the media area is 16:9 of it. */}
         <div ref={stageBoxRef} className="relative w-full bg-black aspect-video">
           {showingShare && selectedShareTrackRef ? (
-            // Render the SELECTED screen share directly from its own
-            // TrackReference, keyed by participant identity + publication SID.
-            // Switching shares changes the SID → React unmounts the old
-            // VideoTile and its LiveKit <video>, and mounts a fresh one bound to
-            // the newly selected publication, so the preview always shows the
-            // chosen presenter (no reused/stuck element, no black frame after
-            // resubscribe). Only this one compact tile re-mounts — never
-            // CallStage, the room, the stage host, or unrelated subscriptions.
+            // Keyed by publication SID so a switch mounts a fresh <video> (no stuck frame);
+            // only this tile remounts.
             <div
               key={`${selectedShareTrackRef.participant.identity}:${selectedShareTrackRef.publication?.trackSid ?? "ss"}`}
               className="h-full w-full"
@@ -1789,9 +1576,6 @@ export function CallStage({
               />
             </div>
           ) : primaryTile ? (
-            // Non-share primary content (active speaker / camera / avatar): the
-            // generic tile keyed by its stable tile key still reattaches cleanly
-            // on change.
             <div key={primaryTile.key} className="h-full w-full">
               {primaryTile.render(true)}
             </div>
@@ -1800,8 +1584,6 @@ export function CallStage({
               Connecting…
             </div>
           )}
-          {/* Multiple simultaneous screen shares: overlay a prev/next selector
-              (single shares auto-select and need no switcher). */}
           {showingShare && sortedShareKeys.length > 1 && (
             <ShareSelector
               participant={selectedShareParticipant}
@@ -1813,9 +1595,6 @@ export function CallStage({
           )}
           <StageReactions containerRef={stageBoxRef} />
         </div>
-        {/* Media controls: only in the desktop floating window. On mobile the
-            fixed MobileCallBar already carries mic/camera/screen-share/leave, so
-            duplicating them here would be redundant. */}
         {!isMobileFloating && <StageControls />}
       </div>
     );
@@ -1825,13 +1604,11 @@ export function CallStage({
     <div
       className={cn(
         "shrink-0 mx-2 overflow-hidden ease-out",
-        // Don't animate max-height while dragging the resize handle (the
-        // transition would lag the pointer); animate only the open/close toggle.
+        // No transition while dragging (it would lag the pointer).
         dockedResize.current ? "" : "transition-all duration-200",
         open ? "mt-2 opacity-100" : "mt-0 max-h-0 opacity-0",
       )}
-      // When open, the wrapper's max-height must clear the (resizable) inner box
-      // plus its top margin, or a tall pane would be clipped.
+      // Must clear the resizable box plus its top margin.
       style={open ? { maxHeight: dockedHeight + 16 } : undefined}
     >
       <div
@@ -1840,7 +1617,6 @@ export function CallStage({
       >
         {header}
         {body}
-        {/* Drag the bottom edge to resize the pane taller/shorter (persisted). */}
         <div
           onPointerDown={beginDockedResize}
           role="separator"

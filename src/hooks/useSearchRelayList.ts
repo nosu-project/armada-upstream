@@ -64,8 +64,7 @@ export function useSearchRelayList() {
         KIND_SEARCH_RELAYS,
       ) ?? null;
       const decoded = await readSearchRelayList(event, user!.signer);
-      // A transient signer refusal is not an intentional empty replacement.
-      // Keep the last decryptable copy visible and let the invalidation retry.
+      // A transient signer refusal isn't an empty replacement; keep the last decryptable copy.
       if (decoded.decryptFailed && cached && !cached.decryptFailed) return cached;
       return { event, ...decoded };
     },

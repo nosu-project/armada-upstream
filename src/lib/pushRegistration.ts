@@ -5,19 +5,15 @@ export interface DesiredPushRegistration {
   id: string;
   register: () => Promise<void>;
   /**
-   * Older ids for this same logical watch. When pruning is authoritative they
-   * are removed immediately before this PUT, releasing gateway quota one item
-   * at a time during an id migration.
+   * Older ids for this logical watch, deleted right before this PUT when
+   * pruning is authoritative (frees quota one item at a time).
    */
   replaces?: readonly string[];
   /** Best-effort rollback when a quota-safe pre-delete is followed by PUT failure. */
   restoreReplaced?: (id: string) => Promise<void>;
   /**
-   * Several desired records may replace ONE broad predecessor. The gateway's
-   * quota can make that 1→many expansion impossible even after deleting the
-   * predecessor. Grouping lets reconciliation roll every child back and
-   * restore one synthesized broad watch, then continue refreshing unrelated
-   * desired records on the current endpoint.
+   * Groups records that replace ONE broad predecessor. If quota blocks the
+   * 1→many expansion, every child is rolled back to a synthesized broad watch.
    */
   replacementGroup?: {
     key: string;
@@ -38,17 +34,11 @@ export interface ReconcilePushRegistrationsOptions {
   /** Latest-generation guard supplied by {@link LatestSerialRunner}. */
   isCurrent?: () => boolean;
   /**
-   * Whether this snapshot is authoritative enough to delete registrations it
-   * does not contain. An incomplete cold-load snapshot may still add every
-   * record it currently knows about, but it must preserve the durable prune
-   * set until all watch sources have completed a safe wire read.
+   * Whether this snapshot may delete registrations it lacks. Incomplete
+   * cold-load snapshots are additive-only until every source has read safely.
    */
   allowPrune?: boolean;
-  /**
-   * Optional per-plane authority for a globally partial snapshot. Scoped ids
-   * in an authoritative plane may still be removed/replaced; every other id
-   * remains additive-only until its own source settles.
-   */
+  /** Per-plane prune authority for a globally partial snapshot. */
   canPruneId?: (id: string) => boolean;
 }
 
@@ -70,12 +60,8 @@ function sorted(values: Iterable<string>): string[] {
 }
 
 /**
- * Rebuild the broad logical predecessor for a 1→many filter migration.
- *
- * Relay-scoped NIP-29 children deliberately cannot coexist at a full gateway
- * quota. Their rollback is the former flat watch: union relays and every array
- * filter dimension, which restores complete (if over-broad) delivery until a
- * later migration has enough capacity. Scalar filter fields must agree.
+ * Rebuild the broad predecessor for a 1→many migration (union of relays and
+ * array filter fields), restoring full if over-broad delivery. Scalar fields must agree.
  */
 export function mergePushReplacementSpec(
   id: string,
@@ -114,16 +100,11 @@ export function mergePushReplacementSpec(
 }
 
 /**
- * Reconcile one desired snapshot while preserving a recoverable watch set.
- *
- * The ordering is load-bearing for web's per-install id migration. An
- * authoritative pass removes each matching legacy id immediately before its
- * replacement PUT, releasing a quota slot even when the gateway is already
- * full. If that PUT fails, `restoreReplaced` makes a best-effort rollback of
- * the bounded delivery gap. A globally partial snapshot may pre-delete only
- * inside a plane its own sources have made authoritative. State is persisted
- * after every success; a failed delete stays durable and is returned to the
- * caller for retry.
+ * Reconcile one desired snapshot. Authoritative passes delete each legacy id
+ * right before its replacement PUT (works at full quota), rolling back via
+ * `restoreReplaced` on failure. Partial snapshots may only pre-delete within
+ * authoritative planes. State is persisted after every success; failed
+ * deletes stay tracked and are returned for retry.
  */
 export async function reconcilePushRegistrations(
   options: ReconcilePushRegistrationsOptions,
@@ -151,14 +132,10 @@ export async function reconcilePushRegistrations(
     grouped.set(key, members);
   }
 
-  // Transfer a legacy flat registry into the scoped registry before the first
-  // network call. A crash after a successful RPC can then never orphan an id.
+  // Persist before any network call so a crash can't orphan an id.
   options.persistTrackedIds(snapshot());
 
-  // Refresh already-tracked stable records first. They consume no new quota
-  // and this ensures the current endpoint reaches DM/Concord even if a later
-  // id migration must fall back or defer. Group members are handled as one
-  // transaction below so they cannot be refreshed independently.
+  // Refresh tracked stable records first (no new quota); groups are handled as one transaction below.
   if (options.allowPrune !== false || options.canPruneId) {
     for (const item of options.desired) {
       if (item.replacementGroup || !tracked.has(item.id) || !canPrune(item.id)) continue;
@@ -172,10 +149,7 @@ export async function reconcilePushRegistrations(
     }
   }
 
-  // On every authoritative snapshot, release unrelated stale ids before PUTs.
-  // Besides reserving capacity for G→G-A/B, this covers a one-relay category
-  // transition (all→mentions): its old relay-scoped id is stale, and waiting
-  // until the final prune would make the new id quota-fail first.
+  // Release stale ids before PUTs so new ids (e.g. a category change) don't quota-fail first.
   if (options.allowPrune !== false || options.canPruneId) {
     const desiredIds = new Set(options.desired.map(({ id }) => id));
     const predecessorIds = new Set(
@@ -213,20 +187,15 @@ export async function reconcilePushRegistrations(
 
       const groupAuthoritative = members.every(({ id }) => canPrune(id));
       if (!groupAuthoritative) {
-        // A NIP-PUSH PUT replaces the WHOLE record, so an unready snapshot must
-        // never refresh a tracked broad/child id from its partial filter (A
-        // would silently replace last-good A+B). Preserve every held record
-        // byte-for-byte. Only a genuinely new fallback id is additive.
+        // A PUT replaces the WHOLE record, so an unready snapshot must never refresh a
+        // tracked id from a partial filter. Only genuinely new ids are additive.
         const trackedTargets = new Set([
           groupDefinition.fallbackId,
           ...(groupDefinition.fallbackIds ?? []),
           ...members.map(({ id }) => id),
         ]);
         if ([...trackedTargets].some((id) => tracked.has(id))) {
-          // Existing records stay byte-for-byte intact, but a newly discovered
-          // relay child is genuinely additive. Register each missing child on
-          // its own; keep any broad predecessor until an authoritative pass
-          // can safely remove it.
+          // New relay children are additive; keep the broad predecessor until an authoritative pass.
           for (const member of members) {
             if (tracked.has(member.id)) continue;
             if (!isCurrent()) {
@@ -249,8 +218,7 @@ export async function reconcilePushRegistrations(
           tracked.add(groupDefinition.fallbackId);
           options.persistTrackedIds(snapshot());
         } catch {
-          // At exact quota the new synthesized fallback cannot take a slot,
-          // but independent ready-plane records can still refresh/activate.
+          // At exact quota the fallback can't take a slot; other records can still refresh.
           deferredRegistrations.push(
             groupDefinition.fallbackId,
             ...members.map(({ id }) => id),
@@ -299,12 +267,8 @@ export async function reconcilePushRegistrations(
       }
 
       if (predecessorDeleteFailed || groupFailure !== undefined) {
-        // Collapse every child, including one left by an older interrupted
-        // attempt. This guarantees a slot for the single broad fallback and
-        // prevents a permanently deterministic "only relay A" result. DELETE
-        // even the child whose PUT rejected: the server may have committed it
-        // before the response was lost, so treating that id as absent would
-        // create an untracked orphan.
+        // Collapse every child (including leftovers) to guarantee a slot for the broad
+        // fallback. DELETE even rejected PUTs: the server may have committed them.
         for (const member of members) {
           if (!isCurrent()) {
             return { completed: false, trackedIds: snapshot(), failedDeletions };
@@ -331,9 +295,7 @@ export async function reconcilePushRegistrations(
           retainedFallbacks.add(groupDefinition.fallbackId);
           options.persistTrackedIds(snapshot());
         } catch (restoreError) {
-          // Continue through later stable records so their endpoint/payload is
-          // refreshed even when this migration cannot be recovered. The
-          // caller still receives a failure after that useful work finishes.
+          // Keep refreshing later records; the failure is still reported afterwards.
           unrecoveredErrors.push(restoreError ?? groupFailure);
           // Removed predecessors truthfully stay absent from durable state.
           for (const oldId of removedPredecessors) tracked.delete(oldId);
@@ -345,9 +307,7 @@ export async function reconcilePushRegistrations(
     if (refreshedDesired.has(item.id)) continue;
 
     const itemAuthoritative = canPrune(item.id);
-    // Re-PUT is replacement, not addition. Without authority we do not know
-    // whether this currently-derived filter is narrower than the tracked
-    // record's last-good payload, so preserve it and wait for that plane.
+    // Without authority, a re-PUT might narrow the last-good payload; wait for the plane.
     if (!itemAuthoritative && tracked.has(item.id)) continue;
     const replacements = !itemAuthoritative
       ? []
@@ -355,9 +315,7 @@ export async function reconcilePushRegistrations(
         .filter((oldId) => oldId !== item.id && tracked.has(oldId));
     const removed: string[] = [];
 
-    // Delete the known equivalent legacy record first. A new-first migration
-    // cannot make progress at an exact-full gateway quota: its first PUT is
-    // refused, so it never reaches the delete that would free capacity.
+    // Delete the legacy record first: new-first can't progress at exact-full quota.
     for (const oldId of replacements) {
       if (!isCurrent()) {
         return { completed: false, trackedIds: snapshot(), failedDeletions };
@@ -370,8 +328,7 @@ export async function reconcilePushRegistrations(
         options.persistTrackedIds(snapshot());
       } catch {
         failedDeletions.push(oldId);
-        // This old record is still the best available copy of the logical
-        // watch. Do not risk a quota-failing PUT or remove more equivalents.
+        // The old record is still the best copy; don't risk further deletes.
         continue desired;
       }
     }
@@ -386,9 +343,7 @@ export async function reconcilePushRegistrations(
         deferredRegistrations.push(item.id);
         continue desired;
       }
-      // The matching legacy watch was known-good before its successful DELETE.
-      // Restore it with the current endpoint/payload where possible, while
-      // preserving truthful durable state if rollback itself fails.
+      // Restore the known-good legacy watch; keep durable state truthful if rollback fails.
       if (item.restoreReplaced) {
         for (const oldId of removed) {
           try {
@@ -396,25 +351,19 @@ export async function reconcilePushRegistrations(
             registeredAny = true;
             tracked.add(oldId);
             options.persistTrackedIds(snapshot());
-          } catch {
-            // Its DELETE succeeded and rollback did not; leaving it absent from
-            // the prune set accurately records that no server record is known.
-          }
+          } catch { /* ignore */ }
         }
       }
       throw error;
     }
   }
 
-  // A newer snapshot may have arrived while the final PUT was in flight. It
-  // will run next; the stale generation must not choose what to delete.
+  // A newer snapshot is queued; this stale generation must not prune.
   if (!isCurrent()) {
     return { completed: false, trackedIds: snapshot(), failedDeletions: [] };
   }
 
-  // A globally partial snapshot is additive in every unready plane. Persist
-  // successful PUTs (and any selective ready-plane removals) so a crash cannot
-  // orphan them, while leaving all other cleanup for a later authoritative pass.
+  // Partial snapshots are additive: persist successes, leave cleanup for an authoritative pass.
   if (options.allowPrune === false) {
     const trackedIds = snapshot();
     options.persistTrackedIds(trackedIds);
@@ -441,8 +390,7 @@ export async function reconcilePushRegistrations(
       tracked.delete(id);
       options.persistTrackedIds(snapshot());
     } catch {
-      // Keep it tracked. Forgetting a failed delete is how stale gateway
-      // records become permanent after a transient outage.
+      // Keep failed deletes tracked, or transient outages leave permanent stale records.
       failedDeletions.push(id);
     }
   }
@@ -459,11 +407,8 @@ export async function reconcilePushRegistrations(
 }
 
 /**
- * Serializes mutations and makes each queued value a new generation.
- *
- * A queued generation that has not started is skipped when superseded. A
- * running worker receives `isCurrent`; reconciliation checks it between RPCs
- * and before pruning, then the newest snapshot runs on the same serial tail.
+ * Serializes mutations; each queued value is a new generation. Superseded
+ * queued work is skipped; running work checks `isCurrent` between RPCs.
  */
 export class LatestSerialRunner<T, R> {
   private generation = 0;
@@ -483,11 +428,7 @@ export class LatestSerialRunner<T, R> {
     return work;
   }
 
-  /**
-   * Queue work that must run even if a newer latest-value arrives (logout and
-   * explicit disable use this to remove the old account before a new one can
-   * register). It first supersedes any in-flight latest snapshot.
-   */
+  /** Queue work that must run even if superseded (logout/disable), superseding in-flight work first. */
   runExclusive(value: T): Promise<R> {
     this.generation += 1;
     const work = this.tail.then(() => this.worker(value, () => true));

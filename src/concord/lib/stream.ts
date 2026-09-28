@@ -58,21 +58,17 @@ export const NIP44_MAX_PLAINTEXT = 65_535;
 const TAG_MS = "ms";
 
 function encryptChecked(convKey: Uint8Array, plaintext: string): string {
-  // Enforce the cap ourselves — libraries are lenient, and a lenient publisher
-  // mints events a strict reader cannot decrypt.
+  // Enforce the cap ourselves: lenient publishers mint events strict readers can't decrypt.
   if (new TextEncoder().encode(plaintext).length > NIP44_MAX_PLAINTEXT) {
     throw new StreamError("oversize", "plaintext exceeds the NIP-44 65,535-byte cap");
   }
   return nip44Encrypt(plaintext, convKey);
 }
 
-// ── Building ─────────────────────────────────────────────────────────────────
-
 /**
- * Build an unsigned rumor. `ms` is the full send time in epoch-milliseconds:
- * `created_at` carries the seconds, the `ms` tag the 0..999 remainder, and the
- * true event time is `created_at * 1000 + ms` (CORD-02 §4). Pass `ms: null`
- * for rumors that don't carry sub-second ordering (control editions).
+ * Build an unsigned rumor. `ms` is epoch-ms: `created_at` = seconds, `ms` tag =
+ * 0..999 remainder (CORD-02 §4). `ms: null` for rumors without sub-second
+ * ordering (control editions).
  */
 export function buildRumor(opts: {
   kind: number;
@@ -87,10 +83,7 @@ export function buildRumor(opts: {
   if (opts.ms === null || opts.ms === undefined) {
     createdAt = opts.createdAtSecs ?? Math.floor(Date.now() / 1000);
   } else {
-    // A negative or non-integer send time would mint a malformed `ms` tag
-    // (e.g. "-123"), which every reader drops as out-of-range (CORD-02 §5).
-    // A glitched clock is a local fault, not a reason to publish garbage: fail
-    // closed rather than emit an un-decodable event.
+    // Fail closed on a negative/non-integer clock: the `ms` tag would be malformed (CORD-02 §5).
     if (!Number.isFinite(opts.ms) || opts.ms < 0) {
       throw new StreamError("bad-ms", `send time must be a non-negative epoch-ms, got ${opts.ms}`);
     }
@@ -113,10 +106,8 @@ export interface StreamSigner {
 }
 
 /**
- * Seal a rumor with the author's REAL identity: an encrypted seal (20013)
- * NIP-44s the rumor under the stream conversation key first; a plaintext seal
- * (20014) carries the rumor's serialized JSON verbatim. The seal is what the
- * author actually signs — one signer round-trip per send.
+ * Seal a rumor with the author's REAL identity: 20013 NIP-44s it under the stream
+ * conversation key; 20014 carries the JSON verbatim. One signer round-trip per send.
  */
 export async function sealRumor(
   rumor: NostrRumor,
@@ -137,14 +128,9 @@ export async function sealRumor(
 
 /**
  * Wrap a signed seal into the outer stream event: encrypted under the stream
- * conversation key, signed by the stream key, tagged with a random ephemeral
- * `p` (NIP-59 reversed). `created_at` is NOT tweaked (CORD-01). Keep
- * `ephemeralSk` if you want to NIP-09-delete the wrap later.
- *
- * `expiration` (unix seconds) puts a NIP-40 tag on the WRAP so relays purge
- * the ciphertext itself — CORD-08 §2's deliberate exception to the
- * no-outer-tags rule, used only for expiring chat rumors and always matching
- * the rumor's own signed `expiration` tag (which is what readers enforce).
+ * conversation key, signed by the stream key, random ephemeral `p` (NIP-59
+ * reversed); `created_at` NOT tweaked (CORD-01). `expiration` adds a NIP-40 tag to
+ * the WRAP so relays purge it (CORD-08 §2), matching the rumor's own tag.
  */
 export function wrapSeal(
   seal: NostrEvent,
@@ -166,17 +152,10 @@ export function wrapSeal(
   );
 }
 
-// ── Opening ──────────────────────────────────────────────────────────────────
-
 /**
- * A fully-opened, verified stream event.
- *
- * The ENVELOPE fields below are optional because they exist only while the wrap
- * is in hand. Nothing about the wrap is persisted: the store holds the rumor its
- * author signed and nothing else, so an event read back from it has the rumor
- * fields and none of these. {@link OpenedWireEvent} is the variant straight off
- * a wrap, where all of them are present — take that type wherever the envelope
- * is actually required, and the compiler will keep a stored event out.
+ * A fully-opened, verified stream event. Envelope fields exist only while the wrap
+ * is in hand (the store keeps just the rumor); use {@link OpenedWireEvent} where
+ * they're required.
  */
 export interface OpenedEvent {
   /** The rumor id — the message id / dedup / display key. */
@@ -193,17 +172,9 @@ export interface OpenedEvent {
   wrapId?: string;
   /** WIRE ONLY. The stream address (wrap author) this event was read from. */
   streamPk?: string;
-  /**
-   * WIRE ONLY. Which seal form carried the rumor (20013 encrypted / 20014
-   * plaintext). Checked at ingest against {@link PLANE_RULES}; afterwards the
-   * rumor's own kind implies it, so no reader needs it.
-   */
+  /** WIRE ONLY. Seal form (20013 / 20014), checked at ingest against {@link PLANE_RULES}. */
   sealKind?: number;
-  /**
-   * WIRE ONLY. The verified seal event itself — needed to re-wrap plaintext
-   * seals (compaction). Plaintext seals are kept in KV beside the store
-   * (`readStoredSeal` fetches them).
-   */
+  /** WIRE ONLY. The verified seal — for re-wrapping plaintext seals (stored in KV; see `readStoredSeal`). */
   seal?: NostrEvent;
 }
 
@@ -216,41 +187,24 @@ export type OpenedWireEvent = OpenedEvent & {
 };
 
 /**
- * How far ahead of the local clock a chat event may be dated before the client
- * treats it as "in the future" — HELD out of the rendered timeline
- * (`foldTimeline`) and never announced as a notification, until local time
- * catches up.
+ * How far ahead of the local clock a chat event may be dated before it's HELD
+ * out of the timeline (`foldTimeline`) and not notified until time catches up.
+ * A display grace, not ingest skew (`MAX_FUTURE_SKEW_SECS`); nothing is dropped.
  *
- * A rumor's `ms` (`created_at*1000 + <ms tag>`) is chosen by its author and
- * bounded nowhere: a desynced sender (or a deliberately future-dated event)
- * otherwise sorts to the bottom of the timeline into "the future" where it sits
- * stuck, a correct-clocked reply renders above it, and a notification for it
- * reads "in 5m" — the OS rendering the raw future timestamp. This is a DISPLAY
- * grace, not the hour of ingest skew NIP-17 allows (`MAX_FUTURE_SKEW_SECS`):
- * nothing is dropped, and it self-corrects in seconds. Kept small so ordinary
- * sub-second clock jitter between honest clients doesn't flap.
- *
- * Mirrored by the native notification services (`FUTURE_HOLD_MS` in
- * `NotificationRelayService.java`, `Concord.futureHoldSecs` in iOS
- * `Concord.swift`), so a message the timeline holds is the same message the
- * background writer declines to buzz.
+ * Mirrored by native notification services (`FUTURE_HOLD_MS` in
+ * `NotificationRelayService.java`, `Concord.futureHoldSecs` in `Concord.swift`).
  */
 export const FUTURE_HOLD_MS = 2_000;
 
 /**
- * Reconstruct the ms timestamp. A missing tag means offset 0; a malformed tag
- * (outside 0..999, non-integer) throws — CORD-02 §5 treats out-of-range `ms`
- * as malformed rather than clamping it, or the excess would smuggle arbitrary
- * "future" past the clock check.
+ * Reconstruct the ms timestamp. Missing tag = 0; out-of-range/non-integer throws
+ * (CORD-02 §5), never clamps.
  */
 export function resolveMs(createdAtSecs: number, tags: string[][]): number {
   const tag = tags.find((t) => t[0] === TAG_MS);
   if (!tag) return createdAtSecs * 1000;
-  // Strict decimal only: `Number()` would accept "", "0x1f", "1e2", " 5 ",
-  // "+5" — and two clients disagreeing on accept/reject would diverge on the
-  // ordering basis every comparison rides (CORD-02 §4/§5). The value is the
-  // 0..999 sub-second remainder as a plain decimal with no leading zeros
-  // beyond a bare "0".
+  // Strict decimal only (no "0x1f", "1e2", " 5 ", "+5"): clients must agree on the
+  // ordering basis (CORD-02 §4/§5).
   const raw = tag[1];
   if (raw === undefined || !/^(0|[1-9][0-9]{0,2})$/.test(raw)) {
     throw new StreamError("bad-ms", `malformed ms tag: ${raw}`);
@@ -263,47 +217,27 @@ export function resolveMs(createdAtSecs: number, tags: string[][]): number {
 }
 
 /**
- * A wrap decoded up to — but NOT through — its seal-signature check.
- *
- * {@link seal} is the layer whose Schnorr signature authenticates the rumor's
- * real author; {@link finish} recovers and binds the rumor and builds the
- * event, and is VALID TO CALL ONLY once `seal` has been verified. Splitting the
- * one EC verify out of the decode is what lets a large first decode batch those
- * verifies and run them off the main thread — see `chat.ts` `openChatBatch`,
- * which drives `verifyEventsOnce` over the seals between the two halves.
+ * A wrap decoded up to — but NOT through — its seal-signature check, so seal
+ * verifies can be batched off-thread (see `chat.ts` `openChatBatch`).
+ * {@link finish} is valid ONLY once `seal` has been verified.
  */
 export interface WrapToSeal {
-  /**
-   * The seal (20013 encrypted / 20014 plaintext) whose Schnorr signature
-   * authenticates the rumor's real author. The caller MUST verify this
-   * (`verifyEventOnce` / `verifyEventsOnce`) before calling {@link finish}.
-   */
+  /** The seal whose signature the caller MUST verify before {@link finish}. */
   seal: NostrEvent;
   /**
-   * Recover the rumor, check its author + id bindings, and build the event —
-   * the tail of {@link openWrap} after the seal verify. Assumes {@link seal} is
-   * already verified; throws {@link StreamError} on a binding failure exactly
-   * as `openWrap` does.
+   * Recover the rumor, check author + id bindings, build the event. Throws
+   * {@link StreamError} like `openWrap`.
    */
   finish(): OpenedWireEvent;
 }
 
 /**
  * Decode one stream wrap up to its seal, WITHOUT the seal-signature check:
- *
- *   1. the wrap's author must be the stream address (else it isn't ours);
- *      the wrap's OWN signature is never checked — it is made by a throwaway
- *      ephemeral key and proves nothing, which is why this takes a rumor and
- *      a parked wrap can be stored without one — EXCEPT a write-restricted
- *      stream, whose wrap signature IS the write gate and is verified here;
- *   2. decrypt the wrap → the seal, and check its kind declares a known seal
- *      form. The seal's Schnorr signature is NOT checked here: {@link openWrap}
- *      does it inline, the batched path does it off-thread. Both then call
- *      {@link WrapToSeal.finish}, which:
- *   3. recovers the rumor (decrypting again for 20013); verifies the rumor's id
- *      is its NIP-01 hash (an id is the ordering tiebreak — never trust a
- *      claimed one) and that the rumor's pubkey equals the seal's signer (or a
- *      keyholder could re-seal another member's rumor under their own name).
+ *   1. wrap author must be the stream address; the wrap's own signature is
+ *      ephemeral and unchecked — EXCEPT on write-restricted streams;
+ *   2. decrypt to the seal and check its kind;
+ *   3. ({@link WrapToSeal.finish}) recover the rumor, verify its id is its NIP-01
+ *      hash and its pubkey equals the seal signer (anti re-seal).
  */
 export function openWrapToSeal(wrap: NostrRumor, stream: StreamKeyView): WrapToSeal {
   if (wrap.kind !== KIND_WRAP && wrap.kind !== KIND_WRAP_EPHEMERAL) {
@@ -312,13 +246,8 @@ export function openWrapToSeal(wrap: NostrRumor, stream: StreamKeyView): WrapToS
   if (wrap.pubkey !== stream.pk) {
     throw new StreamError("author-mismatch", "wrap author is not this stream's address");
   }
-  // A WRITE-RESTRICTED stream's wrap signature is the write gate (CORD-01):
-  // the signer set is narrower than the readership, so unlike an ordinary
-  // stream wrap (signed with a key every reader holds — never checked), it
-  // proves a `control_root` holder published this, and a reader MUST check it
-  // rather than lean on the relays having done so. This is a DIFFERENT verify
-  // from the seal's and stays synchronous here — the restricted (control)
-  // plane is low-volume, so it is not worth the batched path's complexity.
+  // A WRITE-RESTRICTED stream's wrap signature is the write gate (CORD-01): it
+  // proves a `control_root` holder published this. Verified synchronously (low volume).
   if (stream.restricted) {
     const signed = wrap as NostrRumor & { sig?: string };
     if (typeof signed.sig !== "string" || !verifyEventOnce(signed as NostrEvent)) {
@@ -382,19 +311,13 @@ export function openWrapToSeal(wrap: NostrRumor, stream: StreamKeyView): WrapToS
 }
 
 /**
- * Open and fully verify one stream wrap under its plane's group key:
- * {@link openWrapToSeal} plus the seal's Schnorr signature check, in that
- * order (so error codes are unchanged whichever check a malformed wrap trips
- * first). The wrap's own signature is never checked for an ordinary stream —
- * see {@link openWrapToSeal}.
+ * Open and fully verify one stream wrap: {@link openWrapToSeal} plus the seal's
+ * Schnorr check, in that order (so error codes stay stable).
  */
 export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEvent {
   const { seal, finish } = openWrapToSeal(wrap, stream);
-  // Memoized by seal id (see verifyCache): the same wrap arrives from every
-  // relay serving the community, and each delivery re-parses the seal into a
-  // fresh object, so nostr-tools' per-object `verifiedSymbol` memo never hits.
-  // The id is the seal's content hash and is recomputed from THIS copy before
-  // the memo is consulted, so a duplicate cannot ride a known-good id.
+  // Memoized by seal id (recomputed from this copy): the same wrap arrives from
+  // every relay as a fresh object, defeating nostr-tools' per-object memo.
   if (!verifyEventOnce(seal)) {
     throw new StreamError("bad-seal-signature", "seal signature invalid");
   }
@@ -413,8 +336,7 @@ export function rewrapSeal(seal: NostrEvent, targetStream: GroupKey): NostrEvent
   return wrapSeal(seal, targetStream);
 }
 
-// ── Chat-plane binding (CORD-03 §3) ──────────────────────────────────────────
-
+// Chat-plane binding (CORD-03 §3)
 const TAG_CHANNEL = "channel";
 const TAG_EPOCH = "epoch";
 

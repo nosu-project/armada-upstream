@@ -1,10 +1,4 @@
-/**
- * Inject `<script>` tags into an HTML document string.
- *
- * Uses DOMParser to safely manipulate the DOM, then serialises back to a
- * string. Each script path is prepended inside `<head>` so the injected
- * scripts run before the app's own scripts.
- */
+/** Prepend `<script>` tags inside `<head>` (via DOMParser) so they run before the app's scripts. */
 export function injectScriptTags(html: string, scriptPaths: string[]): string {
   if (scriptPaths.length === 0) return html;
 

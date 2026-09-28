@@ -1,10 +1,6 @@
 /**
- * The curated theme font catalog — the same families Ditto bundles
- * (ditto/src/lib/fonts.ts), as DATA rather than @fontsource packages: Armada
- * loads every theme font by URL (see fontLoader.ts), so all it needs per
- * family is the fontsource CDN .woff2 the published `f` tag should carry.
- * Keeping the list identical means a theme authored in either client names a
- * family the other can render.
+ * Curated theme fonts — keep identical to Ditto's (ditto/src/lib/fonts.ts) so
+ * either client can render the other's themes. Loaded by fontsource CDN URL.
  */
 
 export type ThemeFontCategory = "sans" | "serif" | "mono" | "display" | "handwriting";
@@ -58,11 +54,7 @@ export function findThemeFont(family: string): ThemeFontOption | undefined {
   return byFamily.get(family.toLowerCase());
 }
 
-/**
- * Resolve the URL a published `f` tag should carry for a family: catalog
- * fonts get the CDN URL (so other clients can load them without the catalog),
- * anything else keeps whatever URL it already had.
- */
+/** URL for a published `f` tag: the catalog CDN URL, else the existing one. */
 export function resolveThemeFontUrl(family: string, existingUrl?: string): string | undefined {
   return findThemeFont(family)?.cdnUrl ?? existingUrl;
 }

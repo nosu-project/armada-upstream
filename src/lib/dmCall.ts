@@ -2,40 +2,22 @@
  * DM voice calls — the CORD-07 blind-broker path applied to a 1:1 NIP-17
  * conversation.
  *
- * A DM call used to ride a relay's NIP-29 LiveKit token endpoint
- * (`/.well-known/nip29/livekit-dm/…`), coupling 1:1 calls to relay-hosted
- * infrastructure the default deployment no longer serves. It now works like a
- * Concord call, with the NIP-17 envelope standing in for the channel's key
- * distribution:
+ *   - The CALLER mints a random 32-byte call secret; both sides derive the
+ *     CORD-07 sub-keys ({@link dmCallKeys}): `room` (pk = SFU room name, sk
+ *     signs the broker token grant) and `mediaKey`. The broker authorizes by
+ *     key possession and learns nothing about who calls whom.
+ *   - The secret travels in a sealed, gift-wrapped kind-23314 rumor; the invite
+ *     IS the ring signal.
+ *   - Media uses ONE shared per-call E2EE key: sound for two senders with a fresh
+ *     random key, and needs no in-band identity exchange (unlike Concord's
+ *     per-sender keys).
  *
- *   - The CALLER mints a fresh random 32-byte call secret. From it both sides
- *     derive the same CORD-07 sub-keys ({@link dmCallKeys}): `room` (its pk is
- *     the SFU room name, its sk signs the blind broker's token grant) and
- *     `mediaKey` (the E2EE frame-key material). The broker authorizes by
- *     key-possession proof and learns nothing about who is calling whom.
- *   - The secret reaches the callee inside a kind-23314 rumor, sealed and
- *     gift-wrapped like any NIP-17 message — the invite IS the ring signal,
- *     and only the two participants ever hold the room keys.
- *   - Media is end-to-end encrypted under ONE shared per-call key (LiveKit
- *     shared-key E2EE). Concord derives per-sender keys because many members
- *     would otherwise share an AEAD nonce domain; a 1:1 call has two senders
- *     and a fresh random key per call, where the shared-key profile is sound —
- *     and it needs no in-band identity exchange, which a DM call has no
- *     presence plane to carry.
- *
- * Phases (the rumor's content): "offer" (carries the secret + a broker
- * rendezvous hint), "answer" (callee accepted — also how the callee's OTHER
- * devices learn to stop ringing), "decline", and "end" (cancel-while-ringing
- * and hangup alike). Two RECEIPTS let the caller tell an unanswered call from
- * one that never reached anyone: "ringing" (a callee device is ringing) and
- * "busy" (the callee is already in a call). Both are sent only to a caller the
- * callee's ring gate admits, so a stranger learns nothing about whether the
- * other side is online; a client that predates them ignores the phase. All
- * ride EPHEMERAL kind-21059 wraps (see
- * `KIND_DM_CALL`'s note in protocol.ts): relays broadcast and store nothing,
- * so no at-rest record of a call ever exists. The Android relay service holds
- * live sockets and rings with the app dead; the rumor's REAL `created_at`
- * bounds ringing ({@link DM_CALL_RING_MS}).
+ * Phases (rumor content): "offer" (secret + broker hint), "answer" (also stops
+ * the callee's other devices), "decline", "end"; receipts "ringing" and "busy"
+ * are sent only to callers the ring gate admits (no online-status leak). All
+ * ride EPHEMERAL kind-21059 wraps (see `KIND_DM_CALL` in protocol.ts), so no
+ * call is stored anywhere. The rumor's real `created_at` bounds ringing
+ * ({@link DM_CALL_RING_MS}).
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -51,24 +33,22 @@ import {
 import { canonicalOrigin } from "@/concord/lib/voice";
 import { KIND_DM_CALL, type OpenedDm } from "@/lib/nip17/protocol";
 
-/** How long an offer rings before it counts as missed (both sides use this). */
+/** How long an offer rings before it counts as missed (both sides). */
 export const DM_CALL_RING_MS = 45_000;
 
 /**
- * The fixed 32-byte id slot for the CORD-07 derivations. A DM call has no
- * channel id; the per-call SECRET is what makes each call's keys unique, so
- * this constant only namespaces the derivation away from every Concord use.
+ * Fixed 32-byte id slot for the CORD-07 derivations; only namespaces them away
+ * from Concord (the per-call secret makes keys unique).
  */
 const DM_CALL_ID = sha256(new TextEncoder().encode("armada/dm-call"));
 
 export interface DmCallKeys {
-  /** The SFU room keypair: pk is the room name, sk signs token grants. */
+  /** SFU room keypair: pk is the room name, sk signs token grants. */
   room: GroupKey;
-  /** Raw 32-byte E2EE frame-key material (the shared per-call media key). */
+  /** Raw 32-byte shared per-call E2EE frame-key material. */
   mediaKey: Uint8Array;
 }
 
-/** Derive the call's room + media keys from the shared per-call secret. */
 export function dmCallKeys(secretHex: string): DmCallKeys {
   const secret = hex32(secretHex);
   return {
@@ -77,7 +57,6 @@ export function dmCallKeys(secretHex: string): DmCallKeys {
   };
 }
 
-/** Mint a fresh call: a random secret and the room name it derives. */
 export function mintDmCall(): { secretHex: string; callId: string } {
   const secretHex = bytesToHex(random32());
   return { secretHex, callId: dmCallKeys(secretHex).room.pk };
@@ -95,25 +74,16 @@ const PHASES: ReadonlySet<string> = new Set<DmCallPhase>([
 ]);
 
 /**
- * How long the WINNER of a collision waits for the loser to answer its call
- * before joining the loser's instead, counted from when the winner's offer was
- * DELIVERED (not from when the loser's arrived — the winner may still be
- * probing brokers or waiting on a signature then). The loser answers at once
- * when it gets our offer, so silence past this means it never did — our offer
- * was lost, or the loser runs a client that predates collision handling and is
- * ringing out in its own room. Either way the loser's offer is in hand, and
- * joining it is the only move that still connects the two. Generous on
- * purpose: switching while the loser is mid-way into our room leaves each
- * side's "end" for the room it left hanging up the other.
+ * How long a collision WINNER waits for the loser to answer before joining the
+ * loser's call instead, counted from our offer's delivery. Covers lost offers
+ * and pre-collision-handling clients; generous so a mid-way switch doesn't
+ * hang up both sides.
  */
 export const DM_CALL_COLLISION_FALLBACK_MS = 15_000;
 
 /**
- * Which call survives when two people dial each other at once: the one placed
- * by the LOWER pubkey. Each side sees the same two pubkeys, so both reach the
- * same answer without another round trip — the loser joins the winner's room
- * and answers it, the winner simply keeps ringing until that answer lands (or,
- * after {@link DM_CALL_COLLISION_FALLBACK_MS} without it, joins the loser's).
+ * Two people dialing each other: the LOWER pubkey's call survives, computed
+ * identically on both sides. The loser joins and answers the winner's room.
  */
 export function dmCallCollisionWinner(self: string, peer: string): "ours" | "theirs" {
   return self < peer ? "ours" : "theirs";
@@ -122,28 +92,23 @@ export function dmCallCollisionWinner(self: string, peer: string): "ours" | "the
 /** A verified, parsed call signal as opened from a DM gift wrap. */
 export interface DmCallSignal {
   phase: DmCallPhase;
-  /** The SFU room name (the call's stable id) — `dmCallKeys(secret).room.pk`. */
+  /** SFU room name (the call's stable id) — `dmCallKeys(secret).room.pk`. */
   callId: string;
-  /** The seal-verified author of the signal. */
   author: string;
-  /** The 1:1 counterpart from the viewer's perspective. */
   peer: string;
-  /** The rumor's real timestamp, ms. */
+  /** Rumor timestamp, ms. */
   createdAtMs: number;
   rumorId: string;
-  /** Offer only: the per-call secret both sides derive keys from. */
   secretHex?: string;
-  /** Offer only: the canonicalized https broker origin hosting the call. */
+  /** Offer only: canonicalized https broker origin. */
   broker?: string;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
- * Tags for a call rumor: the peer `p` (the conversation, as every DM rumor),
- * the `call` binding, and — offers only — the secret + broker hint. No
- * NIP-40 expiration: the envelope is ephemeral, so there is nothing at rest
- * to expire, and freshness is the rumor's own real `created_at`.
+ * Tags for a call rumor: peer `p`, `call`, and (offers) secret + broker. No
+ * NIP-40 expiration: the envelope is ephemeral; freshness is `created_at`.
  */
 export function dmCallTags(
   peer: string,
@@ -160,21 +125,15 @@ export function dmCallTags(
 }
 
 /**
- * Parse an opened DM rumor into a call signal, or null when it isn't one (or
- * is malformed). 1:1 only — a group thread has no pairwise call. An offer's
- * secret is VERIFIED against its claimed call id (the room name is a pure
- * function of the secret), so a signal can never seat a listener in a room
- * whose keys don't match what the tag claims; an offer without a usable
- * broker hint is refused too, since there is nothing to join.
+ * Parse an opened 1:1 DM rumor into a call signal, or null. An offer's secret
+ * must derive its claimed call id, and it must carry a usable broker hint.
  */
 export function parseDmCall(opened: OpenedDm): DmCallSignal | null {
   if (opened.kind !== KIND_DM_CALL) return null;
   if (!PHASES.has(opened.content)) return null;
   const phase = opened.content as DmCallPhase;
   if (opened.peers.length !== 1) return null;
-  // For a received signal the author IS the counterpart; for an own copy the
-  // `p` tag names them. (Note to Self yields author === peer === self, which
-  // the provider's own-author branch already ignores.)
+      // Received: the author is the counterpart; own copy: the `p` tag names them.
   const peer = opened.peers[0];
   if (!HEX64.test(peer)) return null;
   const tag = (name: string) => opened.tags.find((t) => t[0] === name)?.[1];
@@ -218,20 +177,15 @@ export function isDmOfferFresh(signal: DmCallSignal, nowMs = Date.now()): boolea
   return nowMs - signal.createdAtMs <= DM_CALL_RING_MS;
 }
 
-// ── The signal bus ───────────────────────────────────────────────────────────
-//
-// Call rumors are never stored, so the DM ingest paths (inbox sync, live wrap
-// drain, backfill) hand them here at open time and the mounted call layer
-// (DmCallProvider) reacts. Module-level rather than React state because the
-// deliverers are plain async functions in useDm17.ts.
+// Signal bus: call rumors are never stored, so DM ingest paths (useDm17.ts)
+// hand them here and DmCallProvider reacts.
 
 type DmCallListener = (signal: DmCallSignal) => void;
 
 const listeners = new Set<DmCallListener>();
-/** Rumor ids already dispatched — several ingest paths can open one wrap. */
+/** Rumor ids already dispatched (several ingest paths can open one wrap). */
 const seenRumorIds = new Set<string>();
 
-/** Subscribe to parsed call signals. Returns an unsubscribe function. */
 export function subscribeDmCallSignals(listener: DmCallListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);

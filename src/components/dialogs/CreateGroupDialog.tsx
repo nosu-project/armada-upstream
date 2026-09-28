@@ -26,13 +26,12 @@ interface CreateGroupDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/** Random NIP-29 group id. */
 function randomGroupId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Random UUID v4 (Buzz channel ids MUST be lowercase UUIDs). */
+/** Buzz channel ids MUST be lowercase UUIDs. */
 function randomUuid(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   const b = crypto.getRandomValues(new Uint8Array(16));
@@ -42,19 +41,13 @@ function randomUuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/** Normalize a freeform name into a channel-style slug for preview. */
 function toChannelSlug(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9_-]/g, "");
 }
 
 /**
- * Create a NIP-29 group on the server: kind 9007 (create-group) followed by
- * kind 9002 (edit-metadata) with the chosen name/visibility, then remember it
- * in the user's kind 10009 list.
- *
- * Buzz relays create in ONE kind-9007 event instead (their handler REQUIRES a
- * `name` tag and takes `visibility`/`channel_type`/`about` inline), the id
- * must be a UUID, and a forum-channel toggle appears.
+ * Create a NIP-29 group: kind 9007 then 9002 metadata, then add to kind 10009.
+ * Buzz relays take everything in ONE 9007 (requires a `name` tag) and need a UUID id.
  */
 export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupDialogProps) {
   const { user } = useCurrentUser();
@@ -83,7 +76,6 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
     setError(null);
     try {
       if (isBuzz) {
-        // One-shot Buzz create: name/visibility/type/about ride the 9007.
         const extraTags: string[][] = [["name", name.trim()]];
         extraTags.push(["visibility", isPrivate ? "private" : "open"]);
         if (isForum) extraTags.push(["channel_type", "forum"]);
@@ -98,9 +90,7 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
           isClosed,
         });
       }
-      // Best-effort: remember the group in the user's NIP-51 list. This also
-      // carries the server into that list, which is what gives the new channel
-      // a rail icon to reach it by.
+      // Best-effort; the list entry is what gives the new channel a rail icon.
       updateList({ type: "add-group", ref: { id: effectiveId, relay: relayUrl } }).catch(() => undefined);
 
       toast({ title: "Channel created", description: name.trim() });
@@ -235,7 +225,6 @@ interface PrivacyToggleProps {
   onCheckedChange: (checked: boolean) => void;
 }
 
-/** A toggle row with an icon, title, and description for a channel option. */
 export function PrivacyToggle({ id, icon, title, description, checked, onCheckedChange }: PrivacyToggleProps) {
   return (
     <label

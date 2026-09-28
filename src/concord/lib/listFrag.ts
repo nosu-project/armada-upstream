@@ -1,28 +1,13 @@
 /**
- * CORD-02 §8 fragmented Community List (kind 33302) — the wire layer.
+ * CORD-02 §8 fragmented Community List (kind 33302) — the wire layer. One
+ * addressable event per fragment at `d` = index. 32-byte values are unpadded
+ * base64url on the wire (hex internally); embedded snapshots drop the inherited
+ * `community_id`; `seed` is absent when equal to `current`.
  *
- * The List is addressable, one event per fragment at `d` = the fragment index,
- * so it shards past the ~64KB an event may be and a membership set has no cap.
- * {@link fragment} packs a list into as few fragments as fit; {@link defragment}
- * unions whatever fragments a reader holds.
- *
- * Three shape changes against the retired single-event form: every 32-byte
- * value is unpadded base64url at any depth; a snapshot embedded in an entry
- * drops the `community_id` it inherits; `seed` is absent whenever it equals
- * `current`.
- *
- * BYTE IDENTITY IS THE CONTRACT. Two devices holding identical state must
- * serialize identical bytes, or §8's canonical-bytes tie-break flaps between
- * them — and the reference implementation (Vector's `list_frag.rs`) already
- * pins those bytes: serde emits each struct's declared fields in order, then
- * its flattened unknown-field map in lexicographic key order, with unknown
- * VALUES re-emitted with sorted keys at every depth (serde_json's Map is a
- * BTreeMap). `JSON.stringify` can reproduce none of that on a plain object
- * (integer-like keys hoist first; foreign key order is preserved), so this
- * module hand-emits the known levels and serializes everything below them
- * through {@link canonicalJson}. Internally the list stays HEX everywhere —
- * only this module speaks base64url, so the merge algebra, rehydrate and every
- * consumer are untouched.
+ * BYTE IDENTITY IS THE CONTRACT: identical state must serialize identically or
+ * §8's tie-break flaps. Bytes match Vector's `list_frag.rs` (serde declared field
+ * order, then extras in sorted key order, recursively), which `JSON.stringify`
+ * can't reproduce — hence the hand-emitter and {@link canonicalJson}.
  */
 
 import {
@@ -35,19 +20,13 @@ import {
   type JoinMaterial,
 } from "@/concord/lib/communityList";
 /**
- * The pack target (CORD-02 §8 SHOULD): comfortably under the ceiling, because
- * 65,536 is itself a common relay cap and an event AT it is a `>` vs `>=`
- * lottery between relay implementations.
+ * Pack target (CORD-02 §8): under 65,536, a common relay cap where `>` vs `>=`
+ * differs between implementations.
  */
 export const PACK_TARGET_BYTES = 57_344;
 
-/**
- * Everything in the signed event that isn't `content` — id, pubkey, sig, kind,
- * created_at, the `d` tag, JSON scaffolding. Deliberately generous.
- */
+/** Non-`content` event bytes (id, pubkey, sig, tags, scaffolding); deliberately generous. */
 const EVENT_ENVELOPE_BYTES = 320;
-
-// ── wire ─────────────────────────────────────────────────────────────────────
 
 /** One fragment. `frags` is the total, declared in every fragment. */
 export interface FragList {
@@ -59,7 +38,6 @@ export interface FragList {
 
 export interface FragEntry {
   community_id: string;
-  /** Absent when it equals `current` — which is what absence means. */
   seed?: FragMaterial;
   current: FragMaterial;
   added_at: number;
@@ -67,8 +45,8 @@ export interface FragEntry {
 }
 
 /**
- * Join material as embedded in an entry: no `community_id`, it inherits the
- * entry's. A standalone snapshot (a CORD-06 §1 dissolution payload) keeps its.
+ * Join material embedded in an entry, without `community_id` (inherited). A
+ * standalone snapshot (CORD-06 §1 dissolution payload) keeps its.
  */
 export interface FragMaterial {
   owner: string;
@@ -88,10 +66,7 @@ export interface FragChannel {
   key?: string;
   epoch: number;
   name: string;
-  /**
-   * Armada's `priors` ride here. Without it a republish takes every other
-   * channel's pre-rotation history dark.
-   */
+  /** Armada's `priors` ride here; dropping them takes pre-rotation history dark. */
   extra: Record<string, unknown>;
 }
 
@@ -101,15 +76,12 @@ export interface FragTombstone {
   extra: Record<string, unknown>;
 }
 
-// ── encoding ─────────────────────────────────────────────────────────────────
-
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 const B64URL43 = /^[A-Za-z0-9_-]{43}$/;
 
 /**
- * 32 bytes of hex to unpadded base64url (43 chars). Anything that is not
- * exactly 32 bytes of hex passes through untouched: the amendment re-encodes
- * KEYS, and an unknown field from a peer may hold anything at all.
+ * 32 bytes of hex to unpadded base64url (43 chars); anything else passes through
+ * (peer unknown fields may hold anything).
  */
 function b64(value: string): string {
   if (!HEX64.test(value)) return value;
@@ -118,11 +90,7 @@ function b64(value: string): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/**
- * Unpadded base64url back to 32 bytes of hex. Anything that isn't a 43-char
- * base64 value passes through untouched — the same tolerance as {@link b64},
- * and what lets a document carrying both encodings round-trip either way.
- */
+/** Inverse of {@link b64}; non-43-char values pass through untouched. */
 function unb64(value: string): string {
   if (!B64URL43.test(value)) return value;
   const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=";
@@ -146,10 +114,8 @@ const TOMBSTONE_KEYS = ["community_id", "removed_at"] as const;
 const LIST_KEYS = ["frags", "entries", "tombstones"] as const;
 
 function splitExtra(src: Record<string, unknown>, named: readonly string[]): Record<string, unknown> {
-  // Object.fromEntries defines OWN data properties, so a hostile "__proto__"
-  // key survives as an ordinary field — exactly as serde keeps it as an
-  // ordinary map key. Plain `extra[k] = v` would instead hit the inherited
-  // accessor and silently drop the key, forking the bytes from the reference.
+  // Object.fromEntries keeps a "__proto__" key as an own field, as serde does;
+  // `extra[k] = v` would hit the accessor and drop it, forking the bytes.
   return Object.fromEntries(
     Object.keys(src)
       .filter((k) => !named.includes(k) && src[k] !== undefined)
@@ -158,9 +124,7 @@ function splitExtra(src: Record<string, unknown>, named: readonly string[]): Rec
 }
 
 function material(src: JoinMaterial): FragMaterial {
-  // A corrupt internal snapshot (a damaged folded cache) must fail the publish
-  // LOUDLY here, not seal `"name":undefined` — invalid JSON — into an event
-  // every client rejects. Rust's types make this unrepresentable.
+  // Fail loudly on a corrupt snapshot rather than seal invalid JSON.
   if (
     typeof src.owner !== "string" ||
     typeof src.owner_salt !== "string" ||
@@ -178,7 +142,6 @@ function material(src: JoinMaterial): FragMaterial {
     channels: heldChannelKeys(src.channels).map(channel),
     relays: Array.isArray(src.relays) ? [...src.relays] : [],
     name: src.name,
-    // `community_id` is named-but-dropped: the entry already keys it.
     extra: splitExtra(src, [...MATERIAL_KEYS, "community_id"]),
   };
   if (typeof src.control_pk === "string") out.control_pk = b64(src.control_pk);
@@ -197,12 +160,9 @@ function channel(src: JoinMaterial["channels"][number]): FragChannel {
   return out;
 }
 
-// ── decoding ─────────────────────────────────────────────────────────────────
-
 function unmaterial(src: FragMaterial, communityId: string): JoinMaterial {
   const jm: JoinMaterial = {
     ...src.extra,
-    // Inherited from the entry — the embedded form never carries it.
     community_id: communityId,
     owner: unb64(src.owner),
     owner_salt: unb64(src.owner_salt),
@@ -227,13 +187,9 @@ function unmaterial(src: FragMaterial, communityId: string): JoinMaterial {
 }
 
 /**
- * Union a fragment set back into one list. Entries and tombstones from every
- * fragment are concatenated; a `community_id` appearing in more than one
- * fragment is merged by the caller's own merge, never duplicated here — an
- * interrupted repack legitimately leaves one in two places.
- *
- * Fragment-level unknowns belong to the List, not to their fragment (CORD-02
- * §8): pass fragments in index order and the lowest index wins a key.
+ * Union a fragment set back into one list. Duplicate `community_id`s (e.g. from
+ * an interrupted repack) are left for the caller's merge. Fragment-level
+ * unknowns belong to the List (CORD-02 §8): lowest index wins a key.
  */
 export function defragment(frags: FragList[]): CommunityList {
   const out: CommunityList = { entries: [], tombstones: [] };
@@ -241,7 +197,6 @@ export function defragment(frags: FragList[]): CommunityList {
     for (const e of f.entries) {
       const cid = unb64(e.community_id);
       const current = unmaterial(e.current, cid);
-      // Absent seed means "equal to current" — that is what absence means.
       const seed = e.seed ? unmaterial(e.seed, cid) : structuredClone(current);
       out.entries.push({
         ...e.extra,
@@ -260,8 +215,7 @@ export function defragment(frags: FragList[]): CommunityList {
     }
     for (const [k, v] of Object.entries(f.extra)) {
       if (!Object.prototype.hasOwnProperty.call(out, k)) {
-        // defineProperty, not assignment: a "__proto__" list-extra must land as
-        // an own data property (as serde would keep it), never as a prototype swap.
+        // defineProperty so a "__proto__" key is an own property, not a prototype swap.
         Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
       }
     }
@@ -269,8 +223,7 @@ export function defragment(frags: FragList[]): CommunityList {
   return out;
 }
 
-// ── serialization (the pinned bytes) ─────────────────────────────────────────
-
+// Serialization (the pinned bytes)
 /** Emit sorted extras after the named fields — serde's flatten over a BTreeMap. */
 function emitExtras(extra: Record<string, unknown>, parts: string[]): void {
   for (const k of Object.keys(extra).sort()) {
@@ -328,8 +281,6 @@ export function serializeFragList(f: FragList): string {
   return `{${parts.join(",")}}`;
 }
 
-// ── parsing (mirrors serde's strictness) ─────────────────────────────────────
-
 class FragParseError extends Error {}
 
 function asObject(v: unknown, what: string): Record<string, unknown> {
@@ -338,12 +289,8 @@ function asObject(v: unknown, what: string): Record<string, unknown> {
 }
 
 /**
- * Rust u64: an unsigned integer — floats and negatives reject the fragment.
- * SAFE integers only: beyond 2^53 the value already lost precision in
- * JSON.parse, and re-serializing it emits exponential notation serde_json
- * cannot read back as a u64 — an Armada-authored fragment every Rust client
- * would treat as permanently unreadable. (`-0` re-serializes as `0`, which is
- * a byte change too.)
+ * Rust u64: floats/negatives reject. SAFE integers only — beyond 2^53
+ * re-serialization emits exponent notation serde_json can't read as u64.
  */
 function asU64(v: unknown, what: string): number {
   if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0 || Object.is(v, -0)) {
@@ -357,10 +304,8 @@ function asString(v: unknown, what: string): string {
   return v;
 }
 
-// serde reads an explicit `null` for an Option field as absent and serializes
-// it away — mirror that for the four Option fields (`key`, `seed`,
-// `control_pk`, `control_root`) so a null-emitting client round-trips to the
-// same bytes here as through the reference.
+// serde treats explicit `null` in an Option field as absent; mirror that so
+// null-emitting clients round-trip to the same bytes.
 const absent = (v: unknown): v is undefined | null => v === undefined || v === null;
 
 function parseChannel(v: unknown): FragChannel {
@@ -414,10 +359,8 @@ function parseTombstone(v: unknown): FragTombstone {
 }
 
 /**
- * Parse a fragment's decrypted plaintext. Throws on anything the reference
- * implementation would reject (a missing `frags`, a malformed entry) — a
- * fragment that fails here is unreadable, which the fetch treats as "index
- * missing", never as an empty fragment.
+ * Parse a fragment's decrypted plaintext; throws on anything the reference would
+ * reject. The fetch treats a failure as "index missing", not an empty fragment.
  */
 export function parseFragList(json: string): FragList {
   const o = asObject(JSON.parse(json), "fragment");
@@ -428,8 +371,6 @@ export function parseFragList(json: string): FragList {
     extra: splitExtra(o, [...LIST_KEYS]),
   };
 }
-
-// ── sizing ───────────────────────────────────────────────────────────────────
 
 const utf8 = new TextEncoder();
 
@@ -454,18 +395,10 @@ export function projectedEventBytes(plaintext: number): number {
   return Math.ceil(raw / 3) * 4 + EVENT_ENVELOPE_BYTES;
 }
 
-// ── fragmentation ────────────────────────────────────────────────────────────
-
 /**
- * Pack the list into fragments, each projected to fit {@link PACK_TARGET_BYTES}.
- *
- * Greedy and order-preserving: an entry lands in the first fragment with room.
- * Placement is arbitrary by design — a `community_id` in two fragments merges,
- * so guessing wrong costs a duplicate, never a loss.
- *
- * An entry its tombstone outranks is dropped (CORD-02 §8) — a membership is live
- * only while its entry beats its removal, so a stale fragment re-unioning the
- * retired entry still reads as left.
+ * Pack the list greedily (first fragment with room) under {@link PACK_TARGET_BYTES}.
+ * A misplaced entry just duplicates, never loses. Entries outranked by their
+ * tombstone are dropped (CORD-02 §8).
  */
 export function fragment(list: CommunityList): FragList[] {
   const entries: FragEntry[] = list.entries
@@ -473,8 +406,7 @@ export function fragment(list: CommunityList): FragList[] {
     .map((e) => {
       const current = material(e.current);
       const seed = material(e.seed);
-      // seed's cosmetic fields are current's (CORD-02 §8): seed anchors keys,
-      // and comparing labels would let one rename fork the snapshots forever.
+      // seed's cosmetic fields are current's (CORD-02 §8), so a rename can't fork snapshots.
       seed.name = current.name;
       seed.relays = [...current.relays];
       for (const ch of seed.channels) {
@@ -487,8 +419,6 @@ export function fragment(list: CommunityList): FragList[] {
         added_at: e.added_at,
         extra: splitExtra(e, [...ENTRY_KEYS]),
       };
-      // The omission that pays for itself: identical snapshots are the
-      // common case, and every unrefounded membership has them.
       if (serializeMaterial(seed) !== serializeMaterial(current)) out.seed = seed;
       return out;
     });

@@ -54,49 +54,21 @@ import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import type { NostrMetadata } from "@nostrify/nostrify";
 
 /**
- * useForegroundNotifications
- *
- * The client-side notifier that runs while Armada is OPEN (web / desktop; the
- * native APK uses its background service instead). It surfaces the SAME
- * unread/mention signal the badges already compute — sourced from the wire's
- * ingest, which hands it every live event once — as a real OS
- * `new Notification(...)`, a selected in-app sound, and a browser-tab marker.
- *
- * This is complementary to Web Push (closed-tab delivery via the relay
- * gateway): it needs only the Notifications API + permission, so it works in
- * browsers where Web Push is unavailable (Brave with Google push disabled),
- * which otherwise get nothing while the app is open in the background. The
- * in-app sound and tab marker do not require OS notification permission. Cues
- * fire whether the tab is focused or backgrounded, except for the conversation
- * the user is currently looking at in a focused Armada window (see the
- * active-room gate).
- *
- * Gating (all must pass to produce a cue):
- *   - the conversation's resolved notification level (Discord-style
- *     all/mentions/nothing, `useNotifLevels`, cascading channel → community →
- *     global per-type prefs) admits this message: `all` always, `mentions`
- *     only when it @-mentions you (DMs count), `nothing` never;
- *   - the conversation isn't the one currently on screen (`isRoomActive`);
- *   - the user hasn't already read past it (`useReadState`, NIP-29/DM);
- *   - it's newer than this session's start AND newer than the last thing we
- *     notified for that room (so a backfill / re-ingest never re-alerts).
- * The master foreground intent and OS permission gate only the system
- * Notification; the selected in-app sound and inactive-tab marker remain
- * useful without that permission.
+ * Client-side notifier while Armada is OPEN (web/desktop; native uses its service). Turns the
+ * wire's unread/mention candidates into an OS Notification, an in-app sound and a tab marker.
+ * Gates: the resolved notification level (`useNotifLevels`), not the on-screen room, not already
+ * read (`useReadState`), and newer than session start and the room's last notification.
+ * Intent + OS permission gate only the system Notification; sound and tab marker need neither.
  */
 
 /**
- * Per-room interruption ceiling, the page-side mirror of `sw.js`'s
- * `ROOM_ALERT_*` and the native service's `ALERT_BURST_MAX`. Past this many
- * ALERTING notifications for one room inside the window, further ones post
- * without a sound.
+ * Per-room ceiling, mirroring `sw.js`'s `ROOM_ALERT_*` and native `ALERT_BURST_MAX`: past it,
+ * notifications post without sound.
  */
 const ROOM_ALERT_MAX = 5;
 const ROOM_ALERT_WINDOW_MS = 120_000;
-/** Cap the timestamps one room re-serializes while a flood is live. */
 const ROOM_ALERT_MAX_TRACKED = 64;
 
-/** Whether a candidate is admitted by a resolved notification level. */
 function levelAdmits(level: NotifLevel, mention: boolean): boolean {
   if (level === "nothing") return false;
   if (level === "mentions") return mention;
@@ -104,17 +76,12 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
 }
 
 /**
- * The page may construct an OS notification only after proving this install
- * has no Web Push subscription. Fail closed: an indeterminate registration is
- * preferable to two banners/sounds for one event when its PushEvent arrives.
+ * The page may show an OS notification only after proving there's no Web Push
+ * subscription. Fail closed to avoid duplicates.
  */
 export async function pageMayShowOsNotification(): Promise<boolean> {
-  // The desktop shell serves the app from a custom scheme (app://armada) that
-  // Chromium refuses service-worker registration lookups for — the call throws
-  // a SecurityError, which would fail this closed. It has no Web Push worker to
-  // defer to anyway (see showPageOsNotification), so the page always owns
-  // presentation; without this an unfocused desktop window suppresses every
-  // notification, since the loop's fallback to this gate returns false.
+  // Desktop (app://armada) throws SecurityError on service-worker lookups and has no Web Push,
+  // so the page always owns presentation there.
   if (isDesktop()) return true;
   if (!("serviceWorker" in navigator)) return true;
   try {
@@ -127,19 +94,14 @@ export async function pageMayShowOsNotification(): Promise<boolean> {
 }
 
 export interface PageNotificationCoordination {
-  /** A visible exact-event page may race an active PushSubscription. */
   allowActivePush?: boolean;
-  /** Checked at the final synchronous presentation boundary. */
   shouldAbort?: () => boolean;
-  /** Records the page claim immediately before the browser API is called. */
   onPresenting?: () => void;
 }
 
 /**
- * Present from the registration when possible. Mobile WebKit allows that API
- * for an installed app but rejects the page-level Notification constructor.
- * The returned object exists only for the constructor fallback's click hook;
- * registration notifications route through `notificationclick` in sw.js.
+ * Present via the registration when possible: mobile WebKit rejects the page Notification
+ * constructor for installed apps. Registration notifications route clicks through sw.js.
  */
 export async function showPageOsNotification(
   title: string,
@@ -155,21 +117,14 @@ export async function showPageOsNotification(
   };
 
   if (abort()) return null;
-  // Electron registers the push service worker (it's a secure custom-scheme
-  // context) but does not wire up Chromium's persistent-notification presenter,
-  // so `registration.showNotification()` resolves and draws nothing. The
-  // renderer's `Notification` constructor DOES reach the OS (libnotify on
-  // Linux), so the desktop shell must take the constructor path below. Guard it
-  // by the same no-subscription proof the registration branch uses, though
-  // Electron ships no Web Push so a subscription is not expected here.
+  // Electron's `registration.showNotification()` draws nothing; the page constructor does
+  // reach the OS, so desktop takes that path.
   const preferPageConstructor = isDesktop();
   if (!preferPageConstructor && "serviceWorker" in navigator) {
     try {
       const current = await navigator.serviceWorker.getRegistration();
       if (current) {
-        // Re-check at the final presentation boundary. A subscription can be
-        // enabled while profile/room enrichment is awaiting; `null` hands the
-        // event back to the PushEvent without constructing a second banner.
+        // A subscription may have been enabled meanwhile; `null` hands the event to the PushEvent.
         if (!coordination.allowActivePush && await current.pushManager.getSubscription()) {
           return null;
         }
@@ -184,8 +139,7 @@ export async function showPageOsNotification(
         return undefined;
       }
     } catch {
-      // Desktop engines that reject registration presentation can still allow
-      // the page constructor, but only after one last no-subscription proof.
+      // One last no-subscription proof before the constructor fallback.
       try {
         const current = await navigator.serviceWorker.getRegistration();
         if (
@@ -203,12 +157,10 @@ export async function showPageOsNotification(
   return new Notification(title, options);
 }
 
-/** Draw an image URL's first frame to a static PNG data URL, or undefined. */
 function rasterizeFirstFrame(url: string, size = 128): Promise<string | undefined> {
   return new Promise((resolve) => {
     const img = new Image();
-    // Ask for a CORS-clean pixel buffer; without it `toDataURL` throws on a
-    // cross-origin image (every avatar host is cross-origin from app://armada).
+    // Without CORS `toDataURL` throws on cross-origin images (all avatars, from app://armada).
     img.crossOrigin = "anonymous";
     let settled = false;
     const done = (value?: string) => {
@@ -236,12 +188,8 @@ function rasterizeFirstFrame(url: string, size = 128): Promise<string | undefine
 }
 
 /**
- * The desktop shell presents through libnotify, which renders an animated GIF
- * notification icon as a BLANK frame — so a GIF avatar shows nothing. Flatten a
- * GIF to a static first-frame PNG so the real face still appears; if the host
- * refuses a CORS-clean read the icon is dropped (the app mark fallback then
- * shows) rather than left blank. Non-GIF icons already embed correctly on every
- * platform and are returned untouched, so nothing else changes.
+ * libnotify renders an animated GIF icon blank, so flatten a GIF to a static PNG (dropped if
+ * CORS blocks it). Non-GIFs pass through.
  */
 export async function desktopSafeNotificationIcon(
   icon: string | undefined,
@@ -252,11 +200,8 @@ export async function desktopSafeNotificationIcon(
 }
 
 /**
- * Discard the accumulated notification body of every room the viewer has read.
- * A room is read once its read-state entry reaches the newest message we
- * notified it for; its lines (and alert history) are then cleared so the next
- * message starts a fresh thread instead of re-listing what was already seen.
- * A room with no recorded read key (e.g. git activity) is left untouched.
+ * Clear the accumulated body of rooms read up to the newest notified message, so the next
+ * message starts fresh. Rooms without a read key are untouched.
  */
 export function retireSeenRoomLines(
   roomLines: Map<string, string[]>,
@@ -317,21 +262,16 @@ export function useForegroundNotifications(): void {
   );
   const { data: groupList } = useUserGroupList();
   const { mutedPubkeys } = useMutedPubkeys();
-  // A notification icon is fetched by the OS from this device the moment it
-  // is shown, from whatever host the sender's profile named: the same request
-  // the media policy routes for an avatar on screen, so the same policy.
+  // The OS fetches the icon from the sender-named host, so apply the avatar media policy.
   const mediaPolicy = useMediaPolicy();
   const blossomServers = useBlossomServers();
 
-  // Its own ref rather than a field on `ctx`: the sink reads it on every
-  // candidate, and it must reflect a mute made moments ago in another tab or
-  // surface without the sink being torn down and re-registered.
+  // Own ref so the sink sees a fresh mute without re-registering.
   const mutedRef = useRef(mutedPubkeys);
   mutedRef.current = mutedPubkeys;
 
-  // Fallback groupId → host relay URL for legacy candidate sources that don't
-  // yet carry ingest's exact source relay. A duplicate id on two relays is
-  // deliberately removed from this map rather than guessed.
+  // Fallback for legacy candidates without ingest's exact source relay. Duplicate ids across
+  // relays are removed rather than guessed.
   const wireGroups = useWireNip29Groups();
   const relayByGroup = useMemo(() => {
     const m = new Map<string, string>();
@@ -356,8 +296,7 @@ export function useForegroundNotifications(): void {
     return m;
   }, [groupList, wireGroups]);
 
-  // Refs so the (stable) sink reads current values without re-registering on
-  // every render — a re-register would drop the wire's reference to the sink.
+  // Refs so the stable sink reads current values; re-registering drops the wire's reference.
   const ctx = useRef({
     readState,
     channelLevel,
@@ -389,38 +328,24 @@ export function useForegroundNotifications(): void {
     blossomServers,
   };
 
-  // Session floor: never notify for anything older than the moment the notifier
-  // mounted (a fresh login backfilling weeks of history must stay silent).
+  // Session floor: a fresh login backfilling history must stay silent.
   const sessionFloor = useRef(Math.floor(Date.now() / 1000));
-  // Per-room high-water mark of what we've already notified, so overlapping
-  // transports / re-ingests don't double-alert.
+  // Per-room high-water mark so overlapping transports / re-ingests don't double-alert.
   const lastNotified = useRef(new Map<string, number>());
   const notifiedEvents = useRef(new Set<string>());
-  // Exact per-event outcomes and worker claims arbitrate the live page against
-  // its PushEvent. Both are session-only and bounded below.
+  // Arbitrate the live page against its PushEvent; session-only and bounded.
   const pagePushStates = useRef(new Map<string, PagePushState>());
   const workerOwnedPushes = useRef(new Map<string, string>());
-  // Per-room alert timestamps (the interruption ceiling) and the recent lines
-  // a room's notification body accumulates, both keyed by room key.
   const alertTimes = useRef(new Map<string, number[]>());
   const roomLines = useRef(new Map<string, string[]>());
-  // roomKey → the read-state key of its conversation, recorded when a line is
-  // added so a read can later retire the room's accumulated body.
   const roomReadKeys = useRef(new Map<string, string>());
 
-  // `useKnownDmPeers` supplies durable exact authored/pinned rooms. The sink
-  // also refreshes local conversation rows so a just-authored room is known
-  // before the index catches up. Keeping room keys (rather than flattening
-  // participants) is load-bearing for group privacy.
+  // Room keys (not flattened participants) are load-bearing for group privacy.
   const mineConversationKeys = useRef(new Set<string>());
   const mineLoading = useRef(false);
 
-  // Retire a room's accumulated notification body once the viewer has read it.
-  // Without this a later message re-lists everything already seen — the tag
-  // collapses repeated notifications into one, so its body only ever grew. A
-  // read advancing to the newest message we notified for the room (here, or on
-  // another device/tab) is the signal it has been seen; the next message then
-  // starts a fresh thread. isRoomActive already covers the live-focused case.
+  // Retire a room's body once read (here or elsewhere), or the collapsed notification's body
+  // only ever grows.
   useEffect(() => {
     retireSeenRoomLines(
       roomLines.current,
@@ -433,9 +358,7 @@ export function useForegroundNotifications(): void {
 
   useEffect(() => {
     if (!user) return;
-    // The foreground path mounts outside SyncGate. Do not let a fresh
-    // account's broad in-memory defaults make sound, badge the tab, or show an
-    // OS notification before its encrypted notification policy (or a complete
+    // Mounted outside SyncGate: stay silent until the encrypted notification policy (or a
     // relay-backed absence proof) has been applied.
     if (!notificationSettingsReady) return;
     if (isNativeRuntime()) return; // native has its own background service
@@ -469,8 +392,7 @@ export function useForegroundNotifications(): void {
     ) => {
       if (!eventId || !roomKey) return;
       const prior = exactState(eventId, roomKey);
-      // A completed real presentation must never be downgraded by a later
-      // duplicate candidate taking a suppression/dedupe branch.
+      // Never downgrade a completed presentation.
       if (prior?.outcome === "presented" && outcome !== "presented") return;
       pagePushStates.current.set(eventId, { roomKey, outcome });
       trimExactMap(pagePushStates.current);
@@ -494,9 +416,7 @@ export function useForegroundNotifications(): void {
       if (!port || !eventId) return;
 
       void (async () => {
-        // Give an already-running live candidate time to finish its exact
-        // policy/presentation decision. The worker follows with an explicit
-        // claim when this returns unhandled.
+        // Let a running live candidate finish; the worker claims explicitly if unhandled.
         for (let i = 0; i < 8; i++) {
           const state = stateForWorkerRequest(eventId, roomKey);
           if (state && state.outcome !== "presenting") {
@@ -524,9 +444,7 @@ export function useForegroundNotifications(): void {
       if (!port || !eventId) return;
 
       void (async () => {
-        // A page presentation can cross the query/claim boundary. Let its
-        // already-issued browser call settle; otherwise the claim wins now,
-        // before any late page work reaches its final shouldAbort check.
+        // Let an already-issued page presentation settle before the claim wins.
         for (let i = 0; i < 12; i++) {
           const state = stateForWorkerRequest(eventId, roomKey);
           if (!state || state.outcome !== "presenting") break;
@@ -538,33 +456,19 @@ export function useForegroundNotifications(): void {
           port.postMessage({ eventId, roomKey: state.roomKey, outcome: state.outcome });
           return;
         }
-        // When the worker could not resolve a NIP-29 relay-scoped room, the
-        // event id is still exact. A wildcard claim closes the race for that
-        // event; a later page candidate resolves its room and aborts normally.
+        // Wildcard claim when the worker couldn't resolve a NIP-29 room; the event id is exact.
         claimForWorker(eventId, roomKey || "*");
         port.postMessage({ eventId, roomKey, outcome: "worker" });
       })();
     };
     navigator.serviceWorker?.addEventListener("message", answerWorkerClaim);
 
-    // Resolve a display name for an author. Tries, in order: the react-query
-    // author cache (populated when a profile has been viewed this session) and
-    // the shared event store's kind-0 (the wire keeps profiles flowing in) —
-    // local reads only, so a missing profile can never delay the notification.
-    //
-    // An author with no profile held reads "Anonymous", matching the Android
-    // service (NotificationRelayService#displayName) and `getDisplayName`'s
-    // fallback for a profile that carries no name. A shortened npub here was
-    // the identity in name only: the notification is the one surface with no
-    // room to resolve it, no avatar beside it and no profile a tap reveals, so
-    // it showed a key blob where every other surface shows a word.
+    // Local reads only (author cache, then event store kind-0), so a missing profile never
+    // delays the notification. No profile → "Anonymous", matching Android and `getDisplayName`.
     const profileFor = async (pubkey: string): Promise<{ name: string; avatar?: string }> => {
       const present = (metadata: NostrMetadata | undefined) => ({
         name: getDisplayName(metadata, pubkey),
-        // https only: a notification icon is loaded by the browser outside the
-        // page's control, and an http URL is a mixed-content fetch that simply
-        // fails (noisily, in the console) on every deploy this ships to. Then
-        // the media policy: a stranger's host through the proxy, or no icon.
+        // https only (http is a failing mixed-content fetch), then the media policy.
         avatar: mediaSrc(
           typeof metadata?.picture === "string" && /^https:\/\//.test(metadata.picture)
             ? metadata.picture
@@ -579,14 +483,12 @@ export function useForegroundNotifications(): void {
       if (cached?.metadata) return present(cached.metadata);
       if (cached?.event) return present(parseAuthorEvent(cached.event).metadata);
 
-      // Fall back to the local event store (no network) — the profile is very
-      // often already here even when no component has subscribed to it.
+      // Local event store fallback (no network).
       try {
         const store = await ctx.current.eventStore;
         const [ev] = await store.query([{ kinds: [0], authors: [pubkey], limit: 1 }]);
         if (ev) {
           const parsed = parseAuthorEvent(ev);
-          // Seed the author cache so the next lookup is synchronous.
           seedAuthorCache(qc, pubkey, ev);
           if (parsed.metadata) return present(parsed.metadata);
         }
@@ -597,12 +499,7 @@ export function useForegroundNotifications(): void {
       return { name: "Anonymous" };
     };
 
-    /**
-     * The room's title and icon, matching the Android conversation shortcut: a
-     * channel shows the COMMUNITY image, a DM the sender's avatar (left to the
-     * caller, which already has it). Local reads only; an unresolvable room
-     * simply goes unnamed and the presenter falls back to the sender.
-     */
+    /** Room title and icon, matching the Android conversation shortcut. Local reads only. */
     const roomIdentityFor = async (
       cand: NotifyCandidate,
       relayUrl: string | undefined,
@@ -618,8 +515,7 @@ export function useForegroundNotifications(): void {
         if (cand.plane === "c2") {
           if (!communityId || !cand.channelIdHex) return {};
           const room = await concordRoomIdentity(communityId, cand.channelIdHex);
-          // The icon is an encrypted blob; decrypting it is a warm Cache
-          // Storage hit whenever the community is (or has been) on screen.
+          // Encrypted blob; usually a warm Cache Storage hit.
           const image = room.iconPointer
             ? await resolveDecryptedImage(room.iconPointer, ctx.current.blossomServers, ctx.current.mediaPolicy)
               .catch(() => undefined)
@@ -632,7 +528,6 @@ export function useForegroundNotifications(): void {
       return {};
     };
 
-    /** Resolve the names a message's NIP-27 mentions refer to, locally. */
     const mentionNamesFor = async (content: string | undefined): Promise<Map<string, string>> => {
       const names = new Map<string, string>();
       if (!content) return names;
@@ -640,20 +535,15 @@ export function useForegroundNotifications(): void {
       if (keys.length === 0) return names;
       await Promise.all(keys.map(async (pk) => {
         const { name } = await profileFor(pk);
-        // "Anonymous" is an absence, not a name — leaving the raw token stands
-        // a better chance of meaning something to the reader.
+        // "Anonymous" is an absence; the raw token means more.
         if (name && name !== "Anonymous") names.set(pk, name);
       }));
       return names;
     };
 
     /**
-     * Whether this room has already alerted its fill inside the window, the
-     * page-side mirror of the service worker's `roomAlertSilent` and the native
-     * ALERT_BURST_MAX. Past the ceiling a notification is still shown and its
-     * lines still accumulate — it just stops making noise. Records every
-     * attempt, so a sustained flood keeps its own window full and stays quiet
-     * until it actually stops.
+     * Past the ceiling, still shown but silent. Records every attempt so a sustained flood stays
+     * quiet until it stops.
      */
     const roomAlertSilent = (roomKey: string): boolean => {
       const now = Date.now();
@@ -668,28 +558,21 @@ export function useForegroundNotifications(): void {
       return silent;
     };
 
-    /** The room's recent notification lines plus `line`, capped at 5. */
     const appendRoomLine = (roomKey: string, line: string): string[] => {
       const lines = [...(roomLines.current.get(roomKey) ?? []).slice(-4), line];
       roomLines.current.set(roomKey, lines);
       return lines;
     };
 
-    // Reload the conversations the viewer has authored a message in. Called
-    // once on mount and again whenever a DM arrives that the current sets don't
-    // know: the viewer may have replied since (replying is accepting, but the
-    // persisted `acceptedDms` is only written from the compose pane), so one
-    // message may present generically before the set catches up — which beats
-    // an interval poll, and beats deferring the decision past the point where
-    // the `off` policy has to stay silent.
+    // Reload rooms the viewer authored in, on mount and when an unknown DM arrives (they may have
+    // replied since; `acceptedDms` is only written from the compose pane).
     const refreshMineConversationKeys = () => {
       if (mineLoading.current) return;
       mineLoading.current = true;
       void (async () => {
         try {
           const rows = await queryDm17Conversations(user.pubkey);
-          // A written group makes that exact conversation known. It does not
-          // make each member a trusted author in an unrelated 1:1.
+          // A written group makes that conversation known, not each member in unrelated 1:1s.
           mineConversationKeys.current = new Set(
             rows.filter((row) => row.mine).map((row) => row.key),
           );
@@ -706,12 +589,8 @@ export function useForegroundNotifications(): void {
       const canShowOsNotification = isForegroundNotifyReady();
       const soundSettings = loadNotificationSoundSettings();
       let playedSound = false;
-      // One fresh ownership proof per ingest batch, shared by every OS
-      // notification in it. This reacts immediately to enable/disable/rotation
-      // instead of pinning a mount-time subscription state. The in-app sound is
-      // NOT gated on it: it is a page cue that plays at ingest regardless of who
-      // presents the visual, so a Web Push install still hears it (the OS
-      // notification itself, page- or worker-owned, stays `silent: true`).
+      // One ownership proof per batch. The in-app sound is NOT gated on it (OS notifications are
+      // always `silent: true`).
       let pageOwnership: Promise<boolean> | undefined;
       const pageOwnsPresentation = () => (
         pageOwnership ??= pageMayShowOsNotification()
@@ -730,41 +609,28 @@ export function useForegroundNotifications(): void {
           suppress(initialRoomKey);
           continue;
         }
-        // A candidate dated ahead of the local clock is HELD, exactly as the
-        // timeline holds it (`foldTimeline` / FUTURE_HOLD_MS): cueing now would
-        // toast/sound/notify about a message the reader can't yet see, and the
-        // OS would stamp it "in 5m" from its future timestamp. It re-arrives on
-        // its own once its time comes. The tiny grace absorbs sub-second clock
-        // jitter between honest clients (createdAt is seconds).
+        // Hold future-dated candidates like the timeline does (FUTURE_HOLD_MS); they re-arrive later.
         if (cand.createdAt * 1000 > Date.now() + FUTURE_HOLD_MS) {
           suppress(initialRoomKey);
           continue;
         }
-        // Ingest normally removes self-authored events, but keep the final
-        // presentation boundary safe when identity hydration races a live
-        // event or another candidate source is added.
+        // Belt-and-braces: ingest normally drops self-authored events.
         if (cand.author && cand.author === user.pubkey) {
           suppress(initialRoomKey);
           continue;
         }
-        // A muted person must not be able to raise a toast, a sound, or an OS
-        // notification — the one place where hiding them from the UI isn't
-        // enough, because the notification is the UI coming to find you.
+        // A muted person must not raise any cue.
         if (cand.author && mutedRef.current.has(cand.author)) {
           suppress(initialRoomKey);
           continue;
         }
 
-        // Resolve the fields ingest left for the hook (relay-dependent
-        // routing) and the conversation's notification level.
         let roomKey = initialRoomKey;
         let readKey = cand.readKey;
         let path = cand.path;
         let level: NotifLevel;
-        // Set when this is a DM from an unknown sender and the request policy is
-        // "generic": still cue, but present nothing the sender controls.
+        // Unknown DM sender under the "generic" request policy: cue but show nothing they control.
         let dmGeneric = false;
-        // Filled per plane, for the room's title/image below.
         let relayUrl: string | undefined;
         let communityId: string | undefined;
 
@@ -787,17 +653,14 @@ export function useForegroundNotifications(): void {
           });
           level = c.channelLevel(relay, cand.groupId);
         } else if (cand.plane === "dm") {
-          // Match the DM list: a group containing any muted participant is
-          // absent as a whole, even when this particular author is unmuted.
+          // Match the DM list: a group with any muted participant is hidden.
           if (cand.peer && dmConvPeers(cand.peer).some((peer) => mutedRef.current.has(peer))) {
             suppress(roomKey);
             continue;
           }
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
-          // Unknown sender (not followed / accepted / pinned): a stranger picks
-          // the message text, their display name and their avatar. Apply the
-          // message-request policy before any of it is surfaced — "off" stays
-          // silent, "generic" cues without content, "full" notifies as normal.
+          // Unknown senders control text, name and avatar: apply the request policy ("off" silent,
+          // "generic" content-free, "full" normal).
           const conversationKnown = cand.peer
             ? c.knownConversationSet.has(cand.peer)
               || mineConversationKeys.current.has(cand.peer)
@@ -818,12 +681,7 @@ export function useForegroundNotifications(): void {
             suppress(roomKey);
             continue; // couldn't resolve the community route
           }
-          // Recover the community id from the route, to resolve the
-          // per-channel level. Parsed rather than split on "/": the route may
-          // carry a `/m/<id>` focus, and the parser is the same one the app
-          // navigates by.
-          // (A git-activity candidate carries a `?ticket=` query; parse only
-          // the path part.)
+          // Parsed (not split): the route may carry `/m/<id>`; git candidates carry `?ticket=`.
           const parsed = parseChatRoute(path.split("?")[0]);
           communityId = parsed?.kind === "concord" ? parsed.communityId : "";
           level =
@@ -832,68 +690,46 @@ export function useForegroundNotifications(): void {
               : "all";
         }
 
-        // Notification-level gate (Discord-style all/mentions/nothing).
         if (!levelAdmits(level, cand.mention)) {
           suppress(roomKey);
           continue;
         }
 
-        // Read-state gate (NIP-29 / DM have a useReadState entry). If the user
-        // already read past this message, don't notify.
         if (readKey && (c.readState[readKey] ?? 0) >= cand.createdAt) {
           suppress(roomKey);
           continue;
         }
 
-        // On-screen suppression: only while the Armada window is focused and
-        // the user is actually looking at this room.
+        // Only while the Armada window is focused on this room.
         if (isRoomActive(roomKey)) {
           suppress(roomKey);
           continue;
         }
 
-        // Dedupe against what we've already surfaced for this room.
         const eventKey = cand.eventId ? `${roomKey}:${cand.eventId}` : "";
         if (eventKey && notifiedEvents.current.has(eventKey)) {
           suppress(roomKey);
           continue;
         }
         const mark = lastNotified.current.get(roomKey) ?? 0;
-        // Legacy candidates lack an event id, so retain their timestamp-based
-        // protection. Git events use source ids: multiple accepted actions in
-        // the same second are distinct notification candidates.
+        // Legacy candidates lack an event id, so dedupe by timestamp; git events have source ids.
         if (!eventKey && cand.createdAt <= mark) {
           suppress(roomKey);
           continue;
         }
         lastNotified.current.set(roomKey, cand.createdAt);
         if (eventKey) notifiedEvents.current.add(eventKey);
-        // Remember which read-state entry governs this room, so reading it
-        // clears the accumulated body below rather than letting a later message
-        // re-list everything already seen.
+        // Lets a read clear the accumulated body.
         if (readKey) roomReadKeys.current.set(roomKey, readKey);
 
-        // Past this room's interruption ceiling the notification is still shown
-        // and its lines still accumulate — it just stops making noise. A
-        // channel is writable by anyone holding the invite, so a flood reaches
-        // every surface at once; content-blind rate limiting is what keeps that
-        // from being a phone (or a laptop) buzzing all night.
+        // Content-blind rate limiting: anyone with the invite can flood a channel.
         const silent = roomAlertSilent(roomKey);
 
-        // These page-owned cues work without Notification permission. A batch
-        // can contain multiple accepted events, but should produce one sound,
-        // not a stack of overlapping clips. The favicon badge itself is
-        // idempotent and only appears while the tab is hidden or unfocused.
+        // Page-owned cues need no permission; one sound per batch. The favicon badge is idempotent.
         markTabAttention();
 
-        // The selected in-app sound is a page-owned cue like the tab marker: it
-        // needs no OS-notification permission and does not depend on who
-        // presents the visual. Whether the page or the service worker shows the
-        // banner, the OS notification is always constructed `silent`, so this is
-        // the one tone for the event — play it here at ingest, not behind the
-        // presentation handoff, which silenced it for anyone with a Web Push
-        // subscription (the page hands presentation to the worker, and the
-        // worker can't play audio). One sound per batch, never a stack.
+        // Play the sound here at ingest, not after the presentation handoff: the worker can't play
+        // audio and OS notifications are always silent.
         if (soundSettings.enabled && !playedSound && !silent) {
           playNotificationSound({ settings: soundSettings });
           playedSound = true;
@@ -908,20 +744,13 @@ export function useForegroundNotifications(): void {
 
         if (!canShowOsNotification) continue;
 
-        // Resolve the title (async — needs the author's profile) then fire the
-        // OS notification. Errors are swallowed so one bad event never breaks
-        // the sink for the rest of the batch.
+        // Errors are swallowed so one bad event never breaks the batch.
         void (async () => {
-          // A visible page may cover a delayed/missing PushEvent, but only for
-          // an exact event+room the worker can arbitrate. Hidden pages and
-          // legacy candidates retain the no-subscription requirement.
+          // A visible page may cover a missing PushEvent only for exact events the worker can arbitrate.
           if (!canCoordinateExactEvent() && !(await pageOwnsPresentation())) return;
           if (workerOwns(cand.eventId, roomKey)) return;
-          // Either a fixed presentation (the two shapes that aren't chat
-          // messages) or the message the presenter composes below. Composing is
-          // deferred past the last active-room check so a notification that
-          // turns out not to be shown doesn't leave its line in the room's
-          // accumulated body.
+          // Composing is deferred past the last active-room check so an unshown notification leaves no
+          // line in the room body.
           let presented: PresentedNotification | undefined;
           let message: NotificationMessage | undefined;
           let notificationLines: string[] | undefined;
@@ -935,8 +764,7 @@ export function useForegroundNotifications(): void {
               badge: NOTIFICATION_BADGE_ICON,
             };
           } else if (cand.git) {
-            // Repository activity routed into a channel: not a chat message, so
-            // it keeps its own shape rather than going through the presenter.
+            // Repository activity keeps its own shape rather than going through the presenter.
             const { name, avatar } = await profileFor(cand.author);
             presented = {
               title: `${name} ${cand.git.action} in ${cand.git.repository}`,
@@ -953,9 +781,7 @@ export function useForegroundNotifications(): void {
             message = {
               plane: cand.plane,
               kind: cand.kind,
-              // `body` is already truncated and whitespace-collapsed; `content`
-              // is the raw text the preview pipeline needs. Encrypted legacy
-              // DMs have neither, and fall through to the per-plane default.
+              // `body` is truncated; `content` is the raw text the preview pipeline needs.
               content: cand.content ?? cand.body ?? "",
               authorName: name,
               authorAvatar: avatar,
@@ -970,16 +796,12 @@ export function useForegroundNotifications(): void {
           }
 
           try {
-            // Profile resolution can outlive a focus or route change. Re-check
-            // at presentation time so a notification queued in the background
-            // is not shown after the user has focused that conversation.
+            // Re-check: the user may have focused the conversation during profile resolution.
             if (cand.author === user.pubkey || isRoomActive(roomKey)) {
               suppress(roomKey);
               return;
             }
-            // Accumulate the room's recent lines so a busy conversation reads
-            // as a thread — the closest a Web Notification gets to the native
-            // MessagingStyle expansion.
+            // Accumulate lines so a busy room reads as a thread (like native MessagingStyle).
             if (message) {
               notificationLines = appendRoomLine(roomKey, attributedLine(message));
               presented = presentNotification(
@@ -988,24 +810,19 @@ export function useForegroundNotifications(): void {
               );
             }
             if (!presented) return;
-            // Flatten a GIF avatar to a static frame on desktop; libnotify
-            // draws an animated GIF icon blank. A no-op on other platforms.
+            // libnotify draws animated GIF icons blank.
             const icon = await desktopSafeNotificationIcon(presented.icon);
             const allowActivePush = canCoordinateExactEvent();
             const n = await showPageOsNotification(presented.title, {
               body: presented.body,
               icon,
               badge: presented.badge,
-              // Armada owns foreground audio so the selected sound isn't
-              // doubled by the browser's default notification tone.
+              // Armada plays its own sound; avoid the browser's default tone.
               silent: true,
-              // Tag by room so repeated messages in the same conversation
-              // collapse into one entry. The desktop shell digests it: the raw
-              // key overflows Windows' toast tag limit and the toast is never
-              // shown (desktopNotificationTag.ts).
+              // Tag by room to collapse repeats. Desktop digests it: the raw key overflows Windows'
+              // toast tag limit (desktopNotificationTag.ts).
               tag: isDesktop() ? desktopNotificationTag(roomKey) : roomKey || "armada",
-              // Registration notifications are clicked in sw.js, so carry the
-              // exact SPA route instead of relying on a page-only callback.
+              // sw.js handles registration notification clicks, so carry the SPA route.
               data: { url: path || "/", lines: notificationLines },
             }, {
               allowActivePush,
@@ -1026,15 +843,11 @@ export function useForegroundNotifications(): void {
                 if (path) c.navigate(path);
                 n.close();
               };
-              // The constructor resolves before the OS has drawn anything;
-              // a toast Windows refuses surfaces only here. Say so, or a
-              // whole platform's notifications can fail with no trace.
+              // A toast Windows refuses surfaces only here; log it.
               n.onerror = () => {
                 console.warn("[notify] OS refused the notification", { roomKey, title: n.title });
               };
-              // A banner alone can be missed with the app behind another
-              // window; ask the shell for the taskbar's attention too (the
-              // orange flash on Windows). No-op on the web and when focused.
+              // Taskbar flash on desktop; no-op on the web and when focused.
               if (isDesktop()) requestDesktopAttention();
             }
           } catch {

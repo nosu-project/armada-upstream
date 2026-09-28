@@ -33,11 +33,9 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 export { isUpcoming } from "@/lib/calendar";
 
 /**
- * A group's NIP-52 calendar events (kinds 31922/31923). Queries the group's
- * host relay (group traffic stays on one relay) and exposes create/update and
- * delete mutations, gated relay-side to admins/moderators. Events are
- * addressable, so the newest event per (author, kind, `d`) wins; the list is
- * sorted soonest-first.
+ * A group's NIP-52 calendar events (31922/31923) from its host relay, with
+ * create/update/delete mutations (relay-gated to mods). Newest per (author, kind,
+ * `d`) wins; sorted soonest-first.
  */
 export function useCalendarEvents(relayUrl: string | undefined, groupId: string | undefined) {
   const { nostr } = useNostr();
@@ -51,9 +49,7 @@ export function useCalendarEvents(relayUrl: string | undefined, groupId: string 
     queryKey,
     queryFn: async ({ signal }) => {
       const events = await nostr.relay(relayUrl!).query(
-        // `#h` routes the query into the group's DB (relay29 only serves
-        // filters carrying an h/e/a/ids selector). Both calendar kinds in one
-        // filter.
+        // `#h` routes to the group's DB (relay29 requires an h/e/a/ids selector).
         [{ kinds: [KIND_CALENDAR_DATE, KIND_CALENDAR_TIME], "#h": [groupId!], limit: 200 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
       );
@@ -131,10 +127,8 @@ type RsvpMap = Map<string, RsvpVote[]>;
 const EMPTY_RSVPS: RsvpVote[] = [];
 
 /**
- * Build a NIP-29 {@link CalendarTransport}: the group's events plus its RSVPs
- * (one bulk query, tallied client-side per event), and the create/delete/RSVP
- * mutations. GroupPage hands this to the shared calendar UI, which is otherwise
- * transport-agnostic (Concord supplies the same shape from its sealed fold).
+ * A NIP-29 {@link CalendarTransport}: events plus RSVPs (tallied client-side) and
+ * mutations, for the transport-agnostic calendar UI.
  */
 export function useNip29CalendarTransport(
   relayUrl: string | undefined,

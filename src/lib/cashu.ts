@@ -1,41 +1,28 @@
 /**
- * Cashu ecash token parsing (NUT-00).
- *
- * A token is a bearer instrument serialized as `cashu` + a version letter +
- * base64url payload:
- *
- * - `cashuA` — v3, payload is JSON.
- * - `cashuB` — v4, payload is CBOR.
- *
- * Only the envelope is parsed here (amount / unit / mint / memo / secrets) —
- * enough to render a token in chat and ask the mint whether it's still
- * spendable. Redeeming is a wallet's job; nothing here spends anything.
+ * Cashu ecash token parsing (NUT-00): `cashuA` (v3, JSON) or `cashuB` (v4,
+ * CBOR) + base64url. Only the envelope is parsed, to render and state-check;
+ * nothing here spends.
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, concatBytes } from "@noble/hashes/utils.js";
 
 /**
- * Matches a serialized token, optionally behind a `cashu:` URI scheme. The
- * version letter is case-sensitive in the spec, but callers may apply the `i`
- * flag; `parseCashuToken` re-validates and rejects what it can't decode.
+ * Serialized token, optionally behind `cashu:`. Callers may apply the `i` flag;
+ * `parseCashuToken` re-validates.
  */
 export const CASHU_TOKEN_PATTERN = "(?:cashu:)?cashu[AB][A-Za-z0-9_-]{20,}={0,2}";
 
 export interface CashuTokenInfo {
-  /** Serialization version: 3 (`cashuA`, JSON) or 4 (`cashuB`, CBOR). */
   version: 3 | 4;
-  /** Sum of all proof amounts, in `unit`. */
   amount: number;
-  /** Currency unit, e.g. `sat`, `msat`, `usd`. Defaults to `sat` when absent. */
+  /** Defaults to `sat` when absent. */
   unit: string;
-  /** Mint URL the token is drawn on. Empty when the token omits it. */
+  /** Empty when the token omits it. */
   mint: string;
-  /** Optional memo the sender attached. */
   memo?: string;
-  /** Number of proofs (denominations) in the token. */
   proofs: number;
-  /** Proof secrets, used to derive the `Y` points for a NUT-07 state check. */
+  /** Proof secrets, for NUT-07 `Y` points. */
   secrets: string[];
 }
 
@@ -62,11 +49,7 @@ type CborValue =
   | CborValue[]
   | { [key: string]: CborValue };
 
-/**
- * Minimal CBOR decoder covering the subset a v4 token uses: unsigned/negative
- * integers, byte and text strings, arrays, string-keyed maps, and simple
- * values. Indefinite-length items, tags and floats throw.
- */
+/** Minimal CBOR decoder for the v4 token subset; indefinite lengths, tags and floats throw. */
 function decodeCbor(bytes: Uint8Array): CborValue {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let pos = 0;
@@ -153,10 +136,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     && !(value instanceof Uint8Array);
 }
 
-/**
- * Tally a proof list, ignoring malformed entries. `amountKey`/`secretKey`
- * differ between the v3 (`amount`/`secret`) and v4 (`a`/`s`) encodings.
- */
+/** Tally a proof list, ignoring malformed entries (keys differ between v3 and v4). */
 function collectProofs(
   proofs: unknown,
   amountKey: string,
@@ -179,7 +159,6 @@ function collectProofs(
   return { amount, count, secrets };
 }
 
-/** Parse a v3 (`cashuA`) JSON payload. */
 function parseV3(payload: string): CashuTokenInfo | null {
   const bytes = base64urlToBytes(payload);
   if (!bytes) return null;
@@ -216,7 +195,6 @@ function parseV3(payload: string): CashuTokenInfo | null {
   };
 }
 
-/** Parse a v4 (`cashuB`) CBOR payload. */
 function parseV4(payload: string): CashuTokenInfo | null {
   const bytes = base64urlToBytes(payload);
   if (!bytes) return null;
@@ -251,11 +229,7 @@ function parseV4(payload: string): CashuTokenInfo | null {
   };
 }
 
-/**
- * Parse a serialized Cashu token. Returns null when the string isn't a token,
- * uses an unknown version, or carries no proofs — callers should fall back to
- * rendering it as plain text.
- */
+/** Parse a serialized Cashu token; null means render as plain text. */
 export function parseCashuToken(raw: string): CashuTokenInfo | null {
   const token = raw.startsWith("cashu:") ? raw.slice("cashu:".length) : raw;
   if (!token.startsWith("cashu")) return null;
@@ -301,17 +275,10 @@ function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
 }
 
 /**
- * NUT-00 `hash_to_curve`: `Y = PublicKey('02' || SHA256(msg_hash || counter))`
- * where `msg_hash = SHA256(DOMAIN_SEPARATOR || x)` and `counter` is a
- * little-endian uint32 incremented until the x-coordinate lands on the curve.
- *
- * Only the compressed serialization is needed, so rather than pulling in a
- * curve library this checks candidate x-coordinates directly: `02||X` is a
- * valid point iff `X < p` and `X³ + 7` is a quadratic residue mod p (Euler's
- * criterion — p ≡ 3 mod 4, so a square root exists exactly when the criterion
- * holds).
- *
- * Returns the hex-encoded compressed point.
+ * NUT-00 `hash_to_curve`: `Y = PublicKey('02' || SHA256(msg_hash || counter))`,
+ * `msg_hash = SHA256(DOMAIN_SEPARATOR || x)`, little-endian uint32 counter.
+ * Checks candidates via Euler's criterion on `X³ + 7` (p ≡ 3 mod 4) instead of
+ * a curve library. Returns the hex compressed point.
  */
 export function hashToCurve(message: Uint8Array): string {
   const msgHash = sha256(concatBytes(DOMAIN_SEPARATOR, message));
@@ -335,12 +302,8 @@ export function hashToCurve(message: Uint8Array): string {
 export type CashuTokenState = "unspent" | "pending" | "spent";
 
 /**
- * Ask the mint whether a token's proofs are still spendable (NUT-07).
- *
- * This is a request to a mint URL that came out of a chat message, and it tells
- * that mint someone is looking at this token — so it must only run on an
- * explicit user action, never on render. Returns null when the mint is
- * unreachable, blocks CORS, or doesn't implement NUT-07.
+ * Ask the mint whether a token's proofs are spendable (NUT-07). Reveals interest
+ * to an attacker-supplied mint, so only run on explicit user action. Null on failure.
  */
 export async function checkCashuTokenState(
   info: CashuTokenInfo,
@@ -354,8 +317,7 @@ export async function checkCashuTokenState(
   } catch {
     return null;
   }
-  // Only https: an http mint is blocked as mixed content anyway, and this URL
-  // is attacker-supplied.
+  // https only: the URL is attacker-supplied.
   if (endpoint.protocol !== "https:") return null;
 
   let states: unknown;
@@ -382,17 +344,13 @@ export async function checkCashuTokenState(
     .filter((state): state is string => state !== null);
   if (!values.length) return null;
 
-  // A token is only claimable if something in it is still unspent; treat a
-  // fully-spent token as spent and anything mid-flight as pending.
+  // Claimable if anything is unspent; pending if mid-flight.
   if (values.some((state) => state === "UNSPENT")) return "unspent";
   if (values.every((state) => state === "SPENT")) return "spent";
   return "pending";
 }
 
-/**
- * Format a token amount for display. Sats get thousands separators; other
- * units are shown as-is with the unit appended.
- */
+/** Format a token amount for display. */
 export function formatCashuAmount(amount: number, unit: string): string {
   if (unit === "sat") return `${amount.toLocaleString()} sat`;
   if (unit === "msat") return `${amount.toLocaleString()} msat`;

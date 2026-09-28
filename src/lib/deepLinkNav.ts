@@ -1,15 +1,7 @@
 /**
- * Module-level mark set the moment a deep link is applied as a navigation:
- * the warm `appUrlOpen` path, an iOS `pushOpened` tap, a cold launch consumed
- * by HomeRedirect, and the late cold-launch fallback.
- *
- * SwipeReveal reads it to skip its mount slide-in for these arrivals: a
- * notification tap should LAND on its destination — the native crest
- * gate/splash lifts onto a settled screen — not play one more transition
- * after the tap already sat through the navigation. The window is generous
- * because a cold destination mount can trail the navigation by a lazy-chunk
- * load; the cost of a stale mark is one skipped entrance animation on a
- * manual navigation made moments after a tap, which is cosmetic.
+ * Set when a deep link is applied as a navigation, so SwipeReveal skips its
+ * slide-in and a notification tap lands on a settled screen. Generous window
+ * (cold mounts trail lazy chunks); a stale mark only skips one animation.
  */
 
 const RECENT_MS = 5000;

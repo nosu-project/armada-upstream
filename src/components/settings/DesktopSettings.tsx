@@ -8,12 +8,7 @@ import {
   type DesktopLaunchSettings,
 } from "@/lib/desktop";
 
-/**
- * Desktop-shell behavior: launch Armada when you log in, and whether that
- * launch starts minimized to the tray. Both round-trip to the Electron main
- * process (the OS holds the login-item registration); rendered only inside the
- * desktop app, and self-hides when the running shell predates the bridge.
- */
+/** Launch-at-login and start-minimized, via the Electron main process. Hides on shells without the bridge. */
 export function DesktopSettings() {
   const [settings, setSettings] = useState<DesktopLaunchSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -33,7 +28,7 @@ export function DesktopSettings() {
 
   const apply = (next: { openAtLogin: boolean; openAsHidden: boolean }) => {
     setBusy(true);
-    // Reflect the intent immediately; the returned state is authoritative.
+    // Optimistic; the returned state is authoritative.
     setSettings((prev) => (prev ? { ...prev, ...next } : prev));
     void setDesktopLaunchSettings(next)
       .then((state) => {
@@ -42,7 +37,6 @@ export function DesktopSettings() {
       .finally(() => setBusy(false));
   };
 
-  // An older shell (no bridge) or an unsupported OS: nothing to configure.
   if (!loaded || !settings?.supported) return null;
 
   return (

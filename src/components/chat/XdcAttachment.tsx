@@ -9,11 +9,8 @@ import type { ImetaEntry } from "@/lib/imeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 
 /**
- * A `.xdc` (webxdc app) attachment rendered in a chat message. Shows a launch
- * card; clicking it opens the app in the top-of-chat app stage, joined to the
- * shared coordination session identified by the attachment's `webxdc` uuid (so
- * everyone who launches the same attachment shares state). Falls back to a
- * plain download link when there's no chat scope to launch into.
+ * A `.xdc` attachment: launches in the app stage, joined to the session keyed by
+ * the attachment's `webxdc` uuid. Falls back to a download link without a chat scope.
  */
 export function XdcAttachment({
   url,
@@ -22,19 +19,15 @@ export function XdcAttachment({
 }: {
   url: string;
   imeta?: ImetaEntry;
-  /** The rumor id of the message carrying this app, hex. */
   messageId?: string;
 }) {
   const scope = useChatScope();
   const { activeApp, launchApp } = useApps();
   const name = imeta?.summary || "Webxdc app";
-  // An uploaded app carries a minted topic; a pasted link has no file event to
-  // carry one, so every client derives the same topic from the URL and the
-  // message id. Without this a link opens into a session only this client is
-  // in — which looks like working multiplayer with nobody else ever arriving.
+  // A pasted link has no minted topic, so every client derives the same one from
+  // the URL and message id; otherwise each client gets a solo session.
   const sessionId = imeta?.webxdc ?? (messageId ? deriveUrlTopicId(url, messageId) : undefined);
-  // A published game's icon is a plaintext URL; an encrypted attachment's thumb
-  // is ciphertext (would render broken), so only show it when unencrypted.
+  // An encrypted attachment's thumb is ciphertext; only show plaintext icons.
   const icon = imeta?.encryption ? undefined : sanitizeImageSrc(imeta?.thumbnail);
 
   const openHere = Boolean(
@@ -57,8 +50,6 @@ export function XdcAttachment({
       onClick={(e) => e.stopPropagation()}
     >
       <div className="size-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden">
-        {/* A published game carries a plaintext icon URL; an encrypted
-            attachment's thumb is ciphertext, so fall back to the glyph there. */}
         {icon ? (
           <img src={icon} alt="" className="size-full object-cover" />
         ) : (

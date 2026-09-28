@@ -37,15 +37,7 @@ interface AddDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/**
- * The "Add" wizard, restructured around Concord.
- *
- * The headline act is **starting an end-to-end-encrypted community** — every
- * community is Concord (CORD-01..06). Everything else (joining an existing
- * community, or connecting to a
- * trust-the-host NIP-29 relay) folds into a single smaller "escape hatch": one
- * smart-paste field that figures out what you gave it and does the right thing.
- */
+/** The "Add" wizard: start an encrypted Concord community, or smart-paste to join something existing. */
 export function AddDialog({ open, onOpenChange }: AddDialogProps) {
   const close = () => onOpenChange(false);
 
@@ -60,21 +52,8 @@ export function AddDialog({ open, onOpenChange }: AddDialogProps) {
 }
 
 /**
- * The Add wizard's body: the door into founding an encrypted community, plus
- * the smart-paste "escape hatch" for joining via an invite link or NIP-29
- * server URL.
- *
- * Creating is deliberately NOT a form here. It used to be — a name field, a
- * retention picker and a relay list stacked into a dialog, which left no room
- * to ask about the community's icon, banner or description, so every community
- * was born faceless. Those questions now live in the full-screen
- * {@link CreateCommunityWizard} at `/create`, and this is the button that goes
- * there; the pitch stays because this is where the choice is made.
- *
- * Exported for standalone/full-page use. A standalone host must render
- * {@link ArmadaCrestKeyframes} alongside it for the crest animation, and
- * provide `onDone` (called after a successful join/add, and when the create
- * wizard takes over; the dialog uses it to close, a page can no-op).
+ * Add wizard body. Creating navigates to the full-screen CreateCommunityWizard.
+ * Standalone hosts must render ArmadaCrestKeyframes and provide `onDone`.
  */
 export function AddBody({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
@@ -83,9 +62,6 @@ export function AddBody({ onDone }: { onDone: () => void }) {
     <div className="flex flex-col items-center gap-6 text-center">
       <ArmadaCrest size={84} />
 
-      {/* One line, not three. This is a chooser between three doors — the
-          case for an encrypted community belongs on the wizard's own first
-          screen, where there's room for it and it isn't in the way. */}
       <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
         gather your crew
       </h2>
@@ -95,10 +71,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           type="button"
           size="lg"
           onClick={() => {
-            // Navigation is the whole mechanism, as with the Discord import:
-            // the wizard is owned by its route, so this dialog unmounting (via
-            // `onDone`, which is what stops a second close button painting over
-            // it) cannot take the wizard's state down with it.
+            // The wizard is owned by its route, so this dialog unmounting can't take its state down.
             navigate("/create");
             onDone();
           }}
@@ -109,11 +82,6 @@ export function AddBody({ onDone }: { onDone: () => void }) {
         </Button>
       </div>
 
-      {/* Coming off Discord: the portal mints the community from a guild's
-          channels and history, signed with this user's own key, and hands back
-          an invite the escape hatch below accepts. Absent unless the build
-          names a portal. What it does and what it costs is explained by the
-          import wizard itself, not here. */}
       <ImportFromDiscordSection onOpen={onDone} />
 
       <EscapeHatch onDone={onDone} />
@@ -121,7 +89,6 @@ export function AddBody({ onDone }: { onDone: () => void }) {
   );
 }
 
-/** The Discord-import path: the divider and the button, and nothing else. */
 function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
   if (!bridgePortalUrl("/import")) return null;
 
@@ -138,11 +105,10 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
 }
 
 /**
- * The "I already have something" path. One field, one classifier — checked in
- * order: a NIP-29 group identifier (`naddr1...` for kind 39000, optionally with
- * the standardized `?invite=<code>` suffix), a Buzz relay invite
- * (`https://<host>/invite/<code>` with a dotted HMAC code), a Concord invite
- * (`…/invite/<naddr>#…` or bare `naddr#fragment`), or a NIP-29 relay URL.
+ * Smart-paste classifier, checked in order: NIP-29 group naddr (kind 39000,
+ * optional `?invite=<code>`), Buzz invite (`https://<host>/invite/<code>`,
+ * dotted HMAC code), Concord invite (`…/invite/<naddr>#…` or `naddr#fragment`),
+ * or a NIP-29 relay URL.
  */
 type Classified =
   | { kind: "buzz"; invite: BuzzInvite; identity: string }
@@ -154,10 +120,8 @@ type Classified =
 function classify(input: string): Classified {
   const trimmed = input.trim();
   if (!trimmed) return { kind: "unknown", identity: "" };
-  // A NIP-29 group naddr must be checked before the relay-URL fallback below,
-  // which would otherwise swallow a bare naddr as a garbage hostname. Concord
-  // bundle naddrs are a different kind (33301), so they fall through to the
-  // Concord check below.
+  // Must precede the relay-URL fallback, which would swallow a bare naddr.
+  // Concord bundle naddrs (kind 33301) fall through.
   const groupNaddr = parseGroupNaddr(trimmed);
   if (groupNaddr?.relay) {
     const relay = normalizeRelayUrl(groupNaddr.relay);
@@ -178,7 +142,6 @@ function classify(input: string): Classified {
   return { kind: "unknown", identity: "" };
 }
 
-/** What a resolved (validated + loaded) target looks like, for the preview card. */
 type Target =
   | { kind: "buzz"; relay: string; name?: string; description?: string; policy?: BuzzJoinPolicy; origin: string }
   | { kind: "concord"; name: string; channelCount: number; relays: string[] }
@@ -198,7 +161,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   const [resolving, setResolving] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [committing, setCommitting] = useState(false);
-  // Buzz join-policy acceptance (only rendered when the relay requires one).
   const [policyAccepted, setPolicyAccepted] = useState(false);
   const [ageConfirmed, setAgeConfirmed] = useState(false);
 
@@ -221,7 +183,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
     }
   };
 
-  // Resolve (validate + load) the target whenever the classified input settles.
   useEffect(() => {
     setTarget(null);
     setError(null);
@@ -265,8 +226,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           if (cancelled) return;
           setTarget({ kind: "concord", name: p.name, channelCount: p.channelCount, relays: p.relays });
         } else if (classified.kind === "nip29-group") {
-          // Nothing to fetch: the naddr itself carries the relay + group id,
-          // and the channel page resolves (and joins) the rest.
           if (cancelled) return;
           setTarget({
             kind: "nip29-group",
@@ -279,11 +238,8 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           if (servers.includes(relay)) {
             throw new Error("That server is already in your list.");
           }
-          // The NIP-11 document is only a preview of the server's name and
-          // description — the actual join is a kind-9021 event over WebSocket
-          // (see useJoinGroup), which CORS does not gate. Many relays don't
-          // send Access-Control-Allow-Origin on their NIP-11 endpoint, so a
-          // failed/blocked fetch here must not block joining a public server.
+          // NIP-11 is only a preview; the join (kind 9021 over WebSocket) isn't CORS-gated,
+          // and many relays lack CORS on NIP-11, so a failed fetch must not block joining.
           const info = await fetch(relayToHttpUrl(relay), {
             headers: { Accept: "application/nostr+json" },
             signal: AbortSignal.timeout(8000),
@@ -315,8 +271,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
       cancelled = true;
       clearTimeout(timer);
     };
-    // `classified` is derived from `value`; `identity` captures the parts that
-    // matter (plus the lists that gate nip29 dupes).
+    // `identity` captures the parts of `classified` that matter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, servers]);
 
@@ -340,9 +295,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           policy: target.policy,
           ageConfirmed,
         });
-        // The 10009 list is the only place the rail reads servers from, so
-        // this write IS the add — awaited, so a failure surfaces as an error
-        // rather than a rail icon that vanishes at the next sync.
+        // The 10009 list is the only rail source, so this write IS the add; awaited so failures surface.
         await updateList({ type: "add-server", url: target.relay });
         onDone();
         toast({ title: "Joined", description: target.name || target.relay });
@@ -358,19 +311,15 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         return;
       }
       if (target.kind === "nip29-group") {
-        // Route to the channel page: joining there is what puts the server on
-        // the rail (`add-group` carries it into the 10009 list), and when the
-        // naddr carried an `?invite=` code the join banner auto-sends the
-        // kind-9021 join request with it pre-filled.
+        // Joining on the channel page adds the server to the rail; an `?invite=` code
+        // is pre-filled into the kind-9021 join request.
         const query = target.inviteCode ? `?invite=${encodeURIComponent(target.inviteCode)}` : "";
         onDone();
         navigate(`/s/${relayToRouteParam(target.relay)}/${encodeURIComponent(target.groupId)}${query}`);
         return;
       }
-      // nip29: already validated in the preview. The kind 10009 list is the
-      // only store for added servers, so signing in is a hard requirement and
-      // this write IS the add — awaited, so a rejected publish surfaces as an
-      // error instead of a rail icon that disappears at the next sync.
+      // The 10009 list is the only store for added servers, so this needs a signer
+      // and is awaited so failures surface.
       if (!user) {
         throw new Error("Sign in first. Your server list is stored on your Nostr account.");
       }
@@ -456,8 +405,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           {target && !resolving && (
             <>
               <TargetPreview target={target} />
-              {/* Buzz join policy: operator-configured terms must be accepted
-                  before the claim; the receipt is bound to the invite code. */}
+              {/* Buzz: operator terms must be accepted; the receipt is bound to the invite code. */}
               {target.kind === "buzz" && target.policy && (
                 <div className="mt-3 space-y-2 text-left text-xs text-muted-foreground">
                   <label className="flex items-start gap-2 cursor-pointer">
@@ -540,7 +488,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   );
 }
 
-/** The "here's where you're going" card shown once a target resolves. */
 function TargetPreview({ target }: { target: Target }) {
   const isConcord = target.kind === "concord";
   const Icon = isConcord ? ShieldCheck : target.kind === "nip29-group" ? Hash : Server;

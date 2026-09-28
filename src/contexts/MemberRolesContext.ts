@@ -1,14 +1,8 @@
 import { createContext } from "react";
 
 /**
- * A member's roles in the CURRENT community, for surfaces shared across chat
- * backends. {@link ProfilePreviewCard} renders the same card in NIP-29 groups
- * and Concord communities, so the roles reach it through context rather than a
- * prop threaded down every call site (member list, message author, mention,
- * voice roster). A scope that has no roles simply never provides it and the
- * card renders exactly as before.
- *
- * Display data only — authority is always re-derived from the fold.
+ * A member's roles in the CURRENT community, via context so {@link ProfilePreviewCard}
+ * can show them from any call site. Display data only.
  */
 export interface MemberRole {
   id: string;

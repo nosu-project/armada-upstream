@@ -9,18 +9,8 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 /**
- * Captures the browser's `beforeinstallprompt` event so the app can trigger
- * the PWA install dialog at a time of our choosing instead of the default
- * browser UI.
- *
- * Returns:
- *  - `canInstall`  — true when the browser has queued a deferred prompt (i.e.
- *                    the app meets install criteria and hasn't been installed yet).
- *  - `install()`   — call to show the install dialog; resolves with the user's
- *                    choice ("accepted" | "dismissed").
- *  - `isInstalled` — true when running as a standalone PWA (already installed).
- *  - `needsManualInstall` — iOS has no programmatic install prompt; show the
- *                           Safari Share → Add to Home Screen instructions.
+ * Captures `beforeinstallprompt` so the app can trigger the PWA install dialog itself.
+ * `needsManualInstall`: iOS has no programmatic prompt; show Share → Add to Home Screen.
  */
 export function useInstallPrompt() {
   const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -34,7 +24,6 @@ export function useInstallPrompt() {
 
     window.addEventListener("beforeinstallprompt", handler);
 
-    // Once the app is installed, clear the deferred prompt.
     const installed = () => {
       setPrompt(null);
       setIsInstalled(true);

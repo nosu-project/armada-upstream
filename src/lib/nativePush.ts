@@ -4,25 +4,14 @@ import { isRouterPath } from "@/lib/deepLinkUrl";
 
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 
-// Compatibility export: installation identity is transport-agnostic now that
-// web browsers also need per-install gateway ids.
+// Compatibility re-export.
 export { pushInstallationId } from "@/lib/pushRegistry";
 
 /**
- * Native bridge to `ArmadaPushPlugin.swift` — the iOS app's APNs registration.
- *
- * iOS is the one platform with no way to run Armada's own relay listener in the
- * background: there is no equivalent of the Android foreground service, and
- * WKWebView has no Web Push. The remaining route is Apple's, so the app takes
- * an APNs device token and hands it to the SAME content-blind nostr-push
- * gateway the web client uses, as a `type: "apns"` subscription. Everything
- * above the transport — the RPC, the filters, the per-channel levels, the quota
- * — is shared code (`useIosPush.ts`).
- *
- * There is no Android implementation and there will not be one: the APK ships
- * no Google Play Services, so it has no FCM to receive on, and its background
- * service is strictly better than push anyway (it holds the relay sockets
- * itself and never involves a third party).
+ * Bridge to `ArmadaPushPlugin.swift` (iOS APNs). iOS can't run a background
+ * relay listener, so the APNs token goes to the same content-blind nostr-push
+ * gateway as web (`type: "apns"`); see `useIosPush.ts`. No Android version:
+ * no Play Services, and its background service is better anyway.
  */
 
 /** Whether the OS has been asked, and what it said. */
@@ -30,17 +19,12 @@ export type NativePushPermission = "granted" | "denied" | "default";
 
 /** What `register()` returns once APNs has minted (or refused) a token. */
 export interface NativePushRegistration {
-  /** Whether the user granted the notification authorization prompt. */
   granted: boolean;
   /** The APNs device token, lowercase hex. Absent when not granted / failed. */
   token?: string;
   /** The app's bundle id, which becomes the gateway's `apns-topic`. */
   bundleId?: string;
-  /**
-   * Which APNs host minted this token, read from the build's own
-   * `aps-environment` entitlement. A token is valid on exactly one host, so
-   * this must travel with it.
-   */
+  /** APNs host from the build's `aps-environment`; a token is valid on exactly one host. */
   environment?: "sandbox" | "production";
   /** Why no token, when `granted` is true but APNs still refused. */
   error?: string;
@@ -52,45 +36,22 @@ export interface NativePushOpen {
 }
 
 export interface ArmadaPushPlugin {
-  /** The current authorization status, without prompting. */
   permission(): Promise<{ status: NativePushPermission }>;
-  /**
-   * Prompt for notification authorization (a no-op after the first time — iOS
-   * shows its system prompt exactly once per install) and register with APNs.
-   *
-   * Unlike Web Push's `PushManager.subscribe()` this need not run inside the
-   * user's tap: UNUserNotificationCenter has no transient-activation rule.
-   */
+  /** Prompt (iOS shows it once per install) and register with APNs. No user-gesture requirement. */
   register(): Promise<NativePushRegistration>;
-  /** Unregister from APNs, invalidating the device token. */
   unregister(): Promise<void>;
   /** Clear the app icon badge and any delivered notifications. */
   clearBadge(): Promise<void>;
-  /**
-   * Hand the Notification Service Extension what it needs to open an inlined
-   * event. `config` is JSON — see `IosPushConfig`.
-   */
+  /** Config for the Notification Service Extension; JSON, see `IosPushConfig`. */
   writeConfig(options: { config: string }): Promise<void>;
   /** Delete that config, on disable or logout. */
   clearConfig(): Promise<void>;
   /**
-   * Record how the last gateway registration went, on disk in the app's own
-   * container, for a developer with the device on a cable.
-   *
-   * Registration is otherwise unobservable: the gateway answers over Nostr,
-   * the answer is swallowed by a retry loop, and a device that has silently
-   * stopped receiving looks exactly like one that never tried. `line` is a
-   * STATUS — counts, environment, a token suffix, an error message — and must
-   * never carry a token or a key.
+   * Record the last gateway registration outcome on disk for debugging
+   * (otherwise unobservable). `line` is a status and must never carry a token or key.
    */
   recordStatus(options: { line: string }): Promise<void>;
-  /**
-   * The notification tap that launched this process, consumed once.
-   *
-   * A cold launch delivers the tap before the WebView has loaded, let alone
-   * attached a listener, so the plugin buffers it and the app collects it at
-   * startup. Resolves `{}` for an ordinary launch.
-   */
+  /** The tap that cold-launched this process (buffered by the plugin), consumed once; `{}` otherwise. */
   takePendingOpen(): Promise<NativePushOpen>;
   /** A notification tapped while the app was already running. */
   addListener(
@@ -102,20 +63,10 @@ export interface ArmadaPushPlugin {
 export const ArmadaPush = registerPlugin<ArmadaPushPlugin>("ArmadaPush");
 
 /**
- * What the Notification Service Extension needs to OPEN an event the gateway
- * inlined. The iOS counterpart of `SwPushConfig`, and deliberately the same
- * shape: one set of fields, two readers.
- *
- * Like that one it carries NO display data — the extension reads names and
- * room titles out of ArmadaDB at push time, for any author, rather than from a
- * snapshot the page had to seal ahead of time and re-seal when a profile landed
- * late.
- *
- * `sk` is present ONLY for nsec logins. A bunker (NIP-46) login sends `nip46`
- * instead and the extension asks the bunker to decrypt — the client key it
- * carries addresses the bunker and nothing else, so it is a materially smaller
- * secret than an account key. Extension (NIP-07) logins send neither and stay
- * the generic wake-up: there is no browser for the extension to ask.
+ * What the Notification Service Extension needs to open an inlined event; same
+ * shape as `SwPushConfig`. No display data (read from ArmadaDB at push time).
+ * `sk` only for nsec logins; bunker logins send `nip46` (a smaller secret);
+ * NIP-07 logins send neither.
  */
 export interface IosPushConfig {
   policy: string;
@@ -137,81 +88,43 @@ export interface IosPushConfig {
     epoch: string;
     communityId: string;
     channelId: string;
-    /**
-     * The community's banned authors (CORD-04), hex pubkeys. A banned member's
-     * message is still stored — the timeline folds it away on read — but the
-     * extension must not present it, so it drops it after decrypt.
-     */
+    /** Banned authors (CORD-04, hex); the extension drops their messages after decrypt. */
     banned?: string[];
     /**
-     * "mentions only": the channel wakes iOS for every message (the gateway is
-     * content-blind and can't filter an encrypted wrap), but the extension —
-     * which decrypts — suppresses a message that doesn't `#p`-tag the user.
-     * Mirrors the Android service's per-community `mentionOnly`.
+     * The gateway can't filter encrypted wraps, so the extension suppresses messages
+     * that don't `#p`-tag the user. Mirrors Android's `mentionOnly`.
      */
     mentionOnly?: boolean;
-    /**
-     * The channel/community is muted (level `nothing`). It raises no gateway
-     * subscription, but a lingering one can still wake the device; the channel
-     * is kept here with its key so the extension OPENS the wrap and drops it,
-     * rather than presenting the gateway's static fallback text.
-     */
+    /** Muted: kept with its key so a lingering subscription's wrap is opened and dropped, not shown as fallback text. */
     muted?: boolean;
   }>;
-  /**
-   * The viewer's media policy (`lib/mediaPolicy.ts`), so the extension fetches
-   * a sender's avatar from where the app would — a stranger's host through
-   * the proxy, or not at all. Absent in a config written by an older app,
-   * which the extension reads as the default policy.
-   */
+  /** Media policy for avatar fetches; absent = default policy. */
   mediaPolicy?: MediaPolicyConfig;
 }
 
-/** Write (replace) the extension's config. No-op where the plugin is absent. */
 export async function writeIosPushConfig(config: IosPushConfig): Promise<void> {
   if (!hasIosPush()) return;
   await ArmadaPush.writeConfig({ config: JSON.stringify(config) });
 }
 
-/** Delete it. Called on disable and logout, so no key outlives its session. */
+/** Called on disable and logout, so no key outlives its session. */
 export async function clearIosPushConfig(): Promise<void> {
   if (!hasIosPush()) return;
   await ArmadaPush.clearConfig().catch(() => {});
 }
 
-/**
- * Leave a one-line record of how the last gateway registration went.
- *
- * Best-effort and never throws: this is instrumentation, and a diagnostic that
- * could fail the operation it describes would be worse than none. Keep secrets
- * out of `line` — it is a status, not a payload.
- */
+/** Best-effort one-line registration status; never throws. Keep secrets out of `line`. */
 export async function recordPushStatus(line: string): Promise<void> {
   if (!hasIosPush()) return;
   await ArmadaPush.recordStatus({ line }).catch(() => {});
 }
 
-/**
- * Whether this build can take an APNs token.
- *
- * Gated on the platform being iOS *and* the plugin actually being present, not
- * on `isNativePlatform()`: Android is native too, and would otherwise reach a
- * `registerPlugin` proxy with nothing behind it, where every call can only
- * reject. The `isPluginAvailable` half additionally covers an iOS build made
- * before this plugin existed.
- */
+/** iOS with the plugin present (not `isNativePlatform()`: Android would hit an empty proxy). */
 export function hasIosPush(): boolean {
   return Capacitor.getPlatform() === "ios" && Capacitor.isPluginAvailable("ArmadaPush");
 }
 
-/**
- * The notification tap that launched this process, as a router path.
- *
- * Read once at startup by `coldLaunchDeepLink`, alongside the launch URL: a
- * push tap does NOT produce one (it is delivered to the notification delegate,
- * not as a URL open), so it is a second, equally cold source of the same
- * answer. Resolves null where there is no plugin to ask.
- */
+/** The cold-launch notification tap as a router path (a push tap produces no launch URL). Null without the plugin. */
 export async function takePendingPushOpen(): Promise<string | null> {
   if (!hasIosPush()) return null;
   const { path } = await ArmadaPush.takePendingOpen();

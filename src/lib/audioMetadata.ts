@@ -1,10 +1,6 @@
 import type { Input, MetadataTags, Source } from "mediabunny";
 
-/**
- * What a music file says about itself, read out of the file's own container
- * metadata (ID3, Vorbis comments, MP4 `ilst`, …). Nothing here travels in the
- * event: the sender's and every recipient's client read the same bytes.
- */
+/** Tags read from a music file's own container metadata (ID3, Vorbis, MP4 `ilst`). */
 export interface AudioMetadata {
   title?: string;
   artist?: string;
@@ -18,18 +14,13 @@ export interface AudioMetadata {
 /** Cap on a displayed tag: the bytes are the sender's to fill. */
 const MAX_TAG_CHARS = 200;
 
-/** One line, trimmed and capped. */
 function cleanTag(value: string | undefined): string | undefined {
   // eslint-disable-next-line no-control-regex
   const line = value?.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return line ? line.slice(0, MAX_TAG_CHARS) : undefined;
 }
 
-/**
- * Normalize a container's tags for display. The track artist wins over the
- * album artist, which only stands in when the track has none (a
- * compilation's album artist is "Various Artists").
- */
+/** Normalize tags for display; the album artist only stands in for a missing track artist. */
 export function audioTagsFrom(tags: MetadataTags): Omit<AudioMetadata, "cover"> {
   const year = tags.date && !Number.isNaN(tags.date.getTime()) ? String(tags.date.getUTCFullYear()) : undefined;
   return {
@@ -41,13 +32,8 @@ export function audioTagsFrom(tags: MetadataTags): Omit<AudioMetadata, "cover"> 
 }
 
 /**
- * Read an audio file's tags and front cover. `source` is the file itself, or
- * a URL to it: a `blob:` URL (a decrypted attachment) is read whole, since it
- * is already in memory; an http(s) URL is read with range requests, so only
- * the tag block is fetched, not the track.
- *
- * Never throws: a file mediabunny can't parse, or a host that refuses the
- * read, just comes back with nothing.
+ * Read an audio file's tags and front cover. http(s) URLs use range requests
+ * so only the tag block is fetched. Never throws.
  */
 export async function readAudioMetadata(source: Blob | string): Promise<AudioMetadata> {
   let input: Input | undefined;

@@ -1,14 +1,8 @@
 /**
- * Live call enforcement (CORD-07 §1/§7): while a member is connected to a
- * Channel's voice room, the room they SHOULD be in can change out from under
- * them — a Rekey/Refounding rolls the room name and media key (severing a
- * removed member), a ban or a kick names them directly, or the community
- * leaves their vault entirely. The connected room itself is a join-time
- * snapshot, so a watcher must compare it against the LIVE vault + control fold
- * and decide: stay, rejoin the freshly-derived room, or hang up.
- *
- * The decision is a pure function so the enforcement rules are testable
- * without LiveKit or React.
+ * Live call enforcement (CORD-07 §1/§7): the connected room is a join-time
+ * snapshot, so compare it against the LIVE vault + control fold and decide:
+ * stay, rejoin the freshly-derived room (after a Rekey/Refounding), or hang up
+ * (ban, kick, or community gone). Pure for testability.
  */
 
 import type { FoldedControl } from "@/concord/lib/control";
@@ -20,14 +14,9 @@ export type CallSyncDecision =
   | { action: "rejoin"; community: Community; channel: Channel };
 
 /**
- * Whether the folded Banlist carries a verdict on THIS membership: the newest
- * authorized banlist edition naming `pubkey` postdates when they (re)joined.
- * A compaction re-wraps banlist editions verbatim (original timestamps
- * survive), so a sentence older than a re-admission is a stale verdict, not a
- * judgment on the current membership — the same rule `useSelfRemove`
- * applies before tearing down the vault. The kick half of the question lives
- * in `selfRemoval.ts` (`kickVerdictPostdatesMembership`), since it is answered
- * from the Guestbook rather than from the fold.
+ * Whether the newest authorized banlist edition naming `pubkey` postdates their
+ * (re)join. Compaction keeps original timestamps, so an older sentence is stale
+ * (same rule as `useSelfRemove`). Kicks: see `kickVerdictPostdatesMembership`.
  */
 export function banVerdictPostdatesMembership(
   folded: FoldedControl | undefined,
@@ -43,31 +32,22 @@ export function banVerdictPostdatesMembership(
 }
 
 /**
- * Compare the connected room's join-time snapshot against live state.
+ * Compare the connected room's join-time snapshot against live state:
  *
- *   - a ban or kick verdict on this membership hangs up immediately;
- *   - a vault entry that's gone (left, or the self-removal already ran)
- *     hangs up;
- *   - a live channel whose epoch/room differs from the snapshot rejoins at
- *     the fresh coordinates (the rotation that severed a removed member from
- *     chat must move the call too, or everyone stays in the room the removed
- *     member can still derive — CORD-07 §7);
- *   - a channel absent from the live view (deleted, or a private channel
- *     whose rotated key we weren't dealt) hangs up — the new room is
- *     underivable;
- *   - anything still loading stays put (fail-safe: never tear down a call on
- *     transiently-missing data).
+ *   - a ban/kick verdict on this membership, or a vanished vault entry → hang up;
+ *   - a live channel whose epoch/room changed → rejoin at the fresh coordinates
+ *     (the rotation must move the call too, CORD-07 §7);
+ *   - a channel absent from the live view (deleted, or a rotated key we weren't
+ *     dealt) → hang up;
+ *   - anything still loading → stay (never tear down on transient data).
  */
 export function decideCallSync(input: {
   /** The joined call's coordinates, frozen at join time. */
   snapshot: { channelIdHex: string; epoch: bigint; roomPk: string };
-  /** Whether the community-list vault has loaded at all. */
   listLoaded: boolean;
   /** The LIVE community from the vault (undefined = no entry). */
   community: Community | undefined;
-  /** The LIVE control fold (undefined = still loading). */
   folded: FoldedControl | undefined;
-  /** The LIVE channels view assembled from `community` + `folded`. */
   channels: readonly Channel[];
   /** Whether a ban verdict postdating this membership names me. */
   selfBanned: boolean;
@@ -76,26 +56,17 @@ export function decideCallSync(input: {
   /** Whether this community has been dissolved (terminal, CORD-02 §9). */
   dissolved: boolean;
 }): CallSyncDecision {
-  // A removal is a judgment: hang up regardless of what else has (not) loaded.
-  // A kick severs nothing cryptographically — the room key still derives — so
-  // this compliance IS the removal, exactly as it is on the chat side.
+  // A removal is a judgment: hang up regardless of loading. A kick severs nothing
+  // cryptographically, so this compliance IS the removal.
   if (input.selfBanned) return { action: "leave", reason: "banned" };
   if (input.selfKicked) return { action: "leave", reason: "kicked" };
-  // A dissolved community is a grave, not a judgment against the member:
-  // dissolution rolls no epoch and severs no key, so the connected room stays
-  // derivable and the call finishes on its own terms. The owner's dissolve
-  // then DROPS its vault entry (so it leaves the rail) — which without this
-  // would read below as a "removed" hang-up and boot everyone out of a call
-  // that is still perfectly valid. Terminal, so nothing rolls to rejoin for.
+  // Dissolution severs no key, so the call finishes on its own terms; without this
+  // the dropped vault entry below would boot everyone.
   if (input.dissolved) return { action: "stay" };
-  // The vault has loaded and the community is gone — the member left, or the
-  // compliant self-removal already tore the entry down.
   if (input.listLoaded && !input.community) return { action: "leave", reason: "removed" };
   if (!input.community || !input.folded) return { action: "stay" };
 
   const live = input.channels.find((ch) => ch.idHex === input.snapshot.channelIdHex);
-  // The fold is live and the channel is not in view: deleted, or a private
-  // channel whose rotated key this member wasn't dealt.
   if (!live) return { action: "leave", reason: "channel-gone" };
 
   if (live.current.epoch !== input.snapshot.epoch || live.voice.room.pk !== input.snapshot.roomPk) {

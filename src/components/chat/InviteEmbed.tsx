@@ -14,23 +14,15 @@ import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
 
 interface InviteEmbedProps {
-  /** The full invite URL as it appeared in the message. */
   url: string;
   className?: string;
 }
 
-/**
- * Discord-style "join" card for a Concord invite link posted in chat. Resolves
- * the sealed bundle preview (community name, icon, channel count) from the
- * link's bootstrap relays and offers a one-tap Join / Open button — so an
- * invite reads as an invitation rather than an opaque URL.
- */
+/** Join card for a Concord invite link, previewing the sealed bundle from its bootstrap relays. */
 export function InviteEmbed({ url, className }: InviteEmbedProps) {
   const invite = parseInviteLink(url);
   if (!invite) {
-    // A recognizable invite link that lost its `#fragment` (e.g. a client that
-    // dropped the URL hash) can't be joined — the secret lives in the fragment.
-    // Say so plainly rather than showing a broken event card or a bare link.
+    // The secret lives in the `#fragment`; without it the invite can't be joined.
     return (
       <InviteTombstone
         message="This invite link is missing its secret (the part after #). Ask for a fresh link."
@@ -86,8 +78,6 @@ function InviteResolvedCard({
   const { join, isJoining } = useCommunityActions();
   const iconUrl = useDecryptedImage(preview.bundle.icon);
 
-  // idHex on the community list is the hex community_id; the bundle carries the
-  // same hex, so a direct lookup tells us if we're already a member.
   const alreadyJoined = !!useCommunity(preview.communityId);
 
   const expired =
@@ -101,9 +91,7 @@ function InviteResolvedCard({
       return;
     }
     try {
-      // Optimistic: the resolved bundle rides along, so this answers
-      // immediately and the durable join chain runs in the background (its
-      // failure surfaces as a toast from useCommunityActions).
+      // Optimistic: the durable join runs in the background (failures toast).
       const { communityId, name } = await join({ invite, bundle: preview.bundle });
       toast({ title: "Joined", description: name });
       navigate(`/c/${encodeURIComponent(communityId)}`);

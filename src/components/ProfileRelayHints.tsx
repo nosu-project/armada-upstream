@@ -3,11 +3,8 @@ import { useEffect } from 'react';
 import { addProfileRelayHints } from '@/sync/profileSync';
 
 /**
- * Register the given relays as profile-fetch hints for as long as this is
- * mounted. Render one inside a community/server view: member profiles often
- * live only on the community's own relays, which the pool's general routing
- * never asks — the profile sync topic queries hinted relays alongside the
- * general pass (see `src/sync/profileSync.ts`). Renders nothing.
+ * Registers relays as profile-fetch hints while mounted: member profiles often
+ * live only on community relays (see `src/sync/profileSync.ts`).
  */
 export function ProfileRelayHints({ relays }: { relays: string[] | undefined }) {
   const key = (relays ?? []).join(' ');

@@ -1,27 +1,9 @@
 /// <reference lib="webworker" />
 
 /**
- * Schnorr EC worker: verify or sign.
- *
- * Does the curve arithmetic ONLY. For a verify batch, given `(sig, id,
- * pubkey)` triples, return one boolean per triple in order. No hashing, no
- * memo, no event shape — the memo and the id-is-the-hash security argument
- * stay on the main thread in `verifyCache.ts` (`hashGate`), which is why this
- * worker is handed pre-hashed ids it never recomputes and could never be
- * tricked by: a triple whose `id` doesn't match its content was already
- * dropped before it got here.
- *
- * For a sign batch, given `(hash, secret key)` jobs, return one hex signature
- * per job (or `null` where the key is unusable). The hash is likewise computed
- * by the caller (`streamAuth.ts`), so signing here is the bare BIP-340
- * operation nostr-tools' `finalizeEvent` would run — including @noble's
- * self-verify of the fresh signature, which is most of a sign's cost and the
- * reason it belongs off the main thread.
- *
- * Imports `@noble` ONLY, so it stays a tiny module worker that never pulls the
- * app (or the store, or nostr-tools) into a second bundle. See `verifyPool.ts`
- * for the pool that drives it and the inline fallback when a `Worker` can't be
- * constructed.
+ * Schnorr EC worker: verify `(sig, id, pubkey)` triples or sign `(hash, sk)`
+ * jobs. Curve math ONLY — ids arrive pre-hashed and bound on the main thread
+ * (`verifyCache.ts` `hashGate`). Imports `@noble` only to stay a tiny bundle.
  */
 
 import { schnorr } from "@noble/curves/secp256k1.js";

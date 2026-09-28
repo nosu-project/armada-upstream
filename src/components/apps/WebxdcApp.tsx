@@ -6,10 +6,9 @@ import { deriveIframeSubdomain } from "@/lib/iframeSubdomain";
 import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
- * Runs a `.xdc` webxdc app inside the cross-origin sandbox, backing its
- * `window.webxdc` API with the chat's {@link AppSync} coordination plane. The
- * sandbox subdomain is derived privately from the session id so the app's
- * origin-keyed storage is isolated from every other app and from Armada itself.
+ * Runs a `.xdc` app in the cross-origin sandbox, backing `window.webxdc` with
+ * {@link AppSync}. The sandbox subdomain derives privately from the session id
+ * to isolate the app's origin-keyed storage.
  */
 export function WebxdcApp({
   sync,

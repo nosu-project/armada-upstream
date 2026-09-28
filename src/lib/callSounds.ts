@@ -1,8 +1,4 @@
-/**
- * Tiny synthesized UI sounds for voice calls, generated with the Web Audio API
- * so there are no audio assets to ship. Two short, friendly blips: a rising
- * two-note chirp when someone joins, a gentler falling one when they leave.
- */
+/** Synthesized (Web Audio) UI sounds for voice calls; no assets to ship. */
 
 let ctx: AudioContext | null = null;
 
@@ -23,7 +19,7 @@ function audioContext(): AudioContext | null {
   }
 }
 
-/** Play a short two-note sequence. Each note is a softly enveloped sine. */
+/** Play a short note sequence, each a softly enveloped sine. */
 function playNotes(notes: { freq: number; start: number; dur: number }[], gainPeak: number): void {
   const ac = audioContext();
   if (!ac) return;
@@ -34,7 +30,7 @@ function playNotes(notes: { freq: number; start: number; dur: number }[], gainPe
     osc.type = "sine";
     osc.frequency.value = freq;
     const t0 = now + start;
-    // Quick attack, smooth exponential-ish decay to avoid clicks.
+    // Quick attack and ramp down to avoid clicks.
     gain.gain.setValueAtTime(0, t0);
     gain.gain.linearRampToValueAtTime(gainPeak, t0 + 0.02);
     gain.gain.linearRampToValueAtTime(0, t0 + dur);
@@ -66,11 +62,7 @@ export function playLeaveSound(): void {
   );
 }
 
-/**
- * Self-only mute/unmute feedback. These are single short blips, lower and
- * shorter than the join/leave chirps so they read as a personal toggle rather
- * than a roster change. Only ever played to the local user.
- */
+/** Self-only mute/unmute blips, lower and shorter than join/leave so they read as a personal toggle. */
 
 /** Muted yourself: a low, soft downward blip. (A4 → F4) */
 export function playMuteSound(): void {
@@ -94,13 +86,7 @@ export function playUnmuteSound(): void {
   );
 }
 
-/**
- * Looping call tones, synthesized like everything else here. Incoming ring: a
- * bright four-note phrase repeated every 2s. Outgoing ringback: the classic
- * long soft dual-tone burst every 3s, so the caller hears that the peer is
- * being rung. Each is a singleton loop — starting it twice is a no-op — and
- * the stop functions are safe to call unconditionally.
- */
+/** Looping call tones: incoming ring every 2s, outgoing ringback every 3s. Singleton loops. */
 
 let ringTimer: ReturnType<typeof setInterval> | null = null;
 let ringbackTimer: ReturnType<typeof setInterval> | null = null;
@@ -156,11 +142,7 @@ export function stopRingback(): void {
   }
 }
 
-/**
- * A screenshare started: a bright, rising three-note arpeggio (C6 → E6 → G6)
- * to mark the more notable event of a screen going live, distinct from the
- * two-note join chirp.
- */
+/** Screenshare started: rising three-note arpeggio (C6 → E6 → G6). */
 export function playScreenShareSound(): void {
   playNotes(
     [

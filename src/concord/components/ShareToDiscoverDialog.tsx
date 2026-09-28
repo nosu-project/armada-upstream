@@ -40,14 +40,10 @@ import { toast } from "@/hooks/useToast";
 import type { ImagePointer } from "@/concord/lib/types";
 
 /**
- * Share a community to Discover: publish a kind-33302 community announcement
- * carrying a live invite link (secret included), so the Discover page can list
- * it. The picker offers only communities the user OWNS or ADMINS **and already
- * holds a live invite link for** — sharing reuses that link, and a community
- * with no link would have its FIRST one minted by the share, flipping a
- * private community public from a picker misclick. Minting-on-share stays
- * available only through a community's own menu (preselected via
- * `communityId`), where the destructive confirm makes the flip explicit.
+ * Share a community to Discover (a kind-33302 announcement carrying a live
+ * invite link). The picker offers only owned/admin communities that ALREADY
+ * have a live link, so a misclick can't mint the first link and flip it
+ * public; that path is only via the community's own menu (`communityId`), with a confirm.
  */
 export function ShareToDiscoverDialog({
   open,
@@ -61,7 +57,6 @@ export function ShareToDiscoverDialog({
 }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(communityId);
 
-  // Re-open starts fresh: back to the preselect (or the picker).
   useEffect(() => {
     if (open) setSelectedId(communityId);
   }, [open, communityId]);
@@ -93,7 +88,6 @@ export function ShareToDiscoverDialog({
   );
 }
 
-/** Whether this member may list the community: its owner, or an admin. */
 function useCanShare(idHex: string | undefined) {
   const { user } = useCurrentUser();
   const community = useCommunity(idHex);
@@ -127,12 +121,7 @@ function OptionIcon({
   );
 }
 
-/**
- * One pickable community. Renders nothing until its Control fold proves the
- * viewer owns or admins it — the ineligible majority silently disappears —
- * and reports its verdict up so the picker can tell "still checking" from
- * "nothing to offer".
- */
+/** Renders only once the fold proves ownership/admin; reports its verdict so the picker can tell "checking" from "none". */
 function CommunityOption({
   idHex,
   onSelect,
@@ -174,11 +163,7 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
     [],
   );
 
-  // Communities I hold a live (unrevoked, unexpired) invite link for — the
-  // Invite List's merge already drops revoked tokens, so only expiry needs
-  // checking here. Only these are offered: sharing one reuses its link, so
-  // the picker can never be the step that mints a private community's first
-  // link and thereby flips it public.
+  // The Invite List merge already drops revoked tokens; only check expiry.
   const linked = useMemo(() => {
     const now = Math.floor(Date.now() / 1000);
     const ids = new Set<string>();
@@ -227,12 +212,7 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
   );
 }
 
-/**
- * MY current Discover listings of this community: kind-3314 announcements I
- * authored whose invite link is one of MY links for it. These are what
- * "Unpublish" can delete — a NIP-09 delete only works on one's own events, so
- * another sharer's listing is theirs to remove.
- */
+/** My own kind-3314 listings of this community; NIP-09 deletes only work on one's own events. */
 function useMyAnnouncements(idHex: string, myLinkSigners: string[]) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -269,9 +249,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
 
   const name = folded?.metadata?.name ?? community?.name ?? "this community";
 
-  // Reuse a live link of mine rather than minting one per share: repeat
-  // shares of one link fold to one listing, and one public link is one
-  // revocation away from un-listing.
+  // Reuse a live link so repeat shares fold to one listing, one revocation from un-listing.
   const now = Math.floor(Date.now() / 1000);
   const reusable = myLinks.find((e) => !e.expires_at || e.expires_at > now);
   const willMint = !reusable;
@@ -292,9 +270,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     if (targets.length === 0) return;
     setBusy(true);
     try {
-      // NIP-09: ask relays to drop MY announcement events. The Discover feed
-      // also honors these client-side for relays that keep them, and the
-      // cached directory drops them at once.
+      // NIP-09; Discover also honors these client-side and drops them from cache.
       await unlist(targets.map(announcementFromEvent).filter((a): a is DiscoveredInvite => !!a));
       toast({
         title: "Unpublished from Discover",
@@ -308,8 +284,6 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     }
   };
 
-  // Whether this share is the step that makes the community public: it has no
-  // live invite link yet, so sharing mints its first one.
   const makesPublic = willMint && !isPublic;
 
   const handleShare = async () => {
@@ -320,22 +294,15 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       let url: string;
       if (reusable) {
         url = reusable.url;
-        // The listing shows whatever this link's bundle vends, and a link
-        // minted before the community's current name/icon/banner keeps
-        // serving the old preview — re-post the CURRENT bundle at its
-        // coordinate so the card renders today's community.
+        // Re-post the CURRENT bundle so a link minted earlier shows today's name/icon/banner.
         await refreshMyLinks().catch(() => undefined);
       } else {
         url = await createLink({});
       }
-      // The announcement is just the link. Name, icon and banner — and even
-      // which community it is — are resolved live from the link's bundle by
-      // every viewer, so the listing tracks the community as it changes.
+      // Just the link: viewers resolve name/icon/banner (and which community) live from the bundle.
       const announcement = buildCommunityAnnouncement({ inviteUrl: url });
       if (!announcement) throw new Error("Couldn't build the listing.");
       await publishEvent(announcement);
-      // Drop cached listing previews so the sharer's own Discover tab picks
-      // up the just-refreshed bundle instead of a stale decrypt.
       queryClient.invalidateQueries({ queryKey: ["discover", "invite-bundle"] });
       queryClient.invalidateQueries({ queryKey: ["discover", "directory-infinite"] });
       queryClient.invalidateQueries({ queryKey: ["discover", "my-announcements"] });
@@ -352,9 +319,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     }
   };
 
-  // A first listing publishes the link's secret, and possibly mints the
-  // community's first link too, so it routes through an in-app confirm.
-  // Updating an existing listing just re-posts what is already public.
+  // A first listing publishes the secret (and may mint the first link), so confirm.
   const handleShareClick = () => {
     if (!listed) {
       setConfirmOpen(true);
@@ -380,7 +345,6 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
 
   return (
     <div className="w-full space-y-3">
-      {/* Which community am I about to make public? Show it, don't tell it. */}
       <div className="flex items-center gap-3 px-3 py-2.5 clip-corner-lg bg-secondary">
         <OptionIcon icon={folded?.metadata?.icon} name={name} className="size-10" />
         <div className="min-w-0 flex-1">
@@ -394,8 +358,6 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
         Its name and images come from the community itself, so the listing stays current as they
         change.
       </p>
-      {/* The consequence is shown up front, before the click, when this share
-          would mint the community's first invite link. */}
       {!listed && makesPublic && (
         <Alert variant="destructive">
           <AlertTriangle className="size-4" />
@@ -417,8 +379,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       <Button
         type="button"
         onClick={handleShareClick}
-        // Also parked while the Invite List loads: `reusable` is blind until
-        // then, and sharing early would mint a needless duplicate link.
+        // `reusable` is blind until the Invite List loads; sharing early would mint a duplicate.
         disabled={busy || linksLoading || myAnnouncements.isLoading}
         variant={listed ? "secondary" : "default"}
         className="w-full clip-corner-lg"

@@ -4,14 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
- * The hover-toolbar ⚡ button, shared by the timeline (ChatMessage) and the
- * thread panel (ThreadMessage).
- *
- * It is NOT gated on the author having a lightning address: the dialog's
- * default method is Bitcoin, whose recipient address is derived from the
- * author's pubkey and therefore always exists, and the author may also have
- * declared NIP-A3 payment targets that no kind-0 field mentions. The dialog
- * offers whichever methods that author actually has.
+ * Hover-toolbar ⚡ button. Not gated on a lightning address: Bitcoin (the default)
+ * is derived from the pubkey and always exists, and NIP-A3 targets may exist too.
  */
 export function ZapButton({ onOpen }: { onOpen: () => void }) {
   return (

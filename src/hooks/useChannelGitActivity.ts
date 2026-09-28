@@ -23,19 +23,10 @@ import {
 import { CI_EVENT_KINDS } from "@/lib/ci";
 import { useWireScopes } from "@/wire/useWireScopes";
 
-/**
- * One shared empty result, so a channel with no Git activity — every channel,
- * most of the time — hands back the SAME array on every render. A fresh `[]`
- * here changes `mergeChannelTimeline`'s input identity on each pass, which
- * re-sorts the whole conversation and hands every row new props to diff.
- */
+/** Shared empty result, so channels without Git activity don't re-sort the timeline each render. */
 const NO_ACTIVITY: GitTimelineActivity[] = [];
 
-/**
- * How long a `git:` wire batch waits for its neighbours before the activity
- * query is re-read. Long enough that a repository pull's batches land as one
- * refresh, short enough to stay imperceptible on a single live event.
- */
+/** How long a `git:` wire batch waits before re-reading, so a pull's batches refresh once. */
 const GIT_REFRESH_COALESCE_MS = 400;
 
 /**
@@ -59,21 +50,13 @@ export function useChannelGitActivity(
   const query = useQuery({
     queryKey,
     enabled: Boolean(channelId && addresses.length),
-    // The wire pushes repository activity in (the scope watcher below marks
-    // this stale when a `git:` batch lands), so staleness-driven refetching
-    // only re-reads rows nothing changed — the argument `useAuthor` makes for
-    // its own `Infinity`. It also mattered more here than there: this queryFn
-    // is several thousand-row reads on the `main` tenant, and the default
-    // minute meant every switch back to a repo-attached channel ran them
-    // again, against the same storage the chat timeline is waiting on.
+    // The wire pushes activity in (scope watcher marks stale), so staleness
+    // refetches would only re-run thousands of `main` reads on every switch.
     staleTime: Infinity,
     queryFn: async (): Promise<GitTimelineActivity[]> => {
       const store = await eventStore;
-      // Roots and CI are independent — CI runs address the repository
-      // directly rather than hanging off a discovered ticket — so they read
-      // together. Only `children` needs the roots, and `deletions` the
-      // children, which is what keeps this to three waves rather than five
-      // serial round-trips through the store.
+      // Roots and CI read together; only children need roots and deletions need
+      // children — three waves.
       const [roots, ci, announcements] = await Promise.all([
         store.query([{ kinds: [GIT_PULL_REQUEST_KIND, GIT_ISSUE_KIND], "#a": addresses, limit: 2_000 }]),
         store.query([{ kinds: [...CI_EVENT_KINDS], "#a": addresses, limit: 4_000 }]),
@@ -99,9 +82,7 @@ export function useChannelGitActivity(
   });
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  // The wire keeps repository activity live. Older pages are a store-first
-  // cursor scan: if another Git consumer already hydrated roots, scrolling the
-  // mixed timeline can still expose them without making a duplicate UI query.
+  // Older pages are a store-first cursor scan (roots another consumer hydrated show up too).
   const loadOlder = useCallback(async () => {
     if (!addresses.length) return 0;
     const current = queryClient.getQueryData<GitTimelineActivity[]>(queryKey) ?? [];
@@ -116,8 +97,7 @@ export function useChannelGitActivity(
         return 0;
       }
       await queryClient.invalidateQueries({ queryKey });
-      // `queryFn` rebuilds and dedupes the activity list; count roots rather
-      // than raw children so callers have a truthful non-zero prepend signal.
+      // Count roots, not raw children, for a truthful prepend signal.
       setHasMore(roots.length === 2_000);
       return roots.length;
     } finally {
@@ -177,16 +157,8 @@ export function useChannelGitActivity(
     if (received) await queryClient.invalidateQueries({ queryKey });
     return received;
   }, [eventStore, normalized, nostr, queryClient, queryKey]);
-  // Coalesce the wire's invalidations.
-  //
-  // A repository pull rings this bus once per BATCH, and each ring used to
-  // re-run the whole queryFn — several thousand-row reads on `main`, against
-  // the same storage still absorbing that pull's writes and the chat
-  // timeline's own read. One switch measured 67 `db.query main` calls for
-  // what is five, and drove the `c2:*` read the message skeleton waits on to
-  // twelve seconds. The events are still arriving when the first re-read
-  // starts, so the intermediate passes are work whose result is already stale
-  // when it lands; only the last one is worth having.
+  // Coalesce the wire's invalidations: a pull rings once per BATCH, and re-running
+  // the queryFn each time (67 `main` queries on one switch) starved the chat read.
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (refreshTimerRef.current !== null) clearTimeout(refreshTimerRef.current);

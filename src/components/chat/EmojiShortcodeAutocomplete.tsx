@@ -20,25 +20,20 @@ interface EmojiShortcodeAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
   content: string;
   onInsertEmoji: (params: { start: number; end: number; replacement: string }) => void;
-  /** Called when a custom NIP-30 emoji is selected so the caller can track the emoji tag. */
   onCustomEmojiInsert?: (emoji: CustomEmoji) => void;
 }
 
 const MAX_RESULTS = 8;
 
-/** A result entry that can be either a native emoji or a custom NIP-30 emoji. */
 interface EmojiResult {
   id: string;
   name: string;
-  /** For native emojis */
   native?: string;
-  /** For custom emojis */
   customUrl?: string;
-  /** Search score (lower = better match) */
+  /** Lower = better match. */
   score: number;
 }
 
-/** Build a flat searchable list of emojis from emoji-mart data. */
 function buildEmojiIndex(): Array<{ id: string; name: string; native: string; keywords: string[] }> {
   const emojis = (data as { emojis: Record<string, EmojiData> }).emojis;
   const aliases = (data as { aliases: Record<string, string> }).aliases;
@@ -67,7 +62,6 @@ function buildEmojiIndex(): Array<{ id: string; name: string; native: string; ke
   return results;
 }
 
-/** Lazily initialized emoji index. */
 let emojiIndex: ReturnType<typeof buildEmojiIndex> | null = null;
 function getEmojiIndex() {
   if (!emojiIndex) {
@@ -76,13 +70,11 @@ function getEmojiIndex() {
   return emojiIndex;
 }
 
-/** Search emojis by shortcode query (includes both native and custom emojis). */
 function searchEmojis(query: string, customEmojis: CustomEmoji[]): EmojiResult[] {
   if (!query) return [];
   const q = query.toLowerCase();
   const results: EmojiResult[] = [];
 
-  // Custom emojis get priority
   for (const emoji of customEmojis) {
     const sc = emoji.shortcode.toLowerCase();
     if (sc === q) {
@@ -116,9 +108,8 @@ function searchEmojis(query: string, customEmojis: CustomEmoji[]): EmojiResult[]
 }
 
 /**
- * Detects `:shortcode` at the cursor position in a textarea and shows
- * an emoji autocomplete dropdown. On selection, replaces `:shortcode`
- * with the native emoji character or `:shortcode:` for custom emojis.
+ * `:shortcode` autocomplete at the caret; inserts the native character or
+ * `:shortcode:` for custom emojis.
  */
 export function EmojiShortcodeAutocomplete({
   textareaRef,
@@ -145,7 +136,6 @@ export function EmojiShortcodeAutocomplete({
 
   const results = useMemo(() => searchEmojis(query, customEmojis), [query, customEmojis]);
 
-  // Detect :shortcode query at cursor
   const detectShortcode = useCallback((text?: string, cursorPos?: number | null) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -179,7 +169,6 @@ export function EmojiShortcodeAutocomplete({
     setDropdownPos(computeBottomPosition(coords));
   }, [textareaRef, computeBottomPosition]);
 
-  // Listen for input/cursor changes on the textarea element
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -205,7 +194,6 @@ export function EmojiShortcodeAutocomplete({
     };
   }, [textareaRef, detectShortcode, content]);
 
-  // Re-detect when content changes externally
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -213,14 +201,11 @@ export function EmojiShortcodeAutocomplete({
   }, [content, detectShortcode, textareaRef]);
 
   const selectEmoji = useCallback((emoji: EmojiResult) => {
-    // End of the query span is derived from the tracked colon + query rather
-    // than the live selectionStart: tapping the dropdown (a portal element) can
-    // blur/collapse the textarea selection on touch, which would otherwise
-    // replace the wrong range and leave the `:shortcode` trigger text behind.
+    // Derived from the tracked colon, not selectionStart: tapping the portal
+    // dropdown can collapse the selection on touch.
     const cursor = colonStart + query.length + 1;
 
     if (emoji.customUrl) {
-      // Custom emoji: replace with `:shortcode: ` and track the emoji tag
       const shortcode = emoji.name;
       onInsertEmoji({
         start: colonStart,
@@ -244,7 +229,6 @@ export function EmojiShortcodeAutocomplete({
     setColonStart(-1);
   }, [colonStart, query, onInsertEmoji, onCustomEmojiInsert, customEmojis]);
 
-  // Handle keyboard navigation within the dropdown
   useEffect(() => {
     if (!isOpen || results.length === 0) return;
 
@@ -280,7 +264,6 @@ export function EmojiShortcodeAutocomplete({
     return () => textarea.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, results, selectedIndex, textareaRef, selectEmoji]);
 
-  // Scroll selected item into view
   useEffect(() => {
     if (selectedIndex >= 0 && listRef.current) {
       const items = listRef.current.querySelectorAll("[data-emoji-item]");
@@ -307,9 +290,7 @@ export function EmojiShortcodeAutocomplete({
               "w-full flex items-center gap-3 px-3 py-1.5 text-left text-popover-foreground transition-colors cursor-pointer",
               index === selectedIndex ? "bg-secondary/60" : "hover:bg-secondary/60",
             )}
-            // Select on pointer-down so it fires reliably on touch (a
-            // mousedown-preventDefault can swallow the synthetic click);
-            // preventDefault keeps the composer focused.
+            // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
             onPointerDown={(e) => {
               e.preventDefault();
               selectEmoji(emoji);

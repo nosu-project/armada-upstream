@@ -1,10 +1,6 @@
 /**
- * The arithmetic behind SnapSheet: a bottom sheet with two resting heights
- * (peek and full) whose drag hands off to, and back from, the list inside it.
- *
- * Offsets are the sheet's translateY in pixels from its fully expanded
- * position: `0` is full, `peek` is the half-height rest, `closed` is entirely
- * below the screen.
+ * SnapSheet math: a bottom sheet with peek/full rests whose drag hands off to
+ * the list inside. Offsets are translateY px from full: `0` full, `peek`, `closed`.
  */
 
 export type SnapStop = "full" | "peek" | "closed";
@@ -17,19 +13,14 @@ export interface SnapStops {
 /** Past this speed (px/ms) a release is a fling and moves in its direction. */
 export const FLING_VELOCITY = 0.4;
 
-/**
- * How far below peek, as a fraction of the peek-to-closed run, a slow release
- * still dismisses. Under half: a sheet already pulled most of the way down
- * reads as "going", not as a spring back.
- */
+/** Fraction of the peek→closed run below peek past which a slow release dismisses. */
 const DISMISS_FRACTION = 0.3;
 
 /** Where a released sheet comes to rest. `velocity` is px/ms, positive downward. */
 export function settleStop(offset: number, velocity: number, stops: SnapStops): SnapStop {
   if (velocity <= -FLING_VELOCITY) return "full";
   if (velocity >= FLING_VELOCITY) {
-    // A fling down from above peek lands on peek, as Discord's does; only one
-    // that starts at or below it leaves.
+    // A fling down from above peek lands on peek (like Discord).
     return offset < stops.peek - 8 ? "peek" : "closed";
   }
   if (offset > stops.peek + (stops.closed - stops.peek) * DISMISS_FRACTION) return "closed";
@@ -41,12 +32,8 @@ export function stopOffset(stop: SnapStop, stops: SnapStops): number {
 }
 
 /**
- * One move of a drag the sheet owns, `dy` positive for a finger moving down.
- *
- * Up: the sheet rises until full and whatever travel is left scrolls the list,
- * so one continuous swipe opens the sheet and keeps going into the grid.
- * Down: the list scrolls back to its top first and only then does the sheet
- * follow — the same gesture reversed.
+ * One drag move (`dy` > 0 = down). Up raises the sheet then scrolls the list
+ * with leftover travel; down unscrolls the list first, then lowers the sheet.
  */
 export function dragStep(
   offset: number,
@@ -75,11 +62,7 @@ export function presence(offset: number, stops: SnapStops): number {
   return Math.min(1, Math.max(0, 1 - (offset - stops.peek) / run));
 }
 
-/**
- * The peek height: about the height of a keyboard, which is where Discord's
- * picker sits — enough for two rows of the camera roll and the action tiles
- * while the conversation stays visible above.
- */
+/** Peek height: roughly keyboard height, like Discord's picker. */
 export function peekHeight(viewport: number): number {
   return Math.round(Math.min(Math.max(viewport * 0.56, 340), viewport - 80));
 }

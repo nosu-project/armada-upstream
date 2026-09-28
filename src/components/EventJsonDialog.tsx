@@ -14,25 +14,12 @@ import { writeClipboardText } from "@/lib/clipboard";
 interface EventJsonDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The event or rumor to serialize. */
   source: unknown;
-  /**
-   * What the reader is looking at. Required rather than defaulted because the
-   * signed/unsigned distinction is the whole point of showing this, and it
-   * differs per surface: a relay-read message carries its signature, a Concord
-   * rumor never does.
-   */
+  /** Required: signed vs. unsigned differs per surface (relay events vs. Concord rumors). */
   description: string;
 }
 
-/**
- * The raw JSON behind a rendered row, with a copy button.
- *
- * Serialization happens only while `open`, and callers should ALSO gate the
- * mount — both, because these are rendered one per row on lists long enough
- * that stringifying every event on mount is pure cost, and a caller that
- * forgets the mount gate shouldn't pay it anyway.
- */
+/** Raw JSON behind a row, with copy. Serializes only while `open`; callers should also gate the mount. */
 export function EventJsonDialog({ open, onOpenChange, source, description }: EventJsonDialogProps) {
   const json = useMemo(() => (open ? JSON.stringify(source, null, 2) : ""), [open, source]);
 

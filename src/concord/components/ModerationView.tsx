@@ -13,15 +13,7 @@ import {
 } from "@/concord/lib/moderationPanes";
 import type { Community } from "@/concord/lib/types";
 
-/**
- * The moderation panel: members, roles, invite links, the banlist, reports and
- * the audit log, folded into one surface with a tab strip rather than six
- * entries in the community menu.
- *
- * A pane the viewer may not open is stated rather than silently swapped for
- * another — the URL names a place, and answering with a different one would
- * make the address bar lie.
- */
+/** Moderation panel with tabs. A pane the viewer can't open is stated, not swapped, so the URL doesn't lie. */
 export function ModerationView({
   community,
   pane,
@@ -34,7 +26,6 @@ export function ModerationView({
   pane: ModerationPane;
   access: ModerationAccess;
   memberPubkeys: string[];
-  /** Kick/ban affordances inside the member list. */
   canModerateMembers: boolean;
   onSelect: (pane: ModerationPane) => void;
 }) {

@@ -3,19 +3,12 @@ import { EmojiSourcePopover } from "@/components/chat/EmojiSourcePopover";
 
 import type { ReactNode } from "react";
 
-/** Regex matching `:shortcode:` patterns in text. */
 const SHORTCODE_REGEX = /:([a-zA-Z0-9_-]+):/g;
 
 /**
- * Replaces `:shortcode:` patterns in text with inline custom emoji images.
- *
- * When `clickable` is set, each emoji becomes a trigger for its source popover
- * (which pack it came from, with a one-tap add). Left off for compact previews
- * — DM lists, reply quotes, display names — where a tappable popover is noise.
- *
- * `authorPubkey` is who typed the text; the popover uses it to resolve an
- * unknown pack over that author's own relays rather than blindly (see
- * `useEmojiSource`). Harmless to omit — resolution just stays local-only.
+ * Replace `:shortcode:` with custom emoji images. `clickable` opens the source
+ * pack popover (off for compact previews). `authorPubkey` lets an unknown pack
+ * resolve over the author's relays (see `useEmojiSource`).
  */
 export function emojify(
   text: string,

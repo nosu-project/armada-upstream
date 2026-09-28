@@ -1,22 +1,7 @@
 /**
- * Sync-activity signal — named catch-up tasks the UI can report honestly
- * ("Syncing #general — 84 messages") instead of a vague global spinner.
- *
- * Post-login cold starts and wakes from background trigger a burst of
- * background work (control/guestbook plane sweeps, per-channel history
- * backfills, the login warm-up) with no user-visible completion signal of its
- * own. Each of those paths registers a task via {@link beginSyncTask},
- * updates its progress detail as data lands, and ends it in a `finally`.
- * The in-chat status bar renders whatever is in flight.
- *
- * Deliberately NOT pulsed by the wire's standing live subscription — a
- * long-lived REQ streaming zero new events is not "syncing", and reporting it
- * made the indicator a false positive. Only paths that page real history
- * register tasks.
- *
- * Style mirrors the wire bus (src/wire/bus.ts): module-level state, plain
- * listener set, a test reset. Fast bursts are expected — the UI debounces
- * with useDelayedFlag so sub-second syncs never paint an indicator.
+ * Named catch-up tasks for the in-chat status bar ("Syncing #general — 84
+ * messages"). Only paths paging real history register — never the standing
+ * live REQ, which made the indicator a false positive. The UI debounces.
  */
 
 export interface SyncTask {
@@ -26,10 +11,7 @@ export interface SyncTask {
   label: string;
   /** Live progress detail — e.g. `84 messages`, `3/12 channels`. */
   detail?: string;
-  /**
-   * Optional conversation scope in wire-bus grammar (e.g. `c2:<channelIdHex>`),
-   * so views can tell whether a task concerns the conversation on screen.
-   */
+  /** Optional wire-bus scope (e.g. `c2:<channelIdHex>`). */
   scope?: string;
 }
 

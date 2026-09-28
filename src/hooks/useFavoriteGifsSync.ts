@@ -85,8 +85,8 @@ export async function decodeFavoriteGifEvents(
     const head = candidates[0]!;
     let headReadable = false;
     let headShard: FavoriteGifShard | undefined;
-    // Divergent relay copies are CRDT inputs, not alternatives: retain every
-    // valid edition's operations while using only NIP-01's winner as `prev`.
+    // Divergent relay copies are CRDT inputs: keep every edition's operations, but only the
+    // NIP-01 winner is `prev`.
     for (const event of candidates.slice(0, 32)) {
       try {
         const plaintext = await decrypt(pubkey, event.content);
@@ -111,10 +111,8 @@ export async function decodeFavoriteGifEvents(
 }
 
 /**
- * Build consolidation editions for explicit Setup Sync. Every readable
- * divergent installation coordinate is repaired before relay migration; an
- * old device may never come back to rewrite its own partial head. This
- * installation's local shard is included as well.
+ * Repair every divergent coordinate before relay migration (Setup Sync); an old device may
+ * never rewrite its own partial head.
  */
 export async function signCurrentFavoriteGifEvents(
   remoteEvents: readonly NostrRumor[],
@@ -126,9 +124,7 @@ export async function signCurrentFavoriteGifEvents(
     if (remoteEvents.length === 0 && loadOwnFavoriteGifShard(pubkey).records.length === 0) return [];
     throw new Error("Your signer cannot encrypt GIF favorites");
   }
-  // Network editions must verify. ArmadaDB rumors have had their signatures
-  // stripped after verified ingest, but remain trusted semantic inputs during
-  // an explicit relay migration.
+  // Network editions must verify; signature-stripped ArmadaDB rumors are trusted inputs.
   const verified = remoteEvents.filter((event) => !isSigned(event) || verifyEventOnce(event));
   const decoded = await decodeFavoriteGifEvents(
     pubkey,
@@ -196,10 +192,8 @@ export async function signCurrentFavoriteGifEvents(
 }
 
 /**
- * Encrypted sync for GIF favorites, gated by this installation's automatic
- * settings-sync preference. Each installation owns one addressable shard;
- * merging all shards gives add/remove convergence without one upgrading device
- * being able to replace another device's old favorites.
+ * Encrypted GIF-favorites sync, gated by the automatic settings-sync preference. One
+ * addressable shard per installation; merging shards gives add/remove convergence.
  */
 export function useFavoriteGifsSync(): void {
   const { nostr } = useNostr();
@@ -223,10 +217,7 @@ export function useFavoriteGifsSync(): void {
     () => nip65WriteRelayKey ? nip65WriteRelayKey.split("\u0000") : [],
     [nip65WriteRelayKey],
   );
-  // An owned kind-10002 is authoritative when it exists. Before an account
-  // publishes one, the explicit self-state/app relay set is the only honest
-  // bootstrap source; requiring a declared writer in that state would disable
-  // sync entirely for existing accounts.
+  // Without a kind-10002, bootstrap from the self-state/app relays, or sync would never run.
   const canonicalSourceRelays = nip65WriteRelays.length > 0 ? nip65WriteRelays : relays;
   const syncBaseKey = user?.pubkey && relayKey
     ? `${user.pubkey}\u0001${relayKey}\u0002${nip65WriteRelayKey}`
@@ -382,9 +373,7 @@ export function useFavoriteGifsSync(): void {
     migrationInFlight.current = false;
   }, [syncBaseKey, user?.pubkey]);
 
-  // Changes made while opted out remain in this installation's local shard.
-  // Enabling synchronization is an explicit request to publish that current
-  // shard after the remote shards have been pulled and merged.
+  // Enabling sync publishes changes made while opted out, after merging remote shards.
   useEffect(() => {
     const wasAutomatic = previousAutomatic.current;
     previousAutomatic.current = automaticSettingsSync;
@@ -394,9 +383,7 @@ export function useFavoriteGifsSync(): void {
     void queryClient.invalidateQueries({ queryKey: [QUERY_KEY, user?.pubkey] });
   }, [automaticSettingsSync, queryClient, user?.pubkey]);
 
-  // Apply every remote device shard, then safely claim this installation's
-  // pre-sync list. The legacy key is removed only once the encrypted shard has
-  // been signed and durably queued by useNostrPublish.
+  // The legacy key is removed only once the shard has been signed and durably queued.
   useEffect(() => {
     const pubkey = user?.pubkey;
     const baseKey = syncBaseKey;
@@ -442,8 +429,7 @@ export function useFavoriteGifsSync(): void {
     });
   }, [automaticSettingsSync, publishCurrentShard, query.data, syncBaseKey, user?.pubkey]);
 
-  // Explicit favorite/unfavorite actions update local state immediately, then
-  // coalesce rapid clicks into one rewrite of this installation's shard.
+  // Coalesce rapid clicks into one shard rewrite.
   useEffect(() => {
     const pubkey = user?.pubkey;
     if (!automaticSettingsSync || !pubkey || !user.signer.nip44) return;

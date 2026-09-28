@@ -19,76 +19,31 @@ import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** NIP-30 emoji set (a shareable pack). */
 export const KIND_EMOJI_SET = 30030;
 
-// Whether a durable, reload-surviving palette exists for an account —
-// "has it ever had emojis?", across page loads, which the in-memory React Query
-// caches cannot answer since they are empty exactly when a cold-start read is
-// most likely to race out.
-//
-// `hasDurableEmojis` lives in `@/lib/emojiPalette` now, which owns the storage
-// both hooks read — it used to be a localStorage key written out here as well
-// and kept in sync with `useCustomEmojis` by hand, since that hook imports from
-// this one.
-
-/** The outcome of reading the user's kind-10030 list. */
 export interface EmojiListRead {
-  /** Newest list from the relays or the local event store, if one was found. */
   event: NostrRumor | null;
   /**
-   * Whether the read reached an EOSE at all, rather than being aborted or
-   * timing out. `NPool.req` only surfaces the merged EOSE once EVERY routed
-   * relay has EOSE'd — the grace window ABORTS the stream, it never emits a
-   * partial EOSE. So this is reliable ONLY because the read is scoped to the
-   * account-data relays (see `readEmojiList`); fanned out over every joined
-   * server it would almost never fire, since one cold/slow/AUTH-gated group
-   * relay withholds the merged EOSE forever. Even so it is not proof a list is
-   * absent (a scoped relay could simply not hold it); never let it alone
-   * authorise blanking or recreating a list — pair it with the local store,
-   * the durable palette, and whatever is already on screen.
+   * Whether the read reached EOSE. `NPool.req` only emits the merged EOSE once EVERY routed
+   * relay has, so this is reliable only because the read is scoped to account-data relays.
+   * Not proof of absence: never let it alone authorise blanking or recreating a list.
    */
   conclusive: boolean;
 }
 
 /**
- * How long to keep listening after the first relay's EOSE.
- *
- * The pool's global `eoseTimeout` is 300ms (NostrProvider) — tuned for
- * timelines, where the fastest relay is representative of the rest. A user's
- * emoji list is a SINGLE replaceable event that may live on only one, slower
- * relay (and on a cold page load every socket is still connecting, possibly
- * mid-NIP-42), so 300ms routinely cuts it off and the palette comes up empty.
- * The batcher's ReplaceableCollector widens the same window to 1s for kind 0
- * for exactly this reason; a list that only loads sometimes is worth more
- * patience than that.
+ * Grace after the first EOSE. The pool's 300ms `eoseTimeout` routinely cuts off the one
+ * slower relay holding this single replaceable event.
  */
 const EMOJI_LIST_EOSE_GRACE_MS = 2500;
 
-/** Hard ceiling, so a relay that never EOSEs can't hang the read forever. */
 const EMOJI_LIST_READ_TIMEOUT_MS = 8000;
 
 /**
- * Read the current user's kind-10030 list, newest of (relays, local store).
- *
- * Uses `req` rather than `query` so the EOSE is observable, and omits `limit`
- * so the filter doesn't match `isReplaceableFilter` — the batcher's
- * ReplaceableCollector merges replaceable kinds into one REQ and resolves at
- * the first EOSE, which races out a slow relay holding the 10030. The local
- * store is applied as a floor so a relay miss falls back to the last list we
- * actually observed, and events that arrived before an abort/timeout still
- * count (only `conclusive` is lost).
- *
- * `relays` scopes the REQ to the account-data relays (`accountDataRelays`)
- * rather than the whole pool. This is load-bearing for `conclusive`: `NPool.req`
- * only yields the merged EOSE once EVERY routed relay has EOSE'd, so fanning the
- * read out to every joined NIP-29 server (as default pool routing does) means
- * one cold/slow/AUTH-gated group relay withholds the EOSE and `conclusive`
- * never turns true — which blocked the very first pack add ("Couldn't read your
- * emoji list"). The list is account data this client publishes to the app
- * relays anyway, so the scoped set is both where it lives and small enough for
- * the all-relays EOSE to actually arrive. Empty set → fall back to default
- * pool routing (the user has opted out of every account relay).
+ * Kind-10030 list, newest of (relays, local store floor).
+ * Uses `req` (observable EOSE) without `limit` so the batcher's ReplaceableCollector doesn't
+ * merge it and resolve at the first EOSE. `relays` scopes to account-data relays, which is
+ * load-bearing for `conclusive` (see {@link EmojiListRead}). Empty → default pool routing.
  */
 export async function readEmojiList(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -126,15 +81,13 @@ export async function readEmojiList(
   return { event, conclusive };
 }
 
-/** The addressable coordinate of an emoji pack: `30030:pubkey:dtag`. */
 export function emojiPackCoord(pubkey: string, identifier: string): string {
   return `${KIND_EMOJI_SET}:${pubkey}:${identifier}`;
 }
 
 /**
- * Whether the current user's kind 10030 list already references the emoji pack
- * at `coord` (`30030:pubkey:dtag`). Read-only; shares the custom-emoji cache
- * so it invalidates when a pack is added.
+ * Whether the user's kind-10030 list references the pack at `coord`. Shares the
+ * custom-emoji cache so it invalidates on add.
  */
 export function useHasEmojiPack(coord: string | undefined): boolean {
   const { nostr } = useNostr();
@@ -147,8 +100,7 @@ export function useHasEmojiPack(coord: string | undefined): boolean {
     queryFn: async ({ signal }) => {
       if (!user) return [] as string[];
       const store = await eventStore;
-      // Same store floor as the mutation: a missed read here would label an
-      // already-added pack "Add", inviting the write that then rebuilds the list.
+      // Same store floor as the mutation, or a missed read would invite a list rebuild.
       const { event: list } = await readEmojiList(nostr, store, user.pubkey, accountDataRelays(config), signal);
       if (!list) return [] as string[];
       return list.tags.filter((t) => t[0] === "a" && t[1]).map((t) => t[1]);
@@ -161,18 +113,9 @@ export function useHasEmojiPack(coord: string | undefined): boolean {
 }
 
 /**
- * Add a NIP-30 emoji pack (kind 30030) to the current user's emoji list
- * (kind 10030) by appending its `["a", "30030:pubkey:dtag"]` coordinate.
- *
- * Kind 10030 is a public NIP-51 list, so no encryption is needed. The freshest
- * list is fetched first so we append rather than overwrite, and the pack's
- * relay hint (if any) is carried on the `a` tag. On success both the emoji-pack
- * ref cache and the merged custom-emoji cache are invalidated so the new pack's
- * emojis become usable immediately.
- *
- * The mutation refuses to publish when the list can't be read but we hold
- * evidence one exists — appending to an empty base would replace the user's
- * emoji list everywhere rather than adding to it.
+ * Add a NIP-30 pack to the user's kind-10030 list (read-modify-write append of its
+ * `a` coordinate). Refuses to publish when the read failed but a list is known to exist —
+ * an empty base would replace the user's list everywhere.
  */
 export function useAddEmojiPack(): UseMutationResult<
   void,
@@ -193,7 +136,6 @@ export function useAddEmojiPack(): UseMutationResult<
       const coord = emojiPackCoord(pubkey, identifier);
       const store = await eventStore;
 
-      // Fetch the freshest list so we append rather than clobber it.
       const { event: prev, conclusive } = await readEmojiList(
         nostr,
         store,
@@ -202,24 +144,14 @@ export function useAddEmojiPack(): UseMutationResult<
         AbortSignal.timeout(15_000),
       );
 
-      // Never publish a list built from an empty base. Kind 10030 is
-      // replaceable, so doing that on a read that merely FAILED replaces every
-      // emoji the user has with this one pack. Creating the list from scratch
-      // is only allowed when a relay completed the read (EOSE) and reported
-      // nothing, the local store has nothing, and no local record — durable or
-      // in-memory — says a list ever existed. Short of that we publish nothing
-      // and say so.
+      // Never publish from an empty base on a FAILED read (10030 is replaceable). Create from
+      // scratch only on a conclusive empty read with no local evidence of a list.
       const base = prev;
       if (!base) {
         const knownRefs = queryClient.getQueryData<string[]>(["emoji-pack-refs", user.pubkey]);
         const knownEmojis = queryClient.getQueryData<unknown[]>(["custom-emojis", user.pubkey]);
-        // The durable localStorage palette is the reload-surviving evidence a
-        // list exists (AGENTS.md: "refuse to build on an empty/failed read when
-        // local persisted state says a non-empty list existed"). It is what
-        // makes a single conclusive read safe enough to build a first list on,
-        // so we don't need a second, identical re-read — one the replaceable
-        // batcher tends to collapse into a no-EOSE hang, which used to make the
-        // very first add impossible.
+        // The durable palette is the reload-surviving evidence a list exists (AGENTS.md), which
+        // makes a single conclusive read safe.
         const seenAList =
           (knownRefs?.length ?? 0) > 0 ||
           (knownEmojis?.length ?? 0) > 0 ||
@@ -232,7 +164,6 @@ export function useAddEmojiPack(): UseMutationResult<
 
       const tags: string[][] = base ? base.tags.map((t) => [...t]) : [];
 
-      // Already added? Nothing to do.
       if (tags.some((t) => t[0] === "a" && t[1] === coord)) return;
 
       tags.push(relay ? ["a", coord, relay] : ["a", coord]);
@@ -252,17 +183,8 @@ export function useAddEmojiPack(): UseMutationResult<
 }
 
 /**
- * Remove a NIP-30 emoji pack from the current user's kind-10030 list by
- * stripping its `["a", "30030:pubkey:dtag"]` coordinate. Read-modify-write, so
- * inline emojis and every other referenced pack are preserved.
- *
- * Removal never creates a list from scratch — it only ever publishes a strictly
- * smaller version of a list we actually read back. It therefore refuses to
- * publish when the list can't be read but evidence says one exists: republishing
- * an empty base would wipe every emoji rather than remove one pack (AGENTS.md
- * "Never publish a user's Nostr lists without an explicit user action"). When a
- * relay conclusively reports no list, there is genuinely nothing to remove and
- * the mutation is a silent no-op.
+ * Remove a pack's `a` coordinate from the kind-10030 list. Never creates a list; refuses
+ * when the read failed but a list is known to exist (AGENTS.md). Conclusive no list → no-op.
  */
 export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: string }> {
   const { nostr } = useNostr();
@@ -278,7 +200,6 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
 
       const store = await eventStore;
 
-      // Fetch the freshest list so we edit the real thing, not a stale copy.
       const { event: prev, conclusive } = await readEmojiList(
         nostr,
         store,
@@ -288,11 +209,8 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
       );
 
       if (!prev) {
-        // No list came back. Treating that as "already empty, nothing to
-        // remove" is only safe when a relay actually completed the read AND
-        // nothing we hold says a list exists — otherwise a failed read would
-        // silently report success at removing nothing (and leave the pack in
-        // place on the network). Short of that, surface the failure.
+        // "Nothing to remove" is only safe on a conclusive read with no evidence of a list;
+        // otherwise surface the failure.
         const knownRefs = queryClient.getQueryData<string[]>(["emoji-pack-refs", user.pubkey]);
         const knownEmojis = queryClient.getQueryData<unknown[]>(["custom-emojis", user.pubkey]);
         const seenAList =
@@ -305,7 +223,6 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
         return; // genuinely nothing to remove
       }
 
-      // Not referenced? Nothing to do.
       if (!prev.tags.some((t) => t[0] === "a" && t[1] === coord)) return;
 
       const tags = prev.tags.filter((t) => !(t[0] === "a" && t[1] === coord));
@@ -324,21 +241,16 @@ export function useRemoveEmojiPack(): UseMutationResult<void, Error, { coord: st
   });
 }
 
-/** A pack referenced by the user's kind-10030 list, with its resolved event. */
 export interface MyEmojiPack {
-  /** The `30030:pubkey:dtag` coordinate from the user's list. */
   coord: string;
-  /** Relay hint carried on the `a` tag, if any. */
   relay?: string;
-  /** The resolved kind-30030 event, or null if it couldn't be fetched. */
+  /** null if it couldn't be fetched. */
   event: NostrRumor | null;
 }
 
 /**
- * The emoji packs the current user has added (kind-10030 `["a", …]` refs
- * resolved to their kind-30030 events), for a management UI. Unresolved packs
- * are still returned (with `event: null`) so a pack whose set didn't load can
- * still be listed and removed by coordinate.
+ * Packs the user added, resolved to kind-30030 events; unresolved ones are returned with
+ * `event: null` so they can still be removed.
  */
 export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
   const { nostr } = useNostr();
@@ -391,17 +303,13 @@ export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
   });
 }
 
-/** Extract the `["emoji", shortcode, url]` mappings from a kind 30030 event. */
 export function emojiPackEntries(event: NostrRumor): { shortcode: string; url: string }[] {
   return event.tags
     .filter((t) => t[0] === "emoji" && t[1] && t[2])
     .map((t) => ({ shortcode: t[1], url: t[2] }));
 }
 
-/**
- * The pack's human name. Reads `title` and `name` (clients disagree on which
- * they emit — we publish both), falling back to the `d` identifier.
- */
+/** Reads `title` and `name` (clients disagree; we publish both), falling back to `d`. */
 export function emojiPackName(event: NostrRumor): string {
   return (
     event.tags.find((t) => t[0] === "title")?.[1] ||
@@ -411,17 +319,11 @@ export function emojiPackName(event: NostrRumor): string {
   );
 }
 
-/** The pack's description (`about` tag), if any. */
 export function emojiPackAbout(event: NostrRumor): string | undefined {
   return event.tags.find((t) => t[0] === "about")?.[1] || undefined;
 }
 
-/**
- * The pack's cover image (`image` or `picture` tag), if any.
- *
- * Checked here rather than at the three places that render it, so a pack from
- * a stranger's relay cannot point every viewer's browser at a private address.
- */
+/** Checked here so a stranger's pack cannot point viewers' browsers at a private address. */
 export function emojiPackPicture(event: NostrRumor): string | undefined {
   return sanitizeImageSrc(
     event.tags.find((t) => t[0] === "image")?.[1] ||

@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
 import { normalizeBlossomServerUrl } from "@/lib/blossom";
 
-/** Hostname for a Blossom server URL. */
 function serverHost(url: string): string {
   try {
     return new URL(url).host;
@@ -16,11 +15,7 @@ function serverHost(url: string): string {
   }
 }
 
-/**
- * One Blossom server row: an avatar (letter fallback), host prominent, full URL
- * underneath — the same shape as RelayListEditor's RelayIdentity, minus the
- * NIP-11 icon/badges that only relays have.
- */
+/** One server row, shaped like RelayListEditor's RelayIdentity minus NIP-11 bits. */
 function ServerIdentity({ url }: { url: string }) {
   const host = serverHost(url);
   return (
@@ -41,23 +36,15 @@ function ServerIdentity({ url }: { url: string }) {
 export interface BlossomServerListEditorProps {
   /** Editable server URLs (the user's kind 10063 list). */
   servers: string[];
-  /** Persist a new server list. */
   onChange: (servers: string[]) => void;
   /** Read-only, non-removable servers shown first (the app defaults). */
   pinned?: string[];
-  /** Reset the editable list to defaults. */
   onReset?: () => void;
-  /** Empty-state message when there are no editable servers. */
   emptyText?: string;
-  /** Add-input placeholder. */
   placeholder?: string;
 }
 
-/**
- * Blossom media server list editor — the https sibling of RelayListEditor
- * (which is wss/NIP-11 specific). Pinned (read-only) app servers, an editable
- * user list with remove buttons, an add form, and an optional reset.
- */
+/** Blossom server list editor; the https sibling of RelayListEditor. */
 export function BlossomServerListEditor({
   servers,
   onChange,

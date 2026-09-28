@@ -1,24 +1,10 @@
 /**
- * NIP-17 typing indicators — the DM plane's one EPHEMERAL action.
- *
- * A kind-23311 rumor (the same kind Concord uses in its channels) sealed
- * NIP-59-style and carried in a kind-21059 ephemeral gift wrap, so relays
- * broadcast it to whoever is listening and store nothing. Wire format lives in
- * `src/lib/nip17/protocol.ts`; this hook owns the relay traffic:
- *
- *   - RECEIVE: a live `{kinds:[21059], "#p":[me]}` sub on the same relay set
- *     the inbox sync reads (shared across conversations, `ephemeralInbox.ts`),
- *     feeding a decaying in-memory map. Nothing is ever
- *     written to the rumor store or the signer's decrypt cache.
- *   - SEND: throttled to one signal per TYPING_THROTTLE_MS, sealed to the peer
- *     ONLY (no self copy — you don't need your own typing indicator) and
- *     published to the peer's kind-10050 inbox ∪ our own DM relays, the same
- *     targets a message wrap goes to.
- *
- * One thing gates this: `config.dmTypingIndicators`. Every login that can do
- * NIP-44 participates — the send path is throttled to one signal per
- * TYPING_THROTTLE_MS and a missed signal costs nothing, so there is no signer
- * fast enough to require and none slow enough to have to exclude.
+ * NIP-17 typing indicators: a kind-23311 rumor sealed into a kind-21059 ephemeral wrap
+ * (relays store nothing).
+ * - RECEIVE: a live `{kinds:[21059], "#p":[me]}` sub on the inbox relay set (shared via
+ *   `ephemeralInbox.ts`) feeding a decaying in-memory map; nothing is persisted.
+ * - SEND: throttled, sealed to the peer ONLY, to their 10050 inbox ∪ our DM relays.
+ * Gated only by `config.dmTypingIndicators`.
  */
 
 import { useNostr } from "@nostrify/react";
@@ -45,26 +31,18 @@ import { subscribeDmEphemeral } from "@/lib/nip17/ephemeralInbox";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** How long a received signal keeps the indicator up. */
 const TYPING_WINDOW_MS = TYPING_WINDOW_SECS * 1000;
-/** Minimum gap between published signals — one every 4s covers an 8s window. */
+/** One every 4s covers an 8s window. */
 const TYPING_THROTTLE_MS = 4_000;
 
 export interface DmTyping {
-  /** Participants currently typing (sorted); empty when nobody is. */
   typers: string[];
-  /** Fire on every keystroke; throttled internally. No-op when disabled. */
   publishTyping: () => void;
 }
 
 const IDLE: DmTyping = { typers: [], publishTyping: () => {} };
 
-/**
- * Live "is this peer typing" for one NIP-17 conversation, plus a throttled
- * publisher for our own signal. Returns an inert value whenever the feature is
- * off, the signer can't do it, or there's no peer — callers can mount it
- * unconditionally.
- */
+/** Returns an inert value when off/unsupported/no peer, so callers can mount it unconditionally. */
 export function useDmTyping(conversation: string | undefined, enabled = true): DmTyping {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -76,36 +54,27 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
     () => (conversation ? dmConvPeers(conversation) : []),
     [conversation],
   );
-  // The one peer we publish OUR signal to. Groups deliberately receive but do
-  // not send: a signal has to be sealed per recipient, and a sequential signer
-  // round-trip per member every TYPING_THROTTLE_MS is a real cost on a bunker
-  // (and a visible one on a NIP-07 extension that prompts). Somebody else's
-  // signal still lights the indicator, so the feature degrades to one-way
-  // rather than off.
+  // Groups receive but don't send: a per-member seal every throttle tick is too costly
+  // on remote signers.
   const publishPeer = peers.length === 1 && peers[0] !== self ? peers[0] : undefined;
   const peerInboxRelays = useDmRelaysFor(publishPeer);
   const senders = useMemo(() => new Set(peers), [peers]);
 
   const [typers, setTypers] = useState<string[]>([]);
-  /** Newest signal timestamp (ms) per participant, for the decay sweep. */
   const lastSeen = useRef(new Map<string, number>());
   const lastSent = useRef(0);
 
   const on =
     enabled &&
     config.dmTypingIndicators &&
-    // The whole-DM opt-out: with DMs off we neither publish our own typing
-    // signal (`publishTyping` gates on `on`) nor hold the standing 21059 sub.
+    // With DMs off, neither publish nor hold the 21059 sub.
     !config.dmsDisabled &&
     !!self &&
     peers.length > 0 &&
-    // A note-to-self thread would just show us our own indicator.
     !(peers.length === 1 && peers[0] === self) &&
     !!user?.signer.nip44;
 
-  // The same union the inbox sync reads from: our effective DM relays ∪ our
-  // published kind-10050 inbox. A sender following NIP-17 delivers to the
-  // latter, so a signal would be missed if we only watched the former.
+  // Same union the inbox sync reads: senders deliver to our published 10050 inbox.
   const myRelays = useMemo(
     () => [...new Set([...effectiveDmRelays(config), ...publishedRelays])],
     [config, publishedRelays],
@@ -121,8 +90,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
     let released = false;
     const signer = user!.signer as unknown as Dm17Signer;
 
-    // Decay is a one-shot timer armed for the next signal to expire, so a
-    // conversation nobody is typing in schedules no wakeups at all.
+    // One-shot timer for the next expiry, so idle conversations schedule no wakeups.
     let decay: ReturnType<typeof setTimeout> | undefined;
     const recompute = () => {
       if (decay) clearTimeout(decay);
@@ -151,10 +119,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
         cache: false,
       }).catch(() => undefined);
       if (released || !opened || opened.kind !== KIND_DM_TYPING) return;
-      // Only THIS conversation, and never our own signal echoing back off a
-      // shared relay (we publish to our own DM relays too). The author check is
-      // what excludes our own copy; the conversation check is what keeps a
-      // signal from a 1:1 out of a group that shares its members.
+      // Excludes our own echoed signal, and 1:1 signals from a group sharing its members.
       if (!senders.has(opened.author)) return;
       if (dmConvKey(opened.peers) !== conversationKey) return;
       const ms = opened.createdAt * 1000;
@@ -164,8 +129,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
       recompute();
     };
 
-    // Shared per (relay, me) and kept across conversation switches — see
-    // `ephemeralInbox.ts`.
+    // Shared per (relay, me) across conversation switches — see `ephemeralInbox.ts`.
     const handler = (wrap: NostrEvent) => void apply(wrap);
     const unsubs = myRelays.map((url) => subscribeDmEphemeral(nostr, url, self!, handler));
 
@@ -174,8 +138,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
       for (const unsub of unsubs) unsub();
       if (decay) clearTimeout(decay);
     };
-    // `user` is read for its signer; keyed on the pubkey (the signer is stable
-    // per login) so a profile refresh doesn't tear down the subscriptions.
+    // Keyed on pubkey (signer is stable per login) so a profile refresh keeps the subs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, on, self, conversationKey, myRelayKey]);
 
@@ -193,8 +156,7 @@ export function useDmTyping(conversation: string | undefined, enabled = true): D
           tags: dmTypingTags([publishPeer]),
           pubkey: self!,
         });
-        // Peer copy only — a self copy would just be our own indicator coming
-        // back at us, at double the relay traffic.
+        // Peer copy only; a self copy would just echo our own indicator.
         const wrap = wrapDmSealEphemeral(await sealDmRumor(rumor, publishPeer, signer), publishPeer);
         const targets = [...new Set([...peerInboxRelays, ...myRelays])];
         await Promise.allSettled(

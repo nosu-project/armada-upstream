@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 
 import type { ZapEntry, ZapRail, ZapTally } from "@/lib/zaps";
 
-/** A small indicator for the payment rail. */
 function RailIcon({ rail }: { rail: ZapRail }) {
   if (rail === "onchain") {
     return <span className="text-[13px] leading-none text-orange-500 font-bold">₿</span>;
@@ -21,7 +20,6 @@ function RailIcon({ rail }: { rail: ZapRail }) {
   return <Zap className="size-3.5 fill-current text-amber-500" />;
 }
 
-/** One zapper row (avatar + name + amount + comment) inside the detail popover. */
 function ZapperRow({ zap }: { zap: ZapEntry }) {
   const author = useAuthor(zap.pubkey);
   const metadata = author.data?.metadata;
@@ -52,10 +50,7 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
   );
 }
 
-/**
- * The ⚡ total chip beside a message's reaction pills: amber, total sats,
- * popover listing each zapper with amount + comment, and a zap-again footer.
- */
+/** The ⚡ total chip beside a message's reaction pills. */
 export function ZapPill({
   tally,
   canZap,
@@ -80,10 +75,7 @@ export function ZapPill({
               : "border-amber-500/40 bg-amber-500/10 text-amber-500 hover:border-amber-500/70 hover:bg-amber-500/20",
           )}
         >
-          {/* Match the reaction pill's leading glyph EXACTLY: a 20px (h-5 w-5)
-              box so the pills are the same height and line up, with a 16px
-              bolt centered in it so the icon reads the same size as the ~16px
-              (text-base) emoji beside it. */}
+          {/* 20px box matching the reaction pill's glyph so pills line up. */}
           <span className="inline-flex h-5 w-5 items-center justify-center">
             <Zap className="size-4 fill-current" />
           </span>

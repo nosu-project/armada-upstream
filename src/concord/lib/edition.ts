@@ -1,9 +1,6 @@
 /**
- * Concord Control Plane editions — CORD-04 §1.
- *
- * An edition is a kind-3308 RUMOR (unsigned; authorship is the seal's Schnorr
- * signature, which for the Control Plane is a plaintext seal so it survives a
- * compaction re-wrap). Its machinery rides tags:
+ * Concord Control Plane editions — CORD-04 §1. An edition is a kind-3308 RUMOR
+ * (authorship is the plaintext seal's signature, surviving compaction re-wraps):
  *
  *   ["vsk", n]                — entity type (the registry, CORD-02 Appendix B)
  *   ["eid", hex32]            — the entity's stable coordinate
@@ -11,8 +8,7 @@
  *   ["ep",  hex32]            — prev edition hash (absent on the first)
  *   ["vac", eid, ver, hash]   — the authority citation (absent when the owner acts)
  *
- * There is deliberately NO version tag: absence of a version field always
- * means this spec (CORD-02 Appendix B).
+ * Deliberately NO version tag: absence means this spec (CORD-02 Appendix B).
  */
 
 import { hexToBytes } from "@noble/hashes/utils.js";
@@ -32,11 +28,9 @@ const TAG_CITATION = "vac";
 const HEX64 = /^[0-9a-f]{64}$/i;
 
 /**
- * CORD-01 §5: a tag number rides as "its decimal form with no leading zeros".
- * So `"4"` and `"0"` are the shape; `"04"`, `"+4"`, `"0x4"`, `"1e2"` and `" 4 "`
- * are not. `BigInt()`/`Number()` accept several of those, and a peer that
- * doesn't would drop the event we honored — a divergence neither side can see,
- * because a declined parse is never logged.
+ * CORD-01 §5: tag numbers are decimal with no leading zeros. `BigInt()`/`Number()`
+ * accept more (`"04"`, `"0x4"`, `"1e2"`...), and honoring those would silently
+ * diverge from stricter peers.
  */
 const DECIMAL = /^(0|[1-9][0-9]*)$/;
 
@@ -122,23 +116,15 @@ function decodeHash(hex: string | undefined, field: string): Uint8Array {
 }
 
 /**
- * Parse an OPENED control stream event into an edition. The stream layer
- * already proved authorship (seal signature) and rumor integrity (id hash);
- * this extracts the edition machinery and computes selfHash. Rejects duplicate
- * machinery tags (which would make the canonical bytes ambiguous). Does NOT
- * check roster authorization — that's the fold's separate step.
+ * Parse an OPENED control stream event into an edition (the stream layer already
+ * proved authorship and integrity). Rejects duplicate machinery tags. Does NOT
+ * check roster authorization — the fold does.
  */
 export function parseEdition(opened: OpenedEvent): ParsedEdition {
   if (opened.kind !== KIND_CONTROL) throw new EditionError("bad-field", "kind");
-  // Control seals MUST be plaintext (CORD-02 §5) — an encrypted-seal edition
-  // could never survive a compaction re-wrap, so honoring it would mint state
-  // that silently vanishes for every fresh joiner at the next Refounding.
-  //
-  // Checked whenever the seal form is KNOWN, which is any event still holding
-  // its wrap — including the freshly-swept ones that reach a fold in memory
-  // without being read back from the store. A STORED rumor has no envelope at
-  // all, and needs none: `writeOpened` applied this same rule before it could
-  // be stored.
+  // Control seals MUST be plaintext (CORD-02 §5): an encrypted-seal edition can't
+  // survive compaction. Checked whenever the seal form is known; stored rumors
+  // were already checked by `writeOpened`.
   if (opened.sealKind !== undefined && opened.sealKind !== KIND_SEAL_PLAINTEXT) {
     throw new EditionError("bad-field", "seal-kind");
   }

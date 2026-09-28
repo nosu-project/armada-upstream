@@ -1,31 +1,18 @@
 /**
  * Concord reports — a NIP-56 report giftwrapped to the Control Plane address.
  *
- * A room has no relay operator to appeal to and no plaintext anywhere, so a
- * report has to travel as ciphertext addressed to the people who can act on it.
- * The Control Plane's signer pubkey (`control_pk`) is exactly that audience:
- * every member holds it (it is delivered with the join material), and only
- * staff can derive the matching secret from `control_root` (CORD-02 §2), which
- * is handed out on promotion and never otherwise. So a member can address staff
- * without holding anything staff-only, and no other member can read what they
- * sent — including the person being reported.
+ * Every member holds `control_pk`, but only staff can derive its secret from
+ * `control_root` (CORD-02 §2), so members can address staff privately — not even
+ * the reported person can read it.
  *
  *   wrap(1059, ephemeral author, ["p", control_pk], ["k", "1984"])
  *     └ seal(13, signed by the reporter's REAL key)
  *         └ rumor(1984, NIP-56 tags + the reporter's words)
  *
- * This is a STANDARD NIP-59 giftwrap, not the reversed CORD-01 stream wrap, for
- * the same reason a Direct Invite is one (CORD-05 §6): it is addressed to a
- * party, not published at a stream. It is deliberately NOT stream traffic —
- * a report is not a plane, claims no kind in `PLANE_RULES`, and is never stored
- * as a rumor. Control Plane wraps are AUTHORED by `control_pk` and carry a
- * random ephemeral `p`; a report is the mirror image (ephemeral author,
- * `control_pk` in the `p` tag), so the two can never be mistaken for each other
- * even before the outer `k` tag narrows the query.
- *
- * A LEGACY pre-split epoch has no `control_pk` — its plane is one key every
- * member holds — so there is no staff-only audience to address and reporting is
- * simply unavailable there (see `reportDestination`).
+ * A STANDARD NIP-59 giftwrap (addressed to a party, like CORD-05 §6 Direct
+ * Invites), not stream traffic; never stored as a rumor. It mirrors Control Plane
+ * wraps (those are authored BY `control_pk`), so the two can't be confused.
+ * Unavailable on legacy pre-split epochs (no `control_pk`; see `reportDestination`).
  */
 
 import { getConversationKey, decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
@@ -62,8 +49,6 @@ export interface ReportRumor {
   pubkey: string;
 }
 
-// ── Sending ──────────────────────────────────────────────────────────────────
-
 /** Build the kind-1984 rumor: NIP-56 tags plus whatever the reporter wrote. */
 export function buildReportRumor(
   target: ReportTarget,
@@ -81,9 +66,8 @@ export function buildReportRumor(
 }
 
 /**
- * Seal the rumor with the reporter's REAL identity — the seal's verified npub
- * is what tells a moderator who raised the report, and is the only thing
- * stopping a member from flooding the queue under invented names.
+ * Seal with the reporter's REAL identity — tells moderators who reported, and
+ * stops flooding under invented names.
  */
 export async function sealReport(
   rumor: ReportRumor,
@@ -100,10 +84,8 @@ export async function sealReport(
 }
 
 /**
- * Wrap a signed seal for the Control Plane under a single-use ephemeral key.
- * The outer `k` tag is what makes the moderator queue one indexed REQ rather
- * than a decrypt of everything ever addressed to the plane — a hint, never
- * authority: a report is whatever unwraps to a kind-1984 rumor.
+ * Wrap a signed seal for the Control Plane under a single-use ephemeral key. The
+ * outer `k` tag is an index hint, never authority.
  */
 export function wrapReport(seal: NostrEvent, controlPk: string): NostrEvent {
   const ephemeralSk = generateSecretKey();
@@ -121,16 +103,11 @@ export function wrapReport(seal: NostrEvent, controlPk: string): NostrEvent {
   );
 }
 
-// ── Receiving (staff only) ───────────────────────────────────────────────────
-
+// Receiving (staff only)
 /**
- * The current epoch's Control Plane secret, or undefined for anyone who isn't
- * staff of a split epoch. This is the read key for the report queue, and
- * holding it IS the permission — there is no separate bit to check.
- *
- * A held `control_root` that doesn't derive to the held `control_pk` is corrupt
- * state, not a key, and yields undefined rather than a wrong conversation key
- * (mirrors `controlStreamOf`'s fail-closed check).
+ * The current epoch's Control Plane secret, or undefined for non-staff. Holding
+ * it IS the permission. A `control_root` that doesn't derive to `control_pk`
+ * yields undefined (fail closed, like `controlStreamOf`).
  */
 export function reportInboxSecret(community: Community): Uint8Array | undefined {
   if (!community.controlPk || !community.controlRoot) return undefined;
@@ -148,16 +125,9 @@ export interface UnwrappedReport {
 }
 
 /**
- * Unwrap a report addressed to the Control Plane, using the staff secret from
- * {@link reportInboxSecret}. Returns undefined for anything that isn't a
- * well-formed report this key can open — never throws, so a scan loop can skip
- * a foreign or malformed wrap.
- *
- * Both NIP-59 layers are peeled with RAW keys rather than a signer: the
- * conversation key is between the Control Plane secret and the counterparty,
- * and no signer will ever hold a derived group key. The rumor's claimed author
- * must equal the seal's — the standard anti-spoofing check, and here also what
- * makes "who reported this" answerable at all.
+ * Unwrap a report with the staff secret; undefined (never throws) for anything
+ * that isn't a well-formed report this key opens. Uses RAW keys (no signer holds
+ * a group key). Rumor author must equal seal author.
  */
 export function unwrapReport(wrap: NostrEvent, controlSk: Uint8Array): UnwrappedReport | undefined {
   if (wrap.kind !== KIND_WRAP) return undefined;

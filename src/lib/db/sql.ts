@@ -6,13 +6,8 @@ export function qs(length: number): string {
 }
 
 /**
- * A membership test on a column, as `= ?` for a single value and `IN (…)` for
- * several.
- *
- * The distinction matters: an equality on an index column keeps the scan
- * ordered by the columns after it, so `ORDER BY created_at DESC` comes free,
- * whereas `IN` makes SQLite loop over the values and sort the union. Writing a
- * one-element list as `IN (?)` measurably slows tag scans.
+ * `= ?` for one value, `IN (…)` for several: equality keeps the index scan
+ * ordered for `ORDER BY created_at DESC`; `IN (?)` measurably slows tag scans.
  */
 export function memberOf(column: string, values: readonly SqlValue[]): string {
   return values.length === 1 ? `${column} = ?` : `${column} IN (${qs(values.length)})`;

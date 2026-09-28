@@ -11,10 +11,7 @@ interface AndroidSignerOptionsProps {
   onLogin: () => void;
 }
 
-// Lists Android signer apps installed on the device (Amber, etc.) and lets
-// the user pick one to log in with via NIP-55. Rendered only on Capacitor
-// Android — on every other platform the component returns null and
-// contributes nothing to the login dialog layout.
+// NIP-55 signer apps installed on the device. Renders null off Capacitor Android.
 export function AndroidSignerOptions({ onLogin }: AndroidSignerOptionsProps) {
   const isAndroidNative =
     Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
@@ -32,9 +29,7 @@ export function AndroidSignerOptions({ onLogin }: AndroidSignerOptionsProps) {
       .then((list) => { if (!cancelled) setApps(list); })
       .catch((e) => {
         if (cancelled) return;
-        // The plugin throws if no signer is installed at all. Treat that as
-        // "no apps" rather than as an error — the user just won't see this
-        // section. Anything else gets surfaced.
+        // Throws when no signer is installed; treat that as "no apps".
         console.warn('Failed to enumerate Android signer apps:', e);
         setApps([]);
       });

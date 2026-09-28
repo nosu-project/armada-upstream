@@ -72,20 +72,18 @@ const TABS: (PillTab<DiscoverTab> & { placeholder: string; blurb: string })[] = 
 ];
 
 /**
- * Discover: browse and search public directory events on Nostr — opt-in Concord
- * community listings (join links), NIP-30 emoji packs, and shareable themes.
- * Framed in the app's chrome idiom: a floating command bar, cut-corner tab
- * pills, and a chrome search vessel over a card grid.
+ * Discover: public directory events — opt-in Concord community listings, NIP-30
+ * emoji packs, and themes.
  */
 export function DiscoverPage() {
   const { user } = useCurrentUser();
-  // `?tab=` lets a link land on a tab (the emoji picker's "Browse" → emojis).
+  // `?tab=` lets a link land on a tab.
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<DiscoverTab>(() => {
     const requested = searchParams.get("tab");
     return TABS.find((t) => t.id === requested)?.id ?? "communities";
   });
-  // Independent query per tab so switching tabs doesn't carry a stale search.
+  // Independent query per tab so switching doesn't carry a stale search.
   const [queries, setQueries] = useState<Record<DiscoverTab, string>>({
     communities: "",
     emojis: "",
@@ -102,26 +100,16 @@ export function DiscoverPage() {
     <>
       <ServerRail />
       <main className="flex flex-col flex-1 min-w-0 h-full safe-area-top">
-        {/* A centred, bounded column — the same presentational width the
-            moderation and community-settings surfaces use, so Discover reads as
-            an inviting page rather than a full-bleed grid. */}
         <div className="mx-auto flex w-full max-w-5xl flex-1 min-h-0 flex-col px-3 sm:px-4">
-          {/* Header — the floating command bar shared with Inbox / Mesh / Group.
-              Dropped on a phone, where the tab pills carry the page identity and
-              the vertical space is better spent on results. */}
+          {/* Dropped on phones, where the tab pills carry the page identity. */}
           <header className="relative h-12 touch:h-14 mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
             <Compass className="size-5 shrink-0 text-muted-foreground" />
             <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
             <DiscoverScopeInfo signedIn={!!user} />
           </header>
 
-          {/* What the current tab surfaces — desktop only, where there's room to
-              set the page's intent before the grid. */}
           <p className="hidden sm:block mt-3 px-1 text-sm text-muted-foreground">{active.blurb}</p>
 
-          {/* Tab pills + search — one row from sm up, stacked on a phone. On a
-              phone the vessels are the server rail's size-12 grid, spaced on its
-              gap-4 rhythm, so the two read as one idiom. */}
           <div className="mt-3 flex shrink-0 flex-col gap-4 sm:mt-5 sm:flex-row sm:items-center sm:gap-3">
             <PillTabs
               tabs={TABS}
@@ -156,8 +144,7 @@ export function DiscoverPage() {
                 )}
               </div>
 
-              {/* Lives beside the search, not in the header, so it survives the
-                  header being dropped on a phone. */}
+              {/* Beside the search, not in the header, so it survives on phones. */}
               {tab === "communities" && user && (
                 <Button
                   className="h-12 sm:h-9 shrink-0 clip-corner-lg"
@@ -179,7 +166,6 @@ export function DiscoverPage() {
                 </Button>
               )}
 
-              {/* Second tenant of the same slot — the two never co-render. */}
               {tab === "themes" && user && (
                 <Button
                   className="h-12 sm:h-9 shrink-0 clip-corner-lg"
@@ -193,13 +179,11 @@ export function DiscoverPage() {
             </div>
           </div>
 
-          {/* Results — the top spacing is a MARGIN, not scroll padding, so the
-              gap under the search bar stays put as the grid scrolls beneath it. */}
+          {/* Top spacing is a MARGIN so the gap stays put while the grid scrolls. */}
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable mt-3 sm:mt-4 pb-8">
             {tab === "communities" && <CommunitiesTab query={query} />}
             {tab === "emojis" && <EmojisTab query={query} />}
             {tab === "themes" && <ThemesTab query={query} />}
-            {/* The header's info popover, for a phone, where the header is dropped. */}
             <DiscoverScopeFooter signedIn={!!user} className="sm:hidden" />
           </div>
         </div>
@@ -227,10 +211,8 @@ export function DiscoverPage() {
 }
 
 /**
- * An info button whose popover says what the grid is drawn from and links to
- * the settings section that holds the relays and the show-everything switch.
- * A popover rather than a tooltip because it holds a button: tooltip content
- * can't take focus, and a tap can't reach it on touch.
+ * Info popover on what the grid is drawn from, linking to the relay settings.
+ * A popover (not a tooltip) because it holds a focusable button.
  */
 function DiscoverScopeInfo({ signedIn, className }: { signedIn: boolean; className?: string }) {
   const { hint, unrestricted } = useDiscoverScopeHint(signedIn);
@@ -287,11 +269,7 @@ function useDiscoverScopeHint(signedIn: boolean): { hint: string; unrestricted: 
   return { hint, unrestricted };
 }
 
-/**
- * The popover's content laid inline at the end of the results, for a phone:
- * the header that holds the info button is dropped there, and a button beside
- * the search would crowd the one row of controls.
- */
+/** The popover's content inline after the results, for phones (no header there). */
 function DiscoverScopeFooter({ signedIn, className }: { signedIn: boolean; className?: string }) {
   const { hint, unrestricted } = useDiscoverScopeHint(signedIn);
   const settings = useContext(SettingsOverlayContext);
@@ -314,12 +292,7 @@ function DiscoverScopeFooter({ signedIn, className }: { signedIn: boolean; class
 
 const GRID = "grid gap-4 sm:grid-cols-2 lg:grid-cols-3 items-stretch";
 
-/**
- * The infinite-scroll trigger, placed after a grid. The `ref` is
- * {@link useInfiniteScroll}'s sentinel — reaching it (a screenful early) fetches
- * the next page. A spinner shows only while that fetch is in flight; the div
- * keeps a little height either way so the observer has something to catch.
- */
+/** Infinite-scroll sentinel after a grid ({@link useInfiniteScroll}); spinner while fetching. */
 function LoadMore({
   sentinelRef,
   loading,
@@ -334,10 +307,7 @@ function LoadMore({
   );
 }
 
-/**
- * Card-shaped placeholders while the first page loads — the grid keeps its
- * final shape instead of collapsing to a centred spinner and jumping.
- */
+/** Card-shaped placeholders so the grid keeps its shape while loading. */
 function TabSkeleton() {
   return (
     <div className={GRID} aria-hidden>
@@ -380,9 +350,8 @@ function CommunitiesTab({ query }: { query: string }) {
     pageCount,
   });
 
-  // Cross-link de-duplication and owner-based ranking: an announcement names
-  // no community and no owner (only its resolved bundle does, verifiably), so
-  // each card reports its bundle's community_id and owner as it lands.
+  // Announcements name no community/owner; each card reports its resolved
+  // bundle's, for cross-link dedup and owner ranking.
   const [resolved, setResolved] = useState<Record<string, { communityId: string; owner: string }>>(
     {},
   );
@@ -396,16 +365,14 @@ function CommunitiesTab({ query }: { query: string }) {
     [],
   );
 
-  // Activity probe targets reported by each card as its bundle (and, for
-  // members, Control fold) resolves — batched into one last-wrap REQ below.
+  // Activity-probe targets reported per card, batched into one last-wrap REQ.
   const [activityTargets, setActivityTargets] = useState<Record<string, DiscoverActivityTarget>>(
     {},
   );
   const onActivityTarget = useCallback(
     (linkSigner: string, target: DiscoverActivityTarget | null) => {
       setActivityTargets((prev) => {
-        // Withdrawn: the card unmounted or lost the search. Drop it, or the
-        // REQ keeps asking about listings that are no longer on screen.
+        // Withdrawn (unmounted or filtered out): drop it from the REQ.
         if (!target) {
           if (!(linkSigner in prev)) return prev;
           const { [linkSigner]: _gone, ...rest } = prev;
@@ -434,15 +401,9 @@ function CommunitiesTab({ query }: { query: string }) {
   const activityTargetList = useMemo(() => Object.values(activityTargets), [activityTargets]);
   const lastActiveBySigner = useDiscoverCommunityActivity(activityTargetList);
 
-  // Display order: communities owned by curated-list members first, then the
-  // rest of the trusted set (list ∪ viewer ∪ follows), then everyone else —
-  // an owner outside the trusted set, whose community a trusted author
-  // listed, or (unrestricted mode, allow-list bypassed) anyone at all.
-  // Newest-first within each tier (a stable partition preserves the hook's
-  // order). The verified bundle owner ranks a card once it resolves; until
-  // then the announcement's author stands in, so the first paint is already
-  // ordered and a card only moves in the rare case the sharer isn't the
-  // owner. O(n) over ≤ a few hundred listings — no extra fetches.
+  // Order: curated-list owners, then the trusted set (list ∪ viewer ∪
+  // follows), then everyone else; newest-first within tiers. Until a bundle
+  // resolves, the announcement author stands in for its owner.
   const ordered = useMemo(() => {
     if (!data) return data;
     const pack = new Set(packAuthors);
@@ -455,9 +416,8 @@ function CommunitiesTab({ query }: { query: string }) {
     return tiers.flat();
   }, [data, resolved, packAuthors, trustedAuthors]);
 
-  // Every link AFTER the first — in display order, so a pack-owned card wins
-  // the fold — that resolves to an already-seen community is dropped. Until a
-  // bundle resolves its card simply shows.
+  // Drop later links resolving to an already-seen community (display order,
+  // so pack-owned cards win).
   const duplicates = useMemo(() => {
     const seen = new Set<string>();
     const dup = new Set<string>();
@@ -471,8 +431,6 @@ function CommunitiesTab({ query }: { query: string }) {
   }, [ordered, resolved]);
 
   if (isLoading && !data) {
-    // Card-shaped placeholders, enough of them to fill a desktop viewport.
-    // The create tile is real content and never waits on the network.
     return (
       <div className={GRID}>
         <CreateCommunityCard />
@@ -500,20 +458,13 @@ function CommunitiesTab({ query }: { query: string }) {
   return (
     <>
     <div className={GRID}>
-      {/* Founding a community is always the first vessel in the fleet. */}
       <CreateCommunityCard />
-      {/* The announcement is metadata-free, so the search matches each card's
-          RESOLVED community name: non-matching cards render nothing. */}
+      {/* Search matches each card's RESOLVED name; misses render nothing. */}
       {(ordered ?? [])
         .filter((invite) => !duplicates.has(invite.linkSigner))
         .map((invite) => (
-          // Deferred mount: the grid has no windowing, so mapping every listing
-          // used to mount all ~FETCH_LIMIT cards at once — each a live bundle
-          // resolve, an IntersectionObserver, two image decrypts and effects
-          // that re-sort the parent as they land, O(n²) as the grid grows. Gate
-          // on a screenful of lead time so first paint mounts only what's in
-          // view. Disabled while searching: a card hides itself on a miss, and a
-          // placeholder must not reserve height for a row that renders nothing.
+          // No windowing, so defer mounting to a screenful of lead time. Off
+          // while searching: cards self-hide on a miss.
           <DeferredRow key={invite.linkSigner} active={!query.trim()} minHeight={240}>
             <CommunityListingCard
               invite={invite}
@@ -554,10 +505,7 @@ function EmojisTab({ query }: { query: string }) {
   return (
     <>
       <div className={GRID}>
-        {/* Deferred mount, like the Communities grid: an unbounded paginated
-            list of emoji cards (each decoding a strip of images) mounts only a
-            screenful at a time. Not gated on search — these cards never
-            self-hide, so a placeholder always resolves to a real card. */}
+        {/* Deferred mount like Communities; these cards never self-hide. */}
         {data.map((event) => (
           <DeferredRow key={event.id} active minHeight={160}>
             <EmojiPackCard event={event} className="my-0 max-w-none" />

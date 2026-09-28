@@ -1,10 +1,7 @@
 /**
- * NWC wallet connection storage — SPENDING SECRETS, deliberately per-account,
- * plain-local, and never synced (a NIP-78 event on relays is the wrong place
- * for a spending key). Shared between WalletProvider (read/write) and the
- * logout paths (purge): when an account is removed its wallet secrets must
- * not outlive it in localStorage, even when other accounts remain logged in.
- * Follow-up: move the backing store to the platform keystore on Capacitor.
+ * NWC wallet connections — SPENDING SECRETS: per-account, local only, never
+ * synced. Logout paths must purge them even if other accounts remain.
+ * TODO: platform keystore on Capacitor.
  */
 
 /** One saved Nostr Wallet Connect (NIP-47) connection. */

@@ -5,34 +5,14 @@ import { isNostrId } from "@/lib/nostrId";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-// ============================================================================
-// Centralized kind 3 (contact list) fetch + cache logic (ported from Ditto).
-//
-// A kind 3 event is replaceable, so there is exactly one current contact list
-// per pubkey. The shared read pattern:
-//
-//   1. Query the relays for the latest kind 3 of the author.
-//   2. On a hit, persist it to the IndexedDB event store and return it —
-//      unless the locally cached copy is newer (e.g. we just published a
-//      follow that the relay hasn't indexed yet), in which case the cached
-//      copy wins so the read never goes backwards.
-//   3. On a relay miss, fall back to the cached event from the store rather
-//      than treating the contact list as empty/deleted (a miss is almost
-//      always a transient relay hiccup, not an intentional erasure).
-//
-// This is for **display reads** only. Mutations must use `fetchFreshEvent`
-// to read-modify-write against the freshest relay copy — see fetchFreshEvent.ts.
-// ============================================================================
+// Kind 3 (contact list) display reads, ported from Ditto. A newer local copy
+// beats an older relay copy (unindexed recent follow), and a relay miss falls
+// back to the cache rather than reading as empty. Mutations must use
+// `fetchFreshEvent` instead.
 
-/** Default per-fetch timeout for contact-list reads. */
 const DEFAULT_TIMEOUT = 8000;
 
-/**
- * Fetch the latest kind 3 contact list for `pubkey`.
- *
- * Returns the relay's copy when available (and caches it), otherwise the
- * locally cached copy, otherwise `null`.
- */
+/** Latest kind 3 for `pubkey`: relay copy (cached), else local copy, else null. */
 export async function fetchContactList(
   nostr: NPool,
   store: ArmadaEventStore,
@@ -50,14 +30,9 @@ export async function fetchContactList(
   const [event] = await nostr.query([filter], { signal: querySignal });
 
   if (event) {
-    // Persist the fresh event to the store (fire-and-forget).
     void store.event(event);
 
-    // Guard against the relay returning a stale copy that's older than what we
-    // have locally — most commonly right after publishing a follow/unfollow,
-    // when the relay hasn't indexed the new kind 3 yet. Returning the older
-    // relay copy here would revert an optimistic UI update, so the newer of the
-    // two (by `created_at`) wins.
+    // A newer local copy (just-published follow the relay hasn't indexed) wins.
     const cached = await readCachedContactList(store, pubkey);
     if (cached && cached.created_at > event.created_at) {
       return cached;
@@ -65,14 +40,10 @@ export async function fetchContactList(
     return event;
   }
 
-  // Relay miss — fall back to the cached kind 3 event.
   return readCachedContactList(store, pubkey);
 }
 
-/**
- * Read the locally cached kind 3 contact list for `pubkey` from the event
- * store, without touching the network. Returns `null` when nothing is cached.
- */
+/** Locally cached kind 3 for `pubkey`, or null. */
 export async function readCachedContactList(
   store: ArmadaEventStore,
   pubkey: string,
@@ -81,12 +52,7 @@ export async function readCachedContactList(
   return cached ?? null;
 }
 
-/**
- * Extract the valid `p` tag pubkeys from a kind 3 event.
- *
- * Malformed (non-hex) pubkeys are dropped — anything but valid hex would crash
- * nip19 encoders in the consumer UI (avatar stacks, follow lists).
- */
+/** Valid `p` pubkeys of a kind 3; non-hex ones would crash nip19 encoders downstream. */
 export function contactListPubkeys(event: NostrRumor | null | undefined): string[] {
   if (!event) return [];
   return event.tags

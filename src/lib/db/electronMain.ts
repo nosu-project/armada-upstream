@@ -1,30 +1,11 @@
 /**
- * The ArmadaDB server that runs in the Electron desktop shell's MAIN process.
+ * The ArmadaDB server in the Electron shell's MAIN process: {@link SqliteArmadaDB}
+ * (the engine the conformance suite runs) over one file, dispatching
+ * `ArmadaDbPlugin`'s surface method for method with JSON-text payloads so the
+ * renderer reuses `NativeArmadaDB` unchanged.
  *
- * Desktop is the third storage arrangement, and it is deliberately shaped like
- * Android's rather than like the web's: the query engine runs outside the
- * renderer, against one SQLite file on disk in the OS's per-app config
- * directory, and the renderer reaches it over a bridge. What the web build gets
- * instead is Chromium's IndexedDB, partitioned by the renderer's origin and
- * living inside the browser profile — fine for a tab, but on a desktop app it
- * means the user's messages are somewhere they can neither find nor back up,
- * and it means the engine is the one the conformance suite does NOT run.
- *
- * The engine here is {@link SqliteArmadaDB} — the same TypeScript store the
- * suite exercises, on the same schema the Kotlin port implements. Nothing about
- * it is desktop-specific; this module only owns the file, the driver, and the
- * dispatch table.
- *
- * The dispatch surface is `ArmadaDbPlugin`'s, method for method, including its
- * JSON-text payloads. That is not incidental: the renderer adapter is
- * `NativeArmadaDB`, unchanged, with this bridge substituted for the Capacitor
- * one — so the write batching, the KV op coalescing and the read-your-writes
- * ordering that Android needed are already written, already tested, and cannot
- * drift between the two platforms that use them.
- *
- * This module must stay free of Electron imports: `main.js` owns the IPC
- * channel and hands the file path in. Keeping it Electron-free is also what
- * lets `tsc` and the linter cover it as ordinary `src/` code.
+ * Must stay free of Electron imports: `main.js` owns the IPC channel and passes
+ * the file path in.
  */
 import { SqliteArmadaDB } from "./SqliteArmadaDB";
 import { tenantOptsFor } from "./termPolicies";
@@ -40,7 +21,6 @@ interface WireKvEntry {
   value: string;
 }
 
-/** A queued KV operation, as `kvOps` receives it. */
 type WireKvOp =
   | { op: "get"; key: string }
   | { op: "set"; key: string; value: string }
@@ -52,47 +32,27 @@ type WireKvResult = string | null | WireKvEntry[];
 
 export interface ArmadaDbServer {
   /**
-   * Run one `ArmadaDbPlugin` method. `op` is the method name and `payload` its
-   * options object; the result is the method's return value.
-   *
-   * @throws if `op` is not a method of the surface, or the operation fails.
+   * Run one `ArmadaDbPlugin` method by name with its options object.
+   * @throws if `op` is unknown or the operation fails.
    */
   call(op: string, payload?: Record<string, unknown>): Promise<unknown>;
-  /** Release the SQLite connection. */
   close(): Promise<void>;
 }
 
-/**
- * Open (or create) the ArmadaDB file at `file` and return its dispatch table.
- *
- * The schema is installed on construction, and every operation awaits that —
- * so the first call after launch is the one that waits, not the caller who
- * happened to race it.
- */
+/** Open (or create) the ArmadaDB file and return its dispatch table; ops await schema install. */
 export function openArmadaDbServer(file: string): ArmadaDbServer {
   const driver = new NodeSqlDriver(file);
   const db = new SqliteArmadaDB(driver);
 
   /**
-   * The store for a tenant named over the bridge, with its derived-term policy.
-   *
-   * The renderer names the tenant but cannot send the policy — a function does
-   * not cross IPC — so this process looks it up in the same table
-   * (`termPolicies.ts`), exactly as Android's and iOS's engines do in theirs.
-   * Reads that name a term are answered here, so a store acquired without it
-   * would answer them with nothing.
+   * A tenant's store with its derived-term policy, looked up here from
+   * `termPolicies.ts` because functions can't cross IPC (as on Android/iOS).
    */
   function storeFor(id: string) {
     return db.tenant(id, tenantOptsFor(id));
   }
 
-  /**
-   * Every tenant the file has ever held, read from the interning table the
-   * store keeps for its tag index. Read through the driver because the tenant
-   * registry is an implementation detail of the SQLite layout rather than part
-   * of the `ArmadaDB` interface — the IndexedDB adapter's registry is a KV
-   * table, and neither is the other's business.
-   */
+  /** Every tenant the file has held, from the SQLite `tenants` interning table. */
   async function tenantIds(): Promise<string[]> {
     await db.ready;
     const rows = await driver.all(`SELECT id FROM tenants ORDER BY id`);
@@ -100,13 +60,8 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
   }
 
   /**
-   * Serialize a KV value back to the JSON text the bridge carries.
-   *
-   * The store parsed it on the way in, so this is a re-serialization rather
-   * than a passthrough — lossless in practice because the value was produced by
-   * `JSON.stringify` in the renderer to begin with, so there is no number
-   * spelling here that JavaScript did not already choose. `undefined` has no
-   * JSON form and cannot have been stored; it is reported as a miss.
+   * Re-serialize a KV value to JSON text (lossless: it came from
+   * `JSON.stringify`). `undefined` is reported as a miss.
    */
   function toWire(value: unknown): string | null {
     const text = JSON.stringify(value);
@@ -122,16 +77,9 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
   }
 
   /**
-   * Run a burst of KV operations in arrival order.
-   *
-   * Sequential rather than concurrent, which is the part that matters: the
-   * renderer coalesces a whole microtask's worth of gets, sets and lists into
-   * one crossing, and read-your-writes within that burst is only true if they
-   * execute in the order they were queued. Unlike the Kotlin port this is not
-   * one transaction — each write is its own commit — so a crash mid-burst can
-   * leave a prefix of it applied. Every KV key Armada stores is independently
-   * meaningful (a cursor, a fold, a setting), so a prefix is a stale entry to
-   * be rewritten, not a corrupt pair of entries.
+   * Run a burst of KV ops sequentially, for read-your-writes within a coalesced
+   * burst. Not one transaction (unlike Kotlin): a crash can apply a prefix, which
+   * is fine since every KV key is independently meaningful.
    */
   async function kvOps(ops: WireKvOp[]): Promise<WireKvResult[]> {
     const results: WireKvResult[] = [];
@@ -164,9 +112,7 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
     async event({ tenant, rumors }) {
       const store = storeFor(String(tenant));
       const batch = JSON.parse(String(rumors)) as NostrRumor[];
-      // Issued without awaiting between them so the whole batch lands in the
-      // store's own microtask window, i.e. one transaction — the same reason
-      // the renderer bothered to coalesce them into one crossing.
+      // No awaits in between, so the batch lands in one store transaction.
       await Promise.all(batch.map((rumor) => store.event(rumor)));
     },
 
@@ -184,8 +130,7 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
 
     async kvGet({ key }) {
       const value = await db.kv.get<unknown>(String(key));
-      // The key is ABSENT rather than null when unset: null is a value a caller
-      // can legitimately have stored, and the two must stay distinguishable.
+      // Absent (not null) when unset: null is a legitimate stored value.
       if (value === undefined) return {};
       const text = toWire(value);
       return text === null ? {} : { value: text };
@@ -226,8 +171,7 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
       const handler = handlers[op];
       if (!handler) throw new Error(`Unknown ArmadaDB operation: ${op}`);
       const result = await handler(payload);
-      // `undefined` is not a structured-clone value the IPC layer can carry
-      // back for the void methods.
+      // `undefined` can't be carried back over IPC.
       return result ?? null;
     },
 

@@ -4,26 +4,11 @@ import { createContext } from "react";
 import type { RolePickerOption } from "@/components/chat/RolePickerItems";
 
 /**
- * What the VIEWER may do to one member of the current community, for surfaces
- * shared across chat backends.
- *
- * Sibling of {@link MemberRolesContext}, and provided for the same reason:
- * {@link ProfilePreviewCard} is rendered from every surface that shows a
- * person — a message author's avatar and name, a member row, a mention, a
- * voice roster — and takes only a pubkey, so moderation cannot reach it as
- * props threaded down each of those call sites. A scope that moderates nobody
- * (a DM, a bare profile) simply never provides it and the card renders exactly
- * as before.
- *
- * The provider hands over FINISHED actions rather than capability flags, so
- * the backend keeps its own vocabulary (Concord's ban is "Ban & lock out" only
- * when it will rotate keys) and a new action costs no change to the context or
- * the surfaces reading it.
- *
- * Affordances only. An action listed here is a claim about what the viewer may
- * do, re-derived from the fold on every read; the mutation behind it checks
- * the same authority again, because this list can be stale by the time it is
- * clicked.
+ * What the VIEWER may do to one member of the current community, for shared
+ * surfaces like {@link ProfilePreviewCard} (which takes only a pubkey). Sibling
+ * of {@link MemberRolesContext}; unprovided scopes (DMs) show nothing. Holds
+ * FINISHED actions so each backend keeps its vocabulary. Affordances only — the
+ * mutation re-checks authority.
  */
 export interface MemberActionItem {
   id: string;
@@ -35,18 +20,9 @@ export interface MemberActionItem {
 }
 
 export interface MemberActionsValue {
-  /**
-   * This viewer's actions against this member, empty when they have none —
-   * which is the common case, and covers both "not staff" and "staff who
-   * doesn't outrank them".
-   */
+  /** This viewer's actions against this member; empty when none (the common case). */
   actionsFor: (pubkey: string) => MemberActionItem[];
-  /**
-   * The role picker for this member, or undefined when the viewer may change
-   * none of their roles. Unlike an action it is a checklist, toggled in place
-   * with the card left open, so it is handed over as data rather than as a
-   * finished button.
-   */
+  /** The role picker (a checklist toggled in place), or undefined if no role is changeable. */
   rolePickerFor?: (pubkey: string) => MemberRolePicker | undefined;
 }
 

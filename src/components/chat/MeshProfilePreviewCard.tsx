@@ -9,21 +9,17 @@ import { writeClipboardText } from "@/lib/clipboard";
 import type { MessageIdentity } from "@/components/chat/MessageRow";
 
 interface MeshProfilePreviewCardProps {
-  /** The peer id of the author (a mesh peer id, not a Nostr pubkey). */
+  /** A mesh peer id, not a Nostr pubkey. */
   peerID: string;
-  /** The resolved mesh identity (name/color/suffix) of the author. */
   identity: MessageIdentity;
-  /** Whether this author is the local user (hides the action buttons). */
+  /** Hides the action buttons. */
   isSelf?: boolean;
   /** Open the Noise XX DM with this peer. Omitted when already in that DM. */
   onMessage?: (peerID: string) => void;
-  /** Insert an @-mention of this peer into the composer. */
   onMention?: (peerID: string) => void;
-  /** The trigger element (the avatar or name). Rendered as the popover trigger. */
   children: React.ReactNode;
 }
 
-/** The body of the mesh peer preview — avatar, name, peer id, and actions. */
 function MeshProfilePreviewBody({
   peerID,
   identity,
@@ -56,14 +52,12 @@ function MeshProfilePreviewBody({
 
   return (
     <>
-      {/* Mini banner tinted with the peer's deterministic color. */}
       <div
         className="h-16 relative"
         style={color ? { backgroundColor: `${color}33` } : undefined}
       />
 
       <div className="px-4 pb-4">
-        {/* Avatar overlapping the banner. */}
         <div className="-mt-8 mb-2">
           <Avatar className="size-16 border-[3px] border-background">
             <AvatarFallback
@@ -75,7 +69,6 @@ function MeshProfilePreviewBody({
           </Avatar>
         </div>
 
-        {/* Name + #suffix. */}
         <div className="font-bold text-[15px] truncate inline-flex items-baseline gap-1 max-w-full">
           <span className="truncate" style={color ? { color } : undefined}>
             {name}
@@ -87,7 +80,6 @@ function MeshProfilePreviewBody({
           )}
         </div>
 
-        {/* Peer id (copyable). */}
         <button
           type="button"
           onClick={copyPeerID}
@@ -102,7 +94,6 @@ function MeshProfilePreviewBody({
           Nearby mesh peer
         </p>
 
-        {/* Actions. */}
         {!isSelf && (
           <div className="mt-3 flex items-center gap-2">
             {onMessage && (
@@ -130,12 +121,8 @@ function MeshProfilePreviewBody({
 }
 
 /**
- * Wraps a trigger element (an avatar or author name) with a click-triggered
- * popover showing a compact preview of a Bluetooth-mesh peer. Mirrors
- * `ProfilePreviewCard`, but for mesh peers (which are NOT Nostr identities, so
- * there's no profile/npub): it shows the peer's mesh identity and offers two
- * mesh-native actions — "Message" opens the existing Noise XX DM with the peer,
- * and "Mention" inserts an `@name#suffix` token into the composer.
+ * Popover preview for a mesh peer (no Nostr profile), mirroring
+ * `ProfilePreviewCard`, with Message (Noise XX DM) and Mention actions.
  */
 export function MeshProfilePreviewCard({
   peerID,

@@ -62,18 +62,12 @@ interface ZapDialogImplProps {
   onDone: () => void;
 }
 
-/**
- * Amount presets for the Lightning pane. Lightning zaps are expected to be
- * much smaller than on-chain sends (which have a fixed per-tx fee floor), so
- * the presets stay in tip-jar territory. The sats row is hand-picked round
- * numbers rather than a conversion of the USD row.
- */
+/** Lightning presets stay in tip-jar territory; on-chain has a per-tx fee floor. */
 const LIGHTNING_PRESETS: AmountPresetSet = {
   usd: [0.1, 0.5, 1, 2, 5],
   sats: [100, 500, 1_000, 2_100, 5_000],
 };
 
-/** Opening amount for a fresh dialog, in the user's display currency. */
 function defaultAmount(currency: CurrencyDisplay): number {
   return currency === "sats" ? 500 : 0.5;
 }
@@ -92,7 +86,6 @@ function methodTitle(method: DialogMethod | undefined): string {
   return method.def.label;
 }
 
-/** The zap dialog body — method switcher + Lightning/Bitcoin/generic panes. */
 export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone }: ZapDialogImplProps) {
   const { config } = useAppContext();
   const { toast } = useToast();
@@ -102,15 +95,11 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   const displayName = useScopedDisplayName(target.pubkey, metadata);
 
   const isPrivate = Boolean(sendZap);
-  // A private zap's tally is proven by the payment preimage, which only a
-  // connected wallet (NWC / WebLN) can return — the manual QR path can't, so
-  // without a wallet the pane blocks instead of offering a payment that could
-  // never be counted (matching the original feat/zaps design).
+  // A private zap's tally is proven by the preimage, which only a connected
+  // wallet (NWC / WebLN) can return, so the pane blocks without one.
   const walletRequired = isPrivate && !activeConnection && !webln;
   const hasLightning = canZap(metadata);
 
-  // NIP-A3 payment targets. Only fetch once the dialog is open (the parent
-  // already gates the mount on `open`).
   const { targets: paymentTargets, isLoading: targetsLoading } = usePaymentTargets(target.pubkey);
   const lightningTarget = useMemo(() => findLightningTarget(paymentTargets), [paymentTargets]);
   const bitcoinTarget = useMemo(() => findBitcoinTarget(paymentTargets), [paymentTargets]);
@@ -130,12 +119,9 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     [paymentTargets],
   );
 
-  // Bitcoin capability probe — determines whether the on-chain pane is
-  // usable or falls back to the unsupported-signer QR view.
   const { capability: btcCapability } = useBitcoinSigner();
   const bitcoinUnsupported = btcCapability === "unsupported";
 
-  // Build the ordered method list.
   const methods = useMemo<DialogMethod[]>(() => {
     const list: DialogMethod[] = [{ id: "bitcoin", def: PAYMENT_METHODS.bitcoin }];
     if (hasLightning || lightningTarget) {
@@ -147,10 +133,6 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     return list;
   }, [hasLightning, lightningTarget, genericTargets]);
 
-  // Determine the default method: the user's preference, unless it can't be
-  // completed here — a private zap's Lightning pane with no connected wallet is
-  // a dead end, so the dialog must open on a method that actually works or it
-  // looks like there are no payment options at all.
   const defaultMethodId: DialogMethodId = pickDefaultZapMethod({
     preferred: config.defaultZapMethod,
     available: methods.map((m) => m.id),
@@ -158,15 +140,12 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     walletRequired,
     bitcoinUnsupported,
   });
-  // `null` means "follow the computed default". The recipient's NIP-A3 payment
-  // targets load ASYNC, so the default is Bitcoin until they arrive and only
-  // then becomes e.g. the user's preferred Monero — the dialog must move to it
-  // unless the user has already picked a method from the switcher.
+  // `null` follows the computed default: NIP-A3 targets load async, so the
+  // default may change until the user picks a method.
   const [userMethod, setUserMethod] = useState<DialogMethodId | null>(null);
   const activeMethod = userMethod ?? defaultMethodId;
   const currentMethod = methods.find((m) => m.id === activeMethod) ?? methods[0];
 
-  // Success state — replaces the method UI when set.
   const [success, setSuccess] = useState<
     | { kind: "onchain"; amountSats: number; txid: string }
     | { kind: "lightning"; amountSats: number }
@@ -180,9 +159,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     staleTime: 30_000,
   });
 
-  // ── Lightning state ──
-  // The amount is denominated in the user's display currency (matching the
-  // Bitcoin pane) and converted to sats just before the LNURL call.
+  // Amount is in the user's display currency; converted to sats before the LNURL call.
   const currency: CurrencyDisplay = config.currencyDisplay ?? "usd";
   const [amount, setAmount] = useState<number | string>(() => defaultAmount(currency));
   const [comment, setComment] = useState("");
@@ -196,8 +173,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
     [amount, currency, btcPrice],
   );
   const isLarge = isLargeAmount(amountSats, btcPrice);
-  // In USD mode `amountSats` is 0 until the BTC price lands, so fall back to
-  // echoing the raw input ("$0.10") rather than rendering an empty label.
+  // In USD mode `amountSats` is 0 until the BTC price lands.
   const amountDisplay = amountSats > 0
     ? formatMoneyAmount(amountSats, currency, btcPrice)
     : formatAmountInput(amount, currency);
@@ -212,20 +188,17 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   const busy = status === "resolving" || status === "paying";
   const showingInvoice = status === "manual" && invoice;
 
-  // Re-arm (clear confirmation) whenever the amount moves — editing after
-  // arming forces another deliberate click. Mirrors OnchainZapContent.
+  // Re-arm whenever the amount moves so editing after arming needs another click.
   useEffect(() => {
     setConfirmArmed(false);
   }, [amountSats]);
 
   const handleLightningZap = async () => {
     setError("");
-    // Only USD input needs a price to become sats; a sats amount is payable
-    // as-is even when the price endpoint is down.
     if (currency === "usd" && !btcPrice) { setError("Waiting for BTC price…"); return; }
     if (amountSats <= 0) { setError("Enter an amount."); return; }
 
-    // Two-tap safety for large amounts: first click arms, second click sends.
+    // Two-tap safety for large amounts.
     if (isLarge && !confirmArmed) {
       setConfirmArmed(true);
       return;
@@ -243,7 +216,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         });
         setSuccess({ kind: "lightning", amountSats });
       }
-      // "manual" keeps the dialog open — the QR view renders below.
+      // "manual" keeps the dialog open for the QR view.
     } catch (e) {
       toast({
         title: "Zap failed",
@@ -303,10 +276,6 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
           ) : (
             <span className="truncate">
               {isPrivate ? (
-                // Single-method private zap (only Bitcoin is available — no
-                // Lightning method to switch to). Name the actual method rather
-                // than the generic "Private Zap"; the privacy is conveyed by
-                // the help popover beside the title.
                 methodTitle(currentMethod)
               ) : (
                 <>Zap <DisplayName pubkey={target.pubkey} name={displayName} /></>
@@ -350,10 +319,7 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
             onClose={onDone}
           />
         ) : targetsLoading ? (
-          // The recipient's NIP-A3 targets decide which methods exist and which
-          // is the default, and they load from relays. Show a skeleton until
-          // they resolve rather than painting Bitcoin and flipping to e.g. the
-          // user's preferred Monero once the target arrives.
+          // Skeleton until NIP-A3 targets resolve, so the pane doesn't flip after paint.
           <ZapMethodSkeleton />
         ) : showingInvoice ? (
           <LightningInvoiceView
@@ -390,7 +356,6 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
         ) : currentMethod?.def.kind === "generic" && currentMethod.target ? (
           <GenericPaymentContent method={currentMethod.def} target={currentMethod.target} />
         ) : (
-          // Default: native Bitcoin
           <OnchainZapContent
             target={target}
             bitcoinTarget={bitcoinOverride}
@@ -404,9 +369,6 @@ export default function ZapDialogImpl({ target, sendZap, sendOnchainZap, onDone 
   );
 }
 
-// ── Loading skeleton (while the recipient's payment targets resolve) ───────
-
-/** Placeholder shown while NIP-A3 targets load, mirroring a payment pane's shape. */
 function ZapMethodSkeleton() {
   return (
     <div className="grid gap-3 px-4 py-4 w-full overflow-hidden" aria-hidden>
@@ -424,15 +386,12 @@ function ZapMethodSkeleton() {
   );
 }
 
-// ── Lightning pane (amount + presets + send) ──────────────────────────────
-
 interface LightningZapPaneProps {
   /** Raw amount input, denominated in `currency`. */
   amount: number | string;
   setAmount: (v: number | string) => void;
   currency: CurrencyDisplay;
   amountSats: number;
-  /** The amount rendered in the display currency, for the send button. */
   amountDisplay: string;
   isLarge: boolean;
   confirmArmed: boolean;
@@ -474,8 +433,6 @@ function LightningZapPane({
 }: LightningZapPaneProps) {
   return (
     <div className="grid gap-3 px-4 py-4 w-full overflow-hidden">
-      {/* Amount — big number on top, editable by clicking, plus preset chips.
-          Lightning zaps lean small, so the defaults stay in tip-jar territory. */}
       <div className="grid gap-3 pt-2">
         <AmountField
           value={amount}
@@ -496,9 +453,7 @@ function LightningZapPane({
         </p>
       )}
 
-      {/* Optional comment — carried into the NIP-57 zap request, or sealed into
-          the private announcement. Revealed by the icon on the Send row so it
-          costs no space until wanted. */}
+      {/* Comment goes into the NIP-57 zap request, or sealed into the private announcement. */}
       {showComment && (
         <Input
           type="text"
@@ -547,11 +502,8 @@ function LightningZapPane({
   );
 }
 
-// ── Lightning invoice (QR) view ───────────────────────────────────────────
-
 interface LightningInvoiceViewProps {
   invoice: string;
-  /** The amount rendered in the user's display currency. */
   amountDisplay: string;
   webln: boolean;
   busy: boolean;

@@ -22,32 +22,18 @@ import type { ChatRoute, Concord2Route, DmRoute, Nip29Route } from "@/lib/routes
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface ChatRouteEmbedProps {
-  /** The full own-origin URL as it appeared in the message. */
   url: string;
   /** The parsed destination (see `parseSelfLink`). */
   route: ChatRoute;
-  /** The in-app router path to navigate to. */
   path: string;
   className?: string;
 }
 
 /**
- * In-app preview card for a link back into this app (a copied message link, a
- * channel/server share). Clicking navigates with the router — the whole point
- * over the external `<a>` these links used to get.
- *
- * What it shows is decided by what the READER can already see, and it is
- * resolved from LOCAL state only. Every surface Armada links to is either
- * end-to-end encrypted (Concord, DMs) or behind a relay's own membership check,
- * so a preview that reached the network would either come back empty or ask a
- * relay for something the reader has no key to read anyway. The destination
- * page does the real resolution after the click; this card's job is to say
- * where the link goes, and to fill in the parts the reader is already holding.
- *
- * The three surfaces are separate components because they resolve from
- * different places: DMs from the `main` store, NIP-29 from that relay's tenant,
- * and Concord from the community's own tenant — which is why a community
- * message rendered blank when this was one component reading `main`.
+ * In-app preview card for a link into this app, navigating via the router.
+ * Resolved from LOCAL state only: destinations are encrypted or membership-
+ * gated, so a network fetch would reveal nothing. DMs read the `main` store,
+ * NIP-29 its relay tenant, Concord the community's own tenant.
  */
 export function ChatRouteEmbed({ url, route, path, className }: ChatRouteEmbedProps) {
   switch (route.kind) {
@@ -60,14 +46,7 @@ export function ChatRouteEmbed({ url, route, path, className }: ChatRouteEmbedPr
   }
 }
 
-// ── The shell ────────────────────────────────────────────────────────────────
-
-/**
- * The clickable card body every destination shares. `role="link"` rather than
- * an `<a>`: the whole card navigates through the router, and an anchor would
- * put the URL back on the status bar and in the context menu's "open in new
- * tab" — the behavior this replaced.
- */
+/** `role="link"`, not `<a>`: no status-bar URL or "open in new tab". */
 function RouteCardShell({
   url,
   path,
@@ -105,7 +84,6 @@ function RouteCardShell({
   );
 }
 
-/** The card's kicker: what KIND of place this link names. */
 function CardLabel({
   Icon,
   label,
@@ -121,7 +99,6 @@ function CardLabel({
   );
 }
 
-/** The room this link points into: icon + name, and the channel within it. */
 function PlaceRow({
   name,
   iconUrl,
@@ -145,7 +122,6 @@ function PlaceRow({
   );
 }
 
-/** The linked message itself, when the reader already holds it. */
 function MessageBody({ rumor }: { rumor: NostrRumor }) {
   return (
     <>
@@ -173,12 +149,9 @@ function SenderRow({ rumor }: { rumor: NostrRumor }) {
   );
 }
 
-/** Said when the link names a message the reader can reach but hasn't cached. */
 function NotCachedNote() {
   return <p className="text-sm text-muted-foreground">Open to load this message.</p>;
 }
-
-// ── Direct messages ──────────────────────────────────────────────────────────
 
 function DmRouteCard({
   url,
@@ -204,10 +177,8 @@ function DmRouteCard({
 }
 
 /**
- * A rumor from the `main` tenant by id — where NIP-17 plaintext is stored once
- * it has been opened on this device. Nullable context on purpose: `ChatContent`
- * is deliberately mountable without providers, and this card degrades to the
- * unresolved form there rather than throwing.
+ * NIP-17 plaintext from the `main` tenant. Nullable context: degrades instead
+ * of throwing when mounted without providers.
  */
 function useMainStoreRumor(id: string | undefined, relay?: string): NostrRumor | undefined {
   const storePromise = useContext(EventStoreContext);
@@ -224,24 +195,10 @@ function useMainStoreRumor(id: string | undefined, relay?: string): NostrRumor |
   return data ?? undefined;
 }
 
-// ── Concord communities ──────────────────────────────────────────────────────
-
 /**
- * A Concord destination.
- *
- * Membership in Concord is possession of keys, held in the account's own
- * kind-33302 vault — so "is this reader a member" is a purely local question,
- * and it is the same question as "may they see anything about this at all".
- * A member gets the community's folded name and icon, the channel name, and
- * the message out of the community's own tenant; a non-member is TOLD they
- * aren't one and shown nothing else, for the same reason `CommunityNoAccess`
- * names nothing: the card would otherwise be reporting another account's vault
- * contents to whoever is signed in now.
- *
- * Membership is only asserted once the list has genuinely resolved and
- * decrypted — an unread list, or one whose decrypt is waiting on a remote
- * signer, is indistinguishable from an empty one, and calling that "not a
- * member" would tell a member they'd been kicked out of their own community.
+ * Concord membership is possession of keys (kind-33302 vault), a local question.
+ * Non-members see only that they aren't members. Assert non-membership only
+ * once the list has resolved and decrypted (a pending remote signer looks empty).
  */
 function ConcordRouteCard({
   url,
@@ -258,8 +215,7 @@ function ConcordRouteCard({
   const { data: listData, isLoading: listLoading } = useCommunityList();
   const membershipResolved = Boolean(listData && !listData.decryptFailed && !listLoading);
 
-  // `active: false` — the rail's own no-network variant. A pasted link must not
-  // arm a control sweep for a community the reader is not looking at.
+  // `active: false`: a pasted link must not arm a control sweep.
   const { data: folded } = useControlFold(community, false);
   const channels = useChannels(community, false);
   const iconUrl = useDecryptedImage(folded?.metadata?.icon);
@@ -318,14 +274,9 @@ function ConcordRouteCard({
   );
 }
 
-// ── NIP-29 relay groups ──────────────────────────────────────────────────────
-
 /**
- * A NIP-29 destination. The group's metadata (kind 39000) is relay-signed and
- * plaintext, so unlike Concord there is no membership question to answer here —
- * but it is still read from the relay's OWN tenant rather than fetched, both
- * because a group id means nothing without its relay (see `relayScope.ts`) and
- * because a pasted link should not open a socket.
+ * NIP-29 metadata (kind 39000) is plaintext, but read from the relay's own
+ * tenant (see `relayScope.ts`) so a pasted link opens no socket.
  */
 function Nip29RouteCard({
   url,
@@ -364,7 +315,6 @@ function Nip29RouteCard({
   );
 }
 
-/** The cached kind-39000 for a group, from its own relay tenant. No network. */
 function useNip29GroupMeta(relayUrl: string, groupId: string | undefined) {
   const storePromise = useContext(EventStoreContext);
   const { data } = useQuery({

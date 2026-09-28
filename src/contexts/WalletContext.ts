@@ -10,32 +10,19 @@ export interface WalletContextType {
   connections: NWCConnection[];
   /** The connection payments go through, or null. */
   activeConnection: NWCConnection | null;
-  /**
-   * Validate + test a nostr+walletconnect:// URI (10s budget) and save it.
-   * Throws with a user-facing message on bad scheme / unreachable wallet.
-   */
+  /** Validate, test (10s) and save a nostr+walletconnect:// URI; throws user-facing errors. */
   addConnection(uri: string, alias?: string): Promise<void>;
   removeConnection(connectionString: string): void;
   setActive(connectionString: string): void;
   /**
-   * Pay a bolt11 invoice over the active NWC connection.
-   *
-   * Resolves with the preimage (the proof CORD.md zaps seal) when the wallet
-   * returns it — but `preimage` is `null` when the payment settled yet the
-   * proof couldn't be obtained (a lost/slow NWC ack, or a wallet without
-   * `lookup_invoice`). A NIP-57 zap doesn't need it (the provider's receipt
-   * confirms the zap); a private CORD.md zap treats null as fatal. Only a
-   * genuine payment failure rejects.
+   * Pay a bolt11 over NWC. `preimage` is null if it settled but the proof wasn't
+   * obtained (NIP-57 zaps don't need it; private CORD.md zaps treat it as fatal).
+   * Rejects only on real payment failure.
    */
   payWithNWC(invoice: string): Promise<{ preimage: string | null }>;
   /**
-   * Long-window preimage recovery for an ALREADY-PAID invoice: polls the
-   * active wallet's `lookup_invoice` until the payment reports settled (or the
-   * budget runs out). Exists for the "lost NWC ack" case — `payWithNWC`
-   * resolved with `preimage: null` while the sats actually settled — so a
-   * private CORD.md zap can still seal its proof once the wallet catches up.
-   * Resolves null when the wallet never surfaces it (no `lookup_invoice`
-   * support/permission, or a genuinely failed payment).
+   * Poll `lookup_invoice` for an ALREADY-PAID invoice's preimage (the lost-ack
+   * case), so a private CORD.md zap can still seal. Null if never surfaced.
    */
   lookupPreimage(invoice: string, opts?: { budgetMs?: number }): Promise<string | null>;
   /** Browser WebLN provider, if an extension injected one (null on the APK). */

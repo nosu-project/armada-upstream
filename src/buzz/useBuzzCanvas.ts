@@ -7,9 +7,8 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * The latest kind-40100 canvas document for a Buzz channel (newest event
- * wins). Live: the wire's standing Buzz subscription includes 40100, so a
- * fresh edition invalidates through the shared `nip29:<channelId>` scope.
+ * Latest kind-40100 canvas for a Buzz channel. Live via the standing Buzz
+ * subscription, invalidating through the `nip29:<channelId>` scope.
  */
 export function useBuzzCanvas(relayUrl: string | undefined, channelId: string | undefined) {
   const { nostr } = useNostr();

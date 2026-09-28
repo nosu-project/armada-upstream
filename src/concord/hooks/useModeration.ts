@@ -19,26 +19,16 @@ import type { Community } from "@/concord/lib/types";
 import { toast } from "@/hooks/useToast";
 
 /**
- * The Three Removals, composed in the order their guarantees arrive
- * (CORD-04 §6):
+ * The Three Removals, ordered by when their guarantees arrive (CORD-04 §6):
  *
- *   - KICK: Role Removal (grant strip) then the cooperative Guestbook
- *     directive — polite, unenforced, re-joinable.
- *   - BAN: the Banlist edition FIRST (silencing is instant and free), the
- *     grant strip alongside, the Refounding LAST (severance is heavy and
- *     asynchronous; it propagates while the target is already silenced) —
- *     and ONLY in a Private community. A Public ban is the Banlist alone
- *     (CORD-05 §5): with live links the rotation can't sever, it only
- *     strands future link joiners on a dead epoch.
- *   - UNBAN: a Banlist edition dropping the npub (access needs a re-invite —
- *     the rotation is one-way).
+ *   - KICK: grant strip, then the cooperative Guestbook directive (re-joinable).
+ *   - BAN: Banlist edition FIRST (instant silencing), grant strip alongside,
+ *     Refounding LAST — and only in a Private community. A Public ban is the
+ *     Banlist alone (CORD-05 §5): live links would strand joiners on a dead epoch.
+ *   - UNBAN: a Banlist edition dropping the npub (access needs a re-invite).
  *
- * Plus the severance on its own: {@link useModeration}'s `rotateKeys` is a
- * Refounding with an empty exclusion set — the same key roll, with no removal
- * attached.
- *
- * `recipients` is who should KEEP access after a Refounding — a ban's, or a
- * standalone rotation's.
+ * Plus `rotateKeys`: a Refounding with an empty exclusion set. `recipients` is
+ * who KEEPS access after a Refounding.
  */
 /** The ban's steps, in execution order, for progress UI. */
 export type BanPhase = "silence" | "roles" | "rekey";
@@ -82,10 +72,8 @@ export function useModeration(community: Community | undefined, recipients: stri
   };
 
   /**
-   * Strip every role from a member (Role Removal). Best-effort — skipped when
-   * the fold would drop it (a revoke needs MANAGE_ROLES + strict outrank,
-   * CORD-04 §5; a KICK/BAN holder without it still kicks/bans, the target just
-   * keeps their rank until an authorized strip lands).
+   * Strip every role from a member. Best-effort: skipped when the fold would drop
+   * it (needs MANAGE_ROLES + strict outrank, CORD-04 §5).
    */
   const stripRoles = async (target: string) => {
     if (!user || !community) return;
@@ -133,15 +121,9 @@ export function useModeration(community: Community | undefined, recipients: stri
         );
       }
 
-      // Fail-fast BEFORE publishing anything: a rotating ban must read-cut, and
-      // a rotation needs a NIP-44 signer. Publishing the banlist first would
-      // leave a "banned but still readable" member with no cut coming.
-      //
-      // `forceRotate` is for a ban answering control-plane abuse. There the
-      // rotation IS the remedy — it strands the flooder's root, which a banlist
-      // alone never does — and that outweighs the cost it normally avoids
-      // (foreign live links pointing at a dead epoch until their creators next
-      // open the app and republish their bundles).
+      // Fail fast BEFORE publishing: a rotating ban needs a NIP-44 signer, or the
+      // banlist lands with no read-cut coming. `forceRotate` is for control-plane
+      // abuse, where the rotation (stranding the flooder's root) is the remedy.
       const willRotate = banShouldRotateMany(folded, user.pubkey, eligible, forceRotate);
       if (willRotate && !canRefound) {
         throw new Error(
@@ -149,8 +131,7 @@ export function useModeration(community: Community | undefined, recipients: stri
         );
       }
 
-      // 1. Banlist first: silencing is instant and free — and the list replaces
-      // entire (CORD-04 §4), so the whole group rides ONE edition.
+      // 1. Banlist first (instant); it replaces entire (CORD-04 §4), so one edition.
       onPhase?.("silence");
       const next = new Set(folded?.banned ?? []);
       for (const t of eligible) next.add(t);
@@ -165,22 +146,16 @@ export function useModeration(community: Community | undefined, recipients: stri
         onStripProgress?.(stripped, eligible.length);
       }
 
-      // 3. The Refounding last: the cryptographic severance — but never while
-      // a FOREIGN live link exists (only its creator's signer_sk can refresh
-      // its bundle, so a rotation would strand its future joiners on a dead
-      // epoch). My own links rotate safely: the refound refreshes their
-      // bundles behind the same URLs. Judged as-of after this ban, for the
-      // GROUP: every target's registry dies with their authority, and all of
-      // them ride one rotation — never one rotation per target.
+      // 3. The Refounding last — never while a FOREIGN live link exists (only its
+      // creator can refresh its bundle); our own links are refreshed by the refound.
+      // Judged for the whole group: one rotation, never one per target.
       if (folded && !banShouldRotateMany(folded, user.pubkey, eligible, forceRotate)) {
         return { rekeyed: false, publicBan: true, banned: eligible, skipped };
       }
       if (!canRefound) return { rekeyed: false, publicBan: false, banned: eligible, skipped };
       onPhase?.("rekey");
-      // Durable intent: mark BEFORE the attempt (with the keep-list captured
-      // NOW, while the roster is warm and user-initiated), clear only on
-      // success — a rotation lost to a relay outage is retried on the next
-      // visit from this persisted list, never a cold surface's roster.
+      // Durable intent: mark BEFORE the attempt with the keep-list captured now
+      // (roster warm), clear on success; a lost rotation retries from this list.
       const excluded = new Set(eligible);
       const keep = recipients.filter((pk) => !excluded.has(pk));
       for (const t of eligible) await addReadCutPending(user.pubkey, community.idHex, t, keep);
@@ -196,40 +171,21 @@ export function useModeration(community: Community | undefined, recipients: stri
   });
 
   /**
-   * The Refounding on its own — "rotate the community keys", with nobody
-   * removed. Byte for byte the severance step of a ban (CORD-06 §3: epoch
-   * bump, control compaction under the new split address, every held Private
-   * Channel rekeyed, own invite bundles refreshed), minus the Banlist edition
-   * and the role strip, and with an EMPTY exclusion set — so every current
-   * member is carried forward.
+   * The Refounding alone: rotate community keys with nobody removed (CORD-06 §3,
+   * empty exclusion set). Destructive — members who never adopt are stranded until
+   * re-invited — so use it for suspect keys, not routine hygiene.
    *
-   * Destructive in the way every rotation is, which is why it is a red action:
-   * the retired root stops reading anything written after the roll, so a
-   * member who never adopts (offline, or a device that has since gone stale)
-   * is stranded until they are re-invited, and every member pays an adoption
-   * round. Reach for it when the keys themselves are suspect — a leaked
-   * device, a departed keyholder — not as routine hygiene.
-   *
-   * Two deliberate differences from a ban's rotation:
-   *
-   *   - `hasForeignLiveLinks` does NOT veto. A ban falls back to a Public ban
-   *     (the Banlist alone still silences) rather than strand another
-   *     creator's link; a bare rotation has no such fallback — refusing would
-   *     simply leave the suspect key live. The caller warns instead.
-   *   - No read-cut intent is persisted. Nothing is being severed, so a failed
-   *     rotation leaves nobody wrongly readable and there is nothing for
-   *     {@link useReadCutRetry} to owe; the staffer just runs it again.
+   * Unlike a ban's rotation: foreign live links don't veto (refusing would leave
+   * the suspect key live; the caller warns), and no read-cut intent is persisted
+   * (nothing is severed, so the staffer can just retry).
    */
   const rotateKeys = useMutation<void, Error, void>({
     mutationFn: async () => {
       if (!user || !community) throw new Error("Not ready.");
-      // The keep-list is this surface's roster, so a fold that hasn't landed
-      // would rotate to a THIN recipient set and cut live members — the same
-      // hazard useReadCutRetry keeps off cold surfaces. Refuse until settled.
+      // An unsettled fold would rotate to a THIN recipient set and cut live members.
       if (!folded) throw new Error("Still syncing this community; try again shortly.");
-      // The same authority CORD-06 asks of a Refounder, checked here so an
-      // unauthorized staffer is told before the sweep rather than after it.
-      // The rank half is vacuous with nothing excluded.
+      // CORD-06 Refounder authority, checked before the sweep; rank is vacuous with
+      // nothing excluded.
       if (!isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.BAN)) {
         throw new Error("You don't have permission to rotate this community's keys.");
       }
@@ -270,7 +226,6 @@ export function useModeration(community: Community | undefined, recipients: stri
             : "You don't have permission to kick any of these members.",
         );
       }
-      // One actor, one fold — the citation is the same for every directive.
       const citation = citationFor(community, folded, user.pubkey);
       const vac = citation
         ? { eid: bytesToHex(citation.entityId), version: citation.version, hash: bytesToHex(citation.editionHash) }
@@ -280,12 +235,12 @@ export function useModeration(community: Community | undefined, recipients: stri
       let done = 0;
       for (const target of eligible) {
         try {
-          // Strip first, so the target's rank is gone before the departure lands.
+          // Strip first, so rank is gone before the departure lands.
           await stripRoles(target);
           await guestbook.mutateAsync({ type: "kick", target, vac });
           kicked.push(target);
         } catch (e) {
-          // Keep going: a mass kick landing 9 of 10 beats aborting at #2.
+          // Keep going: landing 9 of 10 beats aborting at #2.
           failed.push({ target, message: e instanceof Error ? e.message : "Kick failed." });
         }
         done += 1;
@@ -301,12 +256,10 @@ export function useModeration(community: Community | undefined, recipients: stri
   return {
     banned: folded?.banned ?? NO_BANNED,
     canRekey: canRefound,
-    /** Single-target delegate of {@link banMany} — one code path. */
     ban: (input: { target: string; onPhase?: (phase: BanPhase) => void; forceRotate?: boolean }) =>
       banMany.mutateAsync({ targets: [input.target], onPhase: input.onPhase, forceRotate: input.forceRotate }),
     banMany: banMany.mutateAsync,
     isBanning: banMany.isPending,
-    /** A Refounding with nothing excluded — see the mutation's contract. */
     rotateKeys: () => rotateKeys.mutateAsync(),
     isRotatingKeys: rotateKeys.isPending,
     /** Gate for the standalone rotation's UI; the mutation re-checks it. */
@@ -317,7 +270,6 @@ export function useModeration(community: Community | undefined, recipients: stri
       isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.BAN),
     ),
     unban: unban.mutateAsync,
-    /** Single-target delegate of {@link kickMany}. */
     kick: async (input: { target: string }) => {
       await kickMany.mutateAsync({ targets: [input.target] });
     },
@@ -329,15 +281,10 @@ export function useModeration(community: Community | undefined, recipients: stri
 }
 
 /**
- * Retry an outstanding read-cut once per community visit — the durable half of
- * a rotating ban's severance (a Refounding lost to a relay outage). Mount ONCE
- * per community (ConcordPage), never from a roster-less surface: the retry
- * rotates from the keep-list PERSISTED at ban time, so a cold page can't sever
- * live members by rebuilding a thin recipient set.
- *
- * Moot (and cleared) if a foreign live link has since appeared — rotating then
- * would strand its joiners. Serialized against a user-initiated ban's refound
- * via the shared mutation scope, and skipped outright while one is in flight.
+ * Retry an outstanding read-cut (a ban's Refounding lost to an outage) once per
+ * visit. Mount ONCE per community (ConcordPage): it rotates from the keep-list
+ * PERSISTED at ban time, so a cold surface can't rebuild a thin recipient set.
+ * Cleared if a foreign live link has appeared; serialized with user refounds.
  */
 export function useReadCutRetry(community: Community | undefined): void {
   const { user } = useCurrentUser();
@@ -353,9 +300,7 @@ export function useReadCutRetry(community: Community | undefined): void {
 
     let cancelled = false;
     void (async () => {
-      // The intent lives in KV behind a synchronous cache. Reading it before
-      // the cache has warmed would report "no cut owed" and strand a banned
-      // member as still-readable — the exact failure this retry exists for.
+      // Reading before the KV cache warms would report "no cut owed".
       await readCutPendingReady();
       if (cancelled || retried.current) return;
 

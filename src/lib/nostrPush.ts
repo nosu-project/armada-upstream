@@ -1,23 +1,9 @@
 /**
- * nostr-push RPC client (NIP-PUSH, kind 25742 + NIP-44).
- *
- * The push server is a content-blind relay watcher: the client registers
- * NIP-01 filters + whatever transport reaches this install (a browser Web Push
- * subscription, or an APNs device token on iOS), and the server delivers a
- * static "wake-up" push when a matching event arrives. The client fetches the
- * event and decrypts/renders it — the server never sees plaintext (see
- * `pushSubscriptions.ts` for what we register, and `sw.js` for the web render).
- *
- * Nothing in this file is browser-specific: the transport is Nostr over the
- * injected `PushRelayPool`, and the only per-platform part is which
- * `PushTransport` the caller hands `registerSubscription`.
- *
- * Transport: kind-25742 events with NIP-44-encrypted content. We `#p`-tag the
- * server's pubkey on the request and it replies with a kind-25742 `#p`-tagged
- * back to us, correlated by `request_id`. Everything rides the configured
- * rendezvous relays (`NOSTR_PUSH_RELAYS`); there are no HTTP endpoints.
- *
- * Spec: nostr-push `docs/HOW-IT-WORKS.md`.
+ * nostr-push RPC client (NIP-PUSH, kind 25742 + NIP-44). The server is a
+ * content-blind relay watcher: the client registers filters + a transport (Web
+ * Push or APNs), and the server sends a static wake-up push; the client fetches
+ * and decrypts the event. Requests/replies are `#p`-tagged kind 25742 correlated
+ * by `request_id`, over `NOSTR_PUSH_RELAYS`. Spec: nostr-push `docs/HOW-IT-WORKS.md`.
  */
 
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/types";
@@ -25,7 +11,6 @@ import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/types";
 /** NIP-PUSH RPC event kind. */
 export const KIND_PUSH_RPC = 25742;
 
-/** How long to wait for the server's reply before giving up. */
 const RPC_TIMEOUT_MS = 20_000;
 
 /** A browser Push API endpoint (RFC 8291 + RFC 8292 VAPID). */
@@ -37,19 +22,9 @@ export interface WebPushTransport {
 }
 
 /**
- * An Apple Push Notification service device token.
- *
- * `bundle_id` becomes the `apns-topic` header, which is how one team-wide auth
- * key on the gateway serves every app in that Apple Developer team — the app
- * names itself rather than the server being configured per app.
- *
- * `environment` is not cosmetic. A device token is minted against exactly ONE
- * APNs host and the other rejects it with `BadDeviceToken`: a build run from
- * Xcode gets a sandbox token, TestFlight and the App Store get production ones.
- * Omitting it makes the gateway fall back to its own global setting, which
- * cannot be right for both at once — so the app reads its own
- * `aps-environment` entitlement and always says which it is
- * (`ArmadaPushPlugin.swift`).
+ * APNs device token. `bundle_id` becomes `apns-topic`. `environment` is required:
+ * a token is valid on exactly one APNs host (Xcode → sandbox, TestFlight/App
+ * Store → production), read from the app's `aps-environment` entitlement.
  */
 export interface ApnsPushTransport {
   type: "apns";
@@ -58,19 +33,12 @@ export interface ApnsPushTransport {
   environment?: "sandbox" | "production";
 }
 
-/**
- * How the gateway reaches this install. NIP-PUSH keys this union on `type`, and
- * everything above it — the RPC, the filters, the quota, the mute-list check —
- * is identical across transports; only the final delivery hop differs.
- */
+/** How the gateway reaches this install; only the final delivery hop differs by `type`. */
 export type PushTransport = WebPushTransport | ApnsPushTransport;
 
 /**
- * A per-subscription push registration. `relays` is an Armada extension to
- * the base NIP-PUSH `register_subscription`: our groups/communities live on
- * arbitrary user relays, not one global set, so each subscription names the
- * relays the server should watch for it. Servers that ignore `relays` fall back
- * to their global relay list (graceful for the hosted/default case).
+ * A push registration. `relays` is an Armada extension (our rooms live on
+ * arbitrary relays); servers ignoring it use their global relay list.
  */
 export interface PushRegistration {
   subscription_id: string;
@@ -87,7 +55,6 @@ export interface PushRegistration {
   push_subscription: PushTransport;
 }
 
-/** The minimal relay-pool surface we need (NPool satisfies this). */
 export interface PushRelayPool {
   relay(url: string): {
     event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void>;
@@ -113,7 +80,6 @@ interface RpcResponse {
   error?: string;
 }
 
-/** Options for constructing a client (injectable clock/uuid for tests). */
 export interface NostrPushClientOptions {
   serverPubkey: string;
   relays: string[];
@@ -131,10 +97,7 @@ function defaultUuid(): string {
 
 export class NostrPushError extends Error {}
 
-/**
- * A thin RPC client for one push server. Stateless between calls; construct it
- * per-sync with the current signer/pool.
- */
+/** Thin, stateless RPC client for one push server; construct per sync. */
 export class NostrPushClient {
   readonly #serverPubkey: string;
   readonly #relays: string[];
@@ -169,7 +132,6 @@ export class NostrPushClient {
     await this.call("register_subscription", params);
   }
 
-  /** Delete a subscription by id. */
   async deleteSubscription(subscriptionId: string, domain: string): Promise<void> {
     await this.call("delete_subscription", { subscription_id: subscriptionId, domain });
   }
@@ -204,7 +166,6 @@ export class NostrPushClient {
     const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
     // Listen BEFORE publishing so a fast reply can't race ahead of the REQ.
     const replyPromise = this.awaitReply(myPubkey, requestId, controller.signal);
-    // Publish to every relay; a single relay accepting is enough.
     await Promise.allSettled(
       this.#relays.map((url) =>
         this.#pool.relay(url).event(request, { signal: controller.signal }),

@@ -10,36 +10,18 @@ import { formatMoneyAmount } from '@/lib/bitcoinMoney';
 import { useEsploraApis } from '@/hooks/useEsploraApis';
 
 interface ZapSuccessScreenProps {
-  /** Recipient pubkey (hex). Used to resolve the author avatar + name
-   *  when `recipientLabel` is omitted. */
+  /** Recipient pubkey (hex), used when `recipientLabel` is omitted. */
   recipientPubkey: string;
-  /**
-   * Optional explicit recipient label. When set, the success screen
-   * uses this string in place of the author lookup — used by campaign
-   * donations, where the recipient is the campaign (not a Nostr identity)
-   * and the campaign title carries more meaning than the author's name.
-   */
+  /** Explicit label (e.g. a campaign title) instead of the author lookup. */
   recipientLabel?: string;
-  /** Amount sent in satoshis. */
   amountSats: number;
-  /** Current BTC/USD price for display; optional, falls back to sats only. */
   btcPrice: number | undefined;
-  /** Bitcoin txid (onchain only). Enables the "View transaction" link to the in-app tx detail page. */
+  /** Bitcoin txid (onchain only). Enables the "View transaction" link. */
   txid?: string;
-  /** Close handler invoked by the "Done" button. */
   onClose: () => void;
 }
 
-/**
- * Grand confirmation screen shown after a successful Bitcoin send in the
- * ZapDialog. Replaces the previous toast-and-auto-close behavior with a
- * dedicated celebration moment: animated checkmark, expanding halo, a
- * confetti-adjacent sparkle burst, the amount sent, the recipient, and
- * a "View transaction" shortcut when we have a txid on hand.
- *
- * Respects `prefers-reduced-motion`: the entrance animations collapse to a
- * simple fade and the sparkle burst is suppressed.
- */
+/** Post-send celebration screen. Reduced motion collapses to a fade with no sparkles. */
 export function ZapSuccessScreen({
   recipientPubkey,
   recipientLabel,
@@ -56,16 +38,12 @@ export function ZapSuccessScreen({
   const displayName = recipientLabel ?? fallbackName;
   const avatarShape = getAvatarShape(metadata);
 
-  // The amount in the user's display currency — the same unit the dialog took
-  // it in. Falls back to sats when USD is preferred but no price is available.
+  // Falls back to sats when USD is preferred but no price is available.
   const amountDisplay = useMemo(
     () => formatMoneyAmount(amountSats, config.currencyDisplay ?? 'usd', btcPrice),
     [amountSats, config.currencyDisplay, btcPrice],
   );
 
-  // Sparkle burst positions: 8 particles radiating outward from the
-  // checkmark, each with a slightly offset delay so the burst reads organic
-  // rather than synchronised.
   const sparkles = useMemo(
     () =>
       Array.from({ length: 8 }, (_, i) => {
@@ -88,34 +66,28 @@ export function ZapSuccessScreen({
       aria-live="polite"
       className="relative grid gap-5 px-6 py-8 w-full overflow-hidden text-center motion-safe:animate-success-fade-up"
     >
-      {/* Soft radial glow behind the whole card. Pure decoration. */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(circle_at_50%_35%,hsl(var(--primary)/0.18),transparent_65%)]"
       />
 
-      {/* Check + halo + sparkles */}
       <div className="relative mx-auto flex size-28 items-center justify-center">
-        {/* Expanding halo ring */}
         <span
           aria-hidden
           className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-400/40 to-orange-500/30 motion-safe:animate-success-halo"
         />
 
-        {/* Solid gradient disc */}
         <span
           aria-hidden
           className="absolute inset-0 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg shadow-orange-500/30 motion-safe:animate-success-pop"
         />
 
-        {/* Checkmark */}
         <Check
           className="relative size-14 text-white drop-shadow-sm motion-safe:animate-success-pop"
           strokeWidth={3}
           aria-hidden
         />
 
-        {/* Sparkle burst */}
         <div aria-hidden className="pointer-events-none absolute inset-0 motion-reduce:hidden">
           {sparkles.map((s) => (
             <span
@@ -133,7 +105,6 @@ export function ZapSuccessScreen({
         </div>
       </div>
 
-      {/* Headline + amount */}
       <div className="grid gap-1">
         <h2 className="text-lg font-semibold tracking-tight">
           {recipientLabel ? 'Donation sent' : 'Bitcoin sent'}
@@ -143,7 +114,6 @@ export function ZapSuccessScreen({
         </div>
       </div>
 
-      {/* Recipient card */}
       <div className="mx-auto flex items-center gap-3 rounded-full border border-border/70 bg-muted/40 pl-2 pr-4 py-2 max-w-full">
         <Avatar shape={avatarShape} className="size-8 shrink-0">
           <AvatarImage src={metadata?.picture} alt={displayName} />
@@ -154,14 +124,12 @@ export function ZapSuccessScreen({
         <div className="min-w-0 text-left">
           <div className="text-[11px] text-muted-foreground leading-tight">To</div>
           <div className="text-sm font-medium truncate max-w-[220px]">
-            {/* A campaign label isn't a Nostr profile, so only the resolved
-                author name carries custom emoji. */}
+            {/* A campaign label isn't a Nostr profile, so no custom emoji. */}
             {recipientLabel ?? <DisplayName pubkey={recipientPubkey} name={fallbackName} />}
           </div>
         </div>
       </div>
 
-      {/* Actions */}
       <div className="grid gap-2">
         {txid && (
           <Button

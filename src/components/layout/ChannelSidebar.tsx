@@ -53,9 +53,7 @@ function ChannelLink({
   group: Nip29Group;
   unread?: GroupUnread;
   onNavigate?: () => void;
-  /** Render as a Buzz DM row: participant names as the title, DM icon. */
   buzzDm?: boolean;
-  /** Dim the row (archived Buzz channels). */
   dimmed?: boolean;
 }) {
   const { user } = useCurrentUser();
@@ -65,35 +63,24 @@ function ChannelLink({
   const { channelLevel, setLevel } = useNotifLevels();
   const notificationLevel = channelLevel(group.relay, group.id);
   const muted = notificationLevel === "nothing";
-  // A Buzz DM channel's identity is its roster, so resolve the members
-  // (kind 39002) for the title. Disabled (undefined relay) for normal rows.
+  // A Buzz DM channel's title is its roster (kind 39002).
   const { data: dmDetails } = useGroup(buzzDm ? group.relay : undefined, buzzDm ? group.id : undefined);
-  // Voice capability: prefer the per-group `livekit` metadata tag, but fall
-  // back to the relay-level capability (`/.well-known/nip29/livekit` 204).
-  // Armada's relay29 metadata doesn't emit the `livekit` group tag, so
-  // `group.hasLivekit` is false even though the relay speaks LiveKit — without
-  // this fallback we'd never query presence and could only show a call when
-  // *you* are in it (matching GroupPage's `hasVoice` gate).
+  // Fall back to relay-level LiveKit support: Armada's relay29 doesn't emit the
+  // per-group `livekit` tag (matches GroupPage's `hasVoice`).
   const { data: relayHasLivekit } = useRelayLivekitSupport(group.relay);
   const hasVoice = group.hasLivekit || Boolean(relayHasLivekit);
   const inCall = activeCall?.relayUrl === group.relay && activeCall?.groupId === group.id;
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
-  // Live presence (kind 39004) so we can show when others are in voice here,
-  // even if we haven't joined. Only worth querying for voice-capable groups.
   const { data: participants } = useLivekitParticipants(
     hasVoice ? group.relay : undefined,
     hasVoice ? group.id : undefined,
   );
   const othersInVoice = !inCall && (participants?.length ?? 0) > 0;
-  // Roster to render: while YOU are in this call, the connected room's live
-  // LiveKit participant list is authoritative — kind-39004 presence rides
-  // webhooks + relay memory and desyncs too easily. It's only the fallback
-  // (and the only source for calls you're not in).
+  // While in the call, the live LiveKit roster is authoritative; kind-39004
+  // presence desyncs easily and is only the fallback.
   const roster = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : participants;
-  // The audio icon should only appear when a call is actually live here (you're
-  // in it or others are) — otherwise a voice-capable channel reads as a normal
-  // text channel.
+  // Only show the audio icon when a call is live here.
   const callActive = inCall || othersInVoice;
   const Icon = buzzDm ? MessageSquareText : callActive ? Volume2 : Hash;
 
@@ -106,18 +93,11 @@ function ChannelLink({
         onClick={onNavigate}
         className={({ isActive }) =>
           cn(
-            // Slack-style selection: the active channel sits on a filled
-            // primary rectangle with the house cut-corner chamfer. Inactive
-            // rows are transparent with a subtle hover wash.
             "flex items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors",
             !isActive && "text-muted-foreground hover:text-foreground hover:bg-foreground/5 clip-corner-lg",
-            // Unread (but not selected) channels read brighter + bold, matching
-            // Slack. This is now visually distinct from the active rectangle.
             // Muted channels never bold — their unread is deliberately silent.
             !isActive && hasUnread && !muted && "text-foreground font-semibold",
-            // Muted channels read dimmer (Discord-style).
             !isActive && (muted || dimmed) && "opacity-60",
-            // Active/navigated channel: primary-filled chamfered rectangle.
             isActive && "clip-corner-lg bg-primary text-primary-foreground font-medium",
           )}
       >
@@ -136,8 +116,6 @@ function ChannelLink({
           </Tooltip>
         )}
         {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
-        {/* Mention indicator: an "@" pill. Plain unread is conveyed by the
-            row's brighter + bold text (no dot). */}
         {hasMention ? (
           <span
             className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none"
@@ -147,8 +125,6 @@ function ChannelLink({
           </span>
         ) : null}
       </NavLink>
-      {/* Discord-style nested voice roster: who's in the live call here (with
-          live speaking rings while you're in it). */}
       {callActive && (roster?.length ?? 0) > 0 && (
         <VoiceParticipantList
           participants={roster!}
@@ -191,10 +167,7 @@ interface ChannelSidebarProps {
   className?: string;
 }
 
-/**
- * Channel list for a server: its NIP-29 groups, a create-channel action, and
- * the account area pinned to the bottom (Discord-style).
- */
+/** Channel list for a NIP-29 server, with create-channel and the account area. */
 export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSidebarProps) {
   const { data: groups, isLoading, isError, refetch, relayInfo } = useRelayGroups(relayUrl);
   const { user } = useCurrentUser();
@@ -202,15 +175,10 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   const callBarRef = useRef<HTMLDivElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  // The server-name header menu (Discord-style): expands inline below the
-  // header, pushing the channel list down with a height animation. This is the
-  // only place these server actions are reachable on mobile, where the desktop
-  // welcome pane (ServerPage) is hidden.
+  // The only place server actions are reachable on mobile (ServerPage is hidden there).
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
   const { serverMuted, isRemovable, toggleMute, copyLink, removeServer } =
     useServerActions(relayUrl);
-  // Buzz relays: channels partition into typed sections (forum channels, DM
-  // channels — hidden NIP-29 groups — and archived channels at the bottom).
   const { isBuzz } = useIsBuzzRelay(relayUrl);
   const hiddenDms = useBuzzHiddenDms(isBuzz ? relayUrl : undefined);
   const buzzSections = useMemo(() => {
@@ -236,17 +204,15 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     return { streams, forums, dms, archived };
   }, [isBuzz, groups, hiddenDms]);
 
-  // Close the create-channel dialog when switching servers — its context (and
-  // the user's permission to create) doesn't carry over to the new server.
+  // Create permission doesn't carry over to another server.
   useEffect(() => {
     setCreateOpen(false);
     setProfileOpen(false);
     setServerMenuOpen(false);
   }, [relayUrl]);
 
-  // Don't let skeletons run for the full connect/timeout window (which can be
-  // 8–16s on a slow or AUTH-gated relay) — that reads as a hang. Show skeletons
-  // briefly, then switch to an explicit "Connecting…" message.
+  // Skeletons for the full connect/timeout window (8–16s on AUTH-gated relays)
+  // read as a hang, so switch to "Connecting…".
   const [skeletonExpired, setSkeletonExpired] = useState(false);
   useEffect(() => {
     setSkeletonExpired(false);
@@ -254,18 +220,14 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     return () => clearTimeout(t);
   }, [relayUrl]);
 
-  // Cache hits resolve within a frame or two, so an ungated skeleton flashes for
-  // a nanosecond (reads as a glitch). Only reveal the loading UI once loading
-  // has lasted long enough to be worth a placeholder; a fast load shows nothing.
+  // Cache hits resolve in a frame; don't flash a skeleton.
   const showLoadingUi = useDelayedFlag(isLoading);
 
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
   const { byGroup } = useRelayUnread(relayUrl, groupIds);
-  // Unread mentions across this server's channels — drives the Inbox badge.
   const { unreadCount: inboxUnread } = useRelayInbox(relayUrl, groupIds);
 
-  // "Mark all as read": stamp every unread channel to its newest unread
-  // message (monotonic, so already-read channels no-op).
+  // Monotonic, so already-read channels no-op.
   const { markRead } = useReadState();
   const hasUnread = Object.keys(byGroup).length > 0;
   const markAllRead = useCallback(() => {
@@ -274,9 +236,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
     }
   }, [byGroup, markRead, relayUrl]);
 
-  // Register this sidebar's slot so the persistent call bar portals above the
-  // account pill. Every instance (desktop pane + mobile drawer) registers; the
-  // hidden panes simply don't show their copy.
+  // Slot for the persistent call bar; every instance registers, hidden panes just don't show it.
   useEffect(() => {
     const el = callBarRef.current;
     if (!el) return;
@@ -284,8 +244,7 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   }, [registerCallBarSlot]);
 
   const serverName = relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "");
-  // NIP-11 document fields: the relay chooses them, so they get the same
-  // scheme/local-network check as any other URL we did not author.
+  // NIP-11 fields are relay-controlled, so sanitize.
   const relayIcon = sanitizeImageSrc(relayInfo?.icon);
   const relayBanner = sanitizeImageSrc(relayInfo?.banner);
 
@@ -401,9 +360,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       preChannels={
         user || isBuzz ? (
           <>
-            {/* Inbox: messages across this server's channels that mention you.
-                Not Buzz-specific — shown on any NIP-29 server for a signed-in
-                user. */}
             {user && (
               <NavLink
                 to={`/s/${relayToRouteParam(relayUrl)}/inbox`}
@@ -494,13 +450,9 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       }
       footer={
         <>
-          {/* Voice call bar slot — the persistent call UI portals here. */}
           <div ref={callBarRef} className="empty:hidden shrink-0" />
 
-          {/* Account area. The extra pb-2 mirrors the composer's inner `p-2`
-              (which sits inside its pb-safe wrapper) so the account switcher and
-              the chat composer end at the SAME line above the safe-area inset —
-              without it the switcher sat ~8px lower than the composer. */}
+          {/* pb-2 mirrors the composer's inner `p-2` so both end on the same line above the safe area. */}
           <div className="px-3 pb-safe shrink-0">
             {user ? (
               <div className="pb-2">
@@ -519,8 +471,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
       }
     >
       {isLoading && !showLoadingUi ? (
-        // Loading, but not long enough yet to warrant any placeholder — render
-        // nothing so a fast cache hit doesn't flash a skeleton.
         null
       ) : isLoading && !skeletonExpired ? (
         <div className="space-y-2 px-2 py-1">
@@ -529,8 +479,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           ))}
         </div>
       ) : isLoading ? (
-        // Loading has outlasted the skeleton window — show an explicit,
-        // non-looping "Connecting…" so it doesn't read as a hang.
         <div className="px-2 py-8 text-center text-sm text-muted-foreground">
           <span className="inline-flex items-center gap-2">
             <Loader2 className="size-4 animate-spin" /> Connecting to server…
@@ -552,7 +500,6 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           <ChannelLink key={group.id} group={group} unread={byGroup[group.id]} onNavigate={onNavigate} />
         ))
       ) : isError && !groups ? (
-        // The relay couldn't be reached (NIP-11 and the group query both failed).
         <div className="px-3 py-8 text-center text-sm text-muted-foreground space-y-3">
           <p>Couldn&rsquo;t reach this server. It may be offline or unreachable.</p>
           <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">

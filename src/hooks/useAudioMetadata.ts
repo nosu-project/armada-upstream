@@ -32,11 +32,7 @@ const waveformCache = createAttachmentCache<number[] | null>({
   read: async (src) => (await computeWaveformFromUrl(src)) ?? null,
 });
 
-/**
- * Seed the metadata cache with what was read from the local file, so the
- * composer's card and the sent message show it without fetching the upload
- * back.
- */
+/** Seed the metadata cache from the local file, so composer and sent message skip a refetch. */
 export function primeAudioMetadata(key: string, meta: AudioMetadata): void {
   metadataCache.prime(key, toDisplay(meta));
 }
@@ -53,21 +49,14 @@ export function clearAudioMetadata(): void {
 }
 
 /**
- * The tags and cover art embedded in an audio attachment. `key` names the
- * attachment; `src` is where its bytes can be read (the resolved — decrypted
- * or media-policy-routed — source), and without one only an already-read
- * result is returned. An http(s) `src` is read by range request, so only the
- * tag block is fetched.
+ * Embedded tags and cover art. `src` is the resolved source (without it, only a
+ * cached result); http(s) sources are read by range request (tag block only).
  */
 export function useAudioMetadata(key: string, src?: string): AudioDisplay | undefined {
   return metadataCache.useValue(key, src);
 }
 
-/**
- * The waveform of an audio attachment, from its decoded samples. Unlike the
- * tags this needs the WHOLE file, so the caller decides when `src` is worth
- * handing over; `null` means the file has none to give.
- */
+/** Waveform from decoded samples — needs the WHOLE file, so the caller decides when to pass `src`. */
 export function useAudioWaveform(key: string, src?: string): number[] | null | undefined {
   return waveformCache.useValue(key, src);
 }

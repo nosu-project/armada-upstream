@@ -1,18 +1,7 @@
 /**
- * A hand-written parser for relay → client messages, standing in for the zod
- * schema `NRelay1` validates every frame with.
- *
- * `NRelay1` runs `NSchema.json().pipe(NSchema.relayMsg())` on each incoming
- * WebSocket message: a union of seven tuple schemas, tried in turn, with a
- * regex per hex field of every event. On a phone that was ~0.1ms a frame — the
- * largest single library cost in a profiled history download, ahead of the
- * NIP-44 decrypts, for a check whose outcome is almost always "yes".
- *
- * The contract is the zod schema's, exactly, including what it returns: a
- * message it would reject is rejected here, and an accepted event carries ONLY
- * the seven NIP-01 fields (zod's object parse strips the rest), as does a COUNT
- * payload. `relayMsgParse.test.ts` holds this against `NSchema` directly, so a
- * nostrify upgrade that changes the schema fails there rather than in the field.
+ * Hand-written replacement for NRelay1's zod relay-message schema, which cost
+ * ~0.1ms per frame on phones. Same contract exactly (accepted events carry only
+ * the seven NIP-01 fields); `relayMsgParse.test.ts` checks it against `NSchema`.
  */
 import type { NostrEvent, NostrRelayMsg } from "@nostrify/types";
 

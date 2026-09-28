@@ -1,67 +1,34 @@
 /**
- * Last-known-good snapshot of the DM conversation list, in its FINAL rendered
- * form.
+ * Last-known-good DM conversation list in its FINAL rendered form. The list
+ * depends on four slow async sources, and partial views produce a wrong order
+ * that visibly re-sorts; snapshotting the outcome paints the final order at
+ * once. (Not `timelineSnapshot`, which stores raw events.)
  *
- * The list is derived from four asynchronous local sources — the kind-4 event
- * store, the NIP-17 rumor store, the mute set, and the follow list — and its
- * order depends on all of them at once: a NIP-17 rumor supplies the newest
- * message for many peers, and the follow set decides which peers appear at all.
- * Blocking on all four is correct but slow (the first IndexedDB read after a
- * cold Android WebView launch costs seconds), and seeding the first frame from
- * raw events is worse: any partial view of those sources produces a
- * deterministically WRONG order that visibly re-sorts once the rest arrive.
- *
- * So this snapshots the OUTCOME instead of the inputs: the merged, filtered,
- * sorted rows exactly as they were last rendered. Reading it back paints a list
- * that is already in its final order — the live data replaces it moments later
- * and, absent new messages, produces the same order, so nothing moves.
- *
- * This is deliberately NOT `timelineSnapshot` (which stores a truncated tail of
- * one timeline's raw events, the right shape for a thread and the wrong one
- * here).
- *
- * Trust note: `preview` is decrypted message text at rest, the same device
- * trust level as the DM thread snapshots and the signer's persistent decrypt
- * cache. The `armada:` prefix means `purgeClientStorage` wipes it on logout.
+ * Trust: `preview` is decrypted text at rest (same trust as thread snapshots
+ * and the decrypt cache); the `armada:` prefix gets it purged on logout.
  */
 
 const PREFIX = "armada:dmlist:v1:";
 
-/**
- * Rows kept. Comfortably more than a screenful, so scrolling the restored list
- * doesn't hit a cliff before the live data lands.
- */
+/** Rows kept: more than a screenful. */
 const MAX_ROWS = 100;
 
-/** One conversation row, flattened to what the list needs to render it. */
 export interface DmListSnapshotRow {
   peer: string;
-  /** Id of the latest message, used to distinguish two messages in one second. */
+  /** Latest message id, distinguishing same-second messages. */
   eventId?: string;
-  /** Timestamp of the latest message — the list's sort key. */
+  /** Latest message timestamp; the sort key. */
   createdAt: number;
-  /** Author of the latest message; drives the unread state. */
+  /** Latest message author; drives unread state. */
   author: string;
-  /** Decrypted preview text, when it was available at write time. */
   preview?: string;
-  /**
-   * The latest message's NIP-30 `emoji` tags, so a restored preview renders
-   * custom emoji as images on the first frame. Only `emoji` tags are kept —
-   * the rest (`p`, `e`, …) are irrelevant to rendering and would bloat this.
-   */
+  /** Latest message's NIP-30 `emoji` tags only, so restored previews render custom emoji. */
   emojiTags?: string[][];
-  /**
-   * The latest message's NIP-40 deadline, when it is a disappearing message.
-   * Read-back drops the preview past it: a message that has disappeared must
-   * not keep showing its text here just because this snapshot is faster than
-   * the live read.
-   */
+  /** NIP-40 deadline of a disappearing latest message; the preview is dropped past it on read. */
   expiresAt?: number;
-  /** The viewer has authored at least one message in this conversation. */
   mine: boolean;
 }
 
-/** Pick just the NIP-30 emoji tags out of a message's tags, or undefined. */
 export function pickEmojiTags(tags: readonly string[][] | undefined): string[][] | undefined {
   const picked = (tags ?? []).filter((t) => t[0] === "emoji" && t[1] && t[2]);
   return picked.length > 0 ? picked : undefined;
@@ -84,10 +51,7 @@ function isRow(value: unknown): value is DmListSnapshotRow {
   );
 }
 
-/**
- * Read the stored list for an account, newest-first, or undefined on
- * miss/corruption. Synchronous — safe on the render path.
- */
+/** The stored list for an account (newest-first), or undefined. Synchronous. */
 export function readDmListSnapshot(self: string | undefined): DmListSnapshotRow[] | undefined {
   if (!self || typeof localStorage === "undefined") return undefined;
   try {
@@ -95,9 +59,7 @@ export function readDmListSnapshot(self: string | undefined): DmListSnapshotRow[
     if (!raw) return undefined;
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return undefined;
-    // A disappearing message's preview dies with the message. The row itself
-    // stays (dropping it would make the conversation blink out and back as the
-    // live read lands); only the decrypted text and its emoji go.
+    // Expired previews drop their text/emoji; the row stays so it doesn't blink.
     const now = Math.floor(Date.now() / 1000);
     const rows = parsed
       .filter(isRow)
@@ -113,15 +75,14 @@ export function readDmListSnapshot(self: string | undefined): DmListSnapshotRow[
 }
 
 /**
- * Persist the list for an account. `rows` must be in render order (newest
- * first) and already filtered — muted and unfollowed peers must be gone before
- * they get here, or a later cold start would paint them back.
+ * Persist the list in render order, already filtered (muted/unfollowed peers
+ * removed, or cold starts would paint them back).
  */
 export function writeDmListSnapshot(self: string | undefined, rows: readonly DmListSnapshotRow[]): void {
   if (!self || typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(PREFIX + self, JSON.stringify(rows.slice(0, MAX_ROWS)));
   } catch {
-    // Quota/unavailable — the snapshot is purely a first-paint optimization.
+    // Purely a first-paint optimization.
   }
 }

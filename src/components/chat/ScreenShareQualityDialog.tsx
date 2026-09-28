@@ -71,7 +71,6 @@ function qualityForAvailableCodecs(
   return { ...quality, codec: fallback };
 }
 
-/** Quality controls shared by browser and Electron screen capture. */
 export function ScreenShareQualityDialog({
   open,
   portalContainer,
@@ -106,11 +105,8 @@ export function ScreenShareQualityDialog({
     return () => {
       cancelled = true;
     };
-    // Deliberately keyed on `open` alone. `supportedCodecs` changes when the
-    // desktop shell's asynchronous H.265 probe resolves, which is routinely
-    // while this dialog is open — re-running would throw away whatever the
-    // user has typed since. An unsupported stored codec is already coerced at
-    // derive time by `normalized` below.
+    // Keyed on `open` alone: the async H.265 probe changes `supportedCodecs` while
+    // open, and re-running would discard the user's edits (`normalized` coerces).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -181,9 +177,7 @@ export function ScreenShareQualityDialog({
           <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
             screen share quality
           </h2>
-          {/* A DialogDescription rather than a bare <p>: it renders the same
-              element with the same classes, and also wires aria-describedby,
-              which ChromeDialogContent's sr-only title does not supply. */}
+          {/* DialogDescription wires aria-describedby, which the sr-only title doesn't. */}
           <DialogDescription className="text-sm text-muted-foreground">
             Choose capture and encoder limits. Full quality prevents viewers from being assigned a
             smaller spatial layer.

@@ -1,66 +1,27 @@
 /**
- * PSBT v2 (BIP-370) encoder + parser with BIP-375 silent payment field
- * support — a thin typed layer over `@scure/btc-signer`'s raw PSBT coder.
+ * PSBT v2 (BIP-370) encoder/parser with BIP-375 silent-payment fields, over
+ * `@scure/btc-signer`'s internal `_RawPSBTV2` coder — which, unlike `RawPSBTV2`,
+ * leaves `PSBT_OUT_SCRIPT` optional on outputs carrying only
+ * `PSBT_OUT_SP_V0_INFO` (BIP-375: the signer derives the script). Unknown rows
+ * are surfaced by keytype.
  *
- * We delegate the wire-format work (magic, framing, varint, per-field
- * typed codecs, on-curve validation of embedded pubkeys) to the library's
- * internal `_RawPSBTV2` coder, which — unlike the more strict `RawPSBTV2`
- * surface used by `Transaction` — leaves `PSBT_OUT_SCRIPT` optional on
- * outputs that only carry `PSBT_OUT_SP_V0_INFO`. That last property is
- * essential for BIP-375: the signer derives the script during signing,
- * so the constructor emits SP outputs without one.
- *
- * The public API exposed here is the higher-level shape Ditto's wallet
- * code prefers — typed `PsbtV2Input` / `PsbtV2Output` records, the SP
- * variant flagged with `type: 'sp'`, and a parsed view that surfaces
- * `unknown` rows by their keytype so callers can poke at BIP-375 fields
- * the library doesn't know about. The convenience wrappers don't change;
- * the byte-level codec underneath is now the library's job.
- *
- * Wire format references:
- *   - BIP-174 §"Specification" (key/value framing, varint, key types).
- *   - BIP-370 §"Specification" (PSBT v2 globals + PREVIOUS_TXID / OUTPUT_INDEX
- *     / OUTPUT_AMOUNT / OUTPUT_SCRIPT keys).
- *   - BIP-375 §"Specification" (PSBT_OUT_SP_V0_INFO + ECDH/DLEQ fields,
- *     OUTPUT_SCRIPT optional when SP_V0_INFO is set; SP_V0_INFO
- *     serialized as `version (1 byte) || scan (33) || spend (33)` per
- *     the "Unique Identification" section).
+ * Refs: BIP-174, BIP-370, BIP-375 (SP_V0_INFO = `version(1) || scan(33) || spend(33)`).
  */
 import { _RawPSBTV2 } from '@scure/btc-signer/psbt.js';
 
-// ---------------------------------------------------------------------------
-// BIP-375 + BIP-370 keytype constants (kept private to this module; callers
-// that need to inspect unknown rows look them up by `keyType`).
-// ---------------------------------------------------------------------------
+// BIP-370/375 keytypes; callers inspect unknown rows by `keyType`.
 
-// Global key types — only the ones we explicitly write/read.
 const G_TX_MODIFIABLE = 0x06;
-// BIP-375 globals — emitted by the local signer when it finalizes an SP
-// PSBT and read on the verifier side. We write/read these via the
-// library's `unknown` passthrough.
+// BIP-375 globals, written/read via the library's `unknown` passthrough.
 const G_SP_ECDH_SHARE = 0x07;
 const G_SP_DLEQ = 0x08;
 
-// BIP-375 per-input fields (preserved as "unknown" by the library):
-//   PSBT_IN_SP_ECDH_SHARE = 0x1d
-//   PSBT_IN_SP_DLEQ       = 0x1e
+// BIP-375 per-input fields kept as "unknown": PSBT_IN_SP_ECDH_SHARE = 0x1d, PSBT_IN_SP_DLEQ = 0x1e.
 
-// Per-output BIP-375 keytypes — emitted/read via the library's `unknown`
-// passthrough.
 const O_SP_V0_INFO = 0x09;
 const O_SP_V0_LABEL = 0x0a;
 
-// ---------------------------------------------------------------------------
-// Public byte-level helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Encode a Bitcoin compact-size integer (1, 3, 5, or 9 bytes depending on
- * magnitude). PSBTs use this for every length prefix.
- *
- * Re-exported because `bitcoin-signers.ts` uses it to encode witness
- * stacks when finalizing locally-signed PSBTs.
- */
+/** Bitcoin compact-size integer (1/3/5/9 bytes). Exported for `bitcoin-signers.ts` witness encoding. */
 export function encodeCompactSize(n: number): Uint8Array {
   if (!Number.isFinite(n) || n < 0) throw new Error(`compactSize: out of range (${n}).`);
   if (n < 0xfd) return new Uint8Array([n]);
@@ -155,14 +116,9 @@ function bytesToHex(b: Uint8Array): string {
 }
 
 /**
- * Cheap PSBT-version sniff: walk the globals scope after the magic header
- * looking for a `PSBT_GLOBAL_VERSION` (keytype 0xfb) row with value `2`.
- * If we hit the globals separator (`0x00` key-length) before finding one,
- * the PSBT is v0 (the version field is optional and defaults to 0).
- *
- * We do this ourselves because `@scure/btc-signer`'s v2 decoder rejects v0
- * with a "missing unsignedTx" message that's hard to route on — surfacing
- * the same wording the project's tests and call sites already expect.
+ * Whether the globals carry `PSBT_GLOBAL_VERSION` (0xfb) = 2; absent means v0.
+ * Sniffed ourselves because the library's v0 error ("missing unsignedTx") is
+ * hard to route on.
  */
 function hasPsbtV2Marker(bytes: Uint8Array): boolean {
   let offset = 5; // skip magic
@@ -189,23 +145,14 @@ function hasPsbtV2Marker(bytes: Uint8Array): boolean {
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// PSBT v2 input / output shapes (sender side)
-// ---------------------------------------------------------------------------
-
 /** A previous-output reference for a PSBT v2 input. */
 export interface PsbtV2Input {
-  /** Display-order (big-endian) txid hex of the previous output being spent. */
+  /** Display-order (big-endian) txid hex. */
   txid: string;
-  /** Index of the output within the previous transaction. */
   vout: number;
   /** nSequence (defaults to 0xfffffffd, BIP-125 RBF-enabled). */
   sequence?: number;
-  /**
-   * Witness UTXO for SegWit-style inputs: the previous output's
-   * `scriptPubKey` and amount. Required for all inputs we construct in
-   * Ditto's wallet (P2TR + key-path only).
-   */
+  /** Witness UTXO (required; the wallet only builds P2TR key-path inputs). */
   witnessUtxo: {
     /** Amount in satoshis. */
     amount: bigint;
@@ -215,10 +162,8 @@ export interface PsbtV2Input {
   /** Optional 32-byte x-only Taproot internal key. */
   tapInternalKey?: Uint8Array;
   /**
-   * Optional pre-finalized witness stack — emitted as
-   * `PSBT_IN_FINAL_SCRIPTWITNESS`. The local nsec signer uses this to
-   * round-trip a fully-signed PSBT v2 through {@link extractTxFromSignedPsbtV2}
-   * without going via `@scure/btc-signer`'s `Transaction` model.
+   * Pre-finalized witness (`PSBT_IN_FINAL_SCRIPTWITNESS`), used by the local
+   * nsec signer to round-trip through {@link extractTxFromSignedPsbtV2}.
    */
   finalScriptWitness?: Uint8Array[];
 }
@@ -241,47 +186,27 @@ export interface PsbtV2OutputSilentPayment {
   scanPubKey: Uint8Array;
   /** 33-byte compressed spend key (`B_m`) from the recipient's address. */
   spendPubKey: Uint8Array;
-  /**
-   * Optional change label, encoded into PSBT_OUT_SP_V0_LABEL as a 32-bit
-   * little-endian uint. Only used when the silent payment output is the
-   * sender's own change (m = 0 by convention) — we don't construct
-   * labelled outgoing payments today.
-   */
+  /** Change label as PSBT_OUT_SP_V0_LABEL (u32 LE); only for the sender's own change. */
   label?: number;
 }
 
-/** Either output flavour the encoder accepts. */
 export type PsbtV2Output = PsbtV2OutputRegular | PsbtV2OutputSilentPayment;
 
-/** Parameters for {@link encodePsbtV2}. */
 export interface PsbtV2EncodeOptions {
   /** Transaction version (defaults to 2; BIP-68 / BIP-112-friendly). */
   txVersion?: number;
   /** Fallback `nLockTime` (defaults to 0). */
   fallbackLocktime?: number;
   /**
-   * `PSBT_GLOBAL_TX_MODIFIABLE` bitfield. BIP-375 requires this to be 0
-   * once the signer has filled in every `PSBT_OUT_SCRIPT`. The constructor
-   * (us) starts at 0b011 (inputs and outputs both modifiable); the signer
-   * clears it when it freezes the SP scripts. We default to omitting the
-   * field, which is equivalent to "no constraints announced" — signers
-   * that need to bump it back on do so during signing.
+   * `PSBT_GLOBAL_TX_MODIFIABLE`; BIP-375 requires 0 once every output script is
+   * filled. Omitted by default ("no constraints announced").
    */
   txModifiable?: number;
   /**
-   * Optional BIP-375 global ECDH shares + DLEQ proofs, keyed by scan key.
-   *
-   * Per BIP-375 §"Computing the ECDH Shares and DLEQ Proofs", when a single
-   * signer owns the private keys for every eligible input it should emit
-   * one global share per recipient scan key (rather than per-input shares).
-   * Each entry produces a paired `PSBT_GLOBAL_SP_ECDH_SHARE` (keytype 0x07,
-   * keydata = 33-byte scan key, value = 33-byte share `C = a·B_scan`) and
-   * `PSBT_GLOBAL_SP_DLEQ` (keytype 0x08, keydata = scan key, value = 64-byte
-   * BIP-374 proof) row.
-   *
-   * The local nsec signer fills this in when finalizing an SP PSBT so an
-   * external BIP-375 verifier can re-derive the output scripts without
-   * trusting the signer.
+   * BIP-375 global ECDH shares + DLEQ proofs by scan key (single signer owning all
+   * inputs). Each yields `PSBT_GLOBAL_SP_ECDH_SHARE` (0x07, 33-byte `C = a·B_scan`)
+   * and `PSBT_GLOBAL_SP_DLEQ` (0x08, 64-byte BIP-374 proof), so verifiers can
+   * re-derive output scripts.
    */
   silentPaymentGlobals?: {
     scanPubKey: Uint8Array;
@@ -292,28 +217,12 @@ export interface PsbtV2EncodeOptions {
   outputs: PsbtV2Output[];
 }
 
-// ---------------------------------------------------------------------------
-// PSBT v2 encoder
-// ---------------------------------------------------------------------------
-
-/**
- * Library shape used by `_RawPSBTV2.encode`. We construct globals/inputs/
- * outputs as `Record<string, unknown>` and pass the whole thing through
- * the library's encoder; the precise (very deeply nested) typing isn't
- * worth threading through statically. The library tolerates any subset
- * of named fields plus an `unknown` array of `[{type, key}, value]`
- * tuples.
- */
+/** The library's `unknown` rows: `[{type, key}, value]` tuples. */
 type LibUnknown = [{ type: number; key: Uint8Array }, Uint8Array][];
 
 /**
- * Serialize a PSBT v2 with BIP-375 silent payment outputs.
- *
- * Outputs of `type: 'sp'` are emitted with `PSBT_OUT_SP_V0_INFO` (and
- * optionally `PSBT_OUT_SP_V0_LABEL`) instead of a `PSBT_OUT_SCRIPT` — per
- * BIP-375 the signer derives and writes the script during signing.
- *
- * Returns the hex-encoded PSBT.
+ * Serialize a PSBT v2 to hex. `type: 'sp'` outputs get `PSBT_OUT_SP_V0_INFO`
+ * (and optional label) instead of a script, per BIP-375.
  */
 export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
   const txVersion = opts.txVersion ?? 2;
@@ -321,8 +230,7 @@ export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
   const inputs = opts.inputs;
   const outputs = opts.outputs;
 
-  // Globals -- the library writes PSBT_GLOBAL_VERSION on encode (set to 2
-  // by the table schema), so we don't pass it explicitly.
+  // The library writes PSBT_GLOBAL_VERSION itself.
   const globalUnknown: LibUnknown = [];
   if (opts.txModifiable !== undefined) {
     globalUnknown.push([
@@ -341,7 +249,6 @@ export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
       if (sp.dleqProof.length !== 64) {
         throw new Error('PSBT v2 global SP: dleqProof must be 64 bytes.');
       }
-      // BIP-375 keys these records by the recipient's 33-byte scan key.
       globalUnknown.push([
         { type: G_SP_ECDH_SHARE, key: new Uint8Array(sp.scanPubKey) },
         new Uint8Array(sp.ecdhShare),
@@ -371,18 +278,13 @@ export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
       throw new Error('PSBT v2 input: txid must be 32 bytes.');
     }
     const obj: Record<string, unknown> = {
-      // Library expects display-order bytes for txid (it reverses to wire
-      // little-endian internally on encode); same applies on decode.
+      // Library takes display-order txid bytes and reverses internally.
       txid: txidBytes,
       index: inp.vout,
       sequence: inp.sequence ?? 0xfffffffd,
       witnessUtxo: { amount: inp.witnessUtxo.amount, script: inp.witnessUtxo.script },
     };
     if (inp.tapInternalKey) obj.tapInternalKey = inp.tapInternalKey;
-    // `finalScriptWitness` is the BIP-174 finalized-input witness stack —
-    // present on PSBTs that have already been signed by the local nsec
-    // path. The library serializes the stack into the
-    // `PSBT_IN_FINAL_SCRIPTWITNESS` row automatically.
     if (inp.finalScriptWitness && inp.finalScriptWitness.length > 0) {
       obj.finalScriptWitness = inp.finalScriptWitness;
     }
@@ -393,16 +295,13 @@ export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
     if (out.type === 'script') {
       return { amount: out.amount, script: out.script };
     }
-    // BIP-375 silent payment output.
     if (out.scanPubKey.length !== 33) {
       throw new Error('PSBT v2 output: scanPubKey must be 33 bytes.');
     }
     if (out.spendPubKey.length !== 33) {
       throw new Error('PSBT v2 output: spendPubKey must be 33 bytes.');
     }
-    // PSBT_OUT_SP_V0_INFO value = 1-byte version (0) || 33 scan || 33 spend.
-    // Per BIP-375 §"Unique Identification". The trailing version byte
-    // makes the field stable across silent-payment versions.
+    // SP_V0_INFO = version(0) || scan(33) || spend(33), per BIP-375 "Unique Identification".
     const spInfo = concat(new Uint8Array([0x00]), out.scanPubKey, out.spendPubKey);
     const unknown: LibUnknown = [[{ type: O_SP_V0_INFO, key: new Uint8Array(0) }, spInfo]];
     if (out.label !== undefined) {
@@ -413,15 +312,12 @@ export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
     }
     return {
       amount: out.amount,
-      // No `script` field — BIP-375 makes it optional when SP_V0_INFO is set.
+      // No `script`: optional when SP_V0_INFO is set (BIP-375).
       unknown,
     };
   });
 
-  // `_RawPSBTV2.encode` accepts a `Record<string, unknown>` that the library
-  // narrows internally; the (very deeply nested) static typing isn't worth
-  // threading through. The library tolerates any subset of named fields
-  // plus an `unknown` array.
+  // Deep library typing isn't worth threading through statically.
   type LibInput = Parameters<typeof _RawPSBTV2.encode>[0];
   const libPsbt = {
     magic: undefined,
@@ -442,36 +338,25 @@ export function encodePsbtV2(opts: PsbtV2EncodeOptions): string {
   return bytesToHex(bytes);
 }
 
-// ---------------------------------------------------------------------------
-// Parsed PSBT v2 (consumer-facing view)
-// ---------------------------------------------------------------------------
-
 /** An unknown PSBT key/value row, with the keytype byte separated out. */
 export interface PsbtKV {
-  /** First byte of the key (the BIP-174 keytype). */
+  /** First key byte (the BIP-174 keytype). */
   keyType: number;
-  /** Bytes of the key after the keytype byte (often empty). */
   keyData: Uint8Array;
   value: Uint8Array;
 }
 
 /** Decoded PSBT v2 input scope. */
 export interface ParsedPsbtV2Input {
-  /** Display-order txid hex (the form everywhere in mempool.space / RPC). */
+  /** Display-order txid hex. */
   txid: string;
   vout: number;
   sequence: number;
   finalScriptSig?: Uint8Array;
-  /** Witness stack — populated for SegWit inputs after the signer finalizes. */
   finalScriptWitness?: Uint8Array[];
   /**
-   * BIP-371 `PSBT_IN_TAP_KEY_SIG` — Schnorr signature for a Taproot
-   * key-path spend. Set by signers that follow the BIP-174 split between
-   * "signed" and "finalized": the signature is recorded here, and a
-   * Finalizer wraps it into `finalScriptWitness = [tapKeySig]` before the
-   * raw transaction can be extracted. `extractTxFromSignedPsbtV2` handles
-   * that conversion automatically for the wallet's Taproot-only input
-   * shape.
+   * BIP-371 Taproot key-path signature. Signed-but-not-finalized PSBTs carry it
+   * here; {@link extractTxFromSignedPsbtV2} wraps it into the witness.
    */
   tapKeySig?: Uint8Array;
   witnessUtxo?: { amount: bigint; script: Uint8Array };
@@ -482,11 +367,7 @@ export interface ParsedPsbtV2Input {
 /** Decoded PSBT v2 output scope. */
 export interface ParsedPsbtV2Output {
   amount: bigint;
-  /**
-   * scriptPubKey. Present after the signer finalizes BIP-375 SP outputs
-   * (or unconditionally for regular outputs); absent if the signer
-   * returned the PSBT with `PSBT_OUT_SP_V0_INFO` still unfilled.
-   */
+  /** scriptPubKey; absent if the signer left `PSBT_OUT_SP_V0_INFO` unfilled. */
   script?: Uint8Array;
   /** Unrecognised key/value pairs preserved for completeness. */
   unknown: PsbtKV[];
@@ -500,14 +381,6 @@ export interface ParsedPsbtV2 {
   outputs: ParsedPsbtV2Output[];
 }
 
-// ---------------------------------------------------------------------------
-// PSBT v2 parser
-// ---------------------------------------------------------------------------
-
-/**
- * Bridge the library's `unknown` representation (an array of
- * `[{ type, key }, value]` tuples) to our flat `PsbtKV` shape.
- */
 function unknownToKVs(unknown: unknown): PsbtKV[] {
   if (!unknown || !Array.isArray(unknown)) return [];
   return (unknown as LibUnknown).map(([k, v]) => ({
@@ -518,20 +391,12 @@ function unknownToKVs(unknown: unknown): PsbtKV[] {
 }
 
 /**
- * Decode a PSBT v2 (with possible BIP-375 fields) from hex.
- *
- * The parser tolerates unrecognised key types so the signer can attach
- * implementation-specific rows without breaking the consumer. Required
- * structural fields (`PSBT_GLOBAL_VERSION = 2`, `PSBT_GLOBAL_TX_VERSION`,
- * `PSBT_GLOBAL_INPUT_COUNT`, `PSBT_GLOBAL_OUTPUT_COUNT`, per-input
- * `PSBT_IN_PREVIOUS_TXID` / `PSBT_IN_OUTPUT_INDEX`, per-output
- * `PSBT_OUT_AMOUNT`) are validated. PSBT v0/v1 inputs are rejected.
+ * Decode a PSBT v2 (BIP-375 fields allowed) from hex. Unknown keytypes are
+ * tolerated; required BIP-370 structural fields are validated; v0/v1 rejected.
  */
 export function parsePsbtV2(psbtHex: string): ParsedPsbtV2 {
   const bytes = hexToBytes(psbtHex);
-  // Cheap shape checks before handing off to the library, so we surface
-  // the project's familiar error wording for the obvious failure modes
-  // (truncated input, wrong magic, PSBT v0).
+  // Early shape checks to throw the project's familiar error wording.
   if (bytes.length < 5) {
     throw new Error('PSBT parse: truncated header (magic).');
   }
@@ -541,10 +406,7 @@ export function parsePsbtV2(psbtHex: string): ParsedPsbtV2 {
     throw new Error('PSBT parse: bad magic.');
   }
 
-  // The library would happily accept a PSBT v0 here and surface a confusing
-  // "missing unsignedTx" error from deep inside its decoder. Sniff the
-  // version byte ourselves so we can throw something the call sites can
-  // route on. PSBT_GLOBAL_VERSION (0xfb) is optional; its absence means v0.
+  // The library would take v0 and fail with a confusing error; sniff the version ourselves.
   if (!hasPsbtV2Marker(bytes)) {
     throw new Error('PSBT parse: only PSBT v2 is supported in this code path.');
   }
@@ -614,8 +476,7 @@ export function parsePsbtV2(psbtHex: string): ParsedPsbtV2 {
     const finalScriptWitness = inp.finalScriptWitness as Uint8Array[] | undefined;
     const tapKeySig = inp.tapKeySig as Uint8Array | undefined;
     return {
-      // Library returns display-order bytes (it already reversed the wire
-      // little-endian during decode).
+      // Library returns display-order bytes.
       txid: bytesToHex(txidBytes),
       vout,
       sequence,
@@ -645,31 +506,15 @@ export function parsePsbtV2(psbtHex: string): ParsedPsbtV2 {
   return { txVersion, fallbackLocktime, inputs, outputs };
 }
 
-// ---------------------------------------------------------------------------
-// Raw transaction extractor
-// ---------------------------------------------------------------------------
-
 /**
- * Extract a finalized raw Bitcoin transaction from a fully-signed PSBT v2.
- *
- * Requires:
- *   - every input to have either `finalScriptSig`, `finalScriptWitness`,
- *     `tapKeySig`, or some combination — Taproot key-path inputs that only
- *     carry `tapKeySig` are auto-finalized here by wrapping it into the
- *     single-item witness stack BIP-341 §"Validation" demands;
- *   - every output to have `PSBT_OUT_SCRIPT` set (BIP-375 silent payment
- *     outputs must have been derived and finalized by the signer).
- *
- * Returns the hex-encoded transaction ready to broadcast.
+ * Raw tx hex from a fully-signed PSBT v2. Every input needs a final script/
+ * witness or a `tapKeySig` (auto-finalized per BIP-341); every output needs a
+ * script (SP outputs must have been derived by the signer).
  */
 export function extractTxFromSignedPsbtV2(psbtHex: string): string {
   const psbt = parsePsbtV2(psbtHex);
 
-  // BIP-174 separates "signed" from "finalized": a Taproot key-path
-  // signer may legitimately return a PSBT with `tapKeySig` set but no
-  // `finalScriptWitness`. The Finalizer role wraps `tapKeySig` into a
-  // single-item witness stack. We do that here so callers don't have to
-  // care about which role their signer fulfils.
+  // BIP-174 Finalizer role: wrap a lone `tapKeySig` into a single-item witness.
   for (let i = 0; i < psbt.inputs.length; i++) {
     const inp = psbt.inputs[i];
     if (
@@ -703,13 +548,11 @@ export function extractTxFromSignedPsbtV2(psbtHex: string): string {
   parts.push(u32le(psbt.txVersion));
 
   if (hasAnyWitness) {
-    // SegWit marker + flag
     parts.push(new Uint8Array([0x00, 0x01]));
   }
 
   parts.push(encodeCompactSize(psbt.inputs.length));
   for (const inp of psbt.inputs) {
-    // Display-order hex → wire little-endian.
     const txidDisplay = hexToBytes(inp.txid);
     const txidWire = new Uint8Array(txidDisplay).reverse();
     parts.push(txidWire);
@@ -743,9 +586,5 @@ export function extractTxFromSignedPsbtV2(psbtHex: string): string {
 
   return bytesToHex(concat(...parts));
 }
-
-// ---------------------------------------------------------------------------
-// Re-exported helpers used elsewhere (e.g. tests / `bitcoin-signers.ts`).
-// ---------------------------------------------------------------------------
 
 export const _internal = { decodeCompactSize, u32le, u64le };

@@ -31,8 +31,6 @@ import { LOGIN_STORAGE_KEY } from "@/lib/switchAccount";
 
 import AppRouter from "./AppRouter";
 
-// Every per-account service in one lazy chunk — see SignedInServices for what
-// is in it and why. A signed-out visitor never fetches it at all.
 const LazySignedInServices = lazy(() =>
   import("@/components/SignedInServices").then((m) => ({ default: m.SignedInServices })),
 );
@@ -40,23 +38,14 @@ const LazySignedInPushServices = lazy(() =>
   import("@/components/SignedInServices").then((m) => ({ default: m.SignedInPushServices })),
 );
 
-// On a launch that looks signed in, start that fetch NOW — in parallel with
-// the entry chunk's own parse — rather than when the login state finishes
-// resolving. Without this, deferring the services would trade a faster
-// signed-out boot for a slower signed-in one.
+// Prefetch on a likely-signed-in launch so deferring the services doesn't slow it.
 if (likelySignedIn()) {
   void import("@/components/SignedInServices").catch(() => undefined);
 }
 
 /**
- * Mount the per-account services once there is an account.
- *
- * The gate has to live OUT here, above the lazy boundary: putting the `user`
- * check inside the lazy component would mean fetching the chunk in order to
- * discover it has nothing to do. `fallback={null}` because every one of these
- * is headless until it decides otherwise — there is nothing to show while the
- * chunk is in flight, and showing something would be worse than showing
- * nothing.
+ * The `user` gate lives outside the lazy boundary so signed-out visitors never
+ * fetch the chunk.
  */
 function SignedInServicesGate({ variant }: { variant: "core" | "push" }) {
   const { user } = useCurrentUser();
@@ -75,47 +64,25 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       staleTime: 60000, // 1 minute
       gcTime: 300000, // 5 minutes
-      // Most queries in this app read ArmadaDB, not a network — and the default
-      // `networkMode: "online"` PAUSES a query whenever `navigator.onLine` is
-      // false, holding it at `status: "pending"` (`fetchStatus: "paused"`) for
-      // as long as the browser says it's offline. Every skeleton gate in the app
-      // is a `isPending` read, so that default hangs a loading skeleton over
-      // data already on disk — indefinitely, not for a timeout. `navigator.onLine`
-      // is also unreliable in an Android WebView, and Armada has a genuinely
-      // offline mode (mesh) where local reads must still work.
-      //
-      // Relay-bound queries lose react-query's auto-resume-on-reconnect by this,
-      // which they didn't rely on: each is individually timeout-bounded and has
-      // its own refetch interval or sweep to catch up on.
+      // Most queries read ArmadaDB; the default "online" mode pauses them whenever
+      // `navigator.onLine` is false (unreliable in Android WebView, and mesh is offline).
       networkMode: "always",
     },
     mutations: {
-      // The same default for writes. A paused mutation holds its button
-      // disabled until the browser reports `online` — which in an Android
-      // WebView can be never — and a paused one ahead in a scoped queue (the
-      // Concord list's) holds every write behind it too. Every relay call a
-      // mutation makes carries its own timeout.
+      // Same for mutations: a paused one blocks its scoped queue.
       networkMode: "always",
     },
   },
 });
 
-// Which query families fetch and replace their data, for the runtime profiler
-// (`__armadaPerf.runtime()`). Profiling builds only, like the rest of it.
+// Profiling builds only (`__armadaPerf.runtime()`).
 if (import.meta.env.VITE_PROFILE === "1") instrumentQueryCache(queryClient.getQueryCache());
 
-// Hydrate the Concord groupKey memo from KV at module load — before the
-// community list resolves and channelsView derives every stream key. A warm
-// boot then pays no secp256k1 point multiplications for last session's keys.
+// Hydrate the Concord groupKey memo before channelsView derives stream keys.
 void initGroupKeyPersistence();
 
-// On Android the WebView's `visibilitychange`/`focus` events (which React
-// Query's focusManager watches by default) don't fire reliably when the app is
-// brought back from the background — so a query that should refetch on focus
-// (the live group timeline, which can fall behind while the socket was dead in
-// the background) misses its catch-up. Drive focusManager from Capacitor's
-// authoritative `appStateChange` instead, so resuming the app marks the app
-// focused and any `refetchOnWindowFocus` query catches up immediately.
+// Android WebView's visibilitychange/focus don't fire reliably on resume; drive
+// focusManager from Capacitor's `appStateChange` instead.
 if (Capacitor.isNativePlatform()) {
   void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
     focusManager.setFocused(isActive);
@@ -131,10 +98,7 @@ export function App() {
           <QueryClientProvider client={queryClient}>
             <NostrLoginProvider storageKey={LOGIN_STORAGE_KEY} storage={secureStorage}>
               <ActiveAccountSync />
-              {/* The account-exit overlay lives ABOVE the signed-in gate: a
-                  logout/switch removes the login moments before it reloads, and
-                  a gate mounted below would unmount with it and flash the app
-                  back for the sliver before the reload lands. */}
+              {/* Above the signed-in gate so it survives logout's removal of the login before reload. */}
               <AccountExitGate />
               <NostrProvider>
                 <WalletProvider>
@@ -142,9 +106,7 @@ export function App() {
                     <ReadStateProvider>
                       <MutedPubkeysProvider>
                       <SignedInServicesGate variant="core" />
-                      {/* Stays eager: a cold-launch deep link resolves before
-                          the login state does, and this is what overlaps the
-                          room's first REQ with React mounting the route. */}
+                      {/* Eager: overlaps a cold deep link's first REQ with React mounting the route. */}
                       <DeepLinkWarmup />
                       <WebPushNotifications>
                         <SignedInServicesGate variant="push" />

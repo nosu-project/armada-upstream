@@ -1,29 +1,12 @@
 /**
- * The desktop shell's update feed: the kind-30622 release event, narrowed to
- * the one installer this machine can install.
+ * The desktop shell's update feed: the kind-30622 release event (the same one
+ * `/downloads` reads), narrowed to the installer this machine can install —
+ * content-addressed and signed by a pinned maintainer key. Also resolves the
+ * Flatpak's web bundle from the signed nsite manifest ({@link resolveWebBundle}).
  *
- * `/downloads` and the Electron updater now read the SAME event. They used to
- * read different things — the page read the event while electron-updater
- * fetched `latest*.yml` from `armada.buzz/downloads/desktop` — and the cost of
- * that split was not the duplication but the asymmetry: the page's artifacts
- * were content-addressed and signed by a pinned maintainer key, while the
- * updater's were whatever the web server happened to be serving under a mutable
- * name. The updater is the half that executes what it downloads, so it was the
- * half with the weaker guarantee. Reading the event gives it the stronger one
- * and removes a second place a release has to be published to.
- *
- * The Flatpak's web bundle is resolved here too ({@link resolveWebBundle}),
- * from the signed nsite manifest the web deploy publishes under the same
- * pinned key, so both things the desktop app installs are checked the same way.
- *
- * This file is ordinary `src/` TypeScript, bundled into `electron/updateFeed.cjs`
- * by `vite.config.electron.ts` exactly as `src/lib/db/electronMain.ts` is
- * bundled into `electron/db.cjs`, and for the same reason: `parseRelease()` is
- * the read contract for a release event, and a hand-written copy of it in
- * `electron/` would be a second contract free to drift from the one the
- * download page and the tests exercise. Keep it free of Electron imports — the
- * electron-updater half lives in `electron/nostrUpdateProvider.js`, so `tsc`,
- * eslint and vitest cover everything here as normal source.
+ * Bundled into `electron/updateFeed.cjs` (like `electronMain.ts`) so
+ * `parseRelease()` stays the single read contract. Keep it free of Electron
+ * imports; the electron-updater half is `electron/nostrUpdateProvider.js`.
  */
 
 import { verifyEvent } from "nostr-tools/pure";
@@ -39,35 +22,21 @@ import {
   type ReleaseArtifact,
 } from "./releases";
 
-// Re-exported so `electron/updateFeed.cjs` — this file's bundled build — carries
-// the same version comparison the rest of the release contract uses.
+// Re-exported so the bundled `electron/updateFeed.cjs` shares the version comparison.
 export { compareVersions } from "./releases";
 
-/** How long a single relay gets to answer before it is written off. */
 const RELAY_TIMEOUT_MS = 12_000;
 
 
 /**
- * Which installer each platform self-updates from.
+ * Which installer each platform self-updates from; matches
+ * `supportsSelfUpdate()` in `electron/updateSupport.js`. Package-manager and
+ * portable builds must never go to electron-updater; `-portable.exe` shares the
+ * NSIS installer's platform token and mime, so the filename is the only tell.
  *
- * The `win32`/`darwin`/`linux` rows are exactly the editions
- * `supportsSelfUpdate()` in `electron/updateSupport.js` arms, and the pairing is
- * not incidental: the portable .exe, the .deb and the .flatpak are all present
- * in the same release event, and handing one to electron-updater would have it
- * replace files that belong to a package manager or to a directory the user
- * unpacked by hand. The exclusion of `-portable.exe` is the load-bearing half —
- * CI publishes the NSIS installer and the portable build under the same
- * `windows-x86_64` platform token and the same mime type, so the filename is the
- * only thing that distinguishes them.
- *
- * `flatpak` is a SYNTHETIC target the Electron side passes explicitly (in place
- * of the real `process.platform`, which is `linux`) only when `FLATPAK_ID` is
- * set. It resolves the signed `.flatpak` bundle rather than the AppImage —
- * deliberately kept OUT of the `linux` row so electron-updater never receives
- * it: a Flatpak's `/app` is a read-only OSTree mount the process cannot rewrite,
- * and `quitAndInstall` has no installer for the format. The Flatpak shell
- * updates its web bundle instead (`electron/webBundleUpdate.js`); this row is
- * how a caller resolves the bundle artifact if it ever needs to.
+ * `flatpak` is a SYNTHETIC target (passed when `FLATPAK_ID` is set), kept out
+ * of `linux` so electron-updater never gets it: `/app` is read-only and the
+ * shell updates its web bundle instead (`electron/webBundleUpdate.js`).
  */
 const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) => boolean }> = {
   linux: { os: "linux", accepts: (name) => /\.appimage$/i.test(name) },
@@ -80,14 +49,9 @@ const DESKTOP_FORMATS: Record<string, { os: string; accepts: (filename: string) 
 };
 
 /**
- * Architecture spellings that mean the same machine.
- *
- * The `f` token is advisory per docs/releases.md, so this is only ever used to
- * REJECT an artifact that names an architecture we are not — never to require
- * that one be named. An `f` of `linux` (or none at all) still matches, because
- * the vocabulary is thin enough that a publisher legitimately omits the arch;
- * an `f` of `linux-aarch64` on an x64 machine is a positive statement that the
- * bytes are for a different CPU, and that one is worth refusing.
+ * Architecture spellings for the same machine. The `f` token is advisory
+ * (docs/releases.md): only used to REJECT an artifact naming another arch,
+ * never to require one.
  */
 const ARCH_ALIASES: Record<string, readonly string[]> = {
   x64: ["x86_64", "x64", "amd64"],
@@ -96,30 +60,25 @@ const ARCH_ALIASES: Record<string, readonly string[]> = {
   ia32: ["i686", "i386", "x86", "ia32"],
 };
 
-/** The machine an update is being resolved for. `process.platform`/`process.arch`. */
 export interface DesktopTarget {
   platform: string;
   arch: string;
 }
 
-/** One resolved update, in the shape `electron/nostrUpdateProvider.js` needs. */
 export interface DesktopUpdate {
   /** Semver with no leading `v`, which is what electron-updater compares. */
   version: string;
-  /** The tag as published, e.g. `v0.56.3`. */
   tag: string;
   releaseName: string;
   releaseNotes: string;
   /** ISO 8601, from the event's `created_at`. */
   releaseDate: string;
-  /** `main` for stable, `rc` for a prerelease. */
   channel: string;
   file: {
-    /** Absolute URL to fetch. See {@link downloadUrl} for the extension. */
+    /** Absolute URL to fetch (see {@link downloadUrl}). */
     url: string;
-    /** The name the installer is cached and installed under. */
     filename: string;
-    /** hex — the Blossom content address, and what the download is verified against. */
+    /** Hex Blossom content address; the download is verified against it. */
     sha256: string;
     size: number;
   };
@@ -138,21 +97,9 @@ export interface ResolveDesktopUpdateOptions {
 }
 
 /**
- * The URL to actually download from, which drops a Blossom URL's extension.
- *
- * A published artifact URL is `<server>/<sha256><ext>`, and the extension is the
- * optional half — BUD-01 names the blob `/<sha256>` and every server serves it
- * there. Dropping it is what gets the installer its real filename, which is a
- * property of electron-updater rather than of Blossom: `executeDownload()`
- * names the cached file after the URL's basename when the URL ends in the
- * expected extension, and only otherwise after `UpdateFileInfo.url`, where we
- * put `Armada-v0.56.3.AppImage`. Left with the extension on, every download
- * would be cached — and, on Linux, INSTALLED, since `AppImageUpdater` moves the
- * downloaded file next to the running one under its own name — as
- * `3f9ac2….AppImage`. The user's AppImage would be renamed to a hash.
- *
- * Anything that isn't a bare `/<64 hex>.<ext>` path is returned untouched, so a
- * release published to something other than Blossom still resolves.
+ * The download URL with a Blossom URL's extension dropped (BUD-01 serves
+ * `/<sha256>`). Otherwise electron-updater names the cached — and on Linux,
+ * INSTALLED — AppImage after the hash. Non-Blossom URLs pass through.
  */
 export function downloadUrl(url: string): string {
   try {
@@ -173,22 +120,14 @@ function archMatches(platform: string, arch: string): boolean {
   const named = platform.slice(dash + 1).toLowerCase();
   if (!named) return true;
   const accepted = ARCH_ALIASES[arch];
-  // An architecture this build has never heard of is not evidence either way;
-  // the format check below still has to pass, and that is the stronger signal.
+  // Unknown arch isn't evidence either way; the format check still applies.
   return accepted == null ? true : accepted.includes(named);
 }
 
 /**
- * The one artifact of a release this machine self-updates from, if any.
- *
- * Undefined is a normal answer, not an error: a release built before a platform
- * existed, or one whose Windows job failed, genuinely has nothing here.
- *
- * An artifact with no `x` is not a candidate. `parseRelease` tolerates a missing
- * one — for `/downloads` it costs a checksum nobody was going to type — but here
- * it is the ONLY thing the downloaded bytes are checked against, and an
- * unverifiable installer must not be offered. Skipping rather than throwing
- * keeps the caller's fallback to an older release working.
+ * The artifact this machine self-updates from, if any (undefined is normal).
+ * Artifacts without a hash are skipped: here it's the ONLY verification, so an
+ * unverifiable installer is never offered.
  */
 export function pickDesktopArtifact(
   release: Release,
@@ -205,12 +144,10 @@ export function pickDesktopArtifact(
   );
 }
 
-/** Strip the tag's leading `v`, since electron-updater compares with semver. */
 function semver(version: string): string {
   return version.replace(/^v/i, "");
 }
 
-/** Pair a parsed release with its artifact, in the updater's shape. */
 export function toDesktopUpdate(
   release: Release,
   artifact: ReleaseArtifact,
@@ -232,19 +169,10 @@ export function toDesktopUpdate(
 }
 
 /**
- * Turn relay responses into the release to offer.
- *
- * Every check here is a refusal a malicious relay would otherwise get past,
- * and none of them can be skipped on the grounds that some other layer does it:
- * the events arrive over a plain WebSocket from a server that is not trusted
- * for anything, and the artifact URL they carry is a binary this process is
- * about to download and hand to an installer.
- *
- * - the signature must verify, or a relay can mint an event under any pubkey;
- * - the author must be one of the BUILD-PINNED release keys, or any valid
- *   signature will do;
- * - the `D` tag must be this repository, or a release of some other project
- *   signed by the same maintainer would install over Armada.
+ * Turn untrusted relay responses into the release to offer (the artifact is a
+ * binary about to be installed). Each check blocks a malicious relay: the
+ * signature must verify, the author must be a BUILD-PINNED release key, and
+ * the `D` tag must be this repo (not another project by the same maintainer).
  */
 export function selectDesktopRelease(
   events: readonly unknown[],
@@ -272,21 +200,16 @@ export function selectDesktopRelease(
   }
 
   const folded = foldReleases(releases);
-  // Newest-first, so an rc build takes the head and a stable build takes the
-  // newest release on the stable channel — the same rule `/downloads` features
-  // by, and the same one electron-updater applies to its own `allowPrerelease`.
+  // Newest-first; stable builds take the newest `main` release (as `/downloads` does).
   const candidates = allowPrerelease ? folded : folded.filter((r) => r.channel === "main");
   for (const release of candidates) {
     const artifact = pickDesktopArtifact(release, target);
-    // Don't stop at the newest release: a version whose Windows build failed
-    // still publishes an event, and offering nothing because the HEAD release
-    // lacks this platform would strand it until the next tag.
+    // Skip releases lacking this platform (e.g. a failed Windows build).
     if (artifact) return toDesktopUpdate(release, artifact);
   }
   return undefined;
 }
 
-/** The bits of a signed Nostr event this module needs, checked at the boundary. */
 interface SignedEvent {
   id: string;
   kind: number;
@@ -316,12 +239,8 @@ function isSignedEvent(value: unknown): value is SignedEvent {
 }
 
 /**
- * Read one relay's copy of the release history.
- *
- * Never rejects. A relay that is down, slow, wrong or hostile contributes
- * nothing and the others still answer; an update check that threw because one
- * of three relays refused a connection would report "update check failed" to a
- * user whose update was sitting on the other two.
+ * Read one relay's release history. Never rejects: a bad relay contributes
+ * nothing so the others can still answer.
  */
 function queryRelay(
   url: string,
@@ -348,14 +267,12 @@ function queryRelay(
       signal?.removeEventListener("abort", finish);
       try {
         socket.close();
-      } catch {
-        // Already closing, or never opened. The result is the same either way.
-      }
+      } catch { /* ignore */ }
       resolve(events);
     };
 
     const timer = setTimeout(finish, RELAY_TIMEOUT_MS);
-    // A pending update check must never be the reason the app won't quit.
+    // Never keep the app from quitting.
     (timer as unknown as { unref?: () => void }).unref?.();
     if (signal?.aborted) {
       finish();
@@ -379,9 +296,7 @@ function queryRelay(
       }
       if (!Array.isArray(parsed) || parsed[1] !== subscriptionId) return;
       if (parsed[0] === "EVENT") events.push(parsed[2]);
-      // CLOSED as well as EOSE: a relay that refuses the subscription (AUTH,
-      // rate limit) answers once and never sends EOSE, and waiting out the
-      // timeout for it would delay the whole check by that much.
+      // CLOSED too: a refusing relay (AUTH, rate limit) never sends EOSE.
       else if (parsed[0] === "EOSE" || parsed[0] === "CLOSED") finish();
     });
     socket.addEventListener("error", finish);
@@ -392,36 +307,27 @@ function queryRelay(
 /** NIP-5A named site manifest. */
 const NSITE_KIND = 35128;
 
-/** The named site `.nsite/config.json` publishes: the deployed web client. */
+/** The named site `.nsite/config.json` publishes. */
 export const WEB_BUNDLE_SITE_ID = "armada";
 
-/** Where every web deploy puts its own `dist` as one archive (deploy-nsite.yml). */
+/** Where every web deploy puts its `dist` archive (deploy-nsite.yml). */
 export const WEB_BUNDLE_PATH = "/downloads/armada-web.tar.gz";
 
-/** The deployed web bundle, as the site manifest names it. */
 export interface WebBundleUpdate {
   /**
-   * The manifest's `created_at`. The shell records it with the bundle it
-   * installs and refuses an older one, since a replaceable event can be
-   * served stale by a relay long after it was replaced.
+   * Manifest `created_at`; the shell refuses an older one (relays may serve
+   * stale replaceable events).
    */
   createdAt: number;
-  /** hex sha256 of the archive; what the download is verified against. */
   sha256: string;
-  /** `<server>/<sha256>` for each https Blossom server the manifest names, in order. */
+  /** `<server>/<sha256>` for each https Blossom server in the manifest, in order. */
   urls: string[];
 }
 
 /**
- * The web bundle the newest signed site manifest names, or undefined when no
- * acceptable manifest carries one.
- *
- * The same refusals as {@link selectDesktopRelease}, for the same reason: the
- * manifest arrives from untrusted relays and names code the shell will run.
- * The signature must verify and the author must be a BUILD-PINNED release key
- * (the site is published under the same key as the releases). The `path` and
- * `server` tags are read only from that verified event, so where the bytes
- * come from is as much the signer's statement as what they hash to.
+ * The web bundle from the newest acceptable signed site manifest. Same
+ * refusals as {@link selectDesktopRelease} (verified signature, BUILD-PINNED
+ * author); `path`/`server` tags are read only from the verified event.
  */
 export function selectWebBundle(
   events: readonly unknown[],
@@ -453,20 +359,13 @@ export function selectWebBundle(
       if (server.protocol !== "https:") continue;
       const url = new URL(`/${sha256}`, server).href;
       if (!urls.includes(url)) urls.push(url);
-    } catch {
-      // A malformed server tag names nowhere to fetch from.
-    }
+    } catch { /* ignore */ }
   }
   if (urls.length === 0) return undefined;
   return { createdAt: newest.created_at, sha256, urls };
 }
 
-/**
- * The deployed web bundle, resolved from the site manifest on the release
- * relays (which are also the relays `.nsite/config.json` publishes to).
- * Never rejects for a relay that is down; undefined when none answered with
- * an acceptable manifest.
- */
+/** The deployed web bundle from the site manifest on the release relays; undefined if none acceptable. */
 export async function resolveWebBundle({
   relays = RELEASE_RELAYS,
   authors = RELEASE_AUTHORS,

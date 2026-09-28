@@ -4,13 +4,8 @@ import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
- * The user's NIP-29 servers as stable rail keys: the servers in their kind
- * 10009 list, normalized and de-duplicated, first occurrence winning.
- *
- * This is THE source for "which NIP-29 communities exist" — the rail, the
- * quick switcher and the landing redirect all read it, so they can't drift.
- * There is no local mirror to fall out of sync with: removing a server from
- * the 10009 list removes it here, everywhere, at once.
+ * THE source for "which NIP-29 communities exist" (rail, switcher, landing): the kind 10009
+ * servers, normalized and deduped.
  */
 export function useNip29Servers(): string[] {
   const { data: groupList } = useUserGroupList();

@@ -9,10 +9,8 @@ import { useNostrPublish } from "@/hooks/useNostrPublish";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * The viewer's hidden Buzz DM channels (NIP-DV): the relay maintains a
- * relay-signed, per-viewer kind-30622 snapshot whose `h` tags list the DM
- * channels the viewer has hidden from their sidebar (kind 41012). P-gated:
- * the filter must carry `#p` = the authenticated pubkey.
+ * Hidden Buzz DM channels (NIP-DV): the `h` tags of the relay-signed kind-30622
+ * snapshot. P-gated: the filter must carry `#p` = the authenticated pubkey.
  */
 export function useBuzzHiddenDms(relayUrl: string | undefined): Set<string> {
   const { nostr } = useNostr();
@@ -37,10 +35,8 @@ export function useBuzzHiddenDms(relayUrl: string | undefined): Set<string> {
 }
 
 /**
- * Open (or re-open) a Buzz DM with a peer: publish kind 41010 (1–8 `p` tags,
- * empty content) — the relay creates a hidden DM channel (or reuses the
- * existing one for the same participant set) — then locate that channel's
- * kind-39000 by its participant `p` tags. Returns the DM channel id.
+ * Open a Buzz DM: publish kind 41010 (1–8 `p` tags); the relay creates or reuses
+ * a hidden channel, found by its 39000's `p` tags. Returns the channel id.
  */
 export function useBuzzOpenDm(relayUrl: string | undefined) {
   const { nostr } = useNostr();
@@ -56,8 +52,7 @@ export function useBuzzOpenDm(relayUrl: string | undefined) {
         tags: [["p", peer]],
         relay: relayUrl,
       });
-      // The relay emits the hidden 39000 with the participants as `p` tags —
-      // poll briefly for it (creation is fast; reuse is immediate).
+      // Poll briefly for the relay-emitted 39000.
       const wanted = new Set(peer === user.pubkey ? [user.pubkey] : [user.pubkey, peer]);
       for (let attempt = 0; attempt < 5; attempt++) {
         const metas = await nostr.relay(relayUrl).query(

@@ -7,15 +7,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * Full-screen wizard chrome, shared by the signup wizard ({@link WelcomePage})
- * and the post-login setup flow ({@link LoginSetup}): background takeover, a
- * thin progress bar on top, a back/close header, the landing's ASCII sea along
- * the bottom, and a centered, width-capped column that fades/slides in per
- * step.
- *
- * `stepKey` must differ between steps — it keys the column so React remounts it
- * and the enter animation replays. `index` (0-based) and `total` drive the
- * progress bar.
+ * Full-screen wizard chrome for {@link WelcomePage} and {@link LoginSetup}.
+ * `stepKey` must differ per step so the column remounts and the enter animation replays.
  */
 export function WizardShell({
   index,
@@ -28,25 +21,17 @@ export function WizardShell({
   children,
 }: {
   index: number;
-  /** Number of steps in the flow. `0` means single-screen: no progress bar. */
+  /** Number of steps. `0` means single-screen: no progress bar. */
   total: number;
   stepKey: string;
-  /** Column width cap (a `max-w-*` class). Text-heavy steps go a size up. */
   maxWidth?: "max-w-sm" | "max-w-md" | "max-w-xl";
-  /**
-   * Stacking layer. Signup sits at `z-50` (nothing competes with it); the
-   * post-login flow sits above Radix dialogs (`z-[250]`) so a queued invite
-   * dialog can't paint over a setup step.
-   */
+  /** Stacking layer. Post-login flow sits above Radix dialogs (`z-[250]`) so queued dialogs can't cover a step. */
   zClassName?: string;
-  /** Step back. Omitted when there is nowhere to go back to. */
   onBack?: () => void;
-  /** Leave the wizard entirely. Omitted when the flow can't be abandoned. */
   onClose?: () => void;
   children: ReactNode;
 }) {
-  // Escape closes, matching the dialog chrome this replaced. Only bound when
-  // there's a close to run, so a flow that can't be abandoned stays put.
+  // Only bound when there's a close, so unabandonable flows stay put.
   useEffect(() => {
     if (!onClose) return;
     const onKey = (e: KeyboardEvent) => {
@@ -59,12 +44,7 @@ export function WizardShell({
   const pct = total > 0 ? ((index + 1) / total) * 100 : 100;
   return (
     <div className={cn("fixed inset-0 flex flex-col bg-background", zClassName)}>
-      {/*
-        The landing's living background, at its resting waterline: a band of
-        surf along the bottom of every step. Nothing scrolls it (no `scrollRef`)
-        — the sea just breathes there while the wizard runs. Positioned, so
-        every layer above it needs an explicit `relative z-*` to paint over it.
-      */}
+      {/* Positioned, so layers above need explicit `relative z-*`. */}
       <AsciiSea />
 
       {total > 0 && (
@@ -76,8 +56,6 @@ export function WizardShell({
         </div>
       )}
 
-      {/* Back top-left, close top-right, on every step — the slots hold their
-          width even when empty so the row never reflows between steps. */}
       <div className="relative z-20 flex shrink-0 items-center justify-between px-2 pt-2 safe-area-top">
         {onBack ? (
           <Button
@@ -109,13 +87,7 @@ export function WizardShell({
         )}
       </div>
 
-      {/*
-        `scrollbar-gutter: stable` so the gutter is reserved whether or not a
-        scrollbar is showing. Without it, a step that grows past the viewport
-        (opening the profile editor's More section) takes ~15px of width away
-        from the centered column mid-animation, and the whole step slides
-        sideways while the section expands.
-      */}
+      {/* Stable gutter so a step growing past the viewport doesn't shift the column sideways. */}
       <div className="relative z-10 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div
           key={stepKey}
@@ -133,11 +105,7 @@ export function WizardShell({
   );
 }
 
-/**
- * The common step body: a brand glyph, a lowercase mono heading, a muted
- * paragraph, then whatever actions the step needs. Kept here so every wizard
- * step — signup or post-login — reads the same.
- */
+/** Common step body: glyph, heading, paragraph, actions. */
 export function WizardStepBody({
   glyph,
   title,

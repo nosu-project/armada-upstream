@@ -1,41 +1,18 @@
 /**
- * Tracking-parameter stripping — link canonicalization for outgoing and
- * incoming message bodies.
+ * Tracking-parameter stripping (`si`, `fbclid`, `utm_*`, …) for outgoing and
+ * incoming message bodies — on send so published content is clean, on view so
+ * links from elsewhere are cleaned before render/unfurl.
  *
- * A share sheet rarely hands out a clean URL. YouTube's appends `?si=…`, a
- * per-share identifier that ties the click back to the account that shared it;
- * every ad network appends its own click id (`fbclid`, `gclid`, `ttclid`), and
- * campaign tooling appends `utm_*`. Pasting one into a chat forwards that
- * identifier to everyone who reads the message, and to everything that fetches
- * the link on their behalf — the preview unfurler included. Stripping is
- * applied on BOTH sides on purpose: on send so what is published is clean for
- * every client and every future reader, and on view so a link that arrived
- * from elsewhere (another client, a forward, an old message) is cleaned before
- * this client renders or fetches it.
- *
- * Two rules keep this conservative enough to run unattended:
- *
- * - **A parameter is removed only if it is named**, either globally (click ids
- *   and campaign tags, which mean the same thing everywhere) or by a rule for
- *   that host. There is no heuristic — guessing wrong silently breaks a link,
- *   and a broken link is worse than a tracked one.
- * - **Nothing else about the URL is touched.** When no rule fires the input
- *   string is returned by identity, and the surviving parameters keep their
- *   original spelling and order rather than being re-encoded by
- *   `URLSearchParams`, whose round-trip is not the identity (`%20` becomes
- *   `+`, reserved characters are re-escaped). That matters beyond tidiness:
- *   attachment URLs are matched against their NIP-92 `imeta` tags by exact
- *   string, so a URL this function rewrites gratuitously is an attachment that
- *   loses its metadata.
+ * Conservative by design: only NAMED parameters are removed (no heuristics — a
+ * broken link is worse than a tracked one), and nothing else changes. Unchanged
+ * URLs return by identity and survivors keep their original bytes (no
+ * `URLSearchParams` round-trip), because attachment URLs match their NIP-92
+ * `imeta` by exact string.
  */
 
 /**
- * Click and campaign identifiers stripped on every host.
- *
- * Everything here identifies the click, the campaign or the sharer, and is
- * inert as far as the destination page's content goes. Parameters that some
- * sites use for tracking but others use meaningfully — `ref`, `source`, `s`,
- * `t` — are deliberately NOT here; they belong to a host rule.
+ * Click/campaign identifiers stripped on every host. Params meaningful on some
+ * sites (`ref`, `source`, `s`, `t`) belong in host rules instead.
  */
 const GLOBAL_PARAMS: ReadonlySet<string> = new Set([
   // Ad-network click ids.
@@ -97,11 +74,7 @@ const GLOBAL_PARAMS: ReadonlySet<string> = new Set([
   "guce_referrer_sig",
 ]);
 
-/**
- * Parameter-name prefixes stripped on every host: the campaign conventions of
- * Google Analytics (`utm_`), Matomo/Piwik (`pk_`, `mtm_`, `piwik_`, `matomo_`),
- * HubSpot (`hsa_`), Vero (`vero_`) and Omeda (`oly_`).
- */
+/** Parameter prefixes stripped everywhere (GA, Matomo/Piwik, HubSpot, Vero, Omeda). */
 const GLOBAL_PREFIXES: readonly string[] = [
   "utm_",
   "pk_",
@@ -114,39 +87,24 @@ const GLOBAL_PREFIXES: readonly string[] = [
 ];
 
 interface HostRule {
-  /**
-   * Host suffixes the rule applies to. A rule matches `example.com` and every
-   * subdomain of it, so one entry covers `www.`, `m.` and `music.` spellings.
-   */
+  /** Host suffixes; each also matches all subdomains. */
   hosts: readonly string[];
-  /** Parameter names removed on these hosts, in addition to the global set. */
   params?: readonly string[];
-  /** Parameter-name prefixes removed on these hosts. */
   prefixes?: readonly string[];
-  /**
-   * Match by shape instead of by suffix, for a site whose host is not a fixed
-   * list. Only Google needs it — see {@link isGoogleHost}.
-   */
+  /** Shape-based host match (Google's many ccTLDs). */
   matchHost?: (host: string) => boolean;
-  /**
-   * Canonicalize the path. Mutates `pathname` and/or clears `dropQuery`, and
-   * is the one thing here that may rewrite a URL beyond deleting parameters —
-   * used where a site encodes tracking in the path itself.
-   */
+  /** Path canonicalization, for sites encoding tracking in the path. */
   canonical?: (u: URL) => { pathname?: string; dropQuery?: boolean } | void;
 }
 
 /**
- * Per-host rules, most-used sites first. Anything listed has been checked
- * against what the site's own share sheet emits; when in doubt a parameter is
- * left alone, because a stripped-but-meaningful parameter is a link that
- * silently goes somewhere else.
+ * Per-host rules, checked against each site's own share sheet. When in doubt a
+ * parameter is left alone.
  */
 const HOST_RULES: readonly HostRule[] = [
   {
-    // `si` is the per-share identifier the YouTube share sheet appends; `pp`
-    // is the opaque player blob on Shorts shares. `v`, `list`, `index`, `t`,
-    // `start` and `end` all change what is played, and stay.
+    // `si` = per-share id, `pp` = Shorts player blob. `v`/`list`/`index`/`t`/
+    // `start`/`end` change playback and stay.
     hosts: ["youtube.com", "youtu.be", "youtube-nocookie.com", "youtubekids.com"],
     params: [
       "si",
@@ -242,10 +200,8 @@ const HOST_RULES: readonly HostRule[] = [
     ],
   },
   {
-    // Amazon encodes the search result a product was reached from in the PATH
-    // (`/dp/B0…/ref=sr_1_3`) as well as the query, so a product link
-    // canonicalizes to the bare ASIN. Non-product paths (search, lists) keep
-    // their query — `k=` there IS the search.
+    // Product links canonicalize to the bare ASIN (tracking lives in the path
+    // too); non-product paths keep their query (`k=` is the search).
     hosts: [
       "amazon.com",
       "amazon.co.uk",
@@ -367,9 +323,7 @@ const HOST_RULES: readonly HostRule[] = [
     ],
   },
   {
-    // A Google result URL carries the whole session: `ved`/`ei` identify the
-    // click, `sxsrf` the search session. `q`, `tbm`, `tbs` and `hl` are the
-    // query itself and stay.
+    // `ved`/`ei`/`sxsrf` identify the click/session; `q`/`tbm`/`tbs`/`hl` stay.
     hosts: ["google.com"],
     matchHost: isGoogleHost,
     params: [
@@ -451,11 +405,7 @@ function hostMatches(host: string, suffix: string): boolean {
   return host === suffix || host.endsWith(`.${suffix}`);
 }
 
-/**
- * Google's search UI lives on ~190 ccTLDs (`google.co.uk`, `google.de`, …) that
- * all emit the same parameters, so the rule matches the shape rather than
- * enumerating them.
- */
+/** Google search spans ~190 ccTLDs, so match the shape. */
 function isGoogleHost(host: string): boolean {
   return /(^|\.)google(\.[a-z]{2,3})+$/.test(host);
 }
@@ -479,15 +429,11 @@ function isTracking(name: string, rule: HostRule | undefined): boolean {
 }
 
 /**
- * Remove tracking parameters from a single URL, returning it canonicalized.
- *
- * Returns the input **unchanged, by identity** when it is not an http(s) URL,
- * when it does not parse, or when no rule fires — so a caller can cheaply test
- * `cleaned !== url` to know whether anything happened.
+ * Remove tracking parameters from one URL. Returns the input BY IDENTITY when
+ * not http(s), unparseable, or untouched.
  */
 export function stripTrackingParams(url: string): string {
-  // Cheap rejection before the parser: the overwhelming majority of URLs in a
-  // message body carry no query at all, and this runs over every one of them.
+  // Cheap pre-parse rejection: most URLs have no query.
   if (!url.includes("?") && !url.includes("/dp/") && !url.includes("/gp/")) return url;
 
   let parsed: URL;
@@ -500,8 +446,7 @@ export function stripTrackingParams(url: string): string {
 
   const rule = ruleFor(parsed.hostname.toLowerCase());
 
-  // Split the ORIGINAL string rather than working from the parsed URL, so
-  // whatever survives keeps its exact original bytes (see the file comment).
+  // Slice the ORIGINAL string so survivors keep their exact bytes.
   const hashAt = url.indexOf("#");
   const beforeHash = hashAt === -1 ? url : url.slice(0, hashAt);
   const fragment = hashAt === -1 ? "" : url.slice(hashAt);
@@ -529,7 +474,7 @@ export function stripTrackingParams(url: string): string {
       try {
         name = decodeURIComponent(rawName);
       } catch {
-        // A malformed escape is not a parameter name we know; keep it as-is.
+        // Malformed escape: keep as-is.
       }
       return !isTracking(name, rule);
     });
@@ -543,19 +488,12 @@ export function stripTrackingParams(url: string): string {
   return `${base}${keptQuery ? `?${keptQuery}` : ""}${fragment}`;
 }
 
-/**
- * URLs inside a message body. Matches the same scheme set the renderer's
- * tokenizer does, minus `wss?:` — a relay URL has no tracking to strip and is
- * rendered as an internal link rather than followed.
- */
+/** URLs in a message body (like the renderer's tokenizer, minus relay `wss?:` URLs). */
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<]+/gi;
 
 /**
- * Trim trailing sentence punctuation that a URL matched greedily, re-attaching
- * a `)` that balances a `(` inside the URL (Wikipedia-style paths). Mirrors the
- * rule in `ChatContent`'s tokenizer, which has already applied it by the time
- * that renderer calls {@link stripTrackingParams} on a single URL — this copy
- * is for the send path, which scans raw text.
+ * Trim greedy trailing punctuation, keeping a `)` that balances one in the URL.
+ * Mirrors `ChatContent`'s tokenizer; this copy serves the send path.
  */
 function splitTrailingPunctuation(url: string): [string, string] {
   const m = /^(.*?)([.,;:!?)\]]+)$/.exec(url);
@@ -572,13 +510,7 @@ function splitTrailingPunctuation(url: string): [string, string] {
   return [head, punct];
 }
 
-/**
- * Strip tracking parameters from every URL in a block of text.
- *
- * Returns the input unchanged by identity when nothing was stripped. Used on
- * the send path, where the body is still raw text; the render path works from
- * already-tokenized URLs and calls {@link stripTrackingParams} directly.
- */
+/** Strip tracking from every URL in text (send path); identity when unchanged. */
 export function stripTrackingParamsInText(text: string): string {
   if (!text.includes("http")) return text;
   let changed = false;

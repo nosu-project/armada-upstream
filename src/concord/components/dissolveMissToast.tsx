@@ -2,12 +2,7 @@ import { ToastAction } from "@/components/ui/toast";
 
 import type { toast } from "@/hooks/useToast";
 
-/**
- * The toast for a dissolve whose retirement didn't fully land: says which half
- * missed — invite links still joinable, or Discover listings still up — and
- * offers a Retry, since the community has already left the rail and no other
- * control for it is left on screen.
- */
+/** Toast for a partially failed dissolve (links or Discover listings still live), with Retry. */
 export function dissolveMissToast(
   missed: { revokeFailed: boolean; unlistFailed: boolean },
   onRetry: () => void,

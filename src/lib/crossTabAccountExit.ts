@@ -34,10 +34,9 @@ function parseEpoch(value: unknown): AccountExitEpoch | undefined {
 }
 
 /**
- * Fence every same-origin tab before the leader starts endpoint/config cleanup.
- * The local CustomEvent covers the initiating tab; the storage event covers
- * every other tab. Followers never run destructive shared teardown — they wait
- * for the durable active-account marker and then reload into its winner.
+ * Fence every same-origin tab before the leader starts shared cleanup (local
+ * CustomEvent for this tab, storage event for others). Followers never run
+ * destructive teardown; they wait for the active-account marker and reload.
  */
 export function beginCrossTabAccountExit(
   fromPubkey: string | null | undefined,
@@ -52,19 +51,16 @@ export function beginCrossTabAccountExit(
   try {
     localStorage.setItem(ACCOUNT_EXIT_EPOCH_KEY, JSON.stringify(epoch));
   } catch {
-    // The initiating document is still fenced below. Storage-unavailable
-    // browsers cannot coordinate origin-global state across tabs reliably.
+    // Without storage, only this document is fenced.
   }
   window.dispatchEvent(new CustomEvent(LOCAL_ACCOUNT_EXIT_EVENT, { detail: epoch }));
   return epoch;
 }
 
 /**
- * Fence a stale tab in two phases: the pre-exit epoch stops writers before the
- * leader touches the shared endpoint; the later active marker proves login
- * persistence has settled and tells followers to reload. No follower invokes
- * beforeAccountExit handlers, so it cannot unsubscribe or clear the incoming
- * account's newly activated shared endpoint after a slow old cleanup.
+ * Fence a stale tab: the exit epoch stops writers before the leader touches
+ * the shared endpoint; the active marker then triggers a reload. Followers never
+ * run beforeAccountExit handlers, so they can't clobber the incoming account.
  */
 export function installCrossTabAccountExit(
   options: CrossTabAccountExitOptions,
@@ -94,9 +90,7 @@ export function installCrossTabAccountExit(
       return;
     }
     if (event.key !== ACTIVE_PUBKEY_KEY || event.newValue === options.pubkey) return;
-    // A preflight should always precede this marker. Still fence/reload if an
-    // older tab changes it without one; what must never happen is follower
-    // cleanup against a shared endpoint after the incoming account starts.
+    // No preceding epoch (older tab): still fence and reload, never clean up.
     fence();
     reload();
   };

@@ -5,22 +5,12 @@ import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { cn } from "@/lib/utils";
 
 interface FollowButtonProps {
-  /** The pubkey of the user to follow/unfollow. */
   pubkey: string;
-  /** Optional class name overrides. */
   className?: string;
-  /** Button size variant. Defaults to "sm". */
   size?: "default" | "sm" | "lg" | "icon";
 }
 
-/**
- * Reusable follow button. Ported from Ditto.
- *
- * Renders only the positive (follow) action — the same style as the card's
- * Mention button. Unfollow is a negative action and lives behind the profile
- * card's overflow menu. Hides itself for self, when logged out, or when the
- * user is already following.
- */
+/** Follow button (from Ditto). Follow-only; hidden for self, logged-out, or already following. */
 export function FollowButton({ pubkey, className, size = "sm" }: FollowButtonProps) {
   const { canToggle, isFollowing, isPending, toggle } = useFollowToggle(pubkey);
 

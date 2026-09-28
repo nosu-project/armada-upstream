@@ -1,8 +1,6 @@
 /**
- * Persist the user's preferred voice input/output devices in localStorage so a
- * chosen mic/speaker is reused across calls and reloads. LiveKit identifies
- * devices by `deviceId`; the empty string and "default" both mean "system
- * default", which we treat as "no explicit preference".
+ * Persisted preferred voice devices. "" and "default" both mean system default
+ * (no explicit preference).
  */
 
 import {
@@ -63,16 +61,9 @@ export function getPreferredCameraId(): string | undefined {
 }
 
 /**
- * Whether the user can pick an audio-output (speaker) device.
- *
- * Voice rooms always run with LiveKit `webAudioMix`, so remote playback is
- * mixed through an `AudioContext` and switching the output device routes
- * through `AudioContext.setSinkId` — NOT `HTMLMediaElement.setSinkId`. That is
- * a much narrower capability (Chromium 110+; absent in Firefox/Safari, where
- * the media-element method may still exist). Gating the Speaker menu on the
- * media element instead would show it on engines where selecting a device
- * makes LiveKit throw `"cannot switch audio output…"`, so we gate on the
- * AudioContext capability that actually applies. See voicePlaybackOutput.test.ts.
+ * Whether the user can pick a speaker. Rooms use LiveKit `webAudioMix`, so
+ * output switching needs `AudioContext.setSinkId` (Chromium 110+), not the
+ * media-element one — otherwise LiveKit throws. See voicePlaybackOutput.test.ts.
  */
 export function supportsSpeakerSelection(): boolean {
   if (typeof document === "undefined") return false;
@@ -91,12 +82,9 @@ export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): vo
 }
 
 /**
- * The user's preferred voice server, raw as typed (empty = use the build-time
- * defaults). This is a CLIENT setting, not community state: it's consulted
- * ahead of the deployment defaults when starting a call in an empty Concord
- * voice channel, and when placing a 1:1 DM call (both blind-broker paths).
- * Once anyone is in a Concord call, their presence-announced broker is the
- * rendezvous point and overrides this (CORD-07 §5).
+ * The preferred voice server as typed ("" = build defaults). A client setting
+ * used for empty Concord voice channels and 1:1 DM calls; an active call's
+ * presence-announced broker overrides it (CORD-07 §5).
  */
 export function getPreferredVoiceServer(): string {
   try {
@@ -120,10 +108,8 @@ export function setPreferredVoiceServer(value: string): void {
 }
 
 /**
- * The preference as an https origin (the Concord AV broker form). Accepts a
- * bare host, an https origin, or a wss relay URL — they all name the same
- * Armada host. Undefined when unset or not coercible to a clean https origin
- * (brokers are bearer-credential endpoints; plaintext http is refused).
+ * The preference as an https origin (accepts bare host, https, or wss). Undefined
+ * if not a clean https origin — brokers take bearer credentials.
  */
 export function preferredVoiceServerOrigin(): string | undefined {
   const raw = getPreferredVoiceServer();
@@ -146,15 +132,9 @@ export function effectiveAvServers(defaults: string[]): string[] {
 }
 
 /**
- * Browser audio-processing constraints applied to the captured mic track.
- * These map directly onto the standard MediaTrackConstraints; LiveKit defaults
- * them all to `true`, which we mirror when no preference is stored.
- *
- * `rnnoise` is different in kind: it's an ML noise-cancellation track processor
- * (AudioWorklet + WASM, BSD RNNoise) layered on top of the captured track, not
- * a browser constraint. It's far more effective at removing background noise
- * than the browser's basic `noiseSuppression`, so when it's on we leave the
- * browser `noiseSuppression` constraint alone (the two stack harmlessly).
+ * Mic audio-processing prefs. `rnnoise` is an ML track processor (AudioWorklet
+ * + WASM) layered on the track, not a browser constraint; it stacks harmlessly
+ * with `noiseSuppression`.
  */
 export interface AudioProcessingPrefs {
   noiseSuppression: boolean;
@@ -188,15 +168,9 @@ export function getAudioProcessing(): AudioProcessingPrefs {
 }
 
 /**
- * The browser constraints every published mic track is captured under — the
- * `audioCaptureDefaults` of each LiveKit room this client builds. One function
- * rather than an object literal per room, so the two room constructors (the
- * plain NIP-29 room and the E2EE Concord/DM room) cannot drift.
- *
- * `channelCount: 1` is load-bearing, not a preference. A stereo interface
- * that populates only one channel (most USB mics and mixers do) otherwise
- * publishes a track every listener hears from a single side; a mono reference
- * is also the cleaner input for echo cancellation.
+ * `audioCaptureDefaults` shared by both LiveKit room constructors so they can't
+ * drift. `channelCount: 1` is load-bearing: one-channel USB interfaces would
+ * otherwise play from one side only.
  */
 export function micCaptureConstraints(
   processing: AudioProcessingPrefs = getAudioProcessing(),
@@ -227,20 +201,9 @@ export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
 }
 
 /**
- * Per-user playback volume, keyed by pubkey, as a multiplier in [0, 2]
- * (1 = unchanged, 0 = muted, 2 = 200%). Microphone and screen-share playback
- * are stored separately so quieting somebody's mic does not also quiet media
- * they share. Stored values survive calls and reloads; the default 1 is
- * omitted to keep each map small.
- *
- * LiveKit rooms enable `webAudioMix`, so these multipliers drive a Web Audio
- * GainNode instead of `HTMLMediaElement.volume` and values above 1 are valid.
- * Reads and writes still clamp to [0, 2] to sanitize stale or corrupt storage.
- *
- * Changes are observable (`subscribeUserVolumes`) so every surface that shows
- * a volume control — the call-stage tiles, the sidebar roster's context
- * menu — stays in sync, and the connected room can apply changes live no
- * matter where they were made.
+ * Per-user playback volumes by pubkey, multipliers in [0, 2] (Web Audio gain,
+ * so >1 is valid); mic and screen-share stored separately, default 1 omitted.
+ * Observable via `subscribeUserVolumes` so all controls and the room stay in sync.
  */
 const volumeListeners = new Set<() => void>();
 
@@ -271,19 +234,13 @@ export function getUserVolumes(): Record<string, number> {
   return getStoredVolumes(VOLUME_KEY);
 }
 
-/**
- * The remembered microphone playback volume for a pubkey, clamped to [0, 2]
- * (defaults to 1).
- */
+/** Remembered mic playback volume for a pubkey (default 1). */
 export function getUserVolume(pubkey: string): number {
   const v = getUserVolumes()[pubkey];
   return typeof v === "number" ? clampVolume(v) : 1;
 }
 
-/**
- * Persist a per-user microphone playback volume, clamped to [0, 2]. A value of
- * 1 clears the override.
- */
+/** Persist a mic playback volume; 1 clears the override. */
 export function rememberUserVolume(pubkey: string, volume: number): void {
   const next = clampVolume(volume);
   try {

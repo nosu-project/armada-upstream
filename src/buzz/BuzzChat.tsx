@@ -73,10 +73,8 @@ import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * Chat-like kinds that render through the shared ChatMessage row. Agent job
- * events (43001–43006) are here too: Buzz renders them as ordinary agent
- * messages (author, avatar, content, reactions, threading), not muted system
- * lines — an agent is a member, so its job output is just a message from it.
+ * Kinds rendered through the shared ChatMessage row. Agent job events
+ * (43001–43006) included: Buzz renders them as ordinary agent messages.
  */
 function isChatRow(kind: number): boolean {
   return (
@@ -99,20 +97,14 @@ interface BuzzChatMessageProps {
   onEdit: (event: ChatMsg) => void;
   onEditSubmit: (event: ChatMsg, content: string) => void;
   onEditCancel: () => void;
-  /** Forum vote bar (forum channels only). */
   votes?: { up: number; down: number; mine?: "+" | "-" };
   onVote?: (event: ChatMsg, value: "+" | "-") => void;
-  /** Whether the author holds the `bot` role in this channel (agent badge). */
+  /** Author holds the `bot` role in this channel (agent badge). */
   isAgent?: boolean;
-  /** Channel route for "Copy message link" (see ChatMessage.permalink). */
   permalink?: ChatRoute;
 }
 
-/**
- * Buzz binding for one chat-like row. Mirrors Nip29ChatMessage: per-room
- * batched reactions/threads read off the transport, rendered through the
- * shared presentational ChatMessage.
- */
+/** Buzz binding for one chat-like row; mirrors Nip29ChatMessage. */
 function BuzzChatMessage({
   event,
   transport,
@@ -131,9 +123,7 @@ function BuzzChatMessage({
 }: BuzzChatMessageProps) {
   const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
-  // Buzz's "Send to channel": a fresh top-level message that names the thread
-  // it came from. Buzz renders that provenance as a line above the body, so a
-  // reader can tell it apart from an unprompted message and jump back.
+  // Buzz's "Send to channel": a top-level message naming the thread it came from.
   const sentFrom = sentFromThreadRef(event.tags);
   const openThread = transport.openThread;
   const sendStatus = transport.sendStatusFor?.(event.id);
@@ -161,18 +151,13 @@ function BuzzChatMessage({
             </span>
           ) : undefined
         }
-        // Only a failed row renders Retry/Discard; any other row gets no
-        // per-render closure to defeat ChatMessage's memo with.
+        // Only failed rows get a closure, so ChatMessage's memo holds.
         onRetry={sendStatus === "failed" ? () => transport.retry?.(event) : undefined}
         onDiscard={sendStatus === "failed" ? () => transport.discard?.(event.id) : undefined}
         onDelete={transport.deleteMessage}
         onOpenThread={openThread ? (e) => openThread(e, true) : undefined}
-        // No inline `onReply`: on Buzz, replying IS threading. Buzz's own
-        // client has one reply action and it opens the thread; the inline
-        // reply Armada used to offer here published a `["broadcast","1"]`
-        // reply — a shape Buzz's client never emits — which Buzz renders
-        // twice (a bare channel row AND a thread entry) and, one level
-        // deeper, drops from the channel entirely on reload.
+        // No inline `onReply`: on Buzz, replying IS threading. Buzz renders a
+        // `["broadcast","1"]` inline reply twice and drops it on reload.
         replyContext={
           sentFrom ? (
             <button
@@ -230,20 +215,13 @@ function BuzzChatMessage({
 interface BuzzForumPostProps {
   event: ChatMsg;
   transport: ChatTransport;
-  /** Vote tally for this post (forum channels always pass one). */
   votes?: { up: number; down: number; mine?: "+" | "-" };
   onVote?: (event: ChatMsg, value: "+" | "-") => void;
-  /** Whether the author holds the `bot` role in this channel (agent badge). */
+  /** Author holds the `bot` role in this channel (agent badge). */
   isAgent?: boolean;
 }
 
-/**
- * A forum post rendered as a Reddit-style card: a left vote rail (upvote /
- * score / downvote), then a byline (avatar · author · relative time · overflow
- * menu), the post body, and a comment-count action that opens the thread. The
- * card body is click-to-open (ignoring clicks that land on links/buttons), so
- * the whole post behaves like a Reddit listing row.
- */
+/** A forum post as a Reddit-style card; clicking the body opens the thread. */
 function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPostProps) {
   const { user } = useCurrentUser();
   const author = useAuthor(event.pubkey);
@@ -262,8 +240,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
     [transport, event],
   );
 
-  // Reddit-style: clicking the post opens it, but clicks on links/buttons/media
-  // inside the body act normally instead of being swallowed by the open.
+  // Clicks on links/buttons/media inside the body act normally.
   const handleBodyClick = useCallback(
     (e: React.MouseEvent) => {
       if ((e.target as HTMLElement).closest("a, button, input, textarea, [role='button']")) return;
@@ -285,7 +262,6 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
   return (
     <div className="px-2 py-1">
       <div className="flex overflow-hidden clip-corner-lg border border-border bg-card transition-colors hover:border-muted-foreground/30">
-        {/* Vote rail */}
         <div className="flex shrink-0 flex-col items-center gap-0.5 bg-secondary/40 px-1 py-2">
           <button
             type="button"
@@ -321,7 +297,6 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
           </button>
         </div>
 
-        {/* Body */}
         <div className="min-w-0 flex-1 cursor-pointer px-3 py-2" onClick={handleBodyClick}>
           <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
@@ -396,7 +371,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
 interface BuzzChatProps {
   relayUrl: string;
   channelId: string;
-  /** Buzz channel type: forum channels swap the content kinds + add votes. */
+  /** Forum channels swap the content kinds and add votes. */
   channelType?: "stream" | "forum" | "dm" | "workflow";
   canWrite: boolean;
   membershipPending?: boolean;
@@ -405,12 +380,9 @@ interface BuzzChatProps {
 }
 
 /**
- * The message timeline + composer for a channel on a Buzz relay. Buzz is
- * NIP-29-based, so the surface mirrors {@link GroupChat} — but with the Buzz
- * protocol semantics: extra row kinds (system messages, diffs, job lifecycle,
- * huddle cards), kind-40003 edits folded onto their targets, NIP-10 marked
- * kind-9 THREAD replies (with `broadcast` surfacing), forum posts with votes,
- * and live typing indicators (ephemeral kind 20002).
+ * Timeline + composer for a Buzz channel. Mirrors {@link GroupChat} with Buzz
+ * semantics: extra row kinds, kind-40003 edits, NIP-10 kind-9 thread replies,
+ * forum votes, and typing indicators (ephemeral kind 20002).
  */
 export function BuzzChat({
   relayUrl,
@@ -454,7 +426,6 @@ export function BuzzChat({
   const { mutate: deleteOwnMessage } = useDeleteOwnMessage(relayUrl, channelId);
   const { mutateAsync: publish } = useNostrPublish();
   const { markRead } = useReadState();
-  // Covered by Settings: mounted but not on screen, so not being read.
   const covered = usePageCovered();
   const { typers, publishTyping } = useBuzzTyping(relayUrl, channelId);
 
@@ -489,9 +460,7 @@ export function BuzzChat({
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
-  // The open thread is whichever one the route names, resolved against loaded
-  // history — so it survives a refresh, closes on Back, and opens straight
-  // from a notification without a second code path.
+  // The open thread comes from the route, so it survives refresh and deep links.
   const location = useLocation();
   const navigate = useNavigate();
   const routeThreadRoot = useMemo(() => {
@@ -508,8 +477,7 @@ export function BuzzChat({
     relayUrl && channelId && threadRoot ? `h:${relayUrl}|${channelId}:t:${threadRoot.id}` : undefined,
   );
 
-  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
-  // Old tray notifications and copied links still carry them.
+  // Legacy `?thread=`/`?m=` deep links from old notifications and copied links.
   useLegacyFocusParams(
     useMemo(
       () =>
@@ -520,7 +488,6 @@ export function BuzzChat({
     ),
   );
 
-  // Tallies resolve over the timeline PLUS the open thread's replies.
   const tallyIds = useMemo(() => {
     if (!threadRoot) return visibleIds;
     const replyIds = threadRepliesForRaw(threadRoot.id).map((r) => r.id);
@@ -536,7 +503,7 @@ export function BuzzChat({
     tallyIds,
   );
 
-  // Forum votes (45002) tallied from the raw window.
+  // Forum votes (45002).
   const voteTallies = useMemo(() => {
     if (!forum) return undefined;
     const deleted = collectDeletedIds(raw);
@@ -573,9 +540,7 @@ export function BuzzChat({
     [voteTallies, publish, channelId, relayUrl, mergeEvents],
   );
 
-  // Whether the reply composer takes focus on open: an intent belonging to the
-  // click that navigated, not to the location, so it rides in history state
-  // and a shared link never steals focus.
+  // Focus intent rides in history state so a shared link never steals focus.
   const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
@@ -591,12 +556,11 @@ export function BuzzChat({
   });
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
-  // Message permalinks (`/m/<id>` — notification taps, copied links).
   const channelRoute = useMemo(
     () => ({ kind: "nip29", relayUrl, groupId: channelId }) as const,
     [relayUrl, channelId],
   );
-  // Stable thread-panel permalink — an inline object would defeat the thread rows' memo.
+  // Memoized: an inline object would defeat the thread rows' memo.
   const threadPermalink = useMemo(
     () => (lastThreadRoot ? ({ kind: "nip29", relayUrl, groupId: channelId, threadRoot: lastThreadRoot.id } as const) : undefined),
     [relayUrl, channelId, lastThreadRoot],
@@ -614,7 +578,6 @@ export function BuzzChat({
     enabled: !searching,
   });
 
-  // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
     if (threadRoot) {
       setLastThreadRoot(threadRoot);
@@ -624,7 +587,6 @@ export function BuzzChat({
     return () => clearTimeout(t);
   }, [threadRoot]);
 
-  // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
     if (!user || timeline.length === 0 || covered) return;
     const latest = timeline[timeline.length - 1]?.created_at ?? 0;
@@ -639,33 +601,23 @@ export function BuzzChat({
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [user, timeline, relayUrl, channelId, markRead, covered]);
 
-  // Panel/footer reflows need no re-pinning here (mirrors GroupChat): the
-  // timeline observes its own scroller and content and holds the reading
-  // position across them.
-
-  // Sending is an explicit "I'm at the present": follow the new message, and
-  // drop any `/m/` focus so the location stops claiming the reader is parked
-  // at an older one (a remount would otherwise snap them back to it).
+  // Sending follows the new message and drops any `/m/` focus, or a remount
+  // would snap back to it.
   const handleSent = useCallback(() => {
     timelineRef.current?.pinToBottom();
     clearMessageFocus();
   }, [clearMessageFocus]);
 
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
-    // A broadcast reply is a timeline row, but its thread is its ROOT's: the
-    // fold buckets replies by root, so a panel keyed by the reply's own id
-    // would be empty and a reply sent from it would nest a level deeper.
-    // Buzz routes such a click to the root as well (useChannelRouteTarget).
+    // A broadcast reply's thread is its ROOT's (replies are bucketed by root).
     const rootId = resolveBuzzRootId(event);
     navigate(chatRoute({ kind: "nip29", relayUrl, groupId: channelId, threadRoot: rootId }), {
       state: { threadAutoFocus: focusReply },
     });
-    // Backfill the full thread by `#e` reference — the loaded `#h` window may
-    // not span an old thread's replies.
+    // Fetch by `#e`: the loaded `#h` window may not span an old thread's replies.
     void fetchThread(rootId);
   }, [fetchThread, navigate, relayUrl, channelId]);
-  // A no-op when no thread is routed, so a stray close (the panel stays
-  // mounted through its slide-out) can't stack duplicate history entries.
+  // No-op when no thread is routed, so a stray close can't stack history entries.
   const closeThread = useCallback(() => {
     if (!routeThreadRoot) return;
     setThreadExpanded(false);
@@ -695,8 +647,7 @@ export function BuzzChat({
     async (event: NostrEvent) => {
       markFailed(event.id);
       try {
-        // The timeline copy may have come from the event store, which drops
-        // signatures; the outbox holds the signed one.
+        // The event store drops signatures; the outbox holds the signed copy.
         await republish({ event: await withSignature(event), relay: relayUrl });
         markSent(event.id);
       } catch {
@@ -717,13 +668,11 @@ export function BuzzChat({
     [user?.pubkey, deleteOwnMessage, deleteEvent],
   );
 
-  // Thread replies adapted to ChatMsg (they already are NostrEvents).
   const threadRepliesFor = useCallback(
     (rootId: string): ChatMsg[] => threadRepliesForRaw(rootId),
     [threadRepliesForRaw],
   );
 
-  // Huddle lifecycle overlays for the 48100 session cards.
   const huddleLifecycle = useMemo(
     () =>
       raw.filter(
@@ -796,8 +745,6 @@ export function BuzzChat({
       }
       if (!isChatRow(msg.kind)) return <BuzzSystemRow key={msg.id} event={msg} />;
       const votes = forum ? voteTallies?.get(msg.id) ?? { up: 0, down: 0 } : undefined;
-      // Forum posts render as Reddit-style cards (vote rail + byline + body +
-      // comment count); stream messages render through the chat row.
       if (forum) {
         return (
           <BuzzForumPost
@@ -894,7 +841,6 @@ export function BuzzChat({
           />
         )}
 
-        {/* Live typing indicators (ephemeral kind 20002). */}
         {!searching && <TypingIndicator pubkeys={typers} />}
 
         {searching ? null : user && canWrite ? (
@@ -902,17 +848,13 @@ export function BuzzChat({
             relayUrl={relayUrl}
             groupId={channelId}
             messages={timeline}
-            // Where a share routed to this channel lands — the channel's own
-            // address, not the ambient location.
             shareRoute={chatRoute({ kind: "nip29", relayUrl, groupId: channelId })}
-            // No `replyTo`: this composer only ever posts top-level messages.
-            // Replies go through the thread panel (`sendThreadReply`), which is
-            // the one reply shape Buzz's own client produces.
+            // No `replyTo`: replies go through the thread panel, the only reply shape
+            // Buzz's own client produces.
             messageKind={forum ? KIND_FORUM_POST : undefined}
             pollsEnabled={false}
             placeholder={channelName ? `Message ${channelName}` : undefined}
-            // Android Direct Share: the channel's own name/picture, captured on
-            // send. The publisher can't resolve NIP-29 metadata itself.
+            // Android Direct Share label; the publisher can't resolve NIP-29 metadata.
             shareLabel={channelName}
             shareIconUrl={groupDetails?.group?.picture}
             onSent={handleSent}
@@ -923,8 +865,7 @@ export function BuzzChat({
             onTyping={publishTyping}
             onSlashAction={handleSlashAction}
             onEditLast={editLast}
-            // Caret in the composer on open and on each channel switch; not on
-            // touch, where it raises the keyboard.
+            // Not on touch, where it raises the keyboard.
             autoFocus={!isTouch}
           />
         ) : membershipPending ? (
@@ -941,7 +882,6 @@ export function BuzzChat({
       </div>
       </ComposerBoundsProvider>
 
-      {/* Thread panel (Buzz threads = NIP-10 marked kind-9 replies). */}
       <div
         className={cn(
           "overflow-hidden",

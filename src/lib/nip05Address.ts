@@ -1,15 +1,7 @@
-/**
- * A NIP-05 address, split and canonicalized.
- *
- * `mk@ditto.pub` and `ditto.pub` name the same person: NIP-05 calls a domain's
- * root user `_`, and clients show `_@domain` as the bare domain. Both spellings
- * are things people say out loud and write in a URL, so both arrive here and
- * both have to land on one lookup.
- */
+/** A NIP-05 address, canonicalized: a bare `domain` is the root user `_@domain`. */
 export interface Nip05Address {
   /** Local part. `_` for a bare domain. */
   name: string;
-  /** Lowercased domain. */
   domain: string;
   /** Canonical `name@domain` — the form the well-known lookup is keyed by. */
   address: string;
@@ -20,18 +12,12 @@ export interface Nip05Address {
 /** NIP-05 local part: the characters the spec allows in a `names` key. */
 const NAME_RE = /^[a-z0-9\-_.]+$/i;
 /**
- * A hostname with at least one dot. The dot is what makes this safe to run
- * against a bare path segment: it's the only thing separating `ditto.pub` from
- * `settings`, and without it every unrouted single-segment path would become a
- * NIP-05 lookup instead of a 404.
+ * Hostname with at least one dot — the dot keeps unrouted single-segment paths
+ * (`settings`) from becoming NIP-05 lookups.
  */
 const DOMAIN_RE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i;
 
-/**
- * Parse a user-supplied string as a NIP-05 address, or return undefined if it
- * isn't shaped like one. Accepts `name@domain`, a bare `domain` (expanded to
- * `_@domain`), and a leading `@` (how people write handles: `@mk@ditto.pub`).
- */
+/** Parse `name@domain`, bare `domain` (→ `_@domain`), or `@name@domain`; undefined otherwise. */
 export function parseNip05Address(input: string): Nip05Address | undefined {
   const value = input.trim().replace(/^@/, "");
   if (!value) return undefined;

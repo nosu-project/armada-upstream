@@ -1,27 +1,10 @@
 /**
- * Concord history export writer.
- *
- * ONE download: a single self-contained HTML file that opens as a MINI ARMADA
- * and carries every view of the same rumor-derived model inside it, switched by
- * a tab bar:
- *
- *   - Chat: a channel rail down the left, a message pane on the right.
- *   - Text: a flat plaintext transcript.
- *   - JSON: the whole model, pretty-printed, for machine consumption.
- *
- * Nothing it references lives off the file (inline CSS/JS, `data:` URIs for
- * media), so it opens offline and leaks nothing on open.
- *
- * The completeness verdict is deliberately NOT baked into the file: it is a
- * property of the client that produced the export, shown once in the app before
- * download, not a permanent notice stamped on the artifact. Everything here is
- * PURE and synchronous over a fully-assembled {@link ExportModel}, which the
- * orchestrator builds from the LOCAL RUMOR STORE after the sweep populates it.
+ * Concord history export: one self-contained HTML file (Chat / Text / JSON tabs)
+ * with inline CSS/JS and `data:` URIs, so it opens offline and leaks nothing.
+ * Pure and synchronous over an {@link ExportModel} built from the local rumor store.
  */
 
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
-
-// ── The normalized model (assembled by the orchestrator) ─────────────────────
 
 export interface ExportProfile {
   pubkey: string;
@@ -73,35 +56,25 @@ export interface ExportModel {
   generatedAtMs: number;
   /** Community icon, embedded as a `data:` URI when available. */
   icon?: string;
-  /** pubkey to resolved profile. */
   profiles: Record<string, ExportProfile>;
   channels: ExportChannel[];
 }
-
-// ── Shared helpers ───────────────────────────────────────────────────────────
 
 /** UTC ISO timestamp, locale-independent so an export is byte-reproducible. */
 export function isoTime(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-/** A profile's display name, falling back to a short pubkey. */
 function nameOf(model: ExportModel, pubkey: string): string {
   const p = model.profiles[pubkey];
   if (p?.name) return p.name;
   return pubkey.length > 12 ? `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}` : pubkey;
 }
 
-// ── JSON (embedded into the HTML; not a separate download) ───────────────────
-
-/** The full model as pretty JSON. Round-trips every field. */
 export function exportJson(model: ExportModel): string {
   return JSON.stringify(model, null, 2) + "\n";
 }
 
-// ── Plaintext transcript (embedded into the HTML) ────────────────────────────
-
-/** A flat plaintext transcript of the model, for the HTML's Text tab. */
 export function buildTranscript(model: ExportModel): string {
   const out: string[] = [];
   out.push(model.communityName);
@@ -127,8 +100,6 @@ export function buildTranscript(model: ExportModel): string {
   return out.join("\n");
 }
 
-// ── HTML escaping / content ──────────────────────────────────────────────────
-
 const HTML_ESCAPES: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
@@ -143,13 +114,8 @@ export function escapeHtml(text: string): string {
 }
 
 /**
- * A media URL safe to place in an `href`/`src`, or `undefined` to render no
- * link at all.
- *
- * `data:` passes because the embed pass mints those itself; everything else
- * must be http(s), so a `javascript:` URL riding a member's `imeta` tag or
- * kind-0 never reaches the document. `escapeHtml` alone does NOT cover this:
- * it stops an attribute breakout and says nothing about the scheme.
+ * A media URL safe for `href`/`src`, or `undefined`. Only `data:` and http(s)
+ * pass, so a `javascript:` URL can't ride in via `imeta`/kind-0.
  */
 function safeMediaUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
@@ -160,19 +126,8 @@ function safeMediaUrl(raw: string | undefined): string | undefined {
 const CSS_URL_SAFE = /[^\w!#$&+,\-./:;=?@[\]~%]/g;
 
 /**
- * The same URL, safe to interpolate into `url("…")` inside a `<style>` element.
- *
- * Two contexts stack here, and only escaping for the inner one is a hole. The
- * CSS string wants `"` and `\` neutralised — but a `<style>` is **RAWTEXT**, so
- * a literal `</style>` in its text ends the element and everything after it is
- * parsed as markup. A `<` is script injection in this position even though the
- * CSS grammar is unbothered by it, which is exactly what stripping quotes and
- * backslashes alone missed: a kind-0 `picture` of `x</style><script>…` escaped
- * into the document with the whole decrypted history in the DOM.
- *
- * Percent-encoding is lossless for a URL, and the base64 `data:` URIs the embed
- * pass mints contain none of the encoded characters, so this is a no-op on the
- * common path.
+ * The URL, safe inside `url("…")` in a `<style>`. `<style>` is RAWTEXT, so a
+ * literal `</style>` would escape it — percent-encode, not just strip quotes.
  */
 function cssUrl(raw: string | undefined): string | undefined {
   const safe = safeMediaUrl(raw);
@@ -184,7 +139,6 @@ function cssUrl(raw: string | undefined): string | undefined {
   );
 }
 
-/** Escape, linkify bare URLs, and turn newlines into <br>. Enough for a transcript. */
 function renderContent(text: string): string {
   const escaped = escapeHtml(text);
   const linked = escaped.replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}" rel="noopener noreferrer" target="_blank">${url}</a>`);
@@ -192,25 +146,17 @@ function renderContent(text: string): string {
 }
 
 /**
- * A message avatar. The image itself is NOT inlined here: it is embedded once
- * per author in a `<style>` rule ({@link avatarStyleParts}) and referenced by
- * class, so a chatty user's avatar costs its bytes once instead of once per
- * message — the difference between a sane export and a multi-gigabyte one.
+ * Avatar markup. The image is embedded once per author via {@link avatarStyleParts}
+ * and referenced by class, so it isn't duplicated per message.
  */
 function avatarHtml(model: ExportModel, pubkey: string): string {
-  // Must agree with avatarStyleParts, or a rejected picture leaves the class on
-  // an element with no rule behind it — an empty circle instead of a monogram.
+  // Must agree with avatarStyleParts, or the class has no rule behind it.
   if (avatarCssUrl(model, pubkey) !== undefined) return `<span class="avatar av-${pubkey}"></span>`;
   const initial = escapeHtml(nameOf(model, pubkey).slice(0, 1).toUpperCase() || "?");
   return `<span class="avatar avatar-fallback">${initial}</span>`;
 }
 
-/**
- * A key safe to interpolate into a CSS class selector. In practice these are
- * hex pubkeys, but the model types them as bare strings, so this guards the
- * hazard rather than the expected shape: nothing here can close the `<style>`
- * element or the rule it sits in.
- */
+/** Guards class-selector interpolation so a non-hex key can't close the `<style>`. */
 const CSS_CLASS_SAFE = /^[0-9A-Za-z_-]+$/;
 
 /** The `url(…)` for an author's avatar, or `undefined` to render the monogram. */
@@ -219,13 +165,9 @@ function avatarCssUrl(model: ExportModel, pubkey: string): string | undefined {
   return cssUrl(model.profiles[pubkey]?.picture);
 }
 
-/** One `background-image` rule per author with a usable picture, for the dedupe. */
 function avatarStyleParts(model: ExportModel): string[] {
   const parts: string[] = [];
   for (const pk of Object.keys(model.profiles)) {
-    // The key is interpolated into a selector inside the same RAWTEXT `<style>`
-    // as the URL, so it needs its own guard: a non-hex key would break out of
-    // the element exactly as an unescaped URL would.
     const url = avatarCssUrl(model, pk);
     if (url !== undefined) parts.push(`.av-${pk}{background-image:url("${url}")}`);
   }
@@ -233,9 +175,7 @@ function avatarStyleParts(model: ExportModel): string[] {
 }
 
 function attachmentHtml(a: ExportAttachment): string {
-  // The URL is a member's `imeta` value, so it reaches an href only through
-  // safeMediaUrl. Where it doesn't survive that, the attachment still renders —
-  // as its own text, unlinked — rather than vanishing from the transcript.
+  // The URL only reaches an href via safeMediaUrl; if rejected, render unlinked text.
   if (a.failed) {
     const source = safeMediaUrl(a.url);
     const link = source
@@ -267,8 +207,6 @@ function messageHtml(model: ExportModel, m: ExportMessage): string {
     : "";
   return `<div class="msg">${avatarHtml(model, m.author)}<div class="msg-body">${head}${body}${atts}${reactions}</div></div>`;
 }
-
-// ── The self-contained mini-Armada document ──────────────────────────────────
 
 const APP_STYLE = `
 :root { color-scheme: dark; }
@@ -365,10 +303,8 @@ function channelButton(ch: ExportChannel): string {
 }
 
 /**
- * The model with heavy inlined media stripped, for the embedded JSON view. The
- * bytes are already in the Chat tab; serializing every `data:` URI a SECOND
- * time as JSON text is what doubled a large community's export and pushed it
- * past the browser's maximum string size. URLs are kept, inlined bytes dropped.
+ * The model without inlined `data:` bytes, for the JSON view — serializing them
+ * twice pushed large exports past the browser's max string size.
  */
 function lightenForJson(model: ExportModel): ExportModel {
   const strip = (u: string | undefined) => (u && u.startsWith("data:") ? undefined : u);
@@ -389,11 +325,8 @@ function lightenForJson(model: ExportModel): ExportModel {
 }
 
 /**
- * The export as an ARRAY of HTML fragments (one per message, plus chrome), for
- * `new Blob(parts, …)`. A large community's embedded media runs to tens of
- * megabytes; concatenating it into one JavaScript string throws "allocation
- * size overflow" before it ever reaches the file, so the whole document is
- * never a single string — the Blob concatenates the parts in native memory.
+ * The export as HTML fragments for `new Blob(parts, …)`, never one giant string
+ * (large media throws "allocation size overflow" when concatenated).
  */
 export function exportHtmlParts(model: ExportModel): string[] {
   const channels = model.channels;
@@ -406,8 +339,6 @@ export function exportHtmlParts(model: ExportModel): string[] {
       `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
       `<title>${escapeHtml(model.communityName)} Concord export</title>\n<style>${APP_STYLE}</style>\n<style>`,
   );
-  // Each author's avatar, embedded once (see avatarHtml). Pushed as its own
-  // parts so this can be tens of megabytes without a single huge string.
   parts.push(...avatarStyleParts(model));
   parts.push(
     `</style>\n</head>\n<body>\n` +
@@ -442,17 +373,10 @@ export function exportHtmlParts(model: ExportModel): string[] {
   return parts;
 }
 
-/**
- * A single self-contained HTML file: a Chat / Text / JSON tab bar over one
- * rumor-derived model. Fully offline (inline CSS/JS, `data:` URIs for media).
- * Prefer {@link exportHtmlParts} + a Blob for the download path; this joins them
- * into one string (fine for small models and tests, unsafe for a huge export).
- */
+/** {@link exportHtmlParts} joined into one string; fine for tests, unsafe for huge exports. */
 export function exportHtml(model: ExportModel): string {
   return exportHtmlParts(model).join("");
 }
-
-// ── Format registry ──────────────────────────────────────────────────────────
 
 export type ExportFormat = "html";
 

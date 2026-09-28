@@ -1,12 +1,6 @@
 /**
- * Dev-only timestamped trace of the Concord/community sync pipeline: gate
- * phases, community-list seeding, stream-key registration, NIP-42 challenges
- * and socket bounces, plane sweeps (per relay, with cursors and counts), and
- * control folds. For hunting "why is my community empty / slow to populate".
- *
- * Toggle at runtime with `localStorage.debugSync = '1'` (or `'0'` to silence);
- * defaults on in dev builds. Timestamps are seconds since page load so a
- * pasted log reads as a timeline.
+ * Dev-only timestamped trace of the Concord sync pipeline. Toggle with
+ * `localStorage.debugSync = '1'|'0'`; on by default in dev. Times are seconds since load.
  */
 
 const t0 = Date.now();

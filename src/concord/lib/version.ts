@@ -1,21 +1,13 @@
 /**
- * Per-entity version chains for Control Plane editions — CORD-04 §1.
- *
- * Every entity (Role, Grant, Banlist, metadata, Registry) is a sequence of
- * editions, each carrying a monotonic `version` + the hash of its predecessor.
- * Clients fold the fetched set into the current head: refuse-downgrade,
- * deterministic equal-version tiebreak (lower rumor id), and contiguous
- * chain-walk with gap detection (fail closed) — except across a Refounding,
- * where a fresh joiner accepts the highest authority-verified head despite a
- * dangling `prev` ({@link bootstrapHead}).
+ * Per-entity version chains for Control Plane editions — CORD-04 §1. Folding
+ * picks the head: refuse-downgrade, lower rumor id breaks equal-version ties,
+ * contiguous chain-walk failing closed on gaps — except after a Refounding,
+ * where a fresh joiner accepts the highest verified head ({@link bootstrapHead}).
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
 
-/**
- * The edition-hash domain label — CORD-04 §1, frozen. (Yes, it says "v1": the
- * spec pins this exact string; renaming it would re-hash every chain.)
- */
+/** Edition-hash domain label — CORD-04 §1, frozen ("v1" is spec; renaming re-hashes every chain). */
 const EDITION_LABEL = "vector-community/v1/edition";
 
 function u64be(n: bigint): Uint8Array {
@@ -105,21 +97,9 @@ export function bytesEq(a: Uint8Array | undefined, b: Uint8Array | undefined): b
  * that held edition's selfHash.
  */
 export function fold(editions: Edition[], floor: bigint, floorHash?: Uint8Array): FoldResult {
-  // EVERY sibling per version, tiebreak-ordered — not a single winner.
-  //
-  // Settling the per-version winner here, before the chain is walked, was a
-  // denial of service: `tiebreakId` is the rumor id, a hash of content the
-  // publisher chooses, so anyone able to publish at the control address can
-  // mint a junk edition at a tracking client's own head version whose id
-  // sorts below the real one. That junk then became "the" edition at that
-  // version, its hash did not match the client's recorded floor, the anchor
-  // failed, and every candidate above the floor was dropped — pinning the
-  // entity forever, for every synced client, with content that never had to
-  // pass an authority gate because the gate runs later.
-  //
-  // Carrying the siblings costs nothing and lets the LINK decide which one is
-  // real: a forgery cannot fake `prevHash` continuity to an edition it does
-  // not have, and cannot fake a hash equal to the one we already hold.
+  // Keep EVERY sibling per version, not a single winner: `tiebreakId` is
+  // publisher-chosen, so a junk edition sorting lower would otherwise fail the
+  // floor anchor and pin the entity forever. The `prevHash` link decides.
   const byVersion = new Map<bigint, number[]>();
   for (let i = 0; i < editions.length; i++) {
     const e = editions[i];
@@ -134,9 +114,7 @@ export function fold(editions: Edition[], floor: bigint, floorHash?: Uint8Array)
   const versions = [...byVersion.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   if (versions.length === 0) return { head: null, gap: false };
 
-  // Anchor on a sibling that actually connects to what we hold, preferring the
-  // tiebreak winner among those that do. With one edition per version this is
-  // exactly the old behaviour.
+  // Anchor on a sibling that links to what we hold, preferring the tiebreak winner.
   const base = byVersion.get(versions[0])!;
   let anchorIdx: number | undefined;
   if (floor === 0n) {
@@ -148,8 +126,7 @@ export function fold(editions: Edition[], floor: bigint, floorHash?: Uint8Array)
   }
   let gap = anchorIdx === undefined;
 
-  // Walk from the anchored edition, choosing at each step the sibling that
-  // links to the one we just accepted rather than the one with the lowest id.
+  // Walk choosing at each step the sibling that links to the one just accepted.
   let headIdx = anchorIdx ?? base[0];
   for (let k = 0; k + 1 < versions.length; k++) {
     if (versions[k + 1] !== versions[k] + 1n) {
@@ -170,9 +147,8 @@ export function fold(editions: Edition[], floor: bigint, floorHash?: Uint8Array)
 
 /**
  * The head a BOOTSTRAPPING client accepts after a Refounding's compaction
- * (CORD-04 §1): the per-version winner at the highest present version,
- * ignoring chain contiguity — there is nothing behind a compacted head to
- * verify; the signature plus the current-authority check is the whole test.
+ * (CORD-04 §1): the winner at the highest version, ignoring contiguity (signature
+ * + authority check are the whole test).
  */
 export function bootstrapHead(editions: Edition[], floor: bigint): number | null {
   let best: number | null = null;

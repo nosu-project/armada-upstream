@@ -3,12 +3,7 @@ import { Loader2, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ActivePause } from "@/concord/lib/control";
 
-/**
- * The banner shown above the composer while a community is paused (CORD-04 §8).
- * Everyone sees the status; a MANAGE_CHANNELS holder gets a Resume button. The
- * pause itself is enforced by the fold (non-staff messages collapse) and the
- * composer's disabled state — this is the visible signal.
- */
+/** Pause banner (CORD-04 §8); enforcement is the fold and the composer. MANAGE_CHANNELS gets Resume. */
 export function CommunityPauseBanner({
   pause,
   canManage,

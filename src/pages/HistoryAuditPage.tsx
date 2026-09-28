@@ -6,13 +6,8 @@ import { useCommunity } from "@/concord/hooks/useCommunityList";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
 
 /**
- * The history audit + export tool, as a route.
- *
- * A route rather than a dialog (mirroring {@link DiscordImportPage}): the audit
- * outlives the settings pane its entry point sits in, so owning it here means
- * nothing below can unmount it, and the settings pane yields on its own
- * because the route changed. Portalled to `<body>` because `WizardShell` is
- * `position: fixed` and a transformed ancestor would shrink it to that box.
+ * History audit + export as a route (like {@link DiscordImportPage}), portalled
+ * to `<body>` for `WizardShell`'s `position: fixed`.
  */
 export function HistoryAuditPage() {
   const { communityId } = useParams<{ communityId: string }>();

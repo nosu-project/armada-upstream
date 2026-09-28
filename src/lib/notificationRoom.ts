@@ -1,24 +1,8 @@
 /**
- * Who a notification is FROM, at the room level: the conversation's title and
- * its image.
- *
- * Android gets this look from a long-lived conversation shortcut — the peer's
- * avatar for a DM, the community image for a channel — and it is the single
- * biggest reason its notifications read as conversations rather than as app
- * alerts. Web and Electron have one image slot and no shortcuts, so the same
- * effect comes from putting the room's image in `icon` and the room's name in
- * the title.
- *
- * Everything here is a LOCAL read: the ArmadaDB KV fold snapshot for Concord,
- * the per-relay NIP-29 tenant for groups. A notification is the one surface
- * with no time to wait on a relay, so a room this can't name simply isn't
- * named — the caller falls back to the sender, exactly as the Android service
- * falls back to the app icon.
- *
- * Deliberately free of React and of `@/concord/lib/control`: the service worker
- * bundles this module, where no hook exists and where pulling in the whole
- * control-fold machinery (and the legacy-database drain behind `readFolded`)
- * would be both heavy and wrong — migrations are the page's job.
+ * A notification's room-level identity (title + image), mimicking Android's
+ * conversation shortcuts on web/Electron. Local reads only (KV fold snapshot,
+ * NIP-29 tenant); unnamed rooms fall back to the sender. Free of React and
+ * `@/concord/lib/control` because the service worker bundles it.
  */
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
@@ -33,23 +17,16 @@ const KIND_GROUP_METADATA = 39000;
 /** How long a resolved room identity is reused before being re-read. */
 const MEMO_TTL_MS = 60_000;
 
-/** A room's display identity for a notification. */
 export interface RoomIdentity {
-  /** "Community / #channel", a NIP-29 group name, or undefined if unnamed. */
   title?: string;
-  /** Concord's encrypted icon pointer — the caller decrypts it. */
+  /** Concord's encrypted icon pointer; the caller decrypts it. */
   iconPointer?: ImagePointer;
-  /** NIP-29's plain picture URL. */
   iconUrl?: string;
 }
 
 /**
- * The narrow slice of a folded control snapshot a notification needs.
- *
- * Read straight out of KV rather than through `readControlFold`, which
- * validates the WHOLE fold and would reject a snapshot this has no opinion
- * about. A name and an icon pointer are independently useful; there is nothing
- * here a partially-unreadable fold could make unsafe.
+ * The slice of a control-fold snapshot a notification needs, read straight
+ * from KV: `readControlFold` would reject a partially-unreadable fold.
  */
 interface FoldNameSlice {
   metadata?: { name?: unknown; icon?: unknown };
@@ -73,8 +50,7 @@ function asImagePointer(value: unknown): ImagePointer | undefined {
   const key = asString(p.key);
   const nonce = asString(p.nonce);
   const hash = asString(p.hash);
-  // All four or nothing: a half-present pointer can't be decrypted, and a URL
-  // on its own is ciphertext a browser would render as a broken image.
+  // All four or nothing: a bare URL is ciphertext that would render broken.
   return url && key && nonce && hash ? { url, key, nonce, hash } : undefined;
 }
 
@@ -92,8 +68,6 @@ function memoized(key: string): RoomIdentity | undefined {
 
 function remember(key: string, identity: RoomIdentity): RoomIdentity {
   memo.set(key, { at: Date.now(), identity });
-  // A flood in one room shouldn't grow this without bound; a handful of rooms
-  // are live at once and the TTL evicts the rest anyway.
   if (memo.size > 64) {
     const oldest = memo.keys().next().value;
     if (oldest !== undefined && oldest !== key) memo.delete(oldest);
@@ -101,11 +75,7 @@ function remember(key: string, identity: RoomIdentity): RoomIdentity {
   return identity;
 }
 
-/**
- * A Concord channel's identity — "Community / #channel" plus the community's
- * encrypted icon pointer, matching the Java service's `community + " / #" +
- * channel` and its community-image shortcut.
- */
+/** Concord identity: "Community / #channel" plus the encrypted icon pointer (as the Java service does). */
 export async function concordRoomIdentity(
   communityIdHex: string,
   channelIdHex: string,
@@ -126,19 +96,11 @@ export async function concordRoomIdentity(
         : community ?? (channel ? `#${channel}` : undefined),
       iconPointer: asImagePointer(fold?.metadata?.icon),
     };
-  } catch {
-    // No fold on disk yet (a fresh join), or KV unavailable — stay unnamed.
-  }
+  } catch { /* ignore */ }
   return remember(key, identity);
 }
 
-/**
- * A NIP-29 group's identity from its relay-signed kind-39000 metadata.
- *
- * Scoped to the relay's own tenant, because a group id names nothing without
- * its relay — see `relayScope.ts`. `picture` is a bare URL here, not an
- * encrypted pointer: NIP-29 metadata is public by construction.
- */
+/** NIP-29 identity from relay-signed kind 39000, read from that relay's tenant (see `relayScope.ts`). */
 export async function nip29RoomIdentity(
   relayUrl: string,
   groupId: string,
@@ -158,8 +120,6 @@ export async function nip29RoomIdentity(
       const tagValue = (name: string) => asString(ev.tags.find((t) => t[0] === name)?.[1]);
       identity = { title: tagValue("name"), iconUrl: tagValue("picture") };
     }
-  } catch {
-    // Tenant unreadable — stay unnamed.
-  }
+  } catch { /* ignore */ }
   return remember(key, identity);
 }

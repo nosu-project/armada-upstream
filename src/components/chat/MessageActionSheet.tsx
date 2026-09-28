@@ -14,11 +14,9 @@ import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
 
 /**
- * How long after opening to refuse an "outside interaction" dismiss. On touch
- * the very press that opens the sheet leaves a trailing pointer/synthetic event
- * the dismissable layer reads as an outside tap; refusing it HERE (rather than
- * in the parent's `onOpenChange`) keeps vaul from ever committing that close,
- * so the controlled `open` prop can't desync and wedge the sheet shut.
+ * Window after opening in which an outside-dismiss is refused: the opening
+ * press leaves a trailing event read as an outside tap. Refused here so vaul
+ * never commits the close and the controlled `open` can't desync.
  */
 const OPEN_GUARD_MS = 400;
 
@@ -30,7 +28,6 @@ interface MessageActionSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   actions: MessageActionItem[];
-  /** Omitted when the user can't react (no membership / message is pending). */
   reactions?: {
     tallies: ReactionTally[];
     react: (input: ReactInput) => void;
@@ -38,16 +35,8 @@ interface MessageActionSheetProps {
 }
 
 /**
- * The touch-device message menu: a bottom sheet with a row of quick reactions
- * over a vertical list of actions.
- *
- * This replaces the floating hover toolbar on touch rather than supplementing
- * it. That strip is a pointer idiom — it has to fit every capability a message
- * offers into one horizontal line at the row's edge, which on a phone means
- * eight 44px targets competing for ~360px and wrapping over the message text.
- * A sheet gives each action a full-width labelled row (much harder to
- * mis-tap, which is what the old two-step tap-to-reveal was defending against)
- * and gives the emoji row a line of its own.
+ * Touch message menu: a bottom sheet with quick reactions over labelled action
+ * rows. Replaces the hover toolbar on touch, which can't fit on a phone.
  */
 export function MessageActionSheet({
   open,
@@ -55,41 +44,28 @@ export function MessageActionSheet({
   actions,
   reactions,
 }: MessageActionSheetProps) {
-  // The picker takes over the sheet rather than opening a nested overlay on
-  // top of it — same as Discord's sheet expanding into the full picker.
+  // The picker takes over the sheet rather than nesting an overlay (like Discord).
   const [pickerOpen, setPickerOpen] = useState(false);
   const { user } = useCurrentUser();
   const { emojis: customEmojis } = useCustomEmojis();
   const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_SHEET);
 
-  // Back (Android's, or the browser's in a PWA) closes the sheet, and only
-  // the sheet — a second back leaves the chat, the same one-surface-per-back
-  // the thread panel and lightboxes follow. Without an entry of its own, SwipeReveal's handler would win and
-  // slide the chat pane away with the menu still up: the pane is translated,
-  // never unmounted, and the drawer portals to <body>, so nothing else takes
-  // the menu down. Registered only while open, so it sits above SwipeReveal's
-  // handler for exactly as long as the sheet is on screen.
+  // Back closes only the sheet. Needed because SwipeReveal's handler would
+  // otherwise slide the pane away with the (body-portalled) menu still up.
   useOverlayBack(() => {
     onOpenChange(false);
     return true;
   }, open);
 
-  // When the sheet last opened, to reject the dismiss the opening gesture
-  // itself provokes (see OPEN_GUARD_MS).
   const openedAt = useRef(0);
 
-  // Stamped during the render that opens the sheet, NOT in an effect. A passive
-  // effect runs after commit, by which point the dismissable layer is already
-  // listening — and the stale value it would race against is the PREVIOUS
-  // open's, seconds old, so the guard wouldn't merely be missing, it would read
-  // as long expired and wave the dismiss through. That is the reopen-right-
-  // after-dismiss case: the sheet opens and is shut again before it is seen.
+  // Stamped during the opening render, NOT in an effect: an effect runs after
+  // the layer is listening and would compare against the previous open's stale time.
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
     if (open) openedAt.current = Date.now();
-    // Always reopen on the actions page, never on whatever page the last
-    // message was left on.
+    // Always reopen on the actions page.
     else setPickerOpen(false);
   }
 
@@ -108,10 +84,7 @@ export function MessageActionSheet({
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent
         className="max-h-[85dvh]"
-        // Refuse the opening gesture's own trailing event; a genuine dismiss
-        // arrives later. Prevented here, vaul never closes, so `open` stays in
-        // sync and a later long-press can reopen (a stale close would leave the
-        // row highlighted with no menu).
+        // Refuse the opening gesture's trailing event so `open` stays in sync.
         onPointerDownOutside={(e) => {
           if (Date.now() - openedAt.current < OPEN_GUARD_MS) e.preventDefault();
         }}
@@ -138,8 +111,6 @@ export function MessageActionSheet({
           <div className="overflow-y-auto overscroll-contain pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             {reactions && (
               <div className="flex items-center gap-2 px-3 pb-2">
-                {/* The quick slots read as one control (a pill of emoji), with
-                    "more" as its own button — the same split Discord uses. */}
                 <div className="flex flex-1 items-center gap-0.5 rounded-full bg-muted/60 p-1">
                   {frequent.map((f) => {
                     const mine = reactions.tallies.find((t) => t.key === f.key)?.mine ?? false;

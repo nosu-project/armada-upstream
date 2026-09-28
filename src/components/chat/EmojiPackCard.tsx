@@ -30,15 +30,10 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** How many emojis to show in the preview grid before "+N more". */
 const PREVIEW_LIMIT = 16;
-/**
- * How many more emojis each "Show more" reveals on the expanded page. A pack is
- * sender-controlled and can name thousands of images; each is an element and
- * a (proxied) request, so the page grows in steps rather than all at once.
- */
+/** "Show more" step on the expanded page: packs are sender-controlled and can name thousands. */
 export const EXPANDED_STEP = 200;
 
 interface EmojiPackCardProps {
-  /** The kind-30030 emoji set event. */
   event: NostrRumor;
   /** Show every emoji rather than the first {@link PREVIEW_LIMIT} (the pack's own page). */
   expanded?: boolean;
@@ -46,11 +41,8 @@ interface EmojiPackCardProps {
 }
 
 /**
- * Discord/Ditto-style preview card for a NIP-30 emoji pack (kind 30030) — in
- * chat, in the Discover grid and on its own `/<naddr>` page: the pack name +
- * author, a grid preview of its emojis, a one-tap "Add" button that appends it
- * to the viewer's kind-10030 emoji list, and a copy of its `/<naddr>` link.
- * The name opens that same page.
+ * Preview card for a NIP-30 emoji pack (kind 30030): name, author, preview grid,
+ * "Add" (to the kind-10030 list) and a copy of its `/<naddr>` link.
  */
 export function EmojiPackCard({ event, expanded = false, className }: EmojiPackCardProps) {
   const { user } = useCurrentUser();
@@ -68,8 +60,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
   const alreadyAdded = useHasEmojiPack(coord);
   const { mutateAsync: addPack, isPending: isAdding } = useAddEmojiPack();
   const { mutateAsync: removePack, isPending: isRemoving } = useRemoveEmojiPack();
-  // Local override of the read-back state so the button flips instantly on a
-  // successful add/remove without waiting for the list re-read to settle.
+  // Flip instantly on success rather than waiting for the list re-read.
   const [override, setOverride] = useState<"added" | "removed" | null>(null);
 
   const { naddr, copied, copy } = useNaddrLink(event);
@@ -121,7 +112,6 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
-        {/* Header: pack icon + name + author */}
         <div className="flex items-center gap-2 min-w-0">
           {picture ? (
             <FallbackImage
@@ -142,8 +132,6 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           ) : (
             <p className="font-semibold truncate leading-tight flex-1">{name}</p>
           )}
-          {/* Legible while scanning a Discover grid, where the Add button at
-              the card's foot is the only other signal. */}
           <span
             className={cn(
               "text-[10px] px-1.5 py-px rounded-full shrink-0",
@@ -176,7 +164,6 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           </button>
         </ProfilePreviewCard>
 
-        {/* Emoji preview grid */}
         {visible.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
             {visible.map((e) => (
@@ -207,9 +194,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           </Button>
         )}
 
-        {/* Add / Remove + copy link — pinned to the card bottom so cards align
-            in a grid. Added packs offer a one-tap remove instead of a dead
-            "Added". */}
+        {/* Pinned to the bottom so grid cards align. */}
         <div className="mt-auto flex items-center gap-2">
           {isAdded ? (
             <Button

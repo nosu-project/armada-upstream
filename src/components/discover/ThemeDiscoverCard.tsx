@@ -23,19 +23,11 @@ import { coreToTokens } from "@/themes";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface ThemeDiscoverCardProps {
-  /** A kind-36767 theme definition event. */
   event: NostrRumor;
   className?: string;
 }
 
-/**
- * A shareable theme (kind 36767) as a card — in the Discover grid, on its own
- * `/<naddr>` page, and wherever it's shared in chat: a live preview of its
- * core colors, the author, and three actions — Apply (set it as the app's
- * custom theme; local, publishes nothing), Save (copy it into your own theme
- * library without changing the current look) and Copy link (its `/<naddr>`
- * page, to hand to someone else). The title opens that same page.
- */
+/** A kind-36767 theme card: preview, author, Apply (local only), Save to library, Copy link. */
 export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) {
   const theme = useMemo(() => parseDittoTheme(event), [event]);
   const { customTheme, theme: mode, applyCustomTheme } = useTheme();
@@ -88,7 +80,6 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Live color preview */}
       <div
         className="flex items-end gap-1.5 p-3 h-20"
         style={{ backgroundColor: `hsl(${tokens.background})` }}
@@ -117,8 +108,6 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
           ) : (
             <p className="font-semibold truncate leading-tight flex-1">{theme.title}</p>
           )}
-          {/* What this card is at a glance — in chat it sits among link and
-              event cards, as the emoji pack card's pill does. */}
           <span
             className={cn(
               "text-[10px] px-1.5 py-px rounded-full shrink-0",

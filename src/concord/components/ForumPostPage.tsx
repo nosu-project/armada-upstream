@@ -21,37 +21,17 @@ import { cn } from "@/lib/utils";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { ReactNode } from "react";
 
-/**
- * How deep the indentation goes. Past this a reply still nests in the data
- * but renders at the cap's depth with a "replying to" line, since a sixth
- * indent on a phone leaves no room for words.
- */
+/** Past this depth replies render at the cap with a "replying to" line. */
 const MAX_INDENT_DEPTH = 4;
-/** One level of indentation, and where its rail sits inside that level. */
 const INDENT_REM = 1.5;
 const RAIL_OFFSET_REM = 0.75;
-/** The comment box's open/close transition, matching its Tailwind duration. */
+/** Matches the Tailwind duration. */
 const EXPAND_MS = 200;
 
 /**
- * A forum post as a page in the channel pane (CORD-03 §3): the title as the
- * heading, the byline and body at reading width, then its comments as a
- * tree — a reply to a comment nests under it (its lowercase `e` names the
- * parent; `commentTree.ts`) — with the post's own comment box at the head of
- * the discussion, one line until opened. A document that opens at the TOP,
- * the way every forum opens a thread, not a
- * chat drawer that opens at its newest line.
- *
- * Every comment carries a visible Reply, and answering one opens the editor
- * IN PLACE under it rather than at the bottom of the page, so the reader is
- * never composing a reply out of sight of what it answers. One editor is open
- * at a time; the page's own comment box answers the post.
- *
- * Reuses the thread panel's row ({@link ThreadMessage}) so a comment has every
- * action a thread reply has — react, zap, edit, delete, hide, block, report —
- * from one place; only the presentation differs. The replies, the send and
- * the reactions all come from the room's {@link ChatTransport}, as in the
- * drawer, so nothing about a post is a second decode path.
+ * A forum post page (CORD-03 §3) opening at the TOP, with comments as a tree
+ * (`commentTree.ts`). Reply opens the editor in place under the comment. Rows
+ * reuse {@link ThreadMessage} and the room's {@link ChatTransport}.
  */
 export function ForumPostPage({
   root,
@@ -68,18 +48,14 @@ export function ForumPostPage({
 }: {
   /** The post (a kind-9 root carrying a subject). */
   root: ChatMsg;
-  /** Its subject, already normalized (`subjectOf`). */
   title: string;
   pinned?: boolean;
   transport: ChatTransport;
-  /** The channel id, scoping the composer's draft and mention lookups. */
   groupId: string;
   canWrite: boolean;
   mentionPubkeys?: string[];
   conversationRelays?: string[];
-  /** Focus the comment box on open (launched from a "comment" affordance). */
   autoFocus?: boolean;
-  /** Back to the feed. */
   onBack: () => void;
   className?: string;
 }) {
@@ -88,8 +64,7 @@ export function ForumPostPage({
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const threadRepliesFor = transport.threadRepliesFor;
 
-  // Comments live outside the timeline, so the timeline's mute/hide filter
-  // never sees them; drop them here, and count what is actually shown.
+  // Comments bypass the timeline's mute/hide filter, so filter here.
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
   const { hiddenIds } = useHiddenMessages();
   const comments = useMemo(() => {
@@ -101,7 +76,7 @@ export function ForumPostPage({
     );
   }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds]);
   const tree = useMemo(() => buildCommentTree(root.id, comments), [root.id, comments]);
-  // The tree's reading order, which is what "edit last" and permalinks walk.
+  // Reading order, walked by "edit last" and permalinks.
   const ordered = useMemo(() => [root, ...flattenCommentTree(tree)], [root, tree]);
   const rootMuted = mutesReady && mutedPubkeys.has(root.pubkey);
   const rootGone = isTombstoneRoot(root) || rootMuted;
@@ -120,22 +95,13 @@ export function ForumPostPage({
     self: user?.pubkey,
   });
 
-  // The comment being answered in place, if any. Switching posts drops it.
   const [replyingTo, setReplyingTo] = useState<ChatMsg | undefined>(undefined);
   useEffect(() => setReplyingTo(undefined), [root.id]);
-  // The post's own comment box sits at the top of the discussion, collapsed
-  // to one line until the reader means to write (Reddit's shape): a full
-  // editor parked above every comment would push the discussion down for
-  // everyone who came to read. Opened with intent — the box, the post's
-  // Comment action, or a link that asked for the composer — it takes focus.
+  // Collapsed to one line until the reader means to write.
   const [commentOpen, setCommentOpen] = useState(autoFocus);
   useEffect(() => setCommentOpen(autoFocus), [root.id, autoFocus]);
-  // The editor grows out of the one-line box rather than appearing. It stays
-  // MOUNTED while closed (inert, clipped to nothing) so that opening animates
-  // a box that is already laid out — mounting on click meant the transition
-  // started before the composer had sized its textarea, and the height then
-  // jumped to wherever that landed. Overflow is clipped except while fully
-  // open, so the editor's own overlays (mention autocomplete) are free then.
+  // Kept MOUNTED while closed so opening animates an already-sized box; clip
+  // lifts only when fully open so overlays work.
   const [commentSettled, setCommentSettled] = useState(autoFocus);
   const topComposerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -143,8 +109,7 @@ export function ForumPostPage({
       setCommentSettled(false);
       return;
     }
-    // Focus at once, without scrolling — the box is still growing — and
-    // let the settled state lift the clip once it has.
+    // No scroll while the box is still growing.
     topComposerRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
     const settle = setTimeout(() => {
       setCommentSettled(true);
@@ -157,22 +122,19 @@ export function ForumPostPage({
     setCommentOpen(true);
   }, []);
 
-  // Android back returns to the feed. Registered here rather than left to
-  // history so it wins over the channel list's swipe-reveal handler.
+  // Registered here so it wins over the swipe-reveal back handler.
   useAndroidBack(() => {
     onBack();
     return true;
   });
 
-  // A page opens at its top. The scroller is reused across posts (the pane
-  // does not remount on `/t/<root>` changes), so reset it per post.
+  // The scroller is reused across posts, so reset per post.
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [root.id]);
 
-  // `/t/<root>/m/<comment>`: a permalink to a comment, which exists only here.
   const scrollToComment = useCallback((id: string) => {
     const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
     if (!row) return false;
@@ -223,44 +185,30 @@ export function ForumPostPage({
       canMentionEveryone={transport.canMentionEveryone}
       conversationRelays={conversationRelays}
       placeholder={opts.inline ? "Write a reply" : "Add a comment"}
-      // A reply drafted under one comment is that comment's draft, not the
-      // page's: putting the editor away and reopening it there finds it.
+      // Inline drafts are scoped to the comment answered.
       draftScope={opts.inline ? `thread:${root.id}:${parent.id}` : `thread:${root.id}`}
-      // The inline editor mounts only once asked for; the post's box is
-      // always mounted and focused by the open effect instead.
       autoFocus={opts.inline}
       pollsEnabled={false}
-      // A comment's attachment is sealed like the post's (the channel
-      // composer and `NewPostPane` set the same): Blossom holds ciphertext,
-      // the key rides in the rumor's imeta.
+      // Attachments sealed like the post's: Blossom holds ciphertext, key in imeta.
       encryptAttachments
       canSend={transport.canSend}
       sendOverride={async (text, tags) => {
-        // The transport threads the reply off whatever it is handed: the
-        // post for a top-level comment, the comment for a nested reply
-        // (`buildConcordCommentTags` inherits the root pointer from it).
+        // `buildConcordCommentTags` inherits the root pointer from `parent`.
         await transport.sendThreadReply?.(parent, text, tags);
         if (opts.inline) setReplyingTo(undefined);
         else setCommentOpen(false);
-        // Commenting is an explicit "I'm at the present": the location must
-        // stop claiming an older comment is focused.
+        // Commenting means the reader is at the present.
         clearCommentFocus();
       }}
       onEditLast={editMessage ? editLast : undefined}
     />
   );
 
-  // The tree is rendered FLAT — one row per comment, indented by its depth,
-  // with the connector rails drawn per row at each ancestor's column — rather
-  // than as nested containers. Nesting containers would give the rails for
-  // free, but everything inside them shrinks with depth, and the in-place
-  // reply editor is the thing that must not: a box that loses a column per
-  // level is unusable three replies in on a phone. As a flat row the editor
-  // takes the full column whatever it answers, and says what that is.
+  // Rendered FLAT with per-row rails, not nested containers, so the in-place
+  // reply editor keeps full width at any depth.
   const rows: ReactNode[] = [];
   const pushRows = (nodes: readonly CommentNode[], parent: ChatMsg | undefined) => {
     for (const { comment, depth, children } of nodes) {
-      // Past the indent cap the nesting is said rather than drawn.
       const capped = depth >= MAX_INDENT_DEPTH;
       const shown = Math.min(depth, MAX_INDENT_DEPTH);
       rows.push(

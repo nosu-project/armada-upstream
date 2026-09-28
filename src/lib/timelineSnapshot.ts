@@ -1,40 +1,14 @@
 /**
- * Synchronous last-known-good timeline snapshots, shared by every chat
- * transport (NIP-29 groups, Concord channels, DM threads).
+ * Synchronous last-known-good timeline snapshots in localStorage, seeding
+ * timeline queries' `initialData` so the first frame paints before the slow
+ * first IndexedDB read on cold Android WebView launches. Merges are
+ * append-only/dedup-by-id, so the seed can't clobber fresher data. Not for the
+ * DM conversation LIST, whose order depends on every conversation.
  *
- * Note the DM CONVERSATION LIST deliberately does not use this. A snapshot is
- * a truncated tail of ONE timeline, which is fine for a thread (the newest
- * screenful is what you see first) but wrong for a list whose order depends on
- * every conversation at once — it painted a wrong order that the store read
- * then visibly corrected. That list blocks on IndexedDB instead.
- *
- * Why this exists: the durable event store is IndexedDB, and the FIRST
- * IndexedDB read after a cold Android WebView launch pays a multi-second
- * connection penalty before anything can render — the "skeleton on every cold
- * open" problem. localStorage, by contrast, reads synchronously in
- * microseconds. So each timeline hook persists the last screenful of its
- * rendered messages here and seeds its TanStack query with it (`initialData`),
- * making the previous content paint on the very first frame; the IndexedDB
- * read and the relay refresh then merge in on top (every hook's merge path is
- * append-only/dedup-by-id, so the seed can never clobber fresher data).
- *
- * Storage shape:
- *   - `armada:snap:v1:<scope>` → encoded item array (newest MAX_ITEMS)
- *   - `armada:snap:index`      → LRU list of scopes (oldest first)
- *
- * A shared LRU across all transports bounds total usage to roughly
- * MAX_SCOPES × MAX_ITEMS messages (~a few hundred KB worst case).
- *
- * Values are encoded with the tagged codec from the Concord folded cache so
- * shapes containing `Uint8Array`/`bigint` (Concord's `OpenedMessage`) survive
- * the round-trip exactly.
- *
- * Trust note: Concord/DM snapshots persist DECRYPTED message plaintext at
- * rest. That is the same device-trust level as the existing caches — the
- * Concord folded cache and the signer's persistent decrypt cache both already
- * persist plaintext in IndexedDB, and the raw channel keys live in the event
- * store. Anyone with local storage access already has the keys. Snapshots use
- * the `armada:` prefix, so `purgeClientStorage` wipes them on logout.
+ * Storage: `armada:snap:v1:<scope>` → foldedCache-encoded items (keeps
+ * Uint8Array/bigint); `armada:snap:index` → shared LRU of scopes, oldest first.
+ * Holds decrypted plaintext (same trust level as existing caches); the
+ * `armada:` prefix gets it purged on logout.
  */
 
 import { decode, encode } from "@/lib/foldedCache";
@@ -47,8 +21,6 @@ const MAX_SCOPES = 16;
 /** Newest items kept per conversation — roughly one screenful plus headroom. */
 const MAX_ITEMS = 30;
 
-// ── scope keys ────────────────────────────────────────────────────────────────
-
 /** Snapshot scope for a NIP-29 group timeline. */
 export function nip29SnapshotScope(relayUrl: string, groupId: string): string {
   return `nip29:${relayUrl}|${groupId}`;
@@ -58,8 +30,6 @@ export function nip29SnapshotScope(relayUrl: string, groupId: string): string {
 export function dmThreadSnapshotScope(self: string, peer: string): string {
   return `dm:${self}|${peer}`;
 }
-
-// ── read / write ──────────────────────────────────────────────────────────────
 
 function readIndex(): string[] {
   try {
@@ -79,10 +49,7 @@ function writeIndex(index: string[]): void {
   }
 }
 
-/**
- * Read the snapshot for a scope, or undefined on miss/error. Synchronous —
- * safe to call from a TanStack `initialData` callback on the render path.
- */
+/** Read a scope's snapshot, or undefined. Synchronous, for `initialData`. */
 export function readTimelineSnapshot<T>(scope: string | undefined): T[] | undefined {
   if (!scope || typeof localStorage === "undefined") return undefined;
   try {
@@ -96,12 +63,8 @@ export function readTimelineSnapshot<T>(scope: string | undefined): T[] | undefi
 }
 
 /**
- * Persist the newest {@link MAX_ITEMS} of a timeline for a scope and bump it
- * in the shared LRU, evicting the least-recently-written scopes beyond
- * {@link MAX_SCOPES}. Best-effort: quota/serialization failures are swallowed
- * (the snapshot is purely an optimization).
- *
- * `items` must be ordered oldest-first (every timeline cache's order).
+ * Persist the newest {@link MAX_ITEMS} (items oldest-first) and bump the scope
+ * in the shared LRU. Best-effort.
  */
 export function writeTimelineSnapshot(scope: string | undefined, items: readonly unknown[]): void {
   if (!scope || typeof localStorage === "undefined") return;

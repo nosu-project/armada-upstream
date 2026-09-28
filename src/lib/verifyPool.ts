@@ -1,52 +1,15 @@
 /**
- * The worker pool behind {@link verifyCache}'s {@link EcVerifyBatch} seam —
- * and, through {@link ecSignBatch}, behind the NIP-42 stream-key signing in
- * `streamAuth.ts`.
+ * Worker pool behind {@link verifyCache}'s {@link EcVerifyBatch} seam and
+ * {@link ecSignBatch} (NIP-42 stream-key signing in `streamAuth.ts`), moving
+ * Schnorr verify/sign off the main thread. Workers only get pre-hashed inputs;
+ * `hashGate` binds ids on the main thread.
  *
- * Schnorr verify was ~28% of GeckoMain's inclusive CPU during sync (profiled),
- * all on the main thread, and it is first-time-necessary work the memo can't
- * erase — only parallelism can. This spreads the EC verify of a decode batch
- * across a small pool of `verify.worker.ts` module workers, keeping the main
- * thread free to paint while a cold backfill's signatures are checked off it.
- * A later profile of a community switch found the same shape in SIGNING: a
- * relay challenge signs a kind-22242 per stream key the relay hosts, and
- * @noble's `sign` verifies its own output, so each was ~4ms on the main thread
- * and a switch burned ~1.6s of them. The same workers now take those too.
- *
- * The pool does the EC ONLY: `verifyCache.ts`'s `hashGate` has already bound
- * every id to the copy in hand and consulted the memo on the MAIN thread, so
- * what reaches a worker is a pre-hashed `(sig, id, pubkey)` triple it cannot be
- * tricked by; a sign job is likewise a pre-hashed id plus its key. See
- * `verify.worker.ts`.
- *
- * Failure never changes an ANSWER, only where it is computed. A worker that
- * errors, whose channel throws, or that simply never replies hands its chunk
- * back to this thread — a missing reply must not read as "forged", because
- * callers (`openChatBatch`) memoize a false verdict per wrap and a transient
- * worker death would poison good messages for the session. This is the
- * contract `verifyEventsOnce`'s callers lean on: {@link ecVerifyBatch} never
- * throws and never answers "unverified" for a reason other than the signature.
- * A worker that has failed in any of those ways is retired and never
- * dispatched to again: a message posted to a dead worker vanishes without an
- * error, so re-using it would leave a batch awaiting a reply that can never
- * come. The "never replies" case is the one no event announces — a module
- * fetch that stalls rather than fails fires neither `message` nor `error` —
- * so every round carries a deadline ({@link roundDeadlineMs}) after which the
- * chunk is computed inline and the worker retired. Two more paths keep the
- * pool from ever being worse than inline:
- *
- *  - **No `Worker`** (SSR, a locked-down runtime, a CSP that forbids the
- *    blob/module worker): construction is attempted ONCE, and any failure pins
- *    the pool "unavailable" so every batch runs inline forever after.
- *  - **A small batch** isn't worth a round trip: below the operation's inline
- *    threshold, the fixed postMessage + structured-clone cost dominates the
- *    handful of operations it would parallelize, so those run inline too. This
- *    is the common live-delivery case (a message or two at a time); the pool
- *    is for the backfill and the challenge.
- *
- * The inline path itself is time-sliced ({@link INLINE_SLICE_MS}): it runs on
- * the main thread precisely when the pool can't, and an unsliced loop over a
- * batch of ~ms-each EC operations is the jank the pool exists to remove.
+ * Failure never changes an ANSWER, only where it's computed: a worker that
+ * errors, throws, or misses its deadline ({@link roundDeadlineMs}) is retired
+ * and its chunk recomputed inline. A missing reply must not read as "forged" —
+ * `openChatBatch` memoizes false verdicts for the session. No `Worker` (or
+ * construction failure) pins the pool inline forever; small batches run inline
+ * since the round trip dominates. Inline runs are time-sliced.
  */
 
 import { schnorr } from "@noble/curves/secp256k1.js";
@@ -55,37 +18,18 @@ import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { EcVerifyBatch, VerifyTriple } from "./verifyCache";
 import type { SignJob, WorkerRequest, WorkerResponse } from "./verifyWorkerTypes";
 
-/**
- * How many triples a verify batch must have before the pool is worth using.
- * Below it, the round trip costs more than the verifies it parallelizes
- * (measured: a warm round is ~1ms of fixed overhead against ~1.8ms/verify on
- * desktop, more on a phone), so a small live delivery stays inline.
- */
+/** Min verify batch for the pool (~1ms fixed round cost vs ~1.8ms/verify on desktop). */
 const VERIFY_INLINE_THRESHOLD = 24;
 
-/**
- * The same for signing, where each operation is a sign PLUS @noble's
- * self-verify (~4ms on desktop): two already outweigh the round trip, and a
- * lone AUTH — the single stream key NostrProvider answers a slow bunker with —
- * stays inline where its latency is lowest.
- */
+/** Signing (~4ms incl. @noble's self-verify): two already beat the round trip. */
 const SIGN_INLINE_THRESHOLD = 2;
 
-/**
- * How long an inline slice may run before yielding — matches `openChatBatch`'s
- * decode slice, since the inline verify runs interleaved with that loop's
- * budget on the same thread.
- */
+/** Inline slice before yielding; matches `openChatBatch`'s decode slice. */
 const INLINE_SLICE_MS = 5;
 
 /**
- * How long a round may go unanswered before its chunk is computed inline and
- * the worker retired: a fixed allowance for the worker's first module load,
- * plus a per-item budget generous enough that a slow phone under load (tens
- * of ms per verify, twice that per sign) still finishes with room to spare. A
- * deadline that fires early costs nothing but the duplicated work — the inline
- * answer is the same answer — but it also retires the worker for the session,
- * which is why the budget errs long.
+ * Unanswered-round deadline: module-load allowance plus a generous per-item
+ * budget. Errs long, since firing retires the worker for the session.
  */
 const ROUND_DEADLINE_BASE_MS = 2_000;
 const ROUND_DEADLINE_PER_VERIFY_MS = 50;
@@ -100,12 +44,7 @@ function roundDeadlineMs(request: WorkerRequest): number {
     : ROUND_DEADLINE_BASE_MS + ROUND_DEADLINE_PER_VERIFY_MS * request.triples.length;
 }
 
-/**
- * Worker ceiling: a couple of cores fewer than the machine has, capped small.
- * The pool exists to keep the UI thread free, not to saturate every core — a
- * backfill decode competes with nothing else that matters, and leaving cores
- * for the compositor/renderer is what keeps scroll smooth while it runs.
- */
+/** Leave cores for the compositor; the pool is to free the UI thread, not saturate. */
 function poolSize(): number {
   const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
   return Math.max(1, Math.min(4, cores - 1));
@@ -129,11 +68,7 @@ function signOneInline(job: SignJob): string | null {
   }
 }
 
-/**
- * A batch on this thread — the fallback and the small-batch path — sliced so
- * the main thread keeps painting while it runs. Each operation is
- * milliseconds, so the yield check runs per item rather than per group.
- */
+/** A batch on this thread, yielding every INLINE_SLICE_MS. */
 async function runInline<J, R>(items: J[], one: (item: J) => R): Promise<R[]> {
   const out = new Array<R>(items.length);
   let sliceStart = performance.now();
@@ -163,10 +98,8 @@ interface PoolWorker {
 }
 
 /**
- * Take a worker out of service for good: every round it still owes settles
- * "unanswered" (so those chunks are recomputed inline, not declared forged or
- * unsigned), and the worker itself is terminated so a stalled one holds no
- * resources and a late reply lands nowhere.
+ * Retire a worker for good: owed rounds settle "unanswered" (recomputed
+ * inline) and it's terminated so late replies land nowhere.
  */
 function retire(entry: PoolWorker): void {
   entry.dead = true;
@@ -178,15 +111,11 @@ function retire(entry: PoolWorker): void {
   try {
     entry.worker.terminate();
   } catch {
-    // Already gone; nothing to release.
+    // already gone
   }
 }
 
-/**
- * The pool, built at most once. `undefined` = not yet attempted; `null` =
- * attempted and unavailable (always inline); an array = workers, of which the
- * dead are skipped at dispatch time.
- */
+/** `undefined` = not attempted; `null` = unavailable (always inline); array = workers. */
 let pool: PoolWorker[] | null | undefined;
 let nextRoundId = 0;
 
@@ -210,30 +139,24 @@ function ensurePool(): PoolWorker[] | null {
           round.settle(results);
         }
       };
-      // A worker that dies is retired for good — a later postMessage to it
-      // would vanish silently and hang its round.
+      // A dead worker silently swallows postMessage; retire it.
       worker.onerror = () => retire(entry);
       return entry;
     });
     return pool;
   } catch {
-    // Construction refused (CSP, exotic runtime): inline from here on.
     pool = null;
     return null;
   }
 }
 
 /**
- * One chunk to one worker. Resolves the worker's answer, or `null` when no
- * answer will come (the channel threw, the worker errored mid-round, or the
- * round's deadline passed with no reply) — the caller then computes the chunk
- * inline. Every path that yields `null` also retires the worker.
+ * One chunk to one worker; `null` (worker retired) when no answer will come,
+ * and the caller computes inline.
  */
 function dispatch(entry: PoolWorker, request: WorkerRequest): Promise<unknown[] | null> {
   return new Promise<unknown[] | null>((resolve) => {
     const deadline = setTimeout(() => {
-      // Still owed: the worker is stalled. Retiring it settles this round
-      // (and anything else it owes) as unanswered.
       if (entry.pending.has(request.id)) retire(entry);
     }, roundDeadlineMs(request));
     entry.pending.set(request.id, { settle: resolve, deadline });
@@ -246,14 +169,8 @@ function dispatch(entry: PoolWorker, request: WorkerRequest): Promise<unknown[] 
 }
 
 /**
- * The shared shape of both operations: split the items across the live
- * workers, one contiguous chunk each, and stitch the per-worker answers back
- * into one array in the caller's order.
- *
- * A chunk with no usable answer — its worker died, threw, or replied with the
- * wrong shape — is computed inline instead, so a worker failure only ever
- * moves the work back to this thread, never converts valid signatures into
- * "forged" (or a key into "unsigned").
+ * Split items into contiguous chunks across live workers and stitch answers
+ * back in order. Chunks without a usable answer are computed inline.
  */
 async function runBatch<J, R>(
   items: J[],
@@ -269,7 +186,6 @@ async function runBatch<J, R>(
     return runInline(items, one);
   }
 
-  // Contiguous chunks, one per live worker; the last takes the remainder.
   const chunkSize = Math.ceil(items.length / workers.length);
   const chunks: J[][] = [];
   for (let i = 0; i < items.length; i += chunkSize) {
@@ -303,10 +219,8 @@ export const ecVerifyBatch: EcVerifyBatch = (triples: VerifyTriple[]): Promise<b
 export type EcSignBatch = (jobs: SignJob[]) => Promise<(string | null)[]>;
 
 /**
- * Sign a batch of pre-hashed messages, in the pool when it is worth it and
- * inline (time-sliced) otherwise. Never throws; a job whose key is unusable
- * answers `null`. Same failure contract as {@link ecVerifyBatch}: a worker
- * failure moves the signing back to this thread, never loses a signature.
+ * Sign pre-hashed messages (pool or inline). Never throws; unusable keys answer
+ * `null`. Worker failures fall back inline.
  */
 export const ecSignBatch: EcSignBatch = (jobs: SignJob[]): Promise<(string | null)[]> =>
   runBatch(
@@ -317,11 +231,7 @@ export const ecSignBatch: EcSignBatch = (jobs: SignJob[]): Promise<(string | nul
     (answer) => (typeof answer === "string" ? answer : null),
   );
 
-/**
- * Test seam: tear the pool down and forget it (a fresh test rebuilds it), and
- * optionally pin the round deadline so a stalled-worker test needn't wait out
- * the production budget.
- */
+/** Test seam: tear down the pool; optionally pin the round deadline. */
 export function _resetVerifyPoolForTests(opts?: { roundDeadlineMs?: number }): void {
   if (Array.isArray(pool)) for (const entry of pool) retire(entry);
   pool = undefined;

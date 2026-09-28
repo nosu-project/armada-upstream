@@ -18,14 +18,13 @@ import type { ReactNode } from "react";
 /** See MessageActionSheet: the opening tap's trailing event reads as an outside tap. */
 const OPEN_GUARD_MS = 400;
 
-/** Settle animation, vaul's curve so the two kinds of sheet move alike. */
+/** vaul's settle duration, so both kinds of sheet move alike. */
 const SETTLE_MS = 320;
 const DISMISS_MS = 240;
 
 /** Travel before a touch is committed to a direction. */
 const SLOP_PX = 6;
 
-/** Scrim opacity at peek and at full. */
 const SCRIM_PEEK = 0.45;
 const SCRIM_FULL = 0.8;
 
@@ -36,47 +35,32 @@ export const SHEET_SCROLL_ATTR = "data-sheet-scroll";
 export const SHEET_NO_DRAG_ATTR = "data-sheet-no-drag";
 
 function ease(t: number): number {
-  // cubic-bezier(0.32, 0.72, 0, 1) is close enough to an ease-out quint here.
+  // Approximates vaul's cubic-bezier(0.32, 0.72, 0, 1).
   return 1 - Math.pow(1 - t, 5);
 }
 
 interface SnapSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Whether the sheet rests at full height rather than at peek. */
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  /** Accessible name. */
   title: string;
   className?: string;
   children: ReactNode;
 }
 
 /**
- * A bottom sheet in the shape of Discord's media picker: it rests at a peek
- * height with the conversation visible above, and a pull on it — the handle,
- * or the grid itself — expands it to the full screen. The drag and the list
- * inside are one gesture: swiping up the grid first raises the sheet and then
- * scrolls, and pulling down a scrolled-to-top grid collapses it, to peek and
- * then away.
- *
- * Built on Radix Dialog rather than vaul, which only drags while its content
- * is scrolled to the top and never hands a drag on to the list.
- *
- * Every frame of a drag is a direct style write — no React state — so the
- * sheet tracks the finger without re-rendering the grid. Children read the
- * sheet's position from two CSS variables on the content element:
- * `--sheet-x` (0 at peek … 1 at full) and `--sheet-offset` (px the sheet sits
- * below full), which is what lets a footer stay pinned to the screen bottom.
+ * Discord-style media-picker sheet: rests at peek, expands to full, and the
+ * drag hands off to the inner list in one gesture. Radix Dialog, not vaul
+ * (vaul never hands a drag on to the list). Drags write styles directly; children
+ * read `--sheet-x` (0 peek … 1 full) and `--sheet-offset` (px below full).
  */
 export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, title, className, children }: SnapSheetProps) {
-  // Mounted from open until the close animation has finished.
   const [present, setPresent] = useState(open);
   if (open && !present) setPresent(true);
 
-  // The content node as STATE: Radix's Portal renders nothing on its first
-  // commit, so a plain ref is still null when effects first run and they
-  // would never run again — leaving the sheet with no drag at all.
+  // STATE, not a ref: the Portal renders nothing on first commit, so effects
+  // would never see the node.
   const [node, setNode] = useState<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const setContent = useCallback((el: HTMLDivElement | null) => {
@@ -135,7 +119,6 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
     stops.current = { peek: Math.max(0, height - peekHeight(height)), closed: height };
   }, []);
 
-  // Open: start below the screen and rise to the requested stop.
   useLayoutEffect(() => {
     if (!node || !open) return;
     openedAt.current = Date.now();
@@ -145,26 +128,22 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
     return () => cancelAnimationFrame(frame.current);
   }, [node, open, measure, paint, animateTo]);
 
-  // Close: sink from wherever the sheet is, then unmount.
   useEffect(() => {
     if (open || !present) return;
     animateTo(stops.current.closed, DISMISS_MS, () => setPresent(false));
   }, [open, present, animateTo]);
 
-  // The parent asked for the other rest height.
   useEffect(() => {
     if (!open || !node) return;
     animateTo(stopOffset(expanded ? "full" : "peek", stops.current), SETTLE_MS);
   }, [expanded, open, node, animateTo]);
 
-  // Rotation, a window resize: the stops move with the screen.
   useEffect(() => {
     if (!present) return;
     const onResize = () => {
       if (!open) return;
       measure();
-      // An animation still in flight is heading for a stop measured against
-      // the old height; land on the new one instead of letting it finish there.
+      // Retarget an in-flight animation to the new stop.
       cancelAnimationFrame(frame.current);
       paint(stopOffset(expandedRef.current ? "full" : "peek", stops.current));
     };
@@ -178,15 +157,13 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
       return;
     }
     const full = stop === "full";
-    // The expanded effect only runs on a change; a release that lands back
-    // where it started has to be animated here.
+    // A release landing where it started must be animated here (no state change).
     animateTo(stopOffset(stop, stops.current), SETTLE_MS);
     if (full !== expandedRef.current) onExpandedChangeRef.current(full);
   }, [animateTo]);
 
-  // The drag. Touch events rather than pointer events: only a non-passive
-  // touchmove can refuse the browser its own scroll, and whether to refuse is
-  // decided per move — the sheet and the grid take turns within one gesture.
+  // Touch events: only a non-passive touchmove can refuse the browser its scroll,
+  // decided per move as sheet and grid take turns.
   useEffect(() => {
     const el = node;
     if (!el) return;
@@ -203,9 +180,7 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
         mode = "none";
         return;
       }
-      // A settle in flight keeps running until the drag actually takes the
-      // sheet: a tap, a sideways swipe or a grid scroll must not freeze it
-      // wherever the touch happened to land.
+      // An in-flight settle continues until the drag actually takes the sheet.
       const touch = e.touches[0];
       startX = touch.clientX;
       startY = lastY = touch.clientY;
@@ -221,8 +196,6 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
       samples.push({ t: e.timeStamp, y: touch.clientY });
       if (samples.length > 6) samples.shift();
 
-      // Whether the sheet may take this move, given where it rests and where
-      // the grid is scrolled.
       const atFull = offset.current <= 0.5;
       const sheetMayTake = !scroller || !atFull || (dy > 0 && scroller.scrollTop <= 0);
 
@@ -230,8 +203,8 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
         const tx = touch.clientX - startX;
         const ty = touch.clientY - startY;
         if (Math.abs(tx) < SLOP_PX && Math.abs(ty) < SLOP_PX) {
-          // Inside the slop a move the sheet may own is still refused to the
-          // browser: once it starts a scroll, touchmove stops being cancelable.
+          // Refuse the browser inside the slop: once it starts scrolling, touchmove
+          // stops being cancelable.
           if (sheetMayTake && e.cancelable) e.preventDefault();
           lastY = touch.clientY;
           return;
@@ -243,12 +216,8 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
         mode = sheetMayTake ? "sheet" : "scroll";
         if (mode === "sheet") cancelAnimationFrame(frame.current);
       } else if (mode === "scroll" && sheetMayTake && e.cancelable) {
-        // Only while the browser has not begun a scroll of its own — the grid
-        // was already at its top, so the pull scrolled nothing. Once Chrome
-        // starts scrolling, touchmove stays uncancelable for the rest of the
-        // gesture, so a grid flung back up to its top mid-gesture does NOT
-        // hand over here: that finger keeps scrolling, and the next pull down
-        // moves the sheet.
+        // Only if the browser hasn't begun its own scroll (it stays uncancelable for the
+        // rest of the gesture once it does).
         mode = "sheet";
         cancelAnimationFrame(frame.current);
       }
@@ -270,8 +239,7 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
         return;
       }
       mode = "none";
-      // Velocity over the last ~100ms of the drag; an older sample would let
-      // a pause before release still read as a fling.
+      // Last ~100ms only, so a pause before release isn't a fling.
       const now = e.timeStamp;
       const recent = samples.filter((s) => now - s.t < 100);
       let velocity = 0;
@@ -307,8 +275,7 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           ref={overlayRef}
-          // Opacity is painted per frame; pointer-events drop the moment a
-          // close starts, for the reason given in ui/drawer.tsx.
+          // pointer-events drop the moment a close starts (see ui/drawer.tsx).
           className={cn("fixed inset-0 z-50 bg-black", !open && "!pointer-events-none")}
           style={{ opacity: 0 }}
         />
@@ -317,8 +284,7 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
           aria-describedby={undefined}
           tabIndex={-1}
           onOpenAutoFocus={(e) => {
-            // Take focus off the composer so the keyboard goes down, without
-            // landing a focus ring on the first control in the sheet.
+            // Drop the keyboard without a focus ring on the first control.
             e.preventDefault();
             contentRef.current?.focus({ preventScroll: true });
           }}
@@ -329,8 +295,7 @@ export function SnapSheet({ open, onOpenChange, expanded, onExpandedChange, titl
             onOpenChange(false);
           }}
           className={cn(
-            // Full height from the status bar down; the rest heights are
-            // translations of it, so a drag never re-lays-out the grid.
+            // Rest heights are translations, so a drag never re-lays-out the grid.
             "fixed inset-x-0 bottom-0 top-[var(--safe-area-inset-top,env(safe-area-inset-top,0px))] z-50 flex flex-col overflow-hidden rounded-t-2xl bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)] outline-none touch-none will-change-transform",
             !open && "!pointer-events-none",
             className,

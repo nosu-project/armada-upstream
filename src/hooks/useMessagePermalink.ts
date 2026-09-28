@@ -3,54 +3,24 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { chatRoute, parseChatRoute, withoutMessage } from "@/lib/routes";
 
-/** Older pages the hunt may pull before giving up on a permalink target. */
 const MAX_HUNT_PAGES = 8;
-/** Frames allowed for a loaded row's rendering surface/ref to become ready. */
+/** Frames allowed for a loaded row's surface/ref to become ready. */
 const MAX_SCROLL_RETRIES = 4;
 
 /**
- * Consume a `/m/<event id>` message permalink on a chat route.
- *
- * The message id is a durable part of the location, not a transient hint: a
- * permalink stays in the address bar, so refreshing or coming Back returns the
- * reader to the same message. Three consequences shape everything below.
- *
- * First, the scroll must happen exactly ONCE per arrival. The effect re-runs
- * whenever `messages` changes identity — which is every time anyone posts in
- * the room — and a naive implementation would therefore yank the reader back
- * to the permalink target each time the conversation moved. `doneRef` records
- * that the hunt is settled and resets when the location changes, which
- * includes navigating to the id already on screen (`location.key` is new even
- * when the path is not) — so tapping the same pinned message twice jumps
- * twice, while a message arriving does nothing.
- *
- * Second, an id that cannot be resolved is dropped. A target older than the
- * loaded window drives the transport's `loadOlder` a bounded number of pages;
- * when history is exhausted the segment is replaced away, leaving the reader
- * in the room the link named. Keeping it would mean re-running all eight
- * round-trips on every remount, forever, for a link that will never resolve.
- *
- * Third, a reply inside a thread is not in the timeline at all, and the two
- * surfaces are both mounted at once. `scope` is what keeps them from fighting
- * over the same id: `/c/…/:channel/m/<id>` belongs to the timeline and
- * `/c/…/:channel/t/<root>/m/<id>` belongs to the thread panel, so each instance
- * ignores the other's shape. Without it the timeline would hunt a reply it can
- * never hold — eight round-trips — and then strip the segment out from under
- * the panel that could have shown it.
- *
- * Returns a callback that drops the `/m/` segment, for the moments that mean
- * "I am no longer looking at that": sending a message, above all.
+ * Consume a `/m/<event id>` permalink. The id stays in the URL, so:
+ * - Scroll exactly ONCE per arrival (`doneRef`, reset on `location.key`), not on every new message.
+ * - Unresolvable ids (after bounded `loadOlder` paging) are replaced away.
+ * - `scope` separates timeline `/m/` from thread `/t/<root>/m/`, so they don't fight over an id.
+ * Returns a callback that drops the segment (e.g. on send).
  */
 export function useMessagePermalink(opts: {
   messages: readonly { id: string }[];
   isLoading: boolean;
   hasMore?: boolean;
   loadOlder?: () => Promise<unknown>;
-  /** Jump the timeline to a loaded message; false if it isn't in there. */
   scrollTo: (id: string) => boolean;
-  /** Which `/m/` shape this instance owns (default the room timeline). */
   scope?: "timeline" | "thread";
-  /** Gate for pages that reuse one route for several views (default true). */
   enabled?: boolean;
 }): () => void {
   const {
@@ -69,14 +39,11 @@ export function useMessagePermalink(opts: {
   const mine = scope === "thread" ? inThread : !inThread;
   const target = mine ? route?.messageId : undefined;
 
-  // Pages pulled for the current target, whether a pull is in flight, and
-  // whether the hunt for this arrival has settled.
   const pagesRef = useRef(0);
   const scrollRetriesRef = useRef(0);
   const busyRef = useRef(false);
   const doneRef = useRef(false);
-  // Re-runs the effect when a pull settles WITHOUT changing `messages`
-  // identity (an empty page), so the hunt can continue or give up.
+  // Re-run when a pull settles without changing `messages` (an empty page).
   const [pulse, setPulse] = useState(0);
 
   useEffect(() => {
@@ -85,9 +52,7 @@ export function useMessagePermalink(opts: {
     doneRef.current = false;
   }, [target, location.key]);
 
-  // Drop the `/m/<id>` segment, keeping the room and any open thread. Uses
-  // `replace` so it doesn't leave a Back step that would simply re-run the
-  // navigation it just undid.
+  // `replace` so no Back step re-runs the navigation.
   const clear = useCallback(() => {
     if (!route?.messageId) return;
     navigate(`${chatRoute(withoutMessage(route))}${location.search}${location.hash}`, {
@@ -98,33 +63,21 @@ export function useMessagePermalink(opts: {
   useEffect(() => {
     if (!target || !enabled || isLoading || doneRef.current) return;
     if (messages.some((m) => m.id === target)) {
-      // The data can beat the surface that renders it. Search results, channel
-      // switches and opening skeletons all temporarily leave the timeline ref
-      // unavailable; accepting that failed scroll would consume the permalink
-      // and let the eventual timeline mount at the newest message. Only a
-      // timeline that actually accepted the target settles the arrival.
+      // Only a timeline that actually accepted the target settles the arrival; the ref may be
+      // unavailable during skeletons/switches.
       if (scrollTo(target)) {
-        // Satisfied: the segment stays in the URL (it names where the reader
-        // is), but it must not fire again as the conversation moves on.
+        // Keep the segment (it names where the reader is), but don't fire again.
         doneRef.current = true;
         scrollRetriesRef.current = 0;
         return;
       }
-      // A ref can become available without changing any hook input (the child
-      // mounts later in this same surface), so a false return needs its own
-      // bounded retry signal. Bound it because a loaded-but-intentionally
-      // hidden row — for example a muted author — will never become scrollable.
+      // Bounded retry: a ref may mount later, but a hidden row (muted author) never will.
       if (scrollRetriesRef.current >= MAX_SCROLL_RETRIES) {
         doneRef.current = true;
         clear();
         return;
       }
-      // The budget counts FRAMES, so it is spent only by retries this effect
-      // asked for. An opening conversation re-runs it for reasons that have
-      // nothing to do with the target — `messages` gains a row, `loadOlder` is
-      // rebuilt when the transport's raw set changes — and charging those runs
-      // would clear the permalink during the exact moments the surface is
-      // still mounting, which is the failure this retry exists to prevent.
+      // Counts FRAMES this effect requested, so unrelated re-runs while mounting don't spend it.
       const frame = requestAnimationFrame(() => {
         scrollRetriesRef.current += 1;
         setPulse((n) => n + 1);
@@ -143,8 +96,7 @@ export function useMessagePermalink(opts: {
       busyRef.current = false;
       setPulse((n) => n + 1);
     });
-    // `pulse` is a dependency so a page that found nothing still advances the
-    // hunt instead of stalling on an unchanged `messages` identity.
+    // `pulse` lets an empty page still advance the hunt.
   }, [target, enabled, isLoading, messages, hasMore, loadOlder, scrollTo, clear, pulse]);
 
   return clear;

@@ -69,72 +69,43 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 interface ChatContentProps {
   event: NostrRumor;
   className?: string;
-  /** When true, nested nostr:nevent/note/naddr embeds render as inline links
-   *  instead of cards. Used inside embedded cards to prevent recursion. */
+  /** Render nested nostr embeds as links, not cards (prevents recursion in embedded cards). */
   disableNoteEmbeds?: boolean;
-  /** When set, occurrences of this term in plain text are highlighted. */
   highlight?: string;
-  /** When set, this text is rendered instead of `event.content` (e.g. a
-   *  /me action body with its marker prefix stripped). Tags/imeta still come
-   *  from `event`. */
+  /** Rendered instead of `event.content` (e.g. a /me body); tags still come from `event`. */
   contentOverride?: string;
-  /** When true, mention chips render the bare display name without an `@`
-   *  prefix. Used for /me actions, which read as prose ("Alice slaps Bob"). */
+  /** Mention chips without the `@` (for /me prose). */
   noMentionAtPrefix?: boolean;
-  /** When set, clamp text-only content to this many lines with a trailing
-   *  ellipsis (used by quoted/embedded cards). Ignored when the content
-   *  contains block media (images/embeds), which a line clamp would break. */
+  /** Clamp text-only content to this many lines; ignored with block media. */
   clampLines?: number;
-  /** When true, long-form document markdown also renders: heading levels 4–6
-   *  and `[text](url)` links. Used for git issues/PRs/comments; chat keeps its
-   *  Discord-flavored subset (headings to level 3, lists, fences, quotes). */
+  /** Also render headings 4–6 and `[text](url)` links (git issues/PRs/comments). */
   documentMarkdown?: boolean;
   /** Render authorized literal `@everyone` occurrences as mass-mention chips. */
   everyoneMention?: boolean;
 }
 
-/** Bech32 charset used by NIP-19 identifiers. */
 const BECH32_CHARS = "023456789acdefghjklmnpqrstuvwxyz";
 
 /**
- * Regex to extract a NIP-19 entity embedded in a URL path — an njump.me /
- * habla.news / snort style link whose path IS a nostr id. Matches events
- * (`nevent`/`note`) and addressable events (`naddr`) only: a URL is a
- * destination, and the unfold is a preview of it that keeps the url as a
- * source back-link. `npub`/`nprofile` are deliberately absent — a mention has
- * no room for a source link, so unfolding `https://ditto.pub/npub1…` to a
- * chip discarded the link the sender wrote and silently sent the reader to
- * this app's profile page instead. Such a URL stays a plain link.
- *
- * The entity must be the TERMINAL path segment: a leading `/` and nothing but
- * an optional trailing `/`, query, or fragment after it. A structured URL like
- * `gitworkshop.dev/npub1…/relay.ngit.dev/armada/issues/nevent1…` carries a
- * bech32 id MID-PATH, and matching the first one anywhere claimed the whole
- * link for it. Anchoring to the last segment lets a mid-path id fall through
- * (its next char is `/…`, not a terminator) while the terminal `nevent1…`
- * still unfolds. Captured in group 1, since the match includes the delimiters.
+ * A NIP-19 event/naddr as the TERMINAL path segment of a URL (njump-style).
+ * `npub`/`nprofile` are excluded: a mention chip would discard the sender's
+ * link. Terminal-only so mid-path ids (gitworkshop.dev/npub1…/…/nevent1…)
+ * don't claim the whole link. Captured in group 1.
  */
 const NOSTR_IN_URL_REGEX = new RegExp(
   `\\/((?:nevent1|naddr1|note1)[${BECH32_CHARS}]{10,})\\/?(?:[?#]|$)`,
   "i",
 );
 
-/** A NIP-19 entity found inside a plain URL (njump-style link). */
 type NostrInUrl =
   | { kind: "event"; eventId: string; relays?: string[]; author?: string }
   | { kind: "addr"; addr: AddrCoords; relays?: string[] };
 
-/** An naddr's coordinates, and apart from them its relay hints. */
 function splitAddr({ kind, pubkey, identifier, relays }: nip19.AddressPointer): { addr: AddrCoords; relays?: string[] } {
   return { addr: { kind, pubkey, identifier }, relays };
 }
 
-/**
- * Try to extract a nostr entity from a URL whose path encodes one (e.g.
- * `njump.me/nevent1…`, `habla.news/…/naddr1…`). The decoded entity is
- * returned so the reader gets a rich card, while the ORIGINAL url is kept by
- * the caller as a "source" back-link to where it was posted.
- */
+/** Decode a nostr entity from a URL path; the caller keeps the URL as a source back-link. */
 function extractNostrFromUrl(url: string): NostrInUrl | null {
   const match = url.match(NOSTR_IN_URL_REGEX);
   if (!match) return null;
@@ -159,15 +130,12 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
   return null;
 }
 
-/** A possibly-encrypted image reference for the gallery/lightbox. */
 type ImageRef = EncryptedRef & { alt?: string; spoiler?: boolean };
 
-/** The image a token names, for the grid and the lightbox. */
 function imageRefOf(t: Extract<ContentToken, { type: "image-embed" }>): ImageRef {
   return { url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks, alt: t.alt, spoiler: t.spoiler };
 }
 
-/** A parsed token from message content. */
 type ContentToken =
   | { type: "text"; value: string }
   | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[]; alt?: string; spoiler?: boolean }
@@ -200,10 +168,8 @@ type ContentToken =
   | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] };
 
 /**
- * Split a plain-text leaf into text + `text-mention` tokens by matching known
- * `@name` aliases (Buzz/legacy-style mentions, where the body carries the
- * literal `@displayName` and the pubkey lives in a `p` tag). Only aliases in
- * `mentions.byName` match, so an arbitrary `@word` stays plain text.
+ * Split known `@name` aliases (Buzz/legacy mentions, pubkey in a `p` tag) out
+ * of plain text. Only aliases in `mentions.byName` match.
  */
 function splitTextToken(value: string, mentions: MentionNameMap): ContentToken[] {
   const { regex, byName } = mentions;
@@ -214,8 +180,7 @@ function splitTextToken(value: string, mentions: MentionNameMap): ContentToken[]
   let match: RegExpExecArray | null;
   while ((match = regex.exec(value)) !== null) {
     const pubkey = byName.get(match[1].toLowerCase());
-    // Unknown alias (shouldn't happen — regex is built from the map): leave the
-    // text alone and let exec advance past it on the next iteration.
+    // Unreachable (the regex is built from the map); exec advances past it.
     if (!pubkey) continue;
     const at = match.index;
     if (at > last) out.push({ type: "text", value: value.slice(last, at) });
@@ -226,10 +191,6 @@ function splitTextToken(value: string, mentions: MentionNameMap): ContentToken[]
   return out;
 }
 
-/**
- * Walk a token list splitting `@name` mentions out of plain-text leaves
- * (recursing into quote blocks). No-op when the event tags resolve no names.
- */
 function applyTextMentions(tokens: ContentToken[], mentions: MentionNameMap): ContentToken[] {
   if (!mentions.regex) return tokens;
   const out: ContentToken[] = [];
@@ -280,11 +241,6 @@ function applyEveryoneMentions(tokens: ContentToken[]): ContentToken[] {
   return out;
 }
 
-/**
- * Render text with a highlighted search term, after custom-emoji replacement.
- * Splits on case-insensitive occurrences of `term`, emojifies each segment,
- * and wraps the matched segments in a `<mark>`.
- */
 function highlightText(
   text: string,
   term: string | undefined,
@@ -292,9 +248,8 @@ function highlightText(
   imgClassName?: string,
   authorPubkey?: string,
 ): ReactNode[] {
-  // Inline emojis in the message body are clickable — tapping one opens its
-  // source pack, the same popover a reaction pill shows. The message author is
-  // forwarded so an unknown pack can be resolved over their own relays.
+  // Inline emojis are clickable (open their source pack); the author is passed
+  // so an unknown pack resolves over their relays.
   if (!term || !term.trim()) return emojify(text, emojiMap, imgClassName, true, authorPubkey);
 
   const needle = term.trim().toLowerCase();
@@ -321,10 +276,7 @@ function highlightText(
   return out;
 }
 
-/**
- * Regex segment matching a single visual emoji unit (ZWJ sequences, skin
- * tones, flags, keycaps, tag sequences, and basic presentation emojis).
- */
+/** One visual emoji unit (ZWJ sequences, skin tones, flags, keycaps, tag sequences). */
 const EMOJI_UNIT = [
   "(?:" +
   "(?:\\p{Emoji_Presentation}|\\p{Emoji}\\uFE0F)" +
@@ -337,7 +289,6 @@ const EMOJI_UNIT = [
   "(?:(?:\\p{Emoji_Presentation}|\\p{Emoji}\\uFE0F)[\\u{1F3FB}-\\u{1F3FF}]?)",
 ].join("|");
 
-/** NIP-30 custom emoji shortcode pattern. */
 const CUSTOM_EMOJI_SHORTCODE = ":([a-zA-Z0-9_-]+):";
 
 /** Matches a string of only emoji (unicode and/or custom shortcodes), max 10. */
@@ -346,7 +297,6 @@ const EMOJI_OR_CUSTOM_ONLY_REGEX = new RegExp(
   "u",
 );
 
-/** Check if a string contains only emojis / resolvable custom shortcodes. */
 function isOnlyEmojisOrCustom(text: string, emojiMap: Map<string, string>): boolean {
   if (!EMOJI_OR_CUSTOM_ONLY_REGEX.test(text)) return false;
   const shortcodeMatches = text.matchAll(/:([a-zA-Z0-9_-]+):/g);
@@ -363,37 +313,22 @@ function countEmojiUnits(text: string): number {
 }
 
 /**
- * Kinds whose imeta tags describe attached media for the content body.
- * Includes NIP-17 DM rumors (14 chat, 15 file): like Concord, an encrypted
- * DM attachment lives only in the `imeta` (ciphertext Blossom URL +
- * `decryption-key`/`decryption-nonce`), so it must be parsed for the body to
- * emit — and decrypt — the embed.
+ * Kinds whose imeta tags describe attached media. Includes NIP-17 rumors (14,
+ * 15), whose encrypted attachments live only in `imeta`, and NIP-34 PRs/issues
+ * (1618/1621).
  */
-// 1618/1621: NIP-34 pull requests and issues carry imeta for their attachments.
 const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 1618, 1621]);
 
-/**
- * Plain-text length (of the raw content, before tokenizing/rendering) past
- * which a message defaults to collapsed with a "Read more" control. Picked to
- * land at roughly one screenful of chat text (~8-10 wrapped lines at typical
- * viewport widths) rather than an exact character budget — the goal is
- * "doesn't blow out the timeline", not a precise cutoff. Well below the
- * composer's MAX_CHARS, so only a minority of longer messages collapse.
- */
+/** Raw content length past which a message collapses behind "Read more" (~one screenful). */
 const COLLAPSE_CHAR_THRESHOLD = 600;
 
-/** Collapsed height (px) for long messages — enough for ~8-10 lines before the fade. */
 const COLLAPSED_MAX_HEIGHT = 224;
 
-/** Matches audio file extensions in a URL (drives AudioMessage vs VideoPlayer). */
 const AUDIO_EXT_URL_REGEX = new RegExp(`\\.(${AUDIO_EXTS})(\\?[^\\s]*)?$`, "i");
 
 /**
- * Treat `application/octet-stream` (and empty) as "no MIME info": Blossom
- * servers commonly report it for ciphertext/unknown blobs, and passing it
- * through breaks playback — `<source type="application/octet-stream">` is
- * rejected outright, and a decrypted Blob typed octet-stream won't play as a
- * media src in Firefox. Callers fall back to extension-derived MIME instead.
+ * Treat `application/octet-stream` (and empty) as no MIME: Blossom reports it
+ * for ciphertext, and it breaks `<source type>` and Firefox blob playback.
  */
 function usableMime(m: string | undefined): string | undefined {
   if (!m || m.startsWith("application/octet-stream")) return undefined;
@@ -402,27 +337,12 @@ function usableMime(m: string | undefined): string | undefined {
 
 
 /**
- * Rich message content renderer. Tokenizes the event content and renders:
- * URLs (inline images/galleries, video and audio players, link preview
- * cards), nostr: URIs (mentions, embedded note/naddr cards), hashtags,
- * NIP-30 custom emoji, and lightning invoices.
- */
-/**
- * Tokenized message bodies, keyed by event id and rendering dialect.
- *
- * Tokenizing is the expensive half of mounting a message row — the whole
- * markdown / URL / `nostr:` URI / emoji / invoice pass runs over the content —
- * and a `useMemo` only survives as long as the component instance, so every
- * remount pays for it again: opening a channel re-tokenizes every row it
- * renders, and going back to a channel you were just in pays the same bill a
- * second time. Nostr events are immutable, so the result can be kept across
- * mounts; the stored content is compared on lookup anyway, for synthesized
- * events (mesh, placeholders) whose id isn't a hash of their body, and for
- * inline edits rendered through `contentOverride`.
+ * Tokenized bodies keyed by event id and dialect, surviving remounts (events
+ * are immutable). Content is compared on lookup for synthesized events and
+ * `contentOverride` edits.
  */
 const TOKEN_CACHE = new Map<string, { content: string; tokens: ContentToken[] }>();
 
-/** Entries kept before the oldest is dropped (insertion-ordered Map). */
 const TOKEN_CACHE_MAX = 800;
 
 function cacheTokens(id: string, content: string, tokens: ContentToken[]): ContentToken[] {
@@ -435,83 +355,49 @@ function cacheTokens(id: string, content: string, tokens: ContentToken[]): Conte
 }
 
 /**
- * The body tokenizer's alternation: markdown image | BOLT11 invoice | URL |
- * `nostr:`-prefixed NIP-19 id | bare/`@`-prefixed NIP-19 id | hashtag | Cashu
- * token. Built once — it was being recompiled for every plain-text segment of
- * every message, which on a channel open is thousands of identical
- * `new RegExp` compilations of a ~400-character pattern.
- *
- * Shared, so it carries `lastIndex` between uses: {@link tokenizeSegment}
- * resets it before scanning. Safe because the scan is synchronous and never
- * re-enters itself (the markdown pass calls it, not the other way round).
+ * The body tokenizer's alternation: markdown image | BOLT11 | URL |
+ * `nostr:` NIP-19 | bare/`@` NIP-19 | hashtag | Cashu. Compiled once; shared
+ * `lastIndex` is reset by {@link tokenizeSegment} (synchronous, non-reentrant).
  */
 const SEGMENT_RE = new RegExp(
-  // Markdown image `![alt](url)` (Buzz posts use it) — captured first so
-  // the `![alt](` / `)` wrapper is consumed rather than left as stray text.
+  // Markdown image `![alt](url)` first, so its wrapper is consumed.
   "!\\[[^\\]]*\\]\\((https?:\\/\\/[^\\s)]+)\\)" +
   "|(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
-  // A scheme (`https://`, `wss://`, …) OR a bare `domain.tld/path` — a
-  // scheme-less link like `gitworkshop.dev/npub1…/…` must be consumed whole
-  // here, or the bech32 entity inside it falls to the bare-nostr branch below
-  // and renders as a mention that splits the URL. The bare-domain form needs a
-  // `/path` (a lone `word.tld` isn't linkified) and can't match a bare `npub1…`
-  // (no dot). Normalized to `https://` at use — see below.
-  //
-  // The label and TLD repetitions are BOUNDED (`{1,63}` per DNS octet limit,
-  // `{1,10}` labels, `{2,24}` TLD) rather than open `+`/`{2,}`. Unbounded, a
-  // long run of word-characters with no dot-slash made the engine rescan the
-  // whole run from every start position — O(n²) over attacker-controlled
-  // message content, on the synchronous per-row tokenize path. The bounds cap
-  // the work per position to a constant, so the scan is linear; no real
-  // hostname exceeds them.
+  // Scheme OR bare `domain.tld/path` (so a bech32 id inside a scheme-less link
+  // can't split it into a mention); normalized to `https://` at use.
+  // Repetitions are BOUNDED (DNS limits) to keep the scan linear: unbounded
+  // was O(n²) on attacker-controlled content.
   "|((?:(?:https?|wss?):\\/\\/|(?:[\\w-]{1,63}\\.){1,10}[a-z]{2,24}\\/)[^\\s]+)" +
   "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
   `|(${HASHTAG_PATTERN})` +
-  // Cashu ecash token. Appended last so the group numbers above are
-  // untouched; nothing else in the alternation starts with `cashu`.
+  // Cashu last so the group numbers above are untouched.
   `|(${CASHU_TOKEN_PATTERN})`,
   "giu",
 );
 
 function ChatContentInner({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false, everyoneMention = false }: ChatContentProps) {
-  // Canonicalize links on the way in as well as on the way out: a URL that
-  // arrived from another client, a forward, or a message predating the setting
-  // still carries its share/click ids, and rendering it hands them to whatever
-  // fetches the link — the preview unfurler included, which runs before any
-  // click.
-  //
-  // Read through `useContext` rather than `useAppContext`, which throws without
-  // a provider: this renderer is deliberately mountable bare (the render-cost
-  // tests measure it that way, and wrapping them in a real `AppProvider` would
-  // measure the provider too). Absent one, the default applies.
+  // Canonicalize links on render too (the preview unfurler fetches before any
+  // click). `useContext`, not `useAppContext`, so this renders without a provider.
   const cleanLinks =
     useContext(AppContext)?.config.stripTrackingParams ?? defaultConfig.stripTrackingParams;
 
   const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
-    // The dialect is part of the identity: the same event tokenizes
-    // differently in document mode (headings, lists, [text](url)), and with
-    // link cleaning off the URLs themselves differ.
+    // The dialect is part of the cache identity.
     const cacheKey = `${documentMarkdown ? "doc" : "msg"}:${cleanLinks ? "c" : "r"}:${event.id}`;
     const cached = TOKEN_CACHE.get(cacheKey);
     if (cached && cached.content === text) return cached.tokens;
 
-    // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
-    // chat attachments by uploading AES-GCM ciphertext to Blossom and putting
-    // the (often extension-less) URL + decryption key/nonce inside an `imeta`
-    // tag — for Concord the URL is ONLY in the imeta, not in the content
-    // body. We use these to (a) classify extension-less URLs as media
-    // and (b) emit embeds for imeta media not present inline.
+    // Imeta media declared out-of-band (Vector/0xChat/Concord: ciphertext URL
+    // often ONLY in imeta): classifies extension-less URLs and emits embeds for
+    // non-inline media.
     const isMediaImetaKind = MEDIA_IMETA_KINDS.has(event.kind);
     const imetaByUrl = isMediaImetaKind
       ? parseImetaMap(event.tags)
       : new Map<string, ImetaEntry>();
-    // NIP-17 kind-15 file messages (Amethyst/0xChat) carry NO imeta tag: the
-    // blob URL is the whole content and the file/encryption metadata rides in
-    // TOP-LEVEL tags (`file-type`, `x`, `decryption-key`, …). Synthesize an
-    // imeta entry from those so the URL is classified as media and its
-    // decryption key is picked up, exactly like an imeta attachment.
+    // NIP-17 kind-15 has no imeta: URL is the content, metadata in top-level
+    // tags. Synthesize an imeta entry.
     if (event.kind === KIND_DM_FILE && !imetaByUrl.has(text.trim())) {
       const fileEntry = parseFileMessageTags(text.trim(), event.tags);
       if (fileEntry) imetaByUrl.set(fileEntry.url, fileEntry);
@@ -523,10 +409,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       if (safe && mime) imetaMimeByUrl.set(safe, mime);
     }
 
-    // Resolve the effective MIME for an imeta URL: explicit `m`, else inferred
-    // from the URL extension, else the `name` field's extension. An
-    // uninformative `m` (application/octet-stream) is skipped so the
-    // extension can win — see usableMime.
+    // `m`, else URL extension, else `name` extension; octet-stream is skipped.
     const imageMimeFor = (entry: { mime?: string; url: string; name?: string }): string | undefined => {
       const explicit = usableMime(entry.mime);
       if (explicit) return explicit;
@@ -537,12 +420,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       return fromName ? usableMime(mimeFromExt(fromName)) : undefined;
     };
 
-    /** Strip tracking parameters from a link, unless the user turned that off. */
     const cleanUrl = (url: string) => (cleanLinks ? stripTrackingParams(url) : url);
 
-    // Tokenize one plain-text segment (already free of markdown code spans):
-    // BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or
-    // bare NIP-19 ids | hashtags | Cashu tokens.
     const tokenizeSegment = (segment: string): ContentToken[] => {
       const regex = SEGMENT_RE;
       regex.lastIndex = 0;
@@ -556,14 +435,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const mdImageUrl = match[1];
         const bolt11 = match[2];
         let url = mdImageUrl ?? match[3];
-        // A markdown `![…](url)` is an image regardless of the URL's extension.
         const forceImage = Boolean(mdImageUrl);
         const hashtag = match[8];
         const cashu = match[9];
         const { 4: nostrPrefix, 5: nostrData, 6: barePrefix, 7: bareData } = match;
         const index = match.index;
 
-        // Add text before this match
         if (index > lastIndex) {
           out.push({ type: "text", value: segment.substring(lastIndex, index) });
         }
@@ -571,22 +448,18 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (bolt11) {
           out.push({ type: "lightning-invoice", invoice: bolt11.toLowerCase() });
         } else if (cashu) {
-          // Only claim the match if it actually decodes; otherwise leave the
-          // text alone so a `cashu`-lookalike string renders verbatim.
+          // Only if it decodes; otherwise a `cashu`-lookalike renders verbatim.
           out.push(
             parseCashuToken(cashu)
               ? { type: "cashu-token", raw: cashu }
               : { type: "text", value: cashu },
           );
         } else if (url) {
-          // Strip common trailing punctuation that's likely not part of the URL
-          // (skipped for a markdown image, whose URL was delimited by the `)`).
+          // Strip trailing punctuation (not for markdown images, delimited by `)`).
           const trailingPunctMatch = forceImage ? null : url.match(/^(.*?)([.,;:!?)\]]+)$/);
           if (trailingPunctMatch) {
             let [, urlWithoutPunct, trailingPunct] = trailingPunctMatch;
-            // Re-attach any trailing `)` that balances a `(` inside the URL, so
-            // Wikipedia-style paths like `/wiki/Ditto_(Pokémon)` keep their
-            // closing paren instead of it being treated as sentence punctuation.
+            // Keep a `)` that balances a `(` in the URL (`/wiki/Ditto_(Pokémon)`).
             while (trailingPunct.startsWith(")")) {
               const opens = (urlWithoutPunct.match(/\(/g) ?? []).length;
               const closes = (urlWithoutPunct.match(/\)/g) ?? []).length;
@@ -600,32 +473,20 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             }
           }
 
-          // A scheme-less `domain.tld/path` link (the URL branch now matches
-          // one so a bech32 id inside it can't fall to the bare-entity branch
-          // and split the link into a mention) gets an `https://` so every
-          // downstream consumer — sanitizeUrl, cleanUrl, parseSelfLink,
-          // extractNostrFromUrl — has a URL to parse. `fullMatch` is left as
-          // the source text, so the added scheme never widens the consumed span.
+          // Scheme-less links get `https://`; `fullMatch` stays the source span.
           if (!/^(?:https?|wss?):\/\//i.test(url)) url = `https://${url}`;
 
-          // Canonicalize before anything classifies, renders or fetches the
-          // link. `fullMatch` is deliberately left alone — it measures how much
-          // of the original text this token consumed. An imeta-declared URL is
-          // skipped: it's matched to its tag by exact string, and an uploaded
-          // attachment has no tracking to strip in the first place.
+          // Canonicalize before anything classifies or fetches. imeta URLs are matched
+          // by exact string, so they're skipped.
           if (!imetaByUrl.has(url)) url = cleanUrl(url);
 
-          // WebSocket relay URLs → internal server page link
           if (/^wss?:\/\//i.test(url)) {
             out.push({ type: "relay-link", url });
             lastIndex = index + fullMatch.length;
             continue;
           }
 
-          // Image URLs → render inline at their position in the text. Match by
-          // extension, or by an imeta entry declaring an image MIME (covers
-          // extension-less / encrypted Blossom URLs). Encrypted attachments carry
-          // their decryption key/nonce so the embed can fetch+decrypt the blob.
+          // Images by extension or imeta MIME (extension-less/encrypted Blossom URLs).
           const inlineImeta = imetaByUrl.get(url);
           const inlineImetaMime = inlineImeta ? imageMimeFor(inlineImeta) : undefined;
           const isImetaImage = inlineImetaMime?.startsWith("image/") ?? false;
@@ -653,16 +514,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             continue;
           }
 
-          // Non-image media URLs (video, audio) — render inline at their position.
-          // Match by extension, or by an imeta-declared audio/video MIME (covers
-          // extension-less upload URLs like blossom sha256 filenames). Like
-          // image-embed, the token carries the imeta decryption params + MIME so
-          // encrypted (Concord/Vector) blobs decrypt before playback.
+          // Video/audio by extension or imeta MIME, carrying decryption params.
           const imetaMime = inlineImetaMime ?? imetaMimeByUrl.get(url);
           const isImetaMedia = imetaMime?.startsWith("audio/") || imetaMime?.startsWith("video/");
-          // A webxdc app inline: Armada's own URL ends `.xdc` (matched by
-          // EMBED_MEDIA_URL_REGEX), but a Vector one is an extension-less
-          // Blossom URL, recognizable only by its imeta MIME or `webxdc` uuid.
+          // Armada's webxdc URLs end `.xdc`; Vector's are extension-less, known only by
+          // imeta MIME or `webxdc` uuid.
           const isInlineWebxdc = isWebxdcMime(imetaMime) || Boolean(inlineImeta?.webxdc);
           if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia || isInlineWebxdc) {
             if (out.length > 0) {
@@ -675,8 +531,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               type: "media-embed",
               url,
               encryption: inlineImeta?.encryption,
-              // Normalize a webxdc MIME so the render-side isXdc check fires even
-              // when the only signal was the uuid on an extension-less URL.
               mime: isInlineWebxdc && !isWebxdcMime(imetaMime) ? WEBXDC_MIME : imetaMime,
               fallbacks: inlineImeta?.fallbacks,
             });
@@ -686,10 +540,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             continue;
           }
 
-          // A URL that carries an imeta entry but isn't image/audio/video is a
-          // generic file attachment (PDF, zip, doc): render a download-only
-          // card. Gated on `inlineImeta` so ordinary pasted links stay link
-          // cards; webxdc is excluded (it has its own inline handling).
+          // imeta but not image/audio/video: a download card. Plain pasted links stay link cards.
           if (inlineImeta && !inlineImeta.webxdc && !isWebxdcMime(imetaMime)) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
@@ -711,28 +562,20 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             continue;
           }
 
-          // A URL gets a preview card when nothing meaningful follows it on
-          // the same line; mid-sentence URLs stay plain links.
+          // Preview card only when nothing follows the URL on its line.
           const afterUrl = segment.substring(index + fullMatch.length);
           const nextNewline = afterUrl.indexOf("\n");
           const lineSuffix = nextNewline === -1 ? afterUrl : afterUrl.substring(0, nextNewline);
           const isEndOfLine = lineSuffix.trim() === "";
 
           const isInvite = isInviteUrl(url);
-          // A link back into this app (a copied message link, a channel/server
-          // share, a profile link) routes internally instead of opening a new
-          // tab. Checked before the njump unfold below, which would otherwise
-          // claim a `/dm/npub1…/m/<id>` path by the npub inside it. Invites
-          // are excluded — they already have their own card, matched by path.
+          // Links into this app route internally. Before the njump unfold, which would
+          // claim `/dm/npub1…/m/<id>` by its npub. Invites have their own card.
           const selfTarget = isInvite ? null : parseSelfLink(url);
-          // A URL whose path IS an event or naddr (njump.me/nevent1…,
-          // habla.news/…/naddr1…) unfolds to the rich card for that entity,
-          // keeping the original url as a "source" back-link. Skipped for
-          // invite links, whose naddr points at encrypted content (handled
-          // above). A profile URL never unfolds — see NOSTR_IN_URL_REGEX.
+          // Event/naddr URLs unfold to a rich card with a source back-link. Not
+          // invites (encrypted content).
           const nostrFromUrl = isInvite || selfTarget ? null : extractNostrFromUrl(url);
           if (selfTarget?.kind === "profile") {
-            // A bare `/<npub>` link is exactly a mention, wherever it sits.
             out.push({ type: "mention", pubkey: selfTarget.pubkey });
           } else if (selfTarget?.kind === "chat" && isEndOfLine) {
             out.push({ type: "self-chat-embed", url, route: selfTarget.route, path: selfTarget.path });
@@ -741,14 +584,10 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           } else if (isEndOfLine && isInvite) {
             out.push({ type: "invite-embed", url });
           } else if (isInvite) {
-            // A mid-sentence invite link stays a plain link — never a generic
-            // naddr card (the invite bundle's naddr points at encrypted content).
+            // Never a generic naddr card: an invite's naddr points at encrypted content.
             out.push({ type: "inline-link", url });
           } else if (isEndOfLine && isBuzzInviteUrl(url)) {
-            // A Buzz / NIP-29 relay invite landing URL (`/invite/<code>`, a
-            // non-naddr code) gets its own join card. Checked after the Concord
-            // `isInvite` branches — the two never collide (Concord's segment is
-            // a bech32 naddr, which `parseBuzzInviteUrl` rejects).
+            // Buzz / NIP-29 invite (`/invite/<code>`); never collides with Concord's naddr.
             out.push({ type: "buzz-invite-embed", url });
           } else if (isBuzzInviteUrl(url)) {
             out.push({ type: "inline-link", url });
@@ -803,17 +642,14 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         lastIndex = index + fullMatch.length;
       }
 
-      // Add any remaining text
       if (lastIndex < segment.length) {
         out.push({ type: "text", value: segment.substring(lastIndex) });
       }
       return out;
     };
 
-    // A text run may still contain `inline code` spans — extract those first
-    // so code never gets linkified/emojified. In document mode, `[text](url)`
-    // links split out of the non-code segments before URL tokenizing so the
-    // wrapped URL doesn't linkify on its own.
+    // Extract `inline code` first so code is never linkified. Document mode splits
+    // `[text](url)` before URL tokenizing.
     const tokenizeRun = (run: string): ContentToken[] => {
       const out: ContentToken[] = [];
       for (const seg of splitInlineCode(run)) {
@@ -834,10 +670,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       return out;
     };
 
-    // Markdown block pass first (fenced ``` code, > quotes, headings and
-    // lists), then tokenize each non-code run. Quote blocks
-    // carry their own token list and render inside a <blockquote> (media
-    // inside quotes demotes to plain links).
+    // Markdown block pass first; media inside quotes demotes to plain links.
     const result: ContentToken[] = [];
     for (const block of splitMarkdownBlocks(text, documentMarkdown)) {
       if (block.type === "code") {
@@ -853,7 +686,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
     }
 
-    // Enrich nevent-embed tokens with relay/author hints from `q` tags.
     const qTagMap = new Map<string, { relay?: string; author?: string }>();
     for (const tag of event.tags) {
       if (tag[0] === "q" && tag[1]) {
@@ -876,11 +708,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
     }
 
-    // Append embeds for imeta-declared media URLs not found inline in the
-    // content (NIP-92 attachments without an inline URL — the Concord/Vector
-    // case, where the Blossom URL lives ONLY in the imeta tag). Images become
-    // image-embeds (decrypted on display if encrypted); audio/video become
-    // media-embeds.
+    // Embeds for imeta media not found inline (Concord/Vector attachments).
     if (isMediaImetaKind) {
       const renderedUrls = new Set(
         result.flatMap((t) =>
@@ -898,12 +726,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime, fallbacks: entry.fallbacks });
           renderedUrls.add(url);
         } else if (isWebxdcMime(mime) || entry.webxdc) {
-          // A webxdc Mini App declared only in imeta — the Vector case, where
-          // the Blossom URL never appears inline, so the `.xdc`-extension path
-          // that catches Armada's own can't reach it. Emit a media-embed; the
-          // render pass turns it into an XdcAttachment launch card via isXdc.
-          // Normalize the MIME to a webxdc spelling so that check fires even
-          // when the signal was only the `webxdc` uuid on an extension-less URL.
+          // imeta-only webxdc (Vector): becomes an XdcAttachment card via isXdc; MIME
+          // normalized for the uuid-only case.
           result.push({
             type: "media-embed",
             url,
@@ -913,8 +737,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           });
           renderedUrls.add(url);
         } else {
-          // Any other imeta attachment (PDF, zip, arbitrary document) is a
-          // generic file — render a download-only card.
           result.push({
             type: "file-embed",
             url,
@@ -928,13 +750,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
     }
 
-    // Collapse excessive whitespace around block-level tokens. `link-embed` is
-    // deliberately excluded: it doesn't always render as a block (it becomes an
-    // inline link inside quotes, and falls back to an inline <a> when no preview
-    // data is available), so stripping the surrounding space would glue the URL
-    // onto adjacent text (e.g. "new apk https://…" → "new apkhttps://…"). When
-    // it does render as a preview card, the card is block-level, so a leftover
-    // space in the preceding text is invisible anyway.
+    // Collapse whitespace around block tokens. Not `link-embed`: it can render
+    // inline, and stripping would glue the URL to adjacent text.
     for (let i = 0; i < result.length; i++) {
       const token = result[i];
       const isBlock = token.type === "image-embed" || token.type === "media-embed"
@@ -963,7 +780,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
     }
 
-    // Trim leading/trailing whitespace from edge text tokens.
     if (result.length > 0) {
       const first = result[0];
       if (first.type === "text") {
@@ -975,7 +791,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
     }
 
-    // Filter out empty text tokens
     return cacheTokens(
       cacheKey,
       text,
@@ -983,9 +798,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     );
   }, [event, contentOverride, documentMarkdown, cleanLinks]);
 
-  // Resolve `@name` mentions carried as plain text + `p` tags (Buzz/legacy
-  // style) back to pubkeys, then split them out of the text leaves. NIP-27
-  // `nostr:` mentions are already handled inline by the tokenizer above.
+  // `@name` mentions via `p` tags (Buzz/legacy); NIP-27 is handled by the tokenizer.
   const mentions = useMentionNameMap(event);
   const everyoneTokens = useMemo(
     () => everyoneMention ? applyEveryoneMentions(rawTokens) : rawTokens,
@@ -996,12 +809,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     [everyoneTokens, mentions],
   );
 
-  // Build emoji map for NIP-30 custom emoji rendering. Merge the event's own
-  // emoji tags with the viewer's collection so shortcodes still render when
-  // the published event omitted the tag.
+  // Merge the viewer's emojis so shortcodes render when the event omits the tag.
   const { emojis: viewerEmojis } = useCustomEmojis();
-  // Resolves `#channel` hashtags to local-channel navigation for the current
-  // server/community (falls back to a Ditto hashtag link when unmatched).
+  // `#channel` → local channel, else a Ditto hashtag link.
   const channelNav = useChannelNav();
   const emojiMap = useMemo(() => {
     const map = buildEmojiMap(event.tags);
@@ -1013,10 +823,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     return map;
   }, [event.tags, viewerEmojis]);
 
-  // Parse imeta tags — used for media poster/dim/waveform metadata
   const imetaMap = useMemo(() => parseImetaMap(event.tags), [event.tags]);
 
-  // Group consecutive image-embed tokens (≥2) into image-gallery tokens
   const groupedTokens = useMemo(() => {
     const result: ContentToken[] = [];
     let i = 0;
@@ -1044,7 +852,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     return result;
   }, [tokens]);
 
-  // Collect all inline image refs (in order) for the shared lightbox
   const allImages = useMemo<ImageRef[]>(
     () =>
       groupedTokens.flatMap((t) => {
@@ -1055,7 +862,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     [groupedTokens],
   );
 
-  // Shared lightbox state for inline images
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const closeLightbox = useCallback(() => setLightboxIndex(null), []);
   const goNext = useCallback(
@@ -1067,7 +873,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     [allImages.length],
   );
 
-  // Map from grouped token index → starting image list index
   const tokenImageIndex = useMemo(() => {
     const map = new Map<number, number>();
     let imgCount = 0;
@@ -1082,7 +887,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     return map;
   }, [groupedTokens]);
 
-  // Emoji-only messages render extra large; a lone single emoji a touch larger.
   const isEmojiOnly = groupedTokens.length === 1
     && groupedTokens[0].type === "text"
     && isOnlyEmojisOrCustom(groupedTokens[0].value, emojiMap);
@@ -1090,8 +894,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     && groupedTokens[0].type === "text"
     && countEmojiUnits(groupedTokens[0].value) === 1;
 
-  // A line clamp (display: -webkit-box) would break block-level media, so only
-  // honor `clampLines` when every token is inline text-ish.
+  // A line clamp breaks block media, so only for inline-only content.
   const clampSafe = clampLines != null && !isEmojiOnly && groupedTokens.every((t) =>
     t.type === "text" || t.type === "inline-code" || t.type === "quote"
     || t.type === "text-mention" || t.type === "everyone-mention"
@@ -1106,8 +909,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     : "line-clamp-6"
     : undefined;
 
-  // Plain <a> for a URL (also the demoted rendering for media/embeds inside
-  // quote blocks, where cards would be visually wrong).
+  // Also the demoted rendering for media/embeds inside quotes.
   const inlineLink = (key: React.Key, url: string) => {
     const safe = sanitizeUrl(url);
     if (!safe) return <span key={key}>{url}</span>;
@@ -1125,12 +927,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     );
   };
 
-  /**
-   * A link back into this app: a react-router `<Link>`, so it navigates the SPA
-   * instead of reloading the app in a new tab. Labeled with the shortened path
-   * rather than the raw URL — the origin is this app and the ids in it are
-   * opaque, so spelling them out adds nothing a reader can use.
-   */
+  /** In-app link via the router, labeled with the shortened path (ids are opaque). */
   const selfLink = (key: React.Key, url: string, path: string) => (
     <Link
       key={key}
@@ -1143,11 +940,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     </Link>
   );
 
-  /**
-   * Render one token. `topIndex` is the token's index in `groupedTokens`
-   * (drives lightbox image indexing; null inside quotes). Inside quotes,
-   * block-level media/embed tokens demote to inline links.
-   */
+  /** `topIndex` drives lightbox indexing (null in quotes, where block tokens demote to links). */
   const renderToken = (token: ContentToken, key: React.Key, topIndex: number | null, inQuote = false): ReactNode => {
     switch (token.type) {
       case "text": {
@@ -1189,9 +982,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       case "md-link": {
         const safe = sanitizeUrl(token.url);
         if (!safe) return <span key={key}>{token.text}</span>;
-        // Anti-spoof: when the link TEXT reads as a URL/domain whose host
-        // differs from the real target, surface the real host beside it —
-        // [github.com/x](https://evil.example) must not pass as github.
+        // Anti-spoof: [github.com/x](https://evil.example) shows the real host.
         const spoofedHost = mdLinkSpoofHost(token.text, safe);
         return (
           <a
@@ -1225,8 +1016,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const items = token.items.map((item, j) => (
           <li key={`${key}-li${j}`}>{item.map((t, k) => renderToken(t, `${key}-li${j}-${k}`, null, true))}</li>
         ));
-        // whitespace-normal: the pre-wrap container would otherwise render the
-        // markup's own line breaks as blank rows between <li> elements.
+        // whitespace-normal: pre-wrap would render markup line breaks between <li>s.
         return token.ordered
           ? <ol key={key} start={token.start} className="my-1 list-decimal space-y-0.5 whitespace-normal pl-5">{items}</ol>
           : <ul key={key} className="my-1 list-disc space-y-0.5 whitespace-normal pl-5">{items}</ul>;
@@ -1262,9 +1052,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (inQuote) return inlineLink(key, token.url);
         return <BuzzInviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "self-chat-embed":
-        // Demoted to the internal link inside quotes (cards are visually
-        // wrong there) and inside embedded cards, where mounting the preview
-        // — which itself renders a ChatContent — would recurse.
+        // Demoted in quotes and embedded cards (the preview renders ChatContent: recursion).
         if (disableNoteEmbeds || inQuote) return selfLink(key, token.url, token.path);
         return (
           <ChatRouteEmbed
@@ -1282,17 +1070,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       case "media-embed": {
         if (inQuote) return inlineLink(key, token.url);
         const imeta = imetaMap.get(token.url);
-        // Effective MIME: token/imeta `m` (ignoring uninformative
-        // octet-stream), else derived from the URL extension. This types the
-        // decrypted Blob and the <source>, both of which refuse to play as
-        // application/octet-stream.
+        // Both the decrypted Blob and <source> refuse octet-stream.
         const ext = extOfUrl(token.url);
         const extMime = ext ? usableMime(mimeFromExt(ext)) : undefined;
         const mediaMime = usableMime(token.mime) ?? usableMime(imeta?.mime) ?? extMime;
         const mime = mediaMime ?? "";
-        // Encrypted (Concord/Vector) attachments must be fetched + decrypted
-        // before the <audio>/<video> element can play them. Fall back to the
-        // imeta entry for tokens created by pure extension match.
+        // Fall back to imeta for tokens from extension match.
         const encryption = token.encryption ?? imeta?.encryption;
         const fallbacks = token.fallbacks ?? imeta?.fallbacks;
         const isXdc = isWebxdcMime(mime)
@@ -1316,9 +1099,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             />
           );
         }
-        // A container no browser can decode (AVI, FLV, WMV, …) would only ever
-        // fail the <video> and show "Video unavailable", so render it as a
-        // download card instead — the file is there, it just can't play inline.
+        // Undecodable containers (AVI, FLV, WMV) render as download cards.
         if (isUnplayableVideo(token.url, mime)) {
           return (
             <FileAttachment
@@ -1342,8 +1123,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             mime={mediaMime}
             encryption={encryption}
             fallbacks={fallbacks}
-            // A Tenor/Giphy-style .mp4 is really a GIF — present it looping and
-            // chromeless rather than as a video with controls.
+            // Tenor/Giphy-style .mp4 is really a GIF.
             gif={isGifLikeUrl(token.url)}
             spoiler={imeta?.spoiler}
             alt={imeta?.alt}
@@ -1388,8 +1168,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (disableNoteEmbeds || inQuote) {
           return <TruncatedNostrLink key={key} encode={() => nip19.naddrEncode(token.addr)} />;
         }
-        // The emoji-pack card is self-contained (name, preview, Add button), so
-        // hide the raw URL above it — same as invite cards.
+        // The emoji-pack card is self-contained, so hide the raw URL.
         const hideUrl = token.addr.kind === 30030;
         return (
           <span key={key}>
@@ -1425,9 +1204,6 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           </a>
         );
       case "hashtag": {
-        // A hashtag that names a channel in the current server/community
-        // navigates to that local channel; otherwise it links out to Ditto's
-        // global hashtag feed.
         const goToChannel = channelNav?.resolveChannelByName(token.tag) ?? null;
         if (goToChannel) {
           return (
@@ -1491,12 +1267,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     </div>
   );
 
-  // Long-message collapse ("Read more"): only for top-level message bodies —
-  // nested embeds (disableNoteEmbeds, quoted notes) already get their own
-  // fixed-height clamp from the embedding card, and /me action overrides
-  // render inline (a wrapping block div here would break that flow). Gated on
-  // the raw content length rather than the tokenized/rendered output, so it's
-  // cheap to check before doing any of the render work above.
+  // Top-level bodies only: nested embeds have their own clamp, and /me renders
+  // inline. Gated on raw length, which is cheap.
   const collapsible = !disableNoteEmbeds && contentOverride === undefined
     && (contentOverride ?? event.content).length > COLLAPSE_CHAR_THRESHOLD;
 
@@ -1505,21 +1277,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   return <CollapsibleContent>{body}</CollapsibleContent>;
 }
 
-/**
- * Memoized: a message row re-renders for reasons that have nothing to do with
- * its body (a reaction lands, the row goes active, a local dialog opens), and
- * re-running the body means re-walking six token memos and re-reconciling the
- * mention profile queries for every mounted row in the window.
- */
+/** Memoized: rows re-render for reasons unrelated to the body. */
 export const ChatContent = memo(ChatContentInner);
 
 /**
- * Wraps a rendered message body, clamping it to a fixed height with a
- * fade-out + "Read more" toggle when it overflows. Measures the actual
- * rendered height (rather than trusting the character-count heuristic that
- * gated this wrapper) so short-but-tall content (many short lines, a big
- * embed) still collapses, and long-but-short content (one giant URL) doesn't
- * show a pointless toggle.
+ * Clamp with fade + "Read more" when the rendered height overflows (measured,
+ * not the char heuristic).
  */
 function CollapsibleContent({ children }: { children: ReactNode }) {
   const [expanded, setExpanded] = useState(false);
@@ -1531,8 +1294,7 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
     if (el) setOverflowing(el.scrollHeight > COLLAPSED_MAX_HEIGHT + 1);
   }, []);
 
-  // Re-measure after mount/layout (images, link previews, etc. can resize the
-  // content asynchronously as they load, which changes whether it overflows).
+  // Re-measure as images/previews resize the content.
   const measureRef = useCallback((el: HTMLDivElement | null) => {
     innerRef.current = el;
     if (el) requestAnimationFrame(measure);
@@ -1567,11 +1329,7 @@ function CollapsibleContent({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * The real target host, when a markdown link's TEXT itself reads as a
- * URL/domain pointing somewhere else. Undefined for honest links and for
- * plain-prose link text.
- */
+/** The real host when a markdown link's TEXT reads as a different URL/domain. */
 function mdLinkSpoofHost(text: string, href: string): string | undefined {
   const match = text.trim().toLowerCase().match(/^(?:https?:\/\/)?((?:[\w-]+\.)+[a-z]{2,})(?:[/:?#]|$)/i);
   const textHost = match?.[1]?.replace(/^www\./, "");
@@ -1584,12 +1342,7 @@ function mdLinkSpoofHost(text: string, href: string): string | undefined {
   }
 }
 
-/**
- * The label for an in-app link: the router path with its opaque segments
- * shortened (a pubkey, a relay param, an event id — none of which a reader
- * gets anything from in full), so the link reads as a place rather than as a
- * wall of hex. The full URL stays on the `title`.
- */
+/** In-app link label: the path with opaque segments shortened. Full URL in `title`. */
 function selfLinkLabel(path: string): string {
   const [pathname] = path.split(/[?#]/);
   const shortened = pathname
@@ -1599,7 +1352,6 @@ function selfLinkLabel(path: string): string {
   return shortened || path;
 }
 
-/** Extract the lowercase file extension from a URL's path, or undefined when there is none. */
 function extOfUrl(url: string): string | undefined {
   try {
     const path = new URL(url).pathname;
@@ -1612,7 +1364,6 @@ function extOfUrl(url: string): string | undefined {
   }
 }
 
-/** Read a named field (e.g. `waveform`, `duration`) from the imeta tag for a URL. */
 function getImetaField(tags: string[][], url: string, field: string): string | undefined {
   for (const tag of tags) {
     if (tag[0] !== "imeta") continue;
@@ -1624,11 +1375,7 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
   return undefined;
 }
 
-/**
- * Save a message image to the device from its already-resolved (and, for
- * encrypted media, already-decrypted) source — mirroring the lightbox's own
- * download button so the two behave identically.
- */
+/** Save from the resolved (decrypted) source, mirroring the lightbox's download. */
 async function saveImage(src: string, image: ImageRef): Promise<void> {
   try {
     const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
@@ -1651,7 +1398,7 @@ async function saveImage(src: string, image: ImageRef): Promise<void> {
   }
 }
 
-/** Hand a message image to the system share sheet (the file, never the URL). */
+/** Share the file, never the URL. */
 async function shareImage(src: string, image: ImageRef): Promise<void> {
   const shared = await shareFile(src, {
     nameHint: image.url,
@@ -1667,7 +1414,6 @@ async function shareImage(src: string, image: ImageRef): Promise<void> {
   }
 }
 
-/** Copy a message image to the clipboard as an image, from its resolved src. */
 async function copyImage(src: string): Promise<void> {
   try {
     await writeClipboardImage(src);
@@ -1682,14 +1428,9 @@ async function copyImage(src: string): Promise<void> {
 }
 
 /**
- * Wire an image's tap / long-press / right-click, returning the handlers to
- * spread on its `<button>`.
- *
- * Tap opens the shared lightbox. A touch long-press or a desktop right-click
- * opens the MESSAGE menu with this image's own actions (open / save / share)
- * prepended — built here, where the resolved source is in hand, and handed to
- * the row via {@link useChatImageMenu}. Save/share appear only once the source
- * has resolved; open always does.
+ * Tap opens the lightbox; long-press/right-click opens the MESSAGE menu with
+ * this image's actions prepended (via {@link useChatImageMenu}). Save/share
+ * need the resolved source.
  */
 function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () => void) {
   const menu = useChatImageMenu();
@@ -1725,9 +1466,7 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
     return list;
   }, [image, resolvedSrc, onOpen]);
 
-  // Touch only, and `allowInteractive` because the <button> IS the intended
-  // long-press target. On a pointer device the same actions arrive through the
-  // right-click handler instead.
+  // Touch only; the <button> IS the long-press target.
   const longPress = useLongPress(
     menu?.isTouch ? () => menu.openSheet(actions) : undefined,
     { allowInteractive: true },
@@ -1738,12 +1477,10 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
     onPointerMove: longPress.onPointerMove,
     onPointerUp: longPress.onPointerUp,
     onPointerCancel: longPress.onPointerCancel,
-    // A drag starting on the image is the platform trying to pick it up; that
-    // gesture cancels the pointer stream (and our timer) mid-hold, so refuse it.
+    // Native drag cancels the pointer stream mid-hold.
     onDragStart: (e: React.DragEvent) => e.preventDefault(),
     onClick: (e: React.MouseEvent) => {
-      // A long-press that just fired swallows the click that follows the
-      // release, so the lightbox doesn't open on top of the sheet.
+      // Swallow the click after a long-press so the lightbox doesn't open.
       longPress.onClick(e);
       if (e.defaultPrevented) return;
       e.stopPropagation();
@@ -1752,27 +1489,19 @@ function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () =>
     onContextMenu: (e: React.MouseEvent) => {
       longPress.onContextMenu(e);
       if (menu?.isTouch) {
-        // Our sheet (or nothing) is the touch menu — never the platform's own
-        // image callout, which fires here whether or not our hold won the race.
+        // Suppress the platform's image callout.
         e.preventDefault();
       } else if (menu) {
-        // Desktop: stage the image actions and let the event bubble to the
-        // row's context menu, which opens and shows them above the message's.
+        // Desktop: stage actions and let the event bubble to the row's context menu.
         menu.stage(actions);
       }
     },
   };
 }
 
-/**
- * The image button's props while a spoiler covers it: none of the image menu's
- * handlers, so the lightbox (which shows the item it opened on uncovered) and
- * the Copy/Save/Share actions are reachable only through the cover's reveal —
- * and out of the tab order, where the cover takes its place.
- */
+/** Covered by a spoiler: no menu handlers and out of tab order; reachable only via reveal. */
 const COVERED_IMAGE_PROPS = { tabIndex: -1 } as const;
 
-/** Inline image thumbnail that opens the shared lightbox on click. */
 function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -1780,18 +1509,12 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
   const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
   const covered = image.spoiler && !revealed;
 
-  // Once every mirror is exhausted, degrade to a link + manual retry. Block-level
-  // (via MediaFallback) because the tokenizer stripped the surrounding newlines
-  // expecting a block — an inline fallback would glue onto adjacent text.
+  // Block-level: the tokenizer stripped the surrounding newlines expecting a block.
   if (failed) {
     return <MediaFallback {...fallbackProps} label="Image" />;
   }
 
-  // A known `dim` lets us reserve the EXACT box the loaded image will occupy —
-  // its aspect ratio fitted into the same max-w-sm × max-h-80 the <img>'s own
-  // classes would apply — as a persistent geometry that does not change on
-  // load, so the image never resizes as it renders. Without a `dim` we can
-  // only reserve a min box and let the image settle into its natural size.
+  // A known `dim` reserves the exact final box so the image never resizes on load.
   const box = fitImageBox(image.dim);
 
   return (
@@ -1821,18 +1544,13 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
         {resolved.status === "ready" && (
           <img
             src={resolved.src}
-            // The sender's description says what the spoiler hides.
             alt={covered ? "" : (image.alt ?? "")}
             title={covered ? undefined : image.alt}
             aria-hidden={covered || undefined}
-            // Native image drag/callout starts on the same hold as our
-            // long-press and cancels it (a buzz, no menu) — off on both axes.
+            // Native drag/callout would cancel the long-press.
             draggable={false}
             className={cn(
               "block rounded hover:opacity-90 transition-opacity [-webkit-user-drag:none]",
-              // With a reserved box the image fills it (the box already carries
-              // its aspect ratio, so object-cover cannot crop); without one it
-              // falls back to natural size under the same max-w/max-h caps.
               box ? "w-full h-full object-cover" : "max-w-full max-h-80 h-auto",
             )}
             loading="lazy"
@@ -1846,7 +1564,6 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
   );
 }
 
-/** Compact grid for multiple consecutive images, sharing the lightbox. */
 function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: number) => void }) {
   const visible = images.slice(0, 4);
   const extra = images.length - visible.length;
@@ -1865,11 +1582,7 @@ function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: num
   );
 }
 
-/**
- * A single grid cell image, decrypting on display when encrypted. Owns its own
- * `<button>` (rather than being wrapped by the grid) so the image menu built by
- * {@link useImageMenu} has this cell's resolved source in hand.
- */
+/** Owns its `<button>` so {@link useImageMenu} has this cell's resolved source. */
 function GridImage({
   image,
   onOpen,
@@ -1877,7 +1590,6 @@ function GridImage({
 }: {
   image: ImageRef;
   onOpen: () => void;
-  /** When set, this is the last visible cell and covers `+N` more images. */
   overflow?: number;
 }) {
   const [loaded, setLoaded] = useState(false);
@@ -1893,9 +1605,6 @@ function GridImage({
       {...(covered ? COVERED_IMAGE_PROPS : menu)}
     >
       {failed ? (
-        // Once every mirror is exhausted, fill the cell with a retry control
-        // rather than leaving a silently-blank tile (cross-server fallback runs
-        // before this).
         <MediaFallback {...fallbackProps} compact />
       ) : (
         <>
@@ -1930,13 +1639,9 @@ function GridImage({
 }
 
 /**
- * Fits a NIP-94 `dim` ("WxH") into the inline-image caps (max-w-sm × max-h-80)
- * without upscaling, returning a persistent `aspect-ratio` plus the capped
- * `maxWidth` in px. Reserving this exact box — rather than clamping the loaded
- * <img> with its own `max-h-80`, which the placeholder never knew about — is
- * what keeps a portrait image (whose full-width height would exceed the cap)
- * from resizing on load: its width is pre-shrunk here so the box and the image
- * agree. Returns undefined when `dim` is missing or malformed.
+ * Fit a NIP-94 `dim` into the inline caps (max-w-sm × max-h-80) without
+ * upscaling: an `aspect-ratio` plus capped `maxWidth`, so portrait images
+ * don't resize on load. Undefined for missing/malformed `dim`.
  */
 function fitImageBox(
   dim: string | undefined,
@@ -1950,7 +1655,6 @@ function fitImageBox(
   return { aspectRatio: `${w} / ${h}`, maxWidth: Math.round(w * scale) };
 }
 
-/** Mention chip resolving the profile's display name. */
 function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPrefix?: boolean }) {
   const author = useAuthor(pubkey);
   const scopedName = useScopedDisplayName(pubkey, author.data?.metadata);
@@ -1967,8 +1671,6 @@ function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPref
           hasRealName ? "text-primary" : "text-muted-foreground",
         )}
         title={pubkey}
-        // Don't let the click bubble to the surrounding message row (selection,
-        // reply focus, etc.) — this chip owns the interaction.
         onClick={(e) => e.stopPropagation()}
       >
         {noAtPrefix ? "" : "@"}
@@ -1978,7 +1680,6 @@ function NostrMention({ pubkey, noAtPrefix = false }: { pubkey: string; noAtPref
   );
 }
 
-/** Truncated external link for nested nostr references inside embedded cards. */
 function TruncatedNostrLink({ encode }: { encode: () => string }) {
   const id = useMemo(() => {
     try {
@@ -2003,14 +1704,11 @@ function TruncatedNostrLink({ encode }: { encode: () => string }) {
   );
 }
 
-/** Compact copyable chip for BOLT11 lightning invoices. */
 function LightningInvoice({ invoice }: { invoice: string }) {
   const [copied, setCopied] = useState(false);
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
-  // Anyone can paste a large invoice into chat, so paying is a two-step,
-  // amount-visible action: first tap arms ("Confirm 21k sats?"), second tap
-  // pays, and the armed state disarms after a few seconds. Amountless
+  // Two-tap pay (arm, then confirm with amount shown), auto-disarming. Amountless
   // invoices are never one-tap payable.
   const [armed, setArmed] = useState(false);
   const disarmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);

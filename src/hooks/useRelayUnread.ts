@@ -14,55 +14,33 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 /** NIP-88 poll kind — counts toward channel activity like chat does. */
 const KIND_POLL = 1068;
 /**
- * Human-visible activity kinds: NIP-29 chat + polls, plus the Buzz
- * "new content" set (stream v2, forum posts/comments — kind 9 is shared).
- * Buzz system rows / job events deliberately excluded (phantom unreads).
- * Kinds absent from a relay simply never match.
- *
- * Exported for the wire's unread-dot deferral, whose judgment of "this
- * server's rail button is already dotted" must count exactly the kinds the
- * rail counts — a kind only one side knows about is a dot the other can't
- * explain.
+ * Human-visible activity kinds: NIP-29 chat, polls, and Buzz "new content" (system/job events
+ * excluded as phantom unreads). Exported so the wire's unread-dot deferral counts the same kinds.
  */
 export const NIP29_ACTIVITY_KINDS = [...new Set([KIND_GROUP_CHAT, KIND_POLL, ...BUZZ_UNREAD_KINDS])];
 const ACTIVITY_KINDS = NIP29_ACTIVITY_KINDS;
 
-/** Newest store events scanned per relay when deriving unread. */
 const SCAN_LIMIT = 300;
 
-/** Per-group unread summary. */
 export interface GroupUnread {
-  /** Unix timestamp of the latest non-self message seen. */
+  /** Latest non-self message timestamp. */
   latest: number;
-  /** Whether any unread message mentions the current user (`p` tag). */
+  /** Whether any unread message mentions the user (`p` tag). */
   mention: boolean;
 }
 
 export interface RelayUnread {
-  /** groupId → unread summary. */
   byGroup: Record<string, GroupUnread>;
-  /** Whether any group on this relay has unread activity. */
   anyUnread: boolean;
-  /** Whether any group on this relay has an unread mention. */
   anyMention: boolean;
 }
 
 const EMPTY: RelayUnread = { byGroup: {}, anyUnread: false, anyMention: false };
 
 /**
- * Compute unread / mention state for every group on a relay — purely from the
- * shared IndexedDB event store, which the wire keeps fed. No sockets, no relay
- * queries: a channel reads as unread when the store holds activity newer than
- * the user's read-state. Re-derived when the wire bus announces a change to
- * any of the watched groups (plus a light poll as a backstop). Drives the
- * unread dots and mention badges on the channel list and server rail.
- *
- * Self-authored messages never mark a channel unread.
- *
- * Muted channels (or a muted server) are excluded from the aggregate
- * `anyUnread` — but unread *mentions* still count toward `anyMention`,
- * Discord-style. `byGroup` always carries the full unread data (so
- * "mark as read" and per-row rendering keep working on muted channels).
+ * Unread/mention state per group, purely from the store (no sockets), re-derived on wire bus
+ * rings. Self messages never count. Muted channels are excluded from `anyUnread` but mentions
+ * still count; `byGroup` always carries full data.
  */
 export function useRelayUnread(
   relayUrl: string | undefined,
@@ -90,22 +68,11 @@ export function useRelayUnread(
       });
     },
     enabled: Boolean(relayUrl && groupIds.length > 0 && user),
-    // NO refetch interval or focus refetch: the wire bus below is the complete
-    // in-process live path. Every ingested NIP-29 activity event rings
-    // `nip29:<h>` once it commits, and the handler below invalidates this query
-    // in response — so the derivation stays current without polling.
-    //
-    // This mirrors what the Concord side already concluded (see
-    // useCommunityRumors' staleTime note): the always-mounted rail mounts one
-    // of these per NIP-29 server 2-3x over, so a 30s `refetchInterval` was N
-    // servers' worth of unaligned periodic store scans, and
-    // `refetchOnWindowFocus: true` fired every one of them at once on refocus —
-    // the "freeze when I come back to the app" the single store connection paid
-    // for. The bus ring is the live path the poll was only ever a backstop to.
+    // No polling or focus refetch: the wire bus is the complete live path, and per-server polls
+    // on the rail caused a freeze on refocus (cf. useCommunityRumors).
     staleTime: Infinity,
   });
 
-  // Re-derive as soon as the wire ingests activity for any watched group.
   useWireScopes((scopes) => {
     if (!idsKey) return;
     for (const id of idsKey.split(",")) {

@@ -3,28 +3,15 @@ import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-/**
- * Discord/Ditto-style settings primitives matching Armada's "Corsair" chrome:
- * an uppercase muted group label over a single cut-corner `bg-chrome` panel of
- * flat, hairline-divided rows — not a stack of floating shadcn Cards.
- *
- *   <SettingsSection title="Voice" icon={Mic}>
- *     <SettingsRow label="Noise suppression">{switch}</SettingsRow>
- *     <SettingsRow>{customBlock}</SettingsRow>
- *   </SettingsSection>
- */
+/** Settings primitives: an uppercase group label over one cut-corner `bg-chrome` panel of hairline-divided rows. */
 
 interface SettingsSectionProps {
-  /** Uppercase group label rendered above the panel. */
   title: string;
-  /** Leading icon for the group label. */
   icon: LucideIcon;
-  /** Rows (and/or arbitrary content) inside the chrome panel. */
   children: ReactNode;
   className?: string;
 }
 
-/** A titled group of settings rows in a cut-corner chrome panel. */
 export function SettingsSection({ title, icon: Icon, children, className }: SettingsSectionProps) {
   return (
     <section className={cn("space-y-1.5", className)}>
@@ -42,36 +29,15 @@ export function SettingsSection({ title, icon: Icon, children, className }: Sett
 interface SettingsRowProps {
   /** Row label (left). When omitted, `children` fills the whole row. */
   label?: ReactNode;
-  /** Secondary text under the label. */
   description?: ReactNode;
-  /**
-   * The control on the right (Switch, Button…). When `label` is omitted,
-   * `children` is rendered full-width as the row body (e.g. an embedded editor).
-   */
   children?: ReactNode;
-  /** Make the whole row a clickable affordance (hover + cursor). */
   onClick?: () => void;
-  /**
-   * For a wide control (a button grid, an input) that would crush the label
-   * column on a narrow screen: stack the control below the label until there
-   * is room for a side-by-side row (`sm:`). The control then fills the row
-   * width instead of sitting in the non-shrinking slot.
-   */
+  /** Stack a wide control below the label until `sm:`, so it doesn't crush the label column. */
   stack?: boolean;
   className?: string;
 }
 
-/**
- * One flat settings row. Two shapes:
- *   - labelled: label (+ optional description) left, `children` control right;
- *   - bare: pass only `children` to render arbitrary content full-width with
- *     the same row padding.
- *
- * A labelled row with a wide control (a button grid, a list editor) passes
- * `stack` so the control drops full-width below the label on a narrow screen
- * instead of crushing the label column in the non-shrinking slot, and rejoins
- * it side-by-side at `sm:`.
- */
+/** One flat settings row: labelled (label left, control right) or bare (`children` full-width). */
 export function SettingsRow({ label, description, children, onClick, stack, className }: SettingsRowProps) {
   if (label === undefined) {
     return <div className={cn("px-4 py-3.5", className)}>{children}</div>;

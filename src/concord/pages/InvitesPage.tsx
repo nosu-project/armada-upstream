@@ -46,12 +46,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 import { usePageCovered } from "@/lib/settingsOverlay";
 
-/**
- * The seal-verified sender as a short npub. Shown BESIDE the resolved profile
- * rather than instead of it: the kind-0 name and picture are whatever the
- * sender chose to publish, so the key that actually signed the seal stays on
- * screen as the thing the user can compare against.
- */
+/** The seal-verified sender as a short npub, shown beside the (self-chosen) profile. */
 function senderLabel(pubkeyHex: string): string {
   try {
     return `${nip19.npubEncode(pubkeyHex).slice(0, 16)}…`;
@@ -61,10 +56,8 @@ function senderLabel(pubkeyHex: string): string {
 }
 
 /**
- * A stable hue (0-359) for a community, from its self-certifying id — the
- * fallback artwork for a bundle that carries no icon or banner, so a community
- * without images still gets a face of its own instead of a grey slab. djb2,
- * the same hash `meshIdentity.ts` uses for peer colors.
+ * A stable hue (0-359) from the community id, for fallback artwork. djb2, as in
+ * `meshIdentity.ts`.
  */
 function communityHue(id: string): number {
   let hash = 5381;
@@ -81,21 +74,12 @@ function communityWash(hue: number, strength = 1): string {
   );
 }
 
-/**
- * How many private channels this bundle actually hands over. Read straight off
- * the decrypted bundle — the Control plane would have to be swept for the
- * community's full channel list, and that is a read the Members menu below
- * pays for only when it's opened.
- */
+/** Private channels this bundle hands over, read off the bundle (no Control sweep). */
 function channelCount(invite: ParkedInvite): number {
   return Array.isArray(invite.bundle.channels) ? invite.bundle.channels.length : 0;
 }
 
-/**
- * The community's icon — the bundle's encrypted {@link ImagePointer}, decrypted
- * with the key the invite itself carries, falling back to its initial on the
- * generated wash while it loads or when the bundle has no icon at all.
- */
+/** The community icon, decrypted with the invite's key; initial on the wash as fallback. */
 function CommunityAvatar({
   name,
   communityId,
@@ -127,22 +111,10 @@ function CommunityAvatar({
 }
 
 /**
- * Who's already in there, read from the Guestbook Plane (CORD-02 §5) with the
- * keys the invite carries.
- *
- * Runs for the SELECTED invite only — sweeping the guestbook connects to the
- * community's own relays, so it is scoped to the one community the user opened
- * rather than every invite sitting in the inbox.
- *
- * Feeds the friend stack and NOTHING ELSE. There is deliberately no member
- * COUNT on this screen: the sweep is a cold network read of a community the
- * viewer isn't in yet, seconds long, and the store it is layered over answers
- * empty in a tick — so a count either states a number that is wrong until the
- * sweep lands, or sits behind a spinner that makes the whole consent surface
- * read as still loading, on a page whose entire job is a yes/no the user can
- * already make. The friend stack has neither problem: it renders nothing at
- * all until it has someone to name, so a slow or failed sweep costs a line
- * that was never promised.
+ * Who's already in there, from the Guestbook Plane (CORD-02 §5) with the invite's
+ * keys — for the SELECTED invite only (it connects to the community's relays).
+ * Feeds only the friend stack; there's deliberately no member count, since a
+ * slow cold sweep would make it wrong or a spinner.
  */
 function useInviteMembers(community: Community | undefined) {
   const { coalesced } = useGuestbook(community);
@@ -156,12 +128,7 @@ function useInviteMembers(community: Community | undefined) {
   );
 }
 
-/**
- * The relays the community's traffic actually runs over, straight off the
- * bundle. Worth seeing before accepting: they are the hosts this account will
- * connect to, and the only thing the invite says about where the community
- * physically lives.
- */
+/** The community's relays from the bundle — the hosts this account will connect to. */
 function RelayList({ relays }: { relays: string[] }) {
   return (
     <>
@@ -182,12 +149,7 @@ function RelayList({ relays }: { relays: string[] }) {
   );
 }
 
-/**
- * A fact in the stats line that opens something. Reads as plain running text
- * until hovered: underlining items in a middot-separated row of facts turns
- * the whole line into a link farm. Its icon is what marks it as more than
- * text.
- */
+/** A stats-line fact that opens something; plain text until hovered (its icon marks it). */
 function StatPopover({
   icon: Icon,
   label,
@@ -208,12 +170,8 @@ function StatPopover({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // Dismiss on the outside pointerdown itself. Radix defers a TOUCH dismissal
-  // to the `click` that follows it, and a tap on a non-interactive element
-  // doesn't reliably produce one (iOS dispatches click only for targets it
-  // considers clickable), which is how the panel ends up stuck open with the
-  // page still scrolling behind it. Capture phase, so a handler that stops
-  // propagation on the way down can't take the dismissal with it.
+  // Dismiss on outside pointerdown (capture phase): Radix defers touch dismissal
+  // to a `click` iOS doesn't send for non-clickable targets, leaving it stuck open.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
@@ -245,10 +203,7 @@ function StatPopover({
       <PopoverContent
         ref={contentRef}
         align="start"
-        // Closed explicitly rather than left to the layer's default dismiss:
-        // Radix only calls `onDismiss` when nothing has prevented the outside
-        // event's default, so one handler anywhere in the tree that does is
-        // enough to leave the panel stuck open with no way back out of it.
+        // Close explicitly: Radix skips `onDismiss` if anything prevented the default.
         onInteractOutside={() => setOpen(false)}
         className={cn(width, "border-0 p-0 clip-corner-lg bg-chrome")}
       >
@@ -285,16 +240,9 @@ function FriendName({ pubkey }: { pubkey: string }) {
 }
 
 /**
- * The people you already follow who are in there: their faces, then their
- * names in a sentence. Whether it's a room you know anyone in is usually the
- * part that actually decides an invite — and a row of anonymous circles
- * doesn't answer that, so the names are spelled out beside them. Narrow
- * screens collapse the sentence to a count; the faces stay either way.
- *
- * Renders NOTHING while there is no one to name, which is what lets it sit on
- * a screen the guestbook sweep is far too slow to hold up (see
- * {@link useInviteMembers}): it is a line that appears if it has something to
- * say, never a placeholder the reader is waiting on.
+ * Followed people who are in there: faces, then names (a count on narrow
+ * screens). Renders NOTHING until there's someone to name, so the slow guestbook
+ * sweep never holds up the screen.
  */
 function FriendStack({ pubkeys }: { pubkeys: string[] }) {
   if (pubkeys.length === 0) return null;
@@ -310,10 +258,7 @@ function FriendStack({ pubkeys }: { pubkeys: string[] }) {
           <FriendFace key={pubkey} pubkey={pubkey} className={i > 0 ? "-ml-2" : undefined} />
         ))}
       </span>
-      {/* Narrow screens get the count instead of the names: the sentence
-          truncates mid-name on a phone, and a half-spelled name reads worse
-          than no name at all, while the number still answers the same
-          question. */}
+      {/* Narrow screens get a count: names would truncate mid-word. */}
       <span className="shrink-0 sm:hidden">
         {pubkeys.length} friend{pubkeys.length === 1 ? " is" : "s are"} here
       </span>
@@ -397,26 +342,11 @@ function InviteRow({
 }
 
 /**
- * The invite preview / consent surface — everything a decrypted bundle knows,
- * with an explicit Accept/Decline. PRESENTATIONAL: the caller owns the accept
- * and decline actions and their pending state, so the SAME surface serves both
- * a gift-wrapped Direct Invite (`InboxInviteDetail`, whose Accept keeps the
- * keys and whose Decline tombstones) and a shared invite LINK (`InvitePage`,
- * which used to auto-join on sight and now asks first).
- *
- * Everything the bundle knows is on screen before the decision: the decrypted
- * banner and icon, the name and description, what the keys actually grant, and
- * — for a Direct Invite only — the sender's resolved profile beside the pubkey
- * that signed the seal. A shared link is sealed by no one, so it names no
- * sender (a `creator_npub` in the bundle is an unverified claim and stays off
- * this screen).
- *
- * Nothing on it waits on the network except the artwork. Everything stated here
- * comes out of the bundle the caller already resolved, so the screen is
- * complete the moment it paints and the decision is never gated on a spinner.
- * The one fact that would have cost a relay read — the size of the room — was
- * removed for exactly that reason; the friend stack is the sole guestbook-fed
- * thing left, and it adds itself silently or not at all.
+ * The invite preview / consent surface with explicit Accept/Decline.
+ * PRESENTATIONAL: the caller owns the actions, so it serves both Direct Invites
+ * (`InboxInviteDetail`) and invite links (`InvitePage`). Only Direct Invites name
+ * a sender (seal-verified); a bundle's `creator_npub` is unverified and not shown.
+ * Nothing but artwork and the friend stack waits on the network.
  */
 export function InviteDetail({
   bundle,
@@ -465,9 +395,8 @@ export function InviteDetail({
   const senderMeta = senderAuthor.data?.metadata;
   const senderName = getDisplayName(senderMeta, sender);
 
-  // The community the bundle describes, assembled without joining it — the
-  // same conversion the accept paths run, so the guestbook read behind the
-  // friend stack opens the plane the keys actually grant.
+  // The community the bundle describes, built as the accept paths do, so the
+  // guestbook read opens the plane the keys actually grant.
   const previewCommunity = useMemo(() => {
     try {
       return rehydrateCommunity(bundleToEntry(bundle));
@@ -478,9 +407,7 @@ export function InviteDetail({
 
   const members = useInviteMembers(previewCommunity);
 
-  // Whether the sender is someone the viewer already follows. The strongest
-  // signal on this whole screen: a name and picture are anyone's to choose,
-  // but a pubkey on your own follow list is a person you decided to trust.
+  // Whether the viewer follows the sender — the strongest trust signal here.
   const { data: followList } = useFollowList();
   const followsSender = Boolean(sender && followList?.pubkeys.includes(sender));
   // The subset of the room you already follow — the friend stack's whole input.
@@ -489,8 +416,7 @@ export function InviteDetail({
     return members.filter((pubkey) => following.has(pubkey));
   }, [followList, members]);
 
-  // The stats line as a list of facts joined by middots, so a link (which
-  // carries no "Sent" time) doesn't strand a separator with nothing after it.
+  // Middot-joined facts, so a link (no "Sent" time) doesn't strand a separator.
   const facts: React.ReactNode[] = [];
   if (channels > 0) {
     facts.push(
@@ -525,8 +451,6 @@ export function InviteDetail({
 
   return (
     <div className="relative flex flex-1 flex-col min-h-0 safe-area-top h-full overflow-hidden">
-      {/* Behind everything, and behind the quiet space below the copy in
-          particular. Positioned siblings after it paint on top. */}
       <InviteTide hue={hue} />
       <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
         <Button
@@ -545,20 +469,12 @@ export function InviteDetail({
       </header>
 
       <div className="relative flex-1 min-h-0 overflow-y-auto">
-        {/* The banner is the pane's own top edge rather than a card floating
-            in it. Centred in a wide desktop pane, a card left a large empty
-            margin all around itself, and the community's own artwork is
-            exactly the thing that should be filling that width. A bundle with
-            no banner gets its icon blown up behind a blur, and one with
-            neither falls back to the generated wash, so the hero is always the
-            same shape. */}
+        {/* The banner is the pane's top edge; falls back to a blurred icon, then the wash. */}
         <div
           className="relative h-40 w-full overflow-hidden bg-secondary sm:h-56"
           style={{
             ...(bannerUrl ? undefined : { backgroundImage: communityWash(hue) }),
-            // Feather the top edge. Butted straight under the floating header
-            // the banner ended in a hard horizontal line across the gap; this
-            // mirrors the way its bottom already dissolves into the page.
+            // Feather the top edge under the floating header.
             maskImage: "linear-gradient(to bottom, transparent 0%, black 15%)",
             WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 15%)",
           }}
@@ -572,8 +488,7 @@ export function InviteDetail({
               className="size-full scale-125 object-cover opacity-50 blur-2xl"
             />
           ) : (
-            /* Decorative — wrapped rather than passed `aria-hidden`, since
-               the crest is a `role="img"` with its own label. */
+            /* Wrapped rather than `aria-hidden`: the crest is a labelled `role="img"`. */
             <span
               aria-hidden
               className="pointer-events-none absolute -right-8 -top-6 opacity-[0.14]"
@@ -601,9 +516,6 @@ export function InviteDetail({
             {name}
           </h2>
 
-          {/* What the keys grant, where it runs, and — for a Direct Invite —
-              when it arrived. Assembled as a middot-joined list so a link,
-              which carries no "Sent" time, never strands a separator. */}
           {facts.length > 0 && (
             <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               {facts.map((fact, i) => (
@@ -615,10 +527,7 @@ export function InviteDetail({
             </p>
           )}
 
-          {/* The people you already follow who are in there — whether it's a
-              room you know anyone in. Self-effacing: the whole row is absent
-              until the guestbook has produced someone, so a cold or failed
-              sweep leaves no gap and nothing to wait for. */}
+          {/* Followed members; absent until the guestbook finds someone. */}
           {followedMembers.length > 0 && (
             <div className="mt-3">
               <FriendStack pubkeys={followedMembers} />
@@ -631,12 +540,7 @@ export function InviteDetail({
             </p>
           )}
 
-          {/* Who sent it — a Direct Invite only. A shared link is sealed by no
-              one, so there is no verified sender to name (the bundle's
-              `creator_npub` is an unverified claim and stays off this screen).
-              The profile is resolved like anywhere else in the app; the npub
-              under it is the key that signed the seal, which is the part no one
-              can choose for themselves. */}
+          {/* Sender — Direct Invite only. The npub is the key that signed the seal. */}
           {sender && (
             <div className="mt-4 clip-corner-lg bg-secondary/40 p-3.5">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -673,14 +577,9 @@ export function InviteDetail({
                   </div>
                 </button>
               </ProfilePreviewCard>
-              {/* The sender's own bio, on wide screens only. It is the least
-                  load-bearing thing in this panel — self-written prose, where
-                  the name and the npub beside it are what the decision rests
-                  on — and on a phone it pushes the buttons off the screen. */}
+              {/* The sender's bio, wide screens only (pushes buttons off a phone). */}
               {senderMeta?.about?.trim() && (
-                // The wrapper carries the hiding, not the paragraph: `line-clamp`
-                // is itself a `display` (`-webkit-box`), so putting `hidden` on
-                // the same element makes two utilities fight over one property.
+                // Hide on the wrapper: `line-clamp` sets `display` too.
                 <div className="hidden sm:block">
                   <p className="mt-2 line-clamp-2 break-words text-xs text-muted-foreground">
                     {senderMeta.about.trim()}
@@ -690,8 +589,6 @@ export function InviteDetail({
             </div>
           )}
 
-          {/* `text-pretty` so the browser reflows the last line rather than
-              stranding two or three words under a full-width paragraph. */}
           <p className="mt-4 text-pretty text-sm leading-relaxed text-muted-foreground">
             {isCatchUp ? (
               <>
@@ -706,10 +603,7 @@ export function InviteDetail({
             )}
           </p>
 
-          {/* The decision goes directly under the copy it follows. Pinning it
-              to the bottom of the pane only moved the empty space to between
-              the two, and took the primary action out of the reading and tab
-              order it belongs to. The tide fills whatever is left below. */}
+          {/* The decision sits directly under the copy (reading and tab order). */}
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row">
             <Button
               variant="ghost"
@@ -747,12 +641,9 @@ export function InviteDetail({
 }
 
 /**
- * The inbox's binding of {@link InviteDetail} to a gift-wrapped Direct Invite:
- * it owns the accept/decline mutations, so accepting keeps the keys (records
- * the entry in the Community List vault) and announces a Guestbook Join, while
- * declining tombstones the community so it stops re-appearing. A catch-up (a
- * key update for a community you're already in) declines by local dismissal
- * only — never a tombstone, which would leave the community.
+ * {@link InviteDetail} for a gift-wrapped Direct Invite: Accept records the vault
+ * entry and announces a Guestbook Join; Decline tombstones — except a catch-up
+ * (key update for a joined community), which is only dismissed locally.
  */
 function InboxInviteDetail({
   invite,
@@ -771,9 +662,7 @@ function InboxInviteDetail({
   const isCatchUp = Boolean(invite.catchUp);
 
   const handleDecline = async () => {
-    // A CATCH-UP is a key update for a community I'm already in — declining must
-    // NOT tombstone (that would leave the community). A fresh invite tombstones
-    // so it stops re-appearing.
+    // A CATCH-UP must NOT tombstone (that would leave the community).
     if (!isCatchUp) {
       try {
         await decline({ communityId: invite.communityId });
@@ -834,14 +723,9 @@ function InboxInviteDetail({
 }
 
 /**
- * The direct-invite inbox: every gift-wrapped Concord invite (CORD-05 §6) that
- * hasn't been accepted or declined, as a mail-client-style master/detail list
- * rather than the queue of blocking modals it used to be. Selecting an invite
- * opens its consent surface (Accept/Decline) inline — a two-pane master/detail
- * on desktop, a list→detail push on mobile.
- *
- * Opening the page marks the whole inbox seen (the rail badge clears); the
- * individual accept/decline is still an explicit, per-invite consent action.
+ * The direct-invite inbox (CORD-05 §6): pending gift-wrapped invites as a
+ * master/detail list. Opening the page marks the inbox seen; accept/decline stays
+ * an explicit per-invite action.
  */
 export function InvitesPage() {
   const { items, unreadCount } = useInviteInbox();
@@ -850,20 +734,15 @@ export function InvitesPage() {
 
   const selected = items.find((it) => it.invite.wrapId === selectedWrapId)?.invite;
 
-  // Opening the inbox (or a fresh invite arriving while it's open) marks
-  // everything seen — one high-water mark for the whole inbox, so the rail
-  // badge clears. Consent is still separate: seeing an invite isn't accepting
-  // it. `markRead` no-ops when the stored stamp is already past the newest.
-  // Not while Settings covers the page: an invite arriving then is unseen, and
-  // is marked once the page is back on screen.
+  // Mark everything seen (one high-water mark) while on screen — not while
+  // Settings covers the page. Seeing isn't accepting.
   const covered = usePageCovered();
   const newest = items[0]?.invite.receivedAt ?? 0;
   useEffect(() => {
     if (!covered && newest > 0) markRead(concordInviteReadKey(), newest);
   }, [covered, newest, markRead]);
 
-  // Drop a stale selection when its invite leaves the inbox (accepted/declined
-  // elsewhere, or the scan refreshed it out).
+  // Drop a stale selection when its invite leaves the inbox.
   useEffect(() => {
     if (selectedWrapId && !items.some((it) => it.invite.wrapId === selectedWrapId)) {
       setSelectedWrapId(undefined);

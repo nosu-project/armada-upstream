@@ -1,31 +1,18 @@
 /**
- * Concord Direct Invites — CORD-05 §6.
- *
- * A Direct Invite drops the link machinery entirely: when the invitee is a
- * known npub, the §1 `CommunityInvite` bundle giftwraps straight to them as a
- * STANDARD NIP-59 giftwrap (ephemeral wrap author, the recipient in the `p`
- * tag, a kind-13 seal signed by the inviter's REAL key — not the reversed
- * stream wrap of CORD-01). No coordinate, no token, nothing to fetch:
+ * Concord Direct Invites — CORD-05 §6. The §1 `CommunityInvite` bundle giftwraps
+ * straight to a known npub as a STANDARD NIP-59 giftwrap (not CORD-01's reversed
+ * stream wrap):
  *
  *   wrap(1059, ephemeral author, ["p", recipient], ["k", "3313"])
  *     └ seal(13, signed by the inviter)
  *         └ rumor(3313, content = the CommunityInvite bundle as JSON)
  *
- * The outer `k` tag is what makes invites INDEXED: a recipient looks up
- * exactly their invites — `{"kinds":[1059], "#p":[me], "#k":["3313"]}` —
- * instead of decrypting everything ever p-tagged at them (NIP-17's cost). The
- * tag is unsigned relay-visible bytes, a hint and never authority: an invite
- * is whatever unwraps to a kind-3313 rumor.
+ * The outer `k` tag makes invites INDEXED (`{"kinds":[1059], "#p":[me],
+ * "#k":["3313"]}`); it's a hint, never authority. Unrevocable once landed, absent
+ * from the Registry, never flips the Community Public.
  *
- * A Direct Invite is a key handoff, not a standing door: unrevocable once
- * landed (regretting one is what Rekeys are for), absent from the Registry,
- * and it never flips the Community Public — which is precisely what lets a
- * Private Community grow by personal handoff, one npub at a time.
- *
- * Sending needs the abstract signer only (`signEvent` + `nip44.encrypt`), so
- * nsec, extension, and bunker logins can all invite; unwrapping likewise peels
- * the layers with `nip44.decrypt` (nostr-tools' nip59 helpers need a raw key,
- * which NIP-07/NIP-46 signers never expose).
+ * Uses only the abstract signer (`signEvent`, `nip44`), so extension and bunker
+ * logins work (nostr-tools' nip59 helpers need a raw key).
  */
 
 import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
@@ -63,8 +50,6 @@ export interface DirectInviteRumor {
   pubkey: string;
 }
 
-// ── Sending ──────────────────────────────────────────────────────────────────
-
 /** Build the kind-3313 rumor carrying the bundle as its content (CORD-05 §6). */
 export function buildDirectInviteRumor(bundle: InviteBundle, inviterPubkey: string): DirectInviteRumor {
   return {
@@ -77,9 +62,8 @@ export function buildDirectInviteRumor(bundle: InviteBundle, inviterPubkey: stri
 }
 
 /**
- * Seal the rumor with the inviter's REAL identity (the seal's verified npub is
- * what proves who invited them) — one signer round-trip, NIP-44-encrypted to
- * the recipient, timestamp tweaked into the past per NIP-59.
+ * Seal with the inviter's REAL identity (proves who invited), NIP-44 to the
+ * recipient, timestamp backdated per NIP-59.
  */
 export async function sealDirectInvite(
   rumor: DirectInviteRumor,
@@ -96,10 +80,8 @@ export async function sealDirectInvite(
 }
 
 /**
- * Wrap a signed seal for the recipient under a single-use ephemeral key. The
- * wrap carries what no Concord stream event may — identifying outer tags: the
- * recipient `p` and the indexing `k` (plus optional NIP-40 expiration matching
- * the bundle's `expires_at`, so relays can prune a stale handoff).
+ * Wrap a signed seal under a single-use ephemeral key, with the outer `p` and
+ * indexing `k` tags (plus NIP-40 expiration matching `expires_at`).
  */
 export function wrapDirectInvite(
   seal: NostrEvent,
@@ -124,24 +106,17 @@ export function wrapDirectInvite(
   );
 }
 
-// ── Receiving ────────────────────────────────────────────────────────────────
-
 /** An unwrapped giftwrap: the inner rumor plus its seal-verified sender. */
 export interface UnwrappedInvite {
   rumor: DirectInviteRumor;
-  /** The seal's author — the verified sender (the inviter). */
+  /** The seal's author — the verified inviter. */
   sender: string;
 }
 
 /**
- * Unwrap a kind-1059 giftwrap addressed to the current user. Returns the inner
- * rumor + the verified sender, or undefined if it isn't a well-formed wrap this
- * signer can open. Never throws — a foreign/garbage wrap yields undefined so a
- * scan loop can skip it.
- *
- * The sender is the SEAL's author (kind 13), and the rumor must claim the same
- * pubkey — the standard NIP-59 anti-spoofing check (a wrap can't lie about who
- * sealed it without the seal author's key).
+ * Unwrap a kind-1059 giftwrap to the current user; undefined (never throws) if
+ * malformed or unopenable. The rumor must claim the seal's author (NIP-59
+ * anti-spoofing).
  */
 export async function unwrapDirectInvite(
   giftWrap: NostrEvent,
@@ -149,11 +124,9 @@ export async function unwrapDirectInvite(
 ): Promise<UnwrappedInvite | undefined> {
   if (giftWrap.kind !== KIND_WRAP || !signer.nip44) return undefined;
   try {
-    // Layer 1: decrypt the wrap with the ephemeral wrap author's pubkey → seal.
     const seal = JSON.parse(await signer.nip44.decrypt(giftWrap.pubkey, giftWrap.content)) as NostrEvent;
     if (seal.kind !== KIND_NIP59_SEAL) return undefined;
 
-    // Layer 2: decrypt the seal with the seal author's pubkey → rumor.
     const rumor = JSON.parse(await signer.nip44.decrypt(seal.pubkey, seal.content)) as DirectInviteRumor;
 
     // Anti-spoofing: the rumor's claimed author must equal the seal's author.
@@ -166,11 +139,9 @@ export async function unwrapDirectInvite(
 }
 
 /**
- * Parse + validate an unwrapped rumor as a Direct Invite bundle. The outer `k`
- * tag was only ever a hint — the rumor's kind is the authority here — and the
- * bundle validates exactly as a fetched one (bounds, self-certifying owner).
- * Expiry is deliberately NOT enforced here: a parked invite still renders past
- * `expires_at`; accepting refuses. Returns undefined for anything malformed.
+ * Parse + validate an unwrapped rumor as a bundle (the rumor kind is the
+ * authority, not the `k` tag). Expiry is NOT enforced here: parked invites still
+ * render; accepting refuses.
  */
 export function parseDirectInviteRumor(kind: number, content: string): InviteBundle | undefined {
   if (kind !== KIND_DIRECT_INVITE) return undefined;
@@ -198,47 +169,26 @@ export interface HeldMembership {
   /** channel id (hex) → held channel epoch. */
   channelEpochs: ReadonlyMap<string, number>;
   /**
-   * channel id (hex) → the channel epoch whose rotation cut me out. A key
-   * BELOW that epoch is the access I was revoked, not a vend: without this
-   * floor, an old bundle still in my inbox would look like a fresh key for a
-   * channel I no longer hold and quietly restore it.
+   * channel id (hex) → the channel epoch whose rotation cut me out. Keys BELOW it
+   * are revoked access, so an old bundle can't quietly restore it.
    */
   channelCuts?: ReadonlyMap<string, number>;
 }
 
-/**
- * Compare two optional hex fields. A bundle is another client's document, and
- * CORD-01 says hex is lowercase while foreign input may not be — an unmatched
- * spelling here would read as a changed base and drop a legitimate vend.
- */
+/** Case-insensitive optional hex compare: foreign bundles may not be lowercase. */
 function hexEq(a: string | undefined, b: string | undefined): boolean {
   return a?.toLowerCase() === b?.toLowerCase();
 }
 
 /**
- * Is an incoming bundle for an already-joined community a CATCH-UP worth
- * parking (vs. noise to skip)? Exactly one shape qualifies: a bundle continuing
- * the SAME base the member already holds, carrying a private-channel key they
- * lack or hold at an older channel epoch — a role-gate key vend (CORD.md).
+ * Is a bundle for an already-joined community a CATCH-UP worth parking? Only a
+ * bundle on the SAME base carrying a private-channel key the member lacks (or
+ * holds at an older epoch) — a role-gate key vend (CORD.md).
  *
- * It may never move the base. Nothing binds a bundle's `community_root` to its
- * `community_id`: the id self-certifies the OWNER (CORD-02 §1, A.4) and the root
- * is "deliberately not derived from" it (CORD-02 §2), so a hostile bundle can
- * carry a real community's id, owner and salt beside an attacker-chosen root and
- * still pass `validateBundle`. Accepting one for a community already held merges
- * it through the Community List's `freshest` (CORD-02 §8) — a rule written for
- * reconciling a member's OWN devices, whose input is a self-signed, self-encrypted
- * document, not a stranger's giftwrap — and relocates every future message the
- * member writes onto streams the attacker reads. The precondition is only
- * `(community_id, owner, owner_salt)`, which ride in every bundle and are not
- * revoked by removal, so any past link-holder retains it forever.
- *
- * The base advances by exactly one spec-sanctioned route, and it is not this
- * one: a CORD-06 §2 rekey blob, adopted only when its `prevcommit` proves the
- * rotation extends the very key already held. A member who slept through a
- * Refounding heals from that blob, parked at an address derived from the root
- * they still hold (CORD-08 §1) — so refusing base changes here strands nobody.
- * Consistent with CORD-05 §6: a Direct Invite "grants exactly what it carries".
+ * It may never move the base: nothing binds `community_root` to `community_id`
+ * (CORD-02 §1/§2), so a hostile bundle with a real id/owner/salt could relocate
+ * the member onto attacker-read streams via the List's `freshest` merge. The base
+ * advances only by a CORD-06 §2 rekey blob whose `prevcommit` proves continuity.
  */
 export function isCatchUpBundle(
   held: HeldMembership | undefined,
@@ -248,29 +198,21 @@ export function isCatchUpBundle(
 }
 
 /**
- * The private-channel ids (lowercase hex) a bundle would NEWLY contribute to an
- * already-joined member — the vend inside a catch-up. Empty when the bundle is
- * not a catch-up at all ({@link isCatchUpBundle} is exactly "non-empty").
- *
- * Split out because the adoption decision has to judge entitlement per
- * channel: a bundle that carries one key I'm owed beside one I'm not is not
- * adoptable as a whole, and only the channels it actually adds are the ones
- * whose entitlement matters.
+ * The private-channel ids (lowercase hex) a bundle would NEWLY contribute —
+ * non-empty exactly when {@link isCatchUpBundle}. Split out so adoption can judge
+ * entitlement per channel.
  */
 export function catchUpChannelIds(
   held: HeldMembership | undefined,
   bundle: Pick<InviteBundle, "root_epoch" | "channels" | "community_root" | "control_pk">,
 ): string[] {
   if (held === undefined) return [];
-  // Same base, or it is not a catch-up at any epoch. `control_pk` rides along:
-  // swapping it alone eclipses the member onto an attacker's Control Plane,
-  // which CORD-05 §1 accepts only as self-harm by an inviter a JOINER chose.
+  // Same base, or not a catch-up. `control_pk` too: swapping it alone would
+  // eclipse the member onto an attacker's Control Plane.
   if (!hexEq(bundle.community_root, held.communityRoot)) return [];
   if (!hexEq(bundle.control_pk, held.controlPk)) return [];
   if (bundle.root_epoch !== held.rootEpoch) return [];
-  // A bundle is another client's document: normalize its id spelling before
-  // consulting the cut floor (CORD-01: hex is lowercase; foreign input may
-  // not be, and an unmatched spelling here would re-park revoked access).
+  // Normalize id spelling before consulting the cut floor.
   const out: string[] = [];
   for (const c of bundle.channels) {
     const id = c.id.toLowerCase();
@@ -283,10 +225,8 @@ export function catchUpChannelIds(
 }
 
 /**
- * What a Community List entry currently holds, in the shape the catch-up
- * classifier reads. Structural over the entry so the lib stays free of the
- * list module; every reader of an entry's held keys for this purpose goes
- * through here, so the two spellings of "what I hold" cannot drift.
+ * What a Community List entry holds, in the classifier's shape. The single path
+ * for this, so "what I hold" can't drift.
  */
 export function heldMembershipOf(entry: {
   current: {
@@ -302,9 +242,7 @@ export function heldMembershipOf(entry: {
     rootEpoch: entry.current.root_epoch,
     communityRoot: entry.current.community_root,
     ...(entry.current.control_pk ? { controlPk: entry.current.control_pk } : {}),
-    // Lowercase keys: catchUpChannelIds normalizes the bundle side the same
-    // way, so one channel is one entry whatever a foreign list copy's
-    // spelling was.
+    // Lowercase keys, matching catchUpChannelIds.
     channelEpochs: new Map(channels.map((c) => [c.id.toLowerCase(), c.epoch])),
     channelCuts: new Map((entry.channel_cuts ?? []).map((c) => [c.id.toLowerCase(), c.epoch])),
   };

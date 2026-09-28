@@ -50,18 +50,14 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 import type { PollTally } from "@/lib/polls";
 
 interface EmbeddedNoteProps {
-  /** Hex event ID to fetch and display. */
   eventId: string;
   /** Optional relay hints from the nevent1 identifier. */
   relays?: string[];
   /** Optional author pubkey hint from the nevent1 identifier. */
   authorHint?: string;
-  /** When the embed was unfolded from a link on another host (an
-   *  `njump.me/nevent1…` URL), the original URL — surfaced as a favicon+host
-   *  chip that opens the source. */
+  /** Original URL when unfolded from another host's link (njump.me/nevent1…); shown as a source chip. */
   sourceUrl?: string;
-  /** Author of the message quoting this one — whose outbox is searched when
-   *  the identifier names no author. */
+  /** Quoting message's author, whose outbox is searched when the id names no author. */
   fallbackAuthor?: string;
   className?: string;
 }
@@ -73,12 +69,9 @@ interface KindMeta {
 }
 
 /**
- * Kinds that get a tag-based preview card (cover / title / summary) instead of
- * running their content — JSON metadata, Markdown, or a media manifest — through
- * the kind-1 text tokenizer. Text-note kinds (1, 11, 1111, 9, 42, 14, voice,
- * …) are deliberately absent: those render their body through {@link ChatContent},
- * which already handles inline media and encrypted attachments. Reactions (7),
- * polls (1068), and emoji packs (30030) have dedicated branches.
+ * Kinds rendered as a tag-based preview card (their content is JSON, Markdown
+ * or a media manifest). Text-note kinds render through {@link ChatContent};
+ * reactions, polls and emoji packs have dedicated branches.
  */
 const KIND_META: Record<number, KindMeta> = {
   0: { label: "Profile", Icon: User },
@@ -111,17 +104,14 @@ const KIND_META: Record<number, KindMeta> = {
   39089: { label: "People list", Icon: Users },
 };
 
-/** Photo kinds whose images live in imeta tags (NIP-68). */
+/** NIP-68 photo kinds (images in imeta). */
 const PHOTO_KINDS = new Set([20]);
-/** Video kinds whose media lives in imeta tags (NIP-71 + vines). */
+/** NIP-71 video kinds + vines (media in imeta). */
 const VIDEO_KINDS = new Set([21, 22, 34236]);
 
 /**
- * NIP-21 `nostr:` URI for a resolved event, so the user can copy it and
- * paste into their preferred client. Addressable events encode to an
- * `naddr` (stable across edits); everything else to an `nevent` carrying
- * the author pubkey as a relay hint. Returns `undefined` for malformed
- * id/pubkey (matching `dittoEventUrl`'s routing).
+ * NIP-21 `nostr:` URI: `naddr` for addressable events, else `nevent` with the
+ * author hint. Undefined for malformed id/pubkey.
  */
 function eventNostrUri(event: NostrRumor): string | undefined {
   if (event.kind >= 30000 && event.kind < 40000) {
@@ -133,7 +123,6 @@ function eventNostrUri(event: NostrRumor): string | undefined {
   return nevent ? `nostr:${nevent}` : undefined;
 }
 
-/** Inline embedded note card – like a link preview but for Nostr events. */
 export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, fallbackAuthor, className }: EmbeddedNoteProps) {
   const hints = useMemo(() => publicRelayHints(relays), [relays]);
   const { data: event, isLoading, isFetching, refetch } = useEvent(eventId, hints, authorHint, {
@@ -168,7 +157,6 @@ export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, fallbackA
   return <EmbeddedEventCard event={event} sourceUrl={sourceUrl} className={className} />;
 }
 
-/** Inline embedded card for an addressable event (naddr). */
 export function EmbeddedNaddr({ addr, relays, className }: { addr: AddrCoords; relays?: string[]; className?: string }) {
   const hints = useMemo(() => publicRelayHints(relays), [relays]);
   const { data: event, isLoading, isFetching, refetch } = useAddrEvent(addr, hints);
@@ -196,23 +184,13 @@ export function EmbeddedNaddr({ addr, relays, className }: { addr: AddrCoords; r
   return <EmbeddedEventCard event={event} className={className} />;
 }
 
-/**
- * Shared card body for any resolved event.
- *
- * Modeled on Ditto's NoteCard/EmbeddedCardShell: a soft `rounded-2xl`
- * card with a whole-card hover tint, an author row (avatar + name +
- * `· timeAgo`), the height-capped note content, and a "View on Ditto"
- * off-ramp footer.
- */
+/** Shared card body for any resolved event, modeled on Ditto's NoteCard. */
 export function EmbeddedEventCard({ event, sourceUrl, className }: { event: NostrRumor; sourceUrl?: string; className?: string }) {
-  // NIP-30 emoji packs get a dedicated preview + "Add" card rather than the
-  // generic event body (whose content is empty — the emojis live in tags).
+  // NIP-30 emoji packs: emojis live in tags, content is empty.
   if (event.kind === 30030) {
     return <EmojiPackCard event={event} className={className} />;
   }
-  // Ditto theme definitions get the same treatment: a color preview + "Apply".
-  // One that doesn't parse (no usable colors) keeps the generic body rather
-  // than rendering nothing.
+  // An unparseable theme keeps the generic body.
   if (event.kind === THEME_DEFINITION_KIND && parseDittoTheme(event)) {
     return <ThemeDiscoverCard event={event} className={cn("max-w-sm my-1.5", className)} />;
   }
@@ -227,19 +205,14 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
   const label = meta?.label ?? null;
   const title = event.tags.find(([name]) => name === "title")?.[1];
 
-  // Reactions render their emoji rather than raw content.
   const reactionEmoji = event.kind === 7
     ? (event.content === "+" || event.content === "" ? "👍" : event.content === "-" ? "👎" : event.content)
     : null;
 
-  // Off-ramp to the fuller social view of this event on ditto.pub.
   const dittoHref = dittoEventUrl(event);
-  // NIP-21 identifier to copy for pasting into any other Nostr client.
   const nostrUri = eventNostrUri(event);
-  // When this card was unfolded from a link on another host, that host is the
-  // primary off-ramp — "View on <host>" takes the footer's left slot and the
-  // Ditto link moves beside the copy button. A ditto.pub source is not
-  // "another host": it's the same off-ramp the DittoLink already is.
+  // A source from another host takes the footer's lead slot; ditto.pub doesn't
+  // count (it's the DittoLink off-ramp already).
   const safeSource = externalUrl(sourceUrl);
   const externalSource = safeSource && displayHost(safeSource) !== "ditto.pub" ? safeSource : undefined;
 
@@ -253,7 +226,6 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-3 py-2 space-y-1 min-w-0">
-        {/* Author row */}
         <div className="flex items-center gap-2 min-w-0">
           <ProfilePreviewCard pubkey={event.pubkey}>
             <button type="button" className="shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -289,11 +261,7 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           </span>
         </div>
 
-        {/* Body — dispatched by kind: a reaction shows its emoji; the media,
-            poll, calendar and zap kinds get their real renderers (the same
-            components the timeline uses); the remaining non-note kinds
-            (article, listing, publication, badge, …) a tag-driven preview
-            card; everything else the note text through the shared renderer. */}
+        {/* Dispatched by kind; real renderers where the timeline has them, else a tag preview or note text. */}
         {reactionEmoji !== null ? (
           <div className="text-2xl">
             {isCustomEmoji(reactionEmoji)
@@ -328,10 +296,6 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           </EmbedTruncatedBody>
         )}
 
-        {/* Off-ramp footer. Normally "View on Ditto" (left) + copy id
-            (lower-right). When the card came from a link on another host, that
-            host leads on the left and the Ditto link joins the copy button on
-            the right. */}
         {(dittoHref || nostrUri || externalSource) && (
           <div className="mt-0.5 flex items-center gap-2 min-w-0">
             {externalSource ? (
@@ -351,10 +315,8 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
 }
 
 /**
- * NIP-88 poll (kind 1068) rendered through the SAME {@link PollView} the
- * timeline uses — read-only here (no vote fetch across the embed boundary): an
- * empty tally with `canVote={false}` yields the result-bar layout at 0%. The
- * question (the `content`) is shown above it, since PollView reads only tags.
+ * NIP-88 poll via the timeline's {@link PollView}, read-only (empty tally,
+ * `canVote={false}`). PollView reads only tags, so the question is shown above.
  */
 function EmbeddedPollCard({ event }: { event: NostrRumor }) {
   const tally: PollTally = useMemo(
@@ -372,12 +334,7 @@ function EmbeddedPollCard({ event }: { event: NostrRumor }) {
   );
 }
 
-/**
- * NIP-52 calendar event (31922/31923) rendered through the SAME
- * {@link CalendarEventMessageCard} the timeline uses — read-only (no RSVP fetch
- * across the embed boundary), so an empty tally with `canRsvp={false}`. Falls
- * back to the tag preview when the event doesn't parse.
- */
+/** NIP-52 calendar event via {@link CalendarEventMessageCard}, read-only; tag preview if unparseable. */
 function EmbeddedCalendarCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) {
   const calendar = useMemo(() => parseCalendarEvent(event), [event]);
   const emptyTally: RsvpTally = useMemo(() => ({ accepted: [], declined: [], tentative: [] }), []);
@@ -394,10 +351,8 @@ function EmbeddedCalendarCard({ event, meta }: { event: NostrRumor; meta: KindMe
 }
 
 /**
- * Zap receipt (9735) / on-chain zap (8333): the amount and the zapper's
- * comment. The amount is the verified one — for a Lightning receipt the bolt11
- * invoice via the embedded (signature-checked) request, for an on-chain zap the
- * `amount` tag — so a receipt that doesn't verify shows a bare "Zap".
+ * Zap receipt (9735) / on-chain zap (8333). Only a verified amount is shown;
+ * otherwise a bare "Zap".
  */
 function EmbeddedZapCard({ event }: { event: NostrRumor }) {
   const { sats, comment } = useMemo(() => {
@@ -424,11 +379,7 @@ function EmbeddedZapCard({ event }: { event: NostrRumor }) {
   );
 }
 
-/**
- * A single resolved media thumbnail — decrypts an encrypted Blossom blob the
- * same way the timeline does (`useResolvedMediaSrc`), with a blurhash placeholder
- * until it paints. Clicking opens the shared cinematic {@link Lightbox}.
- */
+/** Media thumbnail resolved/decrypted like the timeline; opens the shared {@link Lightbox}. */
 function PreviewImage({ item, onClick, className }: { item: LightboxItem; onClick?: () => void; className?: string }) {
   const { resolved, onError, failed } = useMediaWithFallback(item);
   const [loaded, setLoaded] = useState(false);
@@ -461,12 +412,7 @@ function PreviewImage({ item, onClick, className }: { item: LightboxItem; onClic
   );
 }
 
-/**
- * NIP-68 picture post (kind 20): the images live in `imeta` tags. Shows a
- * cover (or a 2×2 grid for multiples with a `+N` overflow), and clicking opens
- * the shared {@link Lightbox} at that image. Falls back to the tag preview
- * when no imeta media resolves.
- */
+/** NIP-68 picture post (kind 20); tag preview when no imeta media resolves. */
 function EmbeddedPhotoCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) {
   const title = event.tags.find(([n]) => n === "title")?.[1];
   const imeta = useMemo(() => parseImetaMap(event.tags), [event.tags]);
@@ -512,7 +458,6 @@ function EmbeddedPhotoCard({ event, meta }: { event: NostrRumor; meta: KindMeta 
               onClick={() => setIndex(i)}
               className={cn(multiple ? "aspect-square" : "max-h-[260px] aspect-video")}
             />
-            {/* The last visible tile carries the overflow count. */}
             {multiple && i === tiles.length - 1 && items.length > tiles.length && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50 text-lg font-semibold text-white">
                 +{items.length - tiles.length}
@@ -535,11 +480,7 @@ function EmbeddedPhotoCard({ event, meta }: { event: NostrRumor; meta: KindMeta 
   );
 }
 
-/**
- * NIP-71 video / short video / vine (21/22/34236): the media lives in `imeta`
- * tags. Renders the first source inline through the SAME {@link VideoPlayer}
- * the timeline uses. Falls back to the tag preview when no imeta media resolves.
- */
+/** NIP-71 video (21/22/34236) via {@link VideoPlayer}; tag preview when no imeta media resolves. */
 function EmbeddedVideoCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) {
   const title = event.tags.find(([n]) => n === "title")?.[1];
   const imeta = useMemo(() => parseImetaMap(event.tags), [event.tags]);
@@ -589,14 +530,12 @@ function parseDeckCard(tag: string[]): DeckCard | null {
   return { name, quantity, setId: setId ?? "", artId: artId ?? "", foil: foil === "foil" || foil === "true" };
 }
 
-/** MTG format tags → display labels (drives the format badge row). */
 const DECK_FORMAT_LABELS: Record<string, string> = {
   standard: "Standard", modern: "Modern", commander: "Commander", legacy: "Legacy",
   vintage: "Vintage", pioneer: "Pioneer", pauper: "Pauper", cedh: "cEDH",
   limited: "Limited", draft: "Draft", sealed: "Sealed", brawl: "Brawl",
   historic: "Historic", explorer: "Explorer", alchemy: "Alchemy", timeless: "Timeless",
 };
-/** Non-format archetype tags → display labels. */
 const DECK_ARCHETYPE_LABELS: Record<string, string> = {
   aggro: "Aggro", midrange: "Midrange", control: "Control", combo: "Combo",
   tempo: "Tempo", ramp: "Ramp", tribal: "Tribal", burn: "Burn", mill: "Mill",
@@ -604,7 +543,6 @@ const DECK_ARCHETYPE_LABELS: Record<string, string> = {
   aristocrats: "Aristocrats",
 };
 
-/** A single decklist row (quantity × name, foil-tinted). */
 function DeckCardRow({ card, onClick }: { card: DeckCard; onClick?: () => void }) {
   return (
     <div
@@ -625,7 +563,6 @@ function DeckCardRow({ card, onClick }: { card: DeckCard; onClick?: () => void }
   );
 }
 
-/** A card as a Scryfall-image tile (falls back to its name on a load error). */
 function DeckCardTile({ card, onClick }: { card: DeckCard; onClick?: () => void }) {
   const [failed, setFailed] = useState(false);
   const ref: CardRef = { setId: card.setId || undefined, artId: card.artId || undefined, name: card.name };
@@ -667,11 +604,9 @@ function DeckQuantityBadge({ quantity }: { quantity: number }) {
 }
 
 /**
- * NIP magic-deck (kind 37381): the decklist lives in `c` (main) / `b`
- * (sideboard) tags — Scryfall printings — with the commanders in `C`, companion
- * in `S`, format/archetype in `t`, and a `banner`. Ported from Ditto's
- * MagicDeckContent: banner, title, commanders, a badge row, and a text/visual
- * decklist toggle whose tiles open the shared {@link Lightbox} on the card art.
+ * Magic deck (kind 37381): `c` main / `b` sideboard (Scryfall printings), `C`
+ * commanders, `S` companion, `t` format/archetype, `banner`. Ported from
+ * Ditto's MagicDeckContent.
  */
 function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
   const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1];
@@ -696,8 +631,6 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
   const [visualView, setVisualView] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
-  // The Lightbox opens the card art at large size (Scryfall images are plain
-  // https URLs, so no decryption ref is needed).
   const lightboxItems = useMemo<LightboxItem[]>(
     () => allCards.map((c) => ({ url: scryfallImageUrl({ setId: c.setId || undefined, artId: c.artId || undefined, name: c.name }, "large"), mime: "image/jpeg" })),
     [allCards],
@@ -831,7 +764,6 @@ function EmbeddedMagicDeckCard({ event }: { event: NostrRumor }) {
   );
 }
 
-/** Difficulty/terrain rating pips (filled to `value`, out of `max`). */
 function TreasurePips({ value, max = 5 }: { value: number; max?: number }) {
   return (
     <div className="flex gap-0.5">
@@ -842,7 +774,7 @@ function TreasurePips({ value, max = 5 }: { value: number; max?: number }) {
   );
 }
 
-/** ROT13 decode (treasure hints are stored rot13-obscured, like a geocache). */
+/** Treasure hints are rot13-obscured, like a geocache. */
 function rot13(str: string): string {
   return str.replace(/[A-Za-z]/g, (c) => {
     const base = c <= "Z" ? 65 : 97;
@@ -858,11 +790,9 @@ const TREASURE_TYPE_LABELS: Record<string, string> = {
 };
 
 /**
- * NIP treasure / geocache (kind 37516): the cache metadata lives in tags —
- * `name`, difficulty `D` / terrain `T`, size `S`, type `t`, geohash `g`,
- * rot13 `hint`, and `image`s — with the description in `content`. Ported from
- * Ditto's GeocacheContent: name, badge row, D/T pips, description, image
- * gallery, and a reveal-on-tap hint.
+ * Treasure/geocache (kind 37516): `name`, difficulty `D`, terrain `T`, size `S`,
+ * type `t`, geohash `g`, rot13 `hint`, `image`s; description in content.
+ * Ported from Ditto's GeocacheContent.
  */
 function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
   const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1];
@@ -980,22 +910,14 @@ function EmbeddedTreasureCard({ event }: { event: NostrRumor }) {
   );
 }
 
-/**
- * Tag-driven preview card for a non-note kind whose body is JSON, a media
- * manifest, or Markdown (article, listing, publication, badge, podcast, music,
- * …). Reads title/summary/cover from tags rather than tokenizing content the
- * kind-1 renderer would mangle. Kinds with a real renderer (photos, videos,
- * polls, calendar events, zaps, magic decks, treasures) are dispatched BEFORE
- * reaching here, so this is the long-tail fallback.
- */
+/** Long-tail fallback: title/summary/cover from tags, never the raw content. */
 function TagPreviewCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) {
   const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1];
   const title = tag("title") || tag("name") || tag("subject");
   const summary = tag("summary") || tag("description");
   const Icon = meta.Icon;
 
-  // A poster from imeta (podcasts/music carry artwork there) — never the imeta
-  // `url`, which for an audio kind is the audio blob, not an image.
+  // Never the imeta `url`: for audio kinds that's the audio blob.
   const imeta = useMemo(() => parseImetaMap(event.tags), [event.tags]);
   const posterFromImeta = useMemo(() => {
     for (const e of imeta.values()) {
@@ -1025,8 +947,7 @@ function TagPreviewCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) 
         <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">{summary}</p>
       )}
 
-      {/* When nothing above surfaced, at least name the kind so the card isn't
-          an empty shell. */}
+      {/* Name the kind so the card isn't an empty shell. */}
       {!title && !summary && !cover && (
         <div className="flex items-center gap-2 py-1 text-muted-foreground">
           {Icon && <Icon className="size-4 shrink-0" />}
@@ -1037,20 +958,11 @@ function TagPreviewCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) 
   );
 }
 
-/** Height at which an embedded event body collapses behind a "Show more". */
 const EMBED_MAX_HEIGHT = 260;
 
 /**
- * Height-capped body for a quoted/embedded event. Measures the rendered
- * content and, when it overflows {@link EMBED_MAX_HEIGHT}, clamps it with a
- * fade-out and a "Show more"/"Show less" toggle — so a long quoted note gets
- * an expander rather than the old hard `overflow-hidden` clip that silently
- * dropped everything past 64 units of height. Short bodies render untouched
- * with no toggle.
- *
- * The renderer inside can't provide its own expander (embeds always pass
- * `disableNoteEmbeds`, which disables `ChatContent`'s own collapse), so the
- * height governance lives here at the card level.
+ * Clamp an embedded body with fade + "Show more" when it overflows
+ * {@link EMBED_MAX_HEIGHT}. Lives here since embeds disable `ChatContent`'s collapse.
  */
 function EmbedTruncatedBody({ children }: { children: ReactNode }) {
   const [expanded, setExpanded] = useState(false);
@@ -1062,8 +974,7 @@ function EmbedTruncatedBody({ children }: { children: ReactNode }) {
     if (el) setOverflowing(el.scrollHeight > EMBED_MAX_HEIGHT + 1);
   }, []);
 
-  // Re-measure after layout: media and mention names resolve asynchronously
-  // and change whether the body overflows.
+  // Re-measure as media and mention names resolve.
   const measureRef = useCallback((el: HTMLDivElement | null) => {
     innerRef.current = el;
     if (el) requestAnimationFrame(measure);
@@ -1099,15 +1010,8 @@ function EmbedTruncatedBody({ children }: { children: ReactNode }) {
 }
 
 /**
- * "View on <host>" off-ramp shown when an embedded event card was unfolded from
- * a link on another host (e.g. an `njump.me/nevent1…` URL pasted into chat) —
- * favicon + host + open icon, clicking opens the original source. It leads the
- * footer's left slot in place of the Ditto link. Renders nothing when there is
- * no source URL, or when it's same-host/invalid (`externalUrl`).
- *
- * A ditto.pub source is suppressed on purpose: the card already carries a
- * "View on Ditto" off-ramp, so a second link pointing at the same host would be
- * redundant.
+ * "View on <host>" off-ramp for cards unfolded from another host's link.
+ * Renders nothing for same-host/invalid URLs or ditto.pub (DittoLink covers it).
  */
 function SourceLink({ url }: { url: string | undefined }) {
   const safe = externalUrl(url);
@@ -1133,15 +1037,7 @@ function SourceLink({ url }: { url: string | undefined }) {
   );
 }
 
-/**
- * "View on Ditto" off-ramp — a small primary-tinted link appended to an
- * embedded event card so readers can jump to the full social thread on
- * ditto.pub (images, quotes, zaps, replies) that Armada doesn't render.
- *
- * `iconOnly` renders just the Ditto glyph as an icon button matching
- * {@link CopyIdButton}, for the lower-right corner when a "View on <host>"
- * source link has taken the footer's leading slot.
- */
+/** "View on Ditto" off-ramp; `iconOnly` when a source link holds the lead slot. */
 function DittoLink({ href, label = "View on Ditto", iconOnly = false }: { href: string; label?: string; iconOnly?: boolean }) {
   if (iconOnly) {
     return (
@@ -1177,12 +1073,7 @@ function DittoLink({ href, label = "View on Ditto", iconOnly = false }: { href: 
   );
 }
 
-/**
- * Copy-ID affordance — a small "file digit" icon button in the card's
- * lower-right corner. Clicking copies the event's NIP-21 `nostr:` URI so the
- * reader can paste it into any client. Preferred over a `nostr:` href, which
- * only navigates when the OS/browser has a scheme handler registered.
- */
+/** Copies the NIP-21 URI (a `nostr:` href only works with a registered scheme handler). */
 function CopyIdButton({ uri, className }: { uri: string; className?: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -1235,14 +1126,10 @@ function EmbeddedNoteSkeleton({ className }: { className?: string }) {
   );
 }
 
-/**
- * An embed whose event no lookup found. It may exist somewhere we didn't ask,
- * so it keeps the card's off-ramps — Ditto (which searches its own relays) and
- * copy id — plus a retry that reruns the full lookup.
- */
+/** Unfound event: keeps the off-ramps plus a retry of the full lookup. */
 function EmbeddedNoteTombstone({ label, nip19Id, retrying, onRetry, className }: {
   label: string;
-  /** The nevent/naddr, hints included; undefined when the id is malformed. */
+  /** Hints included; undefined when the id is malformed. */
   nip19Id?: string;
   retrying: boolean;
   onRetry: () => void;

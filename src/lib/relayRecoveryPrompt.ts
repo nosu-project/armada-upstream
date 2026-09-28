@@ -1,8 +1,4 @@
-/**
- * Per-account marker for the one-time "restore your setup" recovery prompt
- * (see `LoginSetup`). Kept in its own module so both the onboarding flow and
- * the account wizard can touch it without a component-file cross-import.
- */
+/** Per-account marker for the one-time "restore your setup" prompt (see `LoginSetup`). */
 
 const key = (pubkey: string) => `armada:relay-prompt-shown:${pubkey}`;
 
@@ -16,27 +12,18 @@ export function relayRecoveryPromptShown(pubkey: string): boolean {
 }
 
 /**
- * Opt a pubkey out of the recovery prompt. The account wizard calls this for a
- * brand-new account — it has nothing on any relay to recover, so "we couldn't
- * find your setup" would be nonsense. LoginSetup also calls it once it has
- * surfaced the prompt, so a force-quit mid-flow isn't re-asked every launch.
+ * Opt out of the recovery prompt: brand-new accounts have nothing to recover,
+ * and LoginSetup marks it once shown so a force-quit isn't re-asked.
  */
 export function markRelayRecoveryPromptShown(pubkey: string): void {
   try {
     localStorage.setItem(key(pubkey), "1");
-  } catch {
-    // Private mode / storage disabled — the prompt simply reappears next launch.
-  }
+  } catch { /* ignore */ }
 }
 
-/**
- * Undo `markRelayRecoveryPromptShown`. Backing out of the prompt signs the
- * account out, and the same key signing in again should be asked again.
- */
+/** Undo the marker: backing out signs out, and signing back in should ask again. */
 export function clearRelayRecoveryPromptShown(pubkey: string): void {
   try {
     localStorage.removeItem(key(pubkey));
-  } catch {
-    // Storage disabled — nothing was persisted to clear.
-  }
+  } catch { /* ignore */ }
 }

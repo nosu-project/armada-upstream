@@ -1,22 +1,11 @@
 /**
- * One standing kind-21059 REQ per relay, merged across channels.
- *
- * Three hooks tail the ephemeral wraps of a channel's current stream address —
- * voice presence, voice reactions, and typing — and the sidebar
- * mounts the presence hook for EVERY channel row, so the per-hook `req()` loop
- * opened one socket REQ per (channel, relay): a measured boot paid 36 REQs of
- * `kinds[21059] authors×1` back to back. Every channel's stream address is a
- * distinct derived pubkey, so NostrBatcher's identical-filter coalescing can
- * never merge them; the merge has to happen where the authors are known
- * together, which is here. Subscribers register (relay, author, handler); each
- * relay carries ONE REQ with `authors×N`, reopened — debounced, so a mounting
- * sidebar contributes one reopen, not eighteen — whenever the author set
- * changes, and events demux by `event.pubkey`: the ephemeral wrap's signer IS
- * the stream address the filter asked for.
- *
- * Ephemeral wraps are never stored (NIP-01 kind range; `cacheEvents` refuses
- * wraps besides), so there is no replay to miss across a reopen — anything
- * lost in the gap is a heartbeat the next interval resends.
+ * One standing kind-21059 REQ per relay, merged across channels. Presence (mounted
+ * per sidebar row), reactions, and typing each tail a channel's stream address; a
+ * REQ per (channel, relay) cost dozens of REQs at boot, and NostrBatcher can't
+ * merge distinct authors. Each relay carries ONE `authors×N` REQ, reopened
+ * (debounced) when the set changes; events demux by `event.pubkey` (the wrap
+ * signer IS the stream address). Ephemeral wraps are never stored, so a reopen
+ * gap only loses a heartbeat the next interval resends.
  */
 import { KIND_WRAP_EPHEMERAL } from "@/concord/lib/kinds";
 
@@ -35,13 +24,10 @@ interface EphemeralNostr {
 type Handler = (event: NostrEvent) => void;
 
 interface RelayLine {
-  /** Stream author pk → the handlers that want its ephemeral wraps. */
   authors: Map<string, Set<Handler>>;
-  /** The REQ currently open, if any. */
   controller?: AbortController;
   /** Sorted author set the open REQ was built from, to skip no-op reopens. */
   openedAuthors: string;
-  /** Debounce for reopening after a burst of (un)subscribes. */
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -51,10 +37,9 @@ const lines = new Map<string, RelayLine>();
 const REOPEN_MS = 50;
 
 /**
- * Tail the ephemeral wraps authored by `author` (a channel's current stream
- * pk) on `relay`. Returns an unsubscribe. Handlers receive the raw 21059 wrap
- * and do their own `openWrap`; a handler for one channel is never called with
- * another channel's wraps.
+ * Tail ephemeral wraps authored by `author` (a channel's current stream pk) on
+ * `relay`. Returns an unsubscribe. Handlers get raw 21059 wraps, only their own
+ * channel's.
  */
 export function subscribeEphemeral(
   nostr: EphemeralNostr,
@@ -125,8 +110,7 @@ function reopen(nostr: EphemeralNostr, relay: string): void {
       )) {
         if (msg[0] !== "EVENT") continue;
         const event = msg[2] as NostrEvent;
-        // Demux strictly by wrap author: a handler sees only its channel's
-        // wraps, exactly as its own single-author REQ delivered.
+        // Demux strictly by wrap author.
         const handlers = lines.get(relay)?.authors.get(event.pubkey);
         if (!handlers) continue;
         for (const handler of [...handlers]) {
@@ -138,8 +122,8 @@ function reopen(nostr: EphemeralNostr, relay: string): void {
         }
       }
     } catch {
-      // Subscription ended (abort, socket loss). A live socket is re-REQ'd by
-      // the relay layer; a torn line is rebuilt by the next (un)subscribe.
+      // Ended (abort, socket loss): the relay layer re-REQs live sockets; a torn line
+      // is rebuilt by the next (un)subscribe.
     }
   })();
 }

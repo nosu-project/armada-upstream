@@ -23,14 +23,12 @@ const ToastViewport = React.forwardRef<
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName
 
 const toastVariants = cva(
-  // Uses max-md / md to cleanly separate mobile and desktop with no leaking or reset classes.
   "group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=move]:transition-none " +
-  // Entry & exit animations (shared)
   "data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 " +
-  // Mobile (< md): top-positioned, swipe up (Y-axis) — mirrors the original X-axis pattern
+  // Mobile (< md): top-positioned, swipe up.
   "max-md:data-[swipe=cancel]:translate-y-0 max-md:data-[swipe=end]:translate-y-[var(--radix-toast-swipe-end-y)] max-md:data-[swipe=move]:translate-y-[var(--radix-toast-swipe-move-y)] " +
   "max-md:data-[state=open]:slide-in-from-top-full max-md:data-[state=closed]:slide-out-to-top-full " +
-  // Desktop (md+): bottom-right, swipe right (X-axis) — identical to original code
+  // Desktop (md+): bottom-right, swipe right.
   "md:data-[swipe=cancel]:translate-x-0 md:data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] md:data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] " +
   "md:data-[state=open]:slide-in-from-bottom-full md:data-[state=closed]:slide-out-to-right-full",
   {

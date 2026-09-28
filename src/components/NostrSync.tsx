@@ -57,88 +57,45 @@ import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
-/**
- * Debounce for the quick-reaction frequency table. Longer than the config one:
- * reacting is a rapid, repeatable act and the table is a convenience cache, so
- * it isn't worth a settings event per tap.
- */
+/** Longer than config's: reactions are rapid, and the table is only a convenience cache. */
 const FREQUENT_REACTIONS_DEBOUNCE_MS = 10_000;
 
-/** Coalescing window (ms) for self-state query invalidations. */
 const SELF_SYNC_FLUSH_MS = 60;
 
 /**
- * Coalescing window (ms) for live DM conversation-index editions. Each piece
- * is merged at most once per window, at its newest version; an account whose
- * installations republish in a loop otherwise costs a verify, a store write
- * and a decrypt per edition.
+ * Coalescing window (ms) for live DM index editions, merged once per piece at
+ * its newest version; installations republishing in a loop are otherwise costly.
  */
 const DM_INDEX_MERGE_MS = 10_000;
 
-/**
- * Distinct index pieces held per window. Above an account's real piece count
- * (8 per installation), so it bounds a flood of invented pieces without ever
- * refusing a real one.
- */
+/** Above the real piece count (8 per installation); bounds a flood of invented pieces. */
 const DM_INDEX_MERGE_MAX_PIECES = 512;
 
-/**
- * How long the app must have been backgrounded before the standing self-state
- * REQ is torn down and rebuilt on return. An alt-tab missed nothing and isn't
- * worth a resubscribe; a phone that spent the night asleep — with a socket that
- * may be half-open, which no reconnect ever fires for — missed everything.
- */
+/** Background time before the self-state REQ is rebuilt on return (half-open sockets never reconnect). */
 const SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS = 30_000;
 
-/** First value of a `d` tag on an event, if any. */
 function dTagOf(event: NostrEvent): string | undefined {
   for (const t of event.tags) if (t[0] === "d") return t[1];
   return undefined;
 }
 
 /**
- * The self-state sync. One component owns everything about the LOGGED-IN USER'S
- * OWN state — the replaceable/addressable events that describe who they are and
- * what they've joined — keeping it synced across devices in both directions.
- * (Its sibling {@link ../wire/WireSync} owns CONVERSATION-timeline sync.)
+ * Self-state sync for the logged-in user's own replaceable/addressable events,
+ * both directions across devices. ({@link ../wire/WireSync} owns timelines.)
  *
- * Two layers:
- *
- * A. Transport / freshness (the standing subscription). A single long-lived REQ
- *    `{ authors:[me], kinds:[…] }` (plus scoped filters for Armada's
- *    addressable kind-30078 documents) streams every new version of the user's
- *    own lists: follow, mute, the NIP-65 pointer (10002), NIP-29
- *    servers/channels (10009), Concord vaults, DM/Blossom relay lists, and
- *    Armada's NIP-78 settings. Events land
- *    in the `armada-events` cache first (the NostrBatcher mirrors `.req()`
- *    output), then the owning hook's query key is invalidated so it re-reads and
- *    reconciles through its OWN merge / decrypt-failed guards. This is what makes
- *    a join/leave/add on another device reach this one in real time — the
- *    community rail no longer waits for a remount or a staleTime lapse.
- *
- * B. Application (this data → runtime state). Adapted from Ditto's NostrSync:
- *    1. Armada's encrypted settings documents (30078, `d=${APP_ID}/…`) ↔
- *       AppConfig, one {@link useConfigDocSync} per document that mirrors
- *       config. Both directions live there, including the debounced publish of
- *       local edits; see `docs/settings-documents.md`.
- *    1a. The quick-reaction frequency table ↔ its own document.
- *    (There is no 1b. It used to hydrate the 10009 `r` tags into an
- *        `addedRelays` config cache; the rail now reads that list directly.
- *        Read-state hydration is likewise gone from here — it moved into
- *        ReadStateProvider, which owns the local map.)
- *    1c. Blossom media server list (10063) → config.
- *    1e. NIP-65 relay-list changes (10002) → config and a restarted self-state
- *        stream on the newly declared write relays.
- *    2. Interop: adopt the user's Ditto active profile theme (16767) if they've
- *       never picked a theme in Armada.
- *
- * Renders nothing.
+ * A. A standing REQ `{ authors:[me], kinds:[…] }` (plus scoped 30078 filters)
+ *    streams new versions into the cache, then invalidates the owning hook's
+ *    query so it reconciles through its own merge / decrypt guards.
+ * B. Application, adapted from Ditto's NostrSync:
+ *    1. Encrypted settings docs (30078, `d=${APP_ID}/…`) ↔ AppConfig via
+ *       {@link useConfigDocSync}; see `docs/settings-documents.md`.
+ *    1a. Quick-reaction frequency table ↔ its own document.
+ *    1c. Blossom server list (10063) → config.
+ *    1e. NIP-65 (10002) → config, restarting the stream on new write relays.
+ *    2. Adopt the Ditto profile theme (16767) if none picked in Armada.
  */
 export function NostrSync() {
-  // Boot-gated: everything here is network catch-up (settings, lists, relay
-  // discovery) that used to fan out the moment the providers mounted and
-  // compete with the first paint's local reads. Starting after the gate opens
-  // loses nothing — every fetch here is a full read, not a delta.
+  // Boot-gated so network catch-up doesn't compete with first paint. Every fetch is a full read.
   const bootGateOpen = useBootGateOpen();
   return bootGateOpen ? <NostrSyncInner /> : null;
 }
@@ -153,9 +110,7 @@ function NostrSyncInner() {
   const { update: updateReactions } = reactionsDoc;
   const eventStore = useEventStore();
 
-  // ─── 1. Settings documents ↔ AppConfig (both directions) ──────────────
-  // One instance per document; each owns its own applied-id guard, publish
-  // baseline and debounce, so these four can't race one another.
+  // One instance per document, each with its own guards, so they can't race.
   useConfigDocSync("metadata");
   useConfigDocSync("rail");
   useConfigDocSync("notifications");
@@ -171,35 +126,27 @@ function NostrSyncInner() {
   useDmConversationIndexSync();
   useRecordDmConversationIndex();
 
-  // Bumped when the app returns from a real backgrounding (not an alt-tab),
-  // rebuilding the standing subscription below.
+  // Bumped after real backgrounding (not an alt-tab) to rebuild the subscription.
   const resumeEpoch = useResumeEpoch(SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS);
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
   const blossomAppliedEvent = useRef<string | undefined>(undefined);
   const dmRelaysAppliedEvent = useRef<string | undefined>(undefined);
   const searchRelaysAppliedEvent = useRef<string | undefined>(undefined);
-  // Newest valid kind-10002 applied in this session. Unlike the ordinary echo
-  // guard, NIP-01 says the LOWER id wins when two replaceables share a second.
+  // NIP-01: the LOWER id wins when two replaceables share a second.
   const relayListSeenVersion = useRef<NostrEvent | undefined>(undefined);
-  // NIP-01 winner handled per (kind + optional d tag), across resubscribes.
   const seenSelfVersions = useRef<Map<string, SelfSyncEventVersion>>(new Map());
-  // Whether the reactions document has been read from the store, readable
-  // from a debounced callback without making every change tear down and
-  // rebuild that subscription.
+  // Ref so a debounced callback can read it without rebuilding the subscription.
   const reactionsFetched = useRef(false);
   useEffect(() => {
     reactionsFetched.current = reactionsDoc.isFetched;
   }, [reactionsDoc.isFetched]);
 
-  // Publish the current signer to the Buzz media module so Buzz-hosted images
-  // and avatars can be fetched with a signed BUD-11 GET header from any render
-  // site without each pulling `useCurrentUser`.
+  // Lets Buzz media fetch with a signed BUD-11 GET header from any render site.
   useEffect(() => {
     setBuzzMediaSigner(user?.signer);
   }, [user?.signer]);
 
-  // Reset guards when the account changes.
   useEffect(() => {
     blossomAppliedEvent.current = undefined;
     dmRelaysAppliedEvent.current = undefined;
@@ -208,10 +155,8 @@ function NostrSyncInner() {
     seenSelfVersions.current = new Map();
   }, [user?.pubkey]);
 
-  // A changed account-state destination set is the handoff point: React has
-  // committed the new map, the standing effect below will rebuild on it, and
-  // every owner gets a fresh read from those relays. Invalid/older 10002 events
-  // never change this key and therefore cannot trigger a refetch storm.
+  // A changed destination set triggers a fresh read by every owner. Invalid/older
+  // 10002s never change this key, so they can't cause a refetch storm.
   const previousSelfRelayKey = useRef(selfRelayKey);
   useEffect(() => {
     if (previousSelfRelayKey.current === selfRelayKey) return;
@@ -221,45 +166,25 @@ function NostrSyncInner() {
     }
   }, [queryClient, selfRelayKey]);
 
-  // Read by the live DM-index merge below without rebuilding the subscription.
   const signerRef = useRef(user?.signer);
   signerRef.current = user?.signer;
 
-  // ─── A. Standing self-state subscription (transport / freshness) ──────
-  // One long-lived REQ for the user's own replaceable/addressable events. Each
-  // event is mirrored into the cache by the batcher, then the owning hook's
-  // query key is invalidated so it re-reads. Echoes (a relay re-emitting the
-  // same replaceable on reconnect) are suppressed by created_at; invalidations
-  // are coalesced so an EOSE catch-up burst is one pass, not one per event.
-  //
-  // The filters carry NO `since`. They used to look back five minutes, which
-  // silently made this a live-only channel: a change published from another
-  // device an hour ago falls outside the window, so subscribing on app open
-  // never delivered it and the rail stayed stale until something else happened
-  // to refetch. The window bought nothing — every kind here is replaceable, so
-  // a relay stores exactly one version and an unbounded filter returns the same
-  // handful of events. Without it, every subscribe (and every NRelay1 reconnect
-  // replay) is a full catch-up.
+  // A. Standing self-state subscription. Echoes suppressed by created_at;
+  // invalidations coalesced. NO `since`: every kind is replaceable, so a full
+  // read is cheap, and a lookback window missed changes made while away.
   useEffect(() => {
     const pubkey = user?.pubkey;
     if (!pubkey) return;
 
-    // Self-state has an explicit ownership boundary. Falling back to the
-    // general pool when this set is empty is not harmless: the combined batch
-    // contains kind-10009, which makes pool routing fan the WHOLE request out
-    // to joined NIP-29 servers, including encrypted settings, Concord vault
-    // coordinates, and the DM/GIF topic markers. With no account-data relay
-    // configured there is nowhere appropriate to maintain a standing copy, so
-    // stay idle until app or NIP-65 self-state relays become available.
+    // No fallback to the general pool when empty: the batch contains 10009, which
+    // would fan encrypted settings and vault coordinates out to NIP-29 servers.
     const relayUrls = selfRelayKey ? selfRelayKey.split("\u0000") : [];
     if (relayUrls.length === 0) return;
 
     const controller = new AbortController();
 
-    // NIP-01 winner seen per (kind + optional d tag). Held across
-    // resubscribes (reset only on account change) so rebuilding the sub on
-    // resume re-reads the same replaceables without invalidating all owning
-    // query keys for versions we already handled.
+    // Held across resubscribes (reset on account change) so a resume doesn't
+    // re-invalidate already-handled versions.
     const seen = seenSelfVersions.current;
 
     let pendingKeys = new Map<string, readonly string[]>();
@@ -272,13 +197,9 @@ function NostrSyncInner() {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
     };
-    // Live DM-index editions: only the newest version of each piece in a
-    // window is stored and merged; the versions it replaced are dropped
-    // unread. The index is an add-only union and every installation
-    // republishes its own pieces, so a skipped intermediate version is at most
-    // a delay until the next full pull. A version is verified when it contests
-    // another (so a forged one can neither displace nor outlast the real one;
-    // see stageNewestPerCoordinate) and otherwise at the flush.
+    // Live DM-index editions: only the newest per piece per window is stored and
+    // merged (add-only union, so skipping intermediates just delays). Verified
+    // when contested (see stageNewestPerCoordinate), otherwise at flush.
     let pendingIndex = new Map<string, NostrEvent>();
     let indexTimer: ReturnType<typeof setTimeout> | undefined;
     const flushIndexMerge = () => {
@@ -301,7 +222,6 @@ function NostrSyncInner() {
     };
     const scheduleIndexMerge = (event: NostrEvent, dTag: string) => {
       const coordinate = `${event.kind}:${dTag}`;
-      // Already superseded by what this stream admitted: skip the verify too.
       if (!isNewerSelfSyncVersion(seen.get(coordinate), event)) return;
       if (!stageNewestPerCoordinate(pendingIndex, coordinate, event, DM_INDEX_MERGE_MAX_PIECES, verifyEventOnce)) {
         return;
@@ -316,16 +236,10 @@ function NostrSyncInner() {
     };
 
     const onEvent = (event: NostrEvent) => {
-      // A relay can violate our author filter. Never let another account's
-      // higher timestamp poison this account's per-coordinate echo guard.
+      // Relays can violate the author filter; don't poison the echo guard.
       if (event.pubkey !== pubkey) return;
-      // A DM conversation-index edition is merged ON ITS OWN rather than by
-      // re-running the full pull, and verified only if it is still the newest
-      // version of its piece when its window closes. The index is an add-only
-      // union, so one newer edition is all there is to learn; the pull
-      // downloads every installation's editions from every self-state relay —
-      // ~128 events a relay on an account with many installs — and one arrived
-      // for every edition another device published.
+      // Merge a DM index edition on its own rather than re-running the full pull
+      // (~128 events per relay on many-install accounts).
       if (
         event.kind === KIND_APP_SPECIFIC
         && selfSyncTopicOf(event.tags) === T_ARMADA_DM_CONVERSATIONS
@@ -337,8 +251,7 @@ function NostrSyncInner() {
       if (!verifyEventOnce(event)) return;
       if (event.kind === KIND_RELAY_LIST) {
         const previous = relayListSeenVersion.current;
-        // A relay can violate our filter. This verifies the signature/kind,
-        // rejects an empty map, and applies NIP-01's timestamp/lower-id order.
+        // Verifies sig/kind, rejects an empty map, applies NIP-01 timestamp/lower-id order.
         const update = newerRelayListUpdate(
           event,
           previous?.pubkey === pubkey ? previous : undefined,
@@ -346,9 +259,7 @@ function NostrSyncInner() {
         if (!update) return;
         const { event: candidate, relays } = update;
 
-        // Compare against the persisted winning id too. Legacy metadata has
-        // only a timestamp, so it accepts one equal-second winner and stamps
-        // the id; subsequent sessions retain NIP-01's lower-id result.
+        // Legacy metadata has only a timestamp: accept one equal-second winner and stamp its id.
         const sameOwner = config.relayMetadata.pubkey === pubkey;
         if (sameOwner && !relayListIsNewerThanMetadata(
           candidate,
@@ -372,8 +283,7 @@ function NostrSyncInner() {
               pubkey,
             },
           };
-          // Sync-driven pointer hydration must not flip `useUserRelays` or
-          // republish an encrypted config document.
+          // Must not flip `useUserRelays` or republish an encrypted config document.
           markConfigSynced(next);
           return next;
         });
@@ -381,9 +291,7 @@ function NostrSyncInner() {
         return;
       }
 
-      // Addressable self-kinds dedup per coordinate: the Community List is one
-      // event per FRAGMENT, and keying the echo-guard by kind alone would drop
-      // fragment 1 as an "echo" of a newer fragment 0.
+      // Dedup per coordinate: the Community List is one event per fragment.
       const dTag =
         event.kind === KIND_APP_SPECIFIC || event.kind === KIND_COMMUNITY_LIST_FRAG
           ? dTagOf(event)
@@ -393,17 +301,12 @@ function NostrSyncInner() {
 
       if (!admitSelfSyncEvent(seen, event, dTag)) return;
 
-      // Write it to ArmadaDB, and only THEN tell the readers. This stream is
-      // opened with the batcher's write-through mirror off, so this is the
-      // only write: one per admitted version, not one per version per relay
-      // — and the settings document is read from the store, so "invalidated
-      // but not yet written" would be a re-read of the version just
-      // superseded.
+      // Store first, THEN invalidate: this stream has the batcher mirror off, and
+      // readers read the settings doc from the store.
       void eventStore
         .then((store) => store.event(event))
         .catch(() => undefined)
         .finally(() => {
-          // Stored, but no query watches it.
           if (keys.length === 0) return;
           if (!controller.signal.aborted) scheduleInvalidate(keys);
         });
@@ -432,8 +335,7 @@ function NostrSyncInner() {
           if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
         }
       } catch {
-        // Subscription ended (abort / relay drop). NRelay1 reconnects
-        // transparently; an account change re-runs this effect.
+        // Subscription ended; NRelay1 reconnects, account change re-runs this.
       }
     })();
 
@@ -442,15 +344,8 @@ function NostrSyncInner() {
       if (flushTimer !== undefined) clearTimeout(flushTimer);
       if (indexTimer !== undefined) clearTimeout(indexTimer);
     };
-    // `resumeEpoch` rebuilds the subscription after a real backgrounding. A
-    // socket that died while the app was away usually reconnects and replays
-    // stored subs on its own, but a HALF-open one — the OS dropped the
-    // connection without telling the WebView — never fires a reconnect, and the
-    // sub stays silently dead. A relay-sent CLOSED kills it just as
-    // permanently: it breaks the `for await` above and is swallowed there.
-    // Rebuilding is the only recovery for either, and with no `since` it costs
-    // a handful of replaceables. `selfRelayKey` rebuilds it when the account's
-    // relay set changes (e.g. NIP-65 adoption) so the standing REQ follows.
+    // `resumeEpoch`: half-open sockets and relay CLOSED leave the sub silently
+    // dead, so rebuild after backgrounding. `selfRelayKey` follows relay-set changes.
   }, [
     nostr,
     user?.pubkey,
@@ -463,29 +358,18 @@ function NostrSyncInner() {
     updateConfig,
   ]);
 
-  // The portable voice-server preference is synchronized in AppConfig, while
-  // the voice runtime still reads its established localStorage key. Keep that
-  // bridge current after login and whenever another device changes the value.
+  // The voice runtime reads its localStorage key; keep it in sync with AppConfig.
   useEffect(() => {
     setPreferredVoiceServer(config.preferredVoiceServer);
   }, [config.preferredVoiceServer]);
 
-  // Background notification runtimes cannot read React state or decrypt the
-  // settings document. Keep their localStorage mirror current when this device
-  // edits the categories and when another client changes them.
+  // Background notification runtimes can't read React state; mirror to localStorage.
   useEffect(() => {
     if (user?.pubkey) savePushPrefs(config.pushPrefs, user.pubkey);
   }, [config.pushPrefs, user?.pubkey]);
 
-  // (Read-state hydration lives in ReadStateProvider, which owns the local map
-  // and so can order it against its own debounced flush.)
-
-  // ─── 1a. Quick-reaction frequency table ↔ its own document ────────────
-  // Merge-hydrate (max count / most recent use per emoji) so the quick row on
-  // a new device starts from the emoji the user actually reaches for. Safe to
-  // run on every change: the merge is a no-op write when nothing moved, and —
-  // as with the read state above — commutative, so the legacy copy in metadata
-  // is simply folded in as a second source.
+  // 1a. Merge-hydrate (max count / latest use per emoji); commutative, so the
+  // legacy copy in metadata is folded in too.
   useEffect(() => {
     if (!automaticSettingsSync || !user?.pubkey) return;
     if (reactionsDoc.doc?.frequentReactions) {
@@ -501,9 +385,7 @@ function NostrSyncInner() {
     metadata?.frequentReactions,
   ]);
 
-  // …and push the other way, debounced, on a user-initiated reaction only
-  // (`subscribeFrequentReactions` never fires for the hydrate above, so two
-  // devices can't ping-pong the table between them).
+  // Push only on user-initiated reactions, so devices can't ping-pong the table.
   useEffect(() => {
     const pubkey = user?.pubkey;
     if (!automaticSettingsSync || !pubkey || !hasNip44Support) return;
@@ -513,12 +395,7 @@ function NostrSyncInner() {
       if (changed !== pubkey) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        // `update` merges the patch over the document last read from the
-        // store. Publishing before one has been read would be merging over
-        // `{}` — harmless here, since this document has exactly one field and
-        // we are writing all of it, but the table itself would be replaced by
-        // whatever this device happens to hold rather than merged with what
-        // the others have. Waiting for the read costs one debounce window.
+        // Wait for the store read so we merge with other devices' table instead of replacing it.
         if (!reactionsFetched.current) return;
         updateReactions({ frequentReactions: getFrequentReactions(pubkey) }).catch((err) =>
           console.warn("Frequent-reaction sync failed:", err),
@@ -532,24 +409,8 @@ function NostrSyncInner() {
     };
   }, [automaticSettingsSync, user?.pubkey, hasNip44Support, updateReactions]);
 
-  // NOTE: there is no longer a "1b" section hydrating the kind 10009 server
-  // list into a local config cache. That cache (`addedRelays`) is gone: the
-  // rail reads the 10009 list directly, via its own folded offline snapshot.
-  // The hydration had to be a UNION — a transient empty/failed-decrypt read
-  // must never wipe the rail — and a union can only ever ADD, so every stale
-  // relay copy re-added servers the user had just removed. The tombstone
-  // machinery that vetoed those re-adds is gone with it.
-
-  // ─── 1c. Blossom server list (kind 10063 `server` tags) → config ──────
-  // The 10063 event is the cross-device source of truth for the user's
-  // Blossom media servers (BUD-03); `config.blossomServerMetadata` is the
-  // fast/offline cache. Apply only when the event is newer than what we hold
-  // (`updatedAt` is the created_at of the last list we synced). A signed empty
-  // event intentionally clears the list; a missing/failed read has no event
-  // and therefore never wipes a good local value.
-  // Mirrors Ditto's NostrSync 10063 hydration. The owning query is invalidated
-  // by the standing self-state subscription, so later cross-device edits apply
-  // without a reload too.
+  // 1c. 10063 (BUD-03) is the source of truth; apply only when newer than
+  // `updatedAt`. A signed empty event clears; a failed read never wipes.
   useEffect(() => {
     const event = blossomServerList.event;
     if (!user?.pubkey || !event || blossomAppliedEvent.current === event.id) return;
@@ -569,10 +430,7 @@ function NostrSyncInner() {
     });
   }, [user?.pubkey, blossomServerList.event, blossomServerList.servers, updateConfig]);
 
-  // ─── 1d. Standard search + DM relay lists → config ────────────────────
-  // A signed empty replacement is an intentional clear, unlike a missing
-  // result. The hooks expose the event separately so we can apply the former
-  // and ignore the latter without ever treating a failed read as an empty list.
+  // 1d. A signed empty replacement clears; a missing result is ignored.
   useEffect(() => {
     const event = searchRelayList.event;
     if (!user?.pubkey
@@ -604,13 +462,12 @@ function NostrSyncInner() {
     });
   }, [user?.pubkey, dmRelayList.event, dmRelayList.relays, updateConfig]);
 
-  // ─── 2. Ditto active profile theme fallback (first-time Armada users) ─
+  // 2. Ditto profile theme fallback.
   useEffect(() => {
     if (!automaticSettingsSync || !user?.pubkey) return;
     if (dittoCheckedPubkey.current === user.pubkey) return;
 
-    // Only adopt the Ditto theme if the user has no Armada theme yet: no
-    // metadata document on disk AND still on the untouched default.
+    // Only if no metadata document on disk AND still on the default theme.
     const usingDefault = config.theme === "dark" && !config.customTheme;
     if (metadata || !usingDefault) {
       dittoCheckedPubkey.current = user.pubkey;
@@ -632,9 +489,7 @@ function NostrSyncInner() {
         if (theme && !cancelled) {
           applyCustomTheme({ title: theme.title, colors: theme.colors });
         }
-      } catch {
-        // No Ditto theme / relay error — keep Armada's default.
-      }
+      } catch { /* ignore */ }
     })();
 
     return () => {

@@ -30,9 +30,7 @@ function metadataTags(patch: GroupMetadataPatch): string[][] {
   if (patch.banner !== undefined) tags.push(["banner", patch.banner]);
   if (patch.isPrivate !== undefined) {
     tags.push([patch.isPrivate ? "private" : "public"]);
-    // Buzz relays take visibility as a `visibility` tag on the 9002 (the bare
-    // NIP-29 marker tags aren't in their recognized set); NIP-29 relays
-    // ignore the extra tag.
+    // Buzz relays read visibility from a `visibility` tag; NIP-29 relays ignore it.
     tags.push(["visibility", patch.isPrivate ? "private" : "open"]);
   }
   if (patch.isClosed !== undefined) tags.push([patch.isClosed ? "closed" : "open"]);
@@ -42,10 +40,7 @@ function metadataTags(patch: GroupMetadataPatch): string[][] {
   return tags;
 }
 
-/**
- * NIP-29 moderation actions, published to the group's host relay. The relay
- * enforces whether the sender's role permits each action.
- */
+/** Published to the host relay, which enforces role permissions. */
 export function useGroupModeration(relayUrl: string, groupId: string) {
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
@@ -61,9 +56,7 @@ export function useGroupModeration(relayUrl: string, groupId: string) {
       publishEvent({
         kind: KIND_PUT_USER,
         content: "",
-        // Roles ride BOTH shapes: NIP-29 relays read them from the `p` tag's
-        // trailing slots; Buzz relays read a separate `["role", …]` tag (and
-        // ignore the p-tag extras). Each side ignores the other's shape.
+        // Roles in both shapes: NIP-29 reads `p` tag extras; Buzz reads `["role", …]`.
         tags: [
           ["h", groupId],
           ["p", pubkey, ...roles],
@@ -133,7 +126,6 @@ export function useGroupModeration(relayUrl: string, groupId: string) {
   return { putUser, removeUser, deleteEvent, editMetadata, deleteGroup, createInvite };
 }
 
-/** Create a new group (kind 9007) on a server. */
 export function useCreateGroup(relayUrl: string) {
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
@@ -143,9 +135,7 @@ export function useCreateGroup(relayUrl: string) {
       return publishEvent({
         kind: KIND_CREATE_GROUP,
         content: "",
-        // Buzz relays take the channel metadata inline on the 9007 (`name` is
-        // REQUIRED there, plus optional visibility/channel_type/about tags);
-        // plain NIP-29 relays ignore the extras and take a follow-up 9002.
+        // Buzz takes metadata inline on the 9007 (`name` REQUIRED); NIP-29 relays use a follow-up 9002.
         tags: [["h", groupId], ...(extraTags ?? [])],
         relay: relayUrl,
       });

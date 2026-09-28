@@ -3,14 +3,8 @@ import { EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
- * The cover over a spoilered attachment, Discord-style: the media underneath is
- * blurred out of recognition until the cover is clicked, and the click that
- * reveals it does nothing else — it must not also open the lightbox or start
- * the video the cover sits on.
- *
- * Rendered INSIDE the media's own box (which must be `relative`), so it takes
- * the box's exact geometry and the layout doesn't move on reveal. A span, not a
- * button, because the image it covers is usually already a button.
+ * Spoiler cover inside the media's `relative` box; the reveal click does nothing
+ * else. A span, not a button, since the covered image is usually a button.
  */
 export function MediaSpoilerCover({ onReveal, compact = false }: { onReveal: () => void; compact?: boolean }) {
   const reveal = (e: React.SyntheticEvent) => {
@@ -24,8 +18,7 @@ export function MediaSpoilerCover({ onReveal, compact = false }: { onReveal: () 
       tabIndex={0}
       aria-label="Reveal spoiler"
       onClick={reveal}
-      // Swallow the press too, so a long-press menu or a video's own
-      // pointer handling underneath never sees the gesture.
+      // Swallow the press so long-press menus and video handlers never see it.
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") reveal(e);

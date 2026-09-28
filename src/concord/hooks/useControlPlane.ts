@@ -38,22 +38,12 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 export { controlFoldKey };
 
 /**
- * Fetch the community's Control Plane. Wraps are decrypted once into the
- * opened-event store; this query reads back from it with no decrypt. A
- * persisted `since` cursor means editions already seen are never refetched.
- * `active` gates the network fetch, not the local read.
- *
- * NETWORK OWNERSHIP: this hook holds no standing sockets and runs no poll.
- * Live control editions arrive through the wire's standing `c2ctl`
- * subscription (see wire/spec.ts + wire/ingest.ts), which decrypts them into
- * the opened-event store and rings `c2ctl:<idHex>`; the seed effect below
- * re-reads on that bus. The slow catch-up for communities you haven't opened is
- * the global {@link syncControlPlane} sweep (ControlPlaneSync). The only
- * network this hook itself issues is a SINGLE on-open catch-up sweep (shared,
- * single-flight, cursor-gated via {@link sweepControl}) so navigating into a
- * community surfaces anything the live sub missed while offline. The query's
- * `queryFn` is a pure store read — it exists so react-query invalidation (e.g.
- * after publishing an edition) re-folds from the store.
+ * The community's Control Plane, read from the opened-event store (wraps are
+ * decrypted once at ingest). Holds no sockets and runs no poll: live editions
+ * arrive via the wire's `c2ctl` sub, which rings `c2ctl:<idHex>`; unopened
+ * communities catch up via {@link syncControlPlane}. The only network here is a
+ * single on-open catch-up sweep via {@link sweepControl}. `active` gates that
+ * sweep, not the local read.
  */
 interface ControlSeedEntry {
   refs: number;
@@ -61,9 +51,8 @@ interface ControlSeedEntry {
 }
 
 /**
- * One live store-seed per (queryClient, community, epochSig) — see the effect
- * in {@link useControlEvents} for why. WeakMap-keyed by the QueryClient so a
- * test's throwaway client can never share (or leak) a real one's runners.
+ * One refcounted store-seed per (queryClient, community, epochSig).
+ * WeakMap-keyed so test clients never share runners.
  */
 const controlSeedRegistries = new WeakMap<QueryClient, Map<string, ControlSeedEntry>>();
 
@@ -132,32 +121,18 @@ export function useControlEvents(community: Community | undefined, active = true
   const epochSig = community?.heldRoots.map((r) => r.epoch.toString()).join(",") ?? "";
   const queryKey = ["concord", "control", cidHex, epochSig] as const;
 
-  // Seed from the opened-event cache (paints rail icons without network).
-  // Re-seeds on the `c2ctl:<id>` wire bus when the wire's live subscription (or
-  // the background sweep) stores new editions — a rail button with active=false
-  // can't be reached by invalidation, so the bus is its only wake-up.
-  //
-  // Refcounted, ONE runner per (queryClient, community, epochSig): ~36 call
-  // sites reach this hook through useControlFold/useChannels, so opening a
-  // community mounts ~20 copies — and every copy used to run its own full
-  // queryPlane("control") read on mount and again on every bus ring (a
-  // measured boot ran the identical 86-edition read 22 times in 20ms). All
-  // copies write the same react-query key, so the first mount does the work
-  // and the rest share it; the last unmount tears the listener down.
+  // Seed from the opened-event cache and re-seed on the `c2ctl:<id>` bus (the only
+  // wake-up for an inactive rail button). Refcounted to ONE runner per key: ~20
+  // copies of this hook mount per open community, and each used to re-read the plane.
   useEffect(() => {
     if (!community) return;
     return acquireControlSeed(queryClient, community, epochSig, queryKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cidHex, epochSig, queryClient]);
 
-  // On-open catch-up: when the community becomes active (you navigate into it),
-  // run ONE control sweep so an edition published while the live wire sub was
-  // down — or since the last 5-min background sweep — surfaces promptly without
-  // waiting for the next global tick. This is the shared, single-flight,
-  // cursor-gated sweepControl (it coalesces with the background sweep and never
-  // re-pays history), NOT a standing socket. Runs once per community-open;
-  // liveness thereafter is the wire's `c2ctl` subscription. Freshly-opened
-  // events land in the store and wake the seed effect via `c2ctl:<id>`.
+  // On-open catch-up: ONE shared, single-flight, cursor-gated sweep when the
+  // community becomes active, so editions missed while the live sub was down
+  // surface promptly. Results wake the seed effect via `c2ctl:<id>`.
   useEffect(() => {
     if (!community || !active) return;
     let cancelled = false;
@@ -167,7 +142,6 @@ export function useControlEvents(community: Community | undefined, active = true
         queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], fresh));
       },
     }).catch(() => {
-      // Best-effort — the background sweep and live wire sub cover any miss.
     });
     return () => {
       cancelled = true;
@@ -177,13 +151,10 @@ export function useControlEvents(community: Community | undefined, active = true
 
   return useQuery<OpenedEvent[]>({
     queryKey,
-    // A pure store read (the network is the sweep effect above, not this).
     ...STORE_READ,
     enabled: Boolean(community) && active,
-    // Push-updated (the seed effect, the sweep's onFresh merge, and
-    // invalidateControl after a publish): a staleness refetch only re-reads
-    // the same rows, while a finite staleTime scheduled a stale timer per
-    // mounted observer (~20 per open community, one more per rail button).
+    // Push-updated, so staleness refetches would only re-read the same rows (and
+    // schedule a timer per mounted observer).
     staleTime: Infinity,
     queryFn: async () => {
       const stored = await queryPlane(community!.idHex, "control");
@@ -195,15 +166,9 @@ export function useControlEvents(community: Community | undefined, active = true
 
 /**
  * The rumor ids that arrived under the community's CURRENT control stream.
- *
- * The one thing about a control edition that is NOT in the edition: a
- * compaction re-wraps editions VERBATIM under the new epoch's address (CORD-06
- * §3), so the rumor — and its id — is byte-identical whether or not it is in
- * the snapshot, and only the wrap it arrived in ever knew. `writeOpened`
- * records it at ingest; this reads it back.
- *
- * Only a Refounded community has one. Refetched on the same `c2ctl:<id>` bus
- * that re-seeds the editions, so a re-wrap arriving live anchors the next fold.
+ * Compaction re-wraps editions verbatim under the new epoch (CORD-06 §3), so
+ * only the wrap knows; `writeOpened` records it at ingest. Refounded
+ * communities only; refetched on the `c2ctl:<id>` bus.
  */
 function useControlSnapshot(community: Community | undefined, active: boolean) {
   const queryClient = useQueryClient();
@@ -225,11 +190,9 @@ function useControlSnapshot(community: Community | undefined, active: boolean) {
 
   return useQuery<string[]>({
     queryKey,
-    // A KV read. It gates the fold for a Refounded community, so a paused or
-    // backing-off one is an empty channel list.
+    // Gates the fold for a Refounded community.
     ...STORE_READ,
     enabled: refounded && active && Boolean(cidHex),
-    // Push-invalidated on the `c2ctl:<id>` wire scope (effect above).
     staleTime: Infinity,
     queryFn: async () => [...((await readControlSnapshot(cidHex!, curPk)) ?? [])],
   });
@@ -237,26 +200,13 @@ function useControlSnapshot(community: Community | undefined, active: boolean) {
 
 /**
  * Per-entity high-water floors (CORD-04 §1), one map per (community, epoch).
- *
- * Module-level and SHARED by every mounted fold instance, deliberately. The
- * floor is "the highest version we've ever accepted", so a per-instance ref
- * was both weaker (a fresh mount started at zero and forgot the session's
- * floors) and wasteful: ~20 fold hooks mount per open community, and each
- * one's different floor produced a different `foldControlState` memo key —
- * the identical fold was recomputed and re-logged once per instance per wave.
- * One shared map gives every instance the same floors, the same memo key, and
- * therefore one fold. Keyed by epoch so adopting a rekey still re-baselines
- * (a floor from a superseded founding must not out-anchor the new epoch's
- * compacted snapshot); the within-epoch withholding defense is untouched.
+ * Shared across all fold instances so they agree on floors and hence on one
+ * memoized fold. Keyed by epoch so a rekey re-baselines against the new
+ * compacted snapshot.
  */
 const foldFloors = new Map<string, Map<string, EntityHead>>();
 
-/**
- * The last fold per opened-events array (the react-query data all instances
- * share), so instances 2..N — and re-runs over unchanged inputs — return the
- * shared result without re-deriving editions, re-building the memo key
- * (itself O(n log n) string work per call) or re-logging the fold line.
- */
+/** The last fold per shared opened-events array, so instances 2..N reuse it. */
 const foldByInputs = new WeakMap<
   OpenedEvent[],
   { idHex: string; rootEpoch: bigint; snapIds: string[] | undefined; folded: FoldedControl }
@@ -272,7 +222,6 @@ export function useControlFold(community: Community | undefined, active = true) 
   const refounded = Boolean(community && community.rootEpoch > 0n);
   const snapIds = useControlSnapshot(community, active).data;
 
-  // The shared floor for this (community, epoch) — see `foldFloors`.
   const floorKey = community ? `${community.idHex}@${community.rootEpoch}` : "";
   let floorHeads = foldFloors.get(floorKey);
   if (!floorHeads) {
@@ -284,22 +233,14 @@ export function useControlFold(community: Community | undefined, active = true) 
     community ? controlFoldKey(community.idHex) : null,
     () => {
       if (!community || !events) return undefined;
-      // A Refounded community anchors on its compaction snapshot, so wait for
-      // it rather than folding once by old-root contiguity and again correctly
-      // — the two disagree about which editions outrank which.
+      // A Refounded community anchors on its snapshot; wait for it rather than
+      // folding twice with disagreeing outranking.
       if (refounded && !snapIds) return undefined;
-      // Folds whatever has arrived, on purpose. The control plane is
-      // procedural: members process editions as they come and converge, and a
-      // member who is one sweep behind reads and writes fine — they just don't
-      // have the newest metadata, roles and bans yet. Refusing to fold until
-      // the plane is "proven complete" would hand any member a lockup switch,
-      // since anyone can inflate the plane past any budget. The defenses that
-      // matter are local and already here: monotonic per-entity floors (a
-      // flood can't downgrade an entity we've advanced past) and `incomplete`
-      // (floored entities the served set can't account for), which is what the
-      // Refounding path aborts on.
-      // Another instance (or a re-run over unchanged inputs) already folded
-      // this exact events array: share its result, work and log line included.
+      // Fold whatever has arrived: the plane is procedural, and waiting for "proven
+      // complete" would be a lockup switch anyone could trigger by inflating it. The
+      // defenses are monotonic per-entity floors and `incomplete` (which the
+      // Refounding path aborts on).
+      // Share another instance's fold of this exact events array.
       const shared = foldByInputs.get(events);
       if (
         shared &&
@@ -310,22 +251,17 @@ export function useControlFold(community: Community | undefined, active = true) 
         return shared.folded;
       }
       const editions = openControlEditions(events);
-      // Once the community has Refounded, editions under the CURRENT epoch's
-      // control group fold by version-anchored bootstrap (the compaction
-      // snapshot outranks old-root fragments — see headCandidates). A
-      // never-rotated community keeps full chain-contiguity semantics.
+      // After a Refounding, current-epoch editions fold by version-anchored bootstrap
+      // (see headCandidates); never-rotated communities keep chain contiguity.
       const snapshotIds = refounded && snapIds ? new Set(snapIds) : undefined;
       const folded = foldControlState(editions, community.id, community.owner, floorHeads, snapshotIds);
-      // Raise the high-water floor from this fold's accepted heads (upward only).
       for (const [eid, head] of folded.heads) {
         const prior = floorHeads.get(eid);
         if (!prior || head.version > prior.version) floorHeads.set(eid, head);
       }
       foldByInputs.set(events, { idHex: community.idHex, rootEpoch: community.rootEpoch, snapIds, folded });
-      // A floored entity the served editions can't account for means an
-      // edition BELOW the sweep's delta floor never arrived here — only a
-      // whole-plane read can heal that, so drop the session floors and let
-      // the next sweep (on-open, or the background tick) re-ask full.
+      // A floored entity the served editions can't account for means an edition below
+      // the delta floor never arrived; drop floors so the next sweep re-asks in full.
       if (folded.incomplete.length > 0) markControlPlaneStale(community);
       logSync(
         "fold",
@@ -341,10 +277,8 @@ export function useControlFold(community: Community | undefined, active = true) 
 }
 
 /**
- * Per-community revision of the decrypted control plane, bumped by the wire's
- * `c2ctl:<id>` bus. {@link readLivePause} re-folds only the community whose
- * revision moved, so a burst of editions in ONE community no longer re-reads
- * and re-folds every other community's plane.
+ * Per-community control-plane revision, bumped by the `c2ctl:<id>` bus, so
+ * {@link readLivePause} re-folds only communities whose plane changed.
  */
 const controlPlaneRev = new Map<string, number>();
 /** The last pause head folded per community, with the revision it came from. */
@@ -364,30 +298,17 @@ function wirePauseBus(): void {
 }
 
 /**
- * The CURRENT pause (CORD-04 §8) for a community the user may not have open.
+ * The CURRENT pause (CORD-04 §8) for a possibly-unopened community. The persisted
+ * fold may be hours stale for a background community, so this folds the store's
+ * editions directly — as {@link useControlFold} does, since this gates the chat
+ * wire and push:
  *
- * `readControlFold` is the persisted fold, and it refreshes lazily — only when
- * the community is opened — so for a BACKGROUND community it can predate the
- * pause by hours. The wire's freeze decision can't be made off a stale answer,
- * so this folds the store's control editions directly.
+ *   - anchored on the compaction snapshot for a Refounded community; without it,
+ *     fail OPEN ("not paused") — a wrongly-frozen room costs more than bandwidth;
+ *   - floored by (and RAISING) the shared per-entity high-water marks, so a stale
+ *     `paused: true` can't re-freeze the room after a lift.
  *
- * It folds them the way {@link useControlFold} does, which is the part that is
- * easy to get wrong and expensive to get wrong here, because this value gates
- * the chat wire and push:
- *
- *   - anchored on the compaction snapshot for a Refounded community, since a
- *     fold by old-root contiguity and one by snapshot disagree about which
- *     editions outrank which. Without the snapshot we return "not paused" and
- *     leave chat on the wire: a wrongly-live community costs bandwidth, a
- *     wrongly-frozen one costs the room, so this fails OPEN;
- *   - floored by the same shared per-entity high-water marks, and it RAISES
- *     them, because a background community is never folded anywhere else — so
- *     without this the pause entity would have no floor at all, and a relay
- *     serving a stale `paused: true` after the lift could re-freeze the room.
- *
- * Cached on the community's own control-plane revision, so the common case (no
- * control traffic for this community) costs a map lookup rather than a plane
- * read plus a fold.
+ * Cached on the community's control-plane revision.
  */
 export async function readLivePause(community: Community, nowSec: number): Promise<ActivePause | undefined> {
   wirePauseBus();
@@ -433,30 +354,18 @@ export function useChannels(community: Community | undefined, active = true): Ch
   return useMemo(() => (community ? channelsView(community, folded) : []), [community, folded]);
 }
 
-/**
- * Whether the community has been dissolved by its owner (terminal). Reads the
- * community-id-derived dissolved address — no key, no epoch — so every member
- * past or present resolves the same grave.
- *
- * `active` gates the network poll: the rail doesn't need each community's
- * dissolution status up-front, so it's only checked once you open the community.
- */
 /** Persisted-forever marker for a community we have seen a valid tombstone for. */
 const dissolvedKey = (idHex: string) => `concord2-dissolved:${idHex}`;
 
 /**
  * Session memo of known-dissolved communities (idHex → tombstone ms), so a
- * remount answers SYNCHRONOUSLY instead of leaving a window where the community
- * reads as alive while IndexedDB is consulted.
+ * remount answers synchronously.
  */
 const dissolvedMemo = new Map<string, number>();
 /** Communities {@link dissolvedAt} found no tombstone for, this session. */
 const aliveMemo = new Set<string>();
 
-/**
- * Record a community as dissolved, permanently. Dissolution is terminal and
- * one-way (CORD-02 §9), so this is write-once and never cleared.
- */
+/** Record a community as dissolved. Terminal and one-way (CORD-02 §9): never cleared. */
 async function rememberDissolved(idHex: string, atMs: number): Promise<void> {
   if (dissolvedMemo.get(idHex) === atMs) return;
   dissolvedMemo.set(idHex, atMs);
@@ -471,11 +380,8 @@ export function _forgetDissolvedMemoForTests(): void {
 }
 
 /**
- * Seal a community dissolved locally, right now — for the client that just
- * PUBLISHED the tombstone, so its own page flips read-only at once instead of
- * waiting for the next poll to rediscover its own act. Persists the verdict
- * (via {@link rememberDissolved}) and updates the live `useDissolved` query.
- * Terminal and one-way, like every other path to the marker (CORD-02 §9).
+ * Mark a community dissolved locally, for the client that just PUBLISHED the
+ * tombstone, so its page flips read-only at once (CORD-02 §9).
  */
 export async function markDissolvedLocally(
   queryClient: QueryClient,
@@ -494,13 +400,10 @@ interface ProbeNostr {
 }
 
 /**
- * Pending dissolved-address probes, per relay: every community's `useDissolved`
- * fires its probe in the same boot burst, and each community's dissolved
- * address is a distinct derived pubkey no batcher can merge — so a measured
- * boot paid one `kinds[1059] authors×1 limit10` REQ per (community, relay).
- * Collecting for one window and sending one multi-filter REQ per relay keeps
- * the per-address `limit` isolation while paying one socket round; results
- * demux by wrap author (the dissolved address signs its own tombstone wrap).
+ * Pending dissolved-address probes per relay. Each community's address is a
+ * distinct pubkey no batcher can merge, so a boot burst is collected into one
+ * multi-filter REQ per relay (per-address `limit` isolation kept); results demux
+ * by wrap author.
  */
 const dissolvedProbes = new Map<string, Map<string, Array<ProbeWaiter>>>();
 const dissolvedProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -511,9 +414,8 @@ interface ProbeWaiter {
 }
 
 /**
- * The wraps at `pk`'s dissolved address on `url`. Rejects when the relay did
- * not answer, so a caller can tell "no grave here" from "no answer"; callers
- * that don't care `.catch(() => [])`.
+ * The wraps at `pk`'s dissolved address on `url`. Rejects when the relay didn't
+ * answer ("no answer" ≠ "no grave").
  */
 function probeDissolved(nostr: ProbeNostr, url: string, pk: string): Promise<NostrEvent[]> {
   return new Promise((resolve, reject) => {
@@ -544,8 +446,6 @@ async function flushDissolvedProbes(nostr: ProbeNostr, url: string): Promise<voi
       { signal: AbortSignal.timeout(8000) },
     );
   } catch (error) {
-    // A failed round rejects every waiter: "this relay didn't answer", which
-    // each caller either treats as empty or refuses to remember as a verdict.
     for (const waiters of byPk.values()) for (const { reject } of waiters) reject(error);
     return;
   }
@@ -556,18 +456,14 @@ async function flushDissolvedProbes(nostr: ProbeNostr, url: string): Promise<voi
 }
 
 /**
- * The tombstone ms for a community we have EVER seen dissolved, or undefined.
- * Local only — no network, no re-derivation. Used by the wire to drop a dead
- * community's subscriptions and by the send path to refuse a write.
+ * The tombstone ms for a community we have EVER seen dissolved. Local only; used
+ * by the wire to drop dead subscriptions and by the send path to refuse writes.
  */
 export async function dissolvedAt(idHex: string): Promise<number | undefined> {
   const memo = dissolvedMemo.get(idHex);
   if (memo !== undefined) return memo;
-  // "Alive" is remembered too. Nearly every community is alive, and the wire,
-  // the rail and every mounted fold hook ask on each switch — a store round
-  // trip apiece (~37 per community switch, measured on Android). The only
-  // writer is the tombstone path above, which sets the memo itself, so a
-  // remembered miss can't go stale in this session.
+  // "Alive" is memoized too (~37 store round-trips per community switch on
+  // Android otherwise); only the tombstone path writes, and it updates the memo.
   if (aliveMemo.has(idHex)) return undefined;
   const stored = await readFolded<number>(dissolvedKey(idHex));
   if (typeof stored === "number") {
@@ -579,35 +475,21 @@ export async function dissolvedAt(idHex: string): Promise<number | undefined> {
 }
 
 /**
- * The tombstone ms for a community known only by its public identity — the
- * self-certified `community_id`, its owner and its relays, which is all an
- * invite bundle hands a NON-member. The dissolved address derives from the
- * community_id alone (CORD-02 §9), so no keys are needed to find the grave;
- * the owner's seal signature and the `eid` binding are what make it one.
+ * The tombstone ms for a community known only by its public identity (id, owner,
+ * relays — what an invite bundle gives a non-member): the dissolved address
+ * derives from the id alone (CORD-02 §9); the owner's seal and `eid` binding
+ * authenticate it. Used by Discover and the join chain; writes no plane tenant.
  *
- * Used where there is no `Community` yet: the Discover card (a dissolved
- * community is not a listing) and the join chain (a dissolved community is not
- * joinable). A found grave is remembered like any other, so it stays terminal.
- * Nothing opened here is written to a plane tenant — a non-member has none.
- * A failed round answers "not known dissolved", never "alive for good".
- *
- * Answers as soon as ANY relay hands over a valid grave, and otherwise within
- * `budgetMs` rather than after the slowest relay's own timeout — an invite
- * preview waits on this. A grave that arrives past the budget is still
- * remembered, so the next ask (the join that follows a preview) sees it.
- * A "not found" answer is reused for {@link GRAVE_PROBE_REUSE_MS}, so a
- * preview and the join it leads to pay one probe between them — but only for
- * the same owner and relay set (a probe with the wrong owner or dead relays
- * says nothing about the real one), and only when at least one relay actually
- * answered: "no relay reached" is not "no grave".
+ * Answers on the first valid grave, else within `budgetMs`. A late grave is
+ * still remembered. A "not found" is reused for {@link GRAVE_PROBE_REUSE_MS},
+ * only for the same owner + relay set and only if some relay answered.
  */
 export async function probeCommunityDissolved(
   nostr: ProbeNostr,
   target: { communityId: string; owner: string; relays: string[] },
   opts?: { budgetMs?: number },
 ): Promise<number | undefined> {
-  // Case-folded: the id keys the persisted marker, which every other path
-  // writes from a lowercase `idHex`.
+  // Lowercased: the persisted marker is keyed by lowercase `idHex`.
   const communityId = target.communityId.toLowerCase();
   const owner = target.owner.toLowerCase();
   const known = await dissolvedAt(communityId);
@@ -625,7 +507,7 @@ export async function probeCommunityDissolved(
     at: Date.now(),
     result: raceForGrave(nostr, communityId, owner, id, target.relays, opts?.budgetMs ?? GRAVE_PROBE_BUDGET_MS).then(
       ({ at, answered }) => {
-        // Shared while in flight; kept past it only as a verdict some relay gave.
+        // Kept past in-flight only as a verdict some relay gave.
         if (at === undefined && !answered && recentGraveProbes.get(probeKey) === entry) {
           recentGraveProbes.delete(probeKey);
         }
@@ -684,8 +566,7 @@ function raceForGrave(
               continue;
             }
             if (!isDissolvedOpened(opened, owner, id)) continue;
-            // Remembered even past the budget: the grave is terminal whoever
-            // was still waiting for it.
+            // Remembered even past the budget: the grave is terminal.
             await rememberDissolved(communityId, opened.ms).catch(() => undefined);
             finish(opened.ms);
             return;
@@ -700,17 +581,10 @@ function raceForGrave(
 }
 
 /**
- * The tombstone's own ms, or `null` while the community lives.
- *
- * STICKY. Death is one-way (CORD-02 §9), so once a valid tombstone has been
- * seen it is persisted and answered from local state forever — a relay outage,
- * an evicted store, or a failed round MUST NOT resurrect a dead community.
- * Before this was persistent, the network branch's `.catch(() => [])` meant one
- * bad round answered "alive", which unfroze the composer.
- *
- * A timestamp rather than a boolean: both planes replay from history, so a
- * caller judging a past action needs to know whether it predates the grave
- * (honored) or follows it (refused). Truthiness still reads as "dissolved".
+ * The tombstone's own ms, or `null` while the community lives. STICKY: death is
+ * one-way (CORD-02 §9), so once seen it's persisted and a failed round can
+ * never resurrect it. A timestamp so callers can judge whether a past action
+ * predates the grave. `active` gates the network poll.
  */
 export function useDissolved(community: Community | undefined, active = true) {
   const { nostr } = useNostr();
@@ -720,23 +594,19 @@ export function useDissolved(community: Community | undefined, active = true) {
     queryKey: ["concord", "dissolved", idHex],
     enabled: Boolean(community) && active,
     staleTime: 30_000,
-    // Synchronous for a community already known dead this session, so the
-    // composer is never briefly live on a remount.
+    // Synchronous for a known-dead community, so the composer never flashes live.
     initialData: idHex && dissolvedMemo.has(idHex) ? dissolvedMemo.get(idHex)! : undefined,
-    // A dissolution is rare and terminal; once known this never touches the
-    // network again. A slow, foreground-only poll is plenty to notice one.
+    // Rare and terminal: a slow, foreground-only poll suffices.
     refetchInterval: active ? 5 * 60_000 : false,
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      // Known dead → done. Never re-derived, so nothing can undo it.
+      // Known dead → done; never re-derived.
       const known = await dissolvedAt(community!.idHex);
       if (known !== undefined) return known;
 
       const group = dissolvedGroupKey(community!.id);
-      // The grave marker is a control-kind rumor, so it reads back with the
-      // rest of the plane; `isDissolvedOpened` is what identifies it, and it
-      // authenticates on the SEAL SIGNER being the owner — which the address it
-      // arrived at never established anyway.
+      // The grave is a control-kind rumor; `isDissolvedOpened` authenticates it by the
+      // SEAL SIGNER being the owner.
       const cached = await queryPlane(community!.idHex, "control");
       const cachedGrave = cached.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
       if (cachedGrave) {
@@ -744,8 +614,7 @@ export function useDissolved(community: Community | undefined, active = true) {
         return cachedGrave.ms;
       }
 
-      // Through the shared per-relay collector: one multi-filter REQ per relay
-      // per burst instead of one REQ per community (see `probeDissolved`).
+      // Via the per-relay collector (see `probeDissolved`).
       const results = await Promise.all(
         community!.relays.map((url) =>
           probeDissolved(nostr, url, group.pk).catch(() => [] as NostrEvent[]),
@@ -765,13 +634,10 @@ export function useDissolved(community: Community | undefined, active = true) {
   });
 }
 
-// ── Publishing ───────────────────────────────────────────────────────────────
-
 /**
  * Sign (plaintext seal) + wrap + broadcast one edition to the community relays.
- * `opts.relays` overrides the fan-out set — a relay-list edition must reach
- * BOTH the old and the new relays (the fold that announces a move lives on the
- * relays being moved away from).
+ * `opts.relays` overrides the fan-out — a relay-list edition must reach BOTH
+ * old and new relays.
  */
 /** Sentinel so the store-read try/catch can't swallow the gate's own refusal. */
 class DissolvedError extends Error {}
@@ -783,18 +649,10 @@ export async function publishEdition(
   rumor: NostrRumor,
   opts?: { relays?: string[] },
 ): Promise<void> {
-  // A dissolved community honors no new authority action (CORD-02 §9: the seal
-  // is one-way and nothing new is honored). Gated HERE rather than at each of
-  // the fifteen call sites — one place that cannot be forgotten when a new
-  // edition kind is added. Reads the local store only, so it costs no network,
-  // and fails OPEN on a store error: an unreadable cache must not block a
-  // legitimate publish (matching Vector's `get_community_dissolved(…)
-  // .unwrap_or(false)`).
-  //
-  // Both local records of a grave count: the persisted marker is the only one
-  // the dissolving owner's own client has (`markDissolvedLocally` writes it;
-  // its own tombstone is never swept back into the control plane first), and
-  // the stored plane is the one a member who folded the grave has.
+  // A dissolved community honors no new authority action (CORD-02 §9); gated here,
+  // once, for every edition kind. Local store only; fails OPEN on a store error
+  // (matching Vector). Both the persisted marker (the dissolving owner's only
+  // record) and the stored plane count.
   try {
     if ((await dissolvedAt(community.idHex)) !== undefined) throw new DissolvedError();
     const cached = await queryPlane(community.idHex, "control");
@@ -804,20 +662,16 @@ export async function publishEdition(
   } catch (e) {
     if (e instanceof DissolvedError) throw new Error("This community has been dissolved; it accepts no changes.");
   }
-  // The WRITE key: on a split epoch its signing secret is the staff-held
-  // control_root (CORD-02 §2) — a member without it fails here with a
-  // readable error instead of minting a wrap every reader and relay drops.
+  // The WRITE key: on a split epoch it's the staff-held control_root (CORD-02 §2);
+  // non-staff fail here with a readable error.
   const control = currentControlWriteGroup(community);
   const wrap = await sealEdition(rumor, control, signer);
   const urls = opts?.relays ?? community.relays;
   const attempt = () =>
     Promise.allSettled(urls.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })));
   let results = await attempt();
-  // An auth-gating relay refuses a stream-authored wrap until the socket's
-  // NIP-42 wave re-authenticates the control key ("restricted: you cannot
-  // publish events on behalf of others") — a race every socket (re)open
-  // invites. One paced retry outlives the wave; a genuine policy refusal
-  // just fails again and surfaces below.
+  // Auth-gating relays refuse stream-authored wraps until the NIP-42 wave
+  // re-authenticates the control key; one paced retry outlives it.
   if (
     !results.some((r) => r.status === "fulfilled") &&
     results.some((r) => r.status === "rejected" && /restricted|auth/i.test(String(r.reason instanceof Error ? r.reason.message : r.reason)))
@@ -836,11 +690,8 @@ export async function publishEdition(
     ];
     throw new Error(`No relay accepted the change${reasons.length ? `: ${reasons.slice(0, 2).join("; ")}` : "."}`);
   }
-  // Write our own edition to the local opened-event store immediately: the
-  // refetch after invalidation unions the store, so the publisher's fold picks
-  // the change up even if no relay echoes the wrap back (or the persisted
-  // `since` cursor would skip it). Without this, a promote can "succeed" with
-  // no visible effect until a full resync.
+  // Write our own edition to the store now, so the publisher's fold sees it even
+  // if no relay echoes it back (or the `since` cursor skips it).
   try {
     writeOpened(community.idHex, [openWrap(wrap, control)], "control", {
       refounded: community.rootEpoch > 0n,
@@ -851,9 +702,8 @@ export async function publishEdition(
 }
 
 /**
- * The authority citation an actor attaches to an action (CORD-04 §5): the
- * exact Grant edition they act under, pinned by coordinate + version + hash.
- * Absent when the owner acts — supreme needs no citation.
+ * The authority citation for an action (CORD-04 §5): the Grant edition the actor
+ * acts under, by coordinate + version + hash. Absent for the owner.
  */
 export function citationFor(
   community: Community,

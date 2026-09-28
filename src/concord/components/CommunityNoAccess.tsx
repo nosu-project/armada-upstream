@@ -8,27 +8,10 @@ import { useLoggedInAccounts } from "@/hooks/useLoggedInAccounts";
 import { useSwitchAccount } from "@/hooks/useSwitchAccount";
 
 /**
- * Shown at `/c/:communityId` when the ACTIVE account holds no live membership
- * for that community.
- *
- * Membership in Concord is possession of keys, and those keys live in the
- * account's own kind-33302 vault — so "not a member" and "cannot decrypt a
- * single byte of this" are the same statement. The page therefore renders
- * nothing about the community: not its name, not its channel list, not a
- * timeline. There is no non-leaking version of those, and a screen that named
- * the community would be reporting the previous account's vault contents to
- * whoever is signed in now.
- *
- * Distinct from the two states it could be confused with. It is NOT a loading
- * state — the caller only mounts this once the community list has actually
- * resolved and decrypted, because an unresolved list is indistinguishable from
- * an empty one. And it is NOT the invite preview: an invite carries its own
- * key material at `/invite/<naddr>`, which is what makes a preview possible at
- * all, whereas a bare `/c/<id>` carries nothing.
- *
- * The likeliest reason to be here is having switched accounts, so the other
- * accounts on the device are offered directly — each one reloads (see
- * `switchAccount`).
+ * Shown at `/c/:communityId` when the active account has no membership. Shows
+ * nothing about the community: without keys there's no non-leaking version,
+ * and naming it would leak the previous account's vault. Mounted only once the
+ * list has resolved (an unresolved list looks empty). Offers account switching.
  */
 export function CommunityNoAccess() {
   const { currentUser, otherUsers } = useLoggedInAccounts();

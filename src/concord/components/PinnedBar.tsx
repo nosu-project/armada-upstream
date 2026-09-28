@@ -14,23 +14,14 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
-/** A pin as the bar renders it: verified, plus any locally-applied Edit. */
 type BarPin = VerifiedPin & { staleEdit?: boolean };
 
-/**
- * Compact text preview. URLs are dropped rather than replaced with a paperclip:
- * the attachments render inline below, so a placeholder would just duplicate
- * them — and an attachment-only message would preview as nothing but "📎".
- */
+/** URLs dropped: attachments render inline below. */
 function previewText(content: string): string {
   return content.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
 }
 
-/**
- * One pin. Nothing is fetched: the author, the words and the time all come out
- * of the proof this row already verified, which is why a pin renders for a
- * member who holds none of the channel's history.
- */
+/** Everything comes from the verified proof, so it renders for members without the history. */
 function PinRow({
   pin,
   canUnpin,
@@ -48,8 +39,7 @@ function PinRow({
 }) {
   const author = useAuthor(pin.author);
   const name = useScopedDisplayName(pin.author, author.data?.metadata);
-  // Jump-to-context needs the epoch the message was written under; a member
-  // who can't derive that address simply doesn't get the affordance (§7).
+  // Jumping needs the message's epoch; members who can't derive it get no affordance (§7).
   const jumpable = Boolean(onJump);
 
   return (
@@ -96,8 +86,7 @@ function PinRow({
           </span>
         )}
       </button>
-      {/* Outside the jump button: these carry their own links and download
-          controls, and a keyless reader has no other way to reach this file. */}
+      {/* Outside the jump button: they carry their own controls. */}
       <PinAttachments content={pin.content} tags={pin.tags} onOpenImage={onOpenImage} />
       </div>
       {canUnpin && (
@@ -121,12 +110,8 @@ function PinRow({
 }
 
 /**
- * The channel's pinned messages (CORD-04 §7), sliding open below the header.
- *
- * Every row shown here passed full verification, so the bar is a claim the
- * client can stand behind rather than a list of quotes. A private channel whose
- * pins were sealed under an epoch this member never held renders as locked
- * instead of empty — pins exist, they just aren't ours to read yet.
+ * Pinned messages (CORD-04 §7); every row is fully verified. Pins sealed under
+ * an epoch this member never held render as locked, not empty.
  */
 export function PinnedBar({
   open,
@@ -155,8 +140,7 @@ export function PinnedBar({
 }) {
   const expanded = open && (pins.length > 0 || dark);
 
-  // One gallery for the whole bar, so swiping moves between pinned images
-  // rather than trapping the reader in a single pin.
+  // One gallery for the whole bar so swipes cross pins.
   const galleryImages = useMemo(() => pins.flatMap((p) => pinImageRefs(p.content, p.tags)), [pins]);
   const galleryOffsets = useMemo(() => {
     const offsets: number[] = [];
@@ -204,9 +188,7 @@ export function PinnedBar({
           </Button>
         </div>
         {staleEdits > 0 && onRefreshEdits && (
-          // Informational, not an errand: the push happens on its own (§7
-          // Edits). The manual trigger stays only so a curator who is watching
-          // can skip the wait, or retry one that failed.
+          // The push is automatic (§7 Edits); the button only skips the wait or retries.
           <button
             type="button"
             disabled={isRefreshingEdits}

@@ -28,10 +28,8 @@ export interface GitWorkItemRepository {
 }
 
 /**
- * Signed NIP-34/NIP-22 writes against a repository's activity relays. Events
- * are stored locally before any network work (the shared store is what every
- * git surface renders from), queued for outbox retry, then published to each
- * activity relay; one acknowledgement counts as delivered.
+ * Signed NIP-34/NIP-22 writes: stored locally first (every git surface renders from the
+ * store), queued for outbox retry, then published; one relay ack counts as delivered.
  */
 export function useGitWorkItemActions() {
   const { nostr } = useNostr();
@@ -47,8 +45,7 @@ export function useGitWorkItemActions() {
     if (!user) throw new Error("Sign in to participate in repository discussions.");
     if (!relays.length) throw new Error("This repository has no reachable activity relays.");
 
-    // Same rule as useNostrPublish: this version is ours, not a carried-forward
-    // `client` from a prior event's tags.
+    // As in useNostrPublish: our version, not a carried-forward `client` tag.
     const tags = [
       ...template.tags.filter(([name]) => name !== "client"),
       ["client", APP_NAME],
@@ -72,8 +69,7 @@ export function useGitWorkItemActions() {
     const results = await Promise.allSettled(
       relays.map((relay) => nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) })),
     );
-    // The outbox entry targets relays[0]; only that relay's own ack clears
-    // it, so a down primary keeps retrying even when a secondary delivered.
+    // The outbox entry targets relays[0], so only its ack clears it.
     if (results[0]?.status === "fulfilled") {
       await removeQueuedPublish(event.id).catch(() => undefined);
     }
@@ -123,14 +119,9 @@ export function useGitWorkItemActions() {
     [publish],
   );
 
-  // Kind 1111 is not replaceable, so an edit is a NIP-09 retraction of the
-  // old event plus a replacement comment at the ORIGINAL created_at (keeping
-  // its thread position). Retraction goes FIRST so a retry after partial
-  // failure is idempotent — re-retracting is harmless, and the worst
-  // mid-failure state is a plain deletion, never a permanent duplicate.
-  // The backdated replacement is invisible to since-cursor readers until
-  // they re-fetch the thread (our panel refresh does on every open); a
-  // fresh-dated replacement would instead reorder the thread everywhere.
+  // Kind 1111 isn't replaceable: an edit is a NIP-09 retraction plus a replacement at the
+  // ORIGINAL created_at (keeps thread position). Retraction first, so a partial failure leaves a
+  // deletion, never a duplicate.
   const editTicketComment = useCallback(
     async (ticket: GitTicket, comment: GitComment, content: string, relays: readonly string[]) => {
       const media = comment.event.tags

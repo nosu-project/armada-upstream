@@ -18,8 +18,6 @@ import { cn } from "@/lib/utils";
 import type { ChatMsg } from "@/components/chat/transport";
 import type { Channel } from "@/concord/lib/types";
 
-// ── Media facet ────────────────────────────────────────────────────────────
-
 const MEDIA_OPTIONS: Array<{ value: SearchMedia; label: string; icon?: typeof ImageIcon }> = [
   { value: "all", label: "All" },
   { value: "images", label: "Images", icon: ImageIcon },
@@ -49,8 +47,6 @@ function MediaToggle({ media, onChange }: { media: SearchMedia; onChange: (m: Se
     </ToggleGroup>
   );
 }
-
-// ── Author facet ─────────────────────────────────────────────────────────────
 
 function AuthorChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void }) {
   const author = useAuthor(pubkey);
@@ -84,8 +80,7 @@ function AuthorOption({
 }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  // Filter by resolved name (falls back to pubkey prefix) — names resolve
-  // async, so each row self-hides rather than filtering a precomputed list.
+  // Names resolve async, so each row self-hides.
   if (query && !name.toLowerCase().includes(query) && !pubkey.toLowerCase().startsWith(query)) {
     return null;
   }
@@ -148,8 +143,6 @@ function AuthorFacet({
   );
 }
 
-// ── Channel facet ────────────────────────────────────────────────────────────
-
 function ChannelFacet({
   channels,
   selected,
@@ -198,14 +191,7 @@ function ChannelFacet({
   );
 }
 
-// ── Filter popover (the in-bar … / sliders button) ───────────────────────────
-
-/**
- * The structured-filter popover for the search bar: media facet, author
- * allow-list (community members), and a channel allow-list. Mirrors Ditto's
- * filter popover — one structured object edited by discrete controls. A dot on
- * the trigger signals active facets.
- */
+/** Structured search filters (media, authors, channels), mirroring Ditto's popover. */
 export function SearchFiltersPopover({
   channels,
   members,
@@ -268,10 +254,7 @@ export function SearchFiltersPopover({
   );
 }
 
-// ── Results ──────────────────────────────────────────────────────────────────
-
-/** A read-only search-result row (unsigned rumor → "View event JSON" menu),
- *  clickable to jump to the message in its channel, with matches highlighted. */
+/** Read-only search result row; jumps to the message. */
 const SearchRow = memo(function SearchRow({
   event,
   highlight,
@@ -283,9 +266,8 @@ const SearchRow = memo(function SearchRow({
 }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
-  // The beveled hover tint is a clipped `::before` behind the content, not a
-  // clip-path on the wrapper: clipping the wrapper also slices off
-  // ChatMessage's action toolbar, which floats above the row's top edge.
+  // Hover tint is a clipped `::before`: clipping the wrapper would slice off
+  // ChatMessage's floating toolbar.
   return (
     <div
       role={onJump ? "button" : undefined}
@@ -313,11 +295,7 @@ const SearchRow = memo(function SearchRow({
   );
 });
 
-/**
- * Community-wide search results: cross-channel, newest-first, each row grouped
- * under a header naming its source channel (mirrors the Mentions pane). Clicking
- * a row jumps to that message in its channel.
- */
+/** Cross-channel results, newest-first, grouped by channel. */
 export function SearchResultsView({
   channels,
   results,

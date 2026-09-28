@@ -9,11 +9,8 @@ import { perfCount } from '@/lib/perf';
 type NRelayLike = ReturnType<NPool['relay']>;
 
 /**
- * The write half of the local cache; see {@link NostrBatcher.store}.
- *
- * Deliberately the ArmadaDB store's `event()` rather than `NStore`'s: the extra
- * `relay` is how a NIP-29 event reaches the tenant for the relay that served it
- * instead of a shared cache where two servers' channels collide.
+ * The write half of the local cache. ArmadaDB's `event()` rather than `NStore`'s:
+ * its `relay` argument files NIP-29 events under the serving relay's tenant.
  */
 type EventSink = Promise<Pick<ArmadaEventStore, 'event'>>;
 
@@ -21,30 +18,20 @@ type EventSink = Promise<Pick<ArmadaEventStore, 'event'>>;
 const MAX_BATCH_SIZE = 50;
 
 /**
- * Grace window (ms) after the first relay EOSEs before a replaceable-event
- * (profile) batch resolves. The pool's global default (300ms) routinely cuts
- * off slower/cold relays that hold the kind-0 — capped at 1000ms so a profile
- * still has a real chance to arrive without stalling the UI.
+ * Post-first-EOSE grace (ms) for replaceable batches. The pool's 300ms default
+ * cuts off slower relays that hold the kind-0.
  */
 const PROFILE_EOSE_GRACE_MS = 1000;
 
 /**
- * Hard deadline on a COALESCED shared query (ms). The shared upstream is
- * deliberately driven without any caller's signal (one caller aborting must
- * not cancel the others) — but with NO deadline at all, a request that never
- * settles (a REQ swallowed by a mid-flight NIP-42 handshake, a half-open
- * socket) parks in `inflightQueries` forever, and every later identical query
- * (channel backfills re-ask the exact same filters every round) joins the
- * corpse instead of opening a fresh request. That wedged the whole sync
- * pipeline until an app restart. Generous — every real caller times out
- * sooner (8-15s); this only exists so the coalesce key can't be poisoned.
+ * Hard deadline (ms) on a coalesced shared query, which runs without any
+ * caller's signal. Without it, a never-settling REQ (swallowed by NIP-42, a
+ * half-open socket) poisons the coalesce key forever and wedges sync. Real
+ * callers time out sooner.
  */
 const SHARED_QUERY_DEADLINE_MS = 30_000;
 
-/**
- * Pending request waiting for a batched query result.
- * Each caller gets its own resolve/reject and optional abort signal.
- */
+/** A caller waiting on a batched query, with its own resolve/reject and optional signal. */
 interface PendingRequest<V> {
   key: string;
   resolve: (value: V) => void;
@@ -52,17 +39,12 @@ interface PendingRequest<V> {
   signal?: AbortSignal;
 }
 
-/** Anything that can be rejected and may carry an abort signal. */
 interface AbortableRequest {
   reject: (error: unknown) => void;
   signal?: AbortSignal;
 }
 
-/**
- * Drop the requests whose signal has already aborted (rejecting them with their
- * reason) and return only the still-live requests. Shared by every collector's
- * `flush` prelude.
- */
+/** Reject requests whose signal already aborted; return the live ones. */
 function partitionLive<R extends AbortableRequest>(batch: R[]): R[] {
   const live: R[] = [];
   for (const req of batch) {
@@ -73,10 +55,8 @@ function partitionLive<R extends AbortableRequest>(batch: R[]): R[] {
 }
 
 /**
- * Build the combined AbortController for a batch: it aborts only when EVERY
- * live caller has aborted (a single caller cancelling must not kill the shared
- * query the others are still waiting on). When not every caller supplies a
- * signal, the batch is never collectively aborted.
+ * Batch abort controller that fires only when EVERY live caller aborted; never
+ * if any caller lacks a signal.
  */
 function combinedAbortController<R extends AbortableRequest>(live: R[]): AbortController {
   const controller = new AbortController();
@@ -90,17 +70,11 @@ function combinedAbortController<R extends AbortableRequest>(live: R[]): AbortCo
   return controller;
 }
 
-/**
- * Accumulates requests during the current microtask and fires a single combined
- * query once it drains. Subclasses implement `flush()` (the query + fan-out);
- * this base owns the pending queue and microtask scheduling shared by every
- * collector.
- */
+/** Accumulates requests during a microtask, then `flush()` fires one combined query. */
 abstract class MicrotaskBatcher<R extends AbortableRequest> {
   protected pending: R[] = [];
   private scheduled = false;
 
-  /** Enqueue a request and schedule a flush for the end of this microtask. */
   protected enqueue(req: R): void {
     this.pending.push(req);
     if (!this.scheduled) {
@@ -109,7 +83,6 @@ abstract class MicrotaskBatcher<R extends AbortableRequest> {
     }
   }
 
-  /** Drain the pending queue into `batch` and reset for the next tick. */
   protected drain(): R[] {
     const batch = this.pending;
     this.pending = [];
@@ -120,10 +93,6 @@ abstract class MicrotaskBatcher<R extends AbortableRequest> {
   protected abstract flush(): Promise<void>;
 }
 
-/**
- * A batch collector that accumulates requests during the current microtask
- * and then fires a single combined query.
- */
 class BatchCollector<V> extends MicrotaskBatcher<PendingRequest<V>> {
   constructor(
     private executeBatch: (keys: string[], signal: AbortSignal) => Promise<Map<string, V>>,
@@ -131,7 +100,6 @@ class BatchCollector<V> extends MicrotaskBatcher<PendingRequest<V>> {
     super();
   }
 
-  /** Enqueue a request. Returns a promise that resolves when the batch completes. */
   request(key: string, signal?: AbortSignal): Promise<V> {
     return new Promise<V>((resolve, reject) => {
       if (signal?.aborted) {
@@ -142,12 +110,10 @@ class BatchCollector<V> extends MicrotaskBatcher<PendingRequest<V>> {
     });
   }
 
-  /** Drain the pending queue and execute the batch. */
   protected async flush(): Promise<void> {
     const live = partitionLive(this.drain());
     if (live.length === 0) return;
 
-    // Deduplicate keys.
     const uniqueKeys: string[] = [];
     const seen = new Set<string>();
     for (const req of live) {
@@ -160,7 +126,6 @@ class BatchCollector<V> extends MicrotaskBatcher<PendingRequest<V>> {
     const controller = combinedAbortController(live);
 
     try {
-      // Chunk to respect relay limits.
       const allResults = new Map<string, V>();
       const chunks: string[][] = [];
       for (let i = 0; i < uniqueKeys.length; i += MAX_BATCH_SIZE) {
@@ -191,25 +156,16 @@ class BatchCollector<V> extends MicrotaskBatcher<PendingRequest<V>> {
   }
 }
 
-// --- Filter pattern detection ---
-
 /** A filter that only fetches events by ID: `{ ids: [x], limit?: n }` */
 function isIdsOnlyFilter(filter: NostrFilter): filter is { ids: string[]; limit?: number } {
   const keys = Object.keys(filter);
   return keys.every((k) => k === 'ids' || k === 'limit') && Array.isArray(filter.ids) && filter.ids.length === 1;
 }
 
-/**
- * Replaceable kinds that are fetched once per author and can be merged into a
- * single multi-kind query when multiple hooks request different kinds for the
- * same pubkey in the same microtask tick.
- */
+/** Replaceable kinds that can be merged into one multi-kind query per author. */
 const REPLACEABLE_KINDS = new Set([0, 3, 10000, 10001, 10002, 10003, 10015, 10030, 10063, 16767]);
 
-/**
- * A filter that fetches a single replaceable event by author:
- * `{ kinds: [k], authors: [a], limit?: n }` where k is a known replaceable kind.
- */
+/** `{ kinds: [k], authors: [a], limit?: n }` with k a known replaceable kind. */
 function isReplaceableFilter(filter: NostrFilter): boolean {
   const keys = Object.keys(filter);
   return (
@@ -222,14 +178,8 @@ function isReplaceableFilter(filter: NostrFilter): boolean {
 }
 
 /**
- * Batches replaceable-kind queries by pubkey across a microtask window.
- *
- * When multiple hooks request different kinds for the same pubkey
- * (e.g. kind 0 from useAuthor, kind 3 from useFollowList, kind 10000 from
- * useMuteList), they are merged into one REQ:
- *   { kinds: [0, 3, 10000], authors: [pubkey], limit: 3 }
- *
- * Each caller still gets back only its own event (or undefined).
+ * Merges replaceable-kind queries for the same pubkey within a microtask into
+ * one REQ (e.g. `{ kinds: [0, 3, 10000], authors: [pk] }`); each caller gets its own event.
  */
 class ReplaceableCollector extends MicrotaskBatcher<{
   pubkey: string;
@@ -245,13 +195,8 @@ class ReplaceableCollector extends MicrotaskBatcher<{
   }
 
   /**
-   * Collect events for a replaceable-event filter, waiting longer than the
-   * pool's global `eoseTimeout` so SLOW/COLD relays get a real chance to return
-   * a profile. Replaceable events (kind 0, etc.) legitimately live on different
-   * relays than the fastest one in the set, and the global 300ms post-EOSE
-   * cutoff routinely drops them — that's the kind-0 "lag/cutoff". We stream via
-   * `pool.req` with a generous per-call `eoseTimeout` and stop at the merged
-   * EOSE (all relays done) or the grace window, whichever comes first.
+   * Stream with a per-call `eoseTimeout` longer than the pool's 300ms, which
+   * routinely dropped kind-0s living on slower relays. Stops at merged EOSE or the grace window.
    */
   private async collect(filter: NostrFilter, signal: AbortSignal): Promise<NostrEvent[]> {
     const events: NostrEvent[] = [];
@@ -285,15 +230,13 @@ class ReplaceableCollector extends MicrotaskBatcher<{
     const live = partitionLive(this.drain());
     if (live.length === 0) return;
 
-    // Collect unique kinds per pubkey.
     const kindsByPubkey = new Map<string, Set<number>>();
     for (const { pubkey, kind } of live) {
       if (!kindsByPubkey.has(pubkey)) kindsByPubkey.set(pubkey, new Set());
       kindsByPubkey.get(pubkey)!.add(kind);
     }
 
-    // Group pubkeys by their kind-set so pubkeys requesting the same kinds
-    // (e.g. all NoteCard authors requesting only kind 0) are fetched in one REQ.
+    // Group pubkeys by kind-set so identical requests share one REQ.
     const byKindSet = new Map<string, { kinds: number[]; pubkeys: string[] }>();
     for (const [pubkey, kinds] of kindsByPubkey) {
       const key = [...kinds].sort((a, b) => a - b).join(',');
@@ -303,7 +246,6 @@ class ReplaceableCollector extends MicrotaskBatcher<{
 
     const controller = combinedAbortController(live);
 
-    // results[pubkey][kind] = event | undefined
     const results = new Map<string, Map<number, NostrEvent | undefined>>();
 
     try {
@@ -313,7 +255,6 @@ class ReplaceableCollector extends MicrotaskBatcher<{
             { kinds, authors: pubkeys, limit: kinds.length * pubkeys.length },
             controller.signal,
           );
-          // Index by pubkey+kind, pick newest per pair.
           for (const pubkey of pubkeys) {
             if (!results.has(pubkey)) results.set(pubkey, new Map());
           }
@@ -332,11 +273,8 @@ class ReplaceableCollector extends MicrotaskBatcher<{
       return;
     }
 
-    // Retry kind 0 profiles not found in the initial query against the loser
-    // relays. The relay race (eoseTimeout) resolves as soon as the first relay
-    // sends EOSE, so slower relays may not have had time to return all profiles.
-    // Collect the missing pubkeys and issue a second batched query so those
-    // relays get a full chance to respond.
+    // Retry missing kind-0s: the first query resolves once the fastest relay EOSEs,
+    // so slower relays get a second chance.
     const missingKind0Pubkeys = [...byKindSet.values()]
       .filter(({ kinds }) => kinds.includes(0))
       .flatMap(({ pubkeys }) => pubkeys)
@@ -344,7 +282,6 @@ class ReplaceableCollector extends MicrotaskBatcher<{
 
     if (missingKind0Pubkeys.length > 0 && !controller.signal.aborted) {
       try {
-        // Chunk into batches to respect relay filter limits.
         const chunks: string[][] = [];
         for (let i = 0; i < missingKind0Pubkeys.length; i += MAX_BATCH_SIZE) {
           chunks.push(missingKind0Pubkeys.slice(i, i + MAX_BATCH_SIZE));
@@ -382,17 +319,9 @@ class ReplaceableCollector extends MicrotaskBatcher<{
 }
 
 /**
- * Batches addressable-event queries that share a fixed kind + `d` tag across
- * many AUTHORS in a microtask window. The motivating case is NIP-38 user
- * statuses (kind 30315, `d: "general"`): a member list mounts dozens of rows
- * that each want one author's status, and without batching that's one REQ per
- * member. This collector merges them into a single
- *   { kinds: [k], authors: [...], '#d': [d], limit: authors.length }
- * REQ and hands each caller back only its own author's event.
- *
- * Note this is the opposite axis from `dTagCollectors`/`executeDTagBatch`,
- * which batch many `d` tags for ONE author. Here the kind and `d` are fixed
- * and the authors vary.
+ * Batches fixed-kind, fixed-`d` addressable queries across AUTHORS (e.g. NIP-38
+ * statuses, kind 30315 `d: "general"`, for a member list). Opposite axis from
+ * `dTagCollectors`, which batch many `d` tags for one author.
  */
 class FixedDTagAuthorCollector extends MicrotaskBatcher<{
   author: string;
@@ -422,7 +351,6 @@ class FixedDTagAuthorCollector extends MicrotaskBatcher<{
     const live = partitionLive(this.drain());
     if (live.length === 0) return;
 
-    // Unique authors, preserving order.
     const authors: string[] = [];
     const seen = new Set<string>();
     for (const r of live) {
@@ -436,7 +364,6 @@ class FixedDTagAuthorCollector extends MicrotaskBatcher<{
 
     const byAuthor = new Map<string, NostrEvent>();
     try {
-      // Chunk authors to respect relay filter limits.
       const chunks: string[][] = [];
       for (let i = 0; i < authors.length; i += MAX_BATCH_SIZE) {
         chunks.push(authors.slice(i, i + MAX_BATCH_SIZE));
@@ -448,7 +375,7 @@ class FixedDTagAuthorCollector extends MicrotaskBatcher<{
             { signal: controller.signal },
           );
           for (const event of events) {
-            // Defensive: relays may return events that don't match the d-tag.
+            // Relays may return events that don't match the d-tag.
             const d = event.tags.find(([name]) => name === 'd')?.[1] ?? '';
             if (d !== this.dTag) continue;
             const existing = byAuthor.get(event.pubkey);
@@ -502,11 +429,7 @@ function isRepostFilter(filter: NostrFilter): boolean {
   );
 }
 
-/**
- * A filter that queries by a single `#e` tag with kinds and limit.
- * e.g. `{ kinds: [7, 9735], '#e': [eventId], limit: 10 }`
- * Must NOT have `authors` (that's the reaction pattern).
- */
+/** Single `#e` tag with kinds, e.g. `{ kinds: [7, 9735], '#e': [id], limit: 10 }`. No `authors` (that's the reaction pattern). */
 function isETagFilter(filter: NostrFilter): boolean {
   const keys = Object.keys(filter);
   return (
@@ -520,25 +443,17 @@ function isETagFilter(filter: NostrFilter): boolean {
   );
 }
 
-/**
- * Extract the single `#e` value from a filter known to have one.
- */
 function getETagValue(filter: NostrFilter): string {
   return ((filter as Record<string, unknown>)['#e'] as string[])[0];
 }
 
-/**
- * Check if a multi-filter array can be batched: every filter must be an
- * e-tag or q-tag filter referencing the same single event ID.
- * e.g. [{ kinds: [7, 9735], '#e': [id], limit: 10 }, { kinds: [1], '#q': [id], limit: 5 }]
- */
+/** If every filter is an `#e`/`#q` filter for the same single event id, return that id. */
 function isMultiFilterETagBatchable(filters: NostrFilter[]): string | null {
   if (filters.length < 2) return null;
   let commonId: string | null = null;
 
   for (const filter of filters) {
     const keys = Object.keys(filter);
-    // Each filter must only have kinds + (#e or #q) + optional limit
     const isEFilter = keys.every((k) => k === 'kinds' || k === '#e' || k === 'limit') &&
       (filter as Record<string, unknown>)['#e'] !== undefined &&
       Array.isArray((filter as Record<string, unknown>)['#e']) &&
@@ -565,19 +480,10 @@ function isMultiFilterETagBatchable(filters: NostrFilter[]): string | null {
   return commonId;
 }
 
-/**
- * Addressable kinds whose `{ kinds:[k], authors:[a], '#d':[d] }` queries should
- * batch across AUTHORS (one REQ for many users) rather than across `d` tags.
- * These are per-user singletons fetched for whole rosters at once — NIP-38 user
- * statuses (30315) are the canonical case.
- */
+/** Addressable per-user singletons batched across authors rather than `d` tags (NIP-38 statuses). */
 const AUTHOR_BATCHED_DTAG_KINDS = new Set([30315]);
 
-/**
- * A fixed-kind, fixed-`d`-tag, single-author filter for a kind we batch across
- * authors: `{ kinds: [k], authors: [a], '#d': [d], limit?: n }` with
- * `k ∈ AUTHOR_BATCHED_DTAG_KINDS`.
- */
+/** `{ kinds: [k], authors: [a], '#d': [d], limit?: n }` with `k ∈ AUTHOR_BATCHED_DTAG_KINDS`. */
 function isAuthorBatchedDTagFilter(filter: NostrFilter): boolean {
   const keys = Object.keys(filter);
   return (
@@ -603,32 +509,22 @@ function isDTagFilter(filter: NostrFilter): boolean {
   );
 }
 
-/** A `req` stream message tuple (EVENT / EOSE / CLOSED). */
 type RelayMsg =
   | import('@nostrify/types').NostrRelayEVENT
   | import('@nostrify/types').NostrRelayEOSE
   | import('@nostrify/types').NostrRelayCLOSED;
 
 /**
- * Options for a `relay()`/`group()` `.req()`. `cache: false` skips the
- * write-through mirror, for a consumer that stores what it admits itself —
- * the mirror would otherwise write every superseded version, once per relay.
- * Not part of Nostrify's `NRelay` type, so pass it as a variable rather than
- * an object literal.
+ * `.req()` options. `cache: false` skips the write-through mirror for consumers
+ * that store what they admit themselves. Not in Nostrify's `NRelay` type, so
+ * pass it as a variable rather than an object literal.
  */
 export interface CachingReqOpts {
   signal?: AbortSignal;
   cache?: boolean;
 }
 
-/**
- * Stable key for coalescing identical `relay()`/`group()` traffic: the scope
- * (relay set) plus the filter set, order-insensitive. Two callers that produce
- * the same key are asking the same relays the same question, so their upstream
- * work can be shared. Filters are canonicalized by sorting their entries (and
- * each entry's array values) so key order / array order can't split a genuine
- * match into two.
- */
+/** Coalescing key: scope relays + filters, canonicalized so ordering can't split a match. */
 function coalesceKey(scopeRelays: string[], filters: NostrFilter[]): string {
   const norm = filters.map((f) => {
     const entries = Object.entries(f)
@@ -640,16 +536,9 @@ function coalesceKey(scopeRelays: string[], filters: NostrFilter[]): string {
 }
 
 /**
- * A single upstream `req()` stream fanned out to N subscribers. The first
- * subscriber for a given key opens the upstream subscription; every later
- * subscriber with the same key attaches to it instead of opening its own
- * socket REQ. Each subscriber gets an independent async iterator that replays
- * nothing (live tail semantics — subscribers see messages from the moment they
- * attach) and drains only its own buffered messages. When the LAST subscriber
- * detaches (its consumer aborts or stops iterating), the upstream is aborted.
- *
- * This is what collapses the pageload's `⟳xN DUPLICATE` live subscriptions
- * (identical kind-1059 `since` REQs from the Concord/DM hooks) onto one socket.
+ * One upstream `req()` fanned out to N subscribers with the same key. Live-tail
+ * only (no replay); the upstream is aborted when the last subscriber detaches.
+ * Collapses duplicate identical kind-1059 REQs from Concord/DM hooks.
  */
 class SharedSubscription {
   private subscribers = new Set<Subscriber>();
@@ -657,12 +546,7 @@ class SharedSubscription {
   private closed = false;
 
   constructor(
-    /**
-     * Opens the upstream stream. Receives the subscription's own abort signal
-     * so tearing the fan-out down (last subscriber left, pump closed) actually
-     * CLOSEs the socket REQ — an upstream opened without a signal would stay
-     * registered on the relay (and pumping) forever after a silent teardown.
-     */
+    /** Gets the subscription's own abort signal so teardown actually CLOSEs the REQ. */
     source: (signal: AbortSignal) => AsyncIterable<RelayMsg>,
     private onEmpty: () => void,
     private onMessage: (msg: RelayMsg) => void,
@@ -677,14 +561,11 @@ class SharedSubscription {
         this.onMessage(msg);
         for (const sub of this.subscribers) sub.push(msg);
       }
-    } catch {
-      // Upstream ended/errored — fall through to close every subscriber.
-    } finally {
+    } catch { /* ignore */ } finally {
       this.close();
     }
   }
 
-  /** Close the upstream and finish every attached subscriber's iterator. */
   private close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -693,16 +574,11 @@ class SharedSubscription {
     this.subscribers.clear();
   }
 
-  /** Whether new subscribers can still attach (false once the upstream ended). */
   isOpen(): boolean {
     return !this.closed;
   }
 
-  /**
-   * Attach a subscriber. Returns an async iterable of the live message stream;
-   * aborting `signal` (or breaking out of the iteration) detaches it, and the
-   * upstream is torn down once the last subscriber leaves.
-   */
+  /** Attach a subscriber; aborting or breaking out detaches, and the last one leaving tears down the upstream. */
   subscribe(signal?: AbortSignal): AsyncIterable<RelayMsg> {
     const sub = new Subscriber();
     this.subscribers.add(sub);
@@ -735,10 +611,7 @@ class SharedSubscription {
   }
 }
 
-/**
- * A single fan-out subscriber: a bounded async queue an iterator drains. `push`
- * enqueues (waking a waiting `drain`), `finish` signals end-of-stream.
- */
+/** Fan-out subscriber: an async queue drained by an iterator. */
 class Subscriber {
   private queue: RelayMsg[] = [];
   private wake?: () => void;
@@ -770,27 +643,12 @@ class Subscriber {
 }
 
 /**
- * Transparent batching proxy for NPool.
- *
- * Wraps an NPool and intercepts `.query()` calls. When a query uses a
- * recognizable single-item filter pattern (fetch by ID, profile by pubkey,
- * reaction check, d-tag lookup), the request is held for a microtask.
- * If more queries with the same pattern arrive in the same frame, they're
- * combined into one REQ.
- *
- * The `relay()`/`group()` handles additionally COALESCE identical concurrent
- * `.query()`/`.req()` calls onto one upstream (see `wrapCaching`): the
- * high-volume Concord/DM paths fan out per-relay and re-fire the same filter
- * from several hooks at once, so without this the pageload issues the same
- * socket REQ many times over (the `⟳xN DUPLICATE` floods in the query log).
- *
- * All other methods (`.event()`, `.close()`) pass through directly.
- *
- * Client code doesn't need to know batching exists — it calls
- * `nostr.query([{ kinds: [0], authors: [pk], limit: 1 }])` as usual.
+ * Transparent batching proxy for NPool. Single-item `.query()` patterns (by id,
+ * profile, reaction, d-tag, …) are held for a microtask and combined into one
+ * REQ. `relay()`/`group()` handles also coalesce identical concurrent
+ * `.query()`/`.req()` calls onto one upstream (see `wrapCaching`).
  */
 export class NostrBatcher {
-  /** Batches replaceable-kind queries by pubkey, merging kinds per pubkey into one REQ. */
   private replaceableCollector: ReplaceableCollector;
   private eventCollector: BatchCollector<NostrEvent | undefined>;
   /** Keyed by userPubkey so each user's reactions batch separately. */
@@ -801,36 +659,19 @@ export class NostrBatcher {
   private dTagCollectors = new Map<string, BatchCollector<NostrEvent | undefined>>();
   /** Keyed by `${kind}:${dTag}` for author batching of fixed-d-tag addressable kinds (e.g. NIP-38 statuses). */
   private fixedDTagAuthorCollectors = new Map<string, FixedDTagAuthorCollector>();
-  /** Keyed by sorted kinds string for #e-tag batching. Returns arrays. */
   private eTagCollectors = new Map<string, BatchCollector<NostrEvent[]>>();
-  /** Keyed by serialized filter shapes for multi-filter #e/#q batching. */
   private multiFilterCollectors = new Map<string, BatchCollector<NostrEvent[]>>();
 
-  /**
-   * In-flight `relay()`/`group()` `.query()` calls, keyed by scope+filters, so
-   * concurrent identical one-shot reads share one upstream request instead of
-   * each opening its own socket REQ. Cleared when the shared request settles.
-   */
+  /** In-flight `relay()`/`group()` queries by scope+filters, shared by identical concurrent reads. */
   private inflightQueries = new Map<string, Promise<NostrEvent[]>>();
 
-  /**
-   * Live `relay()`/`group()` `.req()` subscriptions, keyed by scope+filters, so
-   * concurrent identical live tails fan out from one upstream subscription (see
-   * {@link SharedSubscription}). Removed when the last subscriber detaches.
-   */
+  /** Live shared `.req()` subscriptions by scope+filters (see {@link SharedSubscription}). */
   private sharedSubs = new Map<string, SharedSubscription>();
 
   /**
-   * Optional local cache. Every event that flows out of `.query()` / `.req()`
-   * is written here so the rest of the app can read it back cache-first. The
-   * store is a promise because IndexedDB opens asynchronously; we never block
-   * a relay read on it.
-   *
-   * Write-only by type as well as by use: the batcher hands relay events TO
-   * the cache and never reads them back, which is what keeps its output signed.
-   * The cache drops signatures on the way in (`db/mainEventStore.ts`), so a
-   * batcher that also read from it could serve unsigned events to callers who
-   * have every reason to expect relay-fresh ones.
+   * Optional local cache (a promise: IndexedDB opens async; never blocks reads).
+   * Write-only by design: the cache strips signatures, so reading from it would
+   * serve unsigned events to callers expecting relay-fresh ones.
    */
   private store?: EventSink;
 
@@ -843,25 +684,10 @@ export class NostrBatcher {
   }
 
   /**
-   * Persist events to the local cache (fire-and-forget). Called for every
-   * event that flows out of `.query()` and `.req()`, so the cache mirrors
-   * whatever the relays return without any caller having to opt in.
-   *
-   * `sourceUrl` is the relay that actually served them, known only on the
-   * single-relay `relay(url)` path. The store needs it to file relay-relative
-   * data (NIP-29) under the right relay, and DROPS such data when it is absent
-   * rather than filing it under a guess — so a pool-wide or `group(urls)` read
-   * caches the global kinds and skips the group-scoped ones. That is the
-   * intended behaviour, not a gap: see `db/relayScope.ts`.
-   *
-   * Gift-wrap kinds (1059/21059) are NEVER cached: they are opaque ciphertext,
-   * a waste of space in the shared `main` store, and every Concord/DM consumer
-   * that needs them persists the DECRYPTED rumor in its own store instead. This
-   * is the single chokepoint every caching path flows through, so blocking here
-   * guarantees no wrap can leak into the cache from any read.
-   *
-   * Failures are swallowed: the cache is a best-effort mirror, never on the
-   * critical path of a relay read.
+   * Mirror events into the local cache (fire-and-forget, errors swallowed).
+   * `sourceUrl` is the serving relay, known only via `relay(url)`; without it the
+   * store drops group-scoped (NIP-29) data by design (see `db/relayScope.ts`).
+   * Gift wraps (1059/21059) are NEVER cached — this is the single chokepoint.
    */
   private cacheEvents(events: NostrEvent[], sourceUrl?: string): void {
     if (!this.store) return;
@@ -870,15 +696,10 @@ export class NostrBatcher {
     void this.store
       .then((store) => Promise.all(cacheable.map((event) => store.event(event, { relay: sourceUrl }))))
       .catch(() => {
-        // Best-effort cache; ignore write failures.
       });
   }
 
-  /**
-   * Proxy for `pool.query()`. Detects batchable filter patterns and
-   * combines them; everything else passes through directly. Every event
-   * returned (batched or not) is mirrored into the local cache.
-   */
+  /** Proxy for `pool.query()`: batches recognized patterns, passes others through; results are cached. */
   async query(
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
@@ -888,31 +709,23 @@ export class NostrBatcher {
     return events;
   }
 
-  /**
-   * The actual query logic. Detects batchable filter patterns and combines
-   * them; everything else passes through directly to the pool.
-   */
   private async queryInner(
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<NostrEvent[]> {
-    // Only batch single-filter queries with recognized patterns.
     if (filters.length === 1) {
       const filter = filters[0];
 
-      // { ids: [singleId] }
       if (isIdsOnlyFilter(filter)) {
         const event = await this.eventCollector.request(filter.ids[0], opts?.signal);
         return event ? [event] : [];
       }
 
-      // { kinds: [replaceableKind], authors: [singlePubkey] }
       if (isReplaceableFilter(filter)) {
         const event = await this.replaceableCollector.request(filter.authors![0], filter.kinds![0], opts?.signal);
         return event ? [event] : [];
       }
 
-      // { kinds: [7], authors: [user], '#e': [eventId] }
       if (isReactionFilter(filter)) {
         const userPubkey = filter.authors![0];
         const eventId = ((filter as Record<string, unknown>)['#e'] as string[])[0];
@@ -927,7 +740,6 @@ export class NostrBatcher {
         return event ? [event] : [];
       }
 
-      // { kinds: [6, 16], authors: [user], '#e': [eventId] }
       if (isRepostFilter(filter)) {
         const userPubkey = filter.authors![0];
         const eventId = ((filter as Record<string, unknown>)['#e'] as string[])[0];
@@ -944,7 +756,6 @@ export class NostrBatcher {
         return event ? [event] : [];
       }
 
-      // { kinds: [...], '#e': [eventId] } (no authors — not a reaction check)
       if (isETagFilter(filter)) {
         const eventId = getETagValue(filter);
         const kindsKey = [...filter.kinds!].sort().join(',');
@@ -960,7 +771,6 @@ export class NostrBatcher {
         return collector.request(eventId, opts?.signal);
       }
 
-      // { kinds: [30315], authors: [a], '#d': [d] } — batch across authors.
       // Must precede the generic d-tag check (same shape, different axis).
       if (isAuthorBatchedDTagFilter(filter)) {
         const kind = filter.kinds![0];
@@ -976,7 +786,6 @@ export class NostrBatcher {
         return event ? [event] : [];
       }
 
-      // { kinds: [k], authors: [a], '#d': [d] }
       if (isDTagFilter(filter)) {
         const kind = filter.kinds![0];
         const author = filter.authors![0];
@@ -994,11 +803,9 @@ export class NostrBatcher {
       }
     }
 
-    // Multi-filter: check if all filters reference the same #e/#q event ID
     const multiFilterEventId = isMultiFilterETagBatchable(filters);
     if (multiFilterEventId !== null) {
-      // Serialize the filter "shape" (kinds, tag names, limits) to get a collector key.
-      // Multi-filter queries with the same shape are batched together.
+      // Queries with the same filter shape (kinds, tag names, limits) batch together.
       const shapeKey = filters.map((f) => {
         const keys = Object.keys(f).sort();
         return keys.map((k) => k === '#e' || k === '#q' ? k : `${k}:${JSON.stringify((f as Record<string, unknown>)[k])}`).join('|');
@@ -1014,11 +821,8 @@ export class NostrBatcher {
       return collector.request(multiFilterEventId, opts?.signal);
     }
 
-    // Not batchable — pass through directly.
     return this.pool.query(filters, opts);
   }
-
-  // --- Pass-through methods ---
 
   event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void> {
     return this.pool.event(event, opts);
@@ -1030,8 +834,6 @@ export class NostrBatcher {
   ): AsyncIterable<import('@nostrify/types').NostrRelayEVENT | import('@nostrify/types').NostrRelayEOSE | import('@nostrify/types').NostrRelayCLOSED> {
     const source = this.pool.req(filters, opts);
     const cacheEvents = this.cacheEvents.bind(this);
-    // Wrap the stream so each EVENT message is mirrored into the cache as it
-    // streams past, without altering what the consumer sees.
     return (async function* () {
       for await (const msg of source) {
         if (msg[0] === 'EVENT') {
@@ -1051,24 +853,12 @@ export class NostrBatcher {
   }
 
   /**
-   * Wrap a relay/group handle so its `.query()` and `.req()` output is mirrored
-   * into the local cache, exactly like the pool-level `.query()`/`.req()` above.
-   *
-   * Group-scoped traffic (NIP-29 via `relay(url)`, DMs/Concord via `group()`)
-   * bypasses the pool, so without this wrapper those events would never be
-   * persisted — and chat history could not be read back after a refresh. The
-   * wrapper is transparent: callers see the same NRelay interface and the same
-   * results; caching is fire-and-forget on the side.
-   *
-   * `sourceUrl` (the single-relay `relay(url)` path) is the relay events are
-   * FILED UNDER, which is what puts NIP-29 data in its own relay's tenant
-   * instead of a shared bucket where two servers' identically-named channels
-   * would merge. `groupUrls` (the `group(urls)` path) names N relays and so
-   * attributes nothing — it is used only for the query log, so `group` REQs
-   * report their real relay count instead of "0 relays".
+   * Mirror a relay/group handle's `.query()`/`.req()` output into the cache;
+   * group-scoped traffic bypasses the pool, so it would otherwise never persist.
+   * `sourceUrl` (`relay(url)`) decides the tenant events are filed under;
+   * `groupUrls` only feeds the query log.
    */
   private wrapCaching<R extends NRelayLike>(relay: R, sourceUrl?: string, groupUrls?: string[]): R {
-    // How this handle is scoped, for the query log ("relay(url)" vs "group(N)").
     const via = sourceUrl ? `relay(${sourceUrl})` : `group(${groupUrls?.length ?? 0})`;
     const scopeRelays = sourceUrl ? [sourceUrl] : (groupUrls ?? []);
     const coalescedQuery = this.coalescedQuery.bind(this);
@@ -1090,13 +880,9 @@ export class NostrBatcher {
   }
 
   /**
-   * `relay()`/`group()` `.query()` with in-flight coalescing: concurrent
-   * identical reads (same scope + filters) share one upstream request. Only the
-   * FIRST caller logs a REQ and drives the network; the rest await the shared
-   * promise (so the query log — and the wire — sees one REQ, not N). Each caller
-   * still honours its own `signal`: aborting one rejects only that caller and
-   * never cancels the shared request the others are waiting on. Results are
-   * cached/provenance-tagged once, on the shared path.
+   * `.query()` with in-flight coalescing: identical concurrent reads share one
+   * upstream request (one logged REQ). Each caller's `signal` only rejects that
+   * caller, never the shared request.
    */
   private coalescedQuery(
     target: NRelayLike,
@@ -1110,12 +896,8 @@ export class NostrBatcher {
     let shared = this.inflightQueries.get(key);
     if (!shared) {
       logNostrReq(scopeRelays, filters, via);
-      // Drive the shared request WITHOUT any caller signal, so one caller
-      // aborting can't cancel it for the others. Per-caller abort is applied
-      // below by racing each caller against its own signal. The deadline is
-      // the shared request's ONLY signal: a query that never settles must not
-      // park in `inflightQueries` forever and absorb every future identical
-      // query (see SHARED_QUERY_DEADLINE_MS).
+      // No caller signal, so one abort can't cancel it for others; the deadline is
+      // its only signal (see SHARED_QUERY_DEADLINE_MS).
       shared = target
         .query(filters, { signal: AbortSignal.timeout(SHARED_QUERY_DEADLINE_MS) })
         .then((events) => {
@@ -1131,7 +913,6 @@ export class NostrBatcher {
     const signal = opts?.signal;
     if (!signal) return shared;
     if (signal.aborted) return Promise.reject(signal.reason);
-    // Race the shared result against this caller's own cancellation.
     return new Promise<NostrEvent[]>((resolve, reject) => {
       const onAbort = () => reject(signal.reason);
       signal.addEventListener('abort', onAbort, { once: true });
@@ -1149,12 +930,8 @@ export class NostrBatcher {
   }
 
   /**
-   * `relay()`/`group()` `.req()` with subscription multiplexing: concurrent
-   * identical live tails (same scope + filters) fan out from one upstream
-   * subscription instead of each opening its own socket REQ. Only the first
-   * subscriber logs a REQ and opens the upstream; the rest attach to it. Each
-   * EVENT is cached once (on the shared upstream) and delivered to every
-   * subscriber. The upstream is torn down when the last subscriber detaches.
+   * `.req()` with multiplexing: identical concurrent live tails share one upstream
+   * subscription, torn down when the last subscriber detaches.
    */
   private coalescedReq(
     target: NRelayLike,
@@ -1173,7 +950,6 @@ export class NostrBatcher {
       const sub: SharedSubscription = new SharedSubscription(
         (signal) => target.req(filters, { signal }) as AsyncIterable<RelayMsg>,
         () => {
-          // Last subscriber left — drop the entry so the next caller reopens.
           if (sharedSubs.get(key) === sub) sharedSubs.delete(key);
         },
         (msg) => {
@@ -1191,8 +967,6 @@ export class NostrBatcher {
   close(): Promise<void> {
     return this.pool.close();
   }
-
-  // --- Batch executors ---
 
   private async executeRepostBatch(
     userPubkey: string,
@@ -1327,7 +1101,6 @@ export class NostrBatcher {
         { signal },
       );
 
-      // Group results by which event ID they reference via e-tag.
       const byEventId = new Map<string, NostrEvent[]>();
       const eventIdSet = new Set(eventIds);
       for (const event of events) {
@@ -1358,13 +1131,11 @@ export class NostrBatcher {
   ): Promise<Map<string, NostrEvent[]>> {
     const results = new Map<string, NostrEvent[]>();
     try {
-      // Build combined filters by replacing single #e/#q values with the full batch.
       const batchedFilters: NostrFilter[] = templateFilters.map((f) => {
         const clone = { ...f };
         const rec = clone as Record<string, unknown>;
         if (rec['#e'] !== undefined) {
           rec['#e'] = eventIds;
-          // Scale up limit proportionally
           if (clone.limit) {
             clone.limit = clone.limit * eventIds.length;
           }
@@ -1380,7 +1151,6 @@ export class NostrBatcher {
 
       const events = await this.pool.query(batchedFilters, { signal });
 
-      // Group results by which event ID they reference via e-tag or q-tag.
       const byEventId = new Map<string, NostrEvent[]>();
       const eventIdSet = new Set(eventIds);
 
@@ -1410,35 +1180,14 @@ export class NostrBatcher {
   }
 }
 
-/**
- * The client surface the app actually reaches for. Written down rather than
- * derived by walking the prototype: this is the CONTRACT (`NRelay` plus the
- * pool's two scoped handles), and a prototype walk would also bind whatever
- * internals a future implementation happens to expose.
- */
+/** The client contract (`NRelay` plus scoped handles), listed explicitly rather than walking the prototype. */
 const CLIENT_METHODS = ['query', 'event', 'req', 'relay', 'group', 'close'] as const;
 
 /**
- * Re-present a client as a plain object of receiver-bound functions.
- *
- * Everything downstream consumes `nostr` STRUCTURALLY — a dozen modules declare
- * their own minimal `{ query, relay, group }` interfaces, and every test double
- * in the repo is an object literal of standalone functions. Under that contract
- * a caller copying a method off the client (`{ relay: nostr.relay }`, a
- * destructure, a method handed to `map`) is an ordinary thing to write, and it
- * reads as safe.
- *
- * It is not, because the real client is a CLASS INSTANCE: `NostrBatcher.relay()`
- * reads `this.pool`, and `NPool`'s methods likewise read their own fields. A
- * lifted method arrives with the wrong receiver and throws — at the call site,
- * at runtime, on whichever path happened to do it, with nothing in the types or
- * the tests to catch it first (`useCommunityList` shipped exactly this, which
- * took out Concord community creation).
- *
- * Binding once, here, makes the structural contract TRUE of the object every
- * consumer holds: a bag of functions that work wherever they are called from.
- * That is why this is applied at the provider (the single place a client
- * escapes into the app) rather than at the call sites that must not misuse it.
+ * Re-present a client as a plain object of receiver-bound functions. Consumers
+ * use `nostr` structurally and may lift methods (`{ relay: nostr.relay }`),
+ * which throws on a class instance (this bit `useCommunityList`). Applied once
+ * at the provider.
  */
 export function detachableClient<T extends object>(client: T): T {
   const source = client as unknown as Record<string, unknown>;

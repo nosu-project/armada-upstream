@@ -1,17 +1,9 @@
 import { createContext, useContext } from "react";
 
 /**
- * Tracks the chat composer's container element so that floating UI (context
- * menus, popovers) can avoid overlapping it. The composer is the bottom-most
- * element in every chat view; without tracking it, Radix's collision detection
- * only knows about the viewport, so a context menu opened on a message near the
- * bottom can extend down into the composer / safe-area inset instead of
- * flipping upward.
- *
- * Each chat view (GroupChat, ConcordPage, ConcordPage, DMsPage Conversation,
- * ThreadPanel) provides its own instance via {@link ComposerBoundsProvider},
- * scoping the ref to that pane — important on desktop where a thread panel and
- * the main chat each have their own composer.
+ * Tracks the chat composer element so floating UI (menus, popovers) flips above
+ * it instead of overlapping. Each chat pane provides its own instance via
+ * {@link ComposerBoundsProvider} (thread panel and main chat have separate composers).
  */
 export type ComposerBoundsRef = React.RefObject<HTMLElement | null>;
 
@@ -24,15 +16,8 @@ export function useComposerBoundsRef(): ComposerBoundsRef {
 }
 
 /**
- * Computes `collisionPadding` for Radix floating content (context menus,
- * popovers) so it doesn't overlap the composer. Returns `undefined` when the
- * composer isn't mounted (no boundary to avoid), leaving Radix's default
- * viewport collision detection in effect.
- *
- * The composer sits at the bottom of the chat pane; its distance from the
- * viewport's bottom edge becomes the bottom collision padding, so the
- * effective boundary is the composer's top edge — forcing the menu to flip
- * upward instead of dropping into the composer / safe-area inset.
+ * `collisionPadding` for Radix floating content: the composer's distance from the
+ * viewport bottom, making its top edge the boundary. `undefined` when no composer.
  */
 export function getComposerCollisionPadding(
   ref: ComposerBoundsRef,

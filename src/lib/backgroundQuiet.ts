@@ -1,23 +1,9 @@
 /**
- * Android: while the app is in the background and the native notification
- * service is watching the account, the WebView goes QUIET.
- *
- * Nothing used to tell the WebView it had been backgrounded, so it went on
- * syncing as if on screen: its own wire subscriptions to every relay the
- * service was ALSO subscribed to, the sync scheduler's rounds, and a second
- * pass over every event the service received and forwarded to it. On a busy
- * account that measured 25–55 MB an hour and a quarter of a core with the
- * screen off — the same relays downloaded twice, and each event opened twice.
- *
- * The service is the background path by design: it holds the sockets,
- * decrypts, stores into the shared database and notifies. What it received
- * while the WebView was quiet is routed through ingest on resume (the durable
- * drain in WireSync), and the wire resumes each relay from its cursor, so
- * going quiet loses nothing — it only stops doing the work twice.
- *
- * Not while anything the user can hear or see depends on the page: a call (its
- * media runs in the WebView), or any playing audio/video element. Those keep
- * the WebView fully awake, exactly as before.
+ * Android: while backgrounded and the native notification service is watching
+ * the account, the WebView goes quiet instead of duplicating the service's
+ * relay subscriptions and ingest. Nothing is lost: the service's events drain
+ * through ingest on resume and the wire resumes from cursors. Calls and playing
+ * media keep the WebView awake.
  */
 import { onAppStateChange } from "@/lib/appStateEvents";
 
@@ -68,8 +54,7 @@ function install(): void {
       if (serviceWatching && !pageIsBusy()) set(true);
     }, QUIET_AFTER_MS);
   });
-  // Playback can also START while quiet (the lock screen's media controls),
-  // after the check above has run. `play` doesn't bubble, hence the capture.
+  // Playback can start while quiet (lock-screen controls); `play` doesn't bubble, hence capture.
   if (typeof document !== "undefined") {
     document.addEventListener("play", () => set(false), true);
   }
@@ -89,14 +74,9 @@ export function onBackgroundQuiet(listener: () => void): () => void {
   };
 }
 
-/**
- * Tell this module whether the native service is running with a live config
- * for the account — the only case in which the WebView may hand the
- * background over to it. Losing the service while quiet wakes the WebView.
- */
+/** Whether the native service is running with a live config for the account; losing it wakes the WebView. */
 export function setNativeServiceWatching(watching: boolean): void {
-  // Profiling builds: `armada:perf-no-quiet` keeps the old behavior, for an
-  // A/B measurement on one device and one account.
+  // Profiling builds: `armada:perf-no-quiet` disables quiet for A/B measurement.
   if (import.meta.env.VITE_PROFILE === "1" && watching) {
     try {
       if (localStorage.getItem("armada:perf-no-quiet") === "1") watching = false;

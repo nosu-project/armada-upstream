@@ -7,24 +7,15 @@ import { formatEndsAt, isPollEnded, parsePoll, type PollTally } from "@/lib/poll
 import { cn } from "@/lib/utils";
 
 interface PollViewProps {
-  /** The kind-1068 poll event/rumor (only its tags are read). */
+  /** Only its tags are read. */
   event: { tags: string[][] };
-  /** The tallied votes, resolved by the transport (relay query or sealed fold). */
   tally: PollTally;
-  /** Whether the current user may vote (membership / write access). */
   canVote: boolean;
-  /** Whether a vote publish is in flight (drives the button spinner). */
   isVoting?: boolean;
-  /** Cast the current selection. */
   onVote: (optionIds: string[]) => void;
 }
 
-/**
- * Presentational NIP-88 poll card: question options as result bars or votable
- * buttons, the user's own choice, and totals. 100% transport-agnostic — the
- * tally and the vote callback are supplied, so the same card renders NIP-29
- * relay polls and Concord sealed polls.
- */
+/** Transport-agnostic NIP-88 poll card (NIP-29 relay polls and Concord sealed polls). */
 export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewProps) {
   const { user } = useCurrentUser();
   const { options, pollType, endsAt } = useMemo(() => parsePoll(event), [event]);

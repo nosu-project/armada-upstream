@@ -5,29 +5,17 @@ import { useImageFallback } from "@/hooks/useBlossomCandidates";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
 
-/** Threshold at or below which we apply nearest-neighbor scaling. */
 const PIXEL_ART_MAX = 16;
 
 interface CustomEmojiImgProps {
-  /** The shortcode name (without colons). */
   name: string;
-  /** The image URL. */
   url: string;
-  /** CSS class name for the img element. */
   className?: string;
-  /**
-   * Rendered in place of the image when it fails to load. Defaults to nothing
-   * (the emoji simply disappears rather than showing a broken-image icon).
-   */
+  /** Rendered when the image fails (default: nothing, not a broken icon). */
   fallback?: React.ReactNode;
 }
 
-/**
- * Renders a single NIP-30 custom emoji as an inline image.
- *
- * If the image's natural dimensions are 16x16 or smaller, nearest-neighbor
- * (`image-rendering: pixelated`) scaling is applied to preserve crisp pixels.
- */
+/** A NIP-30 custom emoji; pixelated scaling at ≤16×16 natural size. */
 export function CustomEmojiImg({
   name,
   url,
@@ -35,8 +23,7 @@ export function CustomEmojiImg({
   fallback = null,
 }: CustomEmojiImgProps) {
   const [pixelated, setPixelated] = useState(false);
-  // Emoji-pack images are Blossom blobs more often than not; walk the viewer's
-  // other servers before the emoji disappears.
+  // Usually Blossom blobs: try the viewer's other servers first.
   const { src, onError, failed } = useImageFallback(url);
 
   const handleLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -46,17 +33,8 @@ export function CustomEmojiImg({
     }
   }, []);
 
-  // A custom emoji whose image URL doesn't resolve anywhere shows its fallback
-  // (or nothing) rather than a broken-image icon or the raw shortcode/URL text.
-  //
-  // A URL pointing at a loopback/private address (a leaked dev-instance emoji,
-  // e.g. http://localhost:8080/…) is never rendered: pointing an <img> at it
-  // makes armada.buzz request a local address, which trips Chrome's Local
-  // Network Access prompt ("… wants to access other apps and services on this
-  // device") for everyone who views the message. The media policy gates these
-  // too (`src` is then undefined), and one the policy holds back is simply not
-  // shown — an emoji has no room for a placeholder, and the fallback text
-  // says what it was.
+  // Never render loopback/private URLs: they trigger Chrome's Local Network
+  // Access prompt for every viewer. Policy-held emoji also show the fallback.
   if (failed || !src || isLocalNetworkUrl(url)) return <>{fallback}</>;
 
   return (
@@ -75,11 +53,8 @@ export function CustomEmojiImg({
 }
 
 interface EmojifiedTextProps {
-  /** The text to emojify. */
   children: string;
-  /** The event tags to extract emoji definitions from. */
   tags: string[][];
-  /** Optional CSS class for the custom emoji images. */
   imgClassName?: string;
 }
 

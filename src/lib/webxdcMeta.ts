@@ -9,19 +9,13 @@ export interface WebxdcMeta {
   iconFile?: File;
 }
 
-/**
- * Extract the name and icon from a `.xdc` (ZIP) file.
- *
- * - Reads `manifest.toml` for the `name` field.
- * - Reads `icon.png` or `icon.jpg` and returns it as a `File`.
- */
+/** Extract the name (manifest.toml) and icon (icon.png, else icon.jpg) from a `.xdc` ZIP. */
 export async function extractWebxdcMeta(file: File): Promise<WebxdcMeta> {
   const buf = await file.arrayBuffer();
   const unzipped = unzipSync(new Uint8Array(buf));
 
   const meta: WebxdcMeta = {};
 
-  // --- Parse manifest.toml for the name ---
   const manifestBytes = unzipped["manifest.toml"];
   if (manifestBytes) {
     const text = new TextDecoder().decode(manifestBytes);
@@ -31,11 +25,10 @@ export async function extractWebxdcMeta(file: File): Promise<WebxdcMeta> {
         meta.name = manifest.name;
       }
     } catch {
-      // Silently ignore malformed TOML
+      // ignore malformed TOML
     }
   }
 
-  // --- Extract icon (prefer png, fall back to jpg) ---
   const iconPng = unzipped["icon.png"];
   const iconJpg = unzipped["icon.jpg"];
   const iconBytes = iconPng ?? iconJpg;

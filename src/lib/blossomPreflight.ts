@@ -1,13 +1,7 @@
 /**
- * BUD-06 upload requirements: `HEAD /upload` with the blob's size and type
- * lets a Blossom server say whether it will take a file BEFORE the client has
- * transcoded, encrypted and sent it. The server is the one place an upload
- * size policy lives; this only asks it early.
- *
- * Deliberately unauthenticated: signing a preflight would put a signer prompt
- * in front of every attachment on extension and bunker logins, for a question
- * most servers answer without auth. A server that wants auth (401) is simply
- * "unknown", and the real upload settles it.
+ * BUD-06 upload preflight (`HEAD /upload`), asking the server's size/type policy
+ * before transcoding/encrypting. Unauthenticated to avoid a signer prompt per
+ * attachment; a 401 is just "unknown".
  */
 
 /** What a server said about a prospective upload. */
@@ -25,10 +19,8 @@ export interface PreflightRequest {
 }
 
 /**
- * Statuses that are an answer about THIS blob rather than about the request:
- * too large, unsupported type, payment required. Anything else — including a
- * 400 from a server that insists on `X-SHA-256` we didn't send — says nothing
- * about whether the upload would be taken.
+ * Statuses that refuse THIS blob (too large, bad type, payment). Others (e.g. a
+ * 400 demanding `X-SHA-256`) say nothing about acceptance.
  */
 const REFUSAL_STATUSES = new Set([402, 413, 415]);
 
@@ -60,11 +52,7 @@ export async function preflightUpload(
   }
 }
 
-/**
- * Ask every server. The upload goes to all of them at once and succeeds on
- * the first to take it, so it is doomed only when EVERY server refuses —
- * then the first refusal's reason is returned. Otherwise undefined.
- */
+/** The first refusal reason if EVERY server refuses (uploads race all servers), else undefined. */
 export async function preflightRefusal(
   servers: string[],
   req: PreflightRequest,
@@ -89,10 +77,8 @@ export function describeRefusal(refusal: { status: number; reason?: string }): s
 }
 
 /**
- * The server's own words from a failed upload. `BlossomUploader.upload` races
- * every server with `Promise.any`, so a total failure is an `AggregateError`
- * whose message says nothing; the per-server errors carry
- * `Blossom request failed (<status>): <X-Reason or body>`.
+ * The server's own words from a failed upload: unwraps the `Promise.any`
+ * `AggregateError` into per-server `Blossom request failed (<status>): …` errors.
  */
 export function uploadFailureReason(error: unknown): string | undefined {
   const errors = error instanceof AggregateError ? error.errors : [error];
@@ -108,11 +94,7 @@ export function uploadFailureReason(error: unknown): string | undefined {
   return undefined;
 }
 
-/**
- * How long one PUT may run. A flat per-request timeout caps the upload SIZE by
- * the uplink speed — 30 s killed any file much past a few MB on mobile data —
- * so allow a floor plus time for the bytes at a slow-but-working rate.
- */
+/** Per-PUT timeout scaled by size (a flat 30 s killed large files on mobile data). */
 export function uploadTimeoutMs(size: number): number {
   const FLOOR_MS = 30_000;
   const SLOW_BYTES_PER_SECOND = 50 * 1024;

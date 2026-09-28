@@ -11,16 +11,7 @@ import {
   type PaymentTarget,
 } from '@/lib/paymentTargets';
 
-/**
- * Read a pubkey's NIP-A3 payment targets (kind 10133, replaceable).
- *
- * Payment targets are public, self-authored donation endpoints — there is no
- * trust boundary to defend with an `authors` filter beyond the implicit one
- * (we query the pubkey's own kind 10133), so this mirrors the standard
- * replaceable-event read pattern.
- *
- * Returns validated, deduplicated targets (one per type) in registry order.
- */
+/** A pubkey's NIP-A3 payment targets (kind 10133): validated, one per type, registry order. */
 export function usePaymentTargets(pubkey: string | undefined) {
   const { nostr } = useNostr();
 
@@ -45,16 +36,8 @@ export function usePaymentTargets(pubkey: string | undefined) {
 }
 
 /**
- * Mutation hook for replacing the current user's payment targets (kind 10133).
- *
- * Kind 10133 is a replaceable event, so this is a full overwrite — the caller
- * supplies the complete desired set and the hook serializes it to `payto`
- * tags. We still read-modify-write via {@link fetchFreshEvent} to preserve any
- * unrelated `content` the event may carry, and so a rapid re-save never rebuilds
- * from a stale cache. Payment targets are public, self-authored donation
- * endpoints published only on an explicit user save, so the AGENTS.md
- * list-preservation rule is satisfied structurally: an empty set is a
- * deliberate "clear my donations", not a failed read to defend against.
+ * Full overwrite of kind 10133, still read-modify-write ({@link fetchFreshEvent}) to keep
+ * `content`. Only published on explicit save, so an empty set is a deliberate clear (AGENTS.md).
  */
 export function useUpdatePaymentTargets() {
   const { nostr } = useNostr();
@@ -83,8 +66,7 @@ export function useUpdatePaymentTargets() {
         prev: prev ?? undefined,
       });
     },
-    // Optimistically apply the new target set so the settings UI updates
-    // immediately. Snapshot for rollback on error.
+    // Optimistic, with a snapshot for rollback.
     onMutate: (targets: PaymentTarget[]) => {
       const key = ['payment-targets', user?.pubkey];
       const snapshot = queryClient.getQueryData<PaymentTarget[]>(key);

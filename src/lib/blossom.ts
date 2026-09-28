@@ -3,17 +3,9 @@ import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * App default Blossom media servers (mirrors Ditto's APP_BLOSSOM_SERVERS).
- * Used in addition to the user's kind 10063 server list when
- * `useAppBlossomServers` is enabled (the default), and as the only servers
- * when the user has no list of their own. Order follows BUD-03's "most
- * trusted first" convention.
- *
- * Deployment-configurable via `VITE_APP_BLOSSOM_SERVERS` (comma-separated
- * http(s) origins), mirroring `VITE_APP_RELAYS`: a hosted/self-hosted build
- * bakes in its own media servers, and the shipped APK/desktop builds can point
- * at whatever the operator chooses. Falls back to the public Armada/Ditto
- * media servers when unset or empty.
+ * App default Blossom servers (mirrors Ditto's APP_BLOSSOM_SERVERS), most
+ * trusted first (BUD-03). Overridable via `VITE_APP_BLOSSOM_SERVERS`
+ * (comma-separated origins).
  */
 const DEFAULT_APP_BLOSSOM_SERVERS =
   "https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/";
@@ -26,15 +18,11 @@ export const APP_BLOSSOM_SERVERS: string[] = (
   .filter((url: string | null): url is string => url !== null);
 
 /**
- * The user's personal Blossom server list, mirroring Ditto's
- * BlossomServerMetadata. `servers` is synced bidirectionally with the user's
- * kind 10063 event; `updatedAt` is the event's `created_at` (0 = never
- * synced), used so a stale relay read never clobbers a fresh local edit.
+ * The user's Blossom server list, synced with their kind 10063 event.
+ * `updatedAt` (0 = never synced) keeps a stale relay read from clobbering local edits.
  */
 export interface BlossomServerMetadata {
-  /** Ordered server URLs (most trusted/reliable first per BUD-03). */
   servers: string[];
-  /** Unix timestamp of the last update (from kind 10063 created_at). */
   updatedAt: number;
   /** Winning kind-10063 id, for NIP-01's lower-id same-second tiebreak. */
   eventId?: string;
@@ -82,14 +70,8 @@ function normalizeUrl(url: string): string {
 }
 
 /**
- * Get the effective Blossom server list based on user settings. Mirrors
- * Ditto's getEffectiveBlossomServers (and Armada's effectiveDmRelays)
- * semantics:
- *
- * - When `useAppBlossomServers` is true, merges the synchronized app-server
- *   set with the user's servers (app first, deduped).
- * - When false, returns only the user's servers, including an intentional
- *   empty set. An explicit off must not silently dial build-time defaults.
+ * Effective Blossom servers: app servers + user's (deduped) when enabled, else
+ * only the user's — even if empty; an explicit off must not dial defaults.
  */
 export function getEffectiveBlossomServers(
   appServers: string[],
@@ -100,24 +82,12 @@ export function getEffectiveBlossomServers(
   return dedupeServers([...appServers, ...userMeta.servers]);
 }
 
-/**
- * A Blossom content-addressed path: a leading `/<sha256>` (64 hex), optionally
- * followed by an extension (`/<sha256>.png`) some servers keep. The `\b` after
- * the hash tolerates the extension without matching a longer hex-ish path.
- */
+/** A content-addressed path `/<sha256>` (64 hex), optionally with an extension. */
 export const BLOSSOM_SHA256_PATH_REGEX = /^\/[a-f0-9]{64}\b/i;
 
 /**
- * Given a media URL and the effective server list, return the SAME blob served
- * from every OTHER server, for read-side redundancy (mirrors Ditto's
- * useBlossomFallback). A blob uploaded via {@link getEffectiveBlossomServers}
- * is content-addressed and mirrored (BUD-04) across the list, so swapping the
- * origin onto another server's copy is a valid retry when one server is down or
- * hasn't finished mirroring.
- *
- * Only applies to content-addressed URLs (`/<sha256>[.ext]`): an arbitrary
- * external image has no equivalent elsewhere, so it returns `[]`. Origins are
- * deduped and the source URL's own origin is excluded.
+ * The same content-addressed blob on every OTHER server (BUD-04 mirrors), for
+ * read-side redundancy. `[]` for non-content-addressed URLs.
  */
 export function blossomFallbackUrls(url: string, servers: readonly string[]): string[] {
   let parsed: URL;
@@ -145,20 +115,9 @@ export function blossomFallbackUrls(url: string, servers: readonly string[]): st
 }
 
 /**
- * The ordered list of sources to try for one media reference — the ONE place
- * that order is decided, whether the walk is then driven by an `<img>`'s
- * `onError`, by a `fetch` loop, or by a service worker.
- *
- * The primary URL first, then the sender's own `fallback` entries, then the
- * same content-addressed blob on every other Blossom server. Declared
- * fallbacks outrank derived mirrors because the sender knows where they
- * actually put the blob, while a mirror is only a guess that a copy exists
- * there (the BUD-04 mirroring the uploader does is best-effort).
- *
- * The primary and the declared fallbacks are raw event data, so they are
- * sanitized HERE rather than at each of the dozen places a ref is built — a
- * `javascript:` or LAN URL must not reach a `fetch` or an `<img src>` by any
- * route. Pure, so the walk is checkable without a renderer.
+ * The single ordering of sources for a media reference: primary, then the
+ * sender's declared fallbacks (they know where the blob is), then Blossom
+ * mirrors. Raw URLs are sanitized here so `javascript:`/LAN URLs never reach a fetch.
  */
 export function mediaCandidates(
   url: string,

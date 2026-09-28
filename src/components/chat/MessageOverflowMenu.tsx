@@ -12,13 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 
-/**
- * The `⋯` button on the desktop hover toolbar.
- *
- * The toolbar shows only the handful of actions worth a dedicated button
- * (react, reply, thread); everything else lives here, so the strip stays a
- * fixed, scannable width instead of growing with the message's capabilities.
- */
+/** The desktop toolbar's `⋯`: everything not worth a dedicated button. */
 export function MessageOverflowMenu({ actions }: { actions: MessageActionItem[] }) {
   if (actions.length === 0) return null;
 

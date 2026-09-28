@@ -1,27 +1,11 @@
 /**
- * What a channel drag means, as arithmetic (see CORD.md).
+ * What a channel drag means, as arithmetic (see CORD.md). A drag sets both
+ * `armada.order` position and `armada.category` in ONE edition per channel.
  *
- * Two conventions decide where a channel sits: `armada.order`'s position and
- * `armada.category`'s name. A drag sets BOTH at once — you drop a channel at a
- * spot, and the spot is inside some category or none — so the two have to be
- * planned together and published in ONE edition per channel. Publishing them
- * separately would be two editions on the same entity for one gesture, and a
- * failure between them leaves a channel filed where it isn't positioned.
- *
- * The invariant this establishes, and the reason a drag is expressible at all:
- * AFTER any drop, the stored order matches the rendered order exactly.
- * `groupChannelsByCategory` buckets a flat list, so a category's members need
- * not be contiguous in it — two channels in "Voice" can have three
- * uncategorized channels positioned between them, and the sidebar still draws
- * them together. That is fine to READ, but it means "the row above where I
- * dropped" has no stable flat index. Re-stamping the whole rendered sequence
- * on every drop collapses the two orders into one, so the next drag can read
- * an index straight off the screen.
- *
- * The cost is honest and bounded: the first drag in a community that has never
- * been arranged stamps every channel (an arrangement isn't expressible until
- * each carries a position — the same thing `reorderPositions` says), and later
- * drags stamp only the run between the old and new slot.
+ * Invariant: after any drop, stored order matches rendered order exactly (the
+ * whole rendered sequence is re-stamped), so the next drag reads indices straight
+ * off the screen. The first drag in an unarranged community stamps every channel;
+ * later drags only the disturbed run.
  */
 
 import { categoryKey } from "@/concord/lib/channelCategory";
@@ -42,15 +26,9 @@ export interface ArrangementChange {
 }
 
 /**
- * Move `idHex` to `toIndex` of the RENDERED sequence, under `category`.
- *
- * `rendered` is what the sidebar drew, in the order it drew it (the
- * uncategorized run, then each category's channels) — so `toIndex` is read
- * straight off the pointer without translating between two orders.
- *
- * `toIndex` is the slot in the list WITHOUT the dragged channel, which is what
- * a drop indicator between two rows actually names; dropping a channel back on
- * its own slot is therefore a no-op rather than an off-by-one.
+ * Move `idHex` to `toIndex` of the RENDERED sequence (as the sidebar drew it),
+ * under `category`. `toIndex` is the slot in the list WITHOUT the dragged channel,
+ * so dropping on its own slot is a no-op.
  */
 export function planChannelDrop(
   rendered: readonly ArrangedChannel[],
@@ -67,19 +45,9 @@ export function planChannelDrop(
 }
 
 /**
- * The editions a planned arrangement implies: index becomes position, and each
- * channel keeps the category its slot puts it in. Only genuinely-changed
- * channels come back, so a drop within a category republishes the run it
- * disturbed rather than the whole sidebar.
- *
- * Diffed against `before` (the STORED state) rather than read off `next`
- * alone, because the dragged channel's planned entry already carries its new
- * category — comparing that to itself would silently drop the one edition the
- * gesture was for whenever the drop didn't also change its index.
- *
- * Category comparison is casefolded, so re-filing under a spelling that only
- * differs in case isn't mistaken for a change: the grouping would be
- * identical and the edition would be noise.
+ * The editions a planned arrangement implies — only genuinely changed channels.
+ * Diffed against `before` (STORED state), since the dragged channel's planned
+ * entry already carries its new category. Category compare is casefolded.
  */
 export function arrangementChanges(
   before: readonly ArrangedChannel[],
@@ -110,12 +78,8 @@ export function pendingFromPlan(plan: readonly ArrangedChannel[]): PendingArrang
 }
 
 /**
- * The channels as they will read once a pending arrangement lands: the plan
- * laid over what the fold says, sorted by the same comparator `channelsView`
- * sorts by so the optimistic sidebar and the confirmed one cannot disagree
- * about order. Channels the plan doesn't name are passed through — it is an
- * overlay, not a replacement, so one that has gone stale against a channel
- * created meanwhile still renders that channel.
+ * Channels as they'll read once a pending arrangement lands, sorted by
+ * `channelsView`'s comparator. An overlay: unnamed channels pass through.
  */
 export function applyArrangement<T extends ArrangedChannel & { name: string }>(
   channels: readonly T[],
@@ -131,9 +95,8 @@ export function applyArrangement<T extends ArrangedChannel & { name: string }>(
 }
 
 /**
- * Whether the fold now says what the arrangement asked for, in which case the
- * overlay must be dropped — holding it any longer would mask a later change
- * by someone else behind a drop of ours that has already landed.
+ * Whether the fold now matches the arrangement, so the overlay must be dropped
+ * (or it would mask later changes by others).
  */
 export function arrangementSettled(
   channels: readonly ArrangedChannel[],
@@ -148,10 +111,8 @@ export function arrangementSettled(
 }
 
 /**
- * Whether two category names mean the same bucket. Casefolded and
- * trim-insensitive, and blank is the uncategorized run — the same rule
- * `groupChannelsByCategory` groups by, so "is this arrangement the one I
- * asked for" and "does it render the same" cannot disagree.
+ * Whether two category names are the same bucket (casefolded, trimmed, blank =
+ * uncategorized) — the rule `groupChannelsByCategory` uses.
  */
 export function sameCategory(a: string | undefined, b: string | undefined): boolean {
   const ka = a?.trim() ? categoryKey(a) : "";

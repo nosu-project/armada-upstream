@@ -1,19 +1,8 @@
 /**
- * Drain of the pre-ArmadaDB event cache into the `main` tenant.
- *
- * The old store had three backends (native Android SQLite, SQLite-WASM over
- * OPFS, and `NIndexedDB` as a degraded fallback) behind one interface. Only the
- * IndexedDB one is drained here: it is the only backend reachable from this
- * layer without resurrecting the SQL stack that was just deleted, and the
- * SQLite backends held nothing that isn't refetchable from relays.
- *
- * Unlike the DM, invite and Concord drains, this one is not protecting
- * irreplaceable data — a cached relay event can be fetched again. It exists so
- * an upgrading user's profiles and timelines paint immediately instead of after
- * a cold refetch, and so the abandoned database is actually deleted.
- *
- * Signatures are not carried across: ArmadaDB stores rumors, and nothing reads
- * a cached event's `sig` (see `mainEventStore.ts`).
+ * Drain of the pre-ArmadaDB IndexedDB event cache into the `main` tenant, so
+ * upgraders paint immediately and the old DB is deleted. Only the IndexedDB
+ * backend is drained; the old SQLite backends held only refetchable data.
+ * Signatures aren't carried (ArmadaDB stores rumors).
  */
 import { NIndexedDB } from "@nostrify/indexeddb";
 
@@ -37,12 +26,9 @@ const MAX_PAGES = 200;
 let drain: Promise<void> | undefined;
 
 /**
- * Copy the legacy event cache into the `main` tenant. Runs at most once.
- *
- * REJECTS when the copy fails. Nothing here is irreplaceable, but the startup
- * gate reads a resolved drain as "safe to delete the source", and that same
- * round deletes databases that ARE irreplaceable — so this reports failure
- * like every other drain rather than quietly costing the user a cold refetch.
+ * Copy the legacy event cache into `main`, at most once. REJECTS on failure:
+ * the startup gate reads a resolved drain as "safe to delete", in a round that
+ * also deletes irreplaceable databases.
  */
 export function migrateLegacyEvents(): Promise<void> {
   drain ??= drainLegacyEvents().catch((err: unknown) => {
@@ -58,9 +44,7 @@ async function drainLegacyEvents(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
   // `NIndexedDB` CREATES the database on its first query; see `skipLegacyDrain`.
   if (await skipLegacyDrain(LEGACY_EVENT_DB_NAME)) {
-    // Still sweep OPFS. A user who ran the SQLite-WASM backend has no
-    // `armada-events` database at all, so this is the only path that reaches
-    // them — and the directory is tens of megabytes nothing will ever read.
+    // Still sweep OPFS: SQLite-WASM users have no `armada-events` DB at all.
     await removeLegacyOpfs();
     await db.kv.set(DONE_KEY, true);
     return;
@@ -70,9 +54,7 @@ async function drainLegacyEvents(): Promise<void> {
   const tenant = db.tenant(ARMADA_TENANTS.main);
 
   try {
-    // Newest-first pages, walking `until` backwards. Ties on `created_at` mean
-    // a page can overlap the previous one, so progress is measured in NEW ids
-    // and the walk ends when a page contributes none.
+    // Newest-first pages; `created_at` ties overlap pages, so stop when a page adds no new ids.
     const seen = new Set<string>();
     let until: number | undefined;
 
@@ -83,9 +65,7 @@ async function drainLegacyEvents(): Promise<void> {
       const fresh = rows.filter((ev) => !seen.has(ev.id));
       if (fresh.length === 0) break;
 
-      // One batch per page rather than an await per event: the adapter
-      // coalesces concurrent writes into a single transaction, and a deep cache
-      // is tens of thousands of rows.
+      // One batch per page: the adapter coalesces concurrent writes into one transaction.
       await Promise.all(
         fresh.map((event) => {
           seen.add(event.id);
@@ -105,11 +85,7 @@ async function drainLegacyEvents(): Promise<void> {
   await db.kv.set(DONE_KEY, true);
 }
 
-/**
- * Drop the retired SQLite-WASM database's OPFS directory. Not drained — its
- * contents are refetchable — but leaving tens of megabytes of orphaned bytes
- * behind would be worse than deleting them.
- */
+/** Delete the retired SQLite-WASM OPFS directory (refetchable; tens of MB orphaned). */
 async function removeLegacyOpfs(): Promise<void> {
   try {
     const root = await navigator.storage?.getDirectory?.();

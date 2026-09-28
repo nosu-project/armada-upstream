@@ -10,21 +10,14 @@ import { KIND_POLL_VOTE, parsePoll, tallyPollVotes, type PollVote } from "@/lib/
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface PollCardProps {
-  /** The kind 1068 poll event. */
   event: NostrRumor;
-  /** The group's host relay (votes are published and queried there). */
+  /** Votes are published and queried on the group's host relay. */
   relayUrl: string;
-  /** The NIP-29 group id, added as an `h` tag on votes. */
   groupId: string;
-  /** Whether the current user may vote (group membership). */
   canVote: boolean;
 }
 
-/**
- * NIP-29 poll container: fetches the poll's votes from the group's host relay,
- * tallies them with the shared logic, and publishes votes as kind-1018 events.
- * Rendering is delegated to the transport-agnostic {@link PollView}.
- */
+/** NIP-29 poll: fetches votes from the host relay and publishes kind-1018 votes; renders {@link PollView}. */
 export function PollCard({ event, relayUrl, groupId, canVote }: PollCardProps) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();

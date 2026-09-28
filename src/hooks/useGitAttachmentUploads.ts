@@ -9,10 +9,8 @@ export function imetaTagFromNip94(fileTags: string[][]): string[] {
 }
 
 /**
- * GitHub-style attachments for git work-item composers: each picked file is
- * uploaded to the user's Blossom servers, its public URL appended to the text
- * (what you see is what publishes), and its imeta remembered so submit can
- * attach NIP-92 metadata for every URL still present in the final text.
+ * Uploads picked files to Blossom, appends each URL to the text, and remembers its imeta so
+ * submit attaches NIP-92 metadata for every URL still present.
  */
 export function useGitAttachmentUploads(appendText: (url: string) => void) {
   const { mutateAsync: uploadFile } = useUploadFile();
@@ -39,9 +37,7 @@ export function useGitAttachmentUploads(appendText: (url: string) => void) {
     }
   }, [appendText, uploadFile]);
 
-  // Deleting an appended URL from the text detaches its file. Whole-token
-  // matching, so an uploaded URL that happens to prefix a longer URL in the
-  // text doesn't attach the wrong imeta.
+  // Whole-token matching, so a URL prefixing a longer one doesn't attach the wrong imeta.
   const mediaFor = useCallback(
     (content: string) => {
       const tokens = new Set(content.split(/\s+/));

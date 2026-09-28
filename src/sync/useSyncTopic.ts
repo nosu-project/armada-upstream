@@ -5,13 +5,8 @@ import { onSyncState, syncState, want, type SyncPriority, type SyncState } from 
 const NO_TOPIC: SyncState = Object.freeze({ status: "idle" });
 
 /**
- * Declare interest in a sync topic for the life of the component, and read
- * its state reactively.
- *
- * The network side of a store-first hook: the component's query reads
- * ArmadaDB only, this asks the sync layer to keep the topic fresh, and the
- * returned state drives the loading-skeleton gate (skeleton iff the local
- * read was empty AND the topic has never settled).
+ * Declare interest in a sync topic for the component's life and read its
+ * state (skeleton iff the local read was empty AND the topic never settled).
  */
 export function useSyncTopic(topic: string | undefined, priority: SyncPriority = "visible"): SyncState {
   useEffect(() => {
@@ -22,11 +17,7 @@ export function useSyncTopic(topic: string | undefined, priority: SyncPriority =
   return useSyncTopicState(topic);
 }
 
-/**
- * Read a topic's sync state reactively WITHOUT declaring interest — for a
- * view that reflects someone else's sync (e.g. the chat page's catching-up
- * affordance over the timeline hook's topic).
- */
+/** Read a topic's sync state WITHOUT declaring interest. */
 export function useSyncTopicState(topic: string | undefined): SyncState {
   const subscribe = useCallback(
     (listener: () => void) => (topic === undefined ? () => undefined : onSyncState(topic, listener)),

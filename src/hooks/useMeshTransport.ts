@@ -10,15 +10,12 @@ import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 
 export type { MeshState } from "@/contexts/MeshContext";
 
-/** Synthetic Nostr kind for adapted mesh messages (mirrors NIP-29 chat kind 9). */
+/** Synthetic kind for adapted mesh messages (mirrors NIP-29 chat kind 9). */
 const MESH_KIND = 9;
 
 /**
- * Adapt a mesh wire message to the shared `ChatMsg` (NostrEvent) shape so it
- * renders through the SAME `ChatMessage`/`ChatContent` path as NIP-29 and
- * Concord. Mesh peers are NOT Nostr pubkeys, so `pubkey` carries the mesh peer
- * id (or sender nickname) purely as a stable author key. A mesh message is
- * never a signed Nostr event, which the `ChatMsg` (rumor) shape now admits.
+ * Adapt a mesh message to `ChatMsg`. `pubkey` holds the mesh peer id (not a Nostr key) as a
+ * stable author key.
  */
 function meshToEvent(m: MeshMessage): ChatMsg {
   return {
@@ -32,25 +29,15 @@ function meshToEvent(m: MeshMessage): ChatMsg {
 }
 
 /**
- * Drives the Android Bluetooth mesh and exposes it as a {@link ChatTransport}
- * for the shared chat UI. Public (broadcast) mesh chat only in this first cut —
- * a single room of nearby devices. Channels/DMs/reactions/threads are omitted,
- * so the shared components hide those controls automatically.
- *
- * Identity: the mesh keeps its native crypto identity; we only push the
- * logged-in Nostr profile name down as the announced nickname.
- *
- * This is the implementation hosted by {@link MeshProvider}. It is mounted ONCE
- * above the router so the conversation history survives navigating away from
- * the Mesh page (the native side has no history replay — see {@link MeshContext}).
- * UI code should call {@link useMeshTransport}, which reads the provider value.
+ * Android Bluetooth mesh as a {@link ChatTransport}; public broadcast chat only. Mounted ONCE
+ * in {@link MeshProvider} so history survives navigation (native has no replay). UI code should
+ * use {@link useMeshTransport}.
  */
 export function useMeshTransportState(): MeshContextType {
   const { user, metadata } = useCurrentUserProfile();
   const { config, updateConfig } = useAppContext();
   const incognito = config.meshIncognito;
-  // Opt-in gate: the mesh never starts (no permission prompt, no foreground
-  // service) until the user turns it on from the Mesh page. Persisted.
+  // Opt-in: no permission prompt or foreground service until the user enables it.
   const enabled = config.meshEnabled;
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [directMessages, setDirectMessages] = useState<Record<string, ChatMsg[]>>({});
@@ -61,8 +48,6 @@ export function useMeshTransportState(): MeshContextType {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // The user's real (non-incognito) name: profile display name → name → an
-  // npub-ish fallback so a profileless account still has a stable handle.
   const realName = useMemo(() => {
     return (
       metadata?.display_name?.trim() ||
@@ -71,10 +56,7 @@ export function useMeshTransportState(): MeshContextType {
     );
   }, [metadata?.display_name, metadata?.name, user]);
 
-  // The nickname actually announced on the mesh. Incognito → a stable
-  // `anon<peerid>` derived from our peer id (only known once started, so blank
-  // until then and the native side keeps its own anon default in the meantime).
-  // Non-incognito → the real name.
+  // Incognito → `anon<peerid>` (blank until our peer id is known; native keeps its default).
   const myNickname = useMemo(() => {
     if (incognito) return myPeerID ? meshAnonName(myPeerID) : "";
     return realName;
@@ -85,8 +67,7 @@ export function useMeshTransportState(): MeshContextType {
     [updateConfig],
   );
 
-  // De-dupe incoming messages by id (the mesh floods, so the same packet can
-  // surface more than once) and keep ascending (oldest-first) order.
+  // The mesh floods, so the same packet can surface more than once.
   const seenIds = useRef<Set<string>>(new Set());
   const seenPrivateIds = useRef<Set<string>>(new Set());
   const appendMessage = useCallback((m: MeshMessage) => {
@@ -113,10 +94,7 @@ export function useMeshTransportState(): MeshContextType {
   const start = useCallback(async () => {
     setError(null);
     try {
-      // Announce a name up front when we already have one. Incognito's anon
-      // name needs the peer id (only known after start), so it's announced by
-      // the sync effect below once `myNickname` resolves; until then the native
-      // side keeps its own anon default, so we still read as anonymous.
+      // Incognito's anon name needs the peer id; the sync effect below announces it later.
       if (myNickname) await BluetoothMesh.setNickname({ nickname: myNickname });
       const { peerID } = await BluetoothMesh.start();
       setMyPeerID(peerID);
@@ -143,14 +121,11 @@ export function useMeshTransportState(): MeshContextType {
   const setEnabled = useCallback(
     (next: boolean) => {
       updateConfig((c) => ({ ...c, meshEnabled: next }));
-      // Turning off tears the mesh down immediately (stops the FGS + BLE);
-      // turning on lets the auto-start effect below bring it up.
       if (!next) void stop().catch(() => undefined);
     },
     [updateConfig, stop],
   );
 
-  // Probe availability + wire listeners once.
   useEffect(() => {
     let cancelled = false;
     const handles: Array<{ remove: () => Promise<void> }> = [];
@@ -177,19 +152,14 @@ export function useMeshTransportState(): MeshContextType {
     };
   }, [appendMessage]);
 
-  // Auto-start once available AND the user has opted in. Incognito doesn't
-  // need a nickname up front (the native anon default covers the gap until our
-  // peer id resolves); otherwise wait for the real name so we never announce a
-  // blank. `enabled` is the consent gate: without it we never prompt for
-  // Bluetooth permissions or start the foreground service.
+  // Wait for the real name (unless incognito) so we never announce a blank. `enabled` is the
+  // consent gate.
   useEffect(() => {
     if (enabled && available && !started && (incognito || realName)) void start();
     // Only react to enablement/availability/name readiness; `start` is stable enough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, available, incognito, realName]);
 
-  // Keep the announced nickname in sync when it changes mid-session (profile
-  // edit, incognito toggle, or the anon name resolving once we learn our peer id).
   useEffect(() => {
     if (started && myNickname) void BluetoothMesh.setNickname({ nickname: myNickname }).catch(() => {});
   }, [started, myNickname]);
@@ -198,7 +168,7 @@ export function useMeshTransportState(): MeshContextType {
     async (content: string) => {
       const trimmed = content.trim();
       if (!trimmed) return;
-      // Optimistic local echo (the mesh does not loop our own messages back).
+      // The mesh does not loop our own messages back.
       appendMessage({
         id: `local-${crypto.randomUUID()}`.toUpperCase(),
         sender: myNickname || "me",
@@ -267,11 +237,7 @@ export function useMeshTransportState(): MeshContextType {
   );
 }
 
-/**
- * Read the app-wide Bluetooth-mesh transport (provided by {@link MeshProvider}).
- * Throws if used outside the provider — every consumer is under it via
- * `App.tsx`.
- */
+/** Throws outside {@link MeshProvider}. */
 export function useMeshTransport(): MeshContextType {
   const ctx = useContext(MeshContext);
   if (!ctx) {

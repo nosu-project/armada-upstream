@@ -20,69 +20,42 @@ import { sentRooms, subscribeSentRooms, warmSentRooms } from "@/lib/shareTargets
 import type { Dm17Conversation } from "@/hooks/useDm17";
 import type { NostrMetadata } from "@nostrify/nostrify";
 
-/** Publishing is a background nicety; keep it off the boot path. */
+/** Keep it off the boot path. */
 const PUBLISH_DELAY_MS = 5000;
 
-/** One room in the running, before its name is resolved. */
 interface Candidate {
   /** The room's route, which is also the shortcut id. */
   id: string;
   /** Unix seconds the viewer last sent here; 0 for never. */
   sentAt: number;
-  /** Set for a 1:1 DM — its name and picture come from the kind-0 profile. */
+  /** 1:1 DM — name and picture come from the kind-0. */
   peer?: string;
-  /** Set for a room whose name only the sending page knew (see `shareTargets`). */
+  /** A room name only the sending page knew (see `shareTargets`). */
   label?: string;
   iconUrl?: string;
 }
 
 /**
- * Publish the user's rooms as ranked Direct Share suggestions (Android sharing
- * shortcuts), newest OUTGOING message first — DMs, Concord channels and NIP-29
- * groups in one list.
- *
- * "Who do I message" is the question a share suggestion answers, and neither
- * signal the app had was that. This hook ranked DM conversations by
- * `latest.createdAt` — the newest message in the thread whoever sent it — so a
- * chatty stranger outranked a daily correspondent; and the notification service
- * pushed a shortcut per INCOMING notification with no rank at all, which at the
- * default rank 0 evicted every ranked suggestion below it. The service no
- * longer publishes share targets (its shortcuts are for the conversation-space
- * notification look, and are ranked below these), so this is now the single
- * writer of the set.
- *
- * Two sources for the same fact, both in unix seconds:
- * `Dm17Conversation.mineAt` — free, since the conversation query already reads
- * the viewer's newest message per conversation — and the local `shareTargets`
- * ledger, which is the only record of an outgoing Concord or NIP-29 send. A DM
- * takes whichever is newer: the ledger is fresher (it is written at send), the
- * query is durable (it survives a reinstall).
- *
- * Names and avatars come from the kind-0 profiles already in the local event
- * store for DMs (no network, and a renamed contact updates without sending
- * anything) and from the ledger for rooms. The avatar FETCH is native-side
- * (`ShareTargetPlugin.fetchIcon`), where arbitrary avatar hosts don't hit CORS.
+ * Android Direct Share suggestions, ranked by newest OUTGOING message across DMs, Concord and
+ * NIP-29. The single writer of the set (the notification service no longer publishes these).
+ * Sources: `Dm17Conversation.mineAt` and the local `shareTargets` ledger (newer wins). Avatars are
+ * fetched natively (`ShareTargetPlugin.fetchIcon`) to avoid CORS.
  */
 export function useShareShortcuts(): void {
   const { user } = useCurrentUser();
   const { conversations } = useDm17Conversations();
   const eventStore = useEventStore();
   const self = user?.pubkey;
-  // The shortcut icon is fetched natively (`ShareTargetPlugin.fetchIcon`) from
-  // whatever host the peer's profile names, so the URL handed down is already
-  // the one the media policy would load from — or none.
+  // Hand down the URL the media policy would load, or none.
   const mediaPolicy = useMediaPolicy();
   const mediaPolicyRef = useRef(mediaPolicy);
   mediaPolicyRef.current = mediaPolicy;
 
-  // Read inside the publish, which runs on a timer well after this render, so
-  // it always sees the current list rather than the one that scheduled it.
+  // Read at publish time (a timer), so it sees the current list.
   const conversationsRef = useRef<Dm17Conversation[]>(conversations);
   conversationsRef.current = conversations;
 
-  // The DM inputs as a string, so the effect keys on CONTENT: `conversations`
-  // is a fresh identity every refetch, and rescheduling a publish on each 60s
-  // poll would spend the shortcut manager's rate limit on nothing.
+  // Key on content so the 60s poll doesn't spend the shortcut rate limit.
   const dmKey = useMemo(
     () =>
       self
@@ -100,11 +73,7 @@ export function useShareShortcuts(): void {
     const ledger = sentRooms(self);
     const sentAtOf = new Map(ledger.map((r) => [r.route, r.entry.sentAt]));
 
-    // 1:1 DMs only. A share shortcut is a person — one avatar, one name, and a
-    // slot the OS draws itself — so a group DM has nothing to put in it. (Note
-    // to Self is a 1:1 with yourself and stays.) Inserted in the query's
-    // newest-message order, which the stable sort below preserves among
-    // conversations the viewer has never written in.
+    // 1:1 only: a share shortcut is one person (Note to Self stays).
     for (const c of conversationsRef.current) {
       if (c.peers.length !== 1) continue;
       const peer = c.peers[0];
@@ -116,13 +85,11 @@ export function useShareShortcuts(): void {
       if (byId.has(route)) continue;
       const parsed = parseChatRoute(route);
       if (parsed?.kind === "dm") {
-        // A DM sent to moments ago, before the conversation query refetched.
-        // Group keys are skipped for the same reason as above.
+        // A DM sent moments ago, before the query refetched; groups skipped.
         if (!parsed.peer || parsed.peer.includes(DM_PEER_SEP)) continue;
         byId.set(route, { id: route, peer: parsed.peer, sentAt: entry.sentAt });
       } else if (entry.label) {
-        // No label means no shortcut: a suggestion the OS can only render as
-        // the app icon with no name is worse than one fewer suggestion.
+        // No label → no shortcut.
         byId.set(route, {
           id: route,
           label: entry.label,
@@ -179,8 +146,7 @@ export function useShareShortcuts(): void {
     if (!hasShareTarget() || !self) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    // Every trigger restarts the timer, so a burst of sends coalesces into one
-    // publish rather than one per message.
+    // Restarting the timer coalesces bursts into one publish.
     const schedule = () => {
       if (cancelled) return;
       if (timer) clearTimeout(timer);
@@ -191,8 +157,7 @@ export function useShareShortcuts(): void {
       }, PUBLISH_DELAY_MS);
     };
     const unsubscribe = subscribeSentRooms(schedule);
-    // The warm is its own trigger: on a cold start the ledger is empty, so the
-    // first publish would otherwise rank every room at "never sent".
+    // On cold start the ledger is empty, so warming triggers its own publish.
     void warmSentRooms().catch(() => undefined).then(schedule);
     schedule();
     return () => {

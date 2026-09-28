@@ -50,33 +50,14 @@ import {
 } from "@/lib/webPushSupport";
 
 /**
- * useNostrPush
- *
- * Web Push against a content-blind nostr-push gateway (NIP-PUSH), the
- * replacement for the deprecated push endpoint the client used to reach on the
- * relay itself. Unlike that legacy gateway — which is embedded in a relay and
- * sees every stored event — this server only matches the raw filters we
- * register and sends a static wake-up;
- * the service worker fetches and decrypts/renders the referenced event
- * (`sw.js`).
- *
- * The watch set it registers is `usePushWatchSet` — the same groups,
- * mentions-only levels, addressed NIP-17 wraps, friends-only legacy DMs and
- * Concord channels the native Android background service watches
- * (`useNativeNotifications`), and the same ones the iOS APNs controller
- * registers (`useIosPush`). Only the transport differs between the two: this
- * one registers a browser Web Push subscription, that one a device token.
- * It self-gates: `supported` is false unless a nostr-push server is configured
- * for this build and the signer can NIP-44.
- *
- * Exposes the shared `UsePushNotificationsReturn` interface the settings UI
- * drives.
+ * Web Push via a content-blind NIP-PUSH gateway: it matches our raw filters and sends a
+ * static wake-up; `sw.js` fetches and decrypts the event. The watch set is `usePushWatchSet` (shared
+ * with the Android service and `useIosPush`). `supported` is false unless a gateway is configured and
+ * the signer can NIP-44.
  */
 
-/** Per-domain VAPID key cache (avoids an RPC round-trip on every load). */
 const VAPID_KEY = "armada:nostr-push-vapid";
 
-/** base64url (VAPID public key) → ArrayBuffer for applicationServerKey. */
 function urlBase64ToBuffer(base64String: string): ArrayBuffer {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -123,18 +104,15 @@ interface WebPushDeleteJob {
   pubkey: string;
   domain: string;
   installation: string;
-  /** Legacy logical ids known by the outgoing snapshot. */
   legacyIds: string[];
 }
 
 type WebPushMutationJob = WebPushSyncJob | WebPushDeleteJob;
 
 export interface WebPushMutationResult {
-  /** False when a newer generation superseded this mutation. */
   completed: boolean;
-  /** The worker kill switch was safely lifted for this endpoint. */
   activated: boolean;
-  /** Additive records that did not fit/reach the gateway and need a retry. */
+  /** Additive records that didn't fit/reach the gateway and need a retry. */
   deferredRegistrations: string[];
 }
 
@@ -146,15 +124,12 @@ function registryScopeOf(job: WebPushMutationJob): PushRegistryScope {
   };
 }
 
-/** One serialized, generation-aware gateway reconciliation. */
 export async function mutateWebPushRegistrations(
   job: WebPushMutationJob,
   isCurrent: () => boolean,
 ): Promise<WebPushMutationResult> {
-  // A partial watch set may be additive, but its policy is not. Until the
-  // NIP-78/settings authorities represented in the sealed worker config are
-  // trusted, registering default-derived filters and lifting the account-exit
-  // kill switch could expose notifications the account explicitly disabled.
+  // Until the policy is trusted, registering default-derived filters could expose notifications
+  // the account disabled.
   if (job.kind === "sync" && !job.notificationSettingsReady) {
     return { completed: false, activated: false, deferredRegistrations: [] };
   }
@@ -248,8 +223,7 @@ export async function mutateWebPushRegistrations(
       return {
         id: spec.id,
         replaces: [
-          // Logical filter migrations (notably flat NIP-29 ids → exact
-          // per-relay ids) happen even after the web-install migration latch.
+          // Logical migrations (flat NIP-29 ids → per-relay ids) happen even after the migration latch.
           ...(spec.replaces ?? []).map((logicalId) => scopePushSubscriptionId(
             logicalId,
             job.pubkey,
@@ -310,20 +284,12 @@ export async function mutateWebPushRegistrations(
     return { completed: false, activated: false, deferredRegistrations: [] };
   }
 
-  // A stale record the gateway refused to release is a RETRY, not a reason to
-  // withhold activation. Everything this pass registered is correct, and
-  // endpoint safety is proven separately (`activateRegisteredWebPush`), so
-  // returning here would leave a correct endpoint behind the durable
-  // account-exit kill switch with no sealed policy — silently no
-  // notifications at all until that one record becomes deletable. The error
-  // is still raised below, after the useful work has landed.
+  // An unreleasable stale record is a retry, not a reason to withhold activation (which would
+  // mean no notifications at all). The error is raised below.
   const staleDeletionsRemain = result.failedDeletions.length > 0;
 
-  // An incomplete cold-load pass may add installation-scoped records, but it
-  // cannot prove that the legacy/shared or previously tracked records are
-  // stale. Completing migration would forget the very ids a later full pass
-  // needs to delete — and so would latching it while a delete this pass
-  // attempted is still outstanding.
+  // An incomplete pass can't prove old records stale, so don't complete migration (or latch
+  // while a delete is outstanding).
   if ((job.kind === "sync" && !job.authoritative) || staleDeletionsRemain) {
     savePushRegistrationState(scope, {
       ids: result.trackedIds,
@@ -338,10 +304,7 @@ export async function mutateWebPushRegistrations(
     });
   }
 
-  // Account exit leaves a durable deny-by-default flag behind. A successful
-  // partial registration may activate useful current-account watches, but only
-  // after endpoint retirement is proven and this account's sealed config has
-  // landed. Full watch authority remains solely the prune decision above.
+  // Activate only after endpoint retirement is proven and this account's sealed config landed.
   let activated = false;
   if (job.kind === "sync" && browserSubscription && result.registeredAny) {
     const activationAllowed = await activateRegisteredWebPush({
@@ -358,14 +321,11 @@ export async function mutateWebPushRegistrations(
       }
       return { completed: false, activated: false, deferredRegistrations: [] };
     }
-    // Avoid claiming activation merely because no registration was attempted:
-    // a prior account-exit kill switch remains intentional in that case.
+    // Don't claim activation when nothing was attempted; a prior kill switch stays intentional.
     activated = true;
   }
 
-  // Report the orphan last, so the caller's bounded retry keeps trying to
-  // release it without that retry being the thing standing between a correct
-  // endpoint and any notification at all.
+  // Report the orphan last so the retry doesn't block notifications.
   if (staleDeletionsRemain) {
     throw new Error(
       `Failed to remove ${result.failedDeletions.length} stale push subscription(s)`,
@@ -397,12 +357,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const unavailableReason = isNativeRuntime()
     ? "native-runtime" as const
     : isDesktop()
-      // Electron exposes window.PushManager and registers a service worker, so
-      // the plain capability probe reports Web Push "supported" — but its
-      // Chromium has no push service behind that API, so getVapidKey/subscribe
-      // can only fail (misleadingly, as "check your connection"). Report it
-      // unavailable so Settings offers the foreground notifier — the only
-      // notifier the desktop shell has — instead of a toggle that never works.
+      // Electron exposes PushManager but has no push service behind it; report unavailable so
+      // Settings offers the foreground notifier.
       ? "desktop" as const
       : webPushUnavailableReason(nostrPushConfigured());
   const supported = unavailableReason === undefined;
@@ -417,9 +373,9 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const [prepareNonce, setPrepareNonce] = useState(0);
   const prefs = config.pushPrefs;
   const preparedRef = useRef<PreparedPush | undefined>(undefined);
-  /** Once account exit starts, this mounted instance may never write again. */
+  /** Once account exit starts, this instance may never write again. */
   const exitingRef = useRef(false);
-  /** Serialize and expose config writes so exit can clear strictly after them. */
+  /** Serialized so exit can clear strictly after pending config writes. */
   const swConfigTailRef = useRef<Promise<void>>(Promise.resolve());
   const queueSwConfig = useCallback((operation: () => Promise<void>) => {
     const work = swConfigTailRef.current.then(operation, operation);
@@ -427,8 +383,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     return work;
   }, []);
 
-  // The watch set — the same one the Android background service uses, and the
-  // one the APNs controller registers (`usePushWatchSet`).
   const {
     specs,
     concord,
@@ -449,11 +403,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const notificationSettingsReadyRef = useRef(notificationSettingsReady);
   notificationSettingsReadyRef.current = notificationSettingsReady;
 
-  /**
-   * Seal one current-account config snapshot. The generation check is repeated
-   * before and inside the serialized write so neither a newer watch snapshot
-   * nor account exit can let stale keys land last.
-   */
+  /** The generation check is repeated inside the serialized write so stale keys never land last. */
   const writeCurrentSwConfig = useCallback(async (
     isCurrent: () => boolean = () => true,
   ) => {
@@ -464,9 +414,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       throw new Error("Push session changed before its config could be written");
     }
 
-    // Mirror useKnownDmPeers' `mine` dimension. This local-store enhancement
-    // is bounded: a wedged IndexedDB must not indefinitely hold the endpoint's
-    // kill switch or prevent otherwise-valid current-account registrations.
+    // Mirror useKnownDmPeers' `mine`; bounded so a wedged IndexedDB can't block registration.
     let mineConversationKeys: string[] = [];
     try {
       const rows = await Promise.race([
@@ -538,26 +486,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
     queueSwConfig,
   ]);
 
-  // Keep the service worker's push config current — the DM policy + known set
-  // for every enabled web-push session, the decrypt key for nsec logins, and
-  // the per-channel Concord stream keys. Cleared whenever push is off or logged
-  // out, so no key lingers past a session that can use it.
-  //
-  // Display data is deliberately NOT sealed here. The worker reads names,
-  // avatars, community icons and channel titles out of ArmadaDB at push time
-  // (`pushRuntime.ts`) — IndexedDB is reachable from a worker, which the
-  // earlier snapshot wrongly assumed it wasn't. That removed a whole failure
-  // mode: a config sealed while the kind-0 rows were still cold used to stay
-  // nameless for the session, so it needed timed re-seals to catch profiles
-  // that landed late, and it could only ever name a pre-listed peer.
+  // Keep the worker's push config (DM policy, known set, nsec key, Concord stream keys) current;
+  // cleared when push is off or logged out. Display data isn't sealed: the worker reads ArmadaDB at
+  // push time (`pushRuntime.ts`).
   useEffect(() => {
-    // Clear only in states that MEAN no session should hold a key: logged out,
-    // unsupported runtime, or the user's push intent turned off. `enabled` is
-    // false during every session's PREPARATION (and stays false when the
-    // gateway RPC fails), so clearing on it deleted the worker's decrypt
-    // config at each app start — a session that died before preparing left
-    // every later push degraded to the generic wake-up until a fully
-    // successful load happened to rewrite it.
+    // Clear only when no session should hold a key. `enabled` is false during preparation, so
+    // clearing on it wiped the worker config at every start.
     if (!supported || !user || !loadPushIntent()) {
       void queueSwConfig(clearSwPushConfig).catch(() => undefined);
       return;
@@ -565,9 +499,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     if (exitingRef.current) return;
     // Still preparing: leave the existing config for the worker to use.
     if (!enabled) return;
-    // Only the authorities represented in this file matter. A NIP-29 group
-    // list or DM-relay outage may block gateway pruning, but must not pin old
-    // decrypt keys/policy when the DM roster and Concord folds are complete.
+    // Only this file's authorities matter; a group-list/DM-relay outage mustn't pin old keys.
     if (!notificationSettingsReady) return;
     let cancelled = false;
     writeCurrentSwConfig(() => !cancelled).catch((err) => {
@@ -586,8 +518,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     queueSwConfig,
     writeCurrentSwConfig,
   ]);
-
-  // ── Sync ───────────────────────────────────────────────────────────────────
 
   const client = useMemo(() => {
     if (!supported || !user || !NOSTR_PUSH_PUBKEY) return undefined;
@@ -608,16 +538,13 @@ export function useNostrPush(): UsePushNotificationsReturn {
   }
   const mutationRunner = mutationRunnerRef.current;
 
-  // Supersede a registration/config transaction as soon as policy authority
-  // is lost. `writeCurrentSwConfig` also reads the ref immediately
-  // before its serialized write, closing the async gap before this effect.
+  // Supersede in-flight transactions as soon as policy authority is lost.
   useEffect(() => {
     if (!notificationSettingsReady) mutationRunner.invalidate();
   }, [notificationSettingsReady, mutationRunner]);
 
-  // Prepare the service worker and public VAPID key before showing an enable
-  // action. PushManager.subscribe() has to run directly from the user's tap on
-  // iOS; doing this RPC first would consume that transient activation.
+  // Prepare before showing enable: iOS requires PushManager.subscribe() directly from the tap,
+  // and an RPC first would consume the activation.
   useEffect(() => {
     if (!supported || !client || !user || exitingRef.current) {
       preparedRef.current = undefined;
@@ -636,11 +563,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
       } catch {
         // Storage can be unavailable in private browsing; the RPC covers it.
       }
-      // Always ask the gateway for the CURRENT key: the server can rotate a
-      // domain's VAPID pair (e.g. regenerated key storage), and trusting the
-      // cache would keep this install subscribed — and the gateway signing —
-      // with keys that no longer match, which push services reject with 403
-      // forever. The cache is only a fallback for an unreachable gateway.
+      // Always fetch the CURRENT key: a rotated VAPID pair would otherwise 403 forever. The cache is
+      // only a fallback.
       let vapid = "";
       try {
         vapid = await client.getVapidKey(domain);
@@ -665,9 +589,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
         applicationServerKey: key,
       };
 
-      // A gateway VAPID rotation makes the old browser subscription unusable.
-      // Remove it during preparation so the next user tap can subscribe as its
-      // first permission-sensitive operation.
+      // A VAPID rotation invalidates the old subscription; remove it now so the next tap can subscribe
+      // first thing.
       const existing = await registration.pushManager.getSubscription();
       if (existing && !matchesWebPushServerKey(existing, key)) {
         await existing.unsubscribe().catch(() => false);
@@ -694,14 +617,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
     };
   }, [supported, client, user, prepareNonce]);
 
-  /** Queue one snapshot; incomplete snapshots are strictly additive. */
+  /** Incomplete snapshots are strictly additive. */
   const sync = useCallback(async (gestureSubscription?: PushSubscription) => {
     const prepared = preparedRef.current;
     if (!client || !user || !prepared) throw new Error("Push not ready");
     if (exitingRef.current || !notificationSettingsReady) return undefined;
-    // Empty while false is "not loaded", never an instruction to replace or
-    // prune. A non-empty partial set is still useful: register those records
-    // now, and retain every prior id until readiness makes deletion safe.
+    // Empty while not ready means "not loaded"; partial sets register but never prune.
     if (!watchSetReady
       && specs.length === 0
       && !groupPlaneReady
@@ -738,7 +659,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     writeCurrentSwConfig,
   ]);
 
-  /** Remove this account/install's known records in the same serial lane. */
   const deleteGatewayRecords = useCallback(async () => {
     if (!client || !user) return;
     await mutationRunner.runExclusive({
@@ -752,21 +672,15 @@ export function useNostrPush(): UsePushNotificationsReturn {
     });
   }, [client, user, mutationRunner, installation, specs]);
 
-  // Account switching hard-reloads, and final logout purges the registry. Both
-  // happen too quickly for a render-driven cleanup, so register the outgoing
-  // signer/session with the shared pre-exit choke point.
+  // Switching and logout are too fast for render-driven cleanup, so register with the shared
+  // pre-exit choke point.
   useEffect(() => {
     if (!user) return;
     return registerBeforeAccountExit(async () => {
-      // This hook remains mounted while the account switcher waits for its
-      // bounded cleanup. Stop every render-driven writer synchronously before
-      // the first await, and supersede a queued/running registration snapshot.
+      // Stop every writer synchronously before the first await.
       exitingRef.current = true;
       mutationRunner.invalidate();
-      // Local safety comes before the bounded network cleanup on EVERY exit.
-      // A failed old-account DELETE can then target only a retired endpoint,
-      // and the worker stays deny-by-default until the next account finishes
-      // an authoritative registration.
+      // Local safety first: the worker stays deny-by-default until the next account registers.
       await finishWebPushAccountExit({
         registration: preparedRef.current?.registration,
         clearConfig: () => queueSwConfig(clearSwPushConfig),
@@ -775,11 +689,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
     });
   }, [user, mutationRunner, queueSwConfig, deleteGatewayRecords]);
 
-  // The active-account marker is origin-global. A switch in another tab does
-  // not reload this document, so without this fence its old signer can rewrite
-  // the shared worker config and clear the shared kill switch behind the new
-  // account. The initiating tab is the sole cleanup leader; followers only
-  // fence and reload, never tear down the incoming account's shared endpoint.
+  // The active-account marker is origin-global; fence stale tabs so they can't rewrite the shared
+  // worker config. Only the initiating tab cleans up.
   useEffect(() => {
     if (!user) return;
     return installCrossTabAccountExit({
@@ -791,11 +702,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     });
   }, [user, mutationRunner]);
 
-  // Auto-(re)sync on every load and whenever the watch set changes: opt-out, so
-  // as long as the user intends push, permission is granted, and there is
-  // something to watch, keep the server's subscriptions current. Guarded by a
-  // signature so an unrelated re-render doesn't re-PUT. Transient failures retry
-  // with backoff.
+  // Auto-(re)sync on load and watch-set changes (signature-guarded, with backoff).
   const syncSig = useMemo(
     () => JSON.stringify({
       domain: pushDomain(),
@@ -891,8 +798,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     nonce,
   ]);
 
-  // A rotated browser subscription (SW pushsubscriptionchange → message) must
-  // be re-registered with the server.
+  // Re-register a rotated browser subscription (SW pushsubscriptionchange).
   useEffect(() => {
     if (!supported || !ready) return;
     const onMessage = (event: MessageEvent) => {
@@ -906,9 +812,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [supported, ready]);
 
-  // iOS can rotate or revoke a subscription while Armada is closed. Recheck
-  // whenever the app becomes visible/online; granted intent with no current
-  // subscription is repaired by the auto-sync effect above.
+  // iOS may rotate/revoke subscriptions while closed; recheck on visible/online.
   useEffect(() => {
     if (!supported || !ready) return;
     let cancelled = false;
@@ -943,18 +847,14 @@ export function useNostrPush(): UsePushNotificationsReturn {
     };
   }, [supported, ready]);
 
-  // ── Public actions ─────────────────────────────────────────────────────────
-
   const enable = useCallback(async () => {
     const prepared = preparedRef.current;
     if (!supported || !ready || !user || !prepared || exitingRef.current) return;
     setBusy(true);
     setError(undefined);
 
-    // Call subscribe synchronously from the toggle's click. Besides creating
-    // the endpoint, this is the standards-based permission request; unlike
-    // Notification.requestPermission(), it also works in iOS Home-Screen web
-    // apps where window.Notification is unexpectedly absent.
+    // subscribe() synchronously from the click: it's also the permission request, and works in iOS
+    // Home-Screen apps where window.Notification is absent.
     const subscriptionPromise = prepared.registration.pushManager.subscribe(prepared.options);
     try {
       const subscription = await subscriptionPromise;
@@ -964,9 +864,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       const outcome = await sync(subscription);
       if (outcome?.completed) {
         if (outcome.deferredRegistrations.length > 0) {
-          // Stable existing records may already be active even though a new
-          // additive id hit quota. Keep that useful endpoint live and schedule
-          // the same bounded retry path without claiming the snapshot synced.
+          // Existing records may be active even if a new id hit quota; keep it live and retry.
           if (outcome.activated) setEnabled(true);
           setError("Background notifications are enabled, but some watches still need to be refreshed.");
           setNonce((n) => n + 1);
@@ -975,10 +873,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
         lastSynced.current = syncSig;
         setEnabled(true);
       } else {
-        // The endpoint exists (the gesture cannot be replayed automatically on
-        // iOS), but no default-derived gateway watch was exposed. Once the
-        // notification document becomes authoritative, the standing sync
-        // effect registers it and activates this endpoint.
+        // Endpoint exists but no default-derived watch was exposed; the sync effect activates it once
+        // the notification document is authoritative.
         setEnabled(false);
         setError("Armada is still restoring your notification settings. Background notifications will finish enabling automatically.");
       }
@@ -999,13 +895,9 @@ export function useNostrPush(): UsePushNotificationsReturn {
     try {
       savePushIntent(false);
       mutationRunner.invalidate();
-      // Retry endpoint retirement even when an earlier account-exit attempt
-      // persisted only `{ success:false }` before timing out. A successful
-      // explicit disable upgrades that durable proof, so the next enable can
-      // recover instead of remaining permanently deny-by-default.
+      // Retry retirement even after a timed-out exit attempt, so the next enable can recover.
       await retireWebPushEndpoint(preparedRef.current?.registration);
-      // Serialize after any in-flight sync and keep failed deletes in the
-      // scoped registry for a later retry.
+      // Serialized after any in-flight sync; failed deletes stay for retry.
       await deleteGatewayRecords().catch((err) => {
         console.warn("[nostr-push] gateway cleanup failed:", err);
       });

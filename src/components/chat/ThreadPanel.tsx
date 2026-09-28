@@ -61,32 +61,21 @@ import type { MessageActionItem } from "@/components/chat/messageActions";
 import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
-/**
- * Consecutive replies from the same author within this window collapse into a
- * compact continuation (no repeated avatar/name). Matches the main timeline's
- * `CONTINUATION_WINDOW_SECONDS` in MessageTimeline.
- */
+/** Continuation window; matches MessageTimeline's `CONTINUATION_WINDOW_SECONDS`. */
 const CONTINUATION_WINDOW_SECONDS = 5 * 60;
 
-/** Stable no-op for a zap-only pill row (no reactions resolved), so the
- * ReactionBar keeps a constant prop instead of a fresh closure per render. */
+/** Stable no-op so a zap-only pill row keeps a constant prop. */
 const NOOP_REACT = () => {};
 
-/** Distance from the bottom (px) still counted as "reading the newest". */
 const AT_BOTTOM_PX = 60;
 
 /**
- * How a {@link ThreadMessage} row is drawn. `chat` is the drawer's row: a
- * chat line with a clock time, collapsible into a continuation, its actions
- * on a floated hover strip. `comment` is a forum comment: the same row with
- * its own padding and a relative age (the full date on hover), never
- * collapsed, since a post page has no day dividers to carry the date.
- * `post` is a forum post's body: a byline over the content at reading width,
- * the actions on an always-visible row beneath it rather than floated.
+ * `chat`: drawer row with clock time, collapsible, floated hover actions.
+ * `comment`: forum comment with relative age, never collapsed (no day dividers).
+ * `post`: forum post body at reading width with an always-visible action row.
  */
 export type ThreadMessagePresentation = "chat" | "comment" | "post";
 
-/** A single message row inside a thread (root or reply). */
 export function ThreadMessage({
   event,
   reactions,
@@ -110,49 +99,28 @@ export function ThreadMessage({
 }: {
   event: ChatMsg;
   presentation?: ThreadMessagePresentation;
-  /**
-   * Answer this comment in place (the `comment` presentation only): a
-   * labelled action under the body, always visible — the one thing a
-   * threaded discussion must never make the reader hunt for. A post has no
-   * such action of its own; its comment box sits right beneath it.
-   */
+  /** `comment` only: an always-visible in-place reply action. */
   onReply?: (event: ChatMsg) => void;
   /** This thread's route; rows append their own `/m/<id>` to it. */
   permalink?: ChatRoute;
   reactions?: MessageReactions;
-  /** Aggregated zaps for this message (feeds the ⚡ total chip). */
   zaps?: MessageZaps;
-  /** Whether this surface supports zaps (shows the ⚡ button on others' messages). */
   zapEnabled?: boolean;
   /** CORD.md announcement publisher (Concord); absent = NIP-57 public surface. */
   onSendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
   onSendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   canReact: boolean;
-  /** Whether the current user may delete others' messages (moderation). */
   canModerate?: boolean;
-  /**
-   * Whether this message is an unsigned rumor (Concord sealed chat event).
-   * Drives the "View event JSON" dialog wording and suppresses "Copy message
-   * ID" (a rumor has no relay-addressable event id).
-   */
+  /** Unsigned rumor (Concord): "View event JSON" wording, no "Copy message ID". */
   isRumor?: boolean;
-  /**
-   * Render as a compact continuation of the previous same-author reply: hides
-   * the avatar/name/timestamp header (a hover-revealed clock time replaces the
-   * avatar), mirroring the main timeline's continuation collapsing.
-   */
+  /** Compact continuation of the previous same-author reply. */
   continuation?: boolean;
-  /** This Concord message carries an authorized channel-wide @everyone. */
   everyoneMention?: boolean;
-  /** Delete this message (own always; others' require moderation). Hidden when absent. */
+  /** Own always; others' require moderation. Hidden when absent. */
   onDelete?: (event: ChatMsg) => void;
-  /** Whether this message is currently in edit mode. */
   isEditing?: boolean;
-  /** Begin editing this message (own messages only). */
   onEdit?: (event: ChatMsg) => void;
-  /** Submit an inline edit. */
   onEditSubmit?: (event: ChatMsg, content: string) => void;
-  /** Cancel editing. */
   onEditCancel?: () => void;
 }) {
   const { user } = useCurrentUser();
@@ -166,40 +134,31 @@ export function ThreadMessage({
 
   const [jsonOpen, setJsonOpen] = useState(false);
   const [zapOpen, setZapOpen] = useState(false);
-  // The touch long-press sheet, and delete confirmation (delete now sits one
-  // tap away in the sheet/menu, so it confirms instead of firing immediately).
+  // Delete sits one tap away in the sheet/menu, so it confirms.
   const [sheetOpen, setSheetOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  // The author can delete their own message; moderators can delete anyone's
-  // (mirrors ChatMessage's gating). The transport decides how.
+  // Mirrors ChatMessage's gating; the transport decides how.
   const isOwn = user?.pubkey === event.pubkey;
   const canDelete = Boolean(onDelete) && (isOwn || canModerate);
-  // Own messages are editable when the transport supports it. The transport
-  // only provides editMessage for kinds it can edit, so no kind check needed.
+  // The transport only provides editMessage for kinds it can edit.
   const canEdit = isOwn && Boolean(onEdit);
   const [editText, setEditText] = useState(event.content);
   const editRef = useAutosizeTextarea(editText);
-  // Sync edit text when entering edit mode (content may have changed).
   useEffect(() => {
     if (isEditing) setEditText(event.content);
   }, [isEditing, event.content]);
-  // Zap gating mirrors ChatMessage: shown on others' messages whenever the
-  // surface supports zaps, never gated on a lightning address (the dialog
-  // opens on Bitcoin and offers any NIP-A3 targets the author declared).
+  // Mirrors ChatMessage: never gated on a lightning address.
   const canZap = Boolean(zapEnabled && user && !isOwn);
-  // Reporting, gated exactly as in ChatMessage: the ambient chat scope decides
-  // where a report goes, and an absent destination (a legacy Concord epoch,
-  // which has no staff-only address) offers none.
+  // Gated as in ChatMessage: the chat scope decides the destination (none for
+  // legacy Concord epochs).
   const [reportOpen, setReportOpen] = useState(false);
-  // The menu's collision padding forces a layout flush; compute it only while open.
   // Built on the first right-click, beside the row (see useLazyContextMenu).
   const contextMenu = useLazyContextMenu();
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
-  // Blocking needs no destination, so it is offered wherever a reply is
-  // rendered; hiding is viewer-local and rides beside it.
+  // Blocking needs no destination; hiding is viewer-local.
   const mute = useMuteToggle(event.pubkey);
   const hiddenMessages = useHiddenMessages();
   const reportTarget: ReportTarget =
@@ -218,13 +177,10 @@ export function ThreadMessage({
   }, [event.id, event.pubkey]);
 
   const openSheet = useCallback(() => setSheetOpen(true), []);
-  // Not while editing: the row hosts a textarea then, and both the sheet and
-  // the `-webkit-user-select:none` that guards it would fight the edit caret.
+  // Not while editing: the sheet and `user-select:none` would fight the caret.
   const longPress = useLongPress(isTouch && !isEditing ? openSheet : undefined);
 
-  // One action list drives the touch long-press sheet, the desktop `⋯`
-  // overflow and the right-click menu, so they can't drift apart — matching
-  // ChatMessage's action model instead of the panel's older bespoke menu.
+  // One action list drives the sheet, `⋯` overflow and right-click menu (as ChatMessage).
   const menuActions: MessageActionItem[] = [];
   if (canZap && !isEditing) {
     menuActions.push({ id: "zap", label: "Zap message", icon: Zap, onSelect: () => setZapOpen(true) });
@@ -252,8 +208,7 @@ export function ThreadMessage({
     });
   }
   menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
-  // Hide, block, report and delete share the trailing moderation group; only
-  // the first of them opens it. Same order as ChatMessage: mildest tool first.
+  // Only the first of hide/block/report/delete opens the moderation group.
   const showHide = hiddenMessages.canHide && !isEditing && !isOwn;
   const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
@@ -296,13 +251,10 @@ export function ThreadMessage({
       onSelect: () => setConfirmDelete(true),
     });
   }
-  // The desktop hover strip carries zap as its own button; the rest live in `⋯`.
   const overflowActions = menuActions.filter((a) => a.id !== "zap");
   const isPost = presentation === "post";
   const isComment = presentation === "comment";
 
-  // The body and the pieces under it are the same in every presentation;
-  // only their frame differs.
   const body = isEditing ? (
     <div className="mt-0.5">
       <textarea
@@ -311,9 +263,8 @@ export function ThreadMessage({
         value={editText}
         onChange={(e) => setEditText(e.target.value)}
         onKeyDown={(e) => {
-          // Enter saves; Shift+Enter is a newline. Ignore the Enter that only
-          // confirms an in-progress IME composition. When send-on-Enter is off,
-          // Enter is a newline and Ctrl/Cmd+Enter saves (matching the composer).
+          // Ignore Enter confirming an IME composition; with send-on-Enter off,
+          // Ctrl/Cmd+Enter saves.
           const saveKey = sendsOnEnter(config.sendOnEnter, isTouch)
             ? e.key === "Enter" && !e.shiftKey
             : e.key === "Enter" && (e.ctrlKey || e.metaKey);
@@ -371,8 +322,7 @@ export function ThreadMessage({
 
   return (
     <>
-    {/* On touch the long-press gesture belongs to the action sheet, so
-        the right-click menu is not offered there at all. */}
+    {/* Touch: no right-click menu; long-press belongs to the action sheet. */}
     <div
       {...longPress}
       onContextMenu={(e) => {
@@ -387,16 +337,12 @@ export function ThreadMessage({
             ? "px-3 py-3 hover:bg-secondary/30"
             : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "py-1.5"),
         sheetOpen && "bg-secondary/40",
-        // Stop the platform's text selection / callout from firing
-        // `pointercancel` and eating the long-press before the sheet opens
-        // (see MessageRow); "Copy text" covers manual selection.
+        // Native selection/callout would fire `pointercancel` and eat the long-press (see MessageRow).
         isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
       )}
     >
       {isPost ? (
-        // A post: the byline as a heading block, the body at reading width
-        // beneath it (not beside the avatar), and the actions on a row of
-        // their own — a page, not a chat line.
+        // A post: byline heading, body at reading width, actions on their own row.
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
             <ProfilePreviewCard pubkey={event.pubkey}>
@@ -451,8 +397,7 @@ export function ThreadMessage({
               </button>
             </ProfilePreviewCard>
             {isComment ? (
-              // A comment's age, with the day on hover: a post page has no
-              // day dividers, so a bare clock time would leave it unsaid.
+              // No day dividers on a post page, so show the age with the date on hover.
               <span className="text-xs text-muted-foreground/80 shrink-0" title={fullDateTime(event.created_at)}>
                 {shortTimeAgo(event.created_at)}
               </span>
@@ -478,16 +423,9 @@ export function ThreadMessage({
           </div>
         )}
       </div>
-      {/* Desktop hover strip — the same shared toolbar the timeline uses,
-          including its frequent-emoji quick-reaction row (it floats over
-          the row's right edge, so the narrow panel width doesn't bound it).
-          On touch the long-press sheet replaces it. */}
+      {/* Floats over the row's right edge, so the narrow panel doesn't bound it. */}
       {!isTouch && !isEditing ? (
-        // Floated panel above the row's top-right edge — solid background,
-        // border and lift so it stays legible over whatever it overlaps,
-        // matching the timeline's toolbar (MessageRow). A comment row has
-        // its own padding, so the strip sits inside its top edge instead
-        // of over the comment above.
+        // A comment row has its own padding, so the strip sits inside its top edge.
         <div className={cn(
           "absolute right-2.5 z-20 flex flex-wrap justify-end items-center max-w-[calc(100%-1.25rem)] gap-0.5 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm select-none opacity-0 group-hover/threadmsg:opacity-100 focus-within:opacity-100 transition-opacity",
           isComment ? "top-1" : continuation ? "-top-3" : "-top-2.5",
@@ -573,85 +511,44 @@ export function ThreadMessage({
 }
 
 interface ThreadPanelProps {
-  /** The root chat message this thread hangs off. */
   root: ChatMsg;
-  /**
-   * The root's title when it is a titled post (Concord forum posts, CORD-03
-   * §3). Rendered as a heading above the root, and the panel reads as a post
-   * with comments rather than a message with replies — the same panel, the
-   * same thread machinery, worded for what the reader opened.
-   */
+  /** Titled post (Concord forum, CORD-03 §3): heading above the root, worded as post + comments. */
   rootTitle?: string;
-  /** The room's transport — supplies the replies, reply-send, and reactions. */
   transport: ChatTransport;
-  /**
-   * NIP-29 composer context: the group's host relay + `h`-tag id. Concord
-   * transports send replies via {@link ChatTransport.sendThreadReply} and don't
-   * use these (they pass placeholder values).
-   */
+  /** NIP-29 composer context; Concord sends via {@link ChatTransport.sendThreadReply} and passes placeholders. */
   relayUrl: string;
-  /** Whether this conversation may offer bot commands (see ChatComposer). */
   botCommands?: boolean;
-  /** Relays this conversation uses, for bot-manifest discovery (see ChatComposer). */
   conversationRelays?: string[];
   /**
-   * Seal reply attachments before upload (see ChatComposer). A sealed room
-   * (Concord, NIP-17) must set this on its thread composer as it does on its
-   * channel composer, or a reply's image reaches Blossom in the clear while
-   * the message it hangs off was encrypted.
+   * Seal reply attachments (see ChatComposer). Sealed rooms (Concord, NIP-17)
+   * must set it, or reply images reach Blossom in the clear.
    */
   encryptAttachments?: boolean;
   groupId: string;
-  /** Whether the current user can post replies. */
   canWrite: boolean;
-  /**
-   * Explicit @-mention roster for the reply composer. Required for Concord
-   * transports (`relayUrl="dm"` has no NIP-29 group to derive members from);
-   * NIP-29 callers can omit it and the composer derives the roster itself.
-   */
+  /** Required for Concord (`relayUrl="dm"`); NIP-29 derives the roster itself. */
   mentionPubkeys?: string[];
-  /** Focus the reply input on open (e.g. when launched via /thread). */
   autoFocus?: boolean;
-  /**
-   * This thread's own route (`.../t/<root>`), which makes every row in here
-   * linkable as what it is: a reply *inside* a thread. Without it the panel
-   * offered no "Copy message link" at all, because a reply is not in the
-   * timeline and the room-only link a caller could have passed would have sent
-   * the reader hunting for it there.
-   */
+  /** This thread's route (`.../t/<root>`), enabling "Copy message link" for replies. */
   permalink?: ChatRoute;
-  /**
-   * Whether the panel is actually on screen. Callers keep it mounted through
-   * its slide-out animation, and during that window it must stop claiming the
-   * Android back gesture — otherwise back is swallowed by a panel the reader
-   * has already closed. Defaults to true for callers that unmount it outright.
-   */
+  /** On screen (kept mounted through slide-out); a closed panel must not claim Android back. */
   open?: boolean;
   onClose: () => void;
-  /** Called when the expand/collapse state changes. Parent uses this to resize the container. */
   onExpandChange?: (expanded: boolean) => void;
 }
 
 /**
- * Side panel showing a message thread: the root message, its replies, and a
- * composer for posting a new reply. Sits beside the channel timeline
- * (Slack/Discord style). It is transport-driven — NIP-29 and Concord
- * both render through it, each supplying its own replies + reply-send
- * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
- * replies never appear in the main timeline (they're nested here instead).
+ * Thread side panel: root, replies and a reply composer. Transport-driven
+ * (`threadRepliesFor`/`sendThreadReply`); replies never appear in the main timeline.
  */
 export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
-  // A titled post is a post with comments; everything else is a thread with
-  // replies. Only the words change.
   const isPost = Boolean(rootTitle);
   const replyNoun = isPost ? "comment" : "reply";
   const replyNounPlural = isPost ? "comments" : "replies";
   const threadRepliesFor = transport.threadRepliesFor;
   const isLoading = transport.threadLoading?.(root.id) ?? false;
-  // Replies live outside the main timeline, so `MessageTimeline`'s filter never
-  // sees them — the thread has to drop muted authors itself. The reply COUNT
-  // below is derived from the filtered list on purpose: a count that includes
-  // replies the reader can't see is a permanent "1 reply" on an empty thread.
+  // Replies bypass MessageTimeline's filter, so drop muted authors here. The count
+  // uses the filtered list, or an empty thread would read "1 reply".
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
   const { hiddenIds } = useHiddenMessages();
   const replies = useMemo(() => {
@@ -662,9 +559,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
       (reply) => !hiddenIds.has(reply.id) && (!dropMuted || !mutedPubkeys.has(reply.pubkey)),
     );
   }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady, hiddenIds]);
-  // A muted root is reachable only by permalink now that the timeline filters,
-  // but "reachable only by permalink" isn't "never" — treat it like a root that
-  // couldn't be loaded rather than rendering the person the reader muted.
+  // Treat a muted root (reachable by permalink) like an unloadable one.
   const rootMuted = mutesReady && mutedPubkeys.has(root.pubkey);
   const { config } = useAppContext();
   const reactionsFor = transport.reactionsFor;
@@ -681,36 +576,25 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
 
   const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
     edit: (original, content) => editMessage?.(original, content),
-    // The thread's own messages, oldest-first: the root, then its replies.
     messages: [root, ...replies],
     isPending: (id) => transport.sendStatusFor?.(id) !== undefined,
     self: user?.pubkey,
   });
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // Notify parent when expand state changes so it can resize the container.
   useEffect(() => {
     onExpandChange?.(isExpanded);
   }, [isExpanded, onExpandChange]);
 
-  // Android back closes the thread.
-  //
-  // This has to be handled here rather than left to the history fall-through
-  // in `useAndroidBack`: the channel list's SwipeReveal registers a handler
-  // that CONSUMES back to reveal the list, so without an entry of our own the
-  // reveal would win and slide the list in with the thread still open behind
-  // it. Handlers run most-recently-mounted first, and the panel mounts when it
-  // opens, so it takes precedence for exactly as long as it is on screen.
+  // Handled here: SwipeReveal's handler would otherwise consume back and reveal
+  // the list with the thread still open. Most-recently-mounted wins.
   useAndroidBack(() => {
     onClose();
     return true;
   }, open);
 
-  // --- Auto-scroll + jump-to-latest ---
-  // A plain scroller, like the main timeline: replies are real DOM in normal
-  // flow. A stable row anchor explicitly preserves reading position when one
-  // grows (image, embed, reaction), including on WebKit where CSS anchoring is
-  // unavailable.
+  // A plain scroller like the main timeline, with a row anchor preserving
+  // position when replies grow (WebKit lacks CSS anchoring).
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const distanceRef = useRef(0);
@@ -758,23 +642,18 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
     setShowJumpToLatest(distanceRef.current > 120);
   }, [captureReadingAnchor]);
 
-  // Open each thread at its newest reply.
   useLayoutEffect(() => {
     scrollToBottom("auto");
   }, [root.id, scrollToBottom]);
 
-  // `/t/<root>/m/<reply>` — a permalink to a reply, which exists only in here
-  // (thread replies are never in the main timeline). The panel's replies are
-  // real DOM in normal flow, so the target is simply looked up by id; there is
-  // no window to extend and nothing older to pull, so an id that isn't among
-  // the loaded replies is dropped on the first pass.
+  // `/t/<root>/m/<reply>`: replies are real DOM, so look up by id; unknown ids
+  // are dropped on the first pass.
   const scrollToReply = useCallback((id: string) => {
     const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
     if (!row) return false;
     flashRow(row, true);
-    // Record the new distance from the newest reply the way a real scroll
-    // would: the ResizeObserver re-pins to the bottom while that reads as
-    // zero, which would undo the jump the moment a reply's image resolves.
+    // Record the distance like a real scroll, or the ResizeObserver would re-pin
+    // to the bottom when an image resolves.
     const el = scrollRef.current;
     if (el) distanceRef.current = distanceFromBottom(el);
     captureReadingAnchor();
@@ -782,28 +661,22 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
     return true;
   }, [captureReadingAnchor]);
   const clearReplyFocus = useMessagePermalink({
-    // The root is addressable in here too: it has a timeline identity
-    // (`/m/<root>`) and a thread identity (`/t/<root>/m/<root>`), and "Copy
-    // message link" on the root row inside the panel produces the latter.
+    // The root is addressable here too, as `/t/<root>/m/<root>`.
     messages: [root, ...replies],
     isLoading,
     scrollTo: scrollToReply,
     scope: "thread",
-    // The panel stays mounted through its slide-out, and a closed panel must
-    // not consume (or discard) the location's focus.
+    // A closed (sliding-out) panel must not consume the location's focus.
     enabled: open,
   });
 
-  // Snap to a newly-arrived reply — the panel's long-standing behavior, unlike
-  // the main timeline, which only follows for a reader already at the bottom.
+  // Unlike the main timeline, always snap to a newly-arrived reply.
   useLayoutEffect(() => {
     if (isLoading) return;
     scrollToBottom(distanceRef.current > AT_BOTTOM_PX ? "smooth" : "auto");
   }, [replies.length, isLoading, scrollToBottom]);
 
-  // Replies growing after mount (images, link previews, reactions) and the panel
-  // itself resizing (expand/collapse, the composer growing) both land here; hold
-  // the reader's distance from the newest reply across either.
+  // Hold the reader's distance from the newest reply across growth and resizes.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
@@ -821,8 +694,6 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
     return () => ro.disconnect();
   }, [restoreReadingAnchor]);
 
-  // Scrolls with the content above the replies: the root message (or its
-  // tombstone), the reply-count divider, and the loading spinner.
   const listHeader = (
     <>
       {isTombstoneRoot(root) || rootMuted ? (
@@ -866,10 +737,8 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
     <aside className={cn(
-      // `thread:ml-0` (not `sidebar:`) drops the left gap only at ≥1200px,
-      // where the panel is an in-flow sibling flush against the timeline's
-      // right edge. In the 900–1200 band it overlays the chat (see GroupChat),
-      // so it keeps the `m-2` left gutter and reads as a floating card.
+      // `thread:ml-0` drops the left gap only at ≥1200px (in-flow); below, it
+      // overlays the chat and keeps the gutter.
       "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 thread:ml-0 p-1.5 clip-corner-lg bg-chrome",
     )}>
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
@@ -895,16 +764,11 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           onScroll={handleScroll}
           className="h-full overflow-y-auto overflow-x-clip overscroll-contain [overflow-anchor:none] scrollbar-stable"
         >
-          {/* Top padding leaves room for the root message's floated hover
-              toolbar, which sits above its row's top edge and would otherwise
-              be clipped by the scroll viewport's top. */}
+          {/* Room for the root's floated toolbar above its row. */}
           <div ref={contentRef} className="relative pt-3">
             {listHeader}
             {!isLoading && replies.map((reply, index) => {
-              // Collapse consecutive same-author replies within a short window
-              // into a compact continuation, mirroring the main timeline. The
-              // root never continues into the first reply (the divider splits
-              // them).
+              // The root never continues into the first reply (the divider splits them).
               const prev = replies[index - 1];
               const continuation =
                 !!prev &&
@@ -945,16 +809,12 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           canMentionEveryone={transport.canMentionEveryone}
           placeholder={isPost ? "Add a comment…" : "Reply in thread…"}
           draftScope={`thread:${root.id}`}
-          // No `shareRoute`: a share is addressed to a room, and this room's
-          // own composer is the one that serves it. The thread panel is a
-          // second composer in the same room, not a second destination.
+          // No `shareRoute`: the room's own composer is the share destination.
           autoFocus={autoFocus}
           canSend={transport.canSend}
           sendOverride={async (text, tags) => {
             await transport.sendThreadReply?.(root, text, tags);
-            // Replying is an explicit "I'm at the present", so the panel
-            // snaps to the new reply — the location must stop claiming the
-            // reader is parked at some older one.
+            // Replying drops any `/m/` focus, since the panel snaps to the new reply.
             clearReplyFocus();
           }}
           onEditLast={editMessage ? editLast : undefined}

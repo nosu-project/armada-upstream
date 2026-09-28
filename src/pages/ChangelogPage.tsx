@@ -52,7 +52,6 @@ export function ChangelogPage() {
 
   return (
     <main className="flex-1 min-w-0 flex flex-col safe-area-top">
-      {/* Header — a detached floating command bar matching the settings page chrome. */}
       <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
         <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={back}>
           <ArrowLeft className="size-5" />
@@ -114,7 +113,6 @@ function LatestRelease({ entry }: { entry: ChangelogEntry }) {
 
   return (
     <div className="pt-2 pb-1 px-4">
-      {/* Big centered version + date */}
       <a
         href={`${GITLAB_REPO}/-/releases/v${entry.version}`}
         target="_blank"
@@ -132,7 +130,6 @@ function LatestRelease({ entry }: { entry: ChangelogEntry }) {
         {formatDate(entry.date)}
       </a>
 
-      {/* Items */}
       <div className="relative mt-4">
         <ul
           ref={contentRef}
@@ -200,7 +197,6 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
 
   return (
     <div className="rounded-2xl border border-border overflow-hidden">
-      {/* Version header */}
       <div className="flex items-center gap-3 px-4 py-3">
         <a
           href={`${GITLAB_REPO}/-/releases/v${entry.version}`}
@@ -220,7 +216,6 @@ function ChangelogEntryCard({ entry }: { entry: ChangelogEntry }) {
         </a>
       </div>
 
-      {/* Items */}
       <div className="relative">
         <ul
           ref={contentRef}

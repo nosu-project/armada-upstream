@@ -101,7 +101,7 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
 import { mintTopicId } from "@/lib/webxdcRealtime";
 
-/** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
+/** Lazy: keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
 
 /** How many recently used bot commands the `/` menu keeps, per account. */
@@ -117,43 +117,22 @@ function readBotRecents(key: string): string[] {
   }
 }
 
-// Plain NIP-29 group chat has no relay-side content cap worth worrying about
-// (khatru's default MaxMessageSize is ~500KB per websocket frame). The real
-// hard ceiling comes from Concord (CORD-01/02): every message is NIP-44
-// encrypted TWICE — once into the signed seal, again into the outer wrap —
-// and NIP-44 plaintext is hard-capped at 65,535 bytes PER LAYER (NIP-44
-// §Limitations). The outer wrap is the tighter layer: its "plaintext" is the
-// JSON-serialized seal, which already contains the inner layer's base64
-// ciphertext (bigger than the raw rumor) plus the seal's own signature/tags.
-// Worst case a character costs up to 3 UTF-8 bytes before encryption padding
-// and base64 (~1.33x) expansion; 5,000 characters stays an order of magnitude
-// below the 65KB wrap ceiling even through both encryption layers, leaving
-// generous headroom for reply/quote/mention tags stacked on top. 2.5x the
-// prior 2,000-char limit — comfortably higher without meaningfully eating
-// into that margin.
+// The hard ceiling is Concord (CORD-01/02): NIP-44 plaintext is capped at
+// 65,535 bytes PER LAYER, and the outer wrap holds the base64'd inner layer.
+// 5,000 chars (≤3 UTF-8 bytes each) leaves ample headroom for tags.
 const MAX_CHARS = 5000;
 
-/** Tailwind's `md` step, where the composer's font shrinks (text-base → text-sm). */
 const MD_BREAKPOINT_PX = 768;
 
-/**
- * The height an EMPTY composer settles at, per layout / font step / viewport
- * height — see the auto-resize effect. Shared across instances: every composer
- * of a layout is styled alike.
- */
+/** Empty-composer height per layout / font step / viewport height (see auto-resize). */
 const emptyHeights = new Map<string, number>();
 
-/** Replace or append a file extension. */
 function replaceExtension(filename: string, ext: string): string {
   const dot = filename.lastIndexOf(".");
   return (dot > 0 ? filename.slice(0, dot) : filename) + ext;
 }
 
-/**
- * How many attachments process and upload at once. Picking twenty photos
- * shows twenty cards straight away, but resizing, transcoding and encrypting
- * them all together would hold every one in memory at the same moment.
- */
+/** Concurrent attachment processing/uploads, bounding memory for large batches. */
 const UPLOAD_CONCURRENCY = 3;
 let uploadsActive = 0;
 const uploadQueue: (() => void)[] = [];
@@ -172,7 +151,6 @@ function releaseUploadSlot(): void {
   else uploadsActive--;
 }
 
-/** A card caption for an attachment with no known filename. */
 function fallbackLabel(url: string, mime: string): string {
   const last = url.split(/[?#]/)[0].split("/").pop() ?? "";
   // A content-addressed Blossom name is a 64-char hash; show the kind instead.
@@ -188,12 +166,10 @@ function fallbackLabel(url: string, mime: string): string {
   return `${kind === "image" || kind === "video" || kind === "audio" ? kind : "file"}${ext}`;
 }
 
-/** Short random ID for poll options. */
 function pollOptionId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
 
-/** A per-channel composer draft. */
 interface Draft {
   content: string;
   /** Uploaded attachments as [url, NIP-94 tags] entries (Blossom URLs). */
@@ -203,18 +179,9 @@ interface Draft {
 const EMPTY_DRAFT: Draft = { content: "", attachments: [] };
 
 /**
- * Per-channel drafts, in ArmadaDB's KV behind a synchronous cache.
- *
- * One entry per channel ever typed in, never evicted, and each can hold up to
- * the NIP-44 plaintext cap — the unbounded claim on localStorage that made this
- * worth moving. It is also the most sensitive thing that was in there: unsent
- * plaintext, plus the `decryption-key` imeta tags of encrypted attachments. KV
- * is no more private than localStorage (same origin, same attacker), but it is
- * covered by the same logout purge and no longer competes for a 5 MB budget it
- * could silently exhaust.
- *
- * Tolerates the legacy plain-string format (older builds stored just the text)
- * by treating a non-object value as the content.
+ * Per-channel drafts in ArmadaDB's KV behind a synchronous cache (unbounded,
+ * sensitive: plaintext + `decryption-key` imeta; covered by the logout purge).
+ * A non-object value is the legacy plain-string format.
  */
 const draftCache = new KvPrefixCache<Partial<Draft> | string>({ prefix: "draft:" });
 
@@ -228,7 +195,6 @@ function readDraft(key: string): Draft {
   };
 }
 
-/** Write or clear a channel draft. Clears when there's nothing worth keeping. */
 function writeDraft(key: string, content: string, attachments: Map<string, string[][]>): void {
   if (content.trim() || attachments.size > 0) {
     draftCache.set(key, { content, attachments: [...attachments] });
@@ -237,10 +203,7 @@ function writeDraft(key: string, content: string, attachments: Map<string, strin
   }
 }
 
-/**
- * For an image File, returns `{ dim: "WxH", blurhash: "..." }`.
- * Decodes to a small canvas (max 64px wide) for speed.
- */
+/** For an image File: `{ dim: "WxH", blurhash }`, decoded at ≤64px wide. */
 async function getImageMeta(file: File): Promise<{ dim?: string; blurhash?: string }> {
   if (!file.type.startsWith("image/")) return {};
   try {
@@ -282,35 +245,26 @@ async function getImageMeta(file: File): Promise<{ dim?: string; blurhash?: stri
   }
 }
 
-/** An attachment being processed and uploaded. */
 interface PendingUpload {
   id: string;
-  /** Its place in the tray, so a card keeps its slot when its upload lands. */
+  /** Tray slot, so a card keeps its place when its upload lands. */
   seq: number;
-  /** The picked file's name, for the card's label. */
   name: string;
-  /** An object URL of the picked image, previewed while it uploads. Revoked when it settles. */
+  /** Object URL of the picked image, previewed while uploading. Revoked when it settles. */
   previewUrl?: string;
-  /** Local work (transcode/encrypt) vs. the network upload. */
   phase: "processing" | "uploading";
-  /** 0..1 transcode progress. Absent when the work is indeterminate. */
   progress?: number;
 }
 
-/**
- * A file whose bytes are still to be read — a gallery item, fetched from its
- * content:// URI. Its card appears the moment it is picked, not once a large
- * video has been read into memory.
- */
+/** A gallery item whose content:// bytes are read lazily, so its card appears at once. */
 interface DeferredFile {
   name: string;
   type: string;
-  /** Byte length where known up front, so an oversize item is refused unread. */
+  /** Known up front, so an oversize item is refused unread. */
   size?: number;
   load: () => Promise<File>;
 }
 
-/** An embed (quote or link) detected in the composer content. */
 interface DetectedEmbed {
   type: "nevent" | "note" | "naddr";
   value: string;
@@ -326,226 +280,113 @@ interface ChatComposerProps {
   groupId: string;
   /** Current timeline (used for NIP-29 `previous` refs). */
   messages: NostrRumor[];
-  /** Message being replied to, if any. */
   replyTo?: NostrRumor;
   onCancelReply?: () => void;
   /**
-   * How to tag an inline reply to `replyTo`:
-   * - `"nip10"` (default): NIP-10 marked `e`/`p` tags (NIP-29 groups).
-   * - `"nipc7"`: a NIP-C7 `q` tag citing the parent rumor id (Concord — keeps
-   *   `q` for inline quotes, kind-1111 for threads, per CORD-03 §3).
-   * Buzz surfaces never set `replyTo`: there, replying is threading, and the
-   * thread panel publishes the reply (`useSendBuzzThreadReply`).
-   * The referenced-message chrome (`ReplyContextLine`) reads any shape.
+   * Inline reply tagging: `"nip10"` marked `e`/`p` tags (NIP-29), or `"nipc7"` a
+   * `q` tag (Concord, CORD-03 §3). Buzz never sets `replyTo` (replying is threading).
    */
   replyMarker?: "nip10" | "nipc7";
-  /** Called after a message is successfully sent. */
   onSent?: () => void;
   /**
-   * Display name + avatar for this room's Android Direct Share suggestion,
-   * captured whenever the user sends here (see `lib/shareTargets`).
-   *
-   * Only rooms whose name the publisher cannot resolve on its own need these:
-   * Concord channels and NIP-29 groups, whose metadata lives in state
-   * `useShareShortcuts` has no access to. DMs pass neither — those are
-   * resolved live from the kind-0 profiles already in the event store, so a
-   * contact who changes their name or picture updates without sending anything.
-   *
-   * Scalars rather than an object so the send callbacks' dependency lists don't
-   * churn on every render of an inline prop.
+   * Android Direct Share name/avatar for this room (see `lib/shareTargets`). Only
+   * for rooms the publisher can't resolve (Concord, NIP-29); DMs resolve live.
+   * Scalars so send-callback deps don't churn.
    */
   shareLabel?: string;
   shareIconUrl?: string;
   /**
-   * When provided, the composer sends via this callback (with the final text,
-   * including any appended attachment URLs) instead of publishing a NIP-29
-   * kind-9 group message. Used by DMs, where the whole content is encrypted
-   * and NIP-29 group tagging doesn't apply. Poll mode is hidden in this mode
-   * unless {@link onPollSubmit} is supplied (Concord seals polls too). The
-   * returned promise resolving means "sent" (composer is reset).
-   *
-   * `tags` carries the content-derived NIP-30 emoji / NIP-92 imeta / NIP-27
-   * mention / NIP-10 reply tags the composer built for this message, so an
-   * override (e.g. Concord) can seal them with the message and render custom
-   * emoji, media and mentions just like NIP-29 does.
+   * Send via this callback instead of publishing a NIP-29 kind-9 (DMs, Concord).
+   * `tags` carries the content-derived emoji/imeta/mention/reply tags. Hides poll
+   * mode unless {@link onPollSubmit} is given. Resolving means "sent".
    */
   sendOverride?: (finalText: string, tags: string[][]) => Promise<void>;
   /**
-   * Pre-flight refusal, checked BEFORE the composer clears itself: return a
-   * reason to block this send (shown as a toast), or null to allow it. Concord
-   * uses it for its per-community send rate limit — the limit is enforced at
-   * the publish path either way, but a refusal thrown from there arrives after
-   * `resetComposeState`, i.e. after the user's text is already gone.
-   *
-   * Called exactly ONCE per send the user actually asked for, and never merely
-   * to ask: a refusal is counted against the sender, and Concord lengthens its
-   * lockout for repeat flooding.
+   * Pre-flight refusal checked BEFORE the composer clears (Concord's send rate
+   * limit), returning a toast reason or null. Call exactly ONCE per real send:
+   * refusals count against the sender.
    */
   canSend?: () => string | null;
   /**
-   * Publish a composed poll through a delegated path (Concord seals it as a
-   * Chat Plane rumor). Its presence re-enables poll mode alongside
-   * `sendOverride` — without it, `sendOverride` hides poll mode (a plain DM has
-   * no polls). NIP-29 omits it and publishes polls to its host relay directly.
+   * Delegated poll publisher (Concord seals polls); re-enables poll mode under
+   * `sendOverride`. NIP-29 omits it and publishes to its host relay.
    */
   onPollSubmit?: (draft: PollDraft) => Promise<void>;
   /**
-   * Explicit candidate set for @-mention autocomplete, used when the composer
-   * can't derive a room roster itself. In NIP-29 mode the composer builds this
-   * from the group's admins/members + recent speakers via `useGroup`; but DM
-   * mode (`relayUrl === "dm"`) has no such lookup. Concord reuses DM mode for
-   * its encrypted send path yet *does* have a roster (control-plane members +
-   * recent posters), so it passes that list here to re-enable mentions. When
-   * provided (even empty), the @-mention dropdown is enabled and scoped to
-   * these pubkeys. Omit it (plain DMs) to keep mentions disabled.
+   * Explicit @-mention candidates for DM-mode composers that have a roster
+   * (Concord). Provided (even empty) enables mentions; omit to disable (plain DMs).
    */
   mentionPubkeys?: string[];
-  /** Whether the current user may insert Concord's channel-wide @everyone. */
   canMentionEveryone?: boolean;
-  /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
-  /**
-   * Extra key fragment to scope the per-channel localStorage draft. Use a
-   * distinct value (e.g. a thread root id) when more than one composer targets
-   * the same group so their drafts don't collide.
-   */
+  /** Extra draft-key fragment (e.g. a thread root id) when composers share a group. */
   draftScope?: string;
   /**
-   * The room path this composer serves — the address a share is routed to
-   * (Android share target, the `/share` picker, an in-app forward) for its
-   * text and files to land in this draft.
-   *
-   * Supplied by the surface rather than read from the location, because the
-   * location is ambient: several composers are mounted at once during a route
-   * transition, and each would see the destination's path as readily as the
-   * one it actually renders. Omit it wherever the composer is not a share
-   * destination — the thread panel, whose room already has one.
+   * The room path shares are routed to. Passed in, not read from the location:
+   * during a route transition several composers are mounted and each sees the
+   * destination path. Omit where the composer isn't a share destination.
    */
   shareRoute?: string;
-  /**
-   * Optimistic-send hooks (group mode). When provided, an outgoing message is
-   * inserted into the timeline as `pending` the moment it's signed, then
-   * confirmed (`onSent` of the publish) or marked failed for retry.
-   */
+  /** Optimistic-send hooks (group mode): insert as `pending` on sign, then confirm or fail. */
   onOptimisticInsert?: (event: NostrEvent) => void;
   onOptimisticSent?: (id: string) => void;
   onOptimisticFailed?: (id: string) => void;
-  /** Whether the current user can moderate (enables moderation slash commands). */
   canModerate?: boolean;
-  /**
-   * Focus the textarea on mount and on each conversation switch (e.g. when a
-   * thread panel opens), and — on non-touch devices — catch printable keys
-   * typed while nothing editable has focus.
-   */
+  /** Focus on mount and conversation switch; on non-touch, catch stray printable keys. */
   autoFocus?: boolean;
   /** Fired (unthrottled) as the user types; the caller throttles + publishes a typing signal. */
   onTyping?: () => void;
-  /**
-   * Run a slash-command moderation action (e.g. /kick, /ban). Delegated to the
-   * caller, which owns the NIP-29 moderation mutations and member roster.
-   */
+  /** Slash-command moderation (e.g. /kick, /ban), delegated to the caller. */
   onSlashAction?: (action: SlashAction) => void | Promise<void>;
   /**
-   * Encrypt file attachments client-side (AES-256-GCM) before uploading to
-   * Blossom, à la Vector / 0xChat: the blob on Blossom is ciphertext, and the
-   * per-file key/nonce ride in the message's `imeta` (`decryption-key` /
-   * `decryption-nonce`). Used by Concord so media is confidential at rest and
-   * interoperable with Vector. Without this, attachments upload as plaintext.
+   * Encrypt attachments (AES-256-GCM) before Blossom upload, Vector/0xChat-style:
+   * key/nonce ride in `imeta` (`decryption-key`/`decryption-nonce`). Used by Concord.
    */
   encryptAttachments?: boolean;
   /**
-   * Whether this conversation may offer bot commands to a roster of bots.
-   *
-   * Off by default, and deliberately a decision the surface makes rather than
-   * something inferred: an invocation carries a `["bot", <pubkey>]` routing tag,
-   * and it is only safe where the transport hides its tags (Concord seals them
-   * inside the encrypted rumor) or where nothing is hidden anyway (a public
-   * NIP-29 group). It must stay OFF for NIP-04 direct messages, whose tags are
-   * plaintext on the wire: a routing tag there would publish "this pubkey is
-   * commanding that bot" to every relay carrying the conversation. For a 1:1 DM
-   * with a single bot, use {@link botDmPeer} instead, which routes by recipient
-   * and emits no tag at all.
+   * Offer bot commands to a roster. An invocation carries a `["bot", <pubkey>]`
+   * tag, so this must stay OFF where tags are plaintext (NIP-04 DMs) — it would
+   * publish who commands which bot. For 1:1 bot DMs use {@link botDmPeer}.
    */
   botCommands?: boolean;
   /**
-   * The counterparty of a 1:1 DM, when that counterparty is (or may be) a bot.
-   *
-   * Enables the `/` picker for that one bot's commands and — because a DM's sole
-   * recipient IS the bot — sends the invocation as plain content with NO routing
-   * tag. That makes it transport-agnostic and leak-free: nothing bot-specific
-   * ever reaches a tag, so it is safe even on legacy kind-4 (only the encrypted
-   * content carries the command). Non-bot peers simply contribute no commands.
+   * A 1:1 DM counterparty that may be a bot: enables its `/` commands, sent as
+   * plain content with NO routing tag (the recipient IS the bot), so it's leak-free.
    */
   botDmPeer?: string;
-  /**
-   * Members who have spoken in this conversation, most recent first — used to
-   * rank a bot command's `user`-argument picker. NIP-29 groups can leave this
-   * unset (it's derived from `messages`); Concord passes `messages: []`, so its
-   * pages supply this from their own timeline.
-   */
+  /** Recent speakers, most recent first, for `user` argument pickers. Concord supplies it; NIP-29 derives it. */
   recentAuthors?: string[];
   /**
-   * Relays this conversation's own traffic uses, searched for bot manifests
-   * alongside the app relays and the public indexers — a bot may publish its
-   * manifest only to the community it serves, where no indexer would see it.
-   *
-   * NIP-29 groups need not pass this: their host relay IS `relayUrl`. Concord
-   * rides `relayUrl="dm"` and so must supply its community's relays here.
+   * Extra relays to search for bot manifests (a bot may publish only to its
+   * community). Concord (`relayUrl="dm"`) must supply these.
    */
   conversationRelays?: string[];
-  /**
-   * Whether the poll composer (NIP-88 kind 1068) is offered. On by default for
-   * the group publish path; Buzz relays don't accept poll events, so their
-   * surfaces turn it off.
-   */
+  /** Offer NIP-88 polls (kind 1068). Buzz relays don't accept them. */
   pollsEnabled?: boolean;
   /**
-   * The event kind the group-publish path signs. Defaults to NIP-29 group
-   * chat (kind 9). Buzz forum channels override this to publish forum posts
-   * (kind 45001) instead, so the message lands in the forum's content set and
-   * actually renders (a kind-9 post is filtered out of the forum timeline).
-   * Ignored on the `sendOverride` path, where the caller owns the kind.
+   * Kind the group-publish path signs (default 9). Buzz forums use 45001, since
+   * kind 9 is filtered out of the forum timeline. Ignored with `sendOverride`.
    */
   messageKind?: number;
   /**
-   * Open an inline edit on the user's most recent editable message, invoked when
-   * ArrowUp is pressed in an EMPTY composer (the Slack/Discord gesture). The
-   * surface owns which message that is — it has the real timeline (this
-   * component is passed `messages={[]}` on the DM/Concord/thread paths) and its
-   * own edit rules and pending state (see `lastEditableOwnMessage`). Return true
-   * if an edit was opened and the composer swallows the key; a false/undefined
-   * return leaves ArrowUp an ordinary no-op. Omit on surfaces without inline
-   * edit.
+   * ArrowUp in an EMPTY composer: open an inline edit of the user's last message.
+   * Return true if handled (the key is swallowed).
    */
   onEditLast?: () => boolean;
   /**
-   * How much room the input takes, and how it submits. `bar` is the one-line
-   * chat composer: it grows to a few lines and Enter sends. `document` is a
-   * forum-style editor: the text area sits above its toolbar, starts several
-   * lines tall and grows to half the viewport, Enter is a newline, Ctrl/Cmd+
-   * Enter sends, and the send control is a labelled button (`submitLabel`)
-   * rather than the arrow. Same pickers, uploads, mentions and drafts.
+   * `bar`: one-line chat composer, Enter sends. `document`: forum-style editor
+   * above its toolbar, Enter is a newline, Ctrl/Cmd+Enter sends, labelled button.
    */
   layout?: "bar" | "document";
-  /** The document layout's send button text (default "Post"). */
   submitLabel?: string;
-  /**
-   * Document layout only: offers a Cancel button beside the send button (and
-   * Escape from an empty box), for an editor that was opened in place — an
-   * inline reply under a comment — and can be put away again.
-   */
+  /** Document layout only: a Cancel button (and Escape from an empty box). */
   onCancel?: () => void;
 }
 
 /**
- * Rich chat composer for NIP-29 groups: multi-line textarea with @-mention
- * and :shortcode: autocomplete, emoji/GIF/sticker pickers, media uploads with
- * NIP-92 imeta tags, paste-to-upload, voice messages, NIP-88 polls, replies,
- * NIP-18 quotes, and per-channel drafts.
- *
- * With `sendOverride` it doubles as a generic rich composer (e.g. DMs): the
- * same input/upload/picker UX, but sending is delegated to the caller and
- * group-only features (polls, NIP-29 tagging) are disabled.
+ * Rich chat composer: mentions, shortcodes, pickers, uploads with NIP-92 imeta,
+ * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
+ * doubles as a generic composer (DMs, Concord).
  */
 export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
@@ -560,16 +401,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const isMobile = useIsMobile();
   const isTouch = useIsTouch();
   const enterSends = sendsOnEnter(config.sendOnEnter, isTouch);
-  // The chat scope (NIP-29 group / Concord channel), provided by the page. Used
-  // to launch in-chat apps from the "+" menu. Undefined in DMs (no scope).
+  // Undefined in DMs (no scope).
   const appScope = useChatScope();
   const { launchApp } = useApps();
 
-  // Scope @-mentions to people in the room: admins, members, and anyone who
-  // has spoken in this view. Plain DMs (relayUrl === "dm" with no caller-
-  // supplied roster) have no room, so mentions are disabled there. Callers
-  // that reuse DM mode but do have a roster (e.g. Concord) pass `mentionPubkeys`
-  // to re-enable mentions scoped to that list.
+  // Mentions scoped to the room; disabled in plain DMs unless `mentionPubkeys` is given.
   const isDM = relayUrl === "dm";
   const { data: groupDetails } = useGroup(isDM ? undefined : relayUrl, isDM ? undefined : groupId);
   const memberPubkeys = useMemo(() => {
@@ -582,20 +418,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     if (user) set.add(user.pubkey);
     return [...set];
   }, [mentionPubkeys, isDM, groupDetails?.admins, groupDetails?.members, messages, user]);
-  // Whether the inline @-mention autocomplete should render at all. Available
-  // whenever we have a candidate roster (NIP-29 groups always; Concord via
-  // `mentionPubkeys`); off for plain DMs, which have no room.
   const mentionsEnabled = memberPubkeys !== undefined;
 
-  // Slash-command capabilities this composer advertises. Group-only commands
-  // (/poll, /thread, /kick, /ban) need features the delegated DM/Concord send
-  // path lacks; universal ones (/me, /shrug, /mention, …) work everywhere. The
-  // menu and on-send execution are filtered to this set, so Concord now gets
-  // slash commands without the NIP-29-specific ones.
+  // Group-only commands (/poll, /thread, /kick, /ban) need the group publish path;
+  // universal ones work everywhere.
   const slashCapabilities = useMemo(() => {
     const caps = new Set<SlashCapability>();
-    // Poll mode rides the group publish path, OR a delegated poll publisher
-    // (Concord's `onPollSubmit`) when the send path is otherwise overridden.
     if ((!sendOverride || onPollSubmit) && pollsEnabled) caps.add("poll");
     if (onSlashAction) {
       caps.add("thread");
@@ -604,30 +432,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return caps;
   }, [sendOverride, pollsEnabled, onPollSubmit, onSlashAction, canModerate]);
 
-  // The prefix is the CACHE's now, not part of the id — the localStorage move
-  // rewrites `chat-draft:<id>` to `draft:<id>`, so an id that carried a prefix
-  // itself would look up `draft:chat-draft:…` and never find a migrated draft.
+  // No prefix in the id: the cache adds `draft:`; a prefixed id would miss migrated drafts.
   const draftKey = `${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);
 
-  // ── Bot commands ─────────────────────────────────────────────────────────
-  // The bots in this conversation publish their command catalogs as replaceable
-  // kind-10304 manifests. Gated on an explicit opt-in (`botCommands` for a room,
-  // `botDmPeer` for a 1:1), never inferred from the roster: a surface that gains
-  // a member list must not thereby gain the right to put a routing tag on a
-  // transport that cannot hide it. A DM emits no routing tag at all.
-  /** The command whose arguments are being collected, if any. */
+  // Bot commands (kind-10304 manifests). Explicit opt-in only (`botCommands` /
+  // `botDmPeer`), never inferred from the roster: routing tags must not reach a
+  // transport that can't hide them.
   const [botCommand, setBotCommand] = useState<BotCommandEntry | null>(null);
   /** The bot the user picked from, so a name two bots share still routes correctly. */
   const armedBotRef = useRef<string | undefined>(undefined);
-  // A NIP-29 group's own relay is the one it is hosted on; Concord has no such
-  // single URL (it rides the "dm" sentinel) and hands its community's relays in.
+  // Concord rides the "dm" sentinel and hands in its community's relays.
   const botRelays = useMemo(
     () => conversationRelays ?? (isDM ? undefined : [relayUrl]),
     [conversationRelays, isDM, relayUrl],
   );
-  // A DM offers exactly its counterparty's commands; a room offers its roster's.
   const botRoster = useMemo(
     () => (botDmPeer ? [botDmPeer] : memberPubkeys),
     [botDmPeer, memberPubkeys],
@@ -640,9 +460,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     isLoading: botsLoading,
   } = useBotManifests(botCommandsEnabled ? botRoster : undefined, botRelays);
 
-  // Members ranked by how recently they spoke, for a `user` argument's picker.
-  // Caller-supplied when the timeline lives elsewhere (Concord); otherwise read
-  // off the messages this composer already has (NIP-29).
   const recentAuthorsResolved = useMemo(
     () => recentAuthors ?? authorsByRecency(messages),
     [recentAuthors, messages],
@@ -667,73 +484,41 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [botRecentsKey]);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Keeps the picker mounted through its slide animation (mount + visible flags).
   const { mounted: pickerMounted, visible: pickerVisible } = useMountedTransition(pickerOpen);
   const [pickerTab, setPickerTab] = useState<"emoji" | "gif" | "stickers" | "games">("emoji");
   const [plusOpen, setPlusOpen] = useState(false);
   const [removedEmbeds, setRemovedEmbeds] = useState<Set<string>>(new Set());
-  /** Maps uploaded file URLs to their NIP-94 tags (grouped per upload). */
   const [uploadedFileGroups, setUploadedFileGroups] = useState<Map<string, string[][]>>(
     () => new Map(readDraft(draftKey).attachments),
   );
   /**
-   * Per-upload AES-GCM encryption params (Concord encrypted attachments),
-   * keyed by the uploaded ciphertext URL. Held in a ref (not state/draft):
-   * these are ephemeral secrets that must never be persisted, and the
-   * ciphertext blob is useless without them, so encrypted attachments are not
-   * restorable from a saved draft.
+   * Per-upload AES-GCM params, keyed by ciphertext URL. A ref, never persisted:
+   * these are secrets, so encrypted attachments aren't restorable from drafts.
+   * `ox` is absent on forwards whose sender omitted it.
    */
-  // `ox` (the plaintext hash) is optional: an upload always knows it, a
-  // forwarded attachment only has it if the original sender sent it.
   const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox?: string }>>(new Map());
-  /**
-   * Each attachment's slot in the tray, in the order it was PICKED — uploads
-   * land in whatever order the network finishes them, and a card must not jump
-   * when its upload does. Also the order the attachments are sent in.
-   */
+  /** Tray slot in PICK order (uploads finish in any order); also the send order. */
   const attachmentSeq = useRef<Map<string, number>>(new Map());
   const nextSeq = useRef(0);
-  /**
-   * The picked file's name, per uploaded URL, for its card. Local
-   * only: an image's filename is not sent (it can carry a date or a place),
-   * and a restored draft simply falls back to a generic label.
-   */
+  /** Local-only filename per URL (not sent: it can carry a date or place). */
   const attachmentMeta = useRef<Map<string, { name: string }>>(new Map());
   /**
-   * Content tags from a forwarded message (NIP-92 `imeta` / NIP-30 `emoji`),
-   * carried verbatim so a forwarded attachment re-references the original blob
-   * instead of being re-uploaded — and, when it's client-encrypted, keeps the
-   * key that is nowhere else. Held in a ref for the same reason as
-   * `attachmentEncryption`: those keys must never reach a persisted draft.
-   * Emitted by `buildMessageTags` only while the text still references them.
+   * A forward's `imeta`/`emoji` tags, carried verbatim so attachments aren't
+   * re-uploaded and encrypted ones keep their key. A ref, like
+   * `attachmentEncryption`, so keys never reach a draft.
    */
   const forwardedContentTags = useRef<string[][]>([]);
   /**
-   * In-flight attachments. An entry is added the instant a file is selected and
-   * removed once its upload finishes (or fails), so a placeholder tile shows
-   * immediately — through the slow local pre-upload work (resize, blurhash,
-   * video transcode, client-side encryption) that runs *before* the network
-   * request flips `useUploadFile`'s `isPending`. A list (not a counter) because
-   * files can be attached concurrently and each can be cancelled individually.
+   * In-flight attachments, added on pick so the card shows through slow local
+   * work (resize, transcode, encrypt) before the upload starts.
    */
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
-  /**
-   * Each in-flight upload's abort, by pending id: aborting cancels the
-   * transcode and upload and drops the card. Kept out of state so a cancel is
-   * a lookup, not a side effect inside a state updater.
-   */
+  /** Abort per pending id; a ref so cancel isn't a side effect inside an updater. */
   const pendingAborts = useRef(new Map<string, AbortController>());
-  /**
-   * Sending is blocked while any attachment is still uploading: `attachments`
-   * only gains a file once its upload resolves, so a send fired mid-upload
-   * would publish the text alone and drop the file (the reset then clears the
-   * late-arriving URL).
-   */
+  /** Block sending mid-upload, or the text would publish without the file. */
   const isUploading = pendingUploads.length > 0;
 
-  // Poll mode state
   const [mode, setMode] = useState<"post" | "poll">("post");
-  // Mount + animation-target flags so the poll panel slides up/down like the picker.
   const pollMode = mode === "poll";
   const { mounted: pollMounted, visible: pollVisible } = useMountedTransition(pollMode);
   const [pollOptions, setPollOptions] = useState([
@@ -762,19 +547,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setPickerOpen(true);
   }, [pickerOpen, pickerTab]);
 
-  // Let other components (e.g. the member list) request a mention insertion.
   useMentionInsertions((text) => {
     insertEmoji(text);
     textareaRef.current?.focus();
   });
 
-  // Voice recording
   const voiceRecorder = useVoiceRecorder();
   const [isPublishingVoice, setIsPublishingVoice] = useState(false);
 
-  // Whether the draft cache has finished loading from KV. The persist effect
-  // below is gated on it: a composer that mounted cold reads an empty draft,
-  // and writing that back would DELETE the stored one before it ever arrived.
+  // Gates the persist effect: a cold composer's empty draft would DELETE the stored one.
   const [draftsReady, setDraftsReady] = useState(() => draftCache.warmed);
   useEffect(() => {
     let cancelled = false;
@@ -786,24 +567,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
   }, []);
 
-  // When switching channels, load that channel's draft (text + attachments).
   useEffect(() => {
     const draft = readDraft(draftKey);
     setContent(draft.content);
     setUploadedFileGroups(new Map(draft.attachments));
     setRemovedEmbeds(new Set());
     setMode("post");
-    // A half-built command belongs to the channel it was started in. The
-    // composer is not remounted on a channel switch, so without this the fields
-    // stay on screen over the new channel's draft, and submitting would fire the
-    // invocation — routing tag and all — into a conversation it was never meant
-    // for.
+    // A half-built command must not follow a channel switch (the composer isn't
+    // remounted) and fire its routing tag into the wrong conversation.
     setBotCommand(null);
     armedBotRef.current = undefined;
 
-    // The read above is empty until the cache warms. Fill in afterwards, but
-    // only into fields the user hasn't touched — a restored draft must never
-    // overwrite what someone is in the middle of typing.
+    // Fill in after the cache warms, but only untouched fields.
     let cancelled = false;
     void draftCache.ready().then(() => {
       if (cancelled) return;
@@ -817,28 +592,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     };
   }, [draftKey]);
 
-  // Auto-resize the textarea as content grows/shrinks. Also recompute on
-  // viewport resize/rotation: the textarea font shrinks at the `md:` breakpoint
-  // (text-base -> text-sm), so a portrait height would otherwise stay stale
-  // (too tall, placeholder floating above the buttons) after rotating to
-  // landscape, and vice-versa.
-  //
-  // The `height: auto` probe is not free: the timeline is this bar's flex
-  // sibling, so collapsing the textarea to measure it re-lays-out the whole
-  // pane — on every keystroke, and on every conversation switch, where it
-  // landed right after the timeline's own layout. Two cases never need it: an
-  // empty field (its height depends only on the layout and the font step, so
-  // it is measured once and remembered), and text that was only APPENDED to,
-  // which can only need more room — reading `scrollHeight` against the height
-  // already set answers that without collapsing anything first.
+  // Auto-resize, also on viewport resize (the font shrinks at `md:`). The
+  // `height: auto` probe re-lays-out the whole pane, so skip it for an empty
+  // field (cached per layout) and for append-only edits (compare `scrollHeight`).
   const measuredContentRef = useRef<string | null>(null);
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     const previous = measuredContentRef.current;
     measuredContentRef.current = content;
-    // A document keeps a few lines of room and grows to half the
-    // viewport; the bar grows to a few lines.
     const bounds = () => ({
       max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
       min: layout === "document" ? 120 : 0,
@@ -867,32 +629,22 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return () => window.removeEventListener("resize", measure);
   }, [content, layout]);
 
-  // Focus the textarea when starting a reply. Deferred a frame: Reply picked
-  // from a message's context menu commits this while the menu still traps
-  // focus, which would pull an immediate focus straight back into the menu.
+  // Deferred a frame: a context menu still trapping focus would pull it back.
   useEffect(() => {
     if (!replyTo) return;
     const frame = requestAnimationFrame(() => textareaRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [replyTo]);
 
-  // Clear a pending reply when the composer moves to another channel or group:
-  // the replied-to message lived in the conversation we just left, so a stale
-  // reply banner (and its NIP-10/NIP-C7 marker) must not carry over. Keyed on
-  // the scope (relayUrl + groupId); the live onCancelReply is read from a ref so
-  // this fires only on a real switch, not on every render (the handler is a
-  // fresh closure each time).
+  // Clear a pending reply on a real conversation switch (keyed on scope; the
+  // handler comes from a ref since it's a fresh closure each render).
   const onCancelReplyRef = useRef(onCancelReply);
   onCancelReplyRef.current = onCancelReply;
   useEffect(() => {
     onCancelReplyRef.current?.();
   }, [relayUrl, groupId]);
 
-  // Focus on mount when requested (e.g. the thread panel opening via /thread),
-  // and again when the composer moves to another conversation without
-  // remounting. A field or dialog that already holds the keyboard keeps it,
-  // and so does a switch made from the keyboard (arrowing through the channel
-  // list), which leaves focus where the user is navigating.
+  // Keep focus in a field/dialog that holds it, and after keyboard channel navigation.
   useEffect(() => {
     if (!autoFocus) return;
     const frame = requestAnimationFrame(() => {
@@ -902,17 +654,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return () => cancelAnimationFrame(frame);
   }, [autoFocus, relayUrl, groupId]);
 
-  // Type-to-focus: a printable key pressed while nothing editable has focus
-  // lands in the newest auto-focusing composer, so the user never has to click
-  // back into it after touching the timeline. Not on touch, where focusing
-  // raises the soft keyboard and there is no stray hardware keypress to catch.
+  // Type-to-focus. Not on touch, where focusing raises the soft keyboard.
   useEffect(() => {
     if (!autoFocus || isTouch) return;
     return registerTypeToFocus(textareaRef);
   }, [autoFocus, isTouch]);
 
-  // Dismiss the emoji/GIF/sticker picker when interacting outside it — e.g.
-  // clicking back into the chat messages or the composer's text input.
   useEffect(() => {
     if (!pickerOpen) return;
     const handlePointerDown = (e: PointerEvent) => {
@@ -925,24 +672,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [pickerOpen]);
 
-  // Mount the picker on open; keep it in the DOM briefly on close so the
-  // slide-down exit transition can play before unmounting. The mount/slide
-  // lifecycle (picker + poll panel) lives in useMountedTransition, above.
-
-  // Auto-save draft (debounced): persists the text and any uploaded attachments
-  // (already-uploaded Blossom URLs, so safe to serialize) per channel.
-  // Encrypted attachments are excluded — their decryption params live only in
-  // an in-memory ref (never persisted), so a restored ciphertext URL would be
-  // undecryptable; drop them from the draft rather than persist a dead blob.
+  // Debounced draft save. Encrypted attachments are dropped: their params live
+  // only in memory, so a restored ciphertext URL would be undecryptable.
   useEffect(() => {
-    // Not before the cache has warmed: an empty composer writes a CLEAR, which
-    // would delete the very draft still on its way in from KV.
+    // An empty composer writes a CLEAR, which would delete the draft still loading.
     if (!draftsReady) return;
     const timer = setTimeout(() => {
-      // Keyed on the attachment actually having encryption params, not on this
-      // surface encrypting its own uploads: a FORWARDED attachment arrives
-      // already-encrypted wherever it's forwarded to, including surfaces that
-      // upload in the clear.
+      // Keyed on having params, not this surface encrypting: forwards arrive encrypted.
       const persistable = new Map(
         [...uploadedFileGroups].filter(([url]) => !attachmentEncryption.current.has(url)),
       );
@@ -951,7 +687,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return () => clearTimeout(timer);
   }, [content, uploadedFileGroups, draftKey, draftsReady]);
 
-  // Detect quote embeds in content (nevent, note, naddr) for preview + q tags.
   const detectedEmbeds = useMemo(() => {
     const embeds: DetectedEmbed[] = [];
     const matches = content.matchAll(
@@ -996,26 +731,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     [detectedEmbeds, removedEmbeds],
   );
 
-  /** Uploaded attachments (insertion-ordered) derived from their NIP-94 tags. */
   const attachments = useMemo(
     () =>
       Array.from(uploadedFileGroups.entries()).map(([url, tags]) => {
         const mime = tags.find((t) => t[0] === "m")?.[1] ?? "";
-        // Encrypted (Concord) attachments live on Blossom as ciphertext, so the
-        // preview must fetch + AES-GCM-decrypt them (same as the receive side)
-        // rather than point an <img> at the raw ciphertext URL.
+        // Encrypted attachments are decrypted for preview like the receive side.
         const enc = attachmentEncryption.current.get(url);
         const encryption = enc
           ? { algorithm: enc.algorithm, key: enc.key, nonce: enc.nonce }
           : undefined;
-        // dim/blurhash come from the upload-time NIP-94 tags; the lightbox uses
-        // them to size and blur-up its placeholder before the image resolves.
+        // Lets the lightbox size and blur-up its placeholder.
         const dim = tags.find((t) => t[0] === "dim")?.[1];
         const blurhash = tags.find((t) => t[0] === "blurhash")?.[1];
         const summary = tags.find((t) => t[0] === "summary")?.[1];
         const name = tags.find((t) => t[0] === "name")?.[1];
-        // A webxdc's app icon, or a video's poster frame (uploaded alongside
-        // the video and, when encrypted, under the same key and nonce).
+        // Poster frame shares the video's key and nonce when encrypted.
         const icon = tags.find((t) => t[0] === "image" || t[0] === "thumb")?.[1];
         const isWebxdc = isWebxdcMime(mime);
         const local = attachmentMeta.current.get(url);
@@ -1023,8 +753,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           url,
           mime,
           name: summary ?? name,
-          // The local file's own name where this session picked it: an image
-          // sends no `name`, and a Blossom URL is only a hash.
+          // An image sends no `name`, and a Blossom URL is only a hash.
           label: summary ?? local?.name ?? name ?? fallbackLabel(url, mime),
           alt: tags.find((t) => t[0] === "alt")?.[1] || undefined,
           spoiler: tags.some((t) => t[0] === "content-warning"),
@@ -1038,12 +767,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           blurhash,
         };
       })
-        // Stable: anything without a slot (a restored draft) keeps its order, first.
+        // Stable: items without a slot (restored drafts) keep their order, first.
         .sort((a, b) => (attachmentSeq.current.get(a.url) ?? -1) - (attachmentSeq.current.get(b.url) ?? -1)),
       [uploadedFileGroups],
     );
 
-  /** Previewable attachments (images + video), in chip order — the gallery. */
   const galleryAttachments = useMemo(
     () =>
       attachments
@@ -1054,15 +782,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           encryption,
           dim,
           blurhash,
-          // The poster frame belongs to the video; on an image `icon` is unset.
           poster: isVideo ? icon : undefined,
         })),
     [attachments],
   );
 
-  // The open lightbox item is tracked by URL rather than index so that removing
-  // an attachment while it's open resolves to -1 and closes the lightbox instead
-  // of silently showing a different one.
+  // Tracked by URL so removing the open attachment closes the lightbox.
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const lightboxIndex = lightboxUrl
     ? galleryAttachments.findIndex((item) => item.url === lightboxUrl)
@@ -1092,7 +817,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     attachmentEncryption.current.delete(url);
     attachmentMeta.current.delete(url);
     attachmentSeq.current.delete(url);
-    // Also drop the URL from the text if it was typed/pasted there.
     setContent((prev) =>
       prev
         .split("\n")
@@ -1102,9 +826,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, []);
 
   /**
-   * Set an attachment's description (NIP-94 `alt`) and spoiler flag (an imeta
-   * `content-warning`). Both live in its tags like every other field, so they
-   * ride the draft and reach `buildMessageTags` with no extra plumbing.
+   * Set an attachment's `alt` and spoiler (`content-warning`); both live in its
+   * tags, so they ride the draft.
    */
   const updateAttachment = useCallback((url: string, patch: { alt?: string; spoiler?: boolean }) => {
     setUploadedFileGroups((prev) => {
@@ -1124,8 +847,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     });
   }, []);
 
-  /** Register an externally-sourced media URL (GIF, sticker) as an attachment
-   *  chip, so it previews above the input instead of pasting a raw URL. */
+  /** Register a GIF/sticker URL as an attachment chip rather than pasting it. */
   const registerAttachment = useCallback((url: string, fallbackMime: string, dim?: string) => {
     const ext = url.split(/[?#]/)[0].split(".").pop()?.toLowerCase() ?? "";
     const extMime = mimeFromExt(ext);
@@ -1137,26 +859,20 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, []);
 
   /**
-   * Register a discovered webxdc game (a kind-1063 event) as an attachment. A
-   * freshly minted topic makes THIS message's copy its own shared session, so
-   * everyone who launches it from this message converges on one game state. The
-   * `.xdc` is a public URL (not re-uploaded / not encrypted).
+   * Attach a discovered webxdc game (kind 1063). A fresh topic makes this
+   * message's copy its own shared session. Public URL, not re-uploaded.
    */
   const registerGame = useCallback(async (app: WebxdcApp) => {
     const topic = mintTopicId(app.url, user?.pubkey ?? "");
     const tags: string[][] = [
       ["url", app.url],
       ["m", WEBXDC_MIME],
-      // Written twice on purpose. `webxdc-topic` is the field Vector reads and
-      // validates; `webxdc` is where Armada has always looked, and it carries
-      // the same value so a client that only knows the old field still lands in
-      // the same session rather than alone in a new one.
+      // Written twice: `webxdc-topic` is what Vector reads; `webxdc` is Armada's
+      // legacy field.
       ["webxdc-topic", topic],
       ["webxdc", topic],
       ["summary", app.name],
-      // A filename, not a title: a receiver names the saved file from this tag
-      // and only falls back to the MIME when it carries no extension. `summary`
-      // is what gets displayed, so this costs nothing on our side.
+      // A filename: receivers name the saved file from it. `summary` is the display title.
       ["name", /\.xdc$/i.test(app.name) ? app.name : `${app.name}.xdc`],
     ];
     if (app.icon) tags.push(["image", app.icon], ["thumb", app.icon]);
@@ -1182,8 +898,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setPollDuration(7);
     draftCache.delete(draftKey);
     onCancelReply?.();
-    // Keep the composer focused after sending so the user can immediately type
-    // the next message (clicking the send button otherwise drops focus).
+    // Clicking send otherwise drops focus.
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [draftKey, onCancelReply]);
 
@@ -1196,10 +911,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const encryptedLimitMessage = (bytes: number) =>
       `Encrypted attachments are limited to ${limitMb(bytes)} MB on this device, since they are sealed and opened in memory.`;
 
-    // Refused before a card appears or a byte is read, where the size is
-    // known up front: a gallery item's comes from MediaStore, and reading a
-    // content:// URI buffers the whole file. Only a device limit applies
-    // here — how big an upload may be is the server's to say.
+    // Refuse oversize before reading (content:// reads buffer the whole file).
+    // Only the device limit applies; the server decides upload size.
     const pickedMime = mimeOfPicked(source.name, source.type);
     const pickedLimit = deviceInputLimit(pickedMime, encryptAttachments);
     if (source.size !== undefined && pickedLimit !== undefined && source.size > pickedLimit) {
@@ -1207,12 +920,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       return;
     }
 
-    // Flip on the placeholder tile immediately, before the slow local work
-    // (resize/transcode/blurhash/encrypt) that precedes the network upload.
     const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const seq = nextSeq.current++;
     const abort = new AbortController();
-    // A picked image previews from its own bytes while it uploads, Discord-style.
     let previewUrl = source instanceof File && source.type.startsWith("image/") && source.size < 40 * 1024 * 1024
       ? URL.createObjectURL(source)
       : undefined;
@@ -1228,8 +938,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
     let slotHeld = false;
     try {
-      // A card cancelled while it waits for a slot goes at once; the slot,
-      // when it comes, is handed straight back.
+      // A card cancelled while waiting for a slot hands the slot straight back.
       const slot = acquireUploadSlot();
       const cancelled = new Promise<"cancelled">((resolve) =>
         abort.signal.addEventListener("abort", () => resolve("cancelled"), { once: true }));
@@ -1245,11 +954,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         patchPending({ previewUrl });
       }
 
-      // Browsers report an empty (or occasionally wrong) type for some
-      // containers — `.avi` is commonly `""` — so fall back to the extension.
-      // Without this an `.avi` is misclassified as a generic file: it skips
-      // the video pipeline and uploads with no usable type for the server or
-      // the receive-side render.
+      // Browsers report "" for some containers (`.avi`), so fall back to the extension.
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
       const mime = file.type || mimeFromExt(ext);
       const isImage = mime.startsWith("image/");
@@ -1263,10 +968,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         return;
       }
 
-      // BUD-06: a file processing can't shrink goes up at its picked size, so
-      // ask the servers now rather than after encrypting it. (Images and
-      // videos are asked below, once their real size is known.) Encryption
-      // adds a 16-byte tag and nothing else.
+      // BUD-06: ask the servers now for files processing can't shrink. Encryption
+      // adds only a 16-byte tag.
       if (!isImage && !isVideo) {
         const refusal = await preflightUpload(
           { size: file.size + (encryptAttachments ? 16 : 0), type: mime },
@@ -1286,15 +989,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       let audioWaveform: Promise<number[] | undefined> | undefined;
 
       if (isImage) {
-        // Resize & optimize images before uploading.
         const resized = await resizeImage(file);
         uploadableFile = resized.file;
         resizedDim = resized.dimensions;
       } else if (isVideo) {
-        // Compress the video and pull out its NIP-94 metadata. Never throws for
-        // media reasons — falls back to uploading the original.
-        // Progress is patched per whole percent: the worker reports far more
-        // often than that, and each patch re-renders the composer.
+        // Never throws for media reasons (falls back to the original). Progress is
+        // patched per whole percent to limit re-renders.
         let lastPercent = -1;
         video = await processVideo(file, {
           signal: abort.signal,
@@ -1307,11 +1007,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         });
         uploadableFile = video.file;
       } else if (isAudio) {
-        // A music file's own tags and cover art, read here only to show on
-        // its card — recipients read them out of the same bytes. The cover
-        // stands in for the card's preview while the track uploads.
-        // Its waveform, likewise from the local bytes, decodes alongside the
-        // upload rather than ahead of it.
+        // Tags/cover shown on the card only (recipients read the same bytes); the
+        // waveform decodes alongside the upload.
         audioWaveform = computeWaveform(file);
         audio = await readAudioMetadata(file);
         if (audio.cover && !previewUrl && !abort.signal.aborted) {
@@ -1321,10 +1018,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
 
       if (abort.signal.aborted) return;
-      // Sealing holds the plaintext and ciphertext in memory at once, so an
-      // encrypted file is held to the device limit as it comes OUT of
-      // processing: a video the transcoder brought under it goes, one it
-      // passed through untouched (no encoder, already compact but long) can't.
+      // Sealing holds plaintext and ciphertext at once, so check the device limit
+      // on the processed size.
       if (encryptAttachments && uploadableFile.size > MAX_ENCRYPTED_BYTES) {
         tooLarge(
           isVideo
@@ -1350,8 +1045,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       patchPending({ phase: "uploading", progress: undefined });
 
-      // Compute preview metadata from the PLAINTEXT (before any encryption) —
-      // dim/blurhash must describe the visible media, not the ciphertext.
+      // dim/blurhash from the PLAINTEXT, not the ciphertext.
       let dimTag = resizedDim ?? video?.dim;
       let blurhashTag: string | undefined = video?.blurhash;
       if (isImage) {
@@ -1361,14 +1055,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       const originalMime = uploadableFile.type || mime;
 
-      // The video poster frame is a second blob, uploaded alongside and
-      // referenced from the video's imeta as `image`/`thumb`.
+      // Poster frame: a second blob, referenced as `image`/`thumb`.
       let posterFile = video?.poster
         ? new File([video.poster], replaceExtension(uploadableFile.name, ".jpg"), { type: "image/jpeg" })
         : undefined;
 
-      // Concord: encrypt the blob client-side (AES-256-GCM) so Blossom only
-      // ever holds ciphertext; the key/nonce ride in the message imeta.
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
         const enc = await encryptFileForUpload(uploadableFile);
@@ -1376,14 +1067,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         encryption = { algorithm: "aes-gcm", key: enc.key, nonce: enc.nonce, ox: enc.originalHash };
 
         if (posterFile) {
-          // NIP-17: a `thumb` is "encrypted with the same key, nonce" as the
-          // file it belongs to, so the message's single decryption-key/nonce
-          // pair covers both blobs.
+          // NIP-17: a `thumb` uses the same key and nonce as its file.
           posterFile = (await encryptFileWithParams(posterFile, enc.key, enc.nonce)).file;
         }
       }
 
-      // Poster first: it's small, and a failure here must not cost us the video.
+      // Poster first: small, and its failure mustn't cost the video.
       let posterUrl: string | undefined;
       if (posterFile) {
         try {
@@ -1396,9 +1085,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       const tags = await uploadFile({ file: uploadableFile, signal: abort.signal });
       const url = tags[0][1];
 
-      // For encrypted uploads the server's NIP-94 `m`/`x`/`size`/`dim` all
-      // describe the ciphertext; overwrite `m` with the real MIME (image,
-      // video, or audio) so the receive side classifies + decrypts correctly.
+      // Encrypted: server NIP-94 fields describe the ciphertext; restore the real `m`.
       if (encryption && originalMime) {
         const mTag = tags.find((t) => t[0] === "m");
         if (mTag) mTag[1] = originalMime;
@@ -1407,9 +1094,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       const hasTag = (name: string) => tags.some((t) => t[0] === name);
       if (isImage || isVideo) {
-        // Attach the plaintext-derived dim/blurhash so the embed renders right.
-        // For video the server's `dim` describes the pre-transcode file (or the
-        // ciphertext), so ours wins.
+        // Ours wins: the server's `dim` describes the pre-transcode file or ciphertext.
         if (dimTag) {
           const dim = tags.find((t) => t[0] === "dim");
           if (dim) dim[1] = dimTag;
@@ -1423,26 +1108,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         tags.push(["image", posterUrl], ["thumb", posterUrl]);
       }
       if (!isMedia) {
-        // Generic files render as a download card, which needs the original
-        // filename and (plaintext) size — the NIP-94 `size` the server returns
-        // describes the ciphertext for encrypted uploads, so send our own.
+        // Download cards need the filename and plaintext size (the server's describes ciphertext).
         if (file.name && !hasTag("name")) tags.push(["name", file.name]);
         const sizeTag = tags.find((t) => t[0] === "size");
         if (sizeTag) sizeTag[1] = String(file.size);
         else tags.push(["size", String(file.size)]);
       } else if (isVideo && file.name && !hasTag("name")) {
-        // A video whose container the recipient can't play inline (AVI/FLV/WMV)
-        // renders as a download card too; carry the original filename so it
-        // names the saved file and shows its type, since the Blossom URL is a
-        // content hash. `size` is left to the server's value — a transcode
-        // changes it, so the original file's size would be wrong here.
+        // Non-inline containers (AVI/FLV/WMV) render as download cards; `size` is left
+        // to the server since a transcode changed it.
         tags.push(["name", file.name]);
       }
 
-      // A .xdc is a webxdc app. Browsers report an empty type for `.xdc`, so
-      // force the NIP-94 `m` (the server's guess is wrong), mint a shared
-      // session uuid, and lift the app's title from its manifest — so a
-      // hand-attached game renders as a launchable card, not a download.
+      // Browsers report no type for `.xdc`: force `m`, mint a session, and read the
+      // manifest title so it renders as a launchable card.
       if (isWebxdcMime(originalMime) || /\.xdc$/i.test(file.name)) {
         const mTag = tags.find((t) => t[0] === "m");
         if (mTag) mTag[1] = WEBXDC_MIME;
@@ -1457,11 +1135,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         }
       }
 
-      // Usually long done: the upload took longer than the decode.
       const waveform = await audioWaveform;
       if (abort.signal.aborted) return;
 
-      // Marked from the gallery sheet's Spoiler toggle before it was picked.
       if (options.spoiler && (isImage || isVideo)) tags.push(["content-warning", "spoiler"]);
 
       if (encryption) attachmentEncryption.current.set(url, encryption);
@@ -1472,13 +1148,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       if (audioWaveform) primeAudioWaveform(url, waveform);
 
       setUploadedFileGroups((prev) => new Map(prev).set(url, keepUserFields(prev.get(url), tags)));
-      // The URL is tracked as an attachment chip (rendered above the input)
-      // rather than dumped into the text; it's appended to content on send.
     } catch (error) {
       if (!abort.signal.aborted) {
         toast({
           title: "Upload failed",
-          // The server's own reason (its X-Reason) where it gave one.
+          // The server's X-Reason, when given.
           description: uploadFailureReason(error) ?? "Could not upload file.",
           variant: "destructive",
         });
@@ -1491,7 +1165,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   }, [uploadFile, preflightUpload, toast, encryptAttachments, user?.pubkey]);
 
-  /** Several picked files at once — each gets its card straight away and uploads in parallel. */
   const handleFiles = useCallback((files: Iterable<File | DeferredFile>, options?: { spoiler?: boolean }) => {
     for (const file of files) void handleFileUpload(file, options);
   }, [handleFileUpload]);
@@ -1501,7 +1174,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       name: item.name ?? (item.video ? "video" : "image"),
       // Never empty: the size gate needs to know a video from an image.
       type: item.mime || (item.video ? "video/*" : "image/*"),
-      // MediaStore's size, so an oversize item is refused before it is read.
       size: item.size > 0 ? item.size : undefined,
       load: () => galleryItemFile(item),
     })), options);
@@ -1509,53 +1181,30 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [handleFiles]);
 
   /**
-   * Strip tracking parameters from the links in a message body, when the user
-   * hasn't turned that off.
-   *
-   * Applied at BOTH ends of the draft. On the way in — a share or a forward —
-   * so the user reads and edits the canonical link rather than discovering the
-   * `?utm_source=…` one only after sending it; and again to the TYPED text on
-   * send, which is what actually governs what is published, since the draft is
-   * editable and a link can be pasted or restored by hand after it arrives.
-   * On send it runs before anything else reads the text, so slash-command
-   * parsing, bot invocations and `buildMessageTags` all see the canonical URL
-   * — but deliberately before attachment URLs are appended, since an upload's
-   * URL is matched against its `imeta` tag by exact string and must never be
-   * rewritten.
+   * Strip tracking parameters (when enabled). Applied on share/forward arrival
+   * and again on send, before anything reads the text — but before attachment
+   * URLs are appended, since those match `imeta` by exact string.
    */
   const canonicalizeLinks = useCallback(
     (text: string) => (config.stripTrackingParams ? stripTrackingParamsInText(text) : text),
     [config.stripTrackingParams],
   );
 
-  // Consume a shared payload routed to THIS conversation (Android share
-  // target / the /share destination picker): shared text is appended to the
-  // draft, shared files go through the normal attachment pipeline. The consume
-  // is matched on `shareRoute` — the room this composer serves, which the
-  // surface hands down — and NOT on the current pathname, which every mounted
-  // composer reads the same. During a route transition the page being left is
-  // still mounted while the destination's chunk loads, so an ambient match let
-  // it claim a payload addressed to the room being navigated to. Subscribed
-  // (not just checked on mount) because a native share's file copies can land
-  // AFTER navigation mounted this composer, and a Direct Share into the room
-  // already on screen re-routes the stash without remounting anything.
+  // Consume a share routed to THIS composer's `shareRoute` (not the pathname,
+  // which the outgoing page also sees mid-transition). Subscribed, since native
+  // file copies and Direct Share can arrive after mount.
   useEffect(() => {
     if (!shareRoute) return;
     const consume = () => {
       const share = consumeShareFor(shareRoute);
       if (!share) return;
-      // A forward's imeta/emoji tags (see forwardMessage.ts). Appended, not
-      // replaced: several forwards can be staged into one draft before it's
-      // sent, and buildMessageTags drops whichever the final text no longer
-      // references.
+      // Appended, not replaced: several forwards can stage into one draft;
+      // buildMessageTags drops unreferenced ones.
       if (share.tags?.length) {
         forwardedContentTags.current = [...forwardedContentTags.current, ...share.tags];
       }
-      // A forwarded attachment becomes a real attachment — a chip above the
-      // input, previewable and removable — rather than a bare URL pasted into
-      // the draft. Its URL is stripped from the text because the send path
-      // re-appends every attachment URL not already present, so leaving it in
-      // would send the link twice.
+      // A forwarded attachment becomes a chip; its URL is stripped from the text
+      // since send re-appends attachment URLs.
       const forwarded = (share.tags ?? [])
         .filter((t) => t[0] === "imeta")
         .map(forwardedAttachment)
@@ -1570,12 +1219,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           return next;
         });
       }
-      // Canonicalized on arrival, not only on send, so what the user is shown
-      // is what they are about to publish — a share sheet hands over whatever
-      // link the source app built, and `?utm_source=…` pasted into the draft
-      // is something they can only notice after it has gone out. After the
-      // attachment URLs are removed rather than before: those are matched by
-      // exact string and must not be rewritten.
+      // Canonicalized on arrival so the user sees what they'll publish; after
+      // removing attachment URLs, which must not be rewritten.
       const text = canonicalizeLinks(
         forwarded.length
           ? stripUrlsFromText(share.text, forwarded.map((a) => a.url))
@@ -1595,8 +1240,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const items = e.clipboardData?.items;
     if (!items) return;
 
-    // Upload every pasted file (media or generic documents). Non-file items
-    // (plain text, HTML) fall through to the textarea's default paste handling.
+    // Non-file items fall through to default paste handling.
     const files = Array.from(items)
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
@@ -1608,15 +1252,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [handleFiles]);
 
   const handleGlobalImagePaste = useCallback((files: File[]) => {
-    // Discord-style global paste: once an image is attached, hand keyboard
-    // ownership to the composer so the user can immediately type or press Enter.
     textareaRef.current?.focus();
     handleFiles(files);
   }, [handleFiles]);
   const claimPasteOwnership = useGlobalImagePaste(handleGlobalImagePaste);
 
-  // Drag-and-drop upload onto the composer. `dragDepth` tracks nested
-  // enter/leave events so the overlay doesn't flicker over child elements.
+  // `dragDepth` tracks nested enter/leave so the overlay doesn't flicker.
   const [isDragging, setIsDragging] = useState(false);
   const dragDepth = useRef(0);
 
@@ -1648,26 +1289,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     handleFiles(files);
   }, [handleFiles]);
 
-  /** Build the common NIP-29 + content-derived tags for an outgoing message. */
   const buildMessageTags = useCallback((finalContent: string): string[][] => {
-    // NOTE: we deliberately do NOT emit NIP-29 `previous` timeline tags.
-    // relay29's CheckPreviousTag rejects any event whose first `previous` ref
-    // isn't in the group's in-memory last-50 ring. We can only pick refs from a
-    // local (and own-excluded) message snapshot, which routinely drifts out of
-    // that window — especially when replying to older messages — causing the
-    // relay to silently drop legitimate messages/replies. `previous` is
-    // optional in NIP-29 and only guards against relay-fork attacks, which
-    // don't apply to this single-host-per-group deployment.
+    // NOTE: deliberately no NIP-29 `previous` tags: relay29 rejects events whose
+    // first ref isn't in its last-50 ring, which a local snapshot often misses.
+    // It's optional and only guards against relay forks.
     const tags: string[][] = [
       ["h", groupId],
     ];
 
-    // Hashtags → t tags
     for (const t of new Set(extractHashtags(finalContent))) {
       tags.push(["t", t]);
     }
 
-    // NIP-27 mention p tags — extract nostr:npub1/nprofile1 from content
     const mentionMatches = finalContent.matchAll(
       /nostr:(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)/g,
     );
@@ -1689,9 +1322,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       tags.push(["p", pk]);
     }
 
-    // Inline reply tags. Concord uses a NIP-C7 `q` (parent rumor id + author),
-    // leaving kind-1111 for threads; NIP-29 uses NIP-10 marked `e`/`root` tags.
-    // Either way `p`-tag the replied-to author so they're notified.
+    // Concord: NIP-C7 `q`; NIP-29: NIP-10 marked `e`. Always `p`-tag the author.
     if (replyTo) {
       if (replyMarker === "nipc7") {
         tags.push(["q", replyTo.id, "", replyTo.pubkey]);
@@ -1709,7 +1340,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
     }
 
-    // NIP-18 quote tags for visible nevent/naddr embeds
     for (const embed of visibleEmbeds) {
       if (embed.type === "naddr" && embed.addr) {
         tags.push(["q", `${embed.addr.kind}:${embed.addr.pubkey}:${embed.addr.identifier}`]);
@@ -1718,24 +1348,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
     }
 
-    // NIP-30 emoji tags for custom emojis referenced in content
     const emojiTags = collectEmojiTags(finalContent, customEmojis);
     tags.push(...emojiTags);
 
-    // NIP-92 imeta tags. Uploaded attachments are matched by their EXACT URL —
-    // never by extension regex — because Blossom servers name content-addressed
-    // blobs after the MIME type's canonical extension (audio/mpeg → `.mpga`),
-    // which our extension lists may not cover. Missing the imeta here means no
-    // inline render and, for encrypted uploads, a permanently undecryptable
-    // blob (the key/nonce only ship inside the imeta).
+    // NIP-92 imeta, matched by EXACT upload URL: Blossom names blobs by canonical
+    // extension (audio/mpeg → `.mpga`), and a missed imeta leaves encrypted blobs
+    // undecryptable.
     const processedUrls = new Set<string>();
     for (const [url, fileTags] of uploadedFileGroups) {
       if (!finalContent.includes(url)) continue;
       processedUrls.add(url);
       const fields = fileTags.map((tag) => `${tag[0]} ${tag[1]}`);
-      // Append AES-GCM decryption params for client-encrypted attachments
-      // (Concord), matching Vector / 0xChat's imeta format so members and
-      // Vector can decrypt the Blossom ciphertext.
+      // Vector / 0xChat imeta decryption format.
       const enc = attachmentEncryption.current.get(url);
       if (enc) {
         fields.push(`encryption-algorithm ${enc.algorithm}`);
@@ -1747,11 +1371,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       tags.push(["imeta", ...fields]);
     }
 
-    // Forwarded content tags, carried verbatim from the original message.
-    // BEFORE the extension-derived pass below, and recorded in `processedUrls`,
-    // so a forwarded encrypted attachment isn't also given a bare `url`+`m`
-    // imeta — the renderer keys imeta by URL and the later tag would win,
-    // dropping the decryption params and breaking exactly what this preserves.
+    // BEFORE the extension pass and recorded in `processedUrls`: a later bare imeta
+    // for the same URL would win and drop the decryption params.
     if (forwardedContentTags.current.length) {
       const forwarded = contentTagsFor(forwardedContentTags.current, finalContent, {
         urls: processedUrls,
@@ -1766,8 +1387,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
     }
 
-    // Typed/pasted media URLs (not from an upload in this composer session)
-    // still get a basic extension-derived imeta.
+    // Typed/pasted media URLs get a basic extension-derived imeta.
     const mediaUrlMatches = finalContent.matchAll(new RegExp(IMETA_MEDIA_URL_REGEX.source, "gi"));
     for (const match of mediaUrlMatches) {
       const url = match[0];
@@ -1780,22 +1400,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
   /**
-   * Note this room in the Direct Share "last sent" ledger.
-   *
-   * The room comes from the LOCATION rather than from props: `roomPath` strips
-   * the `/t/<root>` and `/m/<id>` focus, so a thread reply and a permalinked
-   * message both credit the room they were sent in, and one derivation covers
-   * DMs, Concord and NIP-29 without teaching this component their three
-   * different id shapes. (`relayUrl`/`groupId` cannot do this — Concord passes
-   * a bare `channel.idHex` with no community, so its route is not
-   * reconstructible from them.)
-   *
-   * Called where the send is DISPATCHED, which for the override and optimistic
-   * paths is before it is signed — those are deliberately fire-and-forget. So
-   * this means "the user sent here", not "the relay accepted it". That is the
-   * right granularity for a suggestion: a room you tried to message is a room
-   * you meant to message, and the alternative is three protocol-specific hooks
-   * with no shared point at all.
+   * Record this room in the Direct Share ledger. Room from the LOCATION
+   * (`roomPath`), since Concord props can't reconstruct the route. Called at
+   * dispatch, so it means "the user sent here", not "the relay accepted".
    */
   const noteSent = useCallback(() => {
     if (!user) return;
@@ -1804,20 +1411,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     recordSent(user.pubkey, roomPath(route), { label: shareLabel, iconUrl: shareIconUrl });
   }, [user, shareLabel, shareIconUrl]);
 
-  /**
-   * Publish a finalized message body via the active send path.
-   *
-   * `extraTags` are appended to the content-derived ones. They carry routing that
-   * the text itself cannot express — today, the `bot` tag naming which bot should
-   * act on a command. They ride the same path as every other tag, which for
-   * Concord means the inner, encrypted rumor.
-   */
+  /** `extraTags` carry routing the text can't express (the `bot` tag); sealed like the rest on Concord. */
   const publishMessage = useCallback(async (finalText: string, extraTags?: string[][]) => {
     if (!finalText || !user || finalText.length > MAX_CHARS) return;
-    // Only the legacy (non-optimistic) publish path serializes on `isSending`.
-    // The optimistic and override paths clear the composer and publish in the
-    // background so the user can queue several messages back-to-back; their
-    // signer crypto is serialized by the per-identity signer queue instead.
+    // Only the legacy publish path serializes on `isSending`; the others publish
+    // in the background, serialized by the per-identity signer queue.
     if (!sendOverride && !onOptimisticInsert && isSending) return;
 
     // Refused before anything is built or cleared, so the draft survives.
@@ -1827,31 +1425,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       return;
     }
 
-    // Build the tags BEFORE resetting the composer. `resetComposeState` clears
-    // the per-upload encryption ref (`attachmentEncryption`), so building tags
-    // after the reset would drop every encrypted attachment's
-    // `decryption-key`/`decryption-nonce` from its imeta — publishing the
-    // ciphertext URL with no way to decrypt it (a broken image for everyone).
+    // Build tags BEFORE reset: `resetComposeState` clears the encryption ref.
     const tags = buildMessageTags(finalText);
     if (extraTags?.length) tags.push(...extraTags);
 
     try {
       if (sendOverride) {
-        // Delegated send (e.g. DMs): the caller owns publishing. Clear the
-        // composer immediately and fire the send in the background so the user
-        // can queue several messages in a row without the UI locking up. The
-        // override (DM hook) serializes signing internally and surfaces
-        // per-message delivery state, so we neither await nor reset on its
-        // result here.
+        // Fire-and-forget; the override serializes signing and reports delivery.
         resetComposeState();
         onSent?.();
         noteSent();
         void Promise.resolve(sendOverride(finalText, tags)).catch((err) => {
-          // Post-sign delivery failures are surfaced inline by the override
-          // (per-message failed/retry state). But a failure BEFORE the
-          // optimistic insert — the signer itself (a NIP-46 bunker that can't
-          // be reached) — leaves no trace in the timeline, so it must surface
-          // here or the send silently does nothing.
+          // A signer failure BEFORE the optimistic insert leaves no timeline trace, so
+          // surface it here.
           const signerDown =
             err instanceof AggregateError ||
             (err instanceof Error && /timed? ?out|abort/i.test(err.message));
@@ -1864,11 +1450,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           });
         });
       } else if (onOptimisticInsert) {
-        // Optimistic group send: clear the composer immediately and render the
-        // message the moment it is signed, then confirm/fail in the background.
-        // Fire-and-forget so a burst of sends never blocks the UI; signing is
-        // serialized by the per-identity signer queue (useNostrPublish), so
-        // rapid Enter presses don't race on a NIP-07 extension.
+        // Fire-and-forget; signing is serialized by the signer queue (useNostrPublish).
         resetComposeState();
         onSent?.();
         noteSent();
@@ -1887,11 +1469,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             });
             if (signedId) onOptimisticSent?.(signedId);
           } catch (err) {
-            // Surface the relay's rejection reason (NRelay1 throws OK:false
-            // reasons as the Error message) instead of failing silently — a
-            // message that "sends" then vanishes with no explanation is the
-            // worst failure mode. The message stays visible with a "failed"
-            // status (and a retry affordance) rather than disappearing.
+            // Surface the relay's OK:false reason; the message stays with a retry affordance.
             if (signedId) onOptimisticFailed?.(signedId);
             else
               toast({
@@ -1921,11 +1499,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
   }, [user, isSending, sendOverride, canSend, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, noteSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
 
-  /** Execute a parsed slash command's result (run action / send rewritten text). */
   const executeSlash = useCallback(async (command: SlashCommand, arg: string) => {
-    // Guard commands that need a capability this composer lacks (e.g. a literally
-    // typed "/poll" in Concord). Such a command isn't in the menu, but a user
-    // could still type it; rather than misfire, send it as plain text.
+    // A typed command needing a missing capability (e.g. "/poll" in Concord) is sent as text.
     if (command.requires?.some((r) => !slashCapabilities.has(r))) {
       await publishMessage(`/${command.name}${arg ? ` ${arg}` : ""}`);
       return;
@@ -1937,9 +1512,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       {
         send: publishMessage,
         openMention: (prefix) => {
-          // Seed an "@" so the mention autocomplete opens for the next
-          // keystroke. A `prefix` (e.g. "/slap ") keeps a wrapping command so
-          // the resolved mention re-runs that command on send.
+          // Seed "@" to open mention autocomplete; `prefix` keeps a wrapping command.
           const seed = `${prefix ?? ""}@`;
           setContent(seed);
           requestAnimationFrame(() => {
@@ -1958,7 +1531,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             textareaRef.current?.focus();
             return;
           }
-          // Delegated actions (moderation, open thread) handled by the parent.
           try {
             await onSlashAction?.(action);
             resetComposeState();
@@ -1970,16 +1542,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     );
   }, [canModerate, onSlashAction, resetComposeState, toast, publishMessage, slashCapabilities]);
 
-  /** Run a command picked from the autocomplete menu (Tab/Enter/click). */
   const runSlashFromMenu = useCallback((command: SlashCommand) => {
     const parsed = parseSlashCommand(textareaRef.current?.value ?? "");
     void executeSlash(command, parsed?.command === command ? parsed.arg : "");
   }, [executeSlash]);
 
   /**
-   * Send a bot invocation. In a room it carries a `["bot", <pubkey>]` routing
-   * tag so the right bot answers; in a 1:1 DM the recipient IS the bot, so it
-   * sends as plain content with no tag (nothing bot-specific ever hits a tag).
+   * Room: carries a `["bot", <pubkey>]` routing tag. 1:1 DM: plain content, no tag.
    */
   const sendInvocation = useCallback(async (bot: string, name: string, text: string) => {
     rememberBotCommand(bot, name);
@@ -1987,7 +1556,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     await publishMessage(text, invocationTags(bot, { dm: botDmPeer !== undefined }));
   }, [publishMessage, rememberBotCommand, botDmPeer]);
 
-  /** Pick a bot's command from the `/` menu. */
   const runBotFromMenu = useCallback((entry: BotCommandEntry) => {
     armedBotRef.current = entry.bot;
     // Nothing to fill in, so picking it IS the send.
@@ -2000,11 +1568,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setBotCommand(entry);
   }, [sendInvocation]);
 
-  /**
-   * Seed the draft with a command and focus it. The picker watches for exactly
-   * that shape, so it opens itself — one code path in, rather than two that
-   * could drift apart. `name` empty means "just the slash".
-   */
+  /** Seed the draft with a command; the picker watches for that shape and opens itself. */
   const startCommand = useCallback((name: string) => {
     setPlusOpen(false);
     setBotCommand(null);
@@ -2018,7 +1582,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     });
   }, []);
 
-  /** The "+" menu's Commands entry: open the picker with nothing typed yet. */
   const openCommandMenu = useCallback(() => startCommand(""), [startCommand]);
 
   // Clicking a command in the timeline re-arms it here, already filtered.
@@ -2039,17 +1602,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [botCommand, sendInvocation]);
 
   const handleSend = useCallback(async () => {
-    // An attachment is still uploading — its URL isn't in `attachments` yet, so
-    // sending now would silently drop the file. Wait for it.
+    // Its URL isn't in `attachments` yet; sending now would drop the file.
     if (isUploading) return;
 
     const text = canonicalizeLinks(content.trim());
 
-    // Slash commands: when the message is purely a "/command …" with no
-    // attachments. Text commands (/me, /shrug) rewrite the outgoing message;
-    // action/moderation commands run a side-effect and send nothing. Works in
-    // both group mode and the delegated DM/Concord send path — executeSlashCommand
-    // guards commands needing an unsupported capability.
     if (text.startsWith("/") && attachments.length === 0) {
       const parsed = parseSlashCommand(text);
       if (parsed) {
@@ -2057,14 +1614,10 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         return;
       }
 
-      // A bot's command, typed by hand rather than picked. This app's own
-      // commands are matched first, so a local `/me` always beats a bot's.
+      // A hand-typed bot command. Local commands are matched first.
       const invocation = parseInvocation(text, botEntries, armedBotRef.current);
       if (invocation) {
-        // A known command with bad arguments is worth blocking: sending it would
-        // only produce an invocation the bot rejects, and the draft would be
-        // gone. The error is the same canonical text a conforming bot replies
-        // with, so the user reads one message, not two dialects of it.
+        // Block bad arguments (the draft would be gone for a rejected invocation).
         const error = validateInvocation(invocation.command, invocation.args);
         if (error) {
           toast({
@@ -2074,9 +1627,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           });
           return;
         }
-        // Two bots answer to this name and the user named neither. Send it
-        // untagged — a broadcast any of them may answer — rather than pick one
-        // for them, which would order the other to stay silent.
+        // Ambiguous between bots: send untagged rather than silencing one.
         if (invocation.ambiguous) {
           armedBotRef.current = undefined;
           await publishMessage(text);
@@ -2089,8 +1640,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // Unknown /command: fall through and send it literally.
     }
 
-    // Append any attachment URLs not already present in the text so the
-    // imeta/media tagging in buildMessageTags picks them up.
     const extraUrls = attachments
       .map((a) => a.url)
       .filter((url) => !text.includes(url));
@@ -2100,7 +1649,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
-  // A message is sendable when there's text or at least one attachment.
   const hasContent = content.trim().length > 0 || attachments.length > 0;
 
   const handlePollSubmit = useCallback(async () => {
@@ -2110,8 +1658,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .map((o) => ({ id: o.id, label: o.label.trim() }));
     if (!finalContent || filledOptions.length < 2 || !user || isSending || isUploading) return;
 
-    // A poll spends from the same budget as a message; check it here so the
-    // refusal names the wait instead of the generic publish failure below.
+    // Check here so the refusal names the wait.
     const refusal = canSend?.();
     if (refusal) {
       toast({ title: "Poll not published", description: refusal, variant: "destructive" });
@@ -2120,15 +1667,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
     try {
       if (onPollSubmit) {
-        // Delegated path (Concord): the transport seals the poll as a Chat
-        // Plane rumor. The channel binding is added there; no `relay` routing
-        // tag, since votes ride the sealed plane rather than a NIP-88 relay.
+        // Concord seals the poll; no `relay` tag since votes ride the sealed plane.
         await onPollSubmit({ question: finalContent, options: filledOptions, pollType, durationDays: pollDuration });
       } else {
         const tags = buildMessageTags(finalContent);
         tags.push(...buildPollTags(finalContent, filledOptions, pollType, pollDuration));
-        // NIP-88: votes must be sent to the relays listed in `relay` tags —
-        // route them to the group's host relay so membership is enforced.
+        // NIP-88: votes go to `relay`-tagged relays; the group host enforces membership.
         tags.push(["relay", relayUrl]);
         await createEvent({ kind: KIND_POLL, content: finalContent, tags, relay: relayUrl });
       }
@@ -2144,9 +1688,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   /** Stop recording, upload, and send as a voice message (kind 9 + imeta). */
   const handleStopAndSendVoice = useCallback(async () => {
     if (!user) return;
-    // Before `stopRecording`, which consumes the take, and before the upload —
-    // a refused send should neither discard the recording nor spend a Blossom
-    // round-trip on a blob nothing will reference.
+    // Before `stopRecording` (which consumes the take) and before uploading.
     const refusal = canSend?.();
     if (refusal) {
       toast({ title: "Message not sent", description: refusal, variant: "destructive" });
@@ -2170,8 +1712,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         type: recording.mimeType,
       });
 
-      // Concord: encrypt the voice blob client-side like any other attachment,
-      // so Blossom only holds ciphertext; the key/nonce ride in the imeta.
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
         const enc = await encryptFileForUpload(file);
@@ -2183,8 +1723,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       const audioUrl = uploadTags[0][1];
 
       const tags = buildMessageTags(audioUrl);
-      // Replace the basic imeta tag with one carrying waveform + duration
-      // (and, for encrypted uploads, the AES-GCM decryption params).
+      // Carry waveform + duration (and decryption params when encrypted).
       const imetaIndex = tags.findIndex((t) => t[0] === "imeta" && t.includes(`url ${audioUrl}`));
       const imetaFields = [
         `url ${audioUrl}`,
@@ -2208,7 +1747,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
 
       if (sendOverride) {
-        // Delegated send path (Concord/DMs): the caller seals + publishes.
         await sendOverride(audioUrl, tags);
       } else {
         await createEvent({
@@ -2242,13 +1780,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [voiceRecorder, toast]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends; Shift+Enter is a newline. Ignore the Enter that only confirms
-    // an in-progress IME composition (CJK and other multi-keystroke input),
-    // which would otherwise fire a premature send mid-word. A document is
-    // multi-line by nature, so there Enter is a newline and only Ctrl/Cmd+Enter
-    // sends — the labelled button is the ordinary way out. The user gets that
-    // same "Ctrl/Cmd+Enter sends, plain Enter is a newline" behavior for
-    // ordinary messages when send-on-Enter is off (its default on touch).
+    // Ignore Enter confirming an IME composition. Documents (and send-on-Enter
+    // off) use Ctrl/Cmd+Enter to send.
     const sendKey = isDocument || !enterSends
       ? e.key === "Enter" && (e.ctrlKey || e.metaKey)
       : e.key === "Enter" && !e.shiftKey;
@@ -2260,19 +1793,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         handleSend();
       }
     } else if (e.key === "Escape" && mode === "poll") {
-      // Escape leaves poll mode; the panel has no other keyboard exit and
-      // clicking away doesn't dismiss it (it's inline composer state, not a modal).
+      // Poll mode's only keyboard exit.
       e.preventDefault();
       setMode("post");
     } else if (e.key === "Escape" && isDocument && onCancel && !hasContent && pendingUploads.length === 0) {
-      // An empty in-place editor is put away with Escape; one holding a
-      // draft is not, since that would read as losing it.
+      // Only an empty in-place editor is put away with Escape.
       e.preventDefault();
       onCancel();
     } else if (e.key === "Escape" && replyTo && onCancelReply && !e.defaultPrevented && !e.nativeEvent.isComposing) {
-      // Escape drops the reply target, keeping whatever was typed. An open
-      // autocomplete claims the key first (its native listener runs before
-      // this one and prevents the default), so Escape closes that instead.
+      // Drops the reply target; an open autocomplete claims Escape first.
       e.preventDefault();
       onCancelReply();
     } else if (
@@ -2288,9 +1817,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       !e.altKey &&
       !e.nativeEvent.isComposing
     ) {
-      // Only from a truly empty composer, where ArrowUp is otherwise a no-op and
-      // no autocomplete overlay (which needs trigger text) is open to claim the
-      // key: reopen the user's last message for editing, à la Slack/Discord.
       if (onEditLast()) e.preventDefault();
     }
   };
@@ -2299,8 +1825,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const files = e.target.files;
     if (files) handleFiles(Array.from(files));
     e.target.value = "";
-    // The native picker focuses its hidden input/button on return.
-    // Restore the send box so Enter sends without another click.
+    // The native picker steals focus; restore it so Enter sends.
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [handleFiles]);
 
@@ -2308,7 +1833,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     pendingAborts.current.get(id)?.abort();
   }, []);
 
-  /** Uploaded and in-flight attachments, one row, in the order they were picked. */
   const trayItems = useMemo<TrayItem[]>(() => {
     const done = attachments.map((att) => ({
       seq: attachmentSeq.current.get(att.url) ?? -1,
@@ -2351,15 +1875,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setPickerOpen(true);
   }, []);
 
-  /** The "+" menu's secondary rows, shared by the desktop popover and the touch sheet. */
   const extraActions = useMemo<AttachAction[]>(() => {
     const list: AttachAction[] = [];
     if (pollAvailable) list.push({ id: "poll", label: mode === "poll" ? "Remove poll" : "Poll", icon: BarChart3, onSelect: togglePoll, active: mode === "poll" });
     list.push({ id: "game", label: "Add game", icon: Blocks, onSelect: openGames });
     if (appScope) list.push({ id: "watch", label: "Watch together", icon: MonitorPlay, onSelect: () => launchApp(appScope, { type: "youtube" }) });
-    // Only when a bot here actually offers something to run. Disabled
-    // mid-draft: the command menu keys off a draft that is nothing but "/",
-    // so seeding it would eat the message.
+    // Hidden mid-draft: the command menu keys off a draft that is just "/".
     if (botEntries.length > 0) list.push({ id: "commands", label: "Commands", icon: SquareSlash, onSelect: openCommandMenu, disabled: hasContent });
     return list;
   }, [pollAvailable, mode, togglePoll, openGames, appScope, launchApp, botEntries.length, openCommandMenu, hasContent]);
@@ -2373,8 +1894,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     { id: "photos", label: hasMediaGallery() ? "Gallery" : "Photos", icon: ImageIcon, onSelect: () => mediaInputRef.current?.click() },
     { id: "camera", label: "Camera", icon: Camera, onSelect: () => cameraInputRef.current?.click() },
     { id: "file", label: "File", icon: Paperclip, onSelect: () => fileInputRef.current?.click() },
-    // Games, Watch together and bot Commands sit behind the sheet's "Apps"
-    // tile instead, which keeps the tile row to one line (five at most).
+    // These sit behind the sheet's "Apps" tile, keeping the row to one line.
     ...extraActions.filter((a) => a.id !== "game" && a.id !== "watch" && a.id !== "commands"),
   ], [extraActions]);
 
@@ -2411,7 +1931,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Drag-and-drop upload overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-30 m-1 flex items-center justify-center clip-corner-lg border-2 border-dashed border-primary/60 bg-primary/10 backdrop-blur-sm pointer-events-none animate-in fade-in-0 duration-150">
           <div className="flex items-center gap-2 text-sm font-medium text-primary">
@@ -2421,14 +1940,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         </div>
       )}
 
-      {/* Reply banner */}
       {replyTo && (
         <div className="px-3 pt-2">
           <ReplyBanner event={replyTo} onCancel={onCancelReply} />
         </div>
       )}
 
-      {/* Detected quote embeds */}
       {visibleEmbeds.length > 0 && (
         <div className="px-3 pt-2 space-y-1 max-h-40 overflow-y-auto animate-in slide-in-from-top-2 fade-in-0 duration-200">
           {visibleEmbeds.map((embed) => (
@@ -2441,7 +1958,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         </div>
       )}
 
-      {/* Staged attachments — Discord-style cards, uploads in place. */}
       <AttachmentTray
         items={trayItems}
         isTouch={isTouch}
@@ -2453,7 +1969,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       <div className="p-2">
         {voiceRecorder.isRecording || isPublishingVoice ? (
-          /* ── Voice recording UI ─────────────────────────────── */
           <div className="flex items-center gap-3 rounded-xl bg-destructive/5 border border-destructive/20 px-3 py-2.5">
             <div className="flex items-center gap-2 min-w-0">
               <div className="size-2.5 rounded-full bg-destructive animate-pulse shrink-0" />
@@ -2462,7 +1977,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </span>
             </div>
 
-            {/* Live waveform preview */}
             <div className="flex-1 flex items-center gap-[2px] h-6 overflow-hidden">
               {voiceRecorder.liveWaveform.slice(-60).map((amp, i) => {
                 const h = 3 + (amp / 100) * 21;
@@ -2504,16 +2018,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           </div>
         ) : (
           <>
-            {/* Three pickers: any file, the photo library, and the camera.
-                On a phone the first two open different system UIs; `capture`
-                goes straight to the camera where the WebView supports it. */}
+            {/* `capture` goes straight to the camera where the WebView supports it. */}
             <input ref={fileInputRef} type="file" accept="*/*" multiple className="hidden" onChange={onPickerChange} />
             <input ref={mediaInputRef} type="file" accept="image/*,video/*" multiple className="hidden" onChange={onPickerChange} />
             <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onPickerChange} />
 
-            {/* Collecting a bot command's arguments takes over the message box:
-                the fields ARE the message, and quoting is no longer the user's
-                problem. */}
             {botCommand ? (
               <BotCommandComposer
                 entry={botCommand}
@@ -2524,20 +2033,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 onCancel={cancelBotCommand}
               />
             ) : (
-            /* ── Input pill: + | textarea | emoji | mic/send ────
-                A document wraps instead: the textarea takes the first full
-                line (`order-first basis-full`) and the same controls fall
-                onto a toolbar row beneath it, the send button pushed right. */
+            /* A document wraps: the textarea takes the first line, controls fall onto a toolbar row. */
             <div
               className={cn(
                 "clip-corner-lg bg-secondary/60 px-1.5 py-1.5",
                 isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
               )}
             >
-              {/* Plus menu. Touch: a bottom sheet with the camera roll and
-                  action tiles (Signal/Discord mobile). Pointer: Discord's
-                  popover, whose first row uploads a file — and a double-click
-                  on "+" skips the menu and opens the file picker directly. */}
+              {/* Pointer: a double-click on "+" skips the menu and opens the file picker. */}
               {isTouch ? (
                 <>
                   <button
@@ -2581,9 +2084,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     side="top"
                     align="start"
                     sideOffset={8}
-                    // Don't yank focus back to the "+" trigger on close — items that
-                    // redirect focus (Poll, Commands) set it themselves, and the
-                    // default restore would clobber the textarea they just focused.
+                    // Items like Poll/Commands focus the textarea themselves; don't clobber it.
                     onCloseAutoFocus={(e) => e.preventDefault()}
                     className="w-60 p-1.5 rounded-xl border-border shadow-lg"
                   >
@@ -2600,7 +2101,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                           className={cn(
                             "group/item flex items-center gap-3 w-full px-2 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
                             action.active ? "text-primary bg-primary/10" : "text-foreground/90 hover:bg-secondary/70 enabled:hover:text-foreground",
-                            // The file upload is the menu's main job; the rest sit under a rule.
                             i === 1 && "mt-1 relative before:absolute before:-top-0.5 before:inset-x-2 before:h-px before:bg-border/60",
                           )}
                         >
@@ -2620,15 +2120,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </Popover>
               )}
 
-              {/* Borderless, self-growing textarea */}
               <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
-                {/* Placeholder as a truncating overlay, NOT the textarea's
-                    `placeholder` attribute: a native placeholder wraps to a
-                    second line when it's long (a long channel/display name on
-                    a narrow phone), and the wrapped placeholder counts toward
-                    scrollHeight — the auto-resize then inflates the EMPTY
-                    composer to two lines and the wrapped remnant clips. The
-                    overlay always renders one line, ellipsized to fit. */}
+                {/* Overlay, not the `placeholder` attribute: a wrapped native placeholder
+                    inflates scrollHeight and the empty composer to two lines. */}
                 {!content && (
                   <div
                     aria-hidden
@@ -2647,8 +2141,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   value={content}
                   onChange={(e) => {
                     const { value, selectionStart, selectionEnd } = e.target;
-                    // Only a single `:` just typed at a collapsed caret can
-                    // close a shortcode — never a paste or a programmatic edit.
+                    // Only a single `:` typed at a collapsed caret closes a shortcode.
                     const closedShortcode =
                       selectionStart === selectionEnd &&
                       value.length === content.length + 1 &&
@@ -2700,7 +2193,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
               </div>
 
-              {/* Dedicated emoji/sticker and GIF picker toggles. */}
               <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -2744,11 +2236,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </Tooltip>
               </div>
 
-              {/* Mic when empty, send when there's something to send (Signal-style).
-                  Available in group mode AND delegated-send mode (Concord/DMs) —
-                  handleStopAndSendVoice routes through sendOverride when set.
-                  A document has no mic (a voice note is not a post) and sends
-                  from a labelled button at the toolbar's right edge. */}
+              {/* Mic when empty, send otherwise. Documents have no mic. */}
               {isDocument ? (
                 <>
                   {onCancel && (
@@ -2791,14 +2279,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               ) : (
                 <button
                   type="button"
-                  // Keep the tap from blurring the textarea: on iOS, tapping a
-                  // non-editable element dismisses the keyboard, which reflows
-                  // the layout and slides this button out from under the finger
-                  // so the click (fired at touchend) misses — requiring a second
-                  // tap. preventDefault on pointerdown retains focus (keyboard
-                  // stays up, no reflow) while still allowing the click through.
-                  // Must be pointerdown, not mousedown: iOS synthesizes mouse
-                  // events after touchend, too late to prevent the blur.
+                  // Keep the textarea focused: on iOS a blur dismisses the keyboard, reflows,
+                  // and the click misses. Must be pointerdown (iOS synthesizes mouse events late).
                   onPointerDown={(e) => e.preventDefault()}
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
                   disabled={isUploading || (mode === "poll" ? !isPollValid || isSending : !hasContent)}
@@ -2813,7 +2295,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             </div>
             )}
 
-            {/* Char counter — only when approaching the limit */}
             {charCount > MAX_CHARS * 0.8 && (
               <div className="flex justify-end pt-1 pr-2">
                 <span
@@ -2827,7 +2308,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               </div>
             )}
 
-            {/* ── Poll options ─────────────────────────────────── */}
             {pollMounted && (
               <div
                 className={cn(
@@ -2890,7 +2370,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                   )}
                 </div>
 
-                {/* Poll settings — pill toggles */}
                 <div className="flex flex-wrap gap-2">
                   {(["singlechoice", "multiplechoice"] as const).map((t) => (
                     <button
@@ -2932,7 +2411,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         )}
       </div>
 
-      {/* ── Emoji / GIF / sticker picker panel ───────────────── */}
       {pickerMounted && !voiceRecorder.isRecording && (
         <div
           ref={pickerRef}
@@ -3015,8 +2493,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               onSelect={(gif) => {
                 registerAttachment(gif.url, "image/gif", `${gif.width}x${gif.height}`);
                 setPickerOpen(false);
-                // Restore focus after the picker closes so Enter sends the
-                // attached GIF without another click in the message field.
+                // Restore focus so Enter sends the attached GIF.
                 requestAnimationFrame(() => textareaRef.current?.focus());
               }}
             />
@@ -3025,7 +2502,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         </div>
       )}
 
-      {/* Tap an attachment chip to preview it full-screen before sending. */}
       {lightboxIndex !== -1 && (
         <Lightbox
           media={galleryAttachments}
@@ -3039,7 +2515,6 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   );
 }
 
-/** Compact banner above the composer showing the message being replied to. */
 function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => void }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
@@ -3072,12 +2547,7 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
   );
 }
 
-/**
- * Compact single-line bar above the composer for a quoted post (nevent / note /
- * naddr detected in the draft). Resolves the referenced event the same way the
- * inline {@link EmbeddedNote} card does, then shows just "Quoting <Name>:
- * <snippet>" — matching the reply banner — rather than a full note card.
- */
+/** Single-line "Quoting <Name>: <snippet>" bar for a quote detected in the draft. */
 function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () => void }) {
   const isAddr = embed.type === "naddr";
   const noteQuery = useEvent(
@@ -3111,8 +2581,7 @@ function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () =
   );
 }
 
-/** The resolved "Quoting <Name>: <snippet>" line — split out so the author
- * hooks only run once the quoted event exists. */
+/** Split out so the author hooks only run once the quoted event exists. */
 function QuoteBannerBody({ event }: { event: NostrRumor }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;

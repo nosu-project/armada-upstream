@@ -13,12 +13,7 @@ import {
   setRenderTracking,
 } from "@/lib/perfRuntime";
 
-/**
- * The performance report, reachable without a console. On a phone there is no
- * `__armadaPerf()` to type, and the device that is slow is the one whose
- * numbers matter — so the same JSON the console hands out is one tap away.
- * The report holds relay URLs and filter shapes, never content or keys.
- */
+/** Performance report without a console (for phones). Holds relay URLs and filter shapes, never content or keys. */
 export function DiagnosticsSettings() {
   const [renders, setRenders] = useState(isRenderTracking);
 

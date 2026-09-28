@@ -18,52 +18,20 @@ import { DEFAULT_AVATARS, type DefaultAvatar } from "@/lib/defaultAvatars";
 import { impact } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
 
-/**
- * Signup step 3: a name and a face, asked for once, at the only moment the
- * user is definitely paying attention.
- *
- * This used to be the full {@link ProfileSettings} editor — the same form
- * Settings renders — which asks a brand-new account about its banner, its
- * website, its lightning address and its custom fields before it has sent a
- * message. Almost every field is one somebody who has been here five seconds
- * has no answer to, and a form that long reads as work to be skipped.
- *
- * So it is Signal's set-up screen instead: one picture, one field, and a way
- * past it. Both are optional and the screen says so — but an account with
- * neither is the account nobody can tell apart from every other new one, and a
- * network of grey circles reads as an empty network even when it is full,
- * which is why there are twelve pictures on the screen and picking one is a
- * single tap. Everything else stays in Settings, where the person filling it
- * in has a reason to.
- *
- * Its own module rather than a fourth body in `signupSteps.tsx`: this one
- * reaches the publish path, the Blossom uploaders and the query cache, none of
- * which the key steps touch, and both consumers' tests would otherwise have to
- * stand all of that up to reach step 2.
- */
+/** Signup step 3: optional name and picture (twelve presets, one tap). Everything else stays in Settings. */
 
-/** What the picture is going to be, once somebody has chosen one. */
 type Picture =
-  /** Nothing yet. */
   | { kind: "none" }
-  /**
-   * One of the presets, which is already a URL on a Blossom server — so
-   * trying all of them costs nothing and publishing one uploads nothing.
-   */
+  /** A preset is already a Blossom URL, so publishing one uploads nothing. */
   | { kind: "default"; avatar: DefaultAvatar }
-  /** Their own photograph, already on a Blossom server. */
   | { kind: "uploaded"; url: string };
 
 export interface ProfileStepBodyProps {
   /**
-   * Whose profile this is allowed to be: the account made a moment ago, and
-   * nobody else. A kind 0 signed by the wrong key silently replaces a real
-   * person's profile and there is no undo for that, so the publish below
-   * refuses rather than trusting that the login it asked for is the one that
-   * landed.
+   * The just-created account and nobody else: a kind 0 signed by the wrong key
+   * silently replaces someone's profile, so publishing refuses on mismatch.
    */
   expectedPubkey: string | undefined;
-  /** Move on, whether or not anything was published. */
   onFinish: () => void;
 }
 
@@ -81,7 +49,6 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
 
   const busy = saving || uploading;
 
-  /** What to draw in the circle at the top, before anything is published. */
   const preview =
     picture.kind === "default"
       ? picture.avatar.url
@@ -91,7 +58,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
 
   const handlePhoto = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    // Cleared straight away so that picking the same file twice still fires.
+    // Cleared so picking the same file twice still fires.
     event.target.value = "";
     if (!file) return;
 
@@ -120,14 +87,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
     }
   };
 
-  /**
-   * Publish the profile and move on.
-   *
-   * Anything that goes wrong here loses a name and a picture, which are worth
-   * a toast and not worth being stuck on: the account exists either way, and
-   * both are editable from Settings forever after. So every failure still
-   * calls `onFinish`.
-   */
+  /** Publish and move on. Every failure still calls `onFinish`: both fields are editable in Settings. */
   const handleFinish = async () => {
     const trimmed = name.trim();
     if (!trimmed && picture.kind === "none") {
@@ -135,9 +95,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       return;
     }
 
-    // The signer is whoever `useCurrentUser` says it is, and this screen has no
-    // say in that. If the new login somehow is not the active one, signing here
-    // would publish over whichever account is — refuse instead.
+    // Refuse if the new login isn't the active signer, or we'd overwrite another account.
     if (!user || !expectedPubkey || user.pubkey !== expectedPubkey) {
       toast({
         title: "Profile not saved",
@@ -156,9 +114,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       if (picture.kind === "uploaded") {
         pictureUrl = picture.url;
       } else if (picture.kind === "default") {
-        // Published as it stands. A preset is a blob on a Blossom server, and
-        // uploading a copy of one would only mean a second URL for the same
-        // picture that could come to disagree with it.
+        // Published as-is; re-uploading a preset would create a second URL for it.
         pictureUrl = picture.avatar.url;
       }
 
@@ -183,15 +139,10 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
 
   return (
     <div className="flex flex-col items-center gap-6 text-center">
-      {/* No description. The screen is a picture, a name and a Skip — it
-          explains itself, and a paragraph saying so is a paragraph between the
-          heading and the only two things to do. */}
       <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
         set up your profile
       </h1>
 
-      {/* The picture as it will be, at the size a profile shows one, with the
-          way to replace it hung off the corner where a badge goes. */}
       <div className="relative">
         <div className="size-24 overflow-hidden rounded-full bg-muted">
           {preview ? (
@@ -226,14 +177,8 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
         />
       </div>
 
-      {/* A field on `bg-background`, inside a shell that is also
-          `bg-background`, is a placeholder floating in the middle of a screen
-          — which is what this looked like. So: a filled well with a hairline
-          tracing the chamfer, brightening to the ring colour on focus. The
-          frame is a wrapper rather than a `border` on the input itself
-          because clip-path slices a rectangular border off at the two cut
-          corners (see `.clip-hairline-lg` in index.css), and an input has no
-          ::before to trace it with. */}
+      {/* Frame is a wrapper, not an input `border`: clip-path slices borders at the
+          cut corners (see `.clip-hairline-lg`), and inputs have no ::before. */}
       <div className="w-full">
         <label htmlFor="onboarding-name" className="sr-only">
           Your name
@@ -253,22 +198,13 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
         </div>
       </div>
 
-      {/* Sized by the column rather than by a column count: never smaller than
-          a thumb, and as many across as there is room for.
-
-          Its own provider rather than App's, which is an ancestor only in the
-          running app: this screen's tests render it on its own, and a Radix
-          `Tooltip` with no provider above it throws rather than degrading. */}
+      {/* Own provider: tests render this alone, and a Radix Tooltip without one throws. */}
       <TooltipProvider delayDuration={600}>
         <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
           {DEFAULT_AVATARS.map((avatar) => {
             const chosen = picture.kind === "default" && picture.avatar.id === avatar.id;
             return (
-              /* The label is what the picture is and who drew it, and the grid
-                 is pictures with no room for text beside them — so hovering a
-                 cell for a moment is the one way to read the credit with eyes
-                 rather than a screen reader. Hover only, by Radix's own
-                 behaviour: a tap must choose the avatar, not explain it. */
+              /* Hover-only credit (a tap must choose, not explain). */
               <Tooltip key={avatar.id}>
                 <TooltipTrigger asChild>
                   <button
@@ -286,11 +222,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
                       chosen && "ring-2 ring-primary ring-offset-2 ring-offset-background",
                     )}
                   >
-                    {/* Eagerly, deliberately. Lazily the last ones never
-                        loaded at all: the grid sits at the bottom of a scroll
-                        container and the observer never fired for the cells
-                        below the fold, leaving empty circles where the pictures
-                        should be. */}
+                    {/* Eager: lazy images below the fold in this scroll container never loaded. */}
                     <img
                       src={avatar.url}
                       alt=""

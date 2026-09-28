@@ -2,13 +2,9 @@ import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 
 /**
- * A group's NIP-29 banner image (the kind-39000 `banner` tag). The URL is
- * untrusted event data, so non-http(s) and local/private-network URLs are
- * refused (a leaked dev-instance URL would otherwise trigger Chrome's Local
- * Network Access prompt for every viewer), and it loads under the viewer's
- * media policy like every other sender-named image — proxied for a stranger's
- * host, absent when the policy wants a tap first. Renders nothing when
- * invalid; the parent owns the container (height, rounding).
+ * NIP-29 banner (kind-39000 `banner` tag). Untrusted: non-http(s) and
+ * private-network URLs are refused (Chrome's Local Network Access prompt), and
+ * it loads under the viewer's media policy.
  */
 export function GroupBannerImage({ src, className }: { src: string | undefined; className?: string }) {
   const url = sanitizeUrl(src);

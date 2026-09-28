@@ -90,7 +90,6 @@ export interface PortableWireState {
   events: NostrEvent[];
   communityEvents: NostrEvent[];
   communitySet: FragSet | null;
-  /** Explicit relays that completed both the portable and fragment reads. */
   answered: string[];
 }
 
@@ -116,7 +115,7 @@ export function newestPortableAddressableEvents<T extends NostrRumor>(
   return [...byD.values()];
 }
 
-/** Read the bounded set of signed records that can be mirrored byte-for-byte. */
+/** Bounded set of signed records that can be mirrored byte-for-byte. */
 export async function fetchPortableWireState(
   nostr: PortableNostr,
   user: NonNullable<ReturnType<typeof useCurrentUser>["user"]>,
@@ -158,10 +157,8 @@ export async function fetchPortableWireState(
       ],
       signal,
     ),
-    // Creator Invite Lists are deliberately also written to the CORD stock
-    // rescue set. Query kind 13303 there independently so a revocation held
-    // only by a stock relay joins the CRDT merge, without widening any other
-    // private settings document to public rescue relays.
+    // Creator Invite Lists are also written to the CORD stock rescue set; read 13303 there so a
+    // revocation only held there joins the merge.
     queryExplicitRelaysWithStatus(
       nostr,
       STOCK_RELAYS,
@@ -244,9 +241,8 @@ function newerPortableRecord(candidate: NostrEvent, current: NostrEvent | undefi
 }
 
 /**
- * EVENT OK proves receipt, not which replaceable event a relay retained. Read
- * each destination back and require the exact expected NIP-01 head before a
- * NIP-65 pointer is allowed to make that relay authoritative.
+ * OK proves receipt, not retention: read back and require the exact NIP-01 head before a
+ * NIP-65 pointer makes that relay authoritative.
  */
 export async function confirmPortableRecordHeads(
   nostr: PortableNostr,
@@ -305,9 +301,7 @@ export async function publishSignedPortableRecords(
   const uniqueEvents = [...new Map([...events].map((event) => [event.id, event])).values()];
   let rejectedDeliveries = 0;
   for (const event of uniqueEvents) {
-    // Do not begin a fan-out without a durable exact-byte retry entry. If the
-    // queue store is unavailable, a partial success cannot safely be called
-    // portable.
+    // Never fan out without a durable exact-byte retry entry.
     await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
     const result = await publishSignedEventToRelays(nostr, event, targets, PUBLISH_TIMEOUT_MS);
     await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
@@ -328,9 +322,8 @@ export async function publishSignedPortableRecords(
 }
 
 /**
- * Phase one of a NIP-65 relay edit: copy all exact portable state to the
- * proposed write set. A divergent creator-invite list requires explicit Setup
- * Sync first, because exact mirroring cannot safely choose one lossy copy.
+ * Phase one of a NIP-65 edit: mirror all portable state to the proposed write set. A divergent
+ * creator-invite list needs explicit Setup Sync first.
  */
 export interface PortableMirrorResult {
   records: number;
@@ -444,10 +437,7 @@ export async function mirrorPortableStateBeforeRelayChange(
   const inviteEvents = [...wire.events, ...localSingletons]
     .filter((event) => event.kind === KIND_INVITE_LIST);
   const persistedInvites = await readPersistedInviteList(user.pubkey);
-  // Same rule as the community list above: a list this device knows was
-  // published (a folded relay version, or a local copy of the event) that the
-  // read did not return means the read was incomplete, and a fresh edition
-  // built without it would replace the relay copy with whatever the fold lacks.
+  // A known-published list missing from the read means the read was incomplete; don't rebuild.
   const knownPublishedInvites = Boolean(
     (persistedInvites && persistedInvites.newestCreatedAt > 0)
     || localSingletons.some((event) => event.kind === KIND_INVITE_LIST),
@@ -509,9 +499,8 @@ export interface PortableSetupPublishResult {
   destinations: number;
   rejectedDeliveries: number;
   /**
-   * Settings documents that exist on this device but that no relay returned,
-   * and so were left alone. Rebuilding one from a base we couldn't confirm
-   * would silently drop whatever the local copy is missing.
+   * Local settings documents no relay returned, left alone rather than rebuilt from an
+   * unconfirmed base.
    */
   unrefreshed: SettingsDocName[];
 }
@@ -525,7 +514,6 @@ function newestPortableSingleton(
     .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
 }
 
-/** Resolve wire + ArmadaDB, recovering exact bytes from the outbox if needed. */
 export async function signedPortableSingletonWinner(
   wireEvents: NostrEvent[],
   localEvents: NostrRumor[],
@@ -545,10 +533,8 @@ export async function signedPortableSingletonWinner(
 }
 
 /**
- * Recover a local rumor's exact bytes when they remain queued; otherwise sign
- * the same authenticated content/tags at a newer version. ArmadaDB
- * deliberately strips signatures, so refusing every such winner would make a
- * successfully delivered Android-background update impossible to migrate.
+ * Recover exact queued bytes, or re-sign the same content at a newer version: ArmadaDB strips
+ * signatures, so refusing those would block migrating Android-background updates.
  */
 async function signedPortableRumor(
   user: NonNullable<ReturnType<typeof useCurrentUser>["user"]>,
@@ -574,10 +560,8 @@ function nextCreatedAt(prev: NostrRumor | undefined): number {
 }
 
 /**
- * Build the local patch for explicit Setup Sync. The additive DM fields must
- * union with the decrypted relay base before it is re-signed; otherwise a
- * device with a stale local snapshot can erase pins, hides, accepts, or
- * message-less threads that another device added.
+ * Additive DM fields must union with the decrypted relay base before re-signing, or a stale
+ * device erases others' pins/hides/accepts.
  */
 export function portableConfigSnapshot(
   name: ConfigDocName,
@@ -590,18 +574,15 @@ export function portableConfigSnapshot(
   return {
     ...local,
     ...mergedRemote,
-    // Mutable preference, not an additive set: this explicit Sync publishes
-    // the value currently selected on this device.
+    // A mutable preference, not an additive set.
     ...(local.dmProtocol !== undefined ? { dmProtocol: local.dmProtocol } : {}),
   };
 }
 
 /**
- * Explicitly make the current account setup recoverable from every NIP-65
- * write relay. Existing signed list events are mirrored byte-for-byte; a
- * missing canonical service list is created only when the user has a non-empty
- * value in Settings. Armada's private preferences are merged into the latest
- * decryptable NIP-78 document, never built over an ambiguous failed read.
+ * Explicit Setup Sync to every NIP-65 write relay: signed lists mirrored byte-for-byte; a
+ * missing service list is created only from a non-empty Settings value; private preferences merged
+ * into the latest decryptable NIP-78 doc, never over a failed read.
  */
 export function usePublishPortableSetup() {
   const { nostr } = useNostr();
@@ -659,10 +640,7 @@ export function usePublishPortableSetup() {
       } catch {
         // Wire + folded plaintext remain available when ArmadaDB is not.
       }
-      // Consolidate this device's folded Concord facts onto the current wire
-      // before taking the exact events that Setup Sync mirrors. Without this,
-      // an offline-era join held only in the local fold would be omitted from
-      // the very action the user expects to make it portable.
+      // Consolidate local Concord facts onto the wire first, so offline-era joins become portable.
       const community = await syncCommunityList(
         nostr,
         user,
@@ -699,9 +677,8 @@ export function usePublishPortableSetup() {
         throw new Error("Could not refresh your signed NIP-65 list; nothing was published");
       }
 
-      // Portable data goes first and the discovery pointer LAST. This is
-      // immaterial for an unchanged NIP-65 set, and prevents a partial run
-      // from advertising destinations before they hold the state they name.
+      // Portable data first, discovery pointer LAST, so a partial run never advertises relays
+      // that lack the state.
       const toPublish: NostrEvent[] = [...wire.communityEvents];
       const groupWinner = newestPortableSingleton(
         [...events, ...localSingletons],
@@ -757,9 +734,7 @@ export function usePublishPortableSetup() {
       }
       if (blossomEvent) toPublish.push(blossomEvent);
 
-      // Dynamic, per-installation NIP-78 shards (GIF favorites today, DM
-      // conversation indices as they appear) are exact signed mirrors. Their
-      // bounded public `t` tag is the catalogue; `d` remains the coordinate.
+      // Per-installation NIP-78 shards are exact signed mirrors; `t` is the catalogue, `d` the coordinate.
       const topicEditions = [...events, ...localSingletons].filter((event) =>
         event.kind === SETTINGS_KIND
         && event.tags.some(
@@ -798,10 +773,8 @@ export function usePublishPortableSetup() {
       ];
       toPublish.push(...portableTopicEvents);
 
-      // Creator invite bookkeeping contains revocation secrets and terminal
-      // tombstones. If stale relays expose divergent copies, consolidate their
-      // semantic union into one fresh event instead of mirroring whichever
-      // lossy replaceable happened to be newest.
+      // Invite bookkeeping holds revocation secrets/tombstones: consolidate divergent copies into
+      // one fresh event instead of mirroring the newest lossy one.
       const inviteEvents = [...events, ...localSingletons]
         .filter((event) => event.kind === KIND_INVITE_LIST);
       const decodedInvites = await decodeInviteListEvents(inviteEvents, user);
@@ -847,20 +820,14 @@ export function usePublishPortableSetup() {
         inviteSeed = { event, list: inviteList, newestCreatedAt: event.created_at };
       }
 
-      // Each of the six settings documents, handled independently. A document
-      // this account has never written simply isn't there, which is not a
-      // failure — but one that exists locally and came back from NO relay is,
-      // and is skipped rather than rebuilt from a base we can't confirm.
+      // A document never written is fine; one that exists locally but came back from NO relay is
+      // skipped, not rebuilt.
       const settingsSeeds: { name: SettingsDocName; event: NostrEvent; doc: unknown }[] = [];
       const unrefreshed: SettingsDocName[] = [];
 
       for (const name of SETTINGS_DOC_NAMES) {
-        // The relays' newest copy and ArmadaDB's compete. The store is where
-        // the standing self-state REQ files every version as it arrives — and
-        // on Android, where the notification service files them while the app
-        // is dead — so it can hold one the relays we just asked have not
-        // caught up to. Merging over the older of the two would republish it
-        // as newest.
+        // ArmadaDB may hold a newer version than the relays (standing REQ, Android service); merge
+        // over the newer of the two.
         const stored = await readSettingsDoc(store, user.signer, user.pubkey, name);
         const dTag = settingsDTag(name);
         const fromRelays = events
@@ -869,23 +836,16 @@ export function usePublishPortableSetup() {
             && event.tags.some(([tag, value]) => tag === "d" && value === dTag))
           .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
 
-        // We know the user has this document, and this read didn't find it:
-        // every relay we asked failed or is behind. Publishing a base we can't
-        // confirm would drop whatever it is missing, on every device. Skipping
-        // one document doesn't compromise the others — they're separate
-        // coordinates — so the rest of the setup still gets published.
+        // Known document not found: publishing an unconfirmed base would drop data everywhere. Skip
+        // only this one.
         if (!fromRelays && stored) {
           unrefreshed.push(name);
           continue;
         }
 
         const configKeys = name in CONFIG_KEYS_BY_DOC ? (name as ConfigDocName) : undefined;
-        // Read-state and reactions are owned by their modules rather than
-        // AppConfig. Still arbitrate ArmadaDB against the wire by full NIP-01
-        // ordering: Android can file a newer signed document while JS is dead,
-        // and mirroring an older relay copy would regress a monotonic map. Use
-        // its exact retained signature when possible; otherwise surface this
-        // coordinate as unrefreshed instead of claiming synchronization.
+        // Module-owned docs (read-state, reactions): arbitrate store vs wire by NIP-01 order; reuse the
+        // exact signature when possible, else report unrefreshed.
         if (!configKeys) {
           try {
             const winner = await signedPortableSingletonWinner(
@@ -985,9 +945,7 @@ export function usePublishPortableSetup() {
           },
         }));
       }
-      // Into the store like every other version of these documents, so the
-      // next read — here or in the notification service — sees what we
-      // published.
+      // Store what we published so the next read (here or in the notification service) sees it.
       for (const { name, event, doc } of settingsSeeds) {
         await store.event(event);
         queryClient.setQueryData(settingsDocQueryKey(name, user.pubkey), { event, doc });

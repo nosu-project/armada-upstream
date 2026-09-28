@@ -7,7 +7,7 @@ import { KIND_RELAY_MEMBERS, parseRelayMemberRoles } from "@/lib/nip29";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Newest kind-13534 snapshot wins (it's a replaceable roster). */
+/** Newest kind-13534 snapshot wins (replaceable roster). */
 function composeRelayMembers(events: NostrRumor[]): Record<string, string> {
   let newest: NostrRumor | undefined;
   for (const event of events) {
@@ -17,16 +17,8 @@ function composeRelayMembers(events: NostrRumor[]): Record<string, string> {
 }
 
 /**
- * The community-level (NIP-43, kind 13534) membership roster for a relay:
- * `pubkey → owner/admin/member`. A Buzz "community" grants a relay-wide role
- * that its owner/admin hold in *every* channel — distinct from the per-channel
- * NIP-29 admin/member events (39001/39002) that `useGroup` reads.
- *
- * The snapshot carries no `d` scope and is signed by the relay's own key, so we
- * disambiguate a shared IndexedDB cache by the relay's self pubkey: without a
- * known relay author we skip the local read (a 13534 from a *different*
- * community relay would otherwise bleed in) and rely on the background fetch.
- * Relays that don't speak NIP-43 (plain NIP-29, zooid) simply return `{}`.
+ * NIP-43 (kind 13534) relay-wide roster (`pubkey → owner/admin/member`), distinct from NIP-29
+ * 39001/39002. Relays without NIP-43 return `{}`.
  */
 export function useRelayMembers(relayUrl: string | undefined) {
   const { nostr } = useNostr();
@@ -42,10 +34,8 @@ export function useRelayMembers(relayUrl: string | undefined) {
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
-      // 1. LOCAL-FIRST: the newest cached snapshot from THIS relay's tenant.
-      // The relay scope is what isolates servers that share a signing key; the
-      // author filter is kept on top of it, where the key is known, so a rogue
-      // 13534 from a non-relay pubkey can't win the `limit: 1`.
+      // The relay tenant isolates servers sharing a key; the author filter stops a rogue 13534 from
+      // winning `limit: 1`.
       const cached = relaySelf
         ? await store.query([{ kinds: [KIND_RELAY_MEMBERS], authors: [relaySelf], limit: 1 }], {
             relay: relayUrl,
@@ -53,7 +43,6 @@ export function useRelayMembers(relayUrl: string | undefined) {
         : [];
       const local = composeRelayMembers(cached);
 
-      // 2. BACKGROUND refresh from the host relay (mirrored back into the store).
       void (async () => {
         if (signal.aborted) return;
         try {

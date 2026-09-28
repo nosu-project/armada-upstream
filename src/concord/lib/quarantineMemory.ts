@@ -1,45 +1,21 @@
 /**
- * What the flood detector decided, remembered across sessions.
+ * Flood-detector verdicts remembered across sessions. `floodClusters` depends on
+ * context the next session doesn't reload, so once a message is folded it stays
+ * folded. Stored like `c2snap:` (see rumorStore.ts): one KV entry per (community,
+ * channel), `{rumorId: ms}`, behind a `KvPrefixCache` for synchronous reads.
  *
- * `floodClusters` is a pure derivation over the loaded batch, and that is its
- * refresh problem: the verdict depends on context — channel history, arrival
- * order, the wave around a message — that the next session does not reload. A
- * refresh opens the newest window, the flood fills it, and the wall the fold
- * collapsed yesterday renders as chat (the same blindness measured in
- * `queryChannelFirstSeen`, but for the verdict itself). So the VERDICT is
- * kept: once a message folded, it stays folded, however little of its context
- * the next session holds.
- *
- * This is the `c2snap:` shape (see rumorStore.ts): a fact that is genuinely
- * not in the rumor, stored in KV as ids per scope — never a tag injected into
- * the stored rumor, never a row beside it. One KV entry per (community,
- * channel) that ever saw a fold, `{rumorId: ms}`, behind a `KvPrefixCache` so
- * the fold paths can read it synchronously.
- *
- * Semantics worth stating:
- *
- * - **Merge-only.** A later fold with less context (a shallow badge-path
- *   batch) must not un-remember what a better-informed fold decided; writers
- *   only ever add. A superset of what the store still holds is fine — every
- *   reader uses this to filter rows it has in hand, exactly like the snapshot
- *   sets.
- * - **Still a display fold.** Remembered ids feed the same quarantine set the
- *   live rules do: a collapsed row, one click to expand, never a drop. The
- *   Banlist remains the only author-identity drop.
- * - **A false positive is remembered too.** The allowance policy accepts
- *   casualties; {@link QUARANTINE_RETENTION_MS} bounds how long one lasts, and
- *   {@link QUARANTINE_MAX_IDS} bounds what a sustained flood can pin in one KV
- *   value (newest kept — the old end is the part scrolled past anyway).
+ * - Merge-only: a later, less-informed fold never un-remembers.
+ * - Still a display fold (collapsed, expandable), never a drop.
+ * - False positives persist too, bounded by {@link QUARANTINE_RETENTION_MS} and
+ *   {@link QUARANTINE_MAX_IDS} (newest kept).
  */
 import { KvPrefixCache } from "@/lib/db/kvCache";
 
 /** How long a remembered verdict outlives its message's timestamp. */
 export const QUARANTINE_RETENTION_MS = 30 * 24 * 3_600_000;
 /**
- * Most ids one channel's memory may hold; the newest win. Also bounds what a
- * flush re-serializes into one KV value while a flood is live, so it is sized
- * for what can still RENDER (the window plus a few load-older pages), not for
- * the flood's whole output.
+ * Max ids per channel (newest win). Also bounds each flush's KV value during a
+ * live flood, so sized for what can still render.
  */
 export const QUARANTINE_MAX_IDS = 1000;
 
@@ -54,16 +30,14 @@ cache.subscribe(() => {
 });
 
 /**
- * Re-render when the memory changes — most importantly when the warm lands,
- * since a fold that ran before it read "nothing remembered". Kicks the warm,
- * so subscribing is what makes the memory exist for a session.
+ * Re-render on change, notably when the warm lands. Subscribing kicks the warm,
+ * so it's what makes the memory exist for a session.
  */
 export function subscribeQuarantineMemory(listener: () => void): () => void {
   void cache.ready();
   return cache.subscribe(listener);
 }
 
-/** Snapshot counter for `useSyncExternalStore`. */
 export function quarantineMemoryRevision(): number {
   return revision;
 }
@@ -77,9 +51,8 @@ export function quarantineMemoryReady(): Promise<void> {
 const setMemo = new WeakMap<Record<string, number>, Set<string>>();
 
 /**
- * The rumor ids this channel remembers folding, or undefined when none are.
- * Synchronous, and empty before the warm lands — a flood renders for a frame
- * and folds when the warm arrives, never the reverse.
+ * Rumor ids this channel remembers folding, or undefined. Synchronous; empty
+ * before the warm lands (a flood may render for a frame, never the reverse).
  */
 export function recallQuarantined(
   communityIdHex: string,
@@ -93,32 +66,20 @@ export function recallQuarantined(
 }
 
 /**
- * Staged verdicts not yet written, per entry id: remembering STAGES, and one
- * coalesced flush merges and writes.
- *
- * The first shape of this wrote (and notified) per call, and a live flood
- * made that a per-message bill: every ingest folded a new id, every write
- * re-spread and re-serialized the whole record, and every notify re-folded
- * every mounted consumer — the reader paid for the spam twice, the second
- * time in frozen frames. Staging costs a map insert; the flush pays the
- * spread, the prune, the KV write and the ONE notify, once per
- * {@link QUARANTINE_FLUSH_MS}.
+ * Staged, unwritten verdicts per entry id. Staging is a map insert; one flush per
+ * {@link QUARANTINE_FLUSH_MS} merges, writes and notifies once — per-call writes
+ * made a live flood re-fold every consumer per message.
  */
 const pending = new Map<string, Map<string, number>>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let flushing: Promise<void> = Promise.resolve();
 
-/** How long staged verdicts coalesce before the merged write. */
 export const QUARANTINE_FLUSH_MS = 2000;
 
 /**
- * Stage freshly-folded ids (with their message timestamps) for the channel's
- * memory — synchronous and cheap, it is called from render-adjacent effects
- * on every fold. The flush waits for the warm, so an early fold can never
- * overwrite what a past session stored; across tabs last-writer-wins costs at
- * most a re-detectable verdict — the trade `noteControlSnapshot` documents.
- * Staged-but-unflushed ids are already flagged in the fold that derived them
- * and merely not yet visible to the other paths — never the reverse.
+ * Stage freshly-folded ids (with message timestamps) — cheap, called on every
+ * fold. The flush waits for the warm so it can't overwrite a past session's
+ * store; cross-tab last-writer-wins only loses a re-detectable verdict.
  */
 export function rememberQuarantined(
   communityIdHex: string,
@@ -144,14 +105,12 @@ export function rememberQuarantined(
   }, QUARANTINE_FLUSH_MS);
 }
 
-/** Merge every staged bucket into KV — the once-per-window write. */
 async function flush(): Promise<void> {
   await cache.ready();
   const staged = [...pending];
   pending.clear();
   for (const [id, bucket] of staged) {
-    // Re-checked against the warmed map: staging may have run before the warm
-    // and staged ids a past session already holds.
+    // Re-check against the warmed map: staging may predate the warm.
     const existing = cache.get(id);
     let next: Record<string, number> | undefined;
     for (const [rumorId, ms] of bucket) {
@@ -175,7 +134,7 @@ async function flush(): Promise<void> {
   }
 }
 
-/** Flush staged verdicts now. Tests, and nothing user-facing, wait on this. */
+/** Flush staged verdicts now (tests). */
 export async function flushQuarantineMemory(): Promise<void> {
   if (flushTimer !== undefined) {
     clearTimeout(flushTimer);

@@ -67,10 +67,8 @@ export function matchesWebPushServerKey(
 }
 
 /**
- * Return this install's current endpoint, repairing a VAPID rotation or absent
- * subscription. If the owning mutation becomes stale while subscribe is in
- * flight, retire the just-created endpoint instead of resurrecting it after an
- * account exit.
+ * This install's endpoint, repairing VAPID rotation or absence. If the owner
+ * goes stale mid-subscribe, retire the new endpoint rather than resurrect it.
  */
 export async function acquireWebPushSubscription(
   registration: ServiceWorkerRegistration,
@@ -100,18 +98,15 @@ export async function acquireWebPushSubscription(
 }
 
 /**
- * Put the worker in deny-by-default mode and retire the current browser
- * endpoint. This is local safety and therefore runs before any gateway RPC.
- * It applies to account switches as well as final logout: an old account's
- * timed-out DELETE must not keep delivering plaintext group notifications in
- * the next account's page.
+ * Deny-by-default the worker and retire the browser endpoint, before any
+ * gateway RPC — on account switches too, so an old account's timed-out DELETE
+ * can't keep notifying in the next account's page.
  */
 export async function retireWebPushEndpoint(
   registration?: ServiceWorkerRegistration,
 ): Promise<void> {
   await writePushDisabledFlag();
-  // Persist uncertainty before the first browser await. An account-switch
-  // timeout/reload can terminate this function at any later line.
+  // Persist uncertainty before the first await; a switch may kill us any time after.
   saveWebPushRetirementProof({ unsubscribeSucceeded: false });
   try {
     const resolved = registration ?? await navigator.serviceWorker.ready;
@@ -125,8 +120,7 @@ export async function retireWebPushEndpoint(
     const unsubscribeSucceeded = await subscription.unsubscribe();
     saveWebPushRetirementProof({ endpointFingerprint, unsubscribeSucceeded });
   } catch {
-    // The durable worker flag remains the local backstop when PushManager is
-    // unavailable or the push service rejects endpoint retirement.
+    // The durable worker flag remains the backstop.
   } finally {
     await writePushDisabledFlag();
   }
@@ -143,20 +137,15 @@ export async function finishWebPushAccountExit(options: {
   try {
     await options.deleteGatewayRecords();
   } finally {
-    // A stale mutation may have been clearing the flag as exit began. This is
-    // the last local write after the serialized gateway lane has settled.
+    // Last local write, after the gateway lane settles; beats a stale flag-clear.
     await writePushDisabledFlag();
   }
 }
 
 /**
- * Lift the account-exit kill switch after one current-account registration.
- *
- * Gateway prune authority is deliberately unrelated: a partial watch snapshot
- * may register useful records and activate them. Endpoint safety instead comes
- * from proving the outgoing endpoint was retired, or that the current endpoint
- * differs. The current account's sealed config is awaited before the flag is
- * cleared, so no push can slip through a generic/no-policy window.
+ * Lift the exit kill switch after a current-account registration, only when the
+ * outgoing endpoint is proven retired (or differs), and only after the sealed
+ * config is written, so no push slips through a no-policy window.
  */
 export async function activateRegisteredWebPush(options: {
   subscription: PushSubscription;
@@ -181,8 +170,7 @@ export async function activateRegisteredWebPush(options: {
     return true;
   }
 
-  // Exit began while Cache Storage was deleting the flag. Restore it so the
-  // stale generation cannot win the last local write.
+  // Exit began while the flag was being deleted: restore it.
   await writePushDisabledFlag();
   return false;
 }

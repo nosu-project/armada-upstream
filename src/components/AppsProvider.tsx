@@ -19,7 +19,6 @@ import {
 import type { AppSync } from "@/hooks/useWebxdcApi";
 import { cn } from "@/lib/utils";
 
-/** A short human label + icon for the running app, shown in the stage header. */
 function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
   if (app.type === "youtube") {
     return { label: "Watch together", icon: <MonitorPlay className="size-4 text-primary" /> };
@@ -27,7 +26,6 @@ function appHeader(app: AppKind): { label: string; icon: React.ReactNode } {
   return { label: app.name ?? "Webxdc app", icon: <Blocks className="size-4 text-primary" /> };
 }
 
-/** The app surface (player / iframe), given a resolved sync backend. */
 function AppSurface({ app, sessionId, sync }: { app: AppKind; sessionId: string; sync: AppSync }) {
   if (app.type === "youtube") {
     return <Watchalong sync={sync} />;
@@ -35,7 +33,6 @@ function AppSurface({ app, sessionId, sync }: { app: AppKind; sessionId: string;
   return <WebxdcApp sync={sync} url={app.url} sessionId={sessionId} name={app.name} encryption={app.encryption} />;
 }
 
-/** Render a running NIP-29-scoped app (resolves the group sync backend). */
 function Nip29RunningApp({
   active,
   relayUrl,
@@ -51,7 +48,6 @@ function Nip29RunningApp({
   return <>{children(sync)}</>;
 }
 
-/** Render a running Concord-scoped app (resolves the sealed channel sync backend). */
 function Concord2RunningApp({
   active,
   children,
@@ -63,7 +59,6 @@ function Concord2RunningApp({
   return <>{children(sync)}</>;
 }
 
-/** Render a running DM-scoped app (resolves the NIP-17 DM sync backend). */
 function DmRunningApp({
   active,
   children,
@@ -76,10 +71,8 @@ function DmRunningApp({
 }
 
 /**
- * The mounted, persistent app: resolves the right coordination backend for its
- * chat scope and portals the app stage into every registered top-of-chat slot
- * (in practice the single chat surface matching the app's scope). Kept mounted
- * by `AppsProvider` so the app/session survives navigation.
+ * The persistent app: resolves its scope's sync backend and portals the stage
+ * into registered top-of-chat slots.
  */
 function RunningApp({
   active,
@@ -162,10 +155,8 @@ function RunningApp({
 }
 
 /**
- * App-level in-chat apps state. Holds the open app and renders it persistently
- * (mounted once in the never-unmounting MainLayout) so an app — and its
- * coordination session — survives navigation between channels/servers, exactly
- * like the voice `CallProvider`.
+ * Holds the open in-chat app and renders it from never-unmounting MainLayout so
+ * it survives navigation, like `CallProvider`.
  */
 export function AppsProvider({ children }: { children: React.ReactNode }) {
   const [activeApp, setActiveApp] = useState<ActiveApp | null>(null);
@@ -173,8 +164,7 @@ export function AppsProvider({ children }: { children: React.ReactNode }) {
   const [stageOpen, setStageOpen] = useState(true);
 
   const launchApp = useCallback((scope: AppScope, app: AppKind, sessionId?: string) => {
-    // Default to a deterministic, scope-derived session so everyone in the
-    // channel joins the SAME shared app (not a private per-person instance).
+    // Scope-derived session so everyone in the channel joins the SAME app.
     const id = sessionId ?? defaultSessionId(scope, app);
     setStageOpen(true);
     setActiveApp({ scope, app, sessionId: id });
@@ -187,8 +177,7 @@ export function AppsProvider({ children }: { children: React.ReactNode }) {
   const refreshScope = useCallback((scope: AppScope) => {
     setActiveApp((prev) => {
       if (!prev || appScopeKey(prev.scope) !== appScopeKey(scope)) return prev;
-      // Identity matters: a new object every render would remount the app and
-      // reset the game. Only replace when something actually changed.
+      // Identity matters: a new object would remount the app and reset the game.
       return prev.scope === scope ? prev : { ...prev, scope };
     });
   }, []);
@@ -219,7 +208,6 @@ export function AppsProvider({ children }: { children: React.ReactNode }) {
       {children}
       {activeApp && (
         <RunningApp
-          // Remount only when the app/scope/session changes.
           key={`${appScopeKey(activeApp.scope)}|${activeApp.sessionId}`}
           active={activeApp}
           slots={slots}

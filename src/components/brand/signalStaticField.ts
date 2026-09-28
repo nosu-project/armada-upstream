@@ -1,39 +1,20 @@
 /**
- * The noise field behind {@link SignalStatic} — generation-time logic only.
- *
- * The component renders {@link FRAMES} consecutive frames of this field into
- * one tall sprite canvas at mount, and a compositor-driven `steps()` transform
- * animation plays them back on a loop forever. After that one-time render the
- * flicker costs the main thread nothing — and, more to the point, it keeps
- * moving while the sync's own decrypt/store bursts block JS, exactly the
- * stalls that made a live rAF loop freeze and read as a lock-up.
- *
- * The playback loop wraps from the last frame to the first, whose phosphor
- * trails don't continue each other; at these speck alphas the seam is
- * imperceptible, and {@link WARMUP_FRAMES} keeps the first frame from being
- * visibly sparser than the rest.
+ * The noise field behind {@link SignalStatic}. Baked once into a sprite of
+ * {@link FRAMES} frames played by a compositor `steps()` animation, so it keeps
+ * moving while sync work blocks JS (a rAF loop froze).
  */
 
 /** Intended playback rate; the sprite loop's duration is FRAMES / FPS. */
 export const FPS = 12;
 /** CSS pixels per noise cell — fine CRT grain, not chunky blocks. */
 export const CELL = 5;
-/** Frames baked into the sprite. More frames = a less noticeable loop. */
 export const FRAMES = 24;
 /** Advances run before the first painted frame, settling the phosphor. */
 export const WARMUP_FRAMES = 4;
-/**
- * Per-frame alpha retention. A lit speck survives ~4 frames, fading — the
- * phosphor persistence that keeps the field from strobing.
- */
+/** Per-frame alpha retention: a speck survives ~4 frames (phosphor persistence). */
 const DECAY = 0.72;
-/** Fraction of cells lit at steady state. */
 const DENSITY = 0.16;
-/**
- * Speck tints — the brand's own wire cyan and rose: ambient snow is cyan
- * with a scatter of rose. (Interference bands are not baked into the sprite;
- * they're the component's DOM flash, fired by real wire impulses.)
- */
+/** Speck tints: cyan snow with a scatter of rose. */
 const CYAN = [110, 225, 235] as const;
 const ROSE = [240, 95, 170] as const;
 
@@ -56,7 +37,6 @@ export class SignalStaticField {
     this.rng = seed >>> 0 || 1;
   }
 
-  /** xorshift32 over the seed-derived state. */
   private rnd(): number {
     let r = this.rng;
     r ^= r << 13;
@@ -66,7 +46,6 @@ export class SignalStaticField {
     return (r >>> 0) / 4294967296;
   }
 
-  /** (Re)build the cell buffer for a grid of w×h cells. */
   resize(w: number, h: number): void {
     this.iw = w;
     this.ih = h;
@@ -80,19 +59,16 @@ export class SignalStaticField {
     }
   }
 
-  /** Advance the field one frame: decay what's lit, strike fresh specks. */
   advance(): void {
     const img = this.img;
     if (!img) return;
-    // Spawn rate scaled by (1 - DECAY): steady-state coverage then matches
-    // DENSITY even though every speck persists while it fades.
+    // Scaled by (1 - DECAY) so steady-state coverage matches DENSITY.
     const spawn = DENSITY * (1 - DECAY);
     const data = img.data;
     for (let i = 0; i < this.iw * this.ih; i++) {
       const p = i * 4;
-      // Fade what's lit (the -1 lets the decay reach true zero despite Uint8
-      // rounding), then maybe strike a fresh speck. One draw per cell: `r`
-      // decides lit-or-not AND, rescaled, how bright.
+      // The -1 lets decay reach zero despite Uint8 rounding. One draw per cell: `r`
+      // decides lit-or-not and, rescaled, brightness.
       let a = data[p + 3] * DECAY - 1;
       const r = this.rnd();
       if (r < spawn) {
@@ -109,7 +85,6 @@ export class SignalStaticField {
     }
   }
 
-  /** Paint the current frame into the sprite at row offset `dy`. */
   paint(ctx: CanvasRenderingContext2D, dy: number): void {
     if (this.img) ctx.putImageData(this.img, 0, dy);
   }

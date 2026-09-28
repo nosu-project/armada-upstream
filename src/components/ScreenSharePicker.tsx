@@ -29,16 +29,7 @@ function activeFullscreenContainer(): HTMLElement | undefined {
   return element instanceof HTMLElement ? element : undefined;
 }
 
-/**
- * Screen-share source picker for the desktop app.
- *
- * Electron has no built-in getDisplayMedia picker, so the main process asks the
- * renderer to choose a source. This component registers that handler (via the
- * desktop bridge) and shows a grid of screens/windows; the user's choice (or
- * cancel) resolves the pending getDisplayMedia call.
- *
- * Renders nothing on the web (the bridge is absent).
- */
+/** Electron has no getDisplayMedia picker: this handles the main process's source request. No-op on web. */
 export function ScreenSharePicker() {
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<ScreenSource[]>([]);
@@ -51,7 +42,6 @@ export function ScreenSharePicker() {
   const [portalContainer, setPortalContainer] = useState<HTMLElement | undefined>(
     activeFullscreenContainer,
   );
-  // The resolver for the in-flight pick; called with the chosen id or null.
   const resolveRef = useRef<((id: string | null) => void) | null>(null);
 
   useEffect(() => {
@@ -86,9 +76,7 @@ export function ScreenSharePicker() {
             bridge.getScreenCaptureAccessStatus?.() ?? Promise.resolve("unknown"),
           ]);
           macDenied = platform === "darwin" && (status === "denied" || status === "restricted");
-        } catch {
-          // Fall through to the generic operating-system guidance.
-        }
+        } catch { /* ignore */ }
         setSourceError(
           macDenied
             ? "Armada needs Screen Recording permission in macOS Privacy & Security."
@@ -138,9 +126,7 @@ export function ScreenSharePicker() {
         return;
       }
     } else {
-      // Record the choice; the route is retired by the capture that replaces
-      // this share. Unlinking here would silence a live share that the user can
-      // still cancel back into, with nothing left to restore it.
+      // Don't unlink: the user can still cancel back into the live share.
       declineDesktopShareAudio();
     }
 

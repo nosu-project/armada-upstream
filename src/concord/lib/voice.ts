@@ -1,22 +1,14 @@
 /**
  * Concord voice — CORD-07.
  *
- * Every Channel is callable — a call is simply started in it. Two
- * sub-keys derive from the Channel's secret (CORD-07 §1, see derive.ts):
- * `voice_key` (its pk is the SFU room name, its sk signs token grants) and
- * `voice_media_key` (the root of per-sender media encryption). Anyone holding
- * the Channel's key can fetch a short-lived token from a **blind broker** and
- * connect to the SFU; media is end-to-end encrypted under keys only members
- * can derive, so the broker and SFU only ever forward ciphertext.
+ * Every Channel is callable. Two sub-keys derive from its secret (§1, derive.ts):
+ * `voice_key` (pk = SFU room name, sk signs token grants) and `voice_media_key`
+ * (root of per-sender E2EE). Members fetch a short-lived token from a **blind
+ * broker**; broker and SFU only see ciphertext.
  *
- * Who is in a call is announced over the Channel itself (§4): ephemeral
- * kind-23313 rumors in 21059 wraps at the Channel's own address, sealed
- * encrypted like everything else on the Chat Plane, so relays and brokers stay
- * blind. Presence still carries the §5 `broker` tag — it is protocol, other
- * clients rendezvous on it, and it is what tells a member they are on a
- * different broker than the rest — but this client does not ROUTE on it: which
- * broker a call uses is config, the Community's or the member's own
- * (`rendezvousCandidates`).
+ * Presence (§4) is ephemeral kind-23313 rumors in 21059 wraps at the Channel's
+ * address. It carries the §5 `broker` tag, but this client doesn't ROUTE on it:
+ * the broker comes from config (`rendezvousCandidates`).
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -27,8 +19,7 @@ import { KIND_VOICE_PRESENCE } from "@/concord/lib/kinds";
 import type { OpenedEvent } from "@/concord/lib/stream";
 import { MAX_COMMUNITY_AV_BROKERS, type CommunityMetadata } from "@/concord/lib/types";
 
-// ── Protocol constants (CORD-07) ─────────────────────────────────────────────
-
+// Protocol constants (CORD-07)
 /** NIP-98-style HTTP-auth event kind — the token grant's carrier (§2). */
 export const KIND_HTTP_AUTH = 27235;
 /** Publish a `joined` on join and every 30 seconds thereafter (§4). */
@@ -37,28 +28,19 @@ export const VOICE_HEARTBEAT_MS = 30_000;
 export const VOICE_STALE_MS = 90_000;
 
 /**
- * The delay until the next heartbeat: 80–100% of §4's 30s.
- *
- * Jittered so members who joined together — everyone in a channel after a rekey
- * remounts the room — don't stay phase-locked and beat the relays in
- * synchronized bursts. Jittered DOWNWARD only, and that direction is the whole
- * point: at or under 30s, three missed heartbeats still fit inside the 90s
- * staleness window, so the margin only widens. Jittering above 30s would shrink
- * it to two missed heartbeats and make members flicker out of rosters.
+ * Delay until the next heartbeat: 80–100% of §4's 30s. Jittered to avoid
+ * phase-locked bursts, and only DOWNWARD so three missed beats still fit in 90s.
  */
 export function heartbeatDelayMs(random: () => number = Math.random): number {
   return VOICE_HEARTBEAT_MS * (0.8 + random() * 0.2);
 }
 const ASCII = new TextEncoder();
 
-// ── Origins (§5) ─────────────────────────────────────────────────────────────
-
+// Origins (§5)
 /**
- * The RFC 6454 ASCII serialization of an https origin: lowercase scheme and
- * host, default port omitted, no path and no trailing slash — one canonical
- * byte-form, or two clients hash different strings for one broker and the §5
- * tie-break never settles. Returns null for anything that isn't a clean https
- * origin (brokers are bearer-credential endpoints; plaintext http is refused).
+ * RFC 6454 serialization of an https origin (lowercase, no default port, no
+ * path) — one byte-form so the §5 tie-break agrees across clients. null for
+ * anything not a clean https origin.
  */
 export function canonicalOrigin(input: string): string | null {
   let url: URL;
@@ -76,10 +58,8 @@ export function canonicalOrigin(input: string): string | null {
 }
 
 /**
- * The §5 tie-break rank of a broker origin for a room:
- * `sha256(voice_room[32] || utf8(origin))`, compared bytewise (as hex) —
- * smallest wins. Grindable by design; that buys an attacker nothing more than
- * the (already untrusted) hint grants.
+ * §5 tie-break rank: `sha256(voice_room[32] || utf8(origin))` as hex, smallest
+ * wins. Grindable, but that grants no more than the untrusted hint does.
  */
 export function brokerRank(roomHex: string, origin: string): string {
   const originBytes = ASCII.encode(origin);
@@ -96,11 +76,8 @@ export function orderBrokers(roomHex: string, origins: string[]): string[] {
 }
 
 /**
- * The Community's own brokers, read defensively off its folded metadata
- * (CORD-02 §6). Entries are staff-authored strings from another client, so an
- * unreadable one is ignored rather than taken to invalidate the entity — and
- * only valid entries count against the cap, so a typo costs a working broker
- * its slot rather than the list its length.
+ * The Community's own brokers from folded metadata (CORD-02 §6). Unreadable
+ * entries are skipped and don't count against the cap.
  */
 export function communityAvBrokers(metadata: CommunityMetadata | undefined): string[] {
   const raw = metadata?.av_brokers;
@@ -117,8 +94,7 @@ export function communityAvBrokers(metadata: CommunityMetadata | undefined): str
   return out;
 }
 
-// ── The broker (§2) ──────────────────────────────────────────────────────────
-
+// The broker (§2)
 /** The broker's capability probe: `GET <origin>/.well-known/concord/av` → 204. */
 export function avCapabilityUrl(origin: string): string {
   return `${origin}/.well-known/concord/av`;
@@ -136,26 +112,17 @@ export interface AvToken {
   /** The broker-assigned random SFU identity — announced in presence (§4). */
   identity: string;
   /**
-   * The broker origin that actually minted this token. Not always the one the
-   * rendezvous picked: when that broker is unreachable we fall through to the
-   * next candidate, and it is THIS origin that must ride presence as the §5
-   * hint — announcing the one we failed to reach would send everyone else to a
-   * broker that is not hosting the call.
+   * The origin that actually minted this token (may be a fall-through candidate);
+   * this is what presence must announce as the §5 hint.
    */
   origin: string;
 }
 
 /**
- * Sign the token grant (§2): a kind-27235 event self-signed with
- * `voice_key.sk`, so `event.pubkey` equals the room name. The grant lives only
- * in the Authorization header; it never touches a relay.
- *
- * The `nonce` tag carries 32 fresh random bytes and is REQUIRED (§2). Every
- * member of a Channel derives and signs with the SAME `voice_key.sk`, so
- * without it two members joining one room in the same second build
- * byte-identical events — same id — and the broker's anti-replay set (which
- * keys on the id) rejects whichever arrives second. NIP-98, whose shape this
- * borrows, never needs one: each request there is signed by its own user's key.
+ * Sign the token grant (§2): kind-27235 self-signed with `voice_key.sk` (so
+ * pubkey = room name), sent only in the Authorization header. The REQUIRED
+ * random `nonce` tag keeps two members' same-second grants from sharing an id
+ * and tripping the broker's anti-replay set.
  */
 export function signAvGrant(voice: GroupKey, url: string): string {
   const event = finalizeEvent(
@@ -175,10 +142,8 @@ export function signAvGrant(voice: GroupKey, url: string): string {
 }
 
 /**
- * Probe a broker's capability endpoint. Strictly 204 — the endpoint's
- * documented answer — never a general `res.ok`: an SPA origin answers every
- * unknown path 200 with its HTML shell, which is precisely the misconfigured
- * candidate this probe exists to skip.
+ * Probe a broker's capability endpoint. Strictly 204, not `res.ok`: SPA origins
+ * answer unknown paths 200.
  */
 export async function probeAvBroker(origin: string, signal?: AbortSignal): Promise<boolean> {
   try {
@@ -192,10 +157,8 @@ export async function probeAvBroker(origin: string, signal?: AbortSignal): Promi
 }
 
 /**
- * Fetch an SFU token from a blind broker (§2). Validates the response shape
- * and requires the SFU url be `wss://` — the broker is untrusted rendezvous
- * input, and E2EE bounds a hostile one to metadata, but there's no reason to
- * accept a plaintext signaling downgrade.
+ * Fetch an SFU token from a blind broker (§2); validates the shape and requires
+ * a `wss://` SFU url.
  */
 export async function fetchAvToken(origin: string, voice: GroupKey): Promise<AvToken> {
   const url = avTokenUrl(origin, voice.pk);
@@ -215,18 +178,9 @@ export async function fetchAvToken(origin: string, voice: GroupKey): Promise<AvT
 }
 
 /**
- * Mint from the first candidate that answers, in §5 rendezvous order.
- *
- * The capability probe (§5) only says a broker was reachable a moment ago; it
- * can still fail to mint — restarting, at capacity, or its SFU gone. Without a
- * fall-through that is a dead end for the caller, since a client resolves one
- * broker per join and has nothing to retry against. It is also what lets a
- * broker shed load honestly at the token endpoint: refusing a room it does not
- * host now moves the caller on instead of stranding them.
- *
- * Rejections are not sorted by kind — a grant this room's key cannot satisfy
- * fails everywhere, so trying the rest costs a few requests once, while
- * treating a 503 as fatal would cost the call.
+ * Mint from the first candidate that answers, in §5 order. A probe success
+ * doesn't guarantee minting, and brokers may shed load at the token endpoint.
+ * Every failure falls through (a 503 shouldn't cost the call).
  */
 export async function fetchAvTokenFromAny(origins: string[], voice: GroupKey): Promise<AvToken> {
   const candidates = [...new Set(origins.filter(Boolean))];
@@ -242,31 +196,22 @@ export async function fetchAvTokenFromAny(origins: string[], voice: GroupKey): P
   throw lastError instanceof Error ? lastError : new Error("No reachable voice server");
 }
 
-// ── Presence (§4) ────────────────────────────────────────────────────────────
-
+// Presence (§4)
 /** One member's latest presence, as opened from the Channel's stream. */
 export interface VoicePresenceEntry {
   author: string;
   status: "joined" | "left";
   /** The broker-assigned SFU identity (joined only). */
   identity?: string;
-  /**
-   * All identities this member currently authenticates, primary first. Armada
-   * uses one additional identity for its custom H.265 screen-share publisher.
-   * Older clients safely ignore the repeated additive identity tag.
-   */
+  /** All identities this member authenticates, primary first (Armada adds one for its H.265 screen-share publisher). */
   identities?: string[];
   /** Auxiliary identities explicitly assigned the custom screen-share role. */
   screenShareIdentities?: string[];
   /** The broker origin hint, canonicalized (joined only). */
   broker?: string;
   /**
-   * Whether this member has their hand raised (joined only) — an ARMADA CLIENT
-   * EXTENSION, not part of CORD-07. It rides as an additive `["hand","1"]` tag
-   * on the presence rumor; per CORD-02 §6 (additive change / unknown-field
-   * round-tripping) an old client simply ignores it, so no frozen kind is spent
-   * and brokers/relays stay blind (it's sealed like all presence). Sticky state:
-   * carried on every heartbeat and healed by the same staleness window.
+   * Hand raised (joined only) — an ARMADA EXTENSION: additive `["hand","1"]` tag,
+   * ignored by old clients (CORD-02 §6). Sticky, carried on every heartbeat.
    */
   hand?: boolean;
   /** Millisecond ordering basis (CORD-02 §4). */
@@ -276,9 +221,8 @@ export interface VoicePresenceEntry {
 }
 
 /**
- * The presence tags a `joined` carries beyond the channel/epoch binding. `hand`
- * is an Armada client extension (see {@link VoicePresenceEntry.hand}); it's
- * emitted only while joined and only when raised (its absence means lowered).
+ * Presence tags beyond the channel/epoch binding. `hand` is emitted only while
+ * joined and raised.
  */
 export function presenceTags(
   status: "joined" | "left",
@@ -293,8 +237,7 @@ export function presenceTags(
     for (const additional of opts?.additionalIdentities ?? []) {
       if (!additional || seen.has(additional)) continue;
       seen.add(additional);
-      // The third value is signed durable role metadata. Older clients still
-      // read the first two values and safely treat this as a repeated identity.
+      // Third value = signed role metadata; older clients read it as a repeated identity.
       tags.push(["identity", additional, "screen-share"]);
     }
   }
@@ -303,11 +246,7 @@ export function presenceTags(
   return tags;
 }
 
-/**
- * The max byte length of a reaction's emoji payload. Bounds a hostile member's
- * ability to bloat the transient reaction list; comfortably fits any single
- * emoji (incl. ZWJ sequences) or a short custom shortcode.
- */
+/** Max byte length of a reaction emoji (bounds hostile bloat; fits ZWJ sequences). */
 const MAX_REACTION_LEN = 64;
 
 /** A transient in-call emoji reaction, as opened from the Channel's stream. */
@@ -323,21 +262,17 @@ export interface VoiceReactionEntry {
 }
 
 /**
- * The reaction tag an in-call emoji rides — an ARMADA CLIENT EXTENSION, not
- * part of CORD-07. A reaction is a transient, fire-and-forget event, so it
- * rides as an additive `["react", emoji, nonce]` tag on an off-cycle `joined`
- * presence rumor (which doubles as a heartbeat). Receivers fire the emoji once
- * per unseen nonce and never fold it into state. Spec-legal via CORD-02 §6
- * (additive tag on an existing kind); an old client ignores it.
+ * In-call emoji reaction tag — an ARMADA EXTENSION: additive `["react", emoji,
+ * nonce]` on an off-cycle `joined` presence (CORD-02 §6). Fired once per unseen
+ * nonce, never folded into state.
  */
 export function reactionTag(emoji: string, nonce: string): string[] {
   return ["react", emoji, nonce];
 }
 
 /**
- * Parse an opened kind-23313 rumor's reaction tag into a reaction entry, or
- * null when it carries none (a plain presence heartbeat) or a malformed one.
- * The channel/epoch binding is checked by the caller, like every Chat rumor.
+ * Parse a kind-23313 rumor's reaction tag, or null if none/malformed. The caller
+ * checks the channel/epoch binding.
  */
 export function parseReaction(opened: OpenedEvent): VoiceReactionEntry | null {
   if (opened.kind !== KIND_VOICE_PRESENCE) return null;
@@ -346,17 +281,15 @@ export function parseReaction(opened: OpenedEvent): VoiceReactionEntry | null {
   const emoji = tag[1];
   const nonce = tag[2];
   if (typeof emoji !== "string" || emoji.length === 0) return null;
-  // Bound the payload (untrusted member input) — reject rather than truncate,
-  // so two clients never disagree on what floated.
+  // Reject (not truncate) oversize payloads so clients agree on what floated.
   if (new TextEncoder().encode(emoji).length > MAX_REACTION_LEN) return null;
   if (typeof nonce !== "string" || nonce.length === 0 || nonce.length > 128) return null;
   return { author: opened.author, emoji, nonce, ms: opened.ms };
 }
 
 /**
- * Parse an opened kind-23313 rumor into a presence entry. The channel/epoch
- * binding is checked by the caller (like every Chat rumor); this validates the
- * presence shape. Returns null for malformed entries.
+ * Parse a kind-23313 rumor into a presence entry, or null if malformed. The caller
+ * checks the channel/epoch binding.
  */
 export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
   if (opened.kind !== KIND_VOICE_PRESENCE) return null;
@@ -369,8 +302,7 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
       (identity): identity is string =>
         typeof identity === "string" && identity.length > 0 && identity.length <= 128,
     );
-  // A member needs only one auxiliary identity today. Keep a small explicit
-  // bound so hostile members cannot inflate the claims map with repeated tags.
+  // Bound identities so hostile members can't inflate the claims map.
   const identities = [...new Set(rawIdentities)].slice(0, 4);
   const allowedIdentities = new Set(identities);
   const screenShareIdentities = [...new Set(
@@ -383,8 +315,6 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
       ),
   )].filter((candidate) => candidate !== identities[0]);
   const rawBroker = opened.tags.find((t) => t[0] === "broker")?.[1];
-  // Identities are broker-assigned opaque strings; bound them so a hostile
-  // member can't bloat presence state.
   const identity = status === "joined" ? identities[0] : undefined;
   if (status === "joined" && !identity) return null;
   const broker =
@@ -422,9 +352,8 @@ export interface VoicePresenceFold {
   /** Fresh `joined` authors (per author, the latest presence won). */
   present: VoicePresent[];
   /**
-   * SFU identity → the authors whose fresh presence claims it. A participant
-   * renders as a member only when exactly ONE author claims its identity (§4);
-   * contested or unclaimed identities render as unverified.
+   * SFU identity → authors claiming it. A participant is a member only when exactly
+   * ONE author claims its identity (§4).
    */
   claims: Map<string, string[]>;
 }
@@ -464,11 +393,7 @@ export function foldVoicePresence(entries: VoicePresenceEntry[], nowMs: number):
   return { present, claims };
 }
 
-/**
- * The author verifiably behind an SFU identity, or undefined when the identity
- * is unclaimed or contested (all claimants of one identity prove nothing about
- * either author — they render as unverified until the stale claims age out).
- */
+/** The author behind an SFU identity, or undefined if unclaimed or contested. */
 export function verifiedAuthorOf(fold: VoicePresenceFold, identity: string): string | undefined {
   const claimants = fold.claims.get(identity);
   return claimants && claimants.length === 1 ? claimants[0] : undefined;
@@ -488,28 +413,10 @@ export function isVerifiedScreenShareIdentity(
 }
 
 /**
- * The rendezvous candidates for a room: the Community's own brokers (CORD-02
- * §6) when it publishes any, and the client's own configuration when it does
- * not. Nothing else — in particular NOT the `broker` tag on presence.
- *
- * That tag is §5's rendezvous hint, and this client does not route on it. A
- * hint is a fellow member's untrusted input; the list is the Community's own
- * instruction, delivered over the same Control Plane as its relays and gated
- * by the same permission. Where the two disagree the hint is not evidence
- * about where the call belongs — it is a stale fold, or a member steering the
- * call at a broker of their choosing, which is precisely the attack §5
- * concedes and the only part of it a client can decline. Config answers the
- * question instead, so the answer is the same for every member before anyone
- * has joined, and cannot be moved by anyone who joins later.
- *
- * Both sources are ordered by the room-keyed tie-break, which is what makes
- * one list converge without coordination — every member ranks the same origins
- * the same way for a given room — and what spreads a Community's channels
- * across its brokers rather than piling them onto the first.
- *
- * What config cannot do is make an unreachable broker work: with every listed
- * origin down there is no call, the same way a community whose relays are all
- * down has no chat. Callers probe in order and take the first that answers.
+ * Rendezvous candidates for a room: the Community's brokers (CORD-02 §6) if any,
+ * else the client's config — NOT presence `broker` hints, which are untrusted
+ * member input (the steering attack §5 concedes). Ordered by the room-keyed
+ * tie-break so members converge without coordination. Callers probe in order.
  */
 export function rendezvousCandidates(
   roomHex: string,
@@ -522,14 +429,8 @@ export function rendezvousCandidates(
 }
 
 /**
- * Members whose presence puts them on a different broker than the one we
- * joined — a separate call, whose members we cannot hear despite the roster
- * showing them. Presence never routes this client (see above), so the residual
- * causes are ordinary: a list edited mid-call, or a member who reached a
- * candidate we couldn't. Surfaced rather than swallowed, because a roster
- * naming people you can't hear is indistinguishable from broken audio.
- *
- * A `joined` with no broker tag is not counted: it says nothing either way.
+ * Members whose presence is on a different broker than ours — a separate call we
+ * can't hear. Surfaced so it isn't mistaken for broken audio. No broker tag = not counted.
  */
 export function occupantsElsewhere(fold: VoicePresenceFold, origin: string): VoicePresent[] {
   const ours = canonicalOrigin(origin);

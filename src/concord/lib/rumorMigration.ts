@@ -1,63 +1,19 @@
 /**
- * Drain of the pre-ArmadaDB Concord opened-event store into the
- * per-community ArmadaDB tenants that replaced it.
+ * Drain of the pre-ArmadaDB opened-event store (`armada-concord-rumors`, one DB
+ * for all communities) into per-community ArmadaDB tenants.
  *
- * The old store was ONE database (`armada-concord-rumors`) holding every
- * community's decrypted planes, queried by `#channel` / `#stream` tags. The new
- * layout is one tenant per community, so the migration's whole problem is
- * ATTRIBUTION: which community does a given stored row belong to?
+ * Attribution: channel ids and stream addresses are one-way (CORD-01 §A), so rows
+ * are matched against addresses derived from each community's cached key
+ * material ({@link communityListFoldKey}, {@link readControlFold},
+ * {@link mirrorGroups}). Unmatched rows belong to left communities or removed
+ * channels and are dropped with the DB. Copy-forward rather than refetch: cursors
+ * would still say "ingested", and the device is often the last copy.
  *
- * Nothing in the row answers that. A rumor carries its channel id and its
- * stream address, both of which are HKDF/SHA-256 outputs of community secrets
- * (CORD-01 §A) — one-way, so neither can be turned back into a community id.
- * The mapping only exists on the other side: derive a community's addresses
- * from its own key material and see which rows match.
- *
- * That key material is already on disk, decrypted, for exactly this account:
- *
- *   - the community list, cached under {@link communityListFoldKey} — every
- *     joined community's secrets, so `rehydrateCommunity` reconstitutes the
- *     full `Community` with no signer and no relay;
- *   - each community's control fold, cached and vetted by {@link readControlFold} —
- *     the channel definitions, so `channelsView` yields the chat channels.
- *
- * From those, {@link mirrorGroups} enumerates every non-chat plane address
- * (control, guestbook, dissolution, rekey) across all held epochs, and the
- * channels supply the chat channel ids plus their per-epoch stream addresses.
- * A row matching any of them is claimed by that community.
- *
- * Rows matching NOTHING are left behind and eventually deleted with the
- * database: they belong to a community this account has left (its secrets are
- * gone from the list, so the rows are undecryptable anyway) or to a channel
- * removed from the fold. Nothing readable is dropped.
- *
- * Copy-forward rather than drop-and-refetch, because a refetch is not
- * equivalent. The sync cursors live in a different database and would still
- * read "already ingested", so dropped history would not come back on its own —
- * and even after resetting them, only what the community's relays still retain
- * would return. A member's own device is frequently the last copy.
- *
- * ## The row is not copied verbatim, and must not be
- *
- * The old store folded four values belonging to the WRAP into the stored
- * event's tags — `stream`, `wrap`, `sealkind` and the whole signed `seal` — and
- * stripped them again on read. The tenant holds the rumor exactly as its author
- * wrote it, so the drain strips them here instead: what is left is byte-identical
- * to the rumor the `id` already commits to. The seal moves to KV, where the
- * current store keeps it; `wrap` is read by nothing and is dropped.
- *
- * `stream` cannot simply be dropped, because it is what the old store told the
- * planes apart BY. Today a plane is read back by KIND ({@link PLANE_RULES}), and
- * that is only sound because {@link writeOpened} refuses, at ingest, a rumor
- * whose kind does not belong to the plane whose keys opened its wrap. The old
- * write path enforced no such thing — it filtered forged provenance and a stray
- * `channel` tag and nothing else — so a legacy store can hold a control-kind
- * rumor that arrived on the guestbook stream, which a verbatim copy would hand
- * to `queryPlane("control")` as an edition. So the drain applies the CURRENT
- * boundary to every row it copies, using the `stream` tag it is about to remove
- * as the proof of which plane the row actually arrived on. Rows that fail it are
- * left behind: they were never readable as that plane, and only the old store's
- * address-keyed reads kept them harmless.
+ * Rows aren't copied verbatim: the injected `stream`/`wrap`/`sealkind`/`seal`
+ * tags are stripped (seal → KV). Before stripping, `stream` proves which plane
+ * the row arrived on, and the CURRENT {@link writeOpened} boundary is applied —
+ * the old write path didn't enforce it, and planes are now read by kind
+ * ({@link PLANE_RULES}). Rows failing it are left behind.
  */
 import { NIndexedDB } from "@nostrify/indexeddb";
 
@@ -97,39 +53,25 @@ const TAG_SEALKIND = "sealkind";
 const TAG_CHANNEL = "channel";
 const INJECTED = new Set([TAG_STREAM, TAG_SEAL, TAG_WRAP, TAG_SEALKIND]);
 
-/** Per-viewer flag, so a second account still drains its own share. */
 const doneKey = (self: string) => `c2rumors:migrated:${self}`;
 
-/**
- * Rows copied per query. The legacy store has no cursor API, so each address
- * batch is one `limit`-bounded read; this is high enough that a normal
- * community drains in a couple of passes and low enough not to hold the whole
- * store in memory.
- */
+/** Rows copied per query (no cursor API); bounded so the store isn't held in memory. */
 const COPY_LIMIT = 5000;
 
 /** Addresses per filter, keeping any single legacy query's index scan bounded. */
 const ADDRESSES_PER_FILTER = 200;
 
-/** In-flight drains by viewer, so concurrent callers share one pass. */
 const drains = new Map<string, Promise<void>>();
 
 /**
- * Copy `self`'s communities' rows out of the legacy store. Idempotent and
- * memoised: once the flag is set this costs a single KV read.
- *
- * REJECTS when the copy fails OR when it cannot yet be attempted. The startup
- * gate deletes the legacy database once every drain has resolved for every
- * account, and this is the drain guarding the least replaceable data in the
- * app — a member's own device is frequently the last copy of a community's
- * history. Resolving without having copied would be indistinguishable from
- * having copied, and the gate would delete it.
+ * Copy `self`'s communities' rows out of the legacy store; memoised, flag-gated.
+ * REJECTS if the copy fails or can't yet be attempted: the startup gate deletes
+ * the legacy DB once every drain resolves, and this may be the last copy.
  */
 export function migrateLegacyRumors(self: string): Promise<void> {
   let drain = drains.get(self);
   if (!drain) {
     drain = drainLegacyRumors(self).catch((err: unknown) => {
-      // Retry on the next call rather than leaving a rejected promise cached.
       drains.delete(self);
       throw err;
     });
@@ -142,24 +84,16 @@ async function drainLegacyRumors(self: string): Promise<void> {
   const db = getArmadaDB();
   if (await db.kv.get<boolean>(doneKey(self))) return;
   if (typeof indexedDB === "undefined") return;
-  // `NIndexedDB` CREATES the database on its first query, which would leave a
-  // device that never had one with the very database the startup gate scans
-  // for. See `skipLegacyDrain`.
+  // `NIndexedDB` creates the database on first query; see `skipLegacyDrain`.
   if (await skipLegacyDrain(LEGACY_RUMOR_DB_NAME)) return;
 
   const communities = await viewerCommunities(self);
   const legacy = new NIndexedDB(LEGACY_RUMOR_DB_NAME, { indexTags: legacyIndexTags });
 
   try {
-    // A cached list that is EMPTY is an answer: this account has no live
-    // communities, so no row in the store is attributable to it (and any row
-    // that is there belongs to a community it left, whose secrets are gone —
-    // undecryptable either way). NO cached list is not an answer: the profile
-    // may simply never have read it this install.
+    // An EMPTY cached list means nothing is attributable; NO cached list is unknown.
     if (communities === undefined) {
-      // Deferring costs a second gate appearance next launch, once a Concord
-      // read has cached the list. Not deferring costs the history itself, so
-      // the check is worth one query: defer only if there is anything to lose.
+      // Defer only if the legacy store has anything to lose.
       const any = await legacy.query([{ limit: 1 }]);
       if (any.length > 0) {
         throw new MigrationDeferredError(`no cached community list for ${self.slice(0, 8)}`);
@@ -180,15 +114,9 @@ async function drainLegacyRumors(self: string): Promise<void> {
 const QUERYABLE_TAGS = new Set(["channel", "stream", "e", "q", "p", "k"]);
 
 /**
- * The legacy store's write-time tag-index policy, reproduced exactly.
- *
- * It has to match: `NIndexedDB` indexes on write, so the `#channel` / `#stream`
- * filters the drain issues can only match rows the OLD policy indexed. Opening
- * the database with a wider policy does not retroactively index anything —
- * it would just read back nothing and silently migrate an empty store.
- *
- * Exported so anything reconstructing a legacy store (the tests) is forced
- * through the same policy rather than the default single-letter one.
+ * The legacy store's write-time tag-index policy, reproduced exactly: `NIndexedDB`
+ * indexes on write, so a wider policy would silently match nothing. Exported so
+ * tests build legacy stores with the same policy.
  */
 export function legacyIndexTags(event: { tags: string[][] }): string[][] {
   return event.tags.filter(
@@ -203,15 +131,9 @@ export function legacyIndexTags(event: { tags: string[][] }): string[][] {
 }
 
 /**
- * Which plane each of a community's non-chat stream addresses belongs to.
- *
- * Built from the address families themselves rather than from anything stored,
- * so it says what the community's own keys prove. {@link mirrorGroups} is the
- * full enumeration (and the only one that walks the per-channel rekey epochs
- * under every held root); the two exact families are laid over it, leaving
- * every remaining address a rekey one — which is what mirrorGroups' remainder
- * is. The dissolution address carries control editions (a `vsk`-10 kind-3308),
- * so it is a control address for storage purposes.
+ * Plane of each non-chat stream address, from the address families themselves.
+ * {@link mirrorGroups} enumerates all; the exact families overlay it and the
+ * remainder is rekey. Dissolution carries control editions (`vsk` 10), so control.
  */
 function planeByAddress(community: Community): Map<string, Plane> {
   const map = new Map<string, Plane>();
@@ -231,15 +153,10 @@ async function drainCommunity(legacy: NIndexedDB, community: Community): Promise
   const planes = planeByAddress(community);
 
   const tenant = getArmadaDB().tenant(communityTenant(community.idHex));
-  // Which control rumors arrived on which control address — the one envelope
-  // fact that is genuinely not in the rumor, recovered from the `stream` tag
-  // before it is stripped (see `readControlSnapshot`).
+  // Control rumor → arrival address, recovered from `stream` before stripping (see `readControlSnapshot`).
   const snapshot: Array<{ streamPk: string; rumorId: string }> = [];
 
-  // `#channel` and `#stream` are both index-backed in the legacy store, so each
-  // of these is an index scan rather than a table walk. The two passes are
-  // disjoint: a chat rumor is claimed by its channel binding, and its stream
-  // address is not a non-chat plane address, so it is skipped by the second.
+  // Both passes are index scans and disjoint (chat stream addresses aren't plane addresses).
   for (const filter of tagFilters("#channel", channelIds)) {
     await copyMatching(legacy, tenant, filter, (row) => convertChat(row, channelIds));
   }
@@ -272,14 +189,9 @@ function injected(row: NostrEvent, name: string): string | undefined {
 }
 
 /**
- * A chat row, claimed by its channel binding.
- *
- * The binding was proved at decode time (`checkChannelBinding`), and the
- * channel id came out of this community's own control fold, so the row is this
- * community's. The kind is still checked: a rumor of a non-chat plane's kind
- * carrying a `channel` tag would be indexed here and then served by
- * {@link queryPlane} as that plane's — the same refusal {@link writeRumors}
- * applies to every chat rumor on the live path.
+ * A chat row, claimed by its (decode-time verified) channel binding. The kind is
+ * still checked, as {@link writeRumors} does, so a plane-kind rumor can't be
+ * served by {@link queryPlane}.
  */
 function convertChat(row: NostrEvent, channelIds: string[]): NostrRumor | undefined {
   if (PLANE_KINDS.has(row.kind)) return undefined;
@@ -289,12 +201,8 @@ function convertChat(row: NostrEvent, channelIds: string[]): NostrRumor | undefi
 }
 
 /**
- * A non-chat row, claimed by the address it arrived on, and admitted only if it
- * satisfies the plane boundary this build reads by.
- *
- * The three refusals are {@link writeOpened}'s, applied to data written before
- * anything applied them: the kind must belong to the plane whose keys opened
- * the wrap, under that plane's seal form, carrying no channel binding.
+ * A non-chat row, claimed by its arrival address and admitted only under
+ * {@link writeOpened}'s rules: kind in that plane, its seal form, no channel binding.
  */
 function convertPlane(
   row: NostrEvent,
@@ -313,9 +221,7 @@ function convertPlane(
 
   if (plane === "control") snapshot.push({ streamPk, rumorId: row.id });
 
-  // Only plaintext seals are kept — an encrypted one is bound to the old
-  // stream's conversation key and could never survive a re-wrap, which is the
-  // only thing a stored seal is for.
+  // Only plaintext seals are kept; encrypted ones can't survive a re-wrap (their only use).
   if (rule.sealKind === KIND_SEAL_PLAINTEXT) {
     const seal = parseSeal(injected(row, TAG_SEAL));
     if (seal) void writeStoredSeal(communityIdHex, row.id, seal).catch(() => undefined);
@@ -348,12 +254,8 @@ function tagFilters(tag: "#channel" | "#stream", values: string[]): NostrFilter[
 }
 
 /**
- * Copy one filter's matches, paging older with `until` until a page adds
- * nothing new.
- *
- * `convert` turns a legacy row into the rumor to store, or refuses it (see the
- * boundary note at the top). Refused rows still count as seen, so a page of
- * them pages past rather than looping.
+ * Copy one filter's matches, paging older with `until` until a page adds nothing.
+ * Refused rows still count as seen so paging advances.
  */
 async function copyMatching(
   legacy: NIndexedDB,
@@ -381,12 +283,8 @@ async function copyMatching(
 }
 
 /**
- * `self`'s joined communities, rehydrated from the locally cached list. No
- * signer and no network: the cached list is already decrypted.
- *
- * `undefined` when there is no cached list at all, which the caller must not
- * confuse with an empty one — the first says nothing about what the account
- * owns, the second says it owns nothing.
+ * `self`'s communities, rehydrated from the cached list (no signer/network).
+ * `undefined` = no cached list, which is NOT the same as an empty one.
  */
 async function viewerCommunities(self: string): Promise<Community[] | undefined> {
   const persisted = await readFolded<PersistedCommunityList>(communityListFoldKey(self));

@@ -45,11 +45,9 @@ import { buildThemeVarStyle } from "@/themes";
 
 interface ProfilePreviewCardProps {
   pubkey: string;
-  /** The trigger element (e.g. an avatar). Rendered as the popover trigger. */
   children: React.ReactNode;
 }
 
-/** The body of the profile preview — banner, avatar, name, npub, bio, actions. */
 function ProfilePreviewBody({
   pubkey,
   onAction,
@@ -72,8 +70,7 @@ function ProfilePreviewBody({
   const roles = useMemberRoles(pubkey);
   const status = useUserStatus(pubkey).data?.status;
   const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
-  // Music statuses expire when the track ends; hide one whose NIP-40 expiration
-  // has passed even if it's still cached (no refetch happens within a session).
+  // Hide an expired NIP-40 music status even if cached.
   const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const displayName = getDisplayName(metadata, pubkey);
   const avatarShape = getAvatarShape(metadata);
@@ -116,13 +113,10 @@ function ProfilePreviewBody({
 
   return (
     <>
-      {/* Mini banner */}
       <div className="h-16 bg-secondary relative">
         <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" />
 
-        {/* Overflow menu, floated top-right over the banner. Holds the negative,
-            easy-to-misfire actions (unfollow, mute, report) so the card body
-            reads as Message / Mention / Follow, not a stack of red buttons. */}
+        {/* Negative actions (unfollow, mute, report) live in this overflow menu. */}
         {!isSelf && (isFollowing || mute.canMute || (user && onReport)) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -136,8 +130,7 @@ function ProfilePreviewBody({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              {/* Unfollow leaves the card open so the state flip back to a
-                  Follow button is visible. */}
+              {/* Stays open so the flip back to Follow is visible. */}
               {isFollowing && (
                 <DropdownMenuItem
                   disabled={followPending}
@@ -152,8 +145,7 @@ function ProfilePreviewBody({
                   disabled={mute.pending}
                   className={!mute.muted ? "text-destructive focus:text-destructive" : undefined}
                   onSelect={() => {
-                    // Muting hides the person, which unmounts the card — close
-                    // the popover first, as Report does.
+                    // Muting unmounts the card, so close the popover first.
                     onAction?.();
                     void mute.toggle();
                   }}
@@ -179,7 +171,6 @@ function ProfilePreviewBody({
       </div>
 
       <div className="px-4 pb-4">
-        {/* Avatar overlapping the banner */}
         <div className="-mt-8 mb-2">
           <Avatar shape={avatarShape} className="size-16 border-[3px] border-background">
             <AvatarImage src={metadata?.picture} alt={displayName} />
@@ -189,7 +180,6 @@ function ProfilePreviewBody({
           </Avatar>
         </div>
 
-        {/* Name */}
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="font-bold text-[15px] truncate">
             {author.data?.event
@@ -199,9 +189,7 @@ function ProfilePreviewBody({
           <BotPill metadata={metadata} />
         </div>
 
-        {/* Roles in this community (Concord). Tinted per role, wrapping — the
-            card is the one surface with room for every role, where the member
-            row shows only the highest. */}
+        {/* Concord roles; the card shows every role, the member row only the highest. */}
         {roles.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1">
             {roles.map((role) => (
@@ -227,7 +215,6 @@ function ProfilePreviewBody({
           </div>
         )}
 
-        {/* NIP-38 status */}
         {status?.content && (
           status.link ? (
             <a
@@ -246,8 +233,7 @@ function ProfilePreviewBody({
           )
         )}
 
-        {/* NIP-38 music status ("now playing"). Linked to the track when the
-            event carries an `r` tag (e.g. a Spotify / YouTube Music search). */}
+        {/* NIP-38 music status, linked via its `r` tag when present. */}
         {musicStatus?.content && (
           musicStatus.link ? (
             <a
@@ -275,7 +261,6 @@ function ProfilePreviewBody({
           )
         )}
 
-        {/* npub (copyable) */}
         {npub && (
           <button
             type="button"
@@ -288,7 +273,6 @@ function ProfilePreviewBody({
           </button>
         )}
 
-        {/* Bio */}
         {metadata?.about && (
           <p className={cn(
             "text-sm text-muted-foreground mt-2 whitespace-pre-wrap break-words line-clamp-4",
@@ -297,9 +281,6 @@ function ProfilePreviewBody({
           </p>
         )}
 
-        {/* Actions. Negative actions (unfollow, mute, report) live in the
-            overflow menu floated over the banner, so this row stays a clean
-            Message / Mention pair. */}
         {!isSelf && (
           <div className="mt-3 flex items-center gap-2">
             {!config.dmsDisabled && (
@@ -320,23 +301,16 @@ function ProfilePreviewBody({
           </div>
         )}
 
-        {/* Follow. Its own row rather than a third of the one above: the card
-            is w-72, and the two buttons there already carry icons. Hides itself
-            for self / logged-out / already-following (unfollow lives in the
-            overflow menu), and styled like the Mention button. */}
+        {/* Own row: the card is w-72. Hides itself for self/logged-out/following. */}
         <FollowButton pubkey={pubkey} className="mt-2 w-full h-8" />
 
-        {/* The full profile view, with the two off-ramps beside it: this
-            person on ditto.pub (the fuller social view) and their nsite,
-            when they've published one. */}
+        {/* Full profile, plus ditto.pub and the person's nsite when published. */}
         <div className="mt-2 flex items-center gap-2">
           <Button
             size="sm"
             className="flex-1 clip-corner-lg h-8"
             onClick={viewProfile}
-            // Badges and follow counts are the profile's slowest queries and
-            // the only ones this card hasn't already resolved. Hovering the
-            // button is the earliest honest signal that they'll be needed.
+            // Prefetch the profile's slowest queries on hover.
             onPointerEnter={() => prefetchProfile(pubkey)}
             onFocus={() => prefetchProfile(pubkey)}
           >
@@ -372,13 +346,7 @@ function ProfilePreviewBody({
           )}
         </div>
 
-        {/* What a moderator may do to this person, last and in its own group:
-            clicking someone is the shortest path to acting on them, and the
-            destructive-last ordering matches every other menu here. Absent
-            for everyone who isn't staff over this member — which is why it
-            can be buttons rather than a third menu. Not gated on `isSelf`:
-            the provider already offers no action against yourself, and the
-            owner may assign themselves a cosmetic role, as in the member list. */}
+        {/* Renders nothing unless the viewer is staff over this member. */}
         <MemberModerationActions pubkey={pubkey} onAction={onAction} className="mt-3" />
       </div>
     </>
@@ -386,24 +354,16 @@ function ProfilePreviewBody({
 }
 
 /**
- * Wraps a trigger element (typically an avatar) with a click-triggered popover
- * showing a compact profile preview: banner, avatar, display name, npub, and
- * bio. The card is tinted with the profile owner's Ditto theme when they have
- * one, so hovering a user shows their chosen colors.
+ * Click-triggered profile preview popover, tinted with the owner's Ditto theme
+ * when they have one.
  */
 export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps) {
   const [open, setOpen] = useState(false);
-  // The Popover isn't built until the card is first asked for. Every message
-  // row carries two of these (avatar and name), and a Radix popover root is a
-  // popper, an anchor that re-renders to register itself, and presence
-  // tracking — per trigger, for the whole loaded timeline, almost none of
-  // which is ever opened. Until then the trigger is the bare child, which
-  // opens the card on click. Latched: once built, it stays.
+  // The Popover is built on first open (every row has two triggers); latched.
   const [armed, setArmed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const prefetchTheme = usePrefetchProfileTheme();
-  // Where a report from this card goes is the surrounding room's business, not
-  // the card's; in a DM or on a bare profile there is no room, and it's public.
+  // The surrounding room decides where reports go; no room means public.
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
 
@@ -450,8 +410,7 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
           />
         )}
       </Popover>
-      {/* Outside the popover: choosing Report closes the card, which would
-          otherwise unmount the dialog in the same tick. */}
+      {/* Outside the popover: Report closes the card, which would unmount the dialog. */}
       {reportOpen && reportTo && (
         <ReportDialog
           open={reportOpen}
@@ -464,11 +423,7 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
   );
 }
 
-/**
- * The popover content, mounted only while open so the profile + theme queries
- * don't fire until the card is shown. Applies the profile owner's Ditto theme
- * (if any) as scoped CSS variables on the card element.
- */
+/** Mounted only while open so profile/theme queries wait; applies the owner's Ditto theme. */
 function ThemedPreviewContent({
   pubkey,
   onClose,
@@ -487,10 +442,7 @@ function ThemedPreviewContent({
       align="start"
       sideOffset={8}
       style={themeStyle}
-      // PopoverContent caps its height to the space Radix reports as available,
-      // so a card taller than that (a landscape phone, an avatar low on the
-      // screen, a moderator's extra row) scrolls rather than clipping its last
-      // rows. Scrolling still clips to the rounded corners.
+      // Scrolls when taller than Radix's available height rather than clipping.
       className="w-72 p-0 rounded-2xl overflow-x-hidden overflow-y-auto overscroll-contain border border-border shadow-xl"
       onClick={(e) => e.stopPropagation()}
     >

@@ -10,13 +10,8 @@ export interface RichEmbedImage {
   height?: number;
 }
 
-/**
- * A link preview in the shape the card renders, whichever source it came from
- * — a generic oEmbed, or a provider's own API where it says more (Bluesky's
- * counts, timestamp and every image rather than one og:image).
- */
+/** A link preview as the card renders it, from generic oEmbed or a provider API (e.g. Bluesky). */
 export interface RichEmbed {
-  /** Site name, shown above the content. */
   provider?: string;
   author?: { name: string; icon?: string };
   title?: string;
@@ -48,8 +43,7 @@ export function fromOEmbed(data: OEmbedLike | null | undefined): RichEmbed | nul
       provider: "Reddit",
       author: { name: reddit.subreddit },
       title: reddit.title,
-      // A post Reddit marks mature keeps its image off the card, as Reddit
-      // itself hides it behind a click.
+      // Reddit-mature posts keep their image off the card, as Reddit hides it.
       images: data.thumbnail_url && !reddit.mature
         ? [{ thumb: data.thumbnail_url, width: data.thumbnail_width, height: data.thumbnail_height }]
         : [],
@@ -57,7 +51,7 @@ export function fromOEmbed(data: OEmbedLike | null | undefined): RichEmbed | nul
   }
   return {
     provider: data.provider_name,
-    // An author that only repeats the title (Bluesky's oEmbed does) is noise.
+    // An author that only repeats the title (Bluesky's oEmbed) is noise.
     author: data.author_name && data.author_name !== data.title ? { name: data.author_name } : undefined,
     title: data.title,
     description: oembedDescription(data.html),
@@ -103,7 +97,6 @@ const RecordWithMediaView = z.object({
 
 const Label = z.object({ val: z.string() });
 
-/** The part of an `app.bsky.feed.defs#postView` the card reads. */
 export const BlueskyPostSchema = z.object({
   author: z.object({
     handle: z.string(),
@@ -171,9 +164,8 @@ export function fromBlueskyPost(post: BlueskyPost): RichEmbed {
 }
 
 /**
- * Reddit's API refuses unauthenticated reads and its oEmbed sends no CORS
- * header, so a Reddit link only ever gets the preview endpoint's og tags, whose
- * title folds the subreddit and a mature flag into one string:
+ * Reddit only yields og tags (API needs auth, oEmbed lacks CORS), with the
+ * subreddit and mature flag folded into the title:
  * `[Mature Content] From the linux community on Reddit: <title>`.
  */
 function fromRedditTitle(
@@ -182,8 +174,6 @@ function fromRedditTitle(
   const m = /^(\[Mature Content\] )?From the (\S+) community on Reddit: ([\s\S]+)$/.exec(title ?? "");
   return m ? { subreddit: `r/${m[2]}`, title: m[3].trim(), mature: !!m[1] } : null;
 }
-
-// ── GitHub ──────────────────────────────────────────────────────────────────
 
 /** First path segments on github.com that are site pages, not owners. */
 const GITHUB_RESERVED = new Set([
@@ -285,8 +275,6 @@ export function fromGitHubIssue(target: GitHubTarget, issue: z.infer<typeof GitH
   };
 }
 
-// ── Wikipedia ───────────────────────────────────────────────────────────────
-
 /** Language subdomain and (still percent-encoded) title of a Wikipedia article URL. */
 export function extractWikipedia(url: string): { lang: string; title: string } | null {
   try {
@@ -322,8 +310,6 @@ export function fromWikipedia(page: z.infer<typeof WikipediaSummarySchema>): Ric
       : [],
   };
 }
-
-// ── Hacker News ─────────────────────────────────────────────────────────────
 
 /** The item id of a `news.ycombinator.com/item?id=<n>` URL. */
 export function extractHackerNews(url: string): number | null {

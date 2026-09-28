@@ -1,27 +1,10 @@
 /**
- * useHistoryAudit — the orchestrator that turns the pure {@link auditHistory}
- * verifier and the {@link historyExport} writers into a working in-app tool.
+ * Runs {@link auditHistory} and the {@link historyExport} writers as an in-app
+ * tool: an exhaustive control sweep, a per-channel backfill to the floor (written
+ * back to the store), a fold into the surviving timeline, optional inlining of
+ * media as `data:` URIs, then the verdict plus {@link ExportModel}.
  *
- * Running it does the exhaustive, all-or-name-the-gap collection that "ensure
- * perfect history before acting" requires:
- *
- *   1. an EXHAUSTIVE control sweep (`sweepControl(…, { exhaustive: true })` —
- *      the same primitive the Refounding path runs before it compacts), so the
- *      roster/channels/banlist are folded from the whole plane, not a delta;
- *   2. per channel, a backfill paged to its floor across every community relay
- *      (`backfillStore` looped on the oldest cursor), decrypted with
- *      `openChatBatch`, merged with what the store already holds, and written
- *      back so the pull is also a durable fill;
- *   3. a fold (`foldTimeline`) into the surviving timeline, profiles resolved
- *      from kind-0, and — for the offline HTML export — image attachments and
- *      avatars fetched, decrypted, and inlined as `data:` URIs under a byte
- *      budget;
- *   4. the collected facts handed to {@link auditHistory}, whose verdict and
- *      the assembled {@link ExportModel} are returned together.
- *
- * The hook is deliberately imperative (`run()`), not a `useQuery`: it is a
- * seconds-to-minutes operation a user starts explicitly and watches, exactly
- * like the rotation dialog it sits beside.
+ * Imperative (`run()`), not a query: a long operation the user starts and watches.
  */
 
 import { useNostr } from "@nostrify/react";
@@ -67,26 +50,21 @@ import { routeMediaCandidates, type MediaPolicy } from "@/lib/mediaPolicy";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 
-// ── Tunables ─────────────────────────────────────────────────────────────────
-
 /** Backfill rounds per channel; each round pages up to 20×50 wraps oldest-ward. */
 const MAX_BACKFILL_ROUNDS = 60;
-/** Total bytes of decrypted media a single export may embed (keeps a huge room's export sane). */
+/** Total decrypted media bytes one export may embed. */
 const ASSET_TOTAL_BUDGET = 40 * 1024 * 1024;
-/** No single asset larger than this is embedded (it stays a link instead). */
+/** Larger assets stay a link. */
 const ASSET_MAX_EACH = 8 * 1024 * 1024;
 /** AES-GCM appends a 16-byte tag, so ciphertext runs that much past plaintext. */
 const GCM_TAG_BYTES = 16;
 /** kind-0 authors per relay query. */
 const PROFILE_BATCH = 100;
 
-// ── Progress ─────────────────────────────────────────────────────────────────
-
 export type AuditPhase = "idle" | "control" | "channels" | "profiles" | "assets" | "done" | "error";
 
 export interface AuditProgress {
   phase: AuditPhase;
-  /** Channel currently being swept (phase "channels") or the active step's label. */
   label?: string;
   done: number;
   total: number;
@@ -103,19 +81,12 @@ export interface RunOptions {
   /** Passed through to {@link auditHistory} (e.g. `danglingIsBlocker` for a pre-compaction gate). */
   auditOptions?: AuditOptions;
   /**
-   * Only include messages at or after this epoch-ms; undefined = all history.
-   * Bounds the backfill from below AND filters the store read, so a "last 7
-   * days" export neither pages older wraps nor carries older stored rumors.
+   * Only messages at or after this epoch-ms; bounds both the backfill and the store read.
    */
   sinceMs?: number;
-  /**
-   * Restrict the sweep + export to these channel idHex values; undefined = every
-   * channel. A channel left out is neither backfilled nor written into the model.
-   */
+  /** Restrict sweep + export to these channel idHex values; undefined = all. */
   channelIds?: ReadonlySet<string>;
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -132,15 +103,14 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** An imeta attachment worth trying to embed inline (an image, or unknown-but-likely). */
+/** An image, or unknown-but-likely one. */
 function isEmbeddableImage(entry: ImetaEntry): boolean {
   return !entry.mime || entry.mime.startsWith("image/");
 }
 
 /**
- * Fetch a URL (decrypting AES-GCM ciphertext when `enc` is present) and encode
- * it as a `data:` URI, or report failure. Never throws: a leak-free export
- * would rather drop or link an asset than abort over one bad blob.
+ * Fetch a URL (decrypting when `enc` is present) as a `data:` URI. Never throws:
+ * an export would rather drop or link an asset than abort.
  */
 async function fetchImageDataUri(
   url: string,
@@ -151,16 +121,9 @@ async function fetchImageDataUri(
   policy: MediaPolicy,
 ): Promise<{ dataUri?: string; mime?: string; failed: boolean }> {
   try {
-    // Cap the READ at the budget we'd enforce afterwards anyway (+ the GCM
-    // tag), so an oversized asset costs nothing rather than being buffered in
-    // full and then discarded. A `FileTooLargeError` lands in the catch below,
-    // which is the same outcome as the explicit check.
-    // A content-addressed blob is walked across the viewer's other Blossom
-    // servers: an export must not lose an image to one host being down.
-    //
-    // Under the media policy like the timeline: with a proxy set, each host
-    // the export fetches from sees the proxy's address rather than this
-    // device's — the same protection a displayed avatar gets.
+    // Cap the READ at the budget (+ GCM tag) so oversized assets aren't buffered.
+    // Walk other Blossom servers for content-addressed blobs, and route through the
+    // media policy (proxy) like the timeline does.
     const { sources } = routeMediaCandidates(mediaCandidates(url, undefined, servers), policy);
     const raw = await fetchCapped(sources, {
       signal,
@@ -169,20 +132,17 @@ async function fetchImageDataUri(
     let bytes = new Uint8Array(raw);
     if (enc) {
       bytes = new Uint8Array(await decryptBuffer(raw, enc.key, enc.nonce));
-      // An export is evidence; embedding a blob the sender never hashed to
-      // would put bytes nobody vouched for inside an audit record.
+      // An export is evidence; never embed bytes whose hash the sender didn't vouch for.
       await verifyPlaintextHash(bytes, enc.ox);
     }
     if (bytes.length > ASSET_MAX_EACH || bytes.length > budget.left) {
-      // Too big to embed — a plaintext one stays a link, an encrypted one can't.
+      // Too big: a plaintext one stays a link, an encrypted one can't.
       return { failed: Boolean(enc) };
     }
     budget.left -= bytes.length;
     const mime = bytes.length ? sniffImageMime(bytes) : "application/octet-stream";
     return { dataUri: `data:${mime};base64,${bytesToBase64(bytes)}`, mime, failed: false };
   } catch {
-    // An encrypted attachment we couldn't fetch/decrypt is unviewable; a
-    // plaintext one is still a working link.
     return { failed: Boolean(enc) };
   }
 }
@@ -222,10 +182,8 @@ function buildExportMessages(timeline: ReturnType<typeof foldTimeline>): {
 } {
   const pending: Array<{ ref: ExportAttachment; entry: ImetaEntry }> = [];
   const messages = timeline.messages
-    // Disappearing messages (a NIP-40 `expiration` tag, CORD-08) are ephemeral
-    // by the community's own policy. An export is a permanent artifact, so they
-    // are dropped here even before their deadline passes — the fold already
-    // drops the ones that have expired; this drops the ones that still will.
+    // Disappearing messages (NIP-40 `expiration`, CORD-08) are excluded from a
+    // permanent export even before their deadline.
     .filter((m) => expirationOf(m.tags) === undefined)
     .map((m): ExportMessage => {
     const byEmoji = timeline.reactions.get(m.rumorId);
@@ -253,8 +211,6 @@ function buildExportMessages(timeline: ReturnType<typeof foldTimeline>): {
   });
   return { messages, pending };
 }
-
-// ── The hook ─────────────────────────────────────────────────────────────────
 
 export function useHistoryAudit(community: Community | undefined) {
   const { nostr } = useNostr();
@@ -285,8 +241,7 @@ export function useHistoryAudit(community: Community | undefined) {
       const embedAssets = opts?.embedAssets ?? true;
       const sinceMs = opts?.sinceMs;
       const sinceSecs = sinceMs !== undefined ? Math.floor(sinceMs / 1000) : undefined;
-      // Restrict to the picked channels (undefined = all). An unpicked channel
-      // is never backfilled, so a scoped export is also a cheaper sweep.
+      // An unpicked channel is never backfilled.
       const selectedChannels = opts?.channelIds
         ? channels.filter((c) => opts.channelIds!.has(c.idHex))
         : channels;
@@ -294,7 +249,7 @@ export function useHistoryAudit(community: Community | undefined) {
       setError(null);
       setResult(null);
       try {
-        // 1. Control plane — exhaustive sweep, then read its coverage self-facts.
+        // 1. Control plane — exhaustive sweep.
         setProgress({ phase: "control", done: 0, total: 1, label: "Reading the control plane" });
         await sweepControl(nostr, community, { exhaustive: true });
         const control: ControlCollection = {
@@ -322,22 +277,12 @@ export function useHistoryAudit(community: Community | undefined) {
 
           const { wraps, exhausted, failed } = await collectChannelWraps(nostr, community, channel, signal, sinceSecs);
           const openedWire = await openChatBatch(wraps, channel, { signal });
-          // Populate the local store, THEN read the export source back out of it,
-          // so the export is generated purely from durable rumors (never from a
-          // wire set that hasn't landed on disk). The store also merges in
-          // whatever earlier syncs already decrypted.
+          // Write THEN read back, so the export comes purely from durable rumors.
           if (openedWire.length) await writeRumors(community.idHex, openedWire);
           const allRumors = await queryChannelRumors(community.idHex, channel.idHex, { limit: 1_000_000, signal });
-          // The store keeps everything it ever decrypted, so a time-bounded
-          // export filters it down to the window regardless of what the sweep
-          // fetched this run.
           const rumors = sinceMs !== undefined ? allRumors.filter((r) => r.ms >= sinceMs) : allRumors;
 
-          // Fold with the community's real moderation context (not a bare
-          // `canDelete: () => false`) so a message a moderator deleted is left
-          // out of the export just as it is out of the live timeline — the store
-          // drops durable deletes, this catches one freshly swept alongside its
-          // target this run.
+          // Real moderation context, so moderator deletes are excluded as in the timeline.
           const timeline = foldTimeline(rumors, moderation);
           for (const m of timeline.messages) authors.add(m.author);
 
@@ -364,7 +309,6 @@ export function useHistoryAudit(community: Community | undefined) {
           });
         }
 
-        // 3. Profiles — kind-0 for every author seen.
         setProgress({ phase: "profiles", done: 0, total: 1, label: "Resolving members" });
         const profiles: Record<string, ExportProfile> = {};
         const authorList = [...authors];
@@ -379,16 +323,14 @@ export function useHistoryAudit(community: Community | undefined) {
           for (const [pk, ev] of newest) {
             const { metadata } = parseAuthorEvent(ev);
             const name = metadata?.name || metadata?.display_name || "";
-            // A member controls their own kind-0, and this one ends up inside a
-            // `<style>` rule in the export (historyExport's avatarStyleParts).
-            // Scheme-check it at the source as well as at that sink.
+            // Member-controlled URL that ends up in a `<style>` rule; scheme-check at the
+            // source as well as at the sink.
             const picture = sanitizeUrl(metadata?.picture);
             profiles[pk] = { pubkey: pk, name, ...(picture ? { picture } : {}) };
           }
         }
         for (const pk of authorList) profiles[pk] ??= { pubkey: pk, name: "" };
 
-        // 4. Assets — embed the icon, avatars + image attachments as data URIs (offline HTML).
         let iconDataUri: string | undefined;
         if (embedAssets) {
           const budget = { left: ASSET_TOTAL_BUDGET };
@@ -403,12 +345,9 @@ export function useHistoryAudit(community: Community | undefined) {
           for (const pk of authorList) {
             if (signal.aborted) throw new Error("cancelled");
             const pic = profiles[pk].picture;
-            // Already scheme-checked above, so every picture is inlined or
-            // dropped — none is left as a remote URL the opened file fetches.
             if (pic) {
               const r = await fetchImageDataUri(pic, undefined, signal, budget, servers, policy);
-              // Drop a remote avatar we couldn't inline: a self-contained file
-              // must not phone home for it on open.
+              // A self-contained file must not fetch a remote avatar on open.
               if (r.dataUri) {
                 profiles[pk] = { ...profiles[pk], picture: r.dataUri };
               } else {
@@ -431,7 +370,6 @@ export function useHistoryAudit(community: Community | undefined) {
           }
         }
 
-        // 5. Verdict + model.
         const now = Date.now();
         const report = auditHistory({
           communityIdHex: community.idHex,

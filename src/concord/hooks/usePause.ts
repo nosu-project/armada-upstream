@@ -15,13 +15,9 @@ import { toast } from "@/hooks/useToast";
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
- * The durations the pause control offers. Bounded by default, deliberately:
- * CORD-04 §8's `until` is the safety valve that lets a raid response survive
- * the pauser going offline before they can lift it, and a client that can only
- * mint an open-ended pause makes that valve unreachable. Under a full freeze
- * that matters more, not less — an unattended pause leaves every member,
- * staff included, with no chat wire at all until another MANAGE_CHANNELS
- * holder acts. `undefined` is the explicit open-ended choice.
+ * Pause durations offered. Bounded by default: CORD-04 §8's `until` lets a raid
+ * response survive the pauser going offline, and a full freeze leaves everyone
+ * without chat until lifted. `undefined` is the explicit open-ended choice.
  */
 export const PAUSE_DURATIONS: ReadonlyArray<{ label: string; secs?: number }> = [
   { label: "15 minutes", secs: 15 * 60 },
@@ -32,13 +28,8 @@ export const PAUSE_DURATIONS: ReadonlyArray<{ label: string; secs?: number }> = 
 
 /**
  * The community's active pause, re-evaluated when its `until` passes.
- *
- * CORD-04 §8 requires honoring `until` locally rather than waiting for a
- * clearing edition, and that means SCHEDULING the expiry — comparing at render
- * is not enough, because on a bounded pause nothing else re-renders on its
- * behalf: the fold doesn't change and no edition arrives. A frozen room whose
- * `until` passed unobserved is indistinguishable to its members from one
- * nobody lifted.
+ * CORD-04 §8 requires honoring `until` locally, so the expiry must be
+ * SCHEDULED — nothing else re-renders on its behalf.
  */
 export function useActivePause(community: Community | undefined): ActivePause | undefined {
   const { data: folded } = useControlFold(community);
@@ -54,9 +45,8 @@ export function useActivePause(community: Community | undefined): ActivePause | 
     if (ms <= 0) return; // already inert; `pause` is undefined and this won't run
     const t = setTimeout(() => setTick((n) => n + 1), Math.min(ms, MAX_TIMEOUT_MS));
     return () => clearTimeout(t);
-    // `tick` re-arms the clamped case (an `until` further out than setTimeout
-    // can express) and is otherwise a no-op: the wake that changes `pause`
-    // clears `until`, which ends the loop.
+    // `tick` re-arms the clamped case (until beyond setTimeout's range); the wake
+    // that clears `until` ends the loop.
   }, [until, tick]);
 
   return pause;
@@ -64,21 +54,17 @@ export function useActivePause(community: Community | undefined): ActivePause | 
 
 /**
  * The community-wide PAUSE signal (CORD-04 §8, `signal_id` "pause"): a
- * MANAGE_CHANNELS holder closes the room to non-staff. Enforcement is a
- * reader-side fold — the composer disables and non-staff messages collapse
- * (`activePause` + `foldTimeline`) — never an author drop. A pause carries an
- * optional `until` (seconds) that self-clears, so a raid response survives the
- * pauser going offline before they can lift it.
+ * MANAGE_CHANNELS holder closes the room to non-staff. Enforced by reader-side
+ * fold (`activePause` + `foldTimeline`), never an author drop. Optional `until`
+ * (seconds) self-clears.
  */
 export function useCommunityPause(community: Community | undefined): {
-  /** Whether the reading user may pause/unpause (holds MANAGE_CHANNELS). */
+  /** Holds MANAGE_CHANNELS. */
   canPause: boolean;
-  /** The active pause, or undefined. */
   pause: ActivePause | undefined;
   isPaused: boolean;
-  /** Pause the community, optionally until `untilSecs` (unix seconds). */
+  /** Optionally until `untilSecs` (unix seconds). */
   setPaused: ReturnType<typeof useMutation<void, Error, { untilSecs?: number }>>;
-  /** Lift an active pause. */
   clearPause: ReturnType<typeof useMutation<void, Error, void>>;
 } {
   const { nostr } = useNostr();

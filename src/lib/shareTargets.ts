@@ -1,29 +1,9 @@
 /**
- * The "last outgoing message" ledger behind Android's Direct Share suggestions.
- *
- * A share suggestion should name the rooms the user TALKS TO. Neither of the
- * two signals the app had answered that question: the publisher ranked DM
- * conversations by `latest.createdAt` — the newest message in the thread
- * whoever sent it, so a chatty stranger outranked someone messaged daily — and
- * the notification service pushed a shortcut per INCOMING notification, which
- * is the same mistake with the sender inverted.
- *
- * So record the one fact that is actually being ranked by: when the viewer last
- * sent to a room. Keyed by the room's ROUTE, which is the same id the shortcut
- * itself carries (see `ShareTargetPlugin.publishShortcuts`), so a DM, a Concord
- * channel and a NIP-29 group are one kind of entry rather than three.
- *
- * Deliberately LOCAL — ArmadaDB KV, never a NIP-78 document. This is
- * device-scoped Android UX with no meaning on another client, and a synced list
- * of every room the user writes in is exactly the shape the "never publish a
- * user's lists" rule in AGENTS.md exists to prevent, for no benefit here.
- *
- * The DM side has a second, better source that costs nothing: the NIP-17
- * conversation query already reads `distinct:convmine` (the newest message the
- * viewer authored, per conversation) and used to reduce it to a boolean. That
- * timestamp is durable and survives a reinstall, so `useShareShortcuts` takes
- * whichever of the two is newer. This ledger is what gives COMMUNITIES the same
- * signal, since nothing else records an outgoing Concord/NIP-29 send.
+ * "Last outgoing message" ledger ranking Android Direct Share suggestions by
+ * when the viewer last SENT to a room, keyed by route (the shortcut id). Local
+ * KV only, never NIP-78: publishing a user's room list is forbidden
+ * (AGENTS.md). For DMs, `useShareShortcuts` also uses `distinct:convmine` and
+ * takes the newer.
  */
 
 import { KvPrefixCache } from "@/lib/db/kvCache";
@@ -34,39 +14,22 @@ export interface LastSentEntry {
   /** Unix SECONDS the viewer last sent here — the same clock as `created_at`. */
   sentAt: number;
   /**
-   * The room's display name, captured at send time.
-   *
-   * Stored rather than resolved at publish time because resolving it later
-   * would put Concord and NIP-29 lookups inside a hook that runs in
-   * `MainLayout`, where neither community nor group state is loaded. The
-   * sending page already knows what the room is called, and re-captures it on
-   * every send, so a rename settles the next time the user writes there.
-   *
-   * DMs pass none: `useShareShortcuts` resolves those from the kind-0 profiles
-   * in the local event store, which keeps a renamed contact fresh without a
-   * send.
+   * Room name captured at send time (MainLayout has no community/group state to
+   * resolve it). DMs omit it; they resolve from kind-0 profiles.
    */
   label?: string;
   /** Room avatar (community image / group picture) to fetch native-side. */
   iconUrl?: string;
 }
 
-/**
- * How many rooms to remember. Bounded because `KvPrefixCache` holds its whole
- * prefix in memory — and because a suggestion list is a handful of slots, so
- * anything past the most recent few dozen rooms can never be published.
- */
+/** Bounded: `KvPrefixCache` holds the whole prefix in memory. */
 const MAX_ROOMS = 32;
 
 const cache = new KvPrefixCache<LastSentEntry>({ prefix: "share-sent:" });
 
 /**
- * Entry id: `<pubkey>:<route>`.
- *
- * Scoped by account because KV is not — an account SWITCH resets the caches but
- * only a final logout purges the database, so an unscoped ledger would suggest
- * the previous account's rooms. A pubkey is hex, so splitting on the first
- * colon recovers the route whatever the route contains.
+ * `<pubkey>:<route>`. Account-scoped because switching accounts doesn't purge
+ * KV; hex pubkeys make the first colon the split point.
  */
 function entryId(self: string, route: string): string {
   return `${self}:${route}`;
@@ -79,12 +42,8 @@ function splitId(id: string): { self: string; route: string } | null {
 }
 
 /**
- * Note that `self` just sent to `route`, which must be a ROOM path (no `/t/` or
- * `/m/` focus — see `roomPath`), so a thread reply and a permalinked message
- * both credit the room they are in.
- *
- * Fire-and-forget, like every other write on the send path: a suggestion that
- * doesn't update is not worth failing a message over.
+ * Note that `self` just sent to `route` (a ROOM path, no `/t/` or `/m/`
+ * focus). Fire-and-forget.
  */
 export function recordSent(
   self: string,
@@ -96,9 +55,7 @@ export function recordSent(
   if (meta?.label) entry.label = meta.label;
   if (meta?.iconUrl) entry.iconUrl = meta.iconUrl;
   cache.set(entryId(self, route), entry);
-  // Pruning needs the warm, which the write above does not wait for. Doing it
-  // after means a cold process can briefly hold more than the cap, which costs
-  // nothing — the cap bounds memory, it is not a correctness property.
+  // Prune after warm; briefly exceeding the cap is harmless.
   void cache.ready().then(() => prune(self)).catch(() => undefined);
 }
 
@@ -123,23 +80,14 @@ function readAll(self: string): { route: string; entry: LastSentEntry }[] {
 }
 
 /**
- * This account's rooms, newest send first. Synchronous, and empty until
- * {@link warmSentRooms} resolves.
- *
- * Routes are re-emitted through `chatRoute`, and rows that normalize to the
- * same path are collapsed to the newest. New writes are already canonical —
- * `recordSent` is called with `roomPath(parseChatRoute(…))` — but rows written
- * before DM routes were canonicalized name the same conversation in hex, and
- * this ledger is read to BUILD shortcut ids. Left alone, one person would get
- * two suggestions under two ids, and the timestamp the publisher ranks by would
- * be split across them. The stale row keeps its KV key (so {@link prune} can
- * still find and drop it) and ages out on its own.
+ * This account's rooms, newest send first; empty until {@link warmSentRooms}.
+ * Routes are canonicalized via `chatRoute` and deduped, since older rows name
+ * DMs in hex and would yield duplicate shortcut ids.
  */
 export function sentRooms(self: string): { route: string; entry: LastSentEntry }[] {
   if (!self) return [];
   const byRoute = new Map<string, LastSentEntry>();
-  // Newest first, so the first row to claim a route is the one that wins and
-  // later duplicates are dropped rather than merged field by field.
+  // Newest first, so the first to claim a route wins.
   for (const { route, entry } of readAll(self)) {
     const parsed = parseChatRoute(route);
     const canonical = parsed ? chatRoute(parsed) : route;
@@ -153,14 +101,7 @@ export function warmSentRooms(): Promise<void> {
   return cache.ready();
 }
 
-/**
- * Re-publish when the ledger changes.
- *
- * The publisher can't key a React effect on this the way it does on the DM
- * conversation list: the ledger is written from the send path, outside render,
- * and routing it through component state would re-render the app's whole
- * layout once per message sent for a background nicety.
- */
+/** Re-publish on ledger change (written outside render, so not via React state). */
 export function subscribeSentRooms(listener: () => void): () => void {
   return cache.subscribe(listener);
 }

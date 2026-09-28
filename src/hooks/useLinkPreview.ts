@@ -21,7 +21,6 @@ import {
   type RichEmbed,
 } from "@/lib/richEmbed";
 
-/** Zod schema for OEmbed responses from the link preview endpoint. */
 const OEmbedSchema = z.object({
   type: z.enum(["link", "photo", "video", "rich"]),
   version: z.string().optional(),
@@ -39,13 +38,9 @@ const OEmbedSchema = z.object({
   height: z.number().optional(),
 });
 
-/** OEmbed response from the link preview endpoint. */
 export type OEmbedData = z.infer<typeof OEmbedSchema>;
 
-/**
- * Try to fetch OEmbed data directly from a known provider's native endpoint.
- * Returns null if the URL doesn't match a known provider or the fetch fails.
- */
+/** Known providers' native endpoints; null if unmatched or failed. */
 async function tryNativeOEmbed(url: string, signal?: AbortSignal): Promise<OEmbedData | null> {
   try {
     const u = new URL(url);
@@ -71,7 +66,6 @@ async function tryNativeOEmbed(url: string, signal?: AbortSignal): Promise<OEmbe
   }
 }
 
-/** Try to parse an OEmbed response from a standard endpoint, returning null on failure. */
 async function tryFetchOEmbed(endpoint: string, signal?: AbortSignal): Promise<OEmbedData | null> {
   try {
     const response = await fetch(endpoint, {
@@ -87,11 +81,8 @@ async function tryFetchOEmbed(endpoint: string, signal?: AbortSignal): Promise<O
 }
 
 /**
- * Fetch OEmbed data for a URL. Known providers (YouTube, Spotify) are queried
- * at their native endpoints; everything else goes through the generic link
- * preview proxy, which the build may leave unconfigured. (Not Reddit: its
- * oEmbed sends no CORS header, so a browser can only ever read it through the
- * proxy.)
+ * Known providers (YouTube, Spotify) natively; everything else via the optional preview proxy.
+ * Not Reddit: its oEmbed sends no CORS header.
  */
 async function fetchLinkPreview(url: string, signal?: AbortSignal): Promise<OEmbedData | null> {
   const native = await tryNativeOEmbed(url, signal);
@@ -103,7 +94,6 @@ async function fetchLinkPreview(url: string, signal?: AbortSignal): Promise<OEmb
   return tryFetchOEmbed(endpoint, signal);
 }
 
-/** GET a JSON document and validate it, or null on any failure. */
 async function fetchJson<T>(url: string, schema: z.ZodType<T>, signal?: AbortSignal): Promise<T | null> {
   try {
     const response = await fetch(url, { signal, headers: { Accept: "application/json" } });
@@ -116,12 +106,8 @@ async function fetchJson<T>(url: string, schema: z.ZodType<T>, signal?: AbortSig
 }
 
 /**
- * A card from the linked site's own public API, for the few sites whose API
- * says more than their og tags (counts, times, every image) and answers a
- * browser: fixed, first-party hosts with open CORS. Never a host the link
- * itself chooses — that would hand every viewer's IP to whoever sent it.
- * Null when the URL is none of them or the read fails, so the caller falls
- * back to the generic preview.
+ * Richer cards from fixed first-party APIs with open CORS. Never a host the link chooses
+ * (that would leak viewers' IPs to the sender). Null → generic preview.
  */
 async function fetchProviderEmbed(url: string, signal?: AbortSignal): Promise<RichEmbed | null> {
   const bluesky = extractBlueskyPost(url);
@@ -138,8 +124,7 @@ async function fetchProviderEmbed(url: string, signal?: AbortSignal): Promise<Ri
 
   const github = extractGitHub(url);
   if (github) {
-    // Unauthenticated, this is 60 reads an hour per IP; a 403 past that falls
-    // back to the generic card like any other failure.
+    // Unauthenticated: 60 reads/hour per IP; a 403 falls back to the generic card.
     const base = `https://api.github.com/repos/${github.owner}/${github.repo}`;
     if (github.number !== undefined) {
       const issue = await fetchJson(`${base}/issues/${github.number}`, GitHubIssueSchema, signal);
@@ -172,11 +157,7 @@ async function fetchProviderEmbed(url: string, signal?: AbortSignal): Promise<Ri
   return null;
 }
 
-/**
- * Preview card content for a URL: the provider's own API where one says more,
- * else the oEmbed. The two are read together, and a provider card with no
- * image of its own takes the page's og:image (GitHub's social card).
- */
+/** A provider card without an image takes the page's og:image. */
 async function fetchRichEmbed(url: string, signal?: AbortSignal): Promise<RichEmbed | null> {
   const [provider, oembed] = await Promise.all([
     fetchProviderEmbed(url, signal),
@@ -189,7 +170,6 @@ async function fetchRichEmbed(url: string, signal?: AbortSignal): Promise<RichEm
   return provider;
 }
 
-/** Hook to fetch the preview card content for a URL. */
 export function useRichEmbed(url: string | null) {
   return useQuery({
     queryKey: ["rich-embed", url],
@@ -202,14 +182,13 @@ export function useRichEmbed(url: string | null) {
   });
 }
 
-/** Hook to fetch OEmbed link preview data for a URL. */
 export function useLinkPreview(url: string | null) {
   return useQuery({
     queryKey: ["link-preview", url],
     queryFn: ({ signal }) => fetchLinkPreview(url!, signal),
     enabled: !!url,
-    staleTime: 1000 * 60 * 60, // 1 hour
-    gcTime: 1000 * 60 * 60 * 24, // 24 hours
+    staleTime: 1000 * 60 * 60,
+    gcTime: 1000 * 60 * 60 * 24,
     retry: false,
   });
 }

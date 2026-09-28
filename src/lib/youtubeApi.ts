@@ -1,10 +1,6 @@
 /**
- * Minimal loader + typing shim for the YouTube IFrame Player API.
+ * Minimal loader + types for the YouTube IFrame Player API (used by watchalong).
  * https://developers.google.com/youtube/iframe_api_reference
- *
- * The watchalong app uses this for programmatic play/pause/seek so playback can
- * be synchronised across participants. We load the API script once and resolve
- * when `window.YT.Player` is available.
  */
 
 export interface YTPlayer {

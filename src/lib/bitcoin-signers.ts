@@ -6,49 +6,22 @@ import { nip44 } from 'nostr-tools';
 const CONVERSATION_KEYS_MAX = 512;
 const SEEN_ONCE_MAX = 2_048;
 
-// ---------------------------------------------------------------------------
-// BtcSigner interface
-// ---------------------------------------------------------------------------
-
 /**
- * A Nostr signer extended with Bitcoin PSBT signing capability.
- *
- * Implementations receive a hex-encoded unsigned PSBT, sign all Taproot
- * inputs whose `tapInternalKey` matches the signer's key, and return the
- * hex-encoded signed (but not finalized) PSBT.
- *
- * **Lazy crypto.** The heavy Bitcoin/PSBT/silent-payments implementation
- * lives in `bitcoin-signers-impl.ts` and is only `import()`-ed the first
- * time `signPsbt` is called. This module — and therefore `useCurrentUser`,
- * which constructs these signers on every page — never statically pulls in
- * `@scure/btc-signer` or the `@/lib/bitcoin*` stack, keeping ~150 kB of
- * crypto out of the app's entry chunk.
+ * A Nostr signer with PSBT signing: signs Taproot inputs matching its key and
+ * returns the signed (not finalized) hex PSBT. The heavy implementation is
+ * lazily imported so this module stays out of the ~150 kB crypto stack.
  */
 export interface BtcSigner extends NostrSigner {
   signPsbt(psbtHex: string): Promise<string>;
 }
 
-/** Runtime check for whether a signer supports `signPsbt`. */
 export function hasBtcSigning(signer: NostrSigner): signer is BtcSigner {
   return typeof (signer as BtcSigner).signPsbt === 'function';
 }
 
-// ---------------------------------------------------------------------------
-// NSecSignerBtc — local nsec signing
-// ---------------------------------------------------------------------------
-
 /**
- * Extends `NSecSigner` with local Taproot PSBT signing.
- *
- * `NSecSigner` stores the secret key in a JS `#private` field that subclasses
- * cannot access. To work around this, the constructor accepts the raw secret
- * key bytes, passes them to `super()`, and keeps its own copy in a true
- * runtime-private `#secretKeyBytes` field so the key is not reachable via
- * property enumeration or reflection on the instance.
- *
- * The actual PSBT signing (including the BIP-375 / silent-payments path) is
- * implemented in `bitcoin-signers-impl.ts` and dynamically imported on first
- * use, so the heavy crypto stack stays out of the entry bundle.
+ * `NSecSigner` with local Taproot PSBT signing. `NSecSigner` keeps its key in
+ * a `#private` field, so this keeps its own runtime-private copy.
  */
 export class NSecSignerBtc extends NSecSigner implements BtcSigner {
   readonly #secretKeyBytes: Uint8Array;
@@ -59,17 +32,9 @@ export class NSecSignerBtc extends NSecSigner implements BtcSigner {
   }
 
   /**
-   * NIP-44 with the conversation key of a counterparty that RECURS kept for
-   * the session. The key is an ECDH — ~4ms of secp256k1 on a desktop, several
-   * times that on a phone — and `NSecSigner` derived it on every call, so
-   * opening a NIP-17 message paid two: one for the wrap, whose ephemeral
-   * author is new every time and gains nothing, and one for the seal, whose
-   * author is the sender and is the same for every message (and every typing
-   * signal) in the conversation.
-   *
-   * Admission takes a second sighting, so the one-shot wrap authors never
-   * displace the senders. The keys are no more sensitive than the secret key
-   * this instance already holds, and live exactly as long as it does.
+   * NIP-44 with cached conversation keys (each is a ~4ms+ ECDH). Admission
+   * needs a second sighting so one-shot gift-wrap authors don't displace the
+   * recurring seal senders.
    */
   override nip44 = {
     encrypt: async (pubkey: string, plaintext: string): Promise<string> =>
@@ -84,7 +49,6 @@ export class NSecSignerBtc extends NSecSigner implements BtcSigner {
   #conversationKey(pubkey: string): Uint8Array {
     const hit = this.#conversationKeys.get(pubkey);
     if (hit) {
-      // Refresh recency: a Map iterates in insertion order.
       this.#conversationKeys.delete(pubkey);
       this.#conversationKeys.set(pubkey, hit);
       return hit;
@@ -112,16 +76,7 @@ export class NSecSignerBtc extends NSecSigner implements BtcSigner {
   }
 }
 
-// ---------------------------------------------------------------------------
-// NBrowserSignerBtc — NIP-07 extension signing
-// ---------------------------------------------------------------------------
-
-/**
- * Extends `NBrowserSigner` with NIP-07 `window.nostr.signPsbt()` support.
- *
- * Calls the extension's `signPsbt` method if available. If the extension does
- * not expose `signPsbt`, an error is thrown with a user-friendly message.
- */
+/** `NBrowserSigner` with NIP-07 `window.nostr.signPsbt()` support. */
 export class NBrowserSignerBtc extends NBrowserSigner implements BtcSigner {
   constructor(opts?: { timeout?: number }) {
     super(opts);
@@ -142,13 +97,4 @@ export class NBrowserSignerBtc extends NBrowserSigner implements BtcSigner {
   }
 }
 
-// ---------------------------------------------------------------------------
-// NIP-46 remote signing
-// ---------------------------------------------------------------------------
-//
-// The NIP-46 bunker signer is `Nip46Signer` in `@/lib/nip46Signer.ts` (a
-// `BtcSigner`): a persistent-subscription, fenced-retry signer built on the
-// dedicated plain-WebSocket transport. It replaced the old
-// `NConnectSigner`-based wrapper, whose per-RPC subscriptions, unsettled
-// response promises, and blind retries made remote signing unreliable (see
-// nip46Signer.ts for the full rationale).
+// The NIP-46 bunker signer is `Nip46Signer` in `@/lib/nip46Signer.ts`.

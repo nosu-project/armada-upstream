@@ -53,61 +53,35 @@ import type { Channel } from "@/concord/lib/types";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * Floor for a relay's `since` when we have no cursor yet (fresh device): a
- * short overlap window; deeper history arrives via hydration pulls.
- */
+/** `since` floor with no cursor (fresh device); deeper history comes from hydration pulls. */
 const FRESH_LOOKBACK_SECONDS = 5 * 60;
-/**
- * Ceiling for how far back a persisted cursor may reach: a device off for a
- * month resumes at a week, not the epoch. Older history backfills on demand.
- */
+/** Oldest a persisted cursor may reach (a month-off device resumes at a week). */
 const MAX_CURSOR_AGE_SECONDS = 7 * 24 * 60 * 60;
 /** Overlap subtracted from a resumed cursor (clock skew / borderline events). */
 const CURSOR_OVERLAP_SECONDS = 60;
 /**
- * Watchdog on a fresh REQ round: a healthy relay answers with SOMETHING
- * almost immediately (events, or at least EOSE — even an auth-gated relay
- * settles its NIP-42 handshake well inside this). A round that has yielded
- * NOTHING by the deadline is presumed swallowed (a REQ held behind a wedged
- * AUTH exchange, a half-open socket) and is aborted so the loop re-issues it
- * — without this, the `for await` blocks forever and the wire silently dies
- * until an app relaunch (the "I log in and nothing is here" wedge).
+ * Watchdog for a fresh REQ round: a healthy relay answers (events or EOSE)
+ * well within this. A silent round is presumed swallowed (wedged AUTH,
+ * half-open socket) and re-issued; otherwise `for await` blocks forever.
  */
 const SILENT_REQ_TIMEOUT_MS = 30_000;
 /**
- * Rotation ceiling on a QUIET established round: once a round has yielded
- * something, a long silence is usually just a quiet channel — but it is
- * indistinguishable from a subscription that silently died (a relay that
- * dropped its sub state without CLOSED, a re-issued REQ swallowed by the
- * NIP-42 race on a reconnected socket — see relayReopen.ts for the eager
- * path). So a round silent this long is torn down and re-REQ'd from the
- * cursor. Rotation is lossless (the cursor + overlap replays the boundary)
- * and cheap (one REQ frame; an empty replay on a truly quiet relay), and it
- * bounds "live went deaf" to this window instead of "until app relaunch".
+ * Rotation ceiling for a QUIET established round: a long silence can't be told
+ * from a silently dead sub (see relayReopen.ts), so re-REQ from the cursor.
+ * Lossless (cursor + overlap) and cheap.
  */
 const QUIET_ROTATE_MS = 90_000;
 /** How often a round's silence is re-checked against the deadlines above. */
 const WATCHDOG_TICK_MS = 5_000;
 /**
- * Max events buffered from a round's stored replay (pre-EOSE) before they're
- * flushed through ingest as ONE batch. Awaiting `ingestWireEvents` per event
- * defeats the store's burst batching (see the ingest.ts write-path comment):
- * an N-event catch-up replay becomes N idle-scheduled single-event
- * transactions plus N bus emissions — the post-resume main-thread chug.
- * Batching restores the single-transaction burst write and one bus ring per
- * batch; the cap bounds memory and keeps the cursor advancing. Post-EOSE
- * (live) events still ingest immediately for notification latency.
+ * Max pre-EOSE replay events batched into one ingest call (per-event awaits
+ * defeat the store's burst batching). Post-EOSE live events ingest immediately.
  */
 const REPLAY_BATCH_MAX = 200;
 
 /**
- * Per-relay resume cursors, in ArmadaDB's KV behind a synchronous cache.
- *
- * One entry per relay ever contacted, never evicted, which is what made this
- * worth moving off localStorage. A read before {@link cursors.ready} resolves
- * just resumes from the fresh lookback, so the relay loop awaits it once
- * before its first round rather than re-reading the whole backlog.
+ * Per-relay resume cursors in KV (one per relay ever contacted, never
+ * evicted). Reads before {@link cursors.ready} fall back to the fresh lookback.
  */
 const cursors = new KvPrefixCache<number>({ prefix: "wire-cursor:" });
 
@@ -117,41 +91,25 @@ function readCursor(relay: string): number | undefined {
 }
 
 function writeCursor(relay: string, createdAt: number): void {
-  // Clamp against the local clock: an event stamped in the future (a
-  // member's skewed clock, a hostile timestamp) must not drag the cursor
-  // past `now` — every later REQ would open with `since > now` and the wire
-  // would go deaf on this relay (persistently — the cursor is durable)
-  // while everyone else's correctly-stamped messages stop matching.
+  // Clamp to now: a future-stamped event would push `since > now` and make the
+  // relay durably deaf.
   const next = Math.min(createdAt, Math.floor(Date.now() / 1000));
   const prev = readCursor(relay) ?? 0;
   if (next > prev) cursors.set(relay, next);
 }
 
 /**
- * Newest-rumor window scanned per channel when judging a community's unread
- * dot. Smaller than the rail's own 200-rumor scan, deliberately: a kind-9
- * found unread inside this window is unread inside the rail's larger window
- * too, so the wire never defers a community whose rail button isn't visibly
- * dotted — a miss merely keeps the community syncing (the safe direction).
+ * Newest rumors scanned per channel for the dot. Smaller than the rail's 200,
+ * so a miss only keeps a community syncing (the safe direction).
  */
 const DOT_SCAN_WINDOW = 50;
 
 /**
- * Communities the wire is deferring under the unread-dot rule, persisted so
- * the fact survives a reload: the per-relay wire cursor keeps advancing on
- * other traffic while a community's filters are excluded, so a deferred
- * community's missed region can never be recovered from cursor replay alone.
- * The flag is the durable IOU — whichever path brings the community back
- * live (navigation, a remote read clearing the dot, this session or a later
- * one) must run its catch-up ({@link catchUpCommunity} /
- * {@link catchUpNip29Server}) before the standing subscription can be
- * trusted again.
- *
- * Keyed by activation scope (`c2:<idHex>`, `nip29:<relay>` — see
- * wire/activation.ts). Entries written before the scoped spelling were bare
- * Concord idHexes; the Concord read still honors those so a community
- * deferred under the old key isn't silently treated as live without its
- * catch-up.
+ * Deferred scopes (`c2:<idHex>`, `nip29:<relay>`), persisted: the per-relay
+ * cursor keeps advancing on other traffic while a scope is excluded, so this
+ * is the durable IOU that its catch-up ({@link catchUpCommunity} /
+ * {@link catchUpNip29Server}) must run before going live. Legacy entries are
+ * bare Concord idHexes, still honored.
  */
 const deferredFlags = new KvPrefixCache<number>({ prefix: "wire-deferred:" });
 
@@ -164,22 +122,16 @@ interface DotContext {
   readState: Record<string, number>;
   isMuted: (protocol: "c2", communityId: string, channelIdHex: string) => boolean;
   /**
-   * Whether a channel's resolved notification level would ever fire (`all` or
-   * `mentions`, i.e. not silenced). The unread-dot deferral only applies to
-   * communities that would notify about NOTHING — deferring one whose messages
-   * would notify silently drops the notification the deferral was never meant
-   * to touch. Cascade channel → community → global, mutes folded in as
-   * `nothing` (see useNotifLevels).
+   * Whether a channel's resolved level (`all`/`mentions`) would ever fire. Only
+   * communities that notify about NOTHING may be deferred, or notifications are
+   * silently dropped.
    */
   notifies: (communityIdHex: string, channelIdHex: string) => boolean;
 }
 
 /**
- * Whether the community's rail button currently shows an unread indicator,
- * judged from the local rumor store the way the rail judges it
- * (useConcordUnread + the rail's mute rule): a non-self kind-9 newer than
- * its channel's read stamp lights the dot unless the channel is muted, and a
- * p-tag mention lights the badge regardless of mute.
+ * Whether the community's rail dot is lit, judged like the rail
+ * (useConcordUnread + mute rule; mentions light it regardless of mute).
  */
 async function communityDotted(communityIdHex: string, channels: Channel[], ctx: DotContext): Promise<boolean> {
   if (!ctx.pubkey || channels.length === 0) return false;
@@ -203,11 +155,8 @@ async function communityDotted(communityIdHex: string, channels: Channel[], ctx:
 }
 
 /**
- * Bring a previously-deferred community's stores current: sweep its planes
- * and pull the newest page of every channel (the login warm-up, scoped to
- * one community). Heals the region the shared per-relay cursor skipped past
- * while the community was deferred; anything deeper than a newest page is
- * bridged by the channel's own `c2:` round when it is viewed.
+ * Catch up a previously-deferred community: sweep its planes and pull each
+ * channel's newest page, healing what the shared cursor skipped.
  */
 function catchUpCommunity(
   nostr: Parameters<typeof warmupCommunities>[0],
@@ -225,28 +174,14 @@ function catchUpCommunity(
 }
 
 /**
- * Concord channels for every live community in the membership list, with
- * their stream GroupKeys (rehydrated bundle + persisted control-fold snapshot,
- * local reads only). Registers every stream key for NIP-42 stream auth so the
- * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcordSubs, but
- * keeps the full Channel (the wire decrypts; the native service can't).
+ * Concord channels (with stream keys, from local reads) for every live
+ * community, registering keys for NIP-42 stream auth. Mirrors useConcordSubs
+ * but keeps the full Channel (the wire decrypts).
  *
- * NOT every community, though: a SILENCED one (its notification level would
- * fire about nothing) whose rail button already shows the unread dot is
- * DEFERRED — its channel filters leave the wire until the user navigates in
- * (or the dot clears via a read synced from another device), because a binary
- * dot can't get more lit and its history is pulled on activation anyway
- * ({@link catchUpCommunity}). This is the bandwidth rule that keeps a pageload
- * from replaying every busy-but-ignored community's traffic.
- *
- * The silenced qualifier is load-bearing: deferring a community whose messages
- * WOULD notify (any channel at `all`, or a mention) silently drops the live
- * notification — the wire is the only path that fires one, and the pulled
- * history on later activation is not a notification. So a community that would
- * notify stays on the wire however lit its dot, and only one you've muted to
- * `nothing` trades live delivery for the bandwidth saving. Control planes are
- * deliberately NOT deferred (cheap, and they keep the fold current for the
- * moment the community comes back).
+ * A SILENCED community (would notify about nothing) whose dot is already lit is
+ * DEFERRED until activated — a binary dot can't get more lit, and history is
+ * pulled on activation. The silenced qualifier is load-bearing: the wire is the
+ * only live-notification path. Control planes are never deferred.
  */
 function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; communityIdHex: string; banned: Set<string>; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
   const { nostr } = useNostr();
@@ -265,11 +200,8 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
     [entries],
   );
 
-  // Deferral inputs, read through a ref so read-state churn (every markRead
-  // in the open channel) doesn't rebuild the spec. Changes that matter to the
-  // dot verdict are picked up by the 2-minute refetch below — for the one
-  // case that needs it (a remote read clearing a deferred community's dot),
-  // minutes of extra deferral cost nothing but a slightly later catch-up.
+  // Via a ref so read-state churn doesn't rebuild the spec; the 2-minute
+  // refetch catches dot changes that matter.
   const dotCtxRef = useRef<DotContext>({ pubkey: undefined, readState: {}, isMuted: () => false, notifies: () => true });
   dotCtxRef.current = {
     pubkey: user?.pubkey,
@@ -279,16 +211,12 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
       concordChannelLevel("c2", communityIdHex, channelIdHex) !== "nothing",
   };
 
-  // Navigating into a community must re-run the spec NOW (its filters rejoin
-  // the wire and its catch-up starts), not on the next poll.
+  // Activation must re-run the spec NOW, not on the next poll.
   const [activationEpoch, setActivationEpoch] = useState(0);
   useEffect(() => onActivation(() => setActivationEpoch((n) => n + 1)), []);
 
-  // `listSig` only moves on a new community, a rotated epoch, or a channel
-  // count change — a control edition that alters neither (attaching a
-  // repository, renaming a channel) leaves the key identical, so the spec would
-  // keep its stale view until the poll below. The fold snapshot IS this query's
-  // input, so re-read the moment one lands.
+  // `listSig` misses control editions that change neither epoch nor channel
+  // count (repo attach, rename); re-read when a fold snapshot lands.
   const queryClient = useQueryClient();
   useEffect(
     () =>
@@ -298,14 +226,8 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
       }),
     [queryClient],
   );
-  // A pause (CORD-04 §8) is a control edition on the global c2ctl sub, and for a
-  // community the user isn't viewing it persists no fold — so `onFoldedWrite`
-  // never fires. Recompute on the control-plane bus too, or a background pause
-  // would keep its chat streams on the wire until the 2-minute refetch.
-  //
-  // Matched against the live list first: a re-run re-reads every community's
-  // fold, so firing it for a `c2ctl:` scope this wire doesn't carry would spend
-  // the whole list's IndexedDB reads on someone else's roster edit.
+  // A background pause (CORD-04 §8) persists no fold, so also re-run on
+  // `c2ctl:` for communities this wire carries (others would waste the reads).
   const liveIdsRef = useRef<Set<string>>(new Set());
   liveIdsRef.current = useMemo(() => new Set(entries.map((e) => e.community_id.toLowerCase())), [entries]);
   useEffect(
@@ -325,23 +247,17 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
     queryKey: ["wire", "concord-channels", listSig, activationEpoch],
     enabled: entries.length > 0,
     staleTime: 30_000,
-    // Fold snapshots update out-of-band (community open / control sync) —
-    // re-read periodically to pick up new channels and rotated epochs. This is
-    // a local (IndexedDB) read, but there's no reason to run it while hidden.
+    // Picks up out-of-band fold updates (new channels, rotated epochs).
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      // The first run must see the persisted deferral flags, or a reload
-      // would treat every deferred community as live and skip the catch-up
-      // its cursor gap requires.
+      // Deferral flags must be loaded, or a reload skips owed catch-ups.
       await deferredFlags.ready();
       const out: Array<{ relays: string[]; channel: Channel; communityIdHex: string; banned: Set<string>; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
-        // A dissolved community is a grave: no subscriptions, so nothing new is
-        // received, processed or ingested for it (CORD-02 §9). Local + sticky,
-        // so a relay outage can't quietly resurrect the feed.
+        // Dissolved (CORD-02 §9): no subscriptions; local and sticky.
         if ((await dissolvedAt(community.idHex)) !== undefined) continue;
         const folded = await readControlFold(community.idHex);
         const channels: Channel[] = [];
@@ -350,13 +266,8 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
           channels.push(channel);
         }
 
-        // Two rules below drop this community's chat filters from the wire (a
-        // pause, and the unread-dot deferral), and both owe the SAME durable
-        // IOU: the per-relay cursor keeps advancing on other traffic — DMs,
-        // git, every other community on that host — while the filters are
-        // gone, so the missed region can never be recovered from cursor replay
-        // and whichever path brings the community back live must run the
-        // catch-up first (see `deferredFlags`, `catchUpCommunity`).
+        // Pause and unread-dot deferral both drop chat filters and owe the same
+        // durable catch-up IOU (see `deferredFlags`).
         const scope = concordScope(community.idHex);
         const wasDeferred = (deferredFlags.get(scope) ?? deferredFlags.get(community.idHex) ?? 0) > 0;
         const defer = () => {
@@ -367,39 +278,21 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
           deferredFlags.delete(community.idHex); // pre-scope legacy spelling
         };
 
-        // Freeze: while a community is paused (CORD-04 §8) its chat streams
-        // leave the wire entirely — for EVERYONE, staff included. The pause is
-        // advisory, so a spammer's bad client floods regardless; any client
-        // still subscribed only downloads the wall it would fold away, and a
-        // staffer who needs to act on chat lifts the pause first. The control
-        // plane stays subscribed (useWireConcordControl), so the lift still
-        // lands; an `until` expiry self-resumes with no edition. `readLivePause`
-        // reads the CURRENT pause rather than the persisted fold, which for a
-        // background community can predate it by hours.
-        //
-        // The `defer()` is the load-bearing half: not fetching the pause window
-        // is the point, but resuming as though nothing happened is not. The IOU
-        // makes the resume a catch-up, so the room comes back knowing what it
-        // missed instead of silently believing its history complete.
+        // Paused (CORD-04 §8): chat streams leave the wire for everyone (staff
+        // lift the pause first); control stays subscribed so the lift lands.
+        // `readLivePause` reads the CURRENT pause, not a possibly stale fold.
+        // `defer()` makes the resume a catch-up.
         if (await readLivePause(community, Math.floor(Date.now() / 1000))) {
           defer();
           continue;
         }
 
-        // The unread-dot deferral (see wire/activation.ts). Every path back
-        // to live runs the catch-up, because the shared per-relay cursor
-        // advanced past this community's traffic while it was excluded.
-        //
-        // Only a SILENCED community is eligible: if any channel would notify,
-        // the community stays on the wire regardless of its dot, because the
-        // wire is the only path that fires a live notification and dropping it
-        // is exactly the bug the deferral must not cause. `notifies` short-
-        // circuits before the dot scan, so a notifying community skips it.
+        // Unread-dot deferral (wire/activation.ts), only for SILENCED
+        // communities; `notifies` short-circuits the dot scan.
         const notifies = channels.some((c) =>
           dotCtxRef.current.notifies(community.idHex, c.idHex),
         );
         if (isScopeActivated(scope)) {
-          // Navigated into (this session): live for good.
           if (wasDeferred) {
             clearFlag();
             catchUpCommunity(nostr, entry, community.idHex);
@@ -408,10 +301,7 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
           defer();
           continue;
         } else if (wasDeferred) {
-          // The dot cleared while deferred — a read synced back from another
-          // device. Pin it live for the session: re-deferring on the next
-          // unread would oscillate catch-up pulls against a standing
-          // subscription that costs less.
+          // Dot cleared remotely: pin live for the session (re-deferring would oscillate).
           markScopeLive(scope);
           clearFlag();
           catchUpCommunity(nostr, entry, community.idHex);
@@ -423,16 +313,13 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
             relays: community.relays,
             channel,
             communityIdHex: community.idHex,
-            // The community's banned set (CORD-04) rides into the wire spec so
-            // ingest can keep a banned member's message off the notifier, the
-            // same way `foldTimeline` keeps it off the timeline.
+            // Banned set (CORD-04) so ingest keeps banned members off the notifier.
             banned: folded?.banned ?? new Set<string>(),
             gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
           });
           keys.push(...channel.streams.map((s) => s.group));
         }
-        // Scoped per community, so a relay's NIP-42 challenge only signs the
-        // stream keys it actually hosts (see streamAuth.ts).
+        // Per community, so a relay's NIP-42 challenge signs only keys it hosts (streamAuth.ts).
         registerStreamKeys(keys, community.relays);
       }
       return out;
@@ -442,13 +329,7 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
   return query.data ?? [];
 }
 
-/**
- * Newest store events scanned per relay when judging a server's unread dot.
- * Smaller than the rail's own 300-event scan, deliberately: activity found
- * unread inside this window is unread inside the rail's larger window too, so
- * the wire never defers a server whose rail button isn't visibly dotted — a
- * miss merely keeps the server syncing (the safe direction).
- */
+/** Newest events scanned per relay for a server's dot (smaller than the rail's 300; misses err safe). */
 const NIP29_DOT_SCAN_LIMIT = 100;
 
 /** Group filters per catch-up REQ (relays commonly cap filters-per-REQ ~10-20). */
@@ -461,13 +342,7 @@ interface Nip29DotContext {
   isMuted: (relayUrl: string, groupId: string) => boolean;
 }
 
-/**
- * Whether the server's rail button currently shows an unread indicator,
- * judged from the local event store the way the rail judges it
- * (useRelayUnread + the rail's mute rule): non-self activity newer than its
- * group's read stamp lights the dot unless the group is muted, and a p-tag
- * mention lights the badge regardless of mute.
- */
+/** Whether a NIP-29 server's rail dot is lit, judged like the rail (useRelayUnread + mute rule). */
 async function nip29ServerDotted(
   store: { query(filters: NostrFilter[], opts?: { relay?: string }): Promise<Array<Pick<NostrEvent, "pubkey" | "tags" | "created_at">>> },
   relay: string,
@@ -492,13 +367,8 @@ async function nip29ServerDotted(
 }
 
 /**
- * Bring a previously-deferred NIP-29 server's store current: the newest page
- * of every group, filed under the serving relay and announced on the bus —
- * the `nip29:` sync round's write path, batched across the server's groups.
- * Heals the region the shared per-relay cursor may have skipped past (the
- * relay can carry DM/git filters that kept its cursor advancing while the
- * server's `#h` filter was excluded); deeper history is the group's own
- * `nip29:` round when it is viewed.
+ * Catch up a previously-deferred NIP-29 server: the newest page of every
+ * group, filed under the relay and announced on the bus.
  */
 function catchUpNip29Server(
   nostr: { relay(url: string): { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> } },
@@ -525,8 +395,7 @@ function catchUpNip29Server(
       } catch {
         continue; // best-effort; the group's own round retries on open
       }
-      // Filed under the serving relay (the relay-scoped tenant); per-event
-      // catch so one duplicate/refused row doesn't fail the page.
+      // Per-event catch so one refused row doesn't fail the page.
       await Promise.all(events.map((ev) => store.event(ev, { relay }).catch(() => undefined)));
       for (const ev of events) {
         const h = ev.tags.find(([n]) => n === "h")?.[1];
@@ -542,14 +411,8 @@ function catchUpNip29Server(
 }
 
 /**
- * The unread-dot deferral for NIP-29 servers, over the wire's unioned group
- * list: a server whose rail button already shows the dot has its groups'
- * `#h` filters dropped from the wire until the user navigates into it (or
- * the dot clears via a read synced from another device) — the same rule, and
- * the same catch-up IOU, as the Concord deferral above. NIP-29 is
- * relay-per-community, so the unit of deferral is the relay: its rail button
- * and its dot are per-server, and its channels defer and re-activate
- * together.
+ * Unread-dot deferral for NIP-29 servers — same rule and catch-up IOU as
+ * Concord, with the relay as the unit.
  */
 function useWireNip29Deferral(
   groups: Array<{ id: string; relay: string; buzz?: boolean }>,
@@ -560,14 +423,11 @@ function useWireNip29Deferral(
   const { isChannelMuted } = useMutes();
   const eventStore = useEventStore();
 
-  // Deferral inputs through a ref, so read-state churn (every markRead in the
-  // open channel) doesn't rebuild the spec; the 2-minute refetch picks up the
-  // one change that matters (a remote read clearing a deferred server's dot).
+  // Via a ref so read-state churn doesn't rebuild the spec.
   const dotCtxRef = useRef<Nip29DotContext>({ pubkey: undefined, readState: {}, isMuted: () => false });
   dotCtxRef.current = { pubkey: user?.pubkey, readState, isMuted: isChannelMuted };
 
-  // Navigating into a server must re-run the spec NOW (its filters rejoin
-  // the wire and its catch-up starts), not on the next poll.
+  // Activation must re-run the spec NOW.
   const [activationEpoch, setActivationEpoch] = useState(0);
   useEffect(() => onActivation(() => setActivationEpoch((n) => n + 1)), []);
 
@@ -582,19 +442,13 @@ function useWireNip29Deferral(
     queryKey: ["wire", "nip29-deferral", groupsSig, activationEpoch],
     enabled: groups.length > 0,
     staleTime: 30_000,
-    // A local (IndexedDB) read; the interval re-judges dots that changed
-    // out-of-band (a remote read syncing back). No reason to run it hidden.
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async () => {
-      // The first run must see the persisted deferral flags, or a reload
-      // would treat every deferred server as live and skip the catch-up its
-      // cursor gap may require.
+      // Deferral flags must be loaded, or a reload skips owed catch-ups.
       await deferredFlags.ready();
       const all = groupsRef.current;
-      // Grouped under the NORMALIZED relay — the spelling the read-state keys
-      // and the store's relay scope use; the entries keep their original
-      // relay string for the spec builder (which normalizes again).
+      // Grouped by NORMALIZED relay (read-state/store spelling); entries keep the original.
       const byRelay = new Map<string, typeof all>();
       for (const g of all) {
         const relay = normalizeRelayUrl(g.relay);
@@ -610,7 +464,6 @@ function useWireNip29Deferral(
         const wasDeferred = (deferredFlags.get(scope) ?? 0) > 0;
         const ids = relayGroups.map((g) => g.id);
         if (isScopeActivated(scope)) {
-          // Navigated into (this session): live for good.
           if (wasDeferred) {
             deferredFlags.delete(scope);
             catchUpNip29Server(nostr, relay, ids);
@@ -619,9 +472,7 @@ function useWireNip29Deferral(
           if (!wasDeferred) deferredFlags.set(scope, Math.floor(Date.now() / 1000));
           continue;
         } else if (wasDeferred) {
-          // The dot cleared while deferred — a read synced back from another
-          // device. Pin it live for the session (see the Concord branch above for
-          // why re-deferring would oscillate).
+          // Dot cleared remotely: pin live for the session.
           markScopeLive(scope);
           deferredFlags.delete(scope);
           catchUpNip29Server(nostr, relay, ids);
@@ -661,18 +512,9 @@ function wireGitRepositories(
 }
 
 /**
- * The Concord CONTROL-plane subscription targets for EVERY live community:
- * per community, its control-stream GroupKeys (across held epochs) and relays.
- * Unlike the channel list, this needs NO fold — control keys derive straight
- * from the rehydrated bundle's held roots — so it's a cheap, stable memo that
- * updates only when membership/epochs change.
- *
- * A standing subscription to these authors is what makes a newly-published
- * channel edition land LIVE for a non-open community, so a member added to a
- * new channel sees it appear in the sidebar without waiting for the slow
- * background control-plane sweep (or for the first message to be posted).
- * Every control stream key is registered for NIP-42 so the wire's kind-1059
- * control REQs pass auth-gating relays.
+ * Concord CONTROL-plane targets for every live community (keys derive from the
+ * bundle, no fold needed), so new channel editions land live for non-open
+ * communities. Keys are registered for NIP-42.
  */
 function useWireConcordControl(): Array<{
   relays: string[];
@@ -701,8 +543,7 @@ function useWireConcordControl(): Array<{
         groups,
         refounded: community.rootEpoch > 0n,
       });
-      // Scoped per community: a relay's NIP-42 challenge only signs the control
-      // stream keys it actually hosts (see streamAuth.ts).
+      // Per community (streamAuth.ts).
       registerStreamKeys(groups, community.relays);
     }
     return out;
@@ -710,17 +551,9 @@ function useWireConcordControl(): Array<{
 }
 
 /**
- * The Concord GUESTBOOK-plane subscription targets for EVERY live community:
- * per community, its guestbook-stream GroupKeys (across held epochs) and
- * relays. Like the control set, this needs no fold — the guestbook keys derive
- * straight from the rehydrated bundle's held roots.
- *
- * A standing subscription here is what makes a KICK land promptly. A kick is a
- * guestbook directive and nothing else: it rotates no key and publishes no
- * control edition, so it rings nothing on the `c2ctl` sub and the plane was
- * reached only by `useGuestbook`'s 60s poll and the 5-minute background sweep.
- * Every guestbook stream key is registered for NIP-42 so the wire's kind-1059
- * guestbook REQs pass auth-gating relays.
+ * Concord GUESTBOOK-plane targets for every live community (no fold needed),
+ * so a KICK — which touches no control plane — lands promptly. Keys are
+ * registered for NIP-42.
  */
 function useWireConcordGuestbook(): Array<{
   relays: string[];
@@ -738,7 +571,6 @@ function useWireConcordGuestbook(): Array<{
       const groups = guestbookGroups(community);
       if (groups.length === 0) continue;
       out.push({ relays: community.relays, idHex: community.idHex, groups });
-      // Scoped per community, exactly as the control keys are (see streamAuth.ts).
       registerStreamKeys(groups, community.relays);
     }
     return out;
@@ -746,28 +578,15 @@ function useWireConcordGuestbook(): Array<{
 }
 
 /**
- * THE funnel. One component owns all standing ingestion:
- *
- *   - builds the wire spec (minimal relays + filters — the same information
- *     the APK's persistent notification service is configured with);
- *   - web: holds ONE subscription per relay through the relay pool (which
- *     handles NIP-42 AUTH — user key + Concord stream keys), resuming from
- *     a persisted per-relay cursor so time offline is replayed;
- *   - APK: bridges the native service's buffered/live events into the same
- *     ingest path;
- *   - drains Concord wraps the native service parked while the WebView was down.
- *
- * Everything lands in IndexedDB (armada-events / the Concord rumor store) and the
- * wire bus announces which conversations changed. Hooks hydrate from the
- * stores; none of them hold their own sockets.
+ * THE funnel for all standing ingestion: builds the wire spec (same info the
+ * APK service gets); on web holds ONE resumable subscription per relay via the
+ * pool (NIP-42 handled there); on APK bridges the native service's events and
+ * drains its parked Concord wraps. Everything lands in the stores and the bus
+ * announces changes; hooks hold no sockets.
  */
 export function WireSync() {
-  // Boot sequencing: the wire is the highest-volume ingest driver, and its
-  // replay used to start the moment the providers mounted — competing, on the
-  // one main thread, with the local reads the first paint is made of. The
-  // funnel mounts only once the boot gate opens (first local paint, a fresh
-  // login, or the gate's short timeout); the durable cursors make the later
-  // start lossless.
+  // Mount only once the boot gate opens so the replay doesn't compete with
+  // first-paint reads; durable cursors make the later start lossless.
   const bootGateOpen = useBootGateOpen();
   return bootGateOpen ? <WireSyncInner /> : null;
 }
@@ -787,18 +606,15 @@ function WireSyncInner() {
   const gitRepositories = useMemo(() => wireGitRepositories(concord), [concord]);
   const gitTicketRoots = useWireGitTicketRoots(gitRepositories);
 
-  // NIP-29 groups to subscribe to: the per-server directory discovery (the
-  // primary source — see useWireNip29Groups) UNIONed with the kind-10009
-  // `groups` list (which additionally carries private/closed channels the open
-  // directory hides). De-duplicated by relay+id.
+  // Directory-discovered groups UNION the 10009 `groups` list (which also
+  // carries private channels the directory hides).
   const allNip29Groups = useMemo(() => {
     const byKey = new Map<string, { id: string; relay: string; buzz?: boolean }>();
     for (const g of nip29Groups) {
       if (g.id && g.relay) byKey.set(`${g.relay}\u0000${g.id}`, g);
     }
     for (const g of groupList?.groups ?? []) {
-      // Never overwrite a directory-discovered entry: it carries the relay's
-      // Buzz flag, which the 10009 list doesn't know about.
+      // Never overwrite a directory entry (it carries the Buzz flag).
       const key = `${g.relay}\u0000${g.id}`;
       if (g.id && g.relay && !byKey.has(key)) byKey.set(key, { id: g.id, relay: g.relay });
     }
@@ -807,19 +623,10 @@ function WireSyncInner() {
   // …minus the servers deferred under the unread-dot rule.
   const groups = useWireNip29Deferral(allNip29Groups);
 
-  // The relays to hold the live kind-1059 gift-wrap subscription on. MUST match
-  // the set useDm17's inbox scan reads from (useDm17SyncCtx): our effective DM
-  // relays UNIONED with our PUBLISHED kind-10050 inbox. NIP-17 senders deliver a
-  // wrap to the recipient's published 10050 relays; on a default login
-  // (useOwnDmRelays off) effectiveDmRelays is just the app relays, so without the
-  // union the wire would listen on the wrong relays and never receive the wrap
-  // LIVE — only useDm17's 60s poll (which does union the 10050 relays) would
-  // fetch it, which is exactly the "DMs only show up after ~30-60s / a refresh"
-  // bug. Deduped.
-  // `dmsDisabled` collapses this to empty, which drops every DM filter from the
-  // spec (the DM block loops over `dmRelays`): the account holds no standing
-  // gift-wrap or legacy-DM subscription at all, so unsolicited inbound DMs
-  // never reach the wire and cost no bandwidth.
+  // Live gift-wrap relays: MUST match useDm17's inbox scan — effective DM
+  // relays UNION the published kind 10050 (where senders deliver); otherwise
+  // DMs arrive only via the 60s poll. `dmsDisabled` empties it, dropping every
+  // DM filter.
   const dmRelays = useMemo(
     () =>
       config.dmsDisabled
@@ -834,9 +641,7 @@ function WireSyncInner() {
         pubkey: user?.pubkey,
         groups,
         dmRelays,
-        // The wire field keeps its historical name for native/config
-        // compatibility; it now carries every established legacy-DM author,
-        // including peers recovered from the encrypted conversation index.
+        // Historical name kept for native/config compat: all established legacy-DM authors.
         dmFollows: dmKnownPeers,
         concord,
         concordControl,
@@ -847,8 +652,7 @@ function WireSyncInner() {
     [user?.pubkey, groups, dmRelays, dmKnownPeers, concord, concordControl, concordGuestbook, gitRepositories, gitTicketRoots],
   );
 
-  // The ingest path reads the spec lazily so long-lived subscriptions always
-  // decrypt/scope with the latest keys without resubscribing.
+  // Read lazily so long-lived subs decrypt/scope with the latest keys.
   const specRef = useRef(spec);
   specRef.current = spec;
   const sinksRef = useRef({
@@ -862,23 +666,14 @@ function WireSyncInner() {
     getSelfPubkey: () => user?.pubkey,
   };
 
-  // ── Web sockets: one REQ per relay, resumed from the persisted cursor ─────
-  // Loops are diffed PER RELAY rather than keyed on the whole spec: the spec
-  // settles several times during startup as its inputs resolve (groupList,
-  // followData, concordData, concord folds, git repositories, git ticket
-  // roots), and tearing down every relay's standing REQ on each settle aborted
-  // catch-up replays mid-flight and re-issued/re-authed every subscription —
-  // most with identical filters. Only relays whose own filter set changed are
-  // restarted; the rest keep their round and cursor untouched.
+  // Web sockets: one REQ per relay from the persisted cursor. Diffed PER RELAY:
+  // the spec settles several times at startup, and restarting every relay
+  // aborted replays and re-authed identical subscriptions.
   const quiet = useSyncExternalStore(onBackgroundQuiet, isBackgroundQuiet, () => false);
   const loopsRef = useRef(new Map<string, { sig: string; stop: () => void; bump: () => void }>());
   const loopsOwnerRef = useRef<{ nostr: unknown; pubkey?: string } | null>(null);
-  // Explicit-`since` filters (git child / CI bootstrap timestamps) that have
-  // completed a stored replay this session, keyed relay + filter shape.
-  // Honoring the deep root-based `since` on EVERY loop start re-downloaded the
-  // full comment/status/CI history each time the relay's filters changed; once
-  // a bootstrap replay reaches EOSE that history is in the store, and later
-  // rounds resume from the relay cursor like every other filter.
+  // Explicit-`since` filters (git child / CI bootstraps) whose replay reached
+  // EOSE this session; later rounds resume from the cursor.
   const bootstrappedRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -886,22 +681,14 @@ function WireSyncInner() {
 
     const startRelayLoop = (relay: string, filters: NostrFilter[]) => {
       const controller = new AbortController();
-      // "Restart your round now": aborts the in-flight round and skips any
-      // backoff sleep, so the loop re-REQs immediately. Reassigned each round;
-      // driven by the socket-reopen / tab-visibility effect below.
+      // Aborts the current round and skips backoff sleep (reopen/visibility).
       let bumpRound = () => {};
       void (async () => {
-        // Resubscribe with backoff for the loop's lifetime. NRelay1 keeps
-        // the SOCKET alive across drops, but a relay-initiated CLOSED (an
-        // auth-gating relay rejecting the REQ before AUTH lands, a policy
-        // refusal) terminates the req generator and nothing brings the
-        // subscription back until a spec change or app relaunch — on desktop,
-        // where there is no native-service funnel, that means no live wire
-        // until restart. Each fresh REQ gets a new sub id and with it a fresh
-        // auth-retry from the pool, so the wire heals as soon as AUTH lands.
+        // Resubscribe with backoff: a relay CLOSED (e.g. before AUTH lands)
+        // ends the generator and nothing else revives it — on desktop there's
+        // no native funnel. Each fresh REQ gets a fresh auth retry.
         let backoff = 1_000;
-        // Signal-aware, bump-aware sleep: loop teardown or a socket reopen
-        // resolves it early so the retry never lags behind a live socket.
+        // Wakes early on teardown or socket reopen.
         let wakeSleep: (() => void) | undefined;
         const sleep = (ms: number) =>
           new Promise<void>((resolve) => {
@@ -915,26 +702,15 @@ function WireSyncInner() {
             wakeSleep = finish;
             controller.signal.addEventListener("abort", finish);
           });
-        // The cursors are in KV now, so the first round has to wait for them.
-        // Reading an unwarmed cache would resume from the fresh lookback and
-        // re-ingest the backlog on every launch.
+        // Wait for KV cursors, or every launch re-ingests the backlog.
         await cursors.ready();
-        // Routine rotations are silent in the log; only the first round and
-        // anomalies (swallowed REQ, reopen restart, early CLOSED) speak.
+        // Only the first round and anomalies are logged.
         let firstRound = true;
-        // Whether a round on this loop has completed its stored replay (EOSE).
-        // Two filters shrink their replay `limit` once it has: the DM wrap
-        // filter, which re-rewinds the 2-day backdate window every round, and
-        // the Git ticket child filters, whose 4,000-event bootstrap bound
-        // otherwise applies to every quiet rotation as well. In both cases the
-        // repeat bytes were pure duplicates. Deeper catch-up is backstopped by
-        // the DM poll's periodic full scan and by the Git root/project syncs
-        // respectively (see stampRoundSince).
+        // Once a round reached EOSE, the DM wrap and Git child filters shrink
+        // their replay `limit` (repeats were pure duplicates; see stampRoundSince).
         let replayDone = false;
         while (!controller.signal.aborted) {
           const started = Date.now();
-          // Recompute the resume point each round: the cursor advanced with
-          // everything the previous round ingested.
           const now = Math.floor(Date.now() / 1000);
           const cursor = readCursor(relay);
           const floor = now - MAX_CURSOR_AGE_SECONDS;
@@ -942,14 +718,9 @@ function WireSyncInner() {
             cursor !== undefined ? cursor - CURSOR_OVERLAP_SECONDS : now - FRESH_LOOKBACK_SECONDS,
             cursor !== undefined ? floor : 0,
           );
-          // Abortable round, watched for liveness on a recurring tick:
-          //   - a round that never yields ANYTHING (no EVENT, no EOSE) inside
-          //     SILENT_REQ_TIMEOUT_MS was swallowed — abort and re-REQ;
-          //   - an established round silent past QUIET_ROTATE_MS is rotated —
-          //     a quiet channel and a silently-dead subscription look
-          //     identical from here, and re-REQing from the cursor is
-          //     lossless, so never trust one subscription for long;
-          //   - a socket reopen bumps the round immediately (see relayReopen).
+          // Liveness watchdog: silent past SILENT_REQ_TIMEOUT_MS → re-REQ;
+          // established but quiet past QUIET_ROTATE_MS → rotate (lossless); a
+          // socket reopen bumps immediately (relayReopen).
           const round = new AbortController();
           const roundSignal = AbortSignal.any([controller.signal, round.signal]);
           bumpRound = () => {
@@ -958,10 +729,7 @@ function WireSyncInner() {
             wakeSleep?.();
           };
           let sawAnything = false;
-          // Whether the round's stored replay has finished (EOSE seen): events
-          // after it are LIVE arrivals. Ingest uses this to keep replayed DM
-          // wraps (the wrap filter's since rewinds the NIP-59 backdate window —
-          // see stampRoundSince) from re-firing notifications every round.
+          // After EOSE events are LIVE; keeps replayed DM wraps from re-notifying.
           let eosed = false;
           let lastMsgAt = started;
           let ingested = 0;
@@ -980,15 +748,11 @@ function WireSyncInner() {
             logSync("wire", `${relay}: round open (since=${since}, ${filters.length} filter(s))`);
             firstRound = false;
           }
-          // Partition out explicit-`since` filters still awaiting their
-          // bootstrap replay: they keep their deep timestamp for this round;
-          // everything else — and every filter afterwards — takes the cursor.
+          // Explicit-`since` filters awaiting bootstrap keep their deep timestamp this round.
           const bootKey = (f: NostrFilter) => `${relay}\u0000${JSON.stringify(f)}`;
           const pending = filters.filter((f) => f.since !== undefined && !bootstrappedRef.current.has(bootKey(f)));
           const settled = pending.length === 0 ? filters : filters.filter((f) => !pending.includes(f));
-          // Pre-EOSE events are a stored replay — buffer them and flush in
-          // batches (see REPLAY_BATCH_MAX); post-EOSE events are live and
-          // ingest one-by-one as they arrive.
+          // Pre-EOSE replay is batched (REPLAY_BATCH_MAX); live events ingest one by one.
           let replay: NostrEvent[] = [];
           const flushReplay = async () => {
             if (replay.length === 0) return;
@@ -1010,8 +774,7 @@ function WireSyncInner() {
                   await flushReplay();
                   eosed = true;
                   replayDone = true;
-                  // Bootstrap replay complete. Marked only at EOSE, so a round
-                  // torn down mid-replay retries the deep `since` next round.
+                  // Marked only at EOSE, so a torn-down replay retries.
                   for (const f of pending) bootstrappedRef.current.add(bootKey(f));
                 }
                 if (msg[0] === "EVENT") {
@@ -1028,16 +791,14 @@ function WireSyncInner() {
                 }
               }
             } finally {
-              // A round torn down mid-replay (watchdog, reopen bump, effect
-              // cleanup) still ingests what it already received.
+              // A torn-down round still ingests what it received.
               await flushReplay();
             }
           } catch {
-            // Aborted or transport error — handled by the loop condition.
+            // aborted or transport error; the loop condition handles it
           } finally {
             clearInterval(watchdog);
-            // Release the composite roundSignal's grip on the effect
-            // controller (a naturally-CLOSED round never aborted its own).
+            // Release roundSignal's hold on the effect controller.
             round.abort();
           }
           if (controller.signal.aborted) break;
@@ -1047,8 +808,7 @@ function WireSyncInner() {
               `${relay}: round ended after ${Math.round((Date.now() - started) / 1000)}s (${ingested} event(s) ingested)`,
             );
           }
-          // A session that lived a while earned a prompt retry; a relay
-          // slamming the door (CLOSED right away) backs off up to 60s.
+          // Long-lived sessions reset backoff; immediate CLOSEDs back off up to 60s.
           if (Date.now() - started > 60_000) backoff = 1_000;
           await sleep(backoff + Math.floor(Math.random() * 250));
           backoff = Math.min(backoff * 2, 60_000);
@@ -1061,15 +821,13 @@ function WireSyncInner() {
       };
     };
 
-    // A new pool or user invalidates every loop's captured socket/auth context.
     if (loopsOwnerRef.current?.nostr !== nostr || loopsOwnerRef.current?.pubkey !== user?.pubkey) {
       for (const loop of loops.values()) loop.stop();
       loops.clear();
       loopsOwnerRef.current = { nostr, pubkey: user?.pubkey };
     }
-    // Backgrounded on Android with the native service watching: no loops at
-    // all. The service holds these relays; on resume every loop restarts from
-    // its relay's cursor, which is lossless (see backgroundQuiet.ts).
+    // Android background with the native service watching: no loops; resume
+    // restarts from cursors losslessly (backgroundQuiet.ts).
     const desired = new Map<string, NostrFilter[]>(
       user && !quiet ? spec.subs.map(({ relay, filters }) => [relay, filters]) : [],
     );
@@ -1083,19 +841,13 @@ function WireSyncInner() {
     for (const [relay, filters] of desired) {
       if (!loops.has(relay)) loops.set(relay, startRelayLoop(relay, filters));
     }
-    // Loops deliberately outlive this effect (the teardown effect below owns
-    // them); re-diff only when the actual subscription set changes.
+    // Loops outlive this effect (the teardown effect owns them).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, user?.pubkey, spec.sig, quiet]);
 
-  // A backgrounded browser tab has its timers throttled and its sockets
-  // idled by the engine, so the watchdog's re-REQ (30s/90s) stretches to
-  // minutes and a silently-dead subscription isn't noticed until long after
-  // the user returns. Kick every relay's round the instant the tab becomes
-  // visible again: an immediate re-REQ from the cursor is lossless and
-  // drains anything the throttled round missed, so refocus is prompt instead
-  // of waiting out a throttled watchdog tick. Socket reopens kick just the
-  // affected relay's round the same way (see relayReopen.ts).
+  // Throttled background tabs stretch the watchdog to minutes: kick every
+  // relay's round when the tab becomes visible (socket reopens do the same per
+  // relay — relayReopen.ts).
   useEffect(() => {
     const offReopen = onRelayReopened((url) => loopsRef.current.get(url)?.bump());
     const onVisible = () => {
@@ -1111,13 +863,11 @@ function WireSyncInner() {
     };
   }, []);
 
-  // ── APK bridge: the persistent service is a funnel into the same ingest ──
   useEffect(() => {
     if (!hasNativeNotificationService()) return;
     let cancelled = false;
 
-    // One relay's worth of events per call: the store files NIP-29 data under
-    // the relay that served it, so a batch spanning relays could not be routed.
+    // One relay per call: NIP-29 data is filed under its serving relay.
     const ingest = (raw: string[], live: boolean, relay: string | undefined): Promise<void> => {
       const events: NostrEvent[] = [];
       for (const json of raw) {
@@ -1133,13 +883,9 @@ function WireSyncInner() {
       return Promise.resolve();
     };
 
-    // Route what the service received while the WebView was down (open /
-    // resume). The events are already IN the store — service and WebView share
-    // one native ArmadaDB — so this is not how they become durable; it is how
-    // they get a pass through ingest (parked wraps, wire scopes, notification
-    // candidates). A page is acked only AFTER ingest completes, so a webview
-    // crash mid-page replays instead of dropping the routing. NOT live: the
-    // service already notified for these.
+    // Drain what the service received while the WebView was down: already in
+    // the shared native DB, but it needs an ingest pass (parked wraps, scopes).
+    // Acked only after ingest; NOT live (the service already notified).
     let draining = false;
     const drain = async () => {
       if (draining) return; // resume + mount can overlap; pages are sequential
@@ -1153,7 +899,7 @@ function WireSyncInner() {
           await ArmadaNotification.ackDrain({ ids, relay });
         }
       } catch {
-        // Bridge unavailable / mid-drain failure — the unacked page replays.
+        // unacked page replays
       } finally {
         draining = false;
       }
@@ -1172,9 +918,7 @@ function WireSyncInner() {
 
     let liveHandle: { remove: () => void } | undefined;
     ArmadaNotification.addListener("relayEvent", ({ event, relay }) => {
-      // Quiet: the service has already stored and notified this one, and the
-      // resume drain routes it — a second pass now is exactly the work being
-      // shed (see backgroundQuiet.ts).
+      // Quiet: the service stored/notified it; the resume drain routes it.
       if (isBackgroundQuiet()) return;
       void ingest([event], true, relay);
     })
@@ -1191,20 +935,13 @@ function WireSyncInner() {
     };
   }, []);
 
-  // ── Parked-wrap drain: decrypt what the service left us, as keys appear ──
-  // Covers chat wraps (→ rumor store, `c2:` scope), control-plane wraps
-  // (→ opened-event store, `c2ctl:` scope) and guestbook-plane wraps (→ the same
-  // store, `c2gb:` scope). The native service parks any wrap it can't open; the
-  // wire holds the keys, so it drains them here whenever the spec (hence the
-  // held key set) changes. useControlEvents no longer polls to drain parked
-  // control wraps — this is the single drain for all three planes.
+  // Parked-wrap drain (chat → `c2:`, control → `c2ctl:`, guestbook → `c2gb:`):
+  // the native service parks wraps it can't open; drain whenever the held key
+  // set (spec) changes. The single drain for all three planes.
   useEffect(() => {
     if (spec.concordByPk.size === 0 && spec.concordCtlByPk.size === 0 && spec.concordGbByPk.size === 0) return;
     let cancelled = false;
-    // Debounce: spec.sig fires 4-6 times during startup as queries resolve
-    // (groupList, followData, concordData, concord, concordControl). Without
-    // a delay each firing kicks off IDB reads + openChatBatch + IDB writes
-    // concurrently, monopolising the main thread before the UI is interactive.
+    // Debounced: spec.sig fires several times at startup.
     const timer = setTimeout(() => {
       void (async () => {
         const drainStart = performance.now();
@@ -1215,23 +952,17 @@ function WireSyncInner() {
             ...spec.concordGbByPk.keys(),
           ]);
           if (parked.length === 0 || cancelled) return;
-          // WALL CLOCK for the whole drain, against `crypto.openChatBatch`'s
-          // CPU-only total. The gap between the two is the slicing overhead:
-          // `setTimeout(0)` is clamped to ~4ms past nesting depth 5, so a
-          // thousand wraps at a 5ms slice can spend more time yielding than
-          // decrypting. `peekPendingWraps` reads up to 1000 (rumorStore).
+          // Wall clock vs openChatBatch's CPU total shows slicing overhead
+          // (setTimeout(0) clamps to ~4ms).
           perfMark("wire.parked drain start", `${parked.length} wrap(s)`);
           const scopes = new Set<string>();
           const acked: string[] = [];
 
-          // Chat wraps → rumor store, grouped per owning channel.
           const byChannel = new Map<Channel, NostrRumor[]>();
-          // Control wraps → opened-event store, grouped per owning community.
           const ctlByCommunity = new Map<
             string,
             { groups: StreamKeyView[]; refounded: boolean; wraps: NostrRumor[] }
           >();
-          // Guestbook wraps → opened-event store, grouped per owning community.
           const gbByCommunity = new Map<string, { groups: StreamKeyView[]; wraps: NostrRumor[] }>();
           for (const wrap of parked) {
             const channel = spec.concordByPk.get(wrap.pubkey);
@@ -1263,16 +994,12 @@ function WireSyncInner() {
           }
 
           for (const [channel, wraps] of byChannel) {
-            // No community for this channel means no tenant to write to, so
-            // neither store nor ACK — the wraps stay parked for a later drain
-            // (a notified message must never be locally destructible).
+            // No community → no tenant: leave parked (never store nor ACK).
             const communityIdHex = spec.concordCommunityByChannel.get(channel.idHex);
             if (!communityIdHex) continue;
             const opened = await openChatBatch(wraps, channel);
             if (opened.length === 0) continue;
-            // ACK only what actually landed: a wrap is deleted on the
-            // strength of its rumor being stored, and a notified message must
-            // never be locally destructible.
+            // ACK only what landed: a notified message must never be locally destructible.
             if (!(await writeRumors(communityIdHex, opened))) continue;
             scopes.add(`c2:${channel.idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
@@ -1300,7 +1027,7 @@ function WireSyncInner() {
           ackPendingWraps(acked);
           if (scopes.size > 0) emitWireScopes(scopes);
         } catch {
-          // Best-effort — wraps stay parked for the next pass.
+          // best-effort; wraps stay parked
         } finally {
           perfCount("wire.parked drain (wall)", performance.now() - drainStart);
         }

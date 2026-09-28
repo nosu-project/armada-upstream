@@ -47,17 +47,12 @@ import { shortTimeAgo } from "@/lib/formatTime";
 import { toast } from "@/hooks/useToast";
 import { useEventStore } from "@/hooks/useEventStore";
 
-/** Render cap before "Show all" — the house pattern is slicing, not virtualization. */
+/** Render cap before "Show all" (slicing, not virtualization). */
 const RENDER_CAP = 150;
 
 /**
- * The Members tab: the community's full roster — searchable, sortable,
- * filterable, multi-selectable — with mass moderation as the point.
- *
- * Epoch health (the old Member health view) lives on as one compact strip and
- * a filter: a member last seen posting under an older epoch never adopted a
- * key rotation, and "Send keys" re-hands them the current ones via a Direct
- * Invite. Detection is unchanged: observed message epochs only.
+ * Full community roster with mass moderation. Epoch health: a member last seen
+ * under an older epoch missed a rotation; "Send keys" re-sends via Direct Invite.
  */
 export function MembersView({
   community,
@@ -65,7 +60,7 @@ export function MembersView({
   canModerate,
 }: {
   community: Community;
-  /** The page's memberlist — the keep-list a rotating mass ban preserves. */
+  /** The keep-list a rotating mass ban preserves. */
   memberPubkeys: string[];
   canModerate: boolean;
 }) {
@@ -79,8 +74,6 @@ export function MembersView({
   const { data: folded } = useControlFold(community);
   const moderation = useModeration(community, memberPubkeys);
   const { sendDirectInvite } = useInviteActions(community);
-  // The control-plane watchdog: authors whose editions the fold refused. A
-  // banned actor is the Banned view's story; here we surface the un-dealt-with.
   const { actors: suspiciousActors } = useSuspiciousActivity(community, folded);
   const suspiciousOf = useMemo(() => {
     const map = new Map<string, SuspiciousActor>();
@@ -89,7 +82,6 @@ export function MembersView({
   }, [suspiciousActors]);
   const suspiciousSet = useMemo(() => new Set(suspiciousOf.keys()), [suspiciousOf]);
 
-  // Newest epoch + newest activity ms observed per author across all channels.
   const observed = useMemo(() => {
     const epochOf = new Map<string, bigint>();
     const seenMs = new Map<string, number>();
@@ -107,12 +99,7 @@ export function MembersView({
 
   const { members, coalesced } = useMembers(community, observed.seenMs);
 
-  // Muted people leave the roster like they leave every other list. This is
-  // the one place that costs something — a moderator can't ban someone they
-  // can't see — so the trade is stated rather than hidden: unmute from
-  // Settings › Muted people, act, and mute again. Hiding them here but not in
-  // the sidebar roster would be the worse answer, since this view is open to
-  // every member, not just staff.
+  // Muted people are hidden here too (unmute to act on them), since this view is open to all members.
   const allRows = useMemo(
     () =>
       buildMemberRows({
@@ -129,7 +116,6 @@ export function MembersView({
     [members, coalesced, observed, folded, community, user, suspiciousSet, mutedPubkeys],
   );
 
-  // ── Search / filter / sort state ──────────────────────────────────────────
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<MemberSortKey>("role");
   const [roleFilter, setRoleFilter] = useState<string>("all"); // "all" | "none" | roleId
@@ -138,15 +124,12 @@ export function MembersView({
   const [inviterFilter, setInviterFilter] = useState<string>("all"); // "all" | "any" | creator hex
   const [showAll, setShowAll] = useState(false);
 
-  // Batch-resolve profiles for the whole roster so search and the name map see
-  // every member, not just rows that happen to have rendered (the
-  // useMentionNameMap pattern; results land in the shared ['author', pk] cache).
+  // Batch-resolve so search sees every member, not just rendered rows.
   const pubkeys = useMemo(() => allRows.map((r) => r.pubkey), [allRows]);
   const profileResults = useQueries({
     queries: pubkeys.map((pk) => authorQueryOptions(queryClient, eventStore, pk)),
   });
-  // Stable serialization: the map identity changes only when a resolved
-  // profile actually changes, not on every render as query objects churn.
+  // Stable key so the map changes only when a resolved profile does.
   const profileKey = pubkeys
     .map((pk, i) => `${pk}:${profileResults[i]?.data?.metadata?.name ?? ""}:${profileResults[i]?.data?.metadata?.display_name ?? ""}:${profileResults[i]?.data?.metadata?.nip05 ?? ""}`)
     .join("|");
@@ -174,18 +157,15 @@ export function MembersView({
       viaInvite: inviterFilter === "any",
       inviter: inviterFilter !== "all" && inviterFilter !== "any" ? inviterFilter : undefined,
     });
-    // The alarm outranks every sort key: flagged rows ride on top.
     return hoistSuspicious(sortMemberRows(filtered, sortKey));
   }, [allRows, query, roleFilter, behindOnly, suspiciousOnly, inviterFilter, sortKey, profileOf]);
 
   const visible = showAll ? rows : rows.slice(0, RENDER_CAP);
   const visibleOrder = useMemo(() => visible.map((r) => r.pubkey), [visible]);
 
-  // ── Selection ─────────────────────────────────────────────────────────────
   const [selection, setSelection] = useState<SelectionState>(emptySelection());
 
-  // A changed filter hides rows; hidden-but-selected members must not ride
-  // invisibly into a mass action, so the selection resets outright.
+  // Hidden-but-selected members must not ride into a mass action, so reset.
   const filterSig = `${query}|${roleFilter}|${behindOnly}|${suspiciousOnly}|${inviterFilter}`;
   const prevFilterSig = useRef(filterSig);
   useEffect(() => {
@@ -194,7 +174,6 @@ export function MembersView({
       setSelection(emptySelection());
     }
   }, [filterSig]);
-  // Roster churn (a member left, was banned elsewhere) prunes instead.
   const visibleSet = useMemo(() => new Set(visibleOrder), [visibleOrder]);
   useEffect(() => {
     setSelection((s) => pruneSelection(s, visibleSet));
@@ -222,7 +201,6 @@ export function MembersView({
     });
   };
 
-  // ── Mass actions ──────────────────────────────────────────────────────────
   const [kickTargets, setKickTargets] = useState<string[] | null>(null);
   const [banTargets, setBanTargets] = useState<string[] | null>(null);
   const [healing, setHealing] = useState<{ done: number; total: number } | null>(null);
@@ -239,8 +217,7 @@ export function MembersView({
     setHealing({ done: 0, total: healTargets.length });
     let sent = 0;
     const failed: string[] = [];
-    // Sequential on purpose: each invite is a signer round-trip plus an inbox
-    // relay lookup, and a remote signer hammered in parallel wedges.
+    // Sequential: remote signers wedge under parallel load.
     for (const [i, pk] of healTargets.entries()) {
       try {
         await sendDirectInvite({ recipientPubkey: pk });
@@ -270,10 +247,7 @@ export function MembersView({
     [folded],
   );
 
-  // Viewport breakpoints lie inside panes, so "is this list cramped?" has to be
-  // measured off the pane itself. Compact drops the joined chip; minimal (the
-  // sidebar-beside-pane squeeze) drops the times entirely — name and rank
-  // survive, everything else lives in tooltips and the sort.
+  // Measure the pane itself (viewport breakpoints lie inside panes).
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [density, setDensity] = useState<"full" | "compact" | "minimal">("full");
   useEffect(() => {
@@ -325,7 +299,6 @@ export function MembersView({
         </button>
       )}
 
-      {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-40 flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -419,7 +392,6 @@ export function MembersView({
         </Button>
       )}
 
-      {/* Bulk action bar */}
       {canModerate && selected.length > 0 && (
         <div className="sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur pb-safe">
           <span className="text-sm font-medium">{selected.length} selected</span>
@@ -508,8 +480,6 @@ export function MembersView({
   );
 }
 
-// ── Rows ─────────────────────────────────────────────────────────────────────
-
 const JOIN_PROVENANCE: Record<MemberDirectoryRow["joinKind"], string> = {
   join: "From their own join.",
   snapshot: "Estimated — carried over by a key rotation, so this is the rotation's time, not the true join.",
@@ -552,15 +522,12 @@ function MemberRow({
             : "bg-foreground/5"
       } ${selectable ? "cursor-pointer select-none" : ""}`}
       onClick={selectable ? (e) => onToggle(e.shiftKey) : undefined}
-      // Shift-click must range-select, not highlight text.
       onMouseDown={selectable ? (e) => e.shiftKey && e.preventDefault() : undefined}
     >
       {selectable && (
         <Checkbox
           checked={selected}
-          // One handler, not onCheckedChange too — both fire on a click and
-          // would toggle twice. Radix renders a button, so keyboard activation
-          // also arrives here as a click.
+          // Only onClick: onCheckedChange would toggle twice.
           onClick={(e) => {
             e.stopPropagation();
             onToggle(e.shiftKey);
@@ -574,10 +541,7 @@ function MemberRow({
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>
       </Avatar>
-      {/* flex-auto, not flex-1: with basis 0% the name only gets leftover space
-          and a tight row crushes it to nothing while the time chips hold width.
-          Basis auto starts everyone at natural size, then the chips' higher
-          shrink factors make THEM give way first. */}
+      {/* flex-auto, not flex-1: with basis 0% the chips would crush the name. */}
       <span className="min-w-0 flex-auto truncate font-medium">
         <DisplayName pubkey={row.pubkey} name={name} />
         {row.isSelf && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>}
@@ -621,9 +585,7 @@ function MemberRow({
         </Tooltip>
       )}
 
-      {/* Compact time chips that SHRINK (min-w-0 + truncate) before the name
-          does — viewport breakpoints lie inside panes, so the squeeze has to
-          come from flex, not from sm:/md:. Higher shrink factors give way first. */}
+      {/* Chips shrink before the name (flex, not breakpoints). */}
       {density === "full" && (
         <Tooltip>
           <TooltipTrigger asChild>

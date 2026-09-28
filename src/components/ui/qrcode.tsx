@@ -9,14 +9,8 @@ interface QRCodeCanvasProps {
 }
 
 /**
- * A QR code rendered as an `<img>` from an SVG data URL — never a `<canvas>`.
- *
- * Drawing to a canvas is fine, but reading one back (`toDataURL`/`getImageData`)
- * is exactly what canvas-fingerprint blockers (Brave, Tor Browser,
- * `resistFingerprinting`, CanvasBlocker-type extensions) poison or refuse, which
- * can blank a QR. SVG never touches a canvas, so it is immune to any canvas
- * policy; carried as a data URL (not innerHTML) the browser script-sandboxes it.
- * The `Canvas` name is retained for its call sites.
+ * QR code as an `<img>` from an SVG data URL, never a `<canvas>`: fingerprint
+ * blockers poison canvas readback. Name kept for call sites.
  */
 export function QRCodeCanvas({ value, size = 256, level = 'M', className }: QRCodeCanvasProps) {
   const [dataUrl, setDataUrl] = useState('');
@@ -41,8 +35,7 @@ export function QRCodeCanvas({ value, size = 256, level = 'M', className }: QRCo
     };
   }, [value, size, level]);
 
-  // Hold the layout with a sized placeholder until the SVG is ready, so an
-  // empty `src` never flashes a broken-image icon.
+  // Sized placeholder so an empty `src` never flashes a broken image.
   if (!dataUrl) {
     return <div style={{ width: size, height: size }} className={className} />;
   }

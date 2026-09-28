@@ -12,35 +12,23 @@ import { cn } from "@/lib/utils";
 
 import type { ChannelView } from "@/concord/lib/types";
 
-/**
- * What a new channel opens to (CORD-03 §2 `view`): one small segmented
- * control, icon and a word each. No blurbs — the forum's own empty state
- * explains itself the first time it is opened, and the choice can be flipped
- * later from the channel's settings.
- */
+/** What a new channel opens to (CORD-03 §2 `view`); changeable later. */
 const VIEW_OPTIONS: ReadonlyArray<{ view: ChannelView; label: string; icon: typeof Hash }> = [
   { view: "chat", label: "Text", icon: Hash },
   { view: "forum", label: "Forum", icon: MessageSquareText },
 ];
 
-/** The create-text options the page's handler takes. */
 export interface NewTextChannelOptions {
   isPrivate?: boolean;
   accessRoleName?: string;
-  /** The presentation the channel opens to; `chat` when omitted. */
   view?: ChannelView;
 }
 
-/** Re-exported under its original name for the page's handler signature. */
 export type WizardRepository = PickedRepository;
 
-/**
- * A text channel is what "create a channel" means; the repository path is a
- * detour off it. There is no chooser step, so `text` is where the dialog opens.
- */
+/** No chooser: the dialog opens on `text`; repo is a detour. */
 type Step = "text" | "repo" | "confirm";
 
-/** The glyph frame the wizard steps use, sized down for a dialog. */
 function StepGlyph({ children }: { children: ReactNode }) {
   return (
     <div className="flex size-16 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
@@ -49,16 +37,7 @@ function StepGlyph({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * Create a channel: a plain text channel, or a repository channel that ties a
- * NIP-34 repo to it — found by searching the public ngit directory or by pasting
- * an naddr / nostr:// address from a git client.
- *
- * Text is the default and the repository path is a secondary door at the bottom
- * of it, rather than the two being equal halves of a chooser screen: naming a
- * text channel is the overwhelmingly common case, and it used to cost a step of
- * its own before you could type anything.
- */
+/** Create a text/forum channel, or a repository channel tied to a NIP-34 repo. */
 export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onCreateText, onCreateRepository }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -73,14 +52,10 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   const [error, setError] = useState<string | null>(null);
   const [isPrivate, setIsPrivate] = useState(true);
   const [view, setView] = useState<ChannelView>("chat");
-  // Access lives under a disclosure: most channels take the default, and the
-  // collapsed row still names it so the default is never a surprise.
   const [accessOpen, setAccessOpen] = useState(false);
-  // The access role's name, display only: the binding is the role's scope
-  // (CORD-04 §2). Left empty it matches the channel, the common case.
+  // Display only; the binding is the role's scope (CORD-04 §2).
   const [roleName, setRoleName] = useState("");
 
-  // Fresh dialog every time it opens.
   useEffect(() => {
     if (!open) return;
     setStep("text");
@@ -111,16 +86,13 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
         await onCreateRepository(channelName, selected);
         toast({ title: "Repository channel created", description: `#${channelName} · ${selected.displayName}` });
       } else {
-        // `chat` is the default and rides as an ABSENT field, so a plain
-        // public text channel still creates with no options at all.
+        // `chat` rides as an ABSENT field.
         const opts: NewTextChannelOptions = {
           ...(isPrivate ? { isPrivate: true, accessRoleName: roleName.trim() || undefined } : {}),
           ...(view === "forum" ? { view } : {}),
         };
         await onCreateText(channelName, Object.keys(opts).length > 0 ? opts : undefined);
-        // A newborn private channel has an access role nobody holds yet, so
-        // point at the door that grants it rather than leaving the creator in
-        // a room that looks like it simply has no members.
+        // A newborn private channel's access role has no holders; point at granting it.
         const noun = view === "forum" ? "Forum" : "Channel";
         toast(
           isPrivate
@@ -139,7 +111,6 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     }
   }, [name, creating, step, selected, isPrivate, view, roleName, onCreateRepository, onCreateText, onOpenChange]);
 
-  // The repository detour is the only thing there is to come back from.
   const back = step === "repo"
     ? () => setStep("text")
     : step === "confirm"
@@ -149,7 +120,6 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   return (
     <Dialog open={open} onOpenChange={(next) => !creating && onOpenChange(next)}>
       <ChromeDialogContent title="Create a channel">
-        {/* Mirrors the close button's corner, as the wizard's header does. */}
         {back && (
           <Button
             variant="ghost"
@@ -163,8 +133,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
           </Button>
         )}
 
-        {/* The chrome card is a grid; min-w-0 stops an unbreakable string (a hex
-            identifier, a long URL) from widening the whole dialog. */}
+        {/* min-w-0 stops unbreakable strings from widening the grid dialog. */}
         <div className="flex min-w-0 flex-col items-center gap-5 text-center">
           <StepGlyph>
             {step === "text" ? <Hash className="size-7" /> : <FolderGit2 className="size-7" />}
@@ -203,7 +172,6 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 className="h-12 text-base"
               />
 
-              {/* Text or forum: a segmented control, nothing to read. */}
               <div className="flex rounded-md bg-secondary/50 p-0.5" role="radiogroup" aria-label="Channel type">
                 {VIEW_OPTIONS.map((option) => {
                   const selectedView = option.view === view;
@@ -286,8 +254,6 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 {creating ? <Loader2 className="size-4 animate-spin" /> : "Create channel"}
               </Button>
 
-              {/* The secondary door. Below the primary action and quieter than
-                  it, so the common case is never a choice you have to make. */}
               <div className="flex items-center gap-3 pt-1">
                 <span className="h-px flex-1 bg-border" />
                 <span className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">or</span>

@@ -9,10 +9,8 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 export const KIND_RELAY_LIST = 10002;
 
 /**
- * A signed relay list controls live sockets, fan-out and background work. Keep
- * a malformed or unexpectedly huge list from turning one login into an
- * unbounded connection storm. NIP-65 recommends only 2-4 relays per category;
- * sixteen still leaves ample room for overlap and migrations.
+ * Cap on relays per list, so a malformed or huge signed list can't cause a
+ * connection storm. NIP-65 recommends 2-4 per category.
  */
 export const MAX_RELAY_LIST_RELAYS = 16;
 
@@ -29,17 +27,12 @@ interface RelayQueryClient {
       opts: { signal: AbortSignal },
     ): Promise<NostrEvent[]>;
     /**
-     * The raw subscription stream. When present it is read instead of
-     * `query()`, which resolves a CLOSED subscription to `[]` exactly as an
-     * empty EOSE (see `strictRelayQuery.ts`). Optional so test doubles need
-     * not provide it.
+     * Raw stream, preferred over `query()`, which resolves a CLOSED subscription to
+     * `[]` like an empty EOSE (see `strictRelayQuery.ts`). Optional for test doubles.
      */
     req?: ReqRelay["req"];
   };
-  /**
-   * Pool-wide read, used only as a fallback when no explicit relays are given
-   * (see `queryExplicitRelays`). Optional so test doubles need not provide it.
-   */
+  /** Pool-wide read, used only when no explicit relays are given. Optional for test doubles. */
   query?(
     filters: NostrFilter[],
     opts: { signal: AbortSignal },
@@ -55,19 +48,10 @@ export interface ExplicitRelayQueryResult {
 
 export interface ExplicitQueryOptions {
   /**
-   * Once the FIRST relay settles, wait at most this long for the rest before
-   * resolving with whatever has answered. A relay still in flight when the
-   * window closes is reported as neither `answered` nor `failed` — its socket
-   * keeps running under `signal`, it simply stops holding the read open. Omit
-   * to wait for every relay (bounded only by `signal`, the pre-existing
-   * behavior).
-   *
-   * The login sync gate passes this so one dead relay in a fan-out (a
-   * `wss://…` that never upgrades) can't hold a phase's "establishing …" line
-   * spinning for the full step timeout after every reachable relay has already
-   * answered. Leaving a laggard OUT of `failed` rather than in it keeps the
-   * conservative direction for list writes: absence stays non-authoritative
-   * (we did not hear from that relay) instead of looking like a hard failure.
+   * After the FIRST relay settles, wait at most this long for the rest. Relays
+   * still in flight count as neither `answered` nor `failed` (absence stays
+   * non-authoritative for list writes). Lets the login sync gate ignore a dead
+   * relay. Omit to wait for every relay.
    */
   graceMs?: number;
 }
@@ -78,10 +62,8 @@ type SettleState<T> =
   | { status: "pending" };
 
 /**
- * Like `Promise.allSettled`, but if `graceMs` is given the whole batch resolves
- * once the first promise settles plus `graceMs` — promises still outstanding
- * then are left `pending` (and never rejected on our behalf; their own
- * rejection is swallowed so nothing dangles).
+ * `Promise.allSettled`, but with `graceMs` resolves at first settle + `graceMs`;
+ * outstanding promises stay `pending` (their rejections are swallowed).
  */
 async function settleWithGrace<T>(
   promises: Promise<T>[],
@@ -173,10 +155,7 @@ export function relayListIsNewerThanMetadata(
   return current.eventId === undefined || candidate.id < current.eventId;
 }
 
-/**
- * Parse and normalize a kind-10002 event. Bare `r` tags are read+write;
- * duplicate read/write tags for one URL are merged instead of first-wins.
- */
+/** Parse a kind-10002 event. Bare `r` tags are read+write; duplicate tags for a URL are merged. */
 export function parseRelayList(event: Pick<NostrEvent, "tags">): RelayPreference[] {
   const byUrl = new Map<string, RelayPreference>();
 
@@ -226,14 +205,8 @@ export function buildRelayListTags(relays: RelayPreference[]): string[][] {
 }
 
 /**
- * Batch-verify a relay result set OFF the main thread, deduped by id, and drop
- * the copies that fail. A cold community/DM switch resolves several of these
- * lists at once (follow, mute, groups, DM relays, portable setup), each a
- * first-seen batch, and verifying them one synchronous Schnorr at a time on
- * this thread profiled at ~950ms of a switch — a single frozen frame. This
- * routes the EC through the worker pool (`verifyPool`) via the same memoized
- * batch verifier the relay inbox uses, so a duplicate — or a later
- * {@link newestRelayList} over the same events — pays no EC at all.
+ * Batch-verify off the main thread via `verifyPool` (memoized), deduped by id,
+ * dropping failures. Synchronous Schnorr for several lists froze a cold switch ~950ms.
  */
 async function verifyRelayEvents(events: NostrEvent[]): Promise<NostrEvent[]> {
   if (events.length === 0) return [];
@@ -241,14 +214,7 @@ async function verifyRelayEvents(events: NostrEvent[]): Promise<NostrEvent[]> {
   return events.filter((_, index) => verdicts[index]);
 }
 
-/**
- * Newest replaceable event: highest timestamp, then lowest id on a tie.
- *
- * Verifies through the memo (`verifyEventOnce`): its inputs have usually
- * already passed {@link verifyRelayEvents}, so this is a memo hit with no EC —
- * and the single-candidate path (`newerRelayListUpdate`) still pays exactly one
- * Schnorr verify.
- */
+/** Newest replaceable event (highest timestamp, then lowest id). Verification is usually a memo hit. */
 export function newestRelayList(events: NostrEvent[]): NostrEvent | undefined {
   return events
     .filter((event) => event.kind === KIND_RELAY_LIST && verifyEventOnce(event))
@@ -297,7 +263,6 @@ export async function queryExplicitRelays(
   return (await queryExplicitRelaysWithStatus(nostr, relayUrls, filters, signal, opts)).events;
 }
 
-/** The status-bearing form used when an empty successful read matters. */
 export async function queryExplicitRelaysWithStatus(
   nostr: RelayQueryClient,
   relayUrls: Iterable<string>,
@@ -306,10 +271,8 @@ export async function queryExplicitRelaysWithStatus(
   opts?: ExplicitQueryOptions,
 ): Promise<ExplicitRelayQueryResult> {
   const urls = uniqueRelayUrls(relayUrls);
-  // No explicit relays to scope to — e.g. the app relays are switched off and
-  // no NIP-65 write relays have been adopted. Reading nothing would silently
-  // drop account-data singletons that the general pool can still reach, so fall
-  // back to a pool-wide read (the pre-scoping behavior) rather than return [].
+  // No explicit relays (app relays off, no NIP-65 writes adopted): fall back to a
+  // pool-wide read rather than silently dropping account-data singletons.
   if (urls.length === 0) {
     if (!nostr.query) return { events: [], answered: [], failed: [] };
     try {
@@ -319,9 +282,7 @@ export async function queryExplicitRelaysWithStatus(
       return { events: [], answered: [], failed: [] };
     }
   }
-  // A relay that CLOSED the read (auth-required, rate-limited) must land in
-  // `failed`, not `answered`: an empty answered read is what the list writers
-  // take as proof that no list exists.
+  // A CLOSED read must land in `failed`: an empty answered read is proof of "no list" to writers.
   const settled = await settleWithGrace(
     urls.map((url) => {
       const relay = nostr.relay(url);
@@ -335,13 +296,9 @@ export async function queryExplicitRelaysWithStatus(
   for (const result of settled) {
     if (result.status === "fulfilled") all.push(...result.value);
   }
-  // Read the settle states with the events they came with, BEFORE the verify is
-  // awaited. `settleWithGrace` keeps writing into `settled` as laggards land,
-  // and the await below is not free of macrotasks — the inline verify yields
-  // every 5ms and a pool round is longer still. Read after it, a relay that
-  // answered inside that window would be reported as having answered while the
-  // events it returned were already left out of `all`; that pair is exactly
-  // what a list write reads as an authoritative empty read.
+  // Read settle states BEFORE awaiting the verify: `settleWithGrace` keeps mutating
+  // `settled`, and a relay answering during the await would otherwise be reported
+  // as answered with its events missing — an authoritative-looking empty read.
   const answered = urls.filter((_, index) => settled[index]?.status === "fulfilled");
   const failed = urls.filter((_, index) => settled[index]?.status === "rejected");
   const byId = new Map<string, NostrEvent>();

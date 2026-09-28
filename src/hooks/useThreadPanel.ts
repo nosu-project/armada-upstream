@@ -7,57 +7,37 @@ import { cn } from "@/lib/utils";
 import type { ChatMsg } from "@/components/chat/transport";
 import type { Concord2Route, Nip29Route } from "@/lib/routes";
 
-/** The surfaces that have a thread panel. DMs have no threads (see `parseChatRoute`). */
+/** DMs have no threads (see `parseChatRoute`). */
 export type ThreadCapableRoute = Nip29Route | Concord2Route;
 
-/** How long the panel stays mounted after closing, matching its slide-out. */
+/** Matches the slide-out animation. */
 const SLIDE_OUT_MS = 200;
 
 export interface ThreadPanelState {
-  /** The open thread's root, once it resolves against loaded history. */
   threadRoot: ChatMsg | undefined;
-  /** The root to RENDER — outlives `threadRoot` through the slide-out. */
+  /** Outlives `threadRoot` through the slide-out. */
   lastThreadRoot: ChatMsg | undefined;
-  /** Whether the panel is expanded to full width (wide viewports). */
   expanded: boolean;
   setExpanded: (expanded: boolean) => void;
-  /**
-   * Classes for the CHAT column beside the panel. While the panel is expanded
-   * to full width the chat collapses out of the way rather than unmounting, so
-   * reopening it doesn't rebuild the timeline or lose its scroll position.
-   */
+  /** When expanded, the chat collapses rather than unmounting, keeping its scroll position. */
   chatColumnClass: string;
-  /** Whether the reply composer should take focus when the panel opens. */
   autoFocus: boolean;
-  /** Open a thread, optionally focusing its reply composer. */
   openThread: (event: ChatMsg, focusReply?: boolean) => void;
-  /** `openThread` bound to focus the composer, or undefined when read-only. */
+  /** Undefined when read-only. */
   onOpenThread: ((event: ChatMsg) => void) | undefined;
   closeThread: () => void;
 }
 
 /**
- * The open thread panel, driven by the route.
- *
- * There is one answer to "which thread is open", and the URL is it: opening
- * pushes `/t/<root>` onto the room path, so Back closes the panel, a refresh
- * reopens it, and a notification tap arrives at the thread through the same
- * path a click does — no second code path, and no state that can disagree with
- * the address bar. An unresolved id (a deep link to a root older than the
- * loaded window) simply leaves the panel closed while the timeline pages back
- * toward it.
- *
- * NIP-29 and Concord each implemented this identically down to
- * the animation timings, differing only in which route kind they spelled — so
- * it takes the room as a {@link ThreadCapableRoute} and builds every path from
- * that one value.
+ * The thread panel is driven by the route (`/t/<root>`): Back closes it, refresh reopens it,
+ * notifications use the same path. An unresolved root leaves it closed while history pages back.
+ * Shared by NIP-29 and Concord via {@link ThreadCapableRoute}.
  */
 export function useThreadPanel(opts: {
-  /** The room the panel belongs to; undefined while it's still resolving. */
+  /** Undefined while resolving. */
   room: ThreadCapableRoute | undefined;
-  /** Loaded history the routed root is resolved against. */
   messages: readonly ChatMsg[];
-  /** Whether the user may reply (gates {@link ThreadPanelState.onOpenThread}). */
+  /** Gates {@link ThreadPanelState.onOpenThread}. */
   canWrite?: boolean;
 }): ThreadPanelState {
   const { room, messages, canWrite = true } = opts;
@@ -77,13 +57,8 @@ export function useThreadPanel(opts: {
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [expanded, setExpanded] = useState(false);
 
-  // Drop the slide-out keepalive when the ROOM changes. The panel itself needs
-  // no closing — leaving a channel drops the `/t/` segment, so `threadRoot`
-  // resolves to nothing — but `lastThreadRoot` is cleared here rather than only
-  // by the timeout below, which re-runs on `threadRoot` changes and so wouldn't
-  // fire for an already-closed panel. Keying on the room PATH rather than on
-  // ids the caller assembles covers the pages that are reused across community
-  // switches without a route `key`.
+  // Clear the slide-out keepalive on ROOM change (keyed on the room path, since some pages are
+  // reused across switches without a route `key`).
   const scopeKey = room ? roomPath(room) : "";
   const [lastScopeKey, setLastScopeKey] = useState(scopeKey);
   if (lastScopeKey !== scopeKey) {
@@ -91,7 +66,6 @@ export function useThreadPanel(opts: {
     setLastThreadRoot(undefined);
   }
 
-  // Keep the panel's content mounted through its slide-out animation.
   useEffect(() => {
     if (threadRoot) {
       setLastThreadRoot(threadRoot);
@@ -101,17 +75,12 @@ export function useThreadPanel(opts: {
     return () => clearTimeout(t);
   }, [threadRoot]);
 
-  // Whether the reply composer takes focus on open: an intent belonging to the
-  // click that navigated, not to the location, so it rides in history state and
-  // a shared link never steals focus.
+  // A click's intent, carried in history state, so shared links never steal focus.
   const autoFocus = Boolean(
     (location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus,
   );
 
-  // Stable: `onOpenThread` below is a prop of every message row, and taking
-  // the room and `navigate` (which changes per location) as dependencies
-  // re-rendered every row of the room being left on each switch. The room is
-  // read at call time, which is when it matters.
+  // Stable: `onOpenThread` is a prop of every row; read room/navigate at call time.
   const openRef = useRef({ room, navigate });
   openRef.current = { room, navigate };
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
@@ -122,9 +91,7 @@ export function useThreadPanel(opts: {
     });
   }, []);
 
-  // Closing when no thread is routed is a no-op rather than a second push, so a
-  // stray close (the panel is still mounted through its slide-out) can't stack
-  // duplicate history entries.
+  // No-op when nothing is routed, so a stray close can't push duplicate history entries.
   const closeThread = useCallback(() => {
     if (!room || !routeThreadRoot) return;
     setExpanded(false);

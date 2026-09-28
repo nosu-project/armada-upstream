@@ -4,18 +4,10 @@ import type { GroupRef } from "@/lib/nip29";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * The offline cache of the user's kind 10009 list: the DECRYPTED list plus the
- * event it was folded from.
- *
- * The 10009 event is the single source of truth for the user's NIP-29 servers
- * and joined channels, but reading it costs a relay round-trip plus a NIP-44
- * signer decrypt. This snapshot lets a cold boot paint the rail from plaintext
- * immediately, and lets `useUpdateUserGroupList` refuse a read-modify-write
- * that would build on an empty/failed network read.
- *
- * Kept in a standalone module (no React, no Nostrify context) so consumers
- * that CAN'T use the `useUserGroupList` query — notably `NostrProvider`, which
- * provides the very context that hook depends on — can still read it.
+ * Offline cache of the user's kind 10009 list (decrypted list + source event).
+ * Lets a cold boot paint the rail without a relay round-trip and NIP-44 decrypt,
+ * and lets `useUpdateUserGroupList` refuse to build on a failed read. React-free
+ * so `NostrProvider` (below the hook's context) can read it.
  */
 export interface PersistedGroupList {
   event: NostrRumor;

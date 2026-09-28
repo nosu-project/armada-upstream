@@ -4,28 +4,19 @@ import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
- * Native bridge to the Android background notification service
- * (ArmadaNotificationPlugin.java). The service holds a persistent Nostr REQ to
- * the relay and posts native notifications the instant a matching event
- * arrives — instant push with no FCM/Google. iOS/web have no implementation;
- * the plugin calls simply no-op there.
+ * Bridge to the Android background notification service
+ * (ArmadaNotificationPlugin.java): a persistent relay REQ that posts native
+ * notifications without FCM. No-ops on iOS/web.
  */
 /**
- * A community's icon for the Android per-community group summary. Either a
- * plain public URL (`{ url }` only — NIP-29 group `picture`) or an
- * encrypted-blob pointer the background service fetches and AES-256-GCM
- * decrypts itself: `key`/`nonce` are hex, and `hash` (hex SHA-256 of the
- * plaintext) is verified after decrypt so a swapped blob fails closed. The
- * image key is lower-sensitivity than the identity/channel keys already shared
- * with the service (it only decrypts a public-facing community icon).
+ * A community icon for the Android group summary: a public URL, or an encrypted
+ * blob the service fetches and AES-256-GCM decrypts (`key`/`nonce` hex, `hash`
+ * = hex SHA-256 of plaintext, verified so a swapped blob fails closed).
  */
 export interface CommunityNotifImage {
   url: string;
-  /** Hex AES-256-GCM key (encrypted icons only). */
   key?: string;
-  /** Hex AES-GCM nonce/IV (encrypted icons only). */
   nonce?: string;
-  /** Hex SHA-256 of the plaintext (integrity check; encrypted icons only). */
   hash?: string;
 }
 
@@ -59,11 +50,7 @@ export interface NativeNotificationHealth {
   lastErrorAt: number;
   /** Stable error category only; never relay URLs, event bodies, or credentials. */
   lastError?: string;
-  /**
-   * PROFILING BUILDS ONLY (`-ParmadaProfile=true`): the service's
-   * ServiceProfiler window — process CPU, per-operation counts and timings,
-   * cache gauges. Absent from a normal build. Relay HOSTS appear in labels.
-   */
+  /** Profiling builds only (`-ParmadaProfile=true`). Labels include relay hosts. */
   profile?: Record<string, unknown>;
 }
 
@@ -72,76 +59,38 @@ export interface ArmadaNotificationPlugin {
   checkPermission(): Promise<{ granted: boolean }>;
   /** Prompt for POST_NOTIFICATIONS (Android 13+). */
   requestPermission(): Promise<{ granted: boolean }>;
-  /** Read Android permission/channel/service/socket health without exposing config secrets. */
   getHealth(): Promise<NativeNotificationHealth>;
   /** Open Android's app-level or one-channel notification settings screen. */
   openNotificationSettings(options: {
     channel?: "messages" | "calls" | "service";
   }): Promise<void>;
   /**
-   * Android: whether the app is exempt from battery optimizations (Doze).
-   * Battery optimization tears down the persistent relay websockets while the
-   * device is idle, and on Android 15+ the exemption is also required for the
-   * boot receiver to restart the service after a reboot.
+   * Whether exempt from battery optimizations: Doze kills the relay sockets, and
+   * on Android 15+ the boot receiver needs the exemption.
    */
   isIgnoringBatteryOptimizations(): Promise<{ ignoring: boolean }>;
   /** Android: show the one-tap system dialog to grant the exemption. */
   requestIgnoreBatteryOptimizations(): Promise<void>;
-  /** Hand a signed NIP-42 kind-22242 event back to the service for a relay. */
+  /** Hand a signed NIP-42 kind-22242 event back to the service. */
   submitAuth(options: { relayUrl: string; event: NostrEvent }): Promise<void>;
   /**
-   * Drain raw outer wire events the background service received, oldest first.
-   * The JS layer routes each through wire ingest, then calls {@link ackDrain}
-   * with the returned ids so the page isn't replayed. Loss-proof across service
-   * restarts and webview crashes (peek+ack, database-backed).
-   *
-   * This is ROUTING, not storage. The events themselves are already in ArmadaDB
-   * — the service and the WebView share one native store, so it wrote them into
-   * the same tenants the app reads. What a drain still buys is a pass through
-   * ingest: parking undecryptable wraps, ringing the scopes that repaint a
-   * timeline, feeding notification candidates.
-   *
-   * A page is ONE RELAY's worth, and `relay` names it. The queue is a tenant per
-   * relay precisely so this can be answered: the WebView's ingest routes NIP-29
-   * events into the tenant for the relay that served them, and a rumor carries
-   * no record of that (nor may one be injected into it — its tags are the bytes
-   * its id commits to, and a `relay` tag would be forgeable by any sender). The
-   * queue tenant's own id is the unforgeable place that fact can live. `relay` is
-   * absent only for a page drained from the pre-upgrade unscoped queue.
+   * Drain one relay's page of raw wire events (oldest first) for JS ingest, then
+   * {@link ackDrain}. Events are already in ArmadaDB; the drain is for routing.
+   * `relay` names the queue tenant — it can't live in the rumor (tags are signed
+   * and forgeable). Absent only for the pre-upgrade unscoped queue.
    */
   drainEvents(): Promise<{ events: string[]; ids: string[]; relay?: string }>;
-  /**
-   * Drop an acknowledged page from the queue, once it has been ingested. `relay`
-   * must be the value {@link drainEvents} returned with the page: it selects the
-   * queue tenant the ids are removed from.
-   */
+  /** Drop an ingested page; `relay` must be the value {@link drainEvents} returned. */
   ackDrain(options: { ids: string[]; relay?: string }): Promise<void>;
-  /**
-   * Drain (and clear) the pending "Mark read" markers the background service
-   * recorded when the user tapped a notification's "Mark read" action. Each
-   * carries the room key and the unix-seconds timestamp to mark read up to.
-   * The JS layer maps each to the right per-protocol read-state write.
-   * No-ops (empty array) on web/iOS.
-   */
+  /** Drain and clear "Mark read" taps: room key + unix-seconds read-up-to. Empty on web/iOS. */
   drainReadMarkers(): Promise<{
     markers: Array<{ room: string; ts: number }>;
   }>;
   /**
-   * Exchange the call id an Answer tap named for the parameters of the ring
-   * the service posted for it, or `{}` when there is no such ring.
-   *
-   * This is the AUTHORIZATION to join a DM call from a notification tap. The
-   * parameters used to ride the deep link, which made a URL enough to join a
-   * call the client had never been offered, over a broker the sender chose —
-   * the only check being that the secret derived the room, which whoever minted
-   * the secret controls. A URL can be produced by anything that reaches the
-   * router (a link, another app's intent), so it names the call and proves
-   * nothing; the service only records a call it decided to RING, which means it
-   * was fresh, from a followed peer, and carried a well-formed secret and an
-   * https broker.
-   *
-   * Consumed once, so a second tap or a revisited history entry cannot
-   * re-answer a call that has already ended.
+   * The ring the service posted for `callId`, or `{}`. This is the authorization
+   * to join from a notification: a URL proves nothing, while the service only
+   * rings fresh offers from followed peers with valid secrets and https brokers.
+   * Consumed once.
    */
   consumeCallAnswer(options: { callId: string }): Promise<{
     peer?: string;
@@ -149,87 +98,49 @@ export interface ArmadaNotificationPlugin {
     broker?: string;
   }>;
   /**
-   * The peer the WebView is dialing or in a DM call with (omit/empty = none).
-   * The service does not ring, and posts no "Missed call", for that peer's
-   * offers while it is fresh — they are the other half of a call the WebView
-   * already owns (two people dialing each other at once). Volatile and
-   * heartbeat-bound like {@link setActiveRooms}; not part of `configure`.
+   * Peer the WebView is dialing or in a call with; the service won't ring or post
+   * "Missed call" for their offers. Volatile, like {@link setActiveRooms}.
    */
   setCallPeer(options: { peer?: string }): Promise<void>;
   /**
-   * The service's rolling per-room cache of raw outer wire events (newest
-   * last). Unlike {@link drainEvents} — a one-shot global buffer of what
-   * arrived while the WebView was down — this retains the last screenful PER
-   * ROOM for the whole service lifetime, so opening a room from a notification
-   * can paint natively-received history even if the global buffer overflowed.
-   * Room keys: `h:<groupId>` (NIP-29), `c2:<channelId>` (Concord),
-   * `dm` (kind 4).
+   * The service's rolling per-room cache of raw wire events (newest last), kept
+   * for the service lifetime. Room keys: `h:<groupId>`, `c2:<channelId>`, `dm`.
    */
   getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
   /**
-   * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs the
-   * Concord stream auths (their derived keys live JS-side) and the user's
-   * kind-22242, then calls submitAuth. The service ALSO signs the user's
-   * 22242 itself when a signer credential was shared (configure's `signer`),
-   * so auth-gated relays keep working with the app dead.
+   * NIP-42 AUTH challenge: JS signs Concord stream auths and the user's 22242.
+   * The service also signs 22242 itself when given a signer credential.
    */
   addListener(
     eventName: "authChallenge",
     listener: (data: { relayUrl: string; challenge: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
-   * Fired when the background service receives a raw outer event (NIP-29 kind
-   * 9/1068/7/1111/5, a kind-4 DM, or a Concord kind-1059 wrap) while the
-   * WebView is up. The JS layer writes it
-   * straight into its event store, so the live timeline shows it with zero
-   * relay latency — the same message the notification was about.
-   *
-   * `relay` is the relay it arrived from, which the store needs to file a
-   * group-scoped event under the right server (see `db/relayScope.ts`).
+   * A raw outer event the service received while the WebView is up, for
+   * immediate store ingest. `relay` files group events under the right server.
    */
   addListener(
     eventName: "relayEvent",
     listener: (data: { event: string; relay?: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
-   * Tell the running service which roomKey(s) the WebView is currently showing
-   * (so it can suppress redundant notifications for those rooms — the live
-   * timeline already paints the message). Pass an empty array when the app is
-   * backgrounded or on a non-chat screen. The value is volatile: it lives
-   * only on the running service instance, so killing the app or the service
-   * immediately resumes notifications. Mentions still notify on an active
-   * room (a deliberate @-ping deserves attention even on the visible channel).
-   *
-   * Room-key shapes (must match the service's enqueueRoomMessage keys):
-   *   - NIP-29 group: `h:<relayUrl>|<groupId>`
-   *   - Concord:      `c2:<channelIdHex>`
-   *   - DM:           `dm:<peerPubkey>`
+   * Rooms the WebView is showing, so the service skips redundant notifications
+   * (mentions still notify). Empty when backgrounded. Volatile.
+   * Keys must match the service's: `h:<relayUrl>|<groupId>`, `c2:<channelIdHex>`, `dm:<peerPubkey>`.
    */
   setActiveRooms(options: { roomKeys: string[] }): Promise<void>;
   /**
-   * Cancel tray notifications for conversations the in-app read state now
-   * covers (read here, or synced in from another device). Each marker is a
-   * read-state key (`dm:<pk>` / `c2:<id>` / `<relayUrl>::<groupId>`)
-   * and its last-read unix seconds; the running service cancels the matching
-   * room's notification when the room's newest notified message is at/older than
-   * that stamp — the reverse of a notification's "Mark read" tap. No-ops on
-   * web/iOS and when the service posted nothing.
+   * Cancel tray notifications now covered by read state. Markers: key
+   * (`dm:<pk>` / `c2:<id>` / `<relayUrl>::<groupId>`) + last-read unix seconds.
    */
   dismissRead(options: { markers: Array<{ room: string; ts: number }> }): Promise<void>;
-  /**
-   * Configure (and start/stop) the background service. Passing `enabled: false`
-   * or omitting pubkey/relays stops the service and clears stored config.
-   */
+  /** Configure and start/stop the service; `enabled: false` or no pubkey/relays stops it and clears config. */
   configure(options: {
     enabled: boolean;
     userPubkey?: string;
     /**
-     * Per-plane replacement authority. A `false` plane additively merges the
-     * current partial records into that plane's last-good same-account fields;
-     * `true` replaces them, including with an authoritative empty array. A
-     * fresh/different account never inherits fields, regardless of these flags.
-     *
-     * Omitted flags default to `true` for compatibility with older web bundles.
+     * Per-plane authority: `false` merges into last-good same-account data, `true`
+     * replaces (even with empty). New accounts never inherit. Omitted = `true`.
      */
     groupPlaneReady?: boolean;
     dmRelayPlaneReady?: boolean;
@@ -238,118 +149,59 @@ export interface ArmadaNotificationPlugin {
     gitPlaneReady?: boolean;
     /** The account's synced or proven local-last-good notification settings. */
     policyPlaneReady?: boolean;
-    /**
-     * Concord communities the member has left. Dropped from the persisted
-     * Concord and Git watches even when `concordPlaneReady` is false, since an
-     * unready plane otherwise MERGES and would keep the left community forever.
-     */
+    /** Left communities, dropped even from unready (merging) planes. */
     concordLeftCommunities?: string[];
     /** Relay websocket URLs to hold open. */
     relayUrls?: string[];
-    /** Joined group ids (the `h` tag values) for the kind-9 filter. */
+    /** Joined group ids (`h` values). */
     groupIds?: string[];
     /**
-     * Joined NIP-29 groups mapped to their single host relay. A NIP-29 group
-     * is intrinsically tied to one relay, so the service scopes each relay's
-     * kind-9/7/1111 REQ to just the groups that relay hosts — rather than
-     * broadcasting every joined id to every relay. Supersedes the flat
-     * `groupIds`/`relayUrls` pairing; `groupIds` is still sent so an older
-     * native binary (which ignores this field) keeps working.
-     *
-     * `mentionOnly` marks the group's level as "mentions only": the service
-     * still subscribes (so mentions land) but suppresses its non-mention
-     * traffic. It rides here rather than in a flat id list because an `h` id
-     * names a group only together with its relay — the same id on two relays
-     * is two unrelated groups, and a flat list would mute both.
+     * Joined NIP-29 groups with their host relay, so each relay's REQ covers only
+     * its groups. `mentionOnly` is here because an `h` id is only unique per relay.
+     * `groupIds` is still sent for older native binaries.
      */
     groupSubs?: Array<{ relay: string; id: string; mentionOnly?: boolean }>;
-    /**
-     * Subset of `groupIds` whose notification level is "mentions only". This is
-     * the flat counterpart of `groupSubs[].mentionOnly`, and the service only
-     * consults it on the legacy path where no `groupSubs` was sent at all (it
-     * then pairs every id with every relay, so a flat mention set matches).
-     */
+    /** Legacy flat counterpart of `groupSubs[].mentionOnly`, used only without `groupSubs`. */
     mentionOnlyGroupIds?: string[];
-    /** Relays to read DMs (kind 4) from — the app/DM relays, not group relays. */
+    /** Relays to read kind-4 DMs from (app/DM relays, not group relays). */
     dmRelays?: string[];
-    /**
-     * Established legacy-DM authors (hex). The kind-4 subscription is scoped
-     * to `authors:[...dmFollows]`; empty ⇒ no kind-4 subscription at all.
-     */
+    /** Legacy-DM authors (hex); scopes the kind-4 subscription, empty = none. */
     dmFollows?: string[];
     /**
-     * Individually established DM peers (hex): follows, accepts, 1:1 pins and
-     * authored 1:1 index rows. A NIP-17 wrap can come from anyone, so this is
-     * one input to its post-decrypt request boundary; groups use the exact keys
-     * below. Older native binaries ignore this field and notify every DM in full.
+     * Established 1:1 DM peers (hex), part of the NIP-17 post-decrypt request
+     * boundary. Older binaries ignore it and notify everything.
      */
     dmKnownPeers?: string[];
-    /**
-     * Exact canonical NIP-17 conversation keys the viewer pinned or authored.
-     * A group key trusts only that participant set, never its members' unrelated
-     * 1:1 conversations. Older native binaries safely ignore this field.
-     */
+    /** Exact NIP-17 conversation keys pinned/authored; a group key trusts only that participant set. */
     dmKnownConversations?: string[];
-    /** Exact canonical DM conversation key -> notification level overrides. */
     dmLevels?: Record<string, "all" | "mentions" | "nothing">;
-    /**
-     * Muted pubkeys. A NIP-17 notification is suppressed when any participant
-     * is present here, matching the WebView's whole-conversation mute rule.
-     */
+    /** Muted pubkeys; a NIP-17 notification is suppressed if any participant is muted. */
     dmMutedPeers?: string[];
-    /**
-     * How to notify for an unknown DM conversation:
-     * `"off"` (silent), `"generic"` (a content-blind request ping), or `"full"`
-     * (name + avatar + preview, as for a known sender). Absent/unknown ⇒ the
-     * service treats it as `"generic"`, the safe default.
-     */
+    /** Unknown-conversation mode: `"off"`, `"generic"` (default), or `"full"`. */
     dmRequests?: string;
     /**
-     * The relays carrying the user's OWN replaceable documents — the general
-     * pool (app relays + their NIP-65 read relays). On these the service also
-     * subscribes to the self-state catalogue (follow/mute lists, the kind-10009
-     * server list, the Concord vaults, and the NIP-78 settings document that
-     * holds the community rail's arrangement) and files each version in the
-     * `main` tenant the WebView reads, so a change made on another device is
-     * already on disk when the app next opens.
-     *
-     * Distinct from `relayUrls`, which is the NIP-29 server set: a user with no
-     * servers has none, and their settings live on the app relays regardless.
-     * An older native binary ignores this field and simply doesn't mirror them.
+     * Relays with the user's own replaceable docs (app relays + NIP-65 reads). The
+     * service mirrors self-state (follows, mutes, 10009, vaults, NIP-78 settings)
+     * into the `main` tenant. Distinct from `relayUrls` (NIP-29 servers).
      */
     selfRelays?: string[];
     /**
-     * The `d` tags of Armada's own NIP-78 settings documents (see
-     * `lib/settingsDocs.ts`). Kind 30078 is shared with every other client on
-     * the user's identity, so the service asks for these by `d` and stores
-     * only what it asked for.
-     *
-     * Supplied from here rather than hardcoded natively because a fork can
-     * change `VITE_APP_ID` and rename all six. An older native binary ignores
-     * the field, and an absent one means "use the built-in default set" —
-     * never "none", which would drop the subscription entirely.
+     * `d` tags of Armada's NIP-78 docs (kind 30078 is shared across clients).
+     * Sent rather than hardcoded since forks can change `VITE_APP_ID`. Absent =
+     * built-in defaults, never "none".
      */
     selfDTags?: string[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**
-     * The viewer's media policy (`lib/mediaPolicy.ts`), so the service fetches
-     * a sender's avatar and a community's icon from where the WebView would —
-     * a stranger's host through the proxy, or not at all. Rides with the other
-     * policy fields (gated on `policyPlaneReady`). An older native binary
-     * ignores it; a missing one is read natively as the default policy.
+     * Media policy, so the service fetches avatars/icons like the WebView would.
+     * Gated on `policyPlaneReady`. Missing = default policy.
      */
     mediaPolicy?: MediaPolicyConfig;
     /**
-     * Concord (CORD-02) channel subscriptions. The service subscribes
-     * `{kinds:[1059], authors:[…stream pk]}` per relay and uses the supplied
-     * per-stream NIP-44 conversation key to open wrap → seal → rumor for a
-     * rich "<sender>: <preview>" notification deep-linking to
-     * /c/<communityId>/<channelId>. Stream SECRET keys never cross this
-     * bridge — NIP-42 stream auth is signed in the WebView (authChallenge),
-     * and the notification quick reply's wrap is signed with the derived
-     * stream key the service reads from the group-key memo already persisted
-     * in the shared ArmadaDB (`c2gkmemo`, see groupKeyPersist.ts).
+     * Concord (CORD-02) subscriptions: kind 1059 by stream pk, opened with the
+     * per-stream NIP-44 conversation key. Stream SECRET keys never cross the bridge;
+     * quick replies use the stream key from the persisted `c2gkmemo`.
      */
     concordSubs?: Array<{
       relays: string[];
@@ -358,46 +210,24 @@ export interface ArmadaNotificationPlugin {
       channelId: string;
       channelName: string;
       streams: Array<{ pk: string; convKey: string; epoch: string }>;
-      /**
-       * The community's icon for the per-community group summary — see
-       * {@link CommunityNotifImage}. For Concord this is the encrypted CORD-02 §6
-       * icon pointer; the service fetches the blob, AES-GCM decrypts with the
-       * shipped key/nonce, and verifies the plaintext hash before display.
-       * Omitted when the community has no icon.
-       */
+      /** Encrypted CORD-02 §6 icon pointer ({@link CommunityNotifImage}); omitted without an icon. */
       communityImage?: CommunityNotifImage;
       /** "mentions only" — suppress non-mention messages (older binaries notify all). */
       mentionOnly?: boolean;
-      /**
-       * CORD-08 disappearing-message timer (seconds; 0/absent = off) so the
-       * native quick reply stamps its rumor + wrap with the NIP-40 deadline.
-       */
+      /** CORD-08 disappearing timer (seconds; 0/absent = off), stamped as NIP-40 on quick replies. */
       timerSecs?: number;
     }>;
     /**
-     * The user's signer credential, shared with the service so it can open
-     * ANY gift wrap addressed to the user (rich DM notifications regardless
-     * of sender client) and answer NIP-42 AUTH challenges with the app dead.
-     * One shape per login type; the native side seals it with an Android
-     * Keystore key before persisting and wipes it with the config on
-     * disable/logout:
-     *   - nsec:   the raw identity key (hex) — already resident in this same
-     *             app sandbox (localStorage); native storage is sealed, so
-     *             at-rest posture strictly improves.
-     *   - amber:  the NIP-55 signer app's package name; the service queries
-     *             its ContentResolver directly (background grant required).
-     *   - nip46:  the bunker session — the pairing's CLIENT key, bunker
-     *             pubkey and bunker relays; the service runs its own
-     *             kind-24133 RPC channel. The identity key stays in the
-     *             bunker, exactly as the user chose.
+     * Signer credential so the service can open gift wraps and answer NIP-42 with
+     * the app dead. Sealed with an Android Keystore key; wiped on disable/logout.
+     * nsec: raw key (hex). amber: NIP-55 package name. nip46: client key, bunker
+     * pubkey and relays (identity key stays in the bunker).
      */
     signer?:
       | { type: "key"; sk: string }
       | { type: "amber"; packageName: string }
       | { type: "nip46"; clientSk: string; bunkerPk: string; relays: string[] };
-    /** Public NIP-34 activity attached to Concord channels. Mapping an
-     * attachment to its private channel remains local to Android; relay filters
-     * contain only the public repository coordinate and ticket ids. */
+    /** Public NIP-34 activity on Concord channels; the channel mapping stays on-device. */
     gitSubs?: Array<{
       address: string;
       relays: string[];
@@ -412,13 +242,7 @@ export interface ArmadaNotificationPlugin {
 export const ArmadaNotification =
   registerPlugin<ArmadaNotificationPlugin>("ArmadaNotification");
 
-/**
- * Check whether Armada is exempt from Android battery optimizations.
- *
- * Returns `true` (exempt / nothing to do) on non-Android platforms or when
- * the native method is unavailable (older app binary), so callers never show
- * a false warning.
- */
+/** Battery-optimization exemption; `true` off Android or on older binaries (no false warnings). */
 export async function isIgnoringBatteryOptimizations(): Promise<boolean> {
   if (Capacitor.getPlatform() !== "android") return true;
   try {
@@ -438,14 +262,8 @@ export interface NativeCallAnswer {
 }
 
 /**
- * Claim the call parameters for `callId`, or null when the service is holding
- * none — which is every case except an Answer tap on a ring it posted itself.
- *
- * Gated on Android specifically rather than `isNativePlatform()`: this plugin
- * exists nowhere else, and on iOS the gate is what keeps the call from
- * reaching a `registerPlugin` proxy with nothing behind it. `isPluginAvailable`
- * covers an APK that predates the method, where the answer is simply "no
- * ticket" — the same answer a URL from anywhere else gets.
+ * Claim the ring parameters for `callId`, or null. Android-gated (not
+ * `isNativePlatform()`); older APKs answer "no ticket".
  */
 export async function consumeNativeCallAnswer(callId: string): Promise<NativeCallAnswer | null> {
   if (Capacitor.getPlatform() !== "android") return null;
@@ -459,21 +277,14 @@ export async function consumeNativeCallAnswer(callId: string): Promise<NativeCal
   }
 }
 
-/**
- * Report the DM call peer to the background service (see `setCallPeer`).
- * Android only, and best-effort: an APK that predates the method just keeps
- * ringing as before.
- */
+/** Report the DM call peer (see `setCallPeer`). Android only, best-effort. */
 export function setNativeCallPeer(peer: string | null): void {
   if (Capacitor.getPlatform() !== "android") return;
   if (!Capacitor.isPluginAvailable("ArmadaNotification")) return;
   ArmadaNotification.setCallPeer({ peer: peer ?? "" }).catch(() => undefined);
 }
 
-/**
- * Open the one-tap system dialog asking the user to exempt Armada from
- * battery optimizations. No-op outside Android.
- */
+/** Open the battery-optimization exemption dialog. No-op outside Android. */
 export async function requestIgnoreBatteryOptimizations(): Promise<void> {
   if (Capacitor.getPlatform() !== "android") return;
   try {

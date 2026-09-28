@@ -34,10 +34,7 @@ interface LinkEmbedProps {
   className?: string;
 }
 
-/**
- * Unified link embed. YouTube URLs get a click-to-play facade, Spotify URLs
- * get the official embed iframe, everything else gets an OEmbed preview card.
- */
+/** YouTube: click-to-play facade; Spotify: official iframe; else an OEmbed preview card. */
 export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const youtubeId = extractYouTubeId(url);
   const spotify = extractSpotifyEmbed(url);
@@ -76,9 +73,8 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
           loading="lazy"
           className="rounded-xl border-0"
-          // Sandbox (no allow-top-navigation) blocks the embed from launching the
-          // Spotify desktop app via a `spotify:` scheme, which Chrome surfaces as
-          // an "open other apps and services on this device" prompt on load.
+          // No allow-top-navigation: blocks a `spotify:` app launch, which Chrome shows as
+          // an "open other apps" prompt on load.
           sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
         />
       </div>
@@ -96,9 +92,7 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
             key={pauseEpoch}
             src={`https://streamable.com/e/${streamableId}`}
             title="Streamable video"
-            // `allow="fullscreen"` supersedes the `allowFullScreen` attribute
-            // (which the browser warns about if both are set), so this is the
-            // only fullscreen grant.
+            // Supersedes `allowFullScreen` (browsers warn if both are set).
             allow="autoplay; fullscreen; picture-in-picture"
             loading="lazy"
             className="absolute inset-0 h-full w-full border-0"
@@ -112,7 +106,6 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   return <LinkPreview url={url} className={className} />;
 }
 
-/** Domain + title bar shown under provider embeds. */
 function EmbedInfoBar({ url }: { url: string }) {
   const { data } = useLinkPreview(url);
   const domain = displayDomain(url);
@@ -137,7 +130,6 @@ function EmbedInfoBar({ url }: { url: string }) {
   );
 }
 
-/** Extracts the display domain from a URL (e.g. "www.example.com" -> "example.com"). */
 function displayDomain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -146,22 +138,17 @@ function displayDomain(url: string): string {
   }
 }
 
-/** Caps a preview image is fitted into, without upscaling. */
 const PREVIEW_MAX_W = 400;
 const PREVIEW_MAX_H = 320;
 /** An image this small on both axes is a logo/avatar, shown as a side thumbnail. */
 const SMALL_IMAGE_MAX = 200;
-/** Images shown in a multi-image grid; the rest are behind `+N` and the lightbox. */
 const GRID_MAX = 4;
 
-/** Rich link preview card, Discord-style: text, fields, media, footer. */
 function LinkPreview({ url, className }: { url: string; className?: string }) {
   const { data: embed, isLoading } = useRichEmbed(url);
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  // The lightbox resolves the un-proxied URL through the media policy itself,
-  // as it does for a message image; it gets the full-size original where the
-  // source names one.
+  // The lightbox applies the media policy itself; full-size original where named.
   const lightboxMedia = useMemo<LightboxItem[]>(
     () =>
       (embed?.images ?? []).flatMap((img): LightboxItem[] => {
@@ -189,7 +176,6 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
     );
   }
 
-  // No preview data — fall back to a plain inline link.
   if (!embed) {
     return (
       <a
@@ -209,15 +195,11 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
   const singleW = single?.width ?? naturalSize?.w;
   const singleH = single?.height ?? naturalSize?.h;
   const small = !!singleW && !!singleH && singleW <= SMALL_IMAGE_MAX && singleH <= SMALL_IMAGE_MAX;
-  // A footer that names the source stands in for the provider line.
   const provider = embed.provider ?? (embed.footer ? undefined : displayDomain(url));
 
   return (
-    // A `<button>` can't nest in an `<a>`, so instead of wrapping the card in a
-    // link we lay a full-card link OVERLAY under inert content: clicks fall
-    // through the `pointer-events-none` content to the anchor, and the copy
-    // button and the images re-enable pointer events as the exceptions. That
-    // keeps the rest of the card behaving as a link.
+    // A `<button>` can't nest in an `<a>`: a full-card link OVERLAY sits under
+    // `pointer-events-none` content, with the copy button and images as exceptions.
     <div
       className={cn(
         "group relative block w-fit max-w-md rounded-md border-l-4 border-primary bg-secondary/40 overflow-hidden",
@@ -236,11 +218,9 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
 
       <div className="pointer-events-none relative px-3 py-2.5">
         <div className="flex gap-3">
-          {/* Right padding clears the copy button in the top-right corner. */}
           <div className="min-w-0 flex-1 space-y-1.5 pr-6 touch:pr-8">
             {provider && (
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
-                {/* One favicon per card, on the footer when there is one. */}
                 {!embed.footer && <SiteIcon url={url} />}
                 <span className="truncate">{provider}</span>
               </p>
@@ -324,11 +304,7 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
   );
 }
 
-/**
- * The linked site's favicon, beside whichever line names the source. It comes
- * from the favicon service rather than the site itself, like every other
- * favicon in the app, so the site does not see who scrolled past its link.
- */
+/** Favicon via the favicon service, so the site doesn't see who scrolled past. */
 function SiteIcon({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
   const src = faviconUrl(url);
@@ -345,7 +321,6 @@ function SiteIcon({ url }: { url: string }) {
   );
 }
 
-/** Author line with an optional avatar, loaded under the media policy. */
 function EmbedAuthor({ name, icon }: { name: string; icon?: string }) {
   const src = useMediaSrc(sanitizeImageSrc(icon));
   const [failed, setFailed] = useState(false);
@@ -367,15 +342,8 @@ function EmbedAuthor({ name, icon }: { name: string; icon?: string }) {
 }
 
 /**
- * One preview image. The thumbnail is whatever the linked page named, on a
- * host of its choosing — under the media policy like a message image (proxied
- * for a stranger's host). It opens the lightbox rather than the link: the
- * button re-enables pointer events in front of the card-wide link overlay.
- *
- * A `single` image is shown whole, at its own aspect ratio — a page's image is
- * usually the content (an artwork, a post's picture), and a cover crop cuts it
- * to a strip. Known dimensions reserve the box before load; otherwise the
- * loaded image settles into the same caps.
+ * One preview image under the media policy; opens the lightbox. A `single`
+ * image is shown whole at its own aspect ratio (a cover crop cuts the content).
  */
 function EmbedImage({
   image,
@@ -438,22 +406,13 @@ function EmbedImage({
   );
 }
 
-/**
- * Fits an image into the preview caps without upscaling, as a persistent
- * aspect ratio plus the capped width — the same scheme as a message image, so
- * a portrait image is pre-narrowed rather than clamped by height after load.
- */
+/** Fit into the caps without upscaling, pre-narrowing portraits (same scheme as message images). */
 function fitPreviewBox(w: number, h: number): { aspectRatio: string; maxWidth: number } {
   const scale = Math.min(1, PREVIEW_MAX_W / w, PREVIEW_MAX_H / h);
   return { aspectRatio: `${w} / ${h}`, maxWidth: Math.round(w * scale) };
 }
 
-/**
- * Copy-link affordance in the top-right corner of a link preview card. It
- * copies the URL rather than following it, and re-enables pointer events (its
- * container is inert) so it's the one interactive element in front of the
- * card-wide link overlay. Always visible.
- */
+/** Copies the URL; re-enables pointer events above the card-wide link overlay. */
 function CopyLinkButton({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -486,17 +445,13 @@ function CopyLinkButton({ url }: { url: string }) {
   );
 }
 
-/**
- * YouTube thumbnail sizes to try, in preference order. YouTube's CDN serves a
- * 120×90 gray placeholder when a size doesn't exist, so we probe off-screen.
- */
+/** Preferred sizes; a missing size is a 120×90 gray placeholder, so probe off-screen. */
 const THUMBNAIL_SIZES = ["sddefault", "hqdefault"] as const;
 
 function thumbnailUrl(videoId: string, size: string): string {
   return `https://i.ytimg.com/vi/${videoId}/${size}.jpg`;
 }
 
-/** Probe thumbnail sizes off-screen and resolve with the first valid URL. */
 function findThumbnail(videoId: string): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -530,13 +485,9 @@ function findThumbnail(videoId: string): Promise<string | null> {
   });
 }
 
-/**
- * YouTube embed with a privacy-respecting click-to-load facade: no requests
- * are made to YouTube until the user explicitly clicks play.
- */
+/** Click-to-load facade: no requests to YouTube until play. */
 export function YouTubeEmbed({ videoId, className }: { videoId: string; className?: string }) {
-  // The pause epoch the player was started in: pausing media bumps the epoch,
-  // which returns the embed to its facade and tears the player down.
+  // Pausing media bumps the epoch, returning the embed to its facade.
   const pauseEpoch = useEmbedPauseEpoch();
   const [activatedAt, setActivatedAt] = useState<number | null>(null);
   const activated = activatedAt === pauseEpoch;
@@ -554,10 +505,8 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
       return;
     }
 
-    // WKWebView cannot attach an HTTP Referer to this nested iframe when the
-    // parent is capacitor://localhost. Use the native referrer-bearing player;
-    // an older binary without that plugin falls back to the ordinary watch
-    // page instead of knowingly rendering YouTube error 153.
+    // WKWebView can't send a Referer from capacitor://localhost (YouTube error 153):
+    // use the native player; older binaries without it open the watch page.
     if (!hasNativeYouTubePlayer()) {
       openYouTubeWatchPage(videoId);
       return;
@@ -591,10 +540,7 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
           <iframe
             src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1`}
             title="YouTube video"
-            // YouTube requires an HTTP Referer (or equivalent app identity).
-            // Let the browser send this deployment's own origin so a
-            // self-hosted client never inherits a hard-coded public host or
-            // packaged app id from the web bundle.
+            // YouTube requires a Referer; send this deployment's own origin.
             referrerPolicy="strict-origin-when-cross-origin"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             allowFullScreen

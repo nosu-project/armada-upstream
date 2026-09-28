@@ -1,20 +1,13 @@
 /**
- * Concord Control Plane — CORD-02 §5/§6/§9, CORD-04.
+ * Concord Control Plane — CORD-02 §5/§6/§9, CORD-04. One Private Stream per
+ * Community of versioned, real-npub-signed editions in PLAINTEXT seals (kind
+ * 20014, so compaction can re-wrap them). The stream key is SPLIT (CORD-01
+ * Write-Restricted Streams): address + signer derive from the staff-held
+ * `control_root`; content is encrypted under the community_root-derived read key
+ * (a spam gate, never authority). Pre-split epochs used `concord/control` alone.
  *
- * The Control Plane is one Private Stream per Community carrying versioned,
- * real-npub-signed editions inside PLAINTEXT seals (kind 20014 — the one plane
- * whose seals stay plaintext so a compaction can re-wrap signed editions
- * across epochs). Its stream key is SPLIT (CORD-01 Write-Restricted Streams):
- * the address-and-signer keypair derives from the staff-held `control_root`,
- * while the wraps' content is encrypted under the community_root-derived read
- * key every member holds — a spam gate, never authority. Epochs minted before
- * the split keyed the whole plane by the `concord/control` derivation alone,
- * retained here for reading them (CORD-02 §5).
- *
- * `foldControlState` replays the whole plane into current state in one pass:
- * the owner-rooted roster first (delegation fixpoint — the owner's rank comes
- * from the community_id itself, never from any fold), then every authority-
- * gated entity (metadata, channels, banlist, invite registries).
+ * `foldControlState` replays the plane in one pass: the owner-rooted roster first
+ * (the owner's rank comes from the community_id), then every gated entity.
  */
 
 import type { NostrEvent } from "nostr-tools/pure";
@@ -87,17 +80,11 @@ import {
 } from "@/concord/lib/types";
 import { bootstrapHead, bytesEq, fold, type Edition } from "@/concord/lib/version";
 
-// ── Addressing ───────────────────────────────────────────────────────────────
-
 /**
- * One held root epoch's Control Plane read view (CORD-02 §5).
- *
- * A SPLIT epoch (the root carries a held `control_pk`) subscribes and verifies
- * by that address while decrypting under the community_root-derived read key;
- * its `sk` is present only when this member holds the epoch's `control_root`
- * and it actually derives to the held address (staff). A LEGACY epoch is the
- * `concord/control` derivation whole — address, signer and encryption in one
- * key every member holds.
+ * One held root epoch's Control Plane read view (CORD-02 §5). SPLIT epoch: held
+ * `control_pk` address + community_root-derived read key, `sk` only for staff
+ * whose `control_root` derives to that address. LEGACY epoch: the
+ * `concord/control` derivation whole, held by every member.
  */
 function controlStreamOf(community: Community, rootKey: Uint8Array, epoch: bigint, controlPk?: string): StreamKeyView {
   const read = controlGroupKey(rootKey, community.id, epoch);
@@ -111,13 +98,10 @@ function controlStreamOf(community: Community, rootKey: Uint8Array, epoch: bigin
     get convKey() {
       return read.convKey;
     },
-    // The reader's half of the write gate: the wrap signature proves a
-    // control_root holder published it, so openWrap verifies it (CORD-01
-    // Write-Restricted Streams; CORD-02 §5).
+    // The reader's half of the write gate: openWrap verifies the wrap signature
+    // (CORD-01; CORD-02 §5).
     restricted: true,
-    // A held secret that does not derive to the held address is corrupt state,
-    // not a signer: leave `sk` absent (fail closed to read-only) rather than
-    // mint wraps at an address nobody subscribes to.
+    // A secret not deriving to the held address is corrupt: fail closed to read-only.
     ...(signerSk && signerSk.pk === controlPk ? { sk: signerSk.sk } : {}),
   };
 }
@@ -138,10 +122,8 @@ export function canWriteControl(community: Community): boolean {
 }
 
 /**
- * The CURRENT control-plane WRITE key: address, signing secret and read
- * conv_key. Throws when the epoch is split and this member does not hold its
- * `control_root` — publishing there would mint a wrap that fails the plane's
- * signature check at every reader and relay (CORD-02 §2).
+ * The CURRENT control-plane WRITE key. Throws on a split epoch without a held
+ * `control_root`, since such a wrap fails every reader's check (CORD-02 §2).
  */
 export function currentControlWriteGroup(community: Community): GroupKey {
   const stream = currentControlGroup(community);
@@ -158,8 +140,6 @@ export function currentControlWriteGroup(community: Community): GroupKey {
   };
 }
 
-// ── Sealing / opening ────────────────────────────────────────────────────────
-
 /** Sign (plaintext seal) + wrap one edition rumor for the control stream. */
 export async function sealEdition(rumor: NostrRumor, control: GroupKey, signer: StreamSigner): Promise<NostrEvent> {
   const seal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, signer);
@@ -167,11 +147,8 @@ export async function sealEdition(rumor: NostrRumor, control: GroupKey, signer: 
 }
 
 /**
- * Decode-once memo for opened+parsed control editions, keyed by wrap id. The
- * roster/metadata/banlist consumers re-fold on every mount and poll; a wrap's
- * decryption + seal verify is immutable, so parse each exactly once per
- * session. `null` remembers a failure (not ours / malformed) so it isn't
- * retried either.
+ * Decode-once memo of opened+parsed control editions by wrap id; `null` remembers
+ * a failure.
  */
 const parsedEditionMemo = new Map<string, ParsedEdition | null>();
 
@@ -211,11 +188,7 @@ export function openControlWraps(wraps: NostrEvent[], groups: StreamKeyView[]): 
   return out;
 }
 
-/**
- * Parse already-OPENED control events (from the decrypted opened-event cache)
- * into editions. The wrap decrypt + seal verify happened at ingest; this only
- * extracts the edition machinery. Memoized per rumor id, so re-folds are cheap.
- */
+/** Parse already-OPENED control events into editions (memoized per rumor id). */
 export function openControlEditions(opened: OpenedEvent[]): ParsedEdition[] {
   const start = performance.now();
   const out: ParsedEdition[] = [];
@@ -248,8 +221,6 @@ export function _parsedEditionMemoSizeForTests(): number {
   return parsedEditionMemo.size;
 }
 
-// ── Edition builders ─────────────────────────────────────────────────────────
-
 interface BuildCommon {
   actorPubkey: string;
   version: bigint;
@@ -270,10 +241,8 @@ export function buildMetadataEdition(communityId: Uint8Array, metadata: Communit
 /** Role (vsk 1); eid = the role_id. Gated by MANAGE_ROLES. */
 export function buildRoleEdition(role: Role, o: BuildCommon): NostrRumor {
   if (utf8Len(role.name) > NAME_MAX_BYTES) throw new Error(`role name exceeds ${NAME_MAX_BYTES} bytes`);
-  // CORD-04 §3: position 0 is the owner's alone — "no Role may ever claim
-  // position 0, or an owner could create a peer nobody outranks". Refused
-  // here, like the name cap, so a malformed mint fails at its author rather
-  // than being dropped by every verifier after it lands.
+  // CORD-04 §3: position 0 is the owner's alone; refuse at the author rather than
+  // have every verifier drop it.
   if (!Number.isInteger(role.position) || role.position < 1) {
     throw new Error("role position must be an integer of 1 or greater (position 0 is the owner's)");
   }
@@ -313,9 +282,8 @@ export function buildRegistryEdition(communityId: Uint8Array, creatorHex: string
 }
 
 /**
- * Community Signal (vsk 12); eid = signal_locator(cid, signal_id) (CORD-04 §8).
- * A transient staff directive folded per token — the pause is `signal_id`
- * "pause" with content `{ paused, until? }`, gated by MANAGE_CHANNELS.
+ * Community Signal (vsk 12); eid = signal_locator(cid, signal_id) (CORD-04 §8). The
+ * pause is `signal_id` "pause" with content `{ paused, until? }`, MANAGE_CHANNELS.
  */
 export function buildSignalsEdition(
   communityId: Uint8Array,
@@ -330,8 +298,6 @@ export function buildSignalsEdition(
     ...o,
   });
 }
-
-// ── The one-pass fold ────────────────────────────────────────────────────────
 
 export interface EntityHead {
   version: bigint;
@@ -348,19 +314,12 @@ export interface FoldedChannel {
   metadata: ChannelMetadata;
 }
 
-/**
- * Where a community's folded control snapshot is cached (`foldedCache`).
- *
- * Lives here rather than beside the hook that writes it because non-React
- * code reads it too — the notification-subscription builder, the switcher, and
- * the rumor-store migration, none of which should drag React into their import
- * graph to learn a string.
- */
+/** Where a community's folded control snapshot is cached (`foldedCache`); here so non-React code can import it. */
 export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
 
 /** One folded Community Signal head (vsk 12, CORD-04 §8). */
 export interface FoldedSignal {
-  /** The head edition's decoded content, already validated for this signal_id. */
+  /** The head's decoded content, validated for this signal_id. */
   content: Record<string, unknown>;
   /** The authorized author of the head edition. */
   author: string;
@@ -382,77 +341,47 @@ export interface FoldedControl {
   /** creatorHex → that creator's own registry list (for maintaining one's registry). */
   registriesByCreator: Map<string, string[]>;
   /**
-   * Pin Lists (vsk 11) by their `pins_locator` eid → the head's RAW content.
-   * Content is never decoded here: the sealed form needs a Channel key the
-   * fold has no business holding, and a cap-violating or unreadable list reads
-   * as EMPTY rather than affecting the fold at all (CORD-04 §7).
+   * Pin Lists (vsk 11) by `pins_locator` eid → the head's RAW content (decoding
+   * needs a Channel key). Unreadable or cap-violating lists read as EMPTY (CORD-04 §7).
    */
   pinLists: Map<string, { content: string; author: string }>;
   /**
-   * Community Signals (vsk 12, CORD-04 §8) by signal_id — transient staff
-   * directives, folded and gated per token. An absent token is inactive. Only
-   * signal_ids this build implements can appear: an unknown one is never
-   * coordinate-derived, so it is invisible here (and dropped at the next
-   * Refounding) rather than mis-enforced.
+   * Community Signals (vsk 12, CORD-04 §8) by signal_id; absent = inactive. Only
+   * signal_ids this build implements can appear (unknown ones are never
+   * coordinate-derived).
    */
   signals: Map<string, FoldedSignal>;
   /** Per-entity head version + hash, for chaining the next edition (key = eid hex). */
   heads: Map<string, EntityHead>;
-  /**
-   * The chosen head EDITION per entity (key = eid hex) — carries the
-   * re-wrappable plaintext seal a Refounding's compaction republishes.
-   */
+  /** The chosen head EDITION per entity (eid hex), carrying the seal compaction republishes. */
   headEditions: Map<string, ParsedEdition>;
   /**
-   * Floored entities the served set could not account for: gap-held (the
-   * chain to our floor is withheld), or with zero served editions at all. A
-   * data-availability signal ONLY — an entity that was served but
-   * authority-rejected (stripped, banned) is deliberately absent, not listed.
-   * A Refounding MUST NOT compact while non-empty (CORD-06 §3
-   * fold-all-or-abort), or the entities listed here are silently dropped from
-   * the new epoch.
+   * Floored entities the served set couldn't account for (gap-held, or zero served
+   * editions) — data availability ONLY; authority-rejected entities are absent. A
+   * Refounding MUST NOT compact while non-empty (CORD-06 §3).
    */
   incomplete: string[];
   /**
-   * npub → the created_at (SECONDS) of the newest AUTHORIZED banlist edition
-   * that named them. A member's Guestbook Join that predates their most recent
-   * ban is a stale membership: a ban is a departure the Guestbook never records
-   * (self-removal is network-silent), so without this an unbanned member's old
-   * Join resurfaces as a phantom on the roster. Derived from the same authority
-   * gate as `banned`, so a forged banlist can't backdate-suppress a member.
+   * npub → created_at (SECONDS) of the newest AUTHORIZED banlist edition naming
+   * them, so a Join predating their latest ban doesn't resurface as a phantom
+   * member. Same authority gate as `banned`.
    */
   bannedAt: Map<string, number>;
 }
 
 /**
  * Whether a snapshot decoded off disk still has the shape this build reads.
- *
- * `readFolded` rehydrates JSON behind an unchecked `as T`, so a snapshot written
- * by an older build arrives TYPED as current and is then dereferenced as
- * current. That is not hypothetical: {@link FoldedChannel.metadata} was added
- * after this cache already existed, and the readers came later still —
- * `channelsView` reads `def.metadata.custom` unguarded, so an older snapshot
- * threw during the boot render, and a moderator's next reorder would have built
- * its edition from a metadata object that isn't there.
- *
- * Checked at the boundary rather than patched at each reader, because the fold
- * is a pure cache: rejecting it costs one re-fold from editions already on
- * disk, and the next {@link writeFolded} replaces the entry under the same key,
- * so there is nothing to migrate and nothing left behind. Extend this when the
- * persisted shape gains a field readers assume is there.
+ * `readFolded` casts unchecked, and older snapshots have crashed readers before.
+ * Rejecting costs one re-fold and the next write replaces it. Extend this when the
+ * persisted shape gains a field readers rely on.
  */
 export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
   const fold = value as FoldedControl | undefined;
   if (!fold || !(fold.channels instanceof Map) || !(fold.heads instanceof Map)) return false;
-  // Every Map the fold carries has to be checked, not a representative sample:
-  // a snapshot from a build that predates a field passes every check that
-  // field is missing from, and then throws on first read. `pinLists` arrived
-  // after `channels` and `heads`, and a snapshot without it must be a MISS
-  // rather than an empty list — an empty pin list reads as "nothing pinned",
-  // which would let a write replace entries it never saw (CORD-04 §7).
+  // Check every Map: a snapshot predating `pinLists` must MISS, not read as "nothing
+  // pinned", or a write could replace entries it never saw (CORD-04 §7).
   if (!(fold.pinLists instanceof Map)) return false;
-  // `signals` arrived after `pinLists`; a snapshot without it must MISS and
-  // re-fold, or `activePause`/enforcement would read `undefined.get` on boot.
+  // Likewise `signals`, or pause enforcement throws on boot.
   if (!(fold.signals instanceof Map)) return false;
   for (const def of fold.channels.values()) {
     if (!def || typeof def.metadata !== "object" || def.metadata === null) return false;
@@ -460,12 +389,9 @@ export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
   return true;
 }
 
-/**
- * A community's cached control fold, or undefined on a miss OR a snapshot this
- * build can't read. Every reader of the persisted fold goes through here.
- */
+/** A community's cached control fold; undefined on a miss or an unreadable shape. */
 export async function readControlFold(idHex: string): Promise<FoldedControl | undefined> {
-  // Shared: a fold is never mutated after it's built (see readFoldedShared).
+  // Shared: folds are never mutated (see readFoldedShared).
   const folded = await readFoldedShared<FoldedControl>(controlFoldKey(idHex));
   return isCurrentFoldedControl(folded) ? folded : undefined;
 }
@@ -477,49 +403,20 @@ function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdit
 }
 
 /**
- * Fold one entity's editions into an ORDERED candidate list:
+ * Fold one entity's editions into an ORDERED candidate list: the chain-verified
+ * fold head first, then every other edition version-DESCENDING (tiebreak winner
+ * first). The caller takes the first passing its authority gate, since
+ * "the highest authority-verified head" (CORD-04 §1) needs gating before choosing.
+ * Equal-version fork siblings are all kept: the rumor-id tiebreak is grindable.
  *
- *   1. the chain-verified fold head first (refuse-downgrade, contiguity — the
- *      steady-state answer, and the compaction case too: a re-wrapped head
- *      with a dangling `prev` is still the lowest-anchored walk's top);
- *   2. then EVERY remaining edition, version-DESCENDING (equal versions by
- *      rumor id, the fold's tiebreak winner first) — the candidates a client
- *      may accept when (and only when) a higher-priority candidate fails the
- *      caller's authority gate. "The highest authority-verified head"
- *      (CORD-04 §1) requires gating before choosing, or a forger could
- *      suppress a legit entity with garbage at a higher (or dangling lower)
- *      version.
+ * `floor` is a tracking client's last-accepted head: if the served chain doesn't
+ * reach it (withheld middle), report a GAP and drop everything above the floor
+ * (fail closed, CORD-04 §1). A fresh joiner (no floor) accepts a dangling `prev`
+ * (compaction bootstrap).
  *
- * Equal-version fork SIBLINGS are all kept: the tiebreak (lower rumor id) is
- * grindable, so evicting the loser here would let an id-mined fork of the
- * chain tip suppress the real edition before any authority gate ever saw it
- * (an unauthorized banlist fork emptying the banlist, a low-rank grant fork
- * revoking an admin). The tiebreak orders siblings; the gate decides.
- *
- * The caller picks the first candidate that passes its gate and records it in
- * `heads`.
- *
- * `floor` is a TRACKING client's last-accepted head for this entity (from the
- * prior fold's snapshot). When present and the served editions don't link
- * contiguously up to it (a hostile relay withholding the middle of the chain),
- * the fold reports a GAP: a synced client must fail closed and NOT downgrade to
- * the dangling head (CORD-04 §1). We drop every candidate strictly above the
- * floor in that case, so the entity holds at its last-known-good head and
- * refetches. A FRESH joiner (no floor) still accepts the highest head despite a
- * dangling `prev` — that is the legitimate compaction bootstrap.
- *
- * `snapshot` is the subset of editions wrapped under the CURRENT epoch's
- * control group, passed once the community has Refounded at least once. A
- * Refounding compacts every head into the new epoch (CORD-06 §3), so the
- * current epoch is self-contained and readable-but-superseded fragments from
- * older epochs must not outrank it. The snapshot folds by BOOTSTRAP
- * (highest signed version, floor as version-only refuse-downgrade), NEVER the
- * chain walk: behind a compaction, dangling `prev`s are normal, and — since
- * seal signatures survive re-wrap — any group-key holder can re-serve a real
- * OLD edition under the current group. Version anchoring is what bounds that:
- * a re-wrap cannot raise the version inside the signed seal, so a re-served
- * stale edition always loses to the compacted head. Old-epoch editions remain
- * fallback candidates for the authority gate.
+ * `snapshot` (post-Refounding): the entity folds by BOOTSTRAP (highest signed
+ * version, floor as version-only refuse-downgrade), never the chain walk. A re-wrap
+ * can't raise the signed version, so a re-served stale edition always loses.
  */
 function headCandidates(
   editions: ParsedEdition[],
@@ -532,18 +429,14 @@ function headCandidates(
   let gapped = false;
 
   if (snapshot) {
-    // Compaction-era arm. Snapshot presence selects the ARM; version selects
-    // the HEAD — over ALL editions, not the subset. Honest paths are identical
-    // (the compacted head is ≥ every readable old-epoch edition), but bounding
-    // the bootstrap to the subset would let colluding relays serve only a
-    // stale re-wrap and outrank a higher true head sitting in our own store.
+    // Snapshot presence selects the arm; the head is chosen over ALL editions, so
+    // relays serving only a stale re-wrap can't outrank a higher head in our store.
     const idx = bootstrapHead(editions.map(toFoldEdition), floor?.version ?? 0n);
     if (idx !== null) {
       ordered.push(editions[idx]);
       seenRumors.add(bytesToHex(editions[idx].rumorId));
     } else if (floor !== undefined) {
-      // Nothing at/above our floor was served: the head we already accepted
-      // vanished from the served set — withheld, fail closed.
+      // Nothing at/above our floor served: the accepted head was withheld; fail closed.
       gapped = true;
       onGap?.();
     }
@@ -551,15 +444,8 @@ function headCandidates(
     const folds: Edition[] = editions.map(toFoldEdition);
     const result = fold(folds, floor?.version ?? 0n, floor?.hash);
 
-    // Tracking client + a gap: the served chain doesn't reach our floor. Refuse
-    // to adopt anything above the floor — a withheld-middle attack can't push a
-    // higher dangling edition onto a client that already advanced the chain.
-    //
-    // A null head under a floor is that same withholding by omission: every
-    // served edition sat BELOW the floor, so the head we already accepted was
-    // not served at all. `fold` reports no gap for it (it skips below-floor
-    // editions before it ever looks for a chain), which is why this arm has to
-    // name the case itself — the snapshot arm does the same above.
+    // A gap, or a null head under a floor (everything served was below it — `fold`
+    // doesn't report that as a gap): refuse anything above the floor.
     gapped = floor !== undefined && (result.gap || result.head === null);
     if (gapped) onGap?.();
 
@@ -570,30 +456,16 @@ function headCandidates(
   }
   const rest = editions
     .filter((e) => {
-      // A compaction re-wrap carries the same rumor — one candidacy per rumor.
       const id = bytesToHex(e.rumorId);
       if (seenRumors.has(id)) return false;
       seenRumors.add(id);
-      // Refuse-to-downgrade (CORD-04 §1): "a lower version is ignored, so a
-      // relay replaying a stale Grant or a lifted Ban is rejected". A
-      // below-floor edition is never a candidate — not even as the last one
-      // standing, which is exactly the shape that replay takes. Withholding
-      // everything at or above the floor must suspend the entity (it is
-      // reported as a gap above, and refetched), never quietly seat the stale
-      // state the attacker chose to serve.
+      // Refuse-to-downgrade (CORD-04 §1): below-floor editions are never candidates,
+      // not even the last one standing (that's exactly a replay).
       if (floor !== undefined && e.version < floor.version) return false;
-      // Under a gap, suppress every candidate above the floor too: only the
-      // floor's own version (a re-served head we can still verify against our
-      // snapshot) remains admissible, so the entity never downgrades to a
-      // dangling head either.
+      // Under a gap, only the floor's own version remains admissible...
       if (gapped && e.version > floor!.version) return false;
-      // ...and "verify against our snapshot" has to actually verify. Without
-      // this the surviving floor-version candidate was merely the lowest rumor
-      // id at that version, so an equal-version FORK — same version, different
-      // content, grindable id — silently replaced the head we had already
-      // accepted, and `pickHead` then recorded the fork's hash as the new
-      // floor. A re-served head is admissible; a different edition wearing its
-      // version number is not.
+      // ...and only if it IS our accepted head (hash match), not a grindable
+      // equal-version fork.
       if (gapped && !bytesEq(e.selfHash, floor!.hash)) return false;
       return true;
     })
@@ -606,19 +478,10 @@ function headCandidates(
 }
 
 /**
- * Pick the first candidate passing `gate`; record it as the entity's head.
- *
- * `rankOf` breaks an equal-version tie by authority, and every gated entity
- * passes it. Without it the tie fell to the candidate order, whose last term is
- * the rumor id — a hash of content the publisher chooses, so it can be ground.
- * That let any holder of the relevant bit fork the owner's edition at the same
- * version and mine an id that sorted first: a community's name or a channel's
- * definition overwritten indefinitely, by someone who could not have replaced
- * that edition on authority. `authorizeDelegation` already orders roles and
- * grants this way; this is the same rule for the entities it does not cover.
- *
- * Only the tie is affected. Version ordering, the refuse-to-downgrade floor and
- * the gap rules are settled in `headCandidates` before anything gets here.
+ * Pick the first candidate passing `gate`, recording it as the entity's head.
+ * `rankOf` breaks equal-version ties by authority rather than the grindable rumor
+ * id, so a lower-ranked bit-holder can't fork the owner's edition. Version order,
+ * floor and gap rules are settled in `headCandidates`.
  */
 function pickHead(
   candidates: ParsedEdition[],
@@ -634,8 +497,7 @@ function pickHead(
       head = p;
       continue;
     }
-    // Candidates arrive version-descending, so once the version drops below the
-    // first passing one there is nothing left that could outrank it.
+    // Candidates are version-descending: nothing lower can outrank the first pass.
     if (p.version !== head.version) break;
     if (rankOf(p.author) < rankOf(head.author)) head = p;
   }
@@ -662,30 +524,17 @@ function versionGroups<T extends { parsed: ParsedEdition }>(candidates: T[]): T[
 }
 
 /**
- * The delegation fixpoint (CORD-04 §2): start with the owner authorized (their
- * rank comes from the community_id, not any fold), then admit role/grant
- * entities whose signer is authorized to make them, repeating until stable.
- * Per entity the ORDERED candidates are tried in turn and the first authorized
- * one settles it, so a forger's garbage edition can't suppress a legit head.
- * Anything whose signer never becomes authorized is dropped (the
- * self-promotion / forged-delegation defense).
+ * The delegation fixpoint (CORD-04 §2): starting from the owner, admit role/grant
+ * entities whose signer is authorized, repeating until stable; the first authorized
+ * candidate per entity settles it. Unreachable signers are dropped.
  *
- * Editing is ACTING ON A TARGET (CORD-04 §5): besides outranking what an
- * edition hands out, a non-owner signer must strictly outrank what it REPLACES
- * — the standing role position, or the rank a grant's predecessor conferred —
- * or a revoke (empty role_ids) / demotion would be free to anyone. Each
- * entity's candidates are walked version-ascending so the "standing" state is
- * itself an admissible edition, never a forger's plant. Equal-version fork
- * siblings settle to ONE winner per version, highest authority first — the
- * grindable rumor-id tiebreak never lets a lower rank evict its superior's
- * edition.
+ * Editing acts ON A TARGET (CORD-04 §5): a non-owner must also strictly outrank
+ * what an edition REPLACES (the standing role position or the rank a grant's
+ * predecessor conferred). Candidates are walked version-ascending; equal-version
+ * forks settle highest-authority first.
  *
- * The fold must be a function of the edition SET, never its arrival order:
- * entities are processed in sorted-eid order, and an entity DEFERS while any
- * state its gate reads is still pending — a handed-out role definition, or a
- * candidate author's own rank source (their grant entity). A stalled fixpoint
- * freezes those deferrals one at a time (a still-pending dependency is then
- * provably dead or cyclic), so it always terminates.
+ * Order-independent: entities go in sorted-eid order and DEFER while their gate's
+ * inputs are pending; freeze latches resolve stalls, so it always terminates.
  */
 function authorizeDelegation(
   roleCandidates: Map<string, Array<{ role: Role; author: string; parsed: ParsedEdition }>>,
@@ -698,7 +547,6 @@ function authorizeDelegation(
   const roster = emptyRoles();
   const settledRoles = new Set<string>();
   const settledGrants = new Set<string>();
-  // Deterministic processing order — never keyed to edition arrival.
   const roleEids = [...roleCandidates.keys()].sort();
   const grantEids = [...grantCandidates.keys()].sort();
   // member → their grant entity: the rank source the author-deferral watches.
@@ -706,32 +554,19 @@ function authorizeDelegation(
   for (const [eid, cands] of grantCandidates) {
     if (cands.length > 0) grantEidOfMember.set(cands[0].grant.member, eid);
   }
-  // The CORD-04 §5 sync floor, for the delegation chain itself. A Role or Grant
-  // edition is an authority action like any other, so a non-owner must name the
-  // Grant it acts under — otherwise a client whose roster is one sweep stale
-  // honors a promotion (or a demotion) issued by an admin already stripped of
-  // MANAGE_ROLES.
-  //
-  // Resolved against the heads settled by THIS pass, not a pre-built candidate
-  // index. Owner-rooted grants settle first (the owner cites nothing), which
-  // unlocks the admins' citations on a later round, so the fixpoint bootstraps
-  // itself and no circularity arises.
+  // CORD-04 §5 sync floor for the delegation chain itself: a non-owner must cite its
+  // Grant, resolved against heads settled THIS pass (owner grants settle first, so
+  // it bootstraps without circularity).
   const citedOk = (p: ParsedEdition): boolean =>
     citationSatisfied({ heads, ownerHex }, communityId, p.author, p.authority);
 
   let changed = true;
-  // While false, a grant handing out a role that still has unsettled candidates
-  // WAITS (that role may yet reach the roster and set the standing rank). Once
-  // the fixpoint can settle no more roles, the flag flips: any still-unsettled
-  // role is provably dead, so the grants blocked only on dead roles resolve
-  // (and drop, since a dead role confers nothing) instead of hanging forever.
+  // While false, grants handing out still-unsettled roles WAIT; once flipped,
+  // unsettled roles are provably dead and those grants resolve (and drop).
   let rolesFrozen = false;
-  // While false, an entity with a candidate whose author's own grant entity is
-  // unsettled WAITS — the author's rank decides that candidate's admissibility,
-  // so settling early would key the roster to edition ARRIVAL order (a real
-  // admin's revoke dropped because their grant folded later). Flipped only
-  // after a stall with roles already frozen: what's left is dead or a genuine
-  // revocation cycle, resolved in sorted-eid order (deterministic either way).
+  // While false, entities whose candidate authors' grants are unsettled WAIT, so
+  // the roster doesn't depend on arrival order. Flipped after a stall with roles
+  // frozen; what remains is dead or cyclic, resolved in sorted-eid order.
   let ranksFrozen = false;
 
   const settle = (p: ParsedEdition) => {
@@ -743,17 +578,13 @@ function authorizeDelegation(
   const rankPending = (author: string, selfEid?: string): boolean => {
     if (author === ownerHex) return false;
     const aeid = grantEidOfMember.get(author);
-    // An entity never waits on itself: a self-grant's only possible rank source
-    // is the entity being decided, which is exactly the self-promotion the
-    // fixpoint exists to drop.
+    // Never wait on itself: that would be the self-promotion the fixpoint drops.
     return aeid !== undefined && aeid !== selfEid && !settledGrants.has(aeid);
   };
 
   /**
-   * Equal-version fork siblings, highest authority first: the owner, then rank
-   * (lower position), then the fold's rumor-id tiebreak. The id is grindable;
-   * authority is not — so a fork can only displace an edition its author could
-   * have overwritten anyway.
+   * Equal-version fork siblings, highest authority first (owner, then position, then
+   * rumor id); the id is grindable, authority is not.
    */
   const authorityFirst = (a: { author: string; parsed: ParsedEdition }, b: { author: string; parsed: ParsedEdition }): number => {
     const rank = (author: string) => (author === ownerHex ? -1 : (highestPosition(roster, author) ?? Number.MAX_SAFE_INTEGER));
@@ -768,10 +599,8 @@ function authorizeDelegation(
   while (changed) {
     changed = false;
 
-    // Roles: the owner may define any role (position ≥ 1 — the top is not
-    // mintable, enforced at parse); a non-owner needs MANAGE_ROLES, must
-    // strictly outrank the position they mint, AND must strictly outrank the
-    // standing position they replace (no repositioning a role above you).
+    // Roles: owner defines any (position ≥ 1); a non-owner needs MANAGE_ROLES and must
+    // strictly outrank both the minted position and the standing position replaced.
     for (const eid of roleEids) {
       if (settledRoles.has(eid)) continue;
       const candidates = roleCandidates.get(eid)!;
@@ -788,7 +617,6 @@ function authorizeDelegation(
           break; // one winner per version — a fork sibling can't sidestep it
         }
       }
-      // The fold's candidate priority (chain-verified head first), gated.
       const pick = candidates.find((c) => admissible.has(c.parsed));
       if (!pick) continue;
       roster.roles.push(pick.role);
@@ -797,24 +625,14 @@ function authorizeDelegation(
       changed = true;
     }
 
-    // Grants: a non-owner needs MANAGE_ROLES, must strictly outrank every
-    // Role handed out, AND must strictly outrank the target's standing rank —
-    // a revoke (empty role_ids) or demotion acts ON the member (CORD-04 §5/§6),
-    // so it is never free to a lower rank (or to no rank at all).
-    //
-    // The standing walk reads role POSITIONS and author RANKS, so a grant may
-    // only settle once every role its candidates hand out AND every candidate
-    // author's own grant entity has stopped being PENDING. Otherwise a
-    // predecessor handing out a not-yet-settled role would compute an empty
-    // `standing` (a low-rank revoke chained behind it settling vacuously), and
-    // a not-yet-ranked author's legitimate revoke would drop as inadmissible —
-    // either way the very holes the gate closes, re-opened by fold ORDER.
+    // Grants: a non-owner needs MANAGE_ROLES and must strictly outrank every Role
+    // handed out AND the target's standing rank (revokes act ON the member, CORD-04
+    // §5/§6). A grant settles only once its roles and candidate authors' grants are no
+    // longer PENDING, or fold order would reopen those holes.
     for (const eid of grantEids) {
       if (settledGrants.has(eid)) continue;
       const candidates = grantCandidates.get(eid)!;
-      // A referenced role is unresolved iff it still has live role candidates
-      // that haven't settled; such a grant entity waits for a later pass — but
-      // only until roles are frozen (past that, an unsettled role is dead).
+      // Waits for unsettled roles until roles are frozen.
       const rolePending = (rid: string) => roleCandidates.has(rid) && !settledRoles.has(rid);
       if (!rolesFrozen && candidates.some((c) => c.grant.roleIds.some(rolePending))) continue;
       if (!ranksFrozen && candidates.some((c) => rankPending(c.author, eid))) continue;
@@ -847,10 +665,8 @@ function authorizeDelegation(
       changed = true;
     }
 
-    // The fixpoint stalled with deferrals still holding entities back: flip
-    // one freeze latch (roles first — a rank source may itself be blocked only
-    // on a dead role) and let another round resolve them. Each latch only ever
-    // moves its gate later and flips once, so termination is preserved.
+    // Stalled with deferrals: flip one freeze latch (roles first) and go again; each
+    // flips once, so this terminates.
     if (!changed && !rolesFrozen) {
       rolesFrozen = true;
       changed = true;
@@ -860,8 +676,7 @@ function authorizeDelegation(
     }
   }
 
-  // Deterministic cap: a Community carries at most 100 Roles — fold the 100
-  // lowest role_ids and ignore the rest (CORD-04 §2).
+  // CORD-04 §2: at most 100 Roles; fold the 100 lowest role_ids.
   if (roster.roles.length > MAX_ROLES_PER_COMMUNITY) {
     roster.roles.sort((a, b) => (a.roleId < b.roleId ? -1 : a.roleId > b.roleId ? 1 : 0));
     roster.roles = roster.roles.slice(0, MAX_ROLES_PER_COMMUNITY);
@@ -873,16 +688,10 @@ function authorizeDelegation(
 const foldMemo = new Map<string, FoldedControl>();
 
 /**
- * Replay a set of opened control editions into current state. `ownerHex` is
- * the community's proven owner (verified against the id commitment when the
- * membership entry was accepted).
- *
- * Runs in up to two passes: the first fold resolves the Banlist (itself
- * roster-gated), and if any edition was authored by a banned npub the fold
- * re-runs with those editions excluded — a banned npub's authority actions are
- * dropped like every other event of theirs (CORD-04 §4). The first pass's
- * Banlist stays the final word (the owner is never bannable, so the anti-
- * roster can't be used to erase itself).
+ * Replay opened control editions into current state (`ownerHex` is the proven
+ * owner). Up to two passes: if the Banlist names authors of any editions, re-fold
+ * without them (CORD-04 §4); pass 1's Banlist stays final (the owner is never
+ * bannable).
  */
 export function foldControlState(
   editions: ParsedEdition[],
@@ -896,38 +705,25 @@ export function foldControlState(
   const floorSig = priorHeads
     ? [...priorHeads.entries()].map(([k, v]) => `${k}@${v.version}`).sort().join(",")
     : "";
-  // snapshotIds is part of the key: attribution can change (a re-wrap arriving)
-  // without the edition set changing, and must not serve a stale fold.
+  // Attribution (a re-wrap arriving) can change without the edition set changing.
   const snapSig = snapshotIds ? [...snapshotIds].sort().join(",") : "";
-  // Identified by RUMOR id, not the carrier wrap's: the one thing a re-wrap
-  // changes without changing the edition set is attribution, and `snapSig`
-  // above already covers that.
+  // By RUMOR id: `snapSig` already covers re-wrap attribution.
   const memoKey = `${cidHex}:${ownerHex}:${floorSig}:${snapSig}:${editions.map((e) => e.opened.rumorId).sort().join(",")}`;
   const hit = foldMemo.get(memoKey);
-  // A memo HIT is not free: the key above sorts and joins every edition id in the
-  // plane, so a large plane pays O(n log n) of string work per call just to
-  // discover it already has the answer. Counted separately so that cost is
-  // visible instead of hiding inside the miss.
+  // A hit still costs O(n log n) key building; counted separately to stay visible.
   if (hit) {
     perfCount("fold.controlState (memo hit)", performance.now() - start, editions.length, "editions");
     return hit;
   }
 
   const first = foldOnce(editions, communityId, ownerHex, priorHeads, snapshotIds);
-  // The owner is "supreme and unremovable" (CORD-04 §2), so a Banlist naming
-  // them is honored for everyone it validly names and inert as to them. The
-  // filter belongs HERE, on the set every reader consumes, not in each reader:
-  // "every honest client drops every event from a banned npub" (§4) is applied
-  // by the chat fold, the guestbook, the rekey rotator gate, the call roster
-  // and the join path, and a rule only some of them apply is one an authorized
-  // BAN holder can use to silence the owner in every member's client while the
-  // fold still (correctly) honors the owner's authority.
+  // The owner is supreme (CORD-04 §2): strip them from `banned` HERE, on the set
+  // every reader consumes, or a BAN holder could silence the owner everywhere.
   const banned = new Set([...first.banned].filter((pk) => pk !== ownerHex));
   let result: FoldedControl = banned.size === first.banned.size ? first : { ...first, banned };
   if (banned.size > 0 && editions.some((e) => banned.has(e.author))) {
-    // Pass 1 stays authoritative for `incomplete`: pass 2 drops banned authors'
-    // editions by SEMANTICS (CORD-04 §4), not data loss — a gap it introduces
-    // must not read as "plane unserved" and block the ban→refound flow.
+    // Pass 1 stays authoritative for `incomplete`: pass 2's gaps are semantic drops,
+    // not data loss, and must not block ban→refound.
     result = {
       ...foldOnce(editions.filter((e) => !banned.has(e.author)), communityId, ownerHex, priorHeads, snapshotIds),
       banned,
@@ -936,7 +732,7 @@ export function foldControlState(
     };
   }
 
-  // Single-entry-per-community cache so the memo doesn't grow unbounded.
+  // One entry per community.
   for (const k of foldMemo.keys()) if (k.startsWith(`${cidHex}:`)) foldMemo.delete(k);
   foldMemo.set(memoKey, result);
   perfCount("fold.controlState", performance.now() - start, editions.length, "editions");
@@ -944,15 +740,9 @@ export function foldControlState(
 }
 
 /**
- * The community's Public/Private mode, derived (CORD-05 §5): a non-empty
- * aggregate live-link set means Public. Behavior hangs off this — a ban in a
- * Public community is the Banlist alone (a rotation can't sever someone who
- * can re-fetch the refreshed bundle, and it strands every stale link's future
- * joiners on a dead epoch); only a Private ban Refounds (CORD-06 §3).
- *
- * `excludingCreator` evaluates the mode as if that member's registry were
- * already dropped: the target of an in-flight ban loses their links with
- * their authority, so banning the sole link creator still severs.
+ * Public/Private mode (CORD-05 §5): any aggregate live link means Public. A Public
+ * ban is the Banlist alone; only a Private ban Refounds (CORD-06 §3).
+ * `excludingCreator` drops an in-flight ban target's registry first.
  */
 export function isCommunityPublic(folded: FoldedControl, excludingCreator?: string): boolean {
   for (const [creator, signers] of folded.registriesByCreator) {
@@ -963,17 +753,10 @@ export function isCommunityPublic(folded: FoldedControl, excludingCreator?: stri
 }
 
 /**
- * Whether any live link belongs to someone OTHER than `viewer` — the links a
- * rotation by `viewer` would strand. The rotation gate, refined: a rotator
- * refreshes their OWN bundles atomically with the rotation (they hold every
- * signer_sk), so their links survive any rotation; only a foreign creator's
- * link goes stale, because nobody else can re-post its bundle. So a client
- * must not rotate while a foreign live link exists, and may rotate freely
- * when every live link is its own — even though the community still reads
- * Public (the CORD-05 §5 flag is unchanged by this).
- *
- * `excludingCreators` drops further registries from the view — the target(s)
- * of an in-flight ban, whose links die with their authority.
+ * Whether any live link belongs to someone other than `viewer` — links a rotation
+ * by `viewer` would strand (a rotator refreshes their own). Rotate only when none
+ * exist, even if the community reads Public. `excludingCreators` drops in-flight
+ * ban targets' registries.
  */
 export function hasForeignLiveLinks(
   folded: FoldedControl,
@@ -991,23 +774,11 @@ export function hasForeignLiveLinks(
 }
 
 /**
- * Whether an actor's `vac` satisfies the CORD-04 §5 sync floor against a folded
- * control plane — the read-side half of an authority action taken OUTSIDE the
- * roster fold (a moderation delete, a kick).
- *
- * COMPLETENESS, NOT AUTHORIZATION. It answers "have I synced enough of this
- * actor's Grant to judge them", never "may they act" — the caller still resolves
- * rank against the CURRENT roster, so citing an old-but-once-valid Grant
- * grandfathers nobody and a since-demoted actor is refused regardless.
- *
- * Deliberately mirrors Vector's `authority_citation_satisfied` case for case;
- * the two clients diverging here means one honors a moderation action the other
- * silently ignores, which is invisible to both sides.
- *
- * NOT usable inside the roster fold itself: on a bootstrap there are no folded
- * heads yet, so gating editions on them refuses every non-owner edition and the
- * roster can never fold at all. The in-fold path indexes grants from the same
- * pass instead (see `citationOk` in {@link foldControlState}).
+ * Whether an actor's `vac` satisfies the CORD-04 §5 sync floor, for authority
+ * actions OUTSIDE the roster fold (deletes, kicks). COMPLETENESS, not
+ * authorization: callers still check rank against the current roster. Mirrors
+ * Vector's `authority_citation_satisfied` case for case — must stay in sync. Not
+ * usable inside the fold (see `citationOk` in {@link foldControlState}).
  */
 export function citationSatisfied(
   folded: Pick<FoldedControl, "heads" | "ownerHex">,
@@ -1015,39 +786,26 @@ export function citationSatisfied(
   actorHex: string,
   citation: AuthorityCitation | undefined,
 ): boolean {
-  // The owner is proven by the community_id itself — no Grant exists to cite.
+  // The owner is proven by the community_id; nothing to cite.
   if (actorHex === folded.ownerHex) return true;
   if (!citation) return false;
-  // It must name the actor's OWN Grant coordinate: citing a foreign edition we
-  // happen to hold cannot borrow completeness.
+  // Must name the actor's OWN Grant coordinate.
   const eid = bytesToHex(grantLocator(communityId, hex32(actorHex)));
   if (bytesToHex(citation.entityId) !== eid) return false;
   const head = folded.heads.get(eid);
   if (!head) return false;
-  // Synced PAST it: the roster check already reflects the later head.
   if (head.version > citation.version) return true;
-  // Synced to exactly it: the cited hash must be the edition that won our fold,
-  // else they cited a non-canonical fork of their own Grant.
+  // At exactly it: the hash must match our fold's winner, not a fork.
   if (head.version === citation.version) return bytesToHex(head.hash) === bytesToHex(citation.editionHash);
-  // BEHIND it — we cannot confirm the authority, so the action parks and
-  // self-heals when the Grant arrives. Fail closed.
+  // Behind it: park until the Grant arrives (fail closed).
   return false;
 }
 
 /**
- * Whether banning `targets` should also rotate the keys — judged ONCE for the
- * whole group, because the rotation is: a mass ban excludes every target from
- * a single Refounding, never one rotation per target (each rotation forces
- * every member through another adoption round).
- *
- * Ordinarily no rotation while a foreign live link exists — see
- * {@link hasForeignLiveLinks}; every target's own registry is excluded from
- * that view, since their links die with their authority. `force` overrides,
- * and exists for a ban answering control-plane abuse: there the rotation IS
- * the remedy, because a banlist silences a flooder but leaves them holding the
- * root they mint junk with. Stranding a foreign link (until its creator next
- * opens the app and republishes its bundle) is the lesser harm against an
- * attack that otherwise continues indefinitely.
+ * Whether banning `targets` should rotate keys, judged once for the group (one
+ * Refounding, not one per target). Normally not while a foreign live link exists
+ * ({@link hasForeignLiveLinks}; targets' registries excluded). `force` is for
+ * control-plane abuse, where the rotation strands the flooder's root.
  */
 export function banShouldRotateMany(
   folded: FoldedControl | undefined,
@@ -1070,29 +828,23 @@ export function banShouldRotate(
 }
 
 /**
- * signal_id → the permission that authorizes writing it (CORD-04 §8). This map
- * is also the set of signal_ids this build implements: the fold derives a
- * coordinate only for these tokens, so an unknown directive is invisible.
+ * signal_id → permission authorizing it (CORD-04 §8). Also the set of implemented
+ * signal_ids: unknown directives are invisible.
  */
 const SIGNAL_GATES: Record<string, bigint> = {
   [SIGNAL_PAUSE]: Permissions.MANAGE_CHANNELS,
 };
 
 /**
- * The longest `until` a pause edition may name, measured from its OWN
- * `created_at` (CORD-04 §8). Bounded against the edition rather than the
- * reader's clock so every reader reaches the same verdict, and bounded at all
- * because the mistake it catches is silent and severe: a writer emitting
- * milliseconds where the field is seconds mints a fifty-thousand-year freeze
- * that no expiry will ever clear. An open-ended pause omits `until`.
+ * Max pause `until`, measured from the edition's own `created_at` (CORD-04 §8) so
+ * every reader agrees. Catches ms-for-seconds mistakes (a 50,000-year freeze).
+ * Open-ended pauses omit `until`.
  */
 const MAX_PAUSE_UNTIL_SECS = 30 * 24 * 60 * 60;
 
 /**
- * Whether a signal head's raw content JSON is well-formed for its signal_id.
- * `createdAt` is the edition's own timestamp — the anchor the `pause` bound is
- * measured from. A failing head falls through to the next authorized candidate,
- * exactly as a malformed edition of any other entity does.
+ * Whether a signal head's content is well-formed for its signal_id (`createdAt`
+ * anchors the pause bound). Failures fall through to the next candidate.
  */
 function validateSignal(signalId: string, content: string, createdAt: number): boolean {
   let v: unknown;
@@ -1116,20 +868,13 @@ function validateSignal(signalId: string, content: string, createdAt: number): b
 
 /** A Community's active pause (CORD-04 §8), resolved for `nowSec`. */
 export interface ActivePause {
-  /** Enactment time in SECONDS — the floor a reader folds non-staff messages from. */
+  /** Enactment time in SECONDS — the floor from which non-staff messages fold. */
   since: number;
-  /** Optional auto-clear time in seconds. */
   until?: number;
-  /** The staffer who enacted it. */
   by: string;
 }
 
-/**
- * The pause resolved from its folded head alone. Split out so a caller that
- * holds only the head — the wire's per-community pause cache, which keeps this
- * one small object rather than a whole `FoldedControl` per background
- * community — resolves it against `nowSec` without re-folding.
- */
+/** The pause from its folded head alone, for callers caching just the head (the wire). */
 export function activePauseOf(head: FoldedSignal | undefined, nowSec: number): ActivePause | undefined {
   if (!head) return undefined;
   const c = head.content as { paused?: unknown; until?: unknown };
@@ -1140,13 +885,9 @@ export function activePauseOf(head: FoldedSignal | undefined, nowSec: number): A
 }
 
 /**
- * The Community's active pause, or undefined. Active = the folded "pause" head
- * has `paused === true` AND (no `until`, or `until` still in the future at
- * `nowSec`). The `until` self-clears without a clearing edition, so a raid
- * response survives the pauser going offline (CORD-04 §8) — which obliges a
- * caller rendering off this to SCHEDULE the expiry, not merely to compare at
- * render: a frozen room whose `until` passed unobserved is indistinguishable
- * to its members from one nobody lifted (see `usePauseClock`).
+ * The active pause: `paused === true` and no `until` or `until` > `nowSec`.
+ * `until` self-clears (CORD-04 §8), so renderers must SCHEDULE the expiry (see
+ * `usePauseClock`).
  */
 export function activePause(folded: FoldedControl | undefined, nowSec: number): ActivePause | undefined {
   return activePauseOf(folded?.signals.get(SIGNAL_PAUSE), nowSec);
@@ -1181,9 +922,8 @@ function foldOnce(
   const candidatesOf = (vsk: string): Map<string, ParsedEdition[]> => {
     const out = new Map<string, ParsedEdition[]>();
     for (const [eid, list] of byVsk.get(vsk) ?? new Map<string, ParsedEdition[]>()) {
-      // Current-epoch subset: when any edition of this entity arrived under
-      // the current control group, the chain walk anchors there (see
-      // headCandidates) — an entity never re-wrapped keeps full-set semantics.
+      // If any edition arrived under the current control group, anchor there (see
+      // headCandidates).
       const snap = snapshotIds ? list.filter((p: ParsedEdition) => snapshotIds.has(bytesToHex(p.rumorId))) : [];
       out.set(
         eid,
@@ -1216,25 +956,11 @@ function foldOnce(
   }
   const roster = authorizeDelegation(roleCandidates, grantCandidates, communityId, ownerHex, heads, headEditions);
 
-  // The `vac` authority-citation check (CORD-04 §5). A non-owner authority
-  // action MUST cite the exact Grant it acts under, pinned by (eid, version,
-  // hash). A verifier honors it only once it holds that Grant at ≥ the cited
-  // version with a MATCHING hash — otherwise the action "parks" (is dropped
-  // this fold) rather than being honored on the strength of some other grant.
-  // This closes the forged-citation and never-resolves-citation holes: without
-  // it the fold ignored `p.authority` entirely and honored any gated action
-  // whose author currently resolves as authorized.
-  //
-  // Resolved against the Grant heads `authorizeDelegation` just settled, via the
-  // same `citationSatisfied` the delete, kick and rekey gates use — one rule in
-  // one place, mirroring Vector's `authority_citation_satisfied`.
-  //
-  // "Synced AT LEAST that Grant" (CORD-04 §5) means a LATER head passes. An
-  // exact-version index would have dropped an edition whose cited version has
-  // since been superseded — and compaction re-wraps only each entity's head, so
-  // after a Refounding the superseded versions are gone and every edition citing
-  // one would fall out of the fold. That loses a community's name, or its
-  // admins, on rotation.
+  // The `vac` check (CORD-04 §5): a non-owner action MUST cite the exact Grant it
+  // acts under (eid, version, hash), and is honored only once we hold that Grant at
+  // ≥ the cited version with a matching hash; otherwise it parks. Uses the same
+  // `citationSatisfied` as the delete/kick/rekey gates (mirrors Vector). A LATER head
+  // passes, since compaction discards superseded versions.
   const citationOk = (p: ParsedEdition): boolean =>
     citationSatisfied({ heads, ownerHex }, communityId, p.author, p.authority);
 
@@ -1251,8 +977,7 @@ function foldOnce(
       if (!citationOk(p)) return false;
       try {
         const parsed = JSON.parse(p.content) as CommunityMetadata;
-        // The protocol caps are read-side rules too (CORD-02 §6): an oversize
-        // name/description is malformed, not merely impolite.
+        // Protocol caps are read-side rules too (CORD-02 §6).
         if (typeof parsed.name !== "string" || utf8Len(parsed.name) > NAME_MAX_BYTES) return false;
         if (parsed.description !== undefined && (typeof parsed.description !== "string" || utf8Len(parsed.description) > DESCRIPTION_MAX_BYTES)) return false;
         return true;
@@ -1287,18 +1012,9 @@ function foldOnce(
     const head = pickHead(candidates, heads, headEditions, channelGate, rankOf);
     if (!head) continue;
     const meta = normalizeChannelMetadata(JSON.parse(head.content) as ChannelMetadata);
-    // CORD-03 §2: "Deletion is terminal: the id is never reused, clients drop
-    // the Channel from display and may discard its keys." Terminal means the
-    // HEAD cannot lift it — an authorized, correctly-chained edition clearing
-    // the flag is ignored as to deletion (everything else in it still folds).
-    //
-    // The key-discard permission is what makes this load-bearing rather than
-    // cosmetic: members who honored it can never read a resurrected private
-    // channel, members who ignored it can, and no rotation heals the split,
-    // because every fold agrees the channel is live. So deletion is decided
-    // over the whole chain this client accepted, not off the head alone.
-    // Gated by the SAME predicate the head was picked with: an unauthorized
-    // author's tombstone is not a deletion, or anyone could erase a channel.
+    // CORD-03 §2: deletion is terminal — a later edition can't lift it. Decided over
+    // the whole accepted chain (members may have discarded keys; a resurrection would
+    // split them), gated by the same predicate as the head.
     const everDeleted = candidates.some((p) => {
       if (!channelGate(p)) return false;
       try {
@@ -1337,14 +1053,8 @@ function foldOnce(
     };
 
     /**
-     * Holding BAN is not authority over everyone. Banning is acting on a
-     * member, so it takes the bit AND a strict outrank — the same rule kicks
-     * go through (`canKick`) and grants go through (the standing-rank walk).
-     * The gate used to ask only for the bit, which let a stock Moderator, who
-     * holds BAN at position 2, publish a list naming every position-1 Admin
-     * and have every client honor it: the admins land in `banned`, and the
-     * re-fold below then drops all of THEIR editions too. `canActOnMember`
-     * also refuses the owner as a target, so supremacy needs no special case.
+     * Banning acts on a member: BAN AND strict outrank (as kicks and grants), so a
+     * Moderator can't ban Admins. `canActOnMember` also refuses the owner.
      */
     const entitled = (author: string, pk: string): boolean =>
       canActOnMember(roster, author, ownerHex, pk, Permissions.BAN);
@@ -1352,12 +1062,7 @@ function foldOnce(
     const wellFormed = (p: ParsedEdition): boolean =>
       isAuthorized(roster, p.author, ownerHex, Permissions.BAN) && citationOk(p) && parseList(p) !== undefined;
 
-    /**
-     * Equal-version fork siblings, highest authority first — the same ordering
-     * `authorizeDelegation` applies to roles and grants, for the same reason.
-     * The rumor id is a hash of content the publisher chooses, so a sibling
-     * that ties on version can be ground until it sorts first; rank cannot.
-     */
+    /** Equal-version fork siblings, highest authority first (the id is grindable; rank is not). */
     const banlistAuthorityFirst = (a: ParsedEdition, b: ParsedEdition): number => {
       const ra = rankOf(a.author);
       const rb = rankOf(b.author);
@@ -1368,17 +1073,9 @@ function foldOnce(
     };
 
     /**
-     * Walk the versions ascending, carrying the standing list, and decide each
-     * edition against the state it inherits rather than against nothing.
-     *
-     * Two things fall out that a head-only rule cannot express. An author the
-     * standing list already bans is not admissible, which is what stops a
-     * banned moderator who still holds BAN from publishing the next version
-     * without themselves in it — the ban does not strip the bit, so under the
-     * old rule the unban was simply the newest authorized edition and won.
-     * And an edition rewrites only the entries its author is entitled to:
-     * everything else is carried over, so "the list replaces entire" can no
-     * longer be used to lift a ban its author could never have issued.
+     * Walk versions ascending, carrying the standing list: an author the standing
+     * list bans is inadmissible (a banned mod can't unban themselves), and an edition
+     * rewrites only entries its author is entitled to (the rest carry over).
      */
     const standingAt = new Map<ParsedEdition, Set<string>>();
     const admissible = new Set<ParsedEdition>();
@@ -1395,20 +1092,12 @@ function foldOnce(
       }
     }
 
-    // The head is still chosen by the existing ordering — the chain decides it,
-    // not the version number alone — so the list is read from the state as of
-    // whichever edition that is, not from the walk's last step.
+    // The chain picks the head; read the list as of that edition, not the walk's end.
     const head = pickHead(candidates, heads, headEditions, (p) => admissible.has(p), rankOf);
     if (head) for (const pk of standingAt.get(head) ?? []) banned.add(pk);
 
-    // Ban history (for phantom-member suppression, see FoldedControl.bannedAt):
-    // the newest ADMISSIBLE edition that named each npub, counting only the
-    // names its author was entitled to name. Same rules as the head, so a
-    // forged or over-reaching banlist can't backdate-suppress a legit member.
-    // `createdAt` is seconds. Editions span every held epoch, so the history is
-    // as complete as the reader's key set — which, by the compaction
-    // correlation, is exactly whenever they also hold the stale Join that would
-    // otherwise phantom.
+    // Ban history (see FoldedControl.bannedAt): the newest ADMISSIBLE edition naming
+    // each npub, counting only names its author could name. `createdAt` is seconds.
     for (const p of candidates) {
       if (!admissible.has(p)) continue;
       for (const pk of parseList(p)!) {
@@ -1419,10 +1108,9 @@ function foldOnce(
     }
   }
 
-  // 6. Invite registries (vsk 8): each creator owns exactly their own list
-  // (the coordinate binds to the author), honored only while its author holds
-  // CREATE_INVITE. The aggregate active set is the Public/Private source of
-  // truth (CORD-05 §5).
+  // 6. Invite registries (vsk 8): each creator's own list (coordinate binds to the
+  // author), honored while they hold CREATE_INVITE. The aggregate is the
+  // Public/Private source of truth (CORD-05 §5).
   const liveInviteLinks = new Set<string>();
   const registriesByCreator = new Map<string, string[]>();
   for (const [eid, candidates] of candidatesOf(VSK_INVITE_REGISTRY)) {
@@ -1444,9 +1132,8 @@ function foldOnce(
     for (const pk of list) liveInviteLinks.add(pk.toLowerCase());
   }
 
-  // 7. Pin Lists (vsk 11), each gated by PIN_MESSAGES (CORD-04 §7). Only the
-  // authority question is settled here; the content is carried verbatim, since
-  // a violating list reads as empty rather than as a refused edition.
+  // 7. Pin Lists (vsk 11), gated by PIN_MESSAGES (CORD-04 §7); content carried
+  // verbatim (a violating list reads as empty).
   const pinLists = new Map<string, { content: string; author: string }>();
   for (const [eid, candidates] of candidatesOf(VSK_PINS)) {
     const head = pickHead(candidates, heads, headEditions, (p) => {
@@ -1457,11 +1144,9 @@ function foldOnce(
     pinLists.set(eid, { content: head.content, author: head.author });
   }
 
-  // 8. Community Signals (vsk 12), each gated per signal_id (CORD-04 §8). Only
-  // the tokens in SIGNAL_GATES have a derivable coordinate here, so a signal_id
-  // this build doesn't implement matches no entity and stays invisible — the
-  // forward-compat contract. The coordinate IS signal_locator(cid, signal_id),
-  // looked up exactly, so a vsk-12 edition at any other eid is unspoofable in.
+  // 8. Community Signals (vsk 12), gated per signal_id (CORD-04 §8). Only
+  // SIGNAL_GATES tokens have a coordinate (looked up exactly), so unknown ones stay
+  // invisible — the forward-compat contract.
   const signals = new Map<string, FoldedSignal>();
   const signalCands = candidatesOf(VSK_SIGNALS);
   for (const [signalId, gate] of Object.entries(SIGNAL_GATES)) {
@@ -1479,11 +1164,8 @@ function foldOnce(
     });
   }
 
-  // Data-availability roll-up: gap-held entities, plus floored entities with
-  // ZERO served editions this fold. A floored entity whose editions were
-  // served but authority-rejected is NOT flagged — that's a deliberate drop
-  // (a stripped role, a banned creator's registry, CORD-04 §4), and flagging
-  // it would false-abort the very ban→refound flow the gate protects.
+  // Data availability: gap-held entities plus floored ones with ZERO served
+  // editions. Authority-rejected ones aren't flagged, or ban→refound would abort.
   const servedEids = new Set<string>();
   for (const m of byVsk.values()) for (const eid of m.keys()) servedEids.add(eid);
   const incomplete = [...gapHeld];
@@ -1499,20 +1181,12 @@ function foldOnce(
 
 
 /**
- * Build the owner-dissolution tombstone rumor: chainless (no ev/ep/vac), empty
- * content, `eid` = the community_id. Published at `dissolved_pk`, a coordinate
- * derived from the community_id alone, so every member past or present
- * resolves it.
+ * The owner-dissolution tombstone rumor: chainless, empty content, `eid` = the
+ * community_id, published at `dissolved_pk` (derived from the id alone).
  *
- * The `eid` binds the tombstone to the community it kills, and MUST. The
- * dissolved plane's key derives from the community_id with no secret input, so
- * anyone holding that public id (it ships in every invite) can derive the
- * keypair, read the plane, and sign at it — the only thing an attacker lacks is
- * an owner-signed vsk-10 rumor. With the frozen §9 all-zero `eid` that rumor
- * names nothing, so an owner's genuine tombstone for community X can be lifted,
- * re-wrapped at the dissolved address of any OTHER community the same owner
- * runs, and kill it permanently — no membership, no keys, and no un-dissolve.
- * Committing the community_id makes a seal minted for X fail the check at Y.
+ * The `eid` binding is MANDATORY: anyone can sign at the public dissolved address,
+ * and with the frozen §9 all-zero `eid` an owner's tombstone for X could be
+ * re-wrapped to permanently kill any other community they own.
  */
 export function buildDissolvedRumor(
   ownerPubkey: string,
@@ -1541,10 +1215,8 @@ export async function sealDissolved(communityId: Uint8Array, ownerPubkey: string
 }
 
 /**
- * Whether any of `wraps` is a valid owner-signed dissolution tombstone for
- * this community. Only the owner's signature counts; an impostor's event at
- * the (findable-by-anyone) address is noise. Terminal: on sight, the client
- * seals the community read-only.
+ * Whether any wrap is a valid owner-signed tombstone for this community (others
+ * are noise). Terminal: the community goes read-only.
  */
 export function isDissolved(wraps: NostrEvent[], communityId: Uint8Array, ownerHex: string): boolean {
   const group = dissolvedGroupKey(communityId);
@@ -1561,21 +1233,13 @@ export function isDissolved(wraps: NostrEvent[], communityId: Uint8Array, ownerH
 }
 
 /**
- * Whether an already-opened dissolved-address event is a valid owner tombstone
- * FOR THIS COMMUNITY.
- *
- * The `eid` check is the replay binding (see {@link buildDissolvedRumor}), and
- * the address it was found at proves nothing — an attacker chooses where to
- * publish. An all-zero `eid` is REFUSED rather than grandfathered: accepting it
- * is the vulnerability itself, and the failure mode of refusing is a community
- * that reads alive and can simply be re-dissolved, against one that dies
- * permanently with no recovery.
+ * Whether an opened dissolved-address event is a valid owner tombstone FOR THIS
+ * COMMUNITY. The `eid` is the replay binding (see {@link buildDissolvedRumor});
+ * an all-zero `eid` is REFUSED — accepting it is the vulnerability.
  */
 export function isDissolvedOpened(opened: OpenedEvent, ownerHex: string, communityId: Uint8Array): boolean {
-  // Authenticated by the SEAL SIGNER being the owner — the stream it arrived at
-  // is not an authority claim, since only the owner can sign this wherever it
-  // was published. The seal FORM (plaintext, CORD-02 §5) is checked while known;
-  // a stored rumor has no envelope and passed at ingest — see parseEdition.
+  // Authenticated by the SEAL SIGNER, not the arrival address. The seal form
+  // (plaintext, CORD-02 §5) is checked while known (see parseEdition).
   if (opened.author !== ownerHex) return false;
   if (opened.sealKind !== undefined && opened.sealKind !== KIND_SEAL_PLAINTEXT) return false;
   const vsk = opened.tags.find((t) => t[0] === "vsk")?.[1];

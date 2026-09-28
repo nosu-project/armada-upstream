@@ -2,10 +2,7 @@ import type { ReactNode } from "react";
 
 import { ServerScopeContext } from "@/contexts/ServerScopeContext";
 
-/**
- * Provide a server (relay URL) scope to the subtree. Anything rendered inside
- * resolves per-server nicknames against this relay.
- */
+/** Per-server nickname scope (relay URL) for the subtree. */
 export function ServerScopeProvider({
   relayUrl,
   children,

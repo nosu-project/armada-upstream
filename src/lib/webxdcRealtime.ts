@@ -1,12 +1,8 @@
 /**
- * The wire contracts a webxdc realtime channel is made of, shared by both
- * transports (DM and Concord) and by both clients.
- *
- * These are interop surfaces with Vector, so every constant here is a promise
- * to another codebase. A near-match is worse than a mismatch: the two clients
- * join different gossip rooms, each sees one player, and neither reports an
- * error. Vector's implementations live in `crates/vector-core/src/webxdc.rs`
- * and `src-tauri/src/miniapps/realtime.rs`.
+ * Webxdc realtime wire contracts (DM and Concord), interop with Vector
+ * (`crates/vector-core/src/webxdc.rs`, `src-tauri/src/miniapps/realtime.rs`).
+ * Every constant must match exactly: a near-match silently puts clients in
+ * different gossip rooms.
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -56,11 +52,7 @@ export function base32Decode(encoded: string): Uint8Array | undefined {
   return new Uint8Array(out);
 }
 
-/**
- * Vector's receive-side check, matched exactly: 52 characters, uppercase
- * base32 only. A value failing this is dropped rather than propagated, so a
- * UUID in this slot goes silently nowhere.
- */
+/** Vector's receive-side check: exactly 52 uppercase base32 chars (others are silently dropped). */
 export function isTopicId(value: string | undefined | null): value is string {
   if (!value || value.length !== TOPIC_ID_CHARS) return false;
   for (const c of value) {
@@ -70,17 +62,9 @@ export function isTopicId(value: string | undefined | null): value is string {
 }
 
 /**
- * Mint the topic for an outbound `.xdc`. The sender mints ONCE and puts it on
- * the file event; every participant reads it from there rather than deriving
- * one, because a derived topic is asymmetric in a DM (each side's chat id is
- * the other party's npub) and silently splits the players.
- *
- * Only the output shape is an interop contract, never the recipe, so this
- * differs from Vector's deliberately in one place: Vector mixes a nanosecond
- * clock plus a process counter, the counter being there because its clock
- * reports nanos without resolving them and two sends in a tick minted the same
- * "fresh" topic. `Date.now()` is coarser still, so the entropy here is real
- * random bytes and the collision cannot happen.
+ * Mint the topic for an outbound `.xdc`, once, carried on the file event
+ * (derived topics are asymmetric in DMs). Only the output shape is a contract;
+ * random salt avoids Vector's same-tick collision issue.
  */
 export function mintTopicId(fileHash: string, senderHex: string): string {
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -93,44 +77,28 @@ export function mintTopicId(fileHash: string, senderHex: string): string {
 }
 
 /**
- * The fallback for a file event carrying no topic tag, byte-identical to
- * Vector's `derive_topic_id`. Note the first input is the manifest NAME: the
- * Rust parameter is called `file_hash`, but both of its call sites pass the
- * name, and the call sites are what the wire sees.
+ * Fallback for file events without a topic tag; byte-identical to Vector's
+ * `derive_topic_id`. The first input is the manifest NAME (what Vector's call sites pass).
  */
 export function deriveTopicId(app: string, chatId: string, messageId: string): string {
   return base32Encode(sha256(new TextEncoder().encode(`webxdc-realtime-v1:${app}:${chatId}:${messageId}`)));
 }
 
 /**
- * The topic for a Mini App shared as a bare URL, byte-identical to Vector's
- * `derive_url_topic_id`.
- *
- * The URL is truncated at `.xdc` first, because that is the string Vector
- * hashes: its link regex ends in a LOOKAHEAD for `?`/`#`, so the match stops
- * there and a query string never reaches the hash. Feeding it one produces a
- * different topic and puts the two clients in separate rooms, each seeing a
- * single player, with nothing to report.
- *
- * A pasted `.xdc` link has no file event to carry a minted topic, so every
- * recipient derives the same one from what the message already gives them.
- * The message id, not the bytes: a server can rebuild an identical app into
- * new bytes, and two people who tapped the same card hours apart still belong
- * in one session. Re-sharing the same link is a new message, so it is a new
- * game rather than a surprise seat at the old one.
+ * Topic for a Mini App shared as a bare URL; byte-identical to Vector's
+ * `derive_url_topic_id`. Keyed on the message id so every recipient derives
+ * the same session; the URL is truncated at `.xdc` as Vector's regex does.
  */
 export function deriveUrlTopicId(url: string, messageId: string): string {
   url = urlTopicSource(url);
   return base32Encode(sha256(new TextEncoder().encode(`webxdc-url-realtime-v1:${url}:${messageId}`)));
 }
 
-/** The part of a `.xdc` link that identifies the app: everything up to and
- * including the extension, which is exactly what Vector's regex matches. */
+/** The `.xdc` link up to and including the extension — exactly what Vector's regex matches. */
 export function urlTopicSource(url: string): string {
   const lower = url.toLowerCase();
-  // Vector's `[^\s"'<>]+` is greedy, so its match runs to the LAST `.xdc`
-  // followed by a delimiter. Taking the first would split a room on any host
-  // that happens to contain the extension — `https://cdn.xdc.io/game.xdc`.
+  // Vector's greedy match runs to the LAST `.xdc` followed by a delimiter
+  // (e.g. `https://cdn.xdc.io/game.xdc`).
   for (let at = lower.lastIndexOf(".xdc"); at > 0; at = lower.lastIndexOf(".xdc", at - 1)) {
     const next = url[at + 4];
     if (next === undefined || next === "?" || next === "#" || /\s/.test(next)) {
@@ -157,11 +125,7 @@ export interface Unframed {
   sender: string;
 }
 
-/**
- * Strip the trailer. Anything shorter than the trailer itself is malformed and
- * dropped, exactly as Vector drops it — the frame carries no length prefix, so
- * a short read cannot be told from a truncated one.
- */
+/** Strip the trailer; frames shorter than it are dropped, as Vector does. */
 export function unframe(content: Uint8Array): Unframed | undefined {
   if (content.length < TRAILER_LEN) return undefined;
   const cut = content.length - TRAILER_LEN;
@@ -183,11 +147,7 @@ export function peerSignalContent(topic: string, nodeAddr?: string): string {
     : JSON.stringify({ op: "ad", topic, addr: nodeAddr });
 }
 
-/**
- * Read a peer signal off the 3310 plane. Untrusted wire data from any channel
- * member, so a malformed body is dropped rather than thrown on: one bad signal
- * must not take down the ingest loop for everyone else's.
- */
+/** Parse an untrusted 3310 peer signal; malformed bodies return undefined. */
 export function parsePeerSignal(content: string): PeerSignal | undefined {
   let raw: unknown;
   try {
@@ -200,9 +160,7 @@ export function parsePeerSignal(content: string): PeerSignal | undefined {
   if (typeof o.topic !== "string" || !isTopicId(o.topic)) return undefined;
   if (o.op === "left") return { op: "left", topic: o.topic };
   if (o.op === "ad" && typeof o.addr === "string" && o.addr.length > 0) {
-    // Bounded exactly as Vector bounds it. Any member can publish one of
-    // these, and an unbounded value would be base32-decoded on the main
-    // thread, through an intermediate array, once per re-advertisement.
+    // Bounded as Vector does; any member can publish these.
     if (o.addr.length > MAX_NODE_ADDR_CHARS) return undefined;
     return { op: "ad", topic: o.topic, addr: o.addr };
   }
@@ -227,16 +185,8 @@ export interface PeerSignalEvent {
 }
 
 /**
- * Fold a channel's peer signals into who is currently playing a topic.
- *
- * The signals are durable on purpose (Vector's choice, so a reopening peer
- * backfills a recent ad), which means the fold sees the whole history at once
- * and has to resolve it rather than react to it: last writer per author wins,
- * and a `left` that is newer than that author's last ad removes them. Ordering
- * by `ms` rather than arrival matters, because a backfill delivers an old ad
- * after a newer departure.
- *
- * Signals for other topics are ignored, so one channel can carry several games.
+ * Fold a channel's durable peer signals into who's playing `topic`: latest
+ * signal per author by `ms` (not arrival), and a newer `left` removes them.
  */
 export function foldPeerSignals(
   events: readonly PeerSignalEvent[],
@@ -244,21 +194,9 @@ export function foldPeerSignals(
   /** Our own pubkey, so we never dial ourselves. */
   selfPubkey?: string,
 ): RealtimePeer[] {
-  // The timestamp is the sender's own claim and the fold resolves on it, so an
-  // advertisement dated years ahead would outrank its author's every later
-  // departure. Vector CLAMPS, which works there because it clamps once at
-  // ingest and stores that value; a clamp here would be recomputed against
-  // `now` on every fold, so the forged entry would keep winning forever.
-  // Folding live, the answer is to refuse a signal from the future instead.
-  //
-  // The window is an hour rather than Vector's five minutes because dropping
-  // is harsher than clamping and the error is symmetric: a peer whose clock
-  // runs fast goes unseen, and a peer whose OWN clock runs slow sees nobody at
-  // all, since every honest signal then looks future-dated. An hour tolerates
-  // the machines this actually happens on while still bounding a forged
-  // advertisement's ability to outrank its OWN author's later departures to an
-  // hour instead of forever. The signal itself does not expire: the ceiling is
-  // recomputed per fold, so one dated 59 minutes ahead simply stays valid.
+  // Refuse future-dated signals (a forged far-future ad would outrank its
+  // author's departures). Vector clamps at ingest, but a live fold would
+  // re-clamp forever. An hour, not Vector's 5 min, tolerates skewed clocks.
   const ceiling = Date.now() + 60 * 60_000;
   const latest = new Map<string, { signal: PeerSignal; ms: number }>();
   for (const ev of events) {
@@ -267,8 +205,7 @@ export function foldPeerSignals(
     if (!signal || signal.topic !== topic) continue;
     if (selfPubkey && ev.author === selfPubkey) continue;
     const prev = latest.get(ev.author);
-    // Ties go to the departure: a client that advertises and leaves inside one
-    // millisecond has left, and dialling it would hang until timeout.
+    // Ties go to the departure.
     if (prev && (prev.ms > ev.ms || (prev.ms === ev.ms && signal.op === "ad"))) continue;
     latest.set(ev.author, { signal, ms: ev.ms });
   }
@@ -286,12 +223,8 @@ export const KIND_DM_PEER_SIGNAL = 30078;
 export const DM_PEER_SIGNAL_D = "vector-webxdc-peer";
 
 /**
- * The tags of a DM peer signal, as Vector builds them.
- *
- * Armada has no Mini App surface in DMs today, so nothing calls this yet. It
- * lives here because the shape is a contract with another client and belongs
- * beside the Concord one, tested, rather than being rediscovered from Vector's
- * source the day a DM surface exists.
+ * Tags of a DM peer signal as Vector builds them. Unused until Armada has a DM
+ * Mini App surface; kept as a tested contract.
  */
 export function dmPeerSignalTags(topic: string, nodeAddr?: string): string[][] {
   const tags = [
@@ -307,10 +240,7 @@ export function dmPeerSignalContent(nodeAddr?: string): string {
   return nodeAddr === undefined ? "peer-left" : "peer-advertisement";
 }
 
-/**
- * Read a DM peer signal. Vector requires both tags on an advertisement and
- * drops the rumor otherwise, so this does too.
- */
+/** Read a DM peer signal; ads need both tags, as in Vector. */
 export function parseDmPeerSignal(content: string, tags: string[][]): PeerSignal | undefined {
   const get = (name: string) => tags.find(([n]) => n === name)?.[1];
   const topic = get("webxdc-topic");
@@ -324,14 +254,8 @@ export function parseDmPeerSignal(content: string, tags: string[][]): PeerSignal
 }
 
 /**
- * A node address as it travels: base32 of the JSON, matching Vector's
- * `encode_node_addr`.
- *
- * The pair exists so the two directions cannot drift apart. Publishing the raw
- * JSON while decoding base32 on receipt fails in a way nothing reports: the
- * far side's decoder rejects the address and drops the advertisement before it
- * is ever recorded, so the peer stays invisible in the lobby while the game
- * itself plays fine, because whoever could read an address dialled first.
+ * Node address on the wire: base32 of the JSON (Vector's `encode_node_addr`).
+ * Paired with {@link decodeNodeAddr} so the directions can't drift.
  */
 export function encodeNodeAddr(addrJson: string): string {
   return base32Encode(new TextEncoder().encode(addrJson));

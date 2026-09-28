@@ -30,8 +30,7 @@ function Spinner() {
   );
 }
 
-/** Scramble pool. Hex-flavored; spaces and `/` keep their place so the chip's
- * width (mono) and shape never jump during the decode. */
+/** Scramble pool. Spaces and `/` keep their place so the mono chip never jumps. */
 const DECODE_GLYPHS = "0123456789ABCDEF#$%&";
 const DECODE_FRAMES = 8;
 const DECODE_FRAME_MS = 35;
@@ -46,11 +45,7 @@ function scrambled(status: string, settled: number): string {
   return out;
 }
 
-/**
- * A resolved status chip that descrambles into its real text: ~300ms of
- * glyph noise settling left to right, then the actual status. Fires once, at
- * the moment the step actually resolved — the flourish marks a real event.
- */
+/** A resolved status chip that descrambles (~300ms) into its text, once. */
 function DecodeChip({ status, className }: { status: string; className: string }) {
   const [text, setText] = useState(() => (prefersReducedMotion() ? status : scrambled(status, 0)));
   useEffect(() => {
@@ -73,7 +68,6 @@ function DecodeChip({ status, className }: { status: string; className: string }
   return <span className={`shrink-0 text-xs ${className}`}>{text}</span>;
 }
 
-/** Live `x/y` progress as a terminal cell bar: `[███░░░░░] 3/8`. */
 function BarChip({ done, total }: { done: number; total: number }) {
   const cells = 8;
   const filled = total > 0 ? Math.min(cells, Math.round((done / total) * cells)) : 0;
@@ -85,13 +79,8 @@ function BarChip({ done, total }: { done: number; total: number }) {
 }
 
 /**
- * A vertical, terminal-style progress list. Each sync step is a line: a cyan
- * `$` prompt, the step text, and a trailing state — an ASCII spinner while
- * the step runs, a live `[███░░]` bar for x/y progress, or a status chip that
- * descrambles into place once resolved. Resolved lines dim so the eye stays
- * on the step that's working, and a bare `$ _` prompt below the log keeps the
- * shell visibly alive between steps. Echoes the OG card's `$`-prompt terminal
- * look; flat, no boxes or glow.
+ * Terminal-style sync progress: each step a `$` line with a spinner, `[███░░]`
+ * bar, or descrambling status chip. Resolved lines dim.
  */
 export function TerminalProgress({ lines }: { lines: SyncLogLine[] }) {
   return (
@@ -132,8 +121,7 @@ export function TerminalProgress({ lines }: { lines: SyncLogLine[] }) {
           </div>
         );
       })}
-      {/* The shell waiting between steps. `armada-caret` comes from
-          ArmadaCrestKeyframes, mounted on every screen that renders this. */}
+      {/* `armada-caret` comes from ArmadaCrestKeyframes. */}
       <div className="flex items-baseline gap-2">
         <span className="select-none text-[hsl(var(--accent2,180_90%_55%))]">$</span>
         <span className="animate-[armada-caret_1s_step-end_infinite] text-[hsl(var(--primary))]">_</span>

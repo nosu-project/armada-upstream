@@ -26,14 +26,8 @@ export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/r
 const MAX_BUNKER_RELAYS = 8;
 
 /**
- * Whether a relay URL can serve as a NIP-46 rendezvous for THIS client.
- * Loopback is only reachable from this machine, never from a remote signer
- * (a stale ws://localhost:5577 pairing had Amber retry it on every sign for
- * weeks). On a native build (secure WebView origin) non-wss relays are
- * unusable on OUR side (mixed content), so they'd be rendezvous points only
- * the signer could reach — dead weight at best. Non-loopback ws:// LAN
- * relays stay on the web build: an air-gapped LAN deployment with a LAN
- * signer is a supported setup.
+ * Loopback is unreachable for a remote signer, and on native builds non-wss relays are
+ * mixed content on our side. LAN ws:// stays usable on web (air-gapped setups).
  */
 function usableRendezvousRelay(url: string): boolean {
   try {
@@ -49,15 +43,8 @@ function usableRendezvousRelay(url: string): boolean {
 }
 
 /**
- * Ask a freshly-paired bunker for ITS relay list (the NIP-46 `get_relays`
- * RPC) and merge it into the pairing set. The pairing relays are frozen into
- * the login and are the session's only path to the signer (#48); a shared
- * weeks-old bunker:// URI often carries a partial or stale subset, after
- * which a dead pairing relay means a dead signer forever — even though the
- * signer has long moved to other relays. The bunker's own list is the
- * freshest statement of where it actually listens. Best-effort with a short
- * budget: any failure keeps the pairing relays. Pairing relays stay FIRST
- * (they're proven to reach the signer — it just answered on them).
+ * Merge the bunker's own `get_relays` list (NIP-46) into the frozen pairing set (#48): old
+ * bunker:// URIs often carry stale relays. Best-effort; pairing relays stay FIRST.
  */
 async function adoptBunkerRelays(signer: Nip46Signer, pairingRelays: string[]): Promise<string[]> {
   let reported: string[];
@@ -89,11 +76,9 @@ export function useLoginActions() {
   const { logins, addLogin, setLogin } = useNostrLogin();
   const { config } = useAppContext();
 
-  // Add a login and promote it to be the current user.
   const addAndActivate = async (login: NLoginType): Promise<void> => {
-    // Initial login/onboarding has no outgoing session and may continue
-    // in-place. Adding an account while one is active is an account switch:
-    // cleanup and a hard reload must happen before the new signer is exposed.
+    // Adding an account while one is active is a switch: cleanup and hard reload happen before
+    // the new signer is exposed.
     if (logins.length === 0) {
       addLogin(login);
       setLogin(login.id);
@@ -103,19 +88,12 @@ export function useLoginActions() {
   };
 
   return {
-    // Login with a Nostr secret key
     async nsec(nsec: string): Promise<void> {
       const login = NLogin.fromNsec(nsec);
       await addAndActivate(login);
     },
-    // Login with a NIP-46 "bunker://" URI.
-    //
-    // The pairing handshake rides a throwaway Nip46Transport (dedicated plain
-    // WebSockets — never the relay pool, whose socket machinery repeatedly
-    // wedged NIP-46 traffic on Android; see nip46Transport.ts). Once paired,
-    // the bunker's OWN relay list is adopted into the login (see
-    // adoptBunkerRelays) and the session signer (useCurrentUser) builds the
-    // keyed app-wide transport over the merged set.
+    // Pairing uses a throwaway Nip46Transport, never the relay pool (which wedged NIP-46 on
+    // Android; see nip46Transport.ts). The bunker's relays are then adopted (adoptBunkerRelays).
     async bunker(uri: string): Promise<void> {
       const { pubkey: bunkerPubkey, secret, relays } = new BunkerURI(uri);
       if (!relays.length) {
@@ -143,28 +121,19 @@ export function useLoginActions() {
         transport.close();
       }
     },
-    // Login with a NIP-07 browser extension
     async extension(): Promise<void> {
       const login = await NLogin.fromExtension();
       await addAndActivate(login);
     },
-    // Login with a native Android signer app (Amber, etc.) via NIP-55.
-    // The plugin round-trips to the signer app to fetch the user's pubkey; we
-    // persist it in the login so subsequent sessions don't re-prompt.
+    // NIP-55 Android signer (Amber, etc.); the pubkey is persisted so later sessions don't re-prompt.
     async androidSigner(packageName: string): Promise<void> {
       const signer = new AndroidNativeSigner(packageName);
       const pubkey = await signer.getPublicKey();
       const login = new NLogin("x-android-signer", pubkey, { packageName });
       await addAndActivate(login);
     },
-    // Login via nostrconnect:// (client-initiated NIP-46).
-    //
-    // Same dedicated-transport rule as bunker(): the wait for the signer's
-    // connect-ack runs on a throwaway Nip46Transport — the bunker pubkey
-    // isn't known until the ack arrives, so it can't share the session
-    // transport yet. It is closed in `finally` either way; the session
-    // signer (useCurrentUser) builds the keyed app-wide transport once the
-    // login exists.
+    // Client-initiated NIP-46. Same dedicated-transport rule as bunker(): the bunker pubkey is
+    // unknown until the ack, so it can't share the session transport. Closed in `finally`.
     async nostrconnect(
       params: NostrConnectParams,
       signal?: AbortSignal,
@@ -187,15 +156,8 @@ export function useLoginActions() {
           } catch {
             continue; // Not addressed to us / undecryptable noise.
           }
-          // ONLY the generated secret is accepted. The subscription filter
-          // (`#p: [clientPubkey]`) hands the ephemeral client pubkey to every
-          // relay that sees the REQ, so any of them can encrypt a payload to
-          // it — and a bare `{"result":"ack"}` would win the race trivially
-          // while the real signer waits for a human to approve a QR code.
-          // Proving possession of the secret is the whole reason the secret
-          // exists in this flow; `bunker://` is different (the counterparty is
-          // pinned by the URI before `connect()` runs), which is why "ack" is
-          // legitimate there and not here.
+          // ONLY the generated secret is accepted: the REQ reveals the client pubkey to every relay,
+          // so any of them could win with a bare "ack". (`bunker://` pins the counterparty, so "ack" is fine there.)
           if (response?.result !== params.secret) continue;
 
           onStatus?.("getting-public-key");
@@ -216,8 +178,7 @@ export function useLoginActions() {
           );
           return;
         }
-        // The subscription ended without a signer response: the caller
-        // aborted (dialog closed/retried) or the default timeout fired.
+        // Ended without a response: aborted or timed out.
         if (effectiveSignal.aborted) {
           const err = new Error("The nostrconnect handshake was aborted");
           err.name = "AbortError";
@@ -228,42 +189,26 @@ export function useLoginActions() {
         transport.close();
       }
     },
-    // Relay URLs used for NIP-46 nostrconnect communication: the app relays
-    // (remote signers are usually reachable through public relays).
-    //
-    // The user's own NIP-29 servers are deliberately NOT consulted: they live
-    // in the kind 10009 list, which can only be read once someone is logged
-    // in — and this runs to establish that login.
-    //
-    // The list is FROZEN into the signer pairing for the lifetime of the
-    // session (#48), so relays the signer can never reach must not enter it
-    // (see usableRendezvousRelay).
+    // NIP-46 rendezvous relays: the app relays (the user's NIP-29 servers need a login to read).
+    // Frozen into the pairing (#48), so unreachable relays are filtered (see usableRendezvousRelay).
     getRelayUrls(): string[] {
       const appRelays = config.appRelays
         .map(normalizeRelayUrl)
         .filter((url): url is string => Boolean(url));
       const all = [...new Set(appRelays)];
       const usable = all.filter(usableRendezvousRelay);
-      // Never hand back an empty list: a loopback-only dev config still needs
-      // SOME rendezvous attempt (and the QR shows the user what's wrong).
+      // Never empty: a loopback-only dev config still needs SOME rendezvous attempt.
       return usable.length > 0 ? usable : all;
     },
-    // Log out the current user
     async logout(): Promise<void> {
       const login = logins[0];
-      // If that was the last identity, wipe all client-side persistence and
-      // land on the login screen — on a guaranteed, bounded deadline, with the
-      // logged-out state made durable up front. See finalLogout; it raises the
-      // exit overlay itself, synchronously.
+      // Last identity: wipe persistence and land on login (see finalLogout).
       if (logins.length <= 1) {
         await finalLogout(login?.pubkey ?? null);
         return;
       }
-      // Otherwise another account is about to become active, which is an
-      // account SWITCH — so it takes the switch path, reload included, rather
-      // than leaving this account's caches for the next one to read. That path
-      // persists the remaining logins itself and raises the same overlay; the
-      // synchronous flip here is just for instant feedback before the await.
+      // Otherwise this is an account SWITCH and takes the switch path, reload included, so no
+      // caches leak to the next account.
       beginAccountExit("switch", login?.pubkey ?? "");
       if (login) await signOutAccount(logins, login.id);
     },

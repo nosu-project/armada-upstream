@@ -11,18 +11,9 @@ import { toast } from "@/hooks/useToast";
 import { DEFAULT_MEDIA_PROXY, fillUriTemplate, mediaHost, normalizeMediaProxy } from "@/lib/mediaPolicy";
 
 /**
- * The media-privacy rows of the Media settings section: whether images load
- * through a proxy, and — when on — which proxies. Every image in a message is a
- * request from the viewer's device to the host the sender named; routing it
- * through a proxy (`lib/mediaPolicy.ts`) makes the proxy's address the one that
- * host sees. OFF by default; enabling it sets the public Ditto proxy, which the
- * user can replace or extend.
- *
- * The proxies are managed as a list, the same shape as the Blossom server list
- * (`AppConfig.mediaProxies`). The first is the primary the native background
- * writers and the one-image sites read (they do not rotate); with more than one,
- * the web client spreads each image across them and falls to the next when one
- * fails to load.
+ * Media proxy settings (`lib/mediaPolicy.ts`), OFF by default. The first
+ * proxy is primary for native writers and single-image sites; the web client
+ * spreads across all and falls through on failure.
  */
 export function MediaPrivacySettings() {
   const { config, updateConfig } = useAppContext();
@@ -65,16 +56,12 @@ export function MediaPrivacySettings() {
   );
 }
 
-/** Host of a proxy template, read off a filled probe (the `{href}` braces aren't URL chars). */
+/** Read off a filled probe: the `{href}` braces aren't URL chars. */
 function proxyHost(proxy: string): string {
   const host = mediaHost(fillUriTemplate(proxy, { href: "https://example.com/x" }));
   return host ?? proxy.replace(/^https?:\/\//, "").replace(/\/+$/, "");
 }
 
-/**
- * One proxy row: an avatar (letter fallback), host prominent, full template
- * underneath — the same shape as the Blossom `ServerIdentity`.
- */
 function ProxyIdentity({ proxy }: { proxy: string }) {
   const host = proxyHost(proxy);
   return (
@@ -98,7 +85,6 @@ interface MediaProxyListEditorProps {
   onReset?: () => void;
 }
 
-/** The proxy list: removable rows plus an inline add form, mirroring `BlossomServerListEditor`. */
 function MediaProxyListEditor({ proxies, onChange, onReset }: MediaProxyListEditorProps) {
   const [draft, setDraft] = useState("");
 

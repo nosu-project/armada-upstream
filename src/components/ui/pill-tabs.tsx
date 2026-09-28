@@ -9,18 +9,8 @@ export interface PillTab<T extends string> {
 }
 
 /**
- * The app's tab strip: cut-corner pills in a chrome vessel, first grown for
- * Discover and now shared with the community settings and moderation panes so
- * the three read as one idiom.
- *
- * Icon+label pills don't fit a 320px phone once there are more than a couple,
- * and truncating "Integrations" is worse than not showing it. So below `sm`
- * only the ACTIVE pill carries its label: it grows to fill the rail while the
- * others collapse to their icon. The label animates via a 0fr→1fr grid column,
- * which reaches its exact content width without any measuring or hardcoded
- * max-width (and merely snaps, rather than breaking, where that interpolation
- * is unsupported). A strip long enough to overflow anyway scrolls sideways
- * rather than squeezing its pills below a tap target.
+ * Shared tab strip of cut-corner pills. Below `sm` only the active pill shows
+ * its label, animated via a 0fr→1fr grid column (no measuring). Overflow scrolls.
  */
 export function PillTabs<T extends string>({
   tabs,

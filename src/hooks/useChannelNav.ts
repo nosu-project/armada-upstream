@@ -16,11 +16,7 @@ export interface NavChannel {
   go: () => void;
 }
 
-/**
- * Build a stable {@link ChannelNavValue} from the current scope's channels.
- * Matching is case-insensitive and slug-aware (see {@link normalizeChannelKey});
- * the first channel whose normalized name equals the normalized tag wins.
- */
+/** A stable {@link ChannelNavValue} from the scope's channels (matching via {@link normalizeChannelKey}). */
 export function useChannelNavValue(channels: NavChannel[]): ChannelNavValue {
   return useMemo<ChannelNavValue>(() => {
     const byKey = new Map<string, () => void>();

@@ -1,18 +1,12 @@
 import type { CoalescedMember } from "@/concord/lib/guestbook";
 import { type CommunityRoles, highestPosition, rolesOf } from "@/concord/lib/roles";
 
-/**
- * Row building for the Members tab — pure data, no hooks. Every column derives
- * from state the client already folds; nothing here invents new tracking.
- */
+/** Row building for the Members tab — pure data derived from existing folds. */
 
 /**
- * Provenance of a member's join time, which is why the UI says "estimated":
- * - "join": their own Join rumor — the real thing.
- * - "snapshot": seeded secondhand by a Refounding snapshot, so the time is the
- *   refound, not the join.
- * - "observed": no Guestbook entry at all (or activity newer than a departure);
- *   membership is inferred from posting, join time unknown.
+ * Join-time provenance (why the UI says "estimated"): "join" = their own Join
+ * rumor; "snapshot" = seeded by a Refounding (time is the refound); "observed" =
+ * inferred from posting, join time unknown.
  */
 export type JoinKind = "join" | "snapshot" | "observed";
 
@@ -47,8 +41,7 @@ export function buildMemberRows(input: {
   currentEpoch: bigint;
   ownerHex: string | undefined;
   selfHex: string | undefined;
-  /** Watchdog-flagged authors. A flagged NON-member still gets a row — an
-   *  attacker outside the roster is exactly who the list must surface. */
+  /** Watchdog-flagged authors; flagged NON-members still get a row. */
   suspicious?: ReadonlySet<string>;
 }): MemberDirectoryRow[] {
   const { members, coalesced, observedEpochOf, observedSeenMs, roster, currentEpoch, ownerHex, selfHex, suspicious } = input;
@@ -57,8 +50,7 @@ export function buildMemberRows(input: {
   for (const pk of suspicious ?? []) everyone.add(pk);
   for (const pubkey of everyone) {
     const m = coalesced.get(pubkey);
-    // A departed-then-reobserved member's old Join is gone (their winning entry
-    // is the Leave/Kick); only a winning Join carries a usable join time.
+    // Only a winning Join carries a usable join time.
     const joined = m?.state === "join" ? m : undefined;
     const epoch = observedEpochOf.get(pubkey);
     const roleIds = roster ? rolesOf(roster, pubkey).map((r) => r.roleId) : [];
@@ -88,8 +80,7 @@ export function sortMemberRows(rows: readonly MemberDirectoryRow[], key: MemberS
   const sorted = [...rows];
   switch (key) {
     case "role":
-      // Owner (implicit position 0) → ranked roles ascending → roleless last;
-      // longest-standing first within a tier.
+      // Owner → ranked roles ascending → roleless; longest-standing first within a tier.
       sorted.sort((a, b) => {
         const pa = a.isOwner ? 0 : a.highestPosition ?? Number.MAX_SAFE_INTEGER;
         const pb = b.isOwner ? 0 : b.highestPosition ?? Number.MAX_SAFE_INTEGER;

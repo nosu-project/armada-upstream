@@ -8,43 +8,23 @@ import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Where Discover's curated author list comes from, and which relays it reads.
- *
- * Discover never shows the public firehose by default: every feed is gated on
- * an author allow-list, seeded by ONE curation source — a list event whose `p`
- * tags are the curated authors — plus, when logged in, the viewer and their
- * own follows. The source is a build-time default ({@link BUILD_DISCOVER_CURATION})
- * that a user can override per client (`AppConfig.discoverCuration`), and the
- * relays are the app relays plus the user's own NIP-65 relays
- * ({@link resolveDiscoverRelays}).
- *
- * A source is written the way a user would paste it:
- *
- * - an `naddr` — any addressable list carrying `p` tags (a kind-39089 follow
- *   pack, a kind-30000 follow set, …);
- * - an `npub` / `nprofile` / 64-char hex pubkey — that person's follow list
- *   (kind 3), i.e. "show me what this person follows";
- * - `none` — no curated list at all: only you and the people you follow.
+ * Discover's curation source and relays. Feeds are gated on an author
+ * allow-list: ONE curation source's `p` tags plus the viewer and their follows.
+ * The build default ({@link BUILD_DISCOVER_CURATION}) is user-overridable
+ * (`AppConfig.discoverCuration`). A source is an `naddr` (any `p`-tagged list),
+ * an `npub`/`nprofile`/hex pubkey (their kind-3 follows), or `none`.
  */
 
-/**
- * The Armada team follow pack (kind 39089 by Soapbox). The default curation
- * source when the build sets nothing else.
- */
+/** The Armada team follow pack (kind 39089 by Soapbox); the default source. */
 export const ARMADA_FOLLOW_PACK =
   "naddr1qvzqqqyckypzpyexz3t34l966ngh5xg7u2q788hthdqmj0av3lv8s2tz9t43zt6dqqxxkdrsx4mnqm3jxfeh2ess5pyrw";
 
-/** The spelling of "no curated list". */
 export const DISCOVER_CURATION_NONE = "none";
 
-/**
- * This build's curation source. `VITE_DISCOVER_CURATION` accepts anything
- * {@link parseDiscoverCuration} does; set it empty for no curated list.
- */
+/** This build's source via `VITE_DISCOVER_CURATION` (empty = none). */
 export const BUILD_DISCOVER_CURATION: string =
   (import.meta.env.VITE_DISCOVER_CURATION ?? ARMADA_FOLLOW_PACK).trim() || DISCOVER_CURATION_NONE;
 
-/** A resolved curation source. */
 export type DiscoverCuration =
   | {
       type: "list";
@@ -64,9 +44,8 @@ export type ParsedCuration =
 const NONE: DiscoverCuration = { type: "none" };
 
 /**
- * A pasted source's relay hints, narrowed the way every sender-named hint is
- * (`publicRelayHints`): `wss:` on a public host. The source syncs across
- * devices, so a LAN hint would be dialed from each of them on every read.
+ * Relay hints narrowed to public `wss:` (`publicRelayHints`): the source syncs
+ * across devices, so LAN hints would be dialed from each.
  */
 function hints(relays: string[] | undefined): string[] {
   return (relays ?? [])
@@ -74,11 +53,7 @@ function hints(relays: string[] | undefined): string[] {
     .filter((url): url is string => !!url && url.startsWith("wss://") && !isLocalNetworkUrl(url));
 }
 
-/**
- * Parse a curation source as typed or stored. Accepts `none`, an `naddr` of an
- * addressable kind, or an `npub` / `nprofile` / hex pubkey (a `nostr:` prefix
- * is tolerated). Anything else is an error, worded for the settings field.
- */
+/** Parse a curation source (`none`, naddr, npub/nprofile/hex, optional `nostr:`); errors are UI-worded. */
 export function parseDiscoverCuration(input: string): ParsedCuration {
   const value = input.trim().replace(/^nostr:/i, "");
   if (!value) return { ok: false, error: "Enter an naddr, npub, or hex pubkey." };
@@ -113,11 +88,8 @@ export function parseDiscoverCuration(input: string): ParsedCuration {
 }
 
 /**
- * The curation source in effect: the user's override when one is set, the
- * build default otherwise. An override that no longer parses (a corrupted or
- * hand-edited setting) resolves to NO curated list rather than back to the
- * build default — someone who replaced the default list shouldn't get it back
- * silently.
+ * The source in effect: override, else build default. An unparseable override
+ * resolves to none, never silently back to the default.
  */
 export function resolveDiscoverCuration(
   override: string,
@@ -131,18 +103,13 @@ export function resolveDiscoverCuration(
   return parsed.ok ? parsed.curation : NONE;
 }
 
-/**
- * The relays Discover reads: the app relays plus the user's own NIP-65
- * relays, normalized and de-duplicated, app relays first. There is no
- * Discover-specific relay list to curate by hand.
- */
+/** Discover relays: app relays then the user's NIP-65 relays, normalized and deduped. */
 export function resolveDiscoverRelays(appRelays: string[], ownRelays: string[] = []): string[] {
   return [
     ...new Set([...appRelays, ...ownRelays].map(normalizeRelayUrl).filter((url): url is string => !!url)),
   ];
 }
 
-/** A stable identity for a curation source — query keys and seed keys. */
 export function curationKey(curation: DiscoverCuration): string {
   switch (curation.type) {
     case "list":
@@ -154,7 +121,6 @@ export function curationKey(curation: DiscoverCuration): string {
   }
 }
 
-/** The filter that reads a curation source's list event, or `null` for none. */
 export function curationFilter(curation: DiscoverCuration): NostrFilter | null {
   switch (curation.type) {
     case "list":
@@ -166,7 +132,6 @@ export function curationFilter(curation: DiscoverCuration): NostrFilter | null {
   }
 }
 
-/** Whether an event is (a version of) the curation source's list event. */
 export function isCurationEvent(curation: DiscoverCuration, event: NostrRumor): boolean {
   switch (curation.type) {
     case "list":
@@ -182,7 +147,6 @@ export function isCurationEvent(curation: DiscoverCuration, event: NostrRumor): 
   }
 }
 
-/** Valid (hex) member pubkeys from a list event's `p` tags. */
 export function curatedPubkeys(event: NostrRumor | null | undefined): string[] {
   if (!event) return [];
   return event.tags

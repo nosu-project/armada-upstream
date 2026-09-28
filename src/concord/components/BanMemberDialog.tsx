@@ -12,12 +12,10 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 interface BanMemberDialogProps {
   /** The pubkeys queued for banning; null keeps the dialog closed. */
   targets: string[] | null;
-  /** Selected members the actor can't act on — shown as skipped, never sent. */
+  /** Members the actor can't act on — shown as skipped, never sent. */
   ineligible?: string[];
-  /** Whether this ban will also rotate the community keys (Private mode). */
   willRotate: boolean;
   onClose: () => void;
-  /** Runs the full ban; reports each step as it starts. Throws on failure. */
   onConfirm: (
     targets: string[],
     onPhase: (phase: BanPhase) => void,
@@ -28,26 +26,19 @@ interface BanMemberDialogProps {
 const PHASE_ORDER: Record<BanPhase, number> = { silence: 0, roles: 1, rekey: 2 };
 
 /**
- * Ban confirmation + progress, single member or a whole selection. The ban is
- * several sequential publishes (ONE banlist edition for the group, per-member
- * grant strips, and in a Private community ONE whole-group Refounding, which
- * can take seconds), so the dialog stays up and walks its step list until
- * everything lands — closing mid-flight would read as "banned" while the
- * severance is still in the air.
+ * Ban confirmation + progress. Several sequential publishes (banlist, grant
+ * strips, and in Private mode a Refounding), so the dialog stays up until all land.
  */
 export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onConfirm }: BanMemberDialogProps) {
   const [phase, setPhase] = useState<BanPhase | null>(null);
   const [strip, setStrip] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Signer calls (a bunker blob-wrap) carry no timeout of their own; a dead
-  // signer would otherwise wedge the dialog un-dismissable. After a grace
-  // period, re-enable Cancel so the user is never trapped (the operation, if
-  // it ever lands, is idempotent and self-heals via the read-cut retry).
+  // Signer calls have no timeout; after a grace period re-enable Cancel so the
+  // user isn't trapped (the ban is idempotent and self-heals).
   const [stuck, setStuck] = useState(false);
   const busy = phase !== null;
   const count = targets?.length ?? 0;
 
-  // A fresh selection is a fresh flow.
   useEffect(() => {
     setPhase(null);
     setStrip(null);
@@ -55,7 +46,6 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
     setStuck(false);
   }, [targets]);
 
-  // Grace timer: while busy, arm a fallback that lets the user bail out.
   useEffect(() => {
     if (!busy) {
       setStuck(false);
@@ -106,10 +96,7 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
         title={count > 1 ? "Ban members" : "Ban member"}
         className="sm:max-w-sm focus:outline-none"
         onOpenAutoFocus={(e) => {
-          // Keep initial focus off Cancel: a programmatic focus reads as
-          // keyboard focus and paints a ring around the cut-corner button on
-          // open. Focus the dialog surface instead — focus stays trapped and
-          // Escape still works; the first Tab moves to the buttons.
+          // Keep initial focus off Cancel (paints a ring on open); focus stays trapped.
           e.preventDefault();
           (e.currentTarget as HTMLElement | null)?.focus();
         }}

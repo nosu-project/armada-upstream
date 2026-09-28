@@ -6,37 +6,20 @@ import { cn } from "@/lib/utils";
 export interface MediaFallbackProps {
   /** The original media URL — the target of the "open" action. */
   url: string;
-  /** Restart the load from the first server (manual retry). */
   onRetry: () => void;
-  /**
-   * Set when the blob is encrypted and past the inline decrypt cap: its size in
-   * bytes. A different situation from "unavailable" — the media is there and
-   * readable, we just declined to spend the memory unasked.
-   */
+  /** Encrypted blob over the inline decrypt cap: its size in bytes (readable, just not auto-decrypted). */
   oversized?: number;
-  /** Decrypt the oversized blob anyway, at the user's request. */
   onDecryptAnyway?: () => void;
   /** What the missing media is, e.g. "Image" / "Video" / "Audio". */
   label?: string;
   className?: string;
-  /**
-   * Fill a fixed tile (image grid cell) instead of rendering a card: the whole
-   * tile becomes the retry target with a centered icon, since there is no room
-   * for label + actions there.
-   */
+  /** Fill a fixed grid tile: the whole tile is the retry target. */
   compact?: boolean;
 }
 
 /**
- * The placeholder an image/video/audio embed degrades to once EVERY mirror has
- * failed (see {@link useMediaWithFallback}) — a broken-media icon, a short
- * label, and retry + open actions, rather than a raw URL dumped inline.
- *
- * Block-level by default so it takes its own line: the tokenizer strips the
- * whitespace around a media block expecting one, so an inline fallback would
- * glue onto adjacent text. The retry covers the transient case (a server that
- * was down and is back, recovered network) that automatic cross-server fallback
- * couldn't outlast; open is the escape hatch to the original URL.
+ * Placeholder once EVERY mirror fails (see {@link useMediaWithFallback}): retry
+ * + open. Block-level since the tokenizer stripped surrounding whitespace.
  */
 export function MediaFallback({
   url,
@@ -53,10 +36,7 @@ export function MediaFallback({
     onRetry();
   };
 
-  // Oversized is its own case, not a failure: the blob is fine and the key
-  // works, we just won't hold that much in memory until asked. The retry
-  // affordance is "decrypt anyway", and the size is stated so the ask is
-  // informed rather than a dare.
+  // Not a failure: offer "decrypt anyway" and state the size.
   if (oversized !== undefined && onDecryptAnyway) {
     const decrypt = (e: React.MouseEvent) => {
       e.stopPropagation();

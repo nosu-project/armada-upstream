@@ -10,53 +10,38 @@ export interface GifPreviewSource {
 }
 
 export interface GifResult {
-  /** Provider-specific id; also used by KLIPY's share-tracking endpoint. */
+  /** Also used by KLIPY's share-tracking endpoint. */
   id: string;
   title: string;
-  /** URL for the full-size GIF. This is what gets shared into a message. */
+  /** Full-size GIF; this is what gets shared into a message. */
   url: string;
   /** Video renditions for the picker grid, cheapest first. */
   previewSources?: GifPreviewSource[];
-  /** Width of the shared GIF rendition. */
   width: number;
-  /** Height of the shared GIF rendition. */
   height: number;
 }
 
 type GifFetch = { results: GifResult[] };
 
 /**
- * GIF provider selection. GIFverse is the keyless default so a fresh build has
- * working GIF search out of the box. KLIPY is opt-in: it is used only when a
- * `VITE_KLIPY_API_KEY` is baked into the build. KLIPY additionally requires a
- * per-install `customer_id` on every request and injects sponsored results, so
- * it is never the default.
+ * GIFverse is the keyless default. KLIPY is used only when `VITE_KLIPY_API_KEY` is built in
+ * (it needs a per-install `customer_id` and injects sponsored results).
  */
 function klipyConfigured(): boolean {
   return Boolean(import.meta.env.VITE_KLIPY_API_KEY?.trim());
 }
 
-// ---------------------------------------------------------------------------
-// GIFverse provider (default, keyless)
-// ---------------------------------------------------------------------------
-
 const GIFVERSE_BASE_URL = 'https://gifverse.net/api/v1';
 const GIFVERSE_MEDIA_URL = 'https://gifverse.net/media';
 
 interface GifverseResult {
-  /** GIF id */
   i: string;
-  /** Title */
   ti: string;
-  /** Description */
   de?: string;
-  /** Width */
   w: number;
-  /** Height */
   h: number;
   /** Available video formats (e.g. av1, webm, mp4) */
   f: string[];
-  /** NSFW flag */
   nsfw: boolean;
 }
 
@@ -70,26 +55,15 @@ interface GifverseResponse {
   };
 }
 
-/** Video formats we'll play in the grid, cheapest first. */
 const PREVIEW_FORMATS: { format: string; type: string }[] = [
   { format: 'webm', type: 'video/webm' },
   { format: 'mp4', type: 'video/mp4' },
 ];
 
 /**
- * Video renditions of a GIF for the picker grid. GIFverse serves every format
- * it lists in `f` from `/media/<id>/<format>` — the same animation as
- * `original.gif` at a fraction of the size (a trending GIF runs ~1–1.8 MB as a
- * GIF but ~100–350 KB as webm). The grid shows 30 at once, so sending the
- * originals meant tens of megabytes and 30 CPU-decoded GIF animations per open.
- *
- * GIFverse also offers `av1`, which is smaller again (~25–70 KB), but it's
- * deliberately skipped: on devices without AV1 hardware decode the browser
- * falls back to software decode, and 30 concurrently-looping software-decoded
- * streams costs more than the bytes save.
- *
- * `formats` is optional so favorites persisted before this existed (which only
- * kept the id) can still resolve their previews.
+ * Video renditions for the picker grid, served from `/media/<id>/<format>`: ~10x smaller than
+ * the GIF and not CPU-decoded. AV1 is skipped: software decode of 30 looping streams costs more
+ * than it saves. `formats` is optional for favorites persisted with only an id.
  */
 export function gifPreviewSources(id: string, formats?: string[]): GifPreviewSource[] {
   return PREVIEW_FORMATS.filter(({ format }) => !formats || formats.includes(format)).map(
@@ -126,10 +100,6 @@ async function fetchGifverse(path: 'search' | 'trending', query?: string): Promi
   const data: GifverseResponse = await res.json();
   return { results: mapGifverseResults(data) };
 }
-
-// ---------------------------------------------------------------------------
-// KLIPY provider (opt-in via VITE_KLIPY_API_KEY)
-// ---------------------------------------------------------------------------
 
 const KLIPY_BASE_URL = 'https://api.klipy.com/api/v1';
 const KLIPY_CUSTOMER_ID_KEY = 'armada:klipy-customer-id';
@@ -188,8 +158,7 @@ function customerId(): string {
     localStorage.setItem(KLIPY_CUSTOMER_ID_KEY, created);
     return created;
   } catch {
-    // Storage can be unavailable in private/restricted WebViews. The identifier
-    // is analytics-only, so an in-memory value is sufficient for that session.
+    // Storage may be unavailable in restricted WebViews; the id is analytics-only.
     sessionCustomerId ??= createCustomerId();
     return sessionCustomerId;
   }
@@ -263,11 +232,7 @@ async function fetchKlipy(path: 'search' | 'trending', query?: string): Promise<
   return { results: mapKlipyResults(data) };
 }
 
-/**
- * Best-effort share analytics for the selected GIF; selecting the GIF must
- * never wait on it. Only KLIPY tracks shares — GIFverse has no such endpoint,
- * so this is a no-op unless KLIPY is the configured provider.
- */
+/** Best-effort share analytics (KLIPY only); selecting a GIF must never wait on it. */
 export async function registerGifShare(slug: string): Promise<void> {
   if (!slug || !klipyConfigured()) return;
   try {
@@ -281,10 +246,6 @@ export async function registerGifShare(slug: string): Promise<void> {
     console.warn('KLIPY share tracking failed:', error);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Provider-agnostic hook
-// ---------------------------------------------------------------------------
 
 export function useGifSearch() {
   const [query, setQuery] = useState('');

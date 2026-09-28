@@ -6,37 +6,17 @@ import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
- * Per-conversation notification levels — the Discord model.
- *
- * Every conversation (community, channel, or DM) can be set to one of three
- * levels; a conversation with no explicit level INHERITS from a broader scope:
- *
- *   all       → notify on every message
- *   mentions  → notify only on @-mentions (and DMs, always directed at you)
- *   nothing   → silence completely, mentions included
- *
- * Resolution cascade for a channel:
- *   1. the channel's own level, else
- *   2. its community's level, else
- *   3. the account-global per-type prefs (`PushPrefs`): `allGroupMessages`
- *      on ⇒ `all`, else `mentions` on ⇒ `mentions`, else `nothing`.
- *
- * The same three levels apply to a DM (keyed by peer pubkey), where `mentions`
- * is equivalent to `all` (every DM is directed at you) and the global fallback
- * is the `directMessages` pref.
- *
- * Stored in `AppConfig.notifLevels`, keyed by the SAME stable scope keys the
- * mute sets used, and synced across devices via the encrypted settings event.
- * This supersedes the boolean mute (`nothing` == the old mute), and the legacy
- * `mutedCommunities`/`mutedChannels` entries are read here as level `nothing`
- * so an older client's mutes carry forward without a migration step.
+ * Per-conversation notification levels (Discord model): all / mentions / nothing.
+ * Channel cascade: channel → community → global prefs (`allGroupMessages` ⇒ all, else `mentions`
+ * ⇒ mentions, else nothing). DMs (`mentions` ≡ `all`) fall back to `directMessages`.
+ * Stored in `AppConfig.notifLevels` under the mute scope keys; legacy
+ * `mutedCommunities`/`mutedChannels` read as `nothing`.
  */
 
 export type NotifLevel = "all" | "mentions" | "nothing";
 
-// ── Stable scope keys (identical scheme to useMutes) ─────────────────────────
+// Stable scope keys (same scheme as useMutes).
 
-/** Community scope key: normalized relay URL (NIP-29) or `c2:` rail key. */
 export function communityScopeKey(relayUrlOrRailKey: string): string {
   if (relayUrlOrRailKey.startsWith("c2:")) {
     return relayUrlOrRailKey;
@@ -44,12 +24,10 @@ export function communityScopeKey(relayUrlOrRailKey: string): string {
   return normalizeRelayUrl(relayUrlOrRailKey) ?? relayUrlOrRailKey;
 }
 
-/** NIP-29 channel scope key: `${relayUrl}::${groupId}` (relay normalized). */
 export function channelScopeKey(relayUrl: string, groupId: string): string {
   return channelReadKey(normalizeRelayUrl(relayUrl) ?? relayUrl, groupId);
 }
 
-/** Concord channel scope key: `c2:${communityId}::${channelIdHex}`. */
 export function concordChannelScopeKey(
   protocol: "c2",
   communityId: string,
@@ -58,53 +36,43 @@ export function concordChannelScopeKey(
   return `${protocol}:${communityId}::${channelIdHex}`;
 }
 
-/** DM scope key: `dm:${pubkey}`. */
 export function dmScopeKey(pubkey: string): string {
   return `dm:${pubkey}`;
 }
 
-/** The global fallback level for channel-like scopes, from the per-type prefs. */
 function globalChannelLevel(prefs: PushPrefs): NotifLevel {
   if (prefs.allGroupMessages) return "all";
   if (prefs.mentions) return "mentions";
   return "nothing";
 }
 
-/** The global fallback level for DMs, from the per-type prefs. */
 function globalDmLevel(prefs: PushPrefs): NotifLevel {
   return prefs.directMessages ? "all" : "nothing";
 }
 
 export interface UseNotifLevelsReturn {
-  /** The explicit level set for a scope key, or undefined (inherit). */
+  /** Explicit level, or undefined (inherit). */
   getLevel: (scopeKey: string) => NotifLevel | undefined;
-  /** Set (or clear, with `undefined`) the level for a scope key. */
   setLevel: (scopeKey: string, level: NotifLevel | undefined) => void;
-  /**
-   * The RESOLVED level for a NIP-29 channel, applying the cascade
-   * (channel → server → global).
-   */
+  /** Resolved via channel → server → global. */
   channelLevel: (relayUrl: string, groupId: string) => NotifLevel;
-  /** The resolved level for a Concord channel (channel → community → global). */
+  /** Channel → community → global. */
   concordChannelLevel: (
     protocol: "c2",
     communityId: string,
     channelIdHex: string,
   ) => NotifLevel;
-  /** The resolved level for a community (community → global). */
   communityLevel: (railKey: string) => NotifLevel;
-  /** The resolved level for a DM (dm → global). */
   dmLevel: (pubkey: string) => NotifLevel;
 }
 
-/** Merge the explicit `notifLevels` map with the legacy mute sets (as `nothing`). */
 function effectiveMap(
   levels: Record<string, NotifLevel>,
   mutedCommunities: string[],
   mutedChannels: string[],
 ): Map<string, NotifLevel> {
   const m = new Map<string, NotifLevel>();
-  // Legacy mutes first (lowest precedence), so an explicit level overrides them.
+  // Legacy mutes first (lowest precedence).
   for (const key of mutedCommunities) m.set(communityScopeKey(key), "nothing");
   for (const key of mutedChannels) m.set(key, "nothing");
   for (const [key, level] of Object.entries(levels)) m.set(key, level);
@@ -113,8 +81,7 @@ function effectiveMap(
 
 export function useNotifLevels(): UseNotifLevelsReturn {
   const { config, updateConfig } = useAppContext();
-  // AppConfig is account-scoped and is the only foreground policy authority;
-  // never fall back to another account's legacy localStorage mirror.
+  // Account-scoped AppConfig only; never another account's legacy localStorage mirror.
   const pushPrefs = config.pushPrefs ?? DEFAULT_PUSH_PREFS;
 
   const map = useMemo(
@@ -131,11 +98,8 @@ export function useNotifLevels(): UseNotifLevelsReturn {
         if (level === undefined) delete nextLevels[scopeKey];
         else nextLevels[scopeKey] = level;
 
-        // Keep the legacy mute sets in lock-step so older clients and the relay
-        // push gateway (which reads `muted_groups`) still honor a `nothing`
-        // level, and drop a scope from them when it's no longer `nothing`.
-        // Channel keys contain `::`; community keys are a bare relay URL or a
-        // `c2:` rail key; DM keys (`dm:…`) belong to neither mute set.
+        // Keep legacy mute sets in lock-step for older clients and the push gateway (`muted_groups`).
+        // Channel keys contain `::`; `dm:` keys belong to neither set.
         const isChannel = scopeKey.includes("::");
         const isDm = scopeKey.startsWith("dm:");
         const muteSetKey: "mutedCommunities" | "mutedChannels" | null = isDm

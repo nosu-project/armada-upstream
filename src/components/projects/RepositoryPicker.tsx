@@ -17,7 +17,6 @@ import type { GitRepositoryAnnouncement } from "@/lib/gitActivity";
 import { resolveGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
 import { cn } from "@/lib/utils";
 
-/** A repository chosen from the picker, with the relays an attachment should carry. */
 export interface PickedRepository {
   coordinate: string;
   relayHints: string[];
@@ -26,7 +25,7 @@ export interface PickedRepository {
   owner: string;
 }
 
-/** The owner's profile name, or their truncated npub — never "Anonymous". */
+/** Profile name or truncated npub — never "Anonymous". */
 function useOwnerName(pubkey: string): string {
   const author = useAuthor(pubkey);
   const named = author.data?.metadata?.name || author.data?.metadata?.display_name;
@@ -49,7 +48,7 @@ export function OwnerAvatar({ pubkey, className }: { pubkey: string; className?:
   );
 }
 
-/** GitHub-style "owner / repo" title — same-named forks are otherwise indistinguishable. */
+/** "owner / repo": same-named forks are otherwise indistinguishable. */
 export function OwnerSlashRepo({ owner, name, className }: { owner: string; name: string; className?: string }) {
   const ownerName = useOwnerName(owner);
   return (
@@ -82,11 +81,7 @@ function RepositoryRow({ repository, connected, onSelect }: { repository: GitRep
   );
 }
 
-/**
- * Find a NIP-34 repository: search the public ngit directory, or paste an
- * naddr / nostr:// address from a git client. Shared by the create-channel
- * wizard and the connect-repository flow so both read the same.
- */
+/** Find a NIP-34 repository by searching the ngit directory or pasting an naddr / nostr:// address. */
 export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = true, className }: {
   connectedCoordinates: ReadonlySet<string>;
   onSelect: (repository: PickedRepository) => void;
@@ -146,18 +141,12 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          // Short enough to read in full inside a dialog-width field. What may
-          // be pasted (an naddr, a nostr:// remote) is confirmed by the "Use
-          // this repository address" row the moment one is detected, and spelled
-          // out by whatever hosts the picker.
           placeholder="Search, or paste an address"
           autoFocus={autoFocus}
           disabled={resolving}
-          // An input's intrinsic width comes from its `size`, so without this it
-          // refuses to shrink below ~20 characters and overflows a narrow row.
+          // Inputs' intrinsic width comes from `size`; min-w-0 lets it shrink.
           className="h-9 min-w-0 border-0 px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
         />
-        {/* The specifics the placeholder no longer has room to name. */}
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>

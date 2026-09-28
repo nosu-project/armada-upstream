@@ -12,12 +12,7 @@ import type { ChatMsg } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
 
-/**
- * Whether the thread root is a tombstone (a synthetic placeholder for a root
- * message that hasn't been decoded/loaded yet). Checked by the ThreadPanel so
- * it can render a "message not loaded" placeholder instead of the root's
- * content/avatar.
- */
+/** Whether the root is a tombstone placeholder for a not-yet-loaded root message. */
 export function isTombstoneRoot(root: ChatMsg): boolean {
   return root.pubkey === TOMBSTONE_PUBKEY;
 }
@@ -27,11 +22,8 @@ const TOMBSTONE_PUBKEY = "\u0000tombstone";
 
 /** A thread the current user has participated in, summarized for the tab. */
 export interface ConcordThread {
-  /** The thread root message, adapted for the shared chat components. */
   root: ChatMsg;
-  /** The channel the thread lives in (for jumping / opening the panel). */
   channelIdHex: string;
-  /** Number of replies (excluding the root). */
   replyCount: number;
   /** Newest reply's `created_at` (unix SECONDS) — the sort/recency key. */
   lastReplyAt: number;
@@ -42,18 +34,12 @@ export interface ConcordThread {
 }
 
 /**
- * Threads the current user has participated in across a Concord community —
- * every thread whose root or any reply they authored — summarized newest-reply
- * first, derived PURELY from the shared community rumor scan
- * ({@link useCommunityRumors}). No store access of its own.
+ * Threads the user participated in (authored the root or any reply), newest
+ * reply first, derived purely from {@link useCommunityRumors}.
  *
- * "New" is per-thread: a thread lights up when its newest reply is newer than
- * the last time the user saw it. Those stamps live in the shared read-state
- * map at `c2t:<rootRumorId>` — the same map channels and DMs use, so they
- * sync across devices via the encrypted NIP-78 settings event. The per-thread
- * comparison is pure computation layered over the shared scan, so `markRead`
- * recomputes instantly. Reading a channel that shows a thread's replies also
- * advances that thread's stamp (the open-channel effect in ConcordPage).
+ * "New" is per-thread via `c2t:<rootRumorId>` stamps in the shared read-state
+ * map (synced via NIP-78). Reading a channel also advances its threads' stamps
+ * (the open-channel effect in ConcordPage).
  */
 export function useConcordThreads(community: Community | undefined, channels: Channel[]): {
   threads: ConcordThread[];
@@ -67,13 +53,8 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
   const { mutedPubkeys } = useMutedPubkeys();
   const { readState, markRead: sharedMarkRead } = useReadState();
   const communityIdHex = community?.idHex;
-  // The same context the channel timeline folds under. Without it the fold
-  // silently skips the Banlist drop and every moderator delete (both branches
-  // short-circuit on `moderation &&`), so a banned author's replies kept
-  // rendering here — and kept inflating reply counts, participant stacks and
-  // the "new replies" dot — after they had vanished from the channel itself.
-  // CORD-04 §4 admits no such exemption: every honest client drops EVERY event
-  // from a banned npub.
+  // Required so the fold applies the Banlist and moderator deletes (CORD-04 §4);
+  // without it banned authors' replies inflate counts and "new" dots.
   const moderation = useChatModeration(community);
 
   const channelSig = channels.map((c) => c.idHex).join(",");
@@ -81,28 +62,21 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
 
   const { byChannel: rumorsByChannel, isLoading } = useCommunityRumors(communityIdHex, channelIds);
 
-  // Bucket each channel's folded rumors into the threads the user is in. Pure
-  // computation over the shared scan — no store, no readMap dependency (that is
-  // layered on below). Deferred off the render path: it folds every channel's
-  // window, and it ran in the render that switched communities.
+  // Pure computation over the shared scan; deferred off the render path since it
+  // folds every channel's window.
   const scanned = useIdleMemo(communityIdHex ?? null, () => {
     const out: ScannedThread[] = [];
 
     for (const [idHex, rumors] of rumorsByChannel) {
-      // Drop muted authors before folding, so a muted person contributes
-      // neither a listed thread, a reply count, an avatar in the participant
-      // stack, nor a "new replies" dot. A thread whose ROOT is muted vanishes
-      // with it: `byId` no longer resolves the root, and it degrades to the
-      // same tombstone an out-of-window root gets.
+      // Muted authors are dropped before folding; a muted ROOT degrades to a tombstone.
       const folded = foldTimeline(rumors, moderation);
       const messages = folded.messages.filter(
         (m) => !mutedPubkeys.has(m.author) && !folded.quarantined.has(m.rumorId),
       );
       const byId = new Map(messages.map((m) => [m.rumorId, m]));
 
-      // Bucket thread replies by their root. A thread reply is a NIP-22
-      // kind-1111 comment (uppercase `E` root); a kind-9 `q` is an inline reply
-      // and never a thread (see `replyTargetOf`).
+      // Thread replies are NIP-22 kind-1111 (uppercase `E` root); a kind-9 `q` is
+      // an inline reply, never a thread.
       const repliesByRoot = new Map<string, OpenedChat[]>();
       for (const m of messages) {
         const root = replyTargetOf(m);
@@ -121,7 +95,6 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
         replies.sort((a, b) => a.ms - b.ms);
         const newest = replies[replies.length - 1];
 
-        // Distinct repliers, newest-first (avatar stack).
         const participants: string[] = [];
         const seen = new Set<string>();
         for (let i = replies.length - 1; i >= 0; i--) {
@@ -132,10 +105,8 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
           }
         }
 
-        // Orphan root (older than the scan window / undecoded): create a
-        // tombstone so the thread is still listed and reachable. The
-        // ThreadPanel renders a placeholder for the root; when the real root
-        // eventually loads, it replaces the tombstone naturally.
+        // Orphan root (outside the scan window / undecoded): a tombstone keeps the
+        // thread listed; the real root replaces it once loaded.
         const rootChatMsg: ChatMsg = rootMsg
           ? openedToChatMsg(rootMsg)
           : makeTombstoneRoot(rootId);
@@ -156,9 +127,7 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
     return out;
   }, [rumorsByChannel, pubkey, mutedPubkeys, moderation]);
 
-  // Layer per-thread "new" on top as pure arithmetic against the shared
-  // read-state map (`c2t:<rootId>` stamps). Depends on the stamps read here,
-  // not on `readState` itself (a new object on every markRead anywhere).
+  // Depends on these stamps only, not `readState` (a new object on every markRead).
   const readStateRef = useRef(readState);
   readStateRef.current = readState;
   const scannedList = scanned ?? NO_SCANNED;
@@ -191,8 +160,7 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
 
   const hasNew = useMemo(() => threads.some((t) => t.hasNew), [threads]);
 
-  // "Mark all as read": advance every currently-loaded thread with unseen
-  // replies to its newest reply. Monotonic, like the single-thread `markRead`.
+  // Monotonic, like the single-thread `markRead`.
   const markAllRead = useCallback(() => {
     for (const t of threads) {
       if (t.hasNew) markRead(t.root.id, t.lastReplyAt);
@@ -218,13 +186,7 @@ interface ScannedThread {
 
 const NO_SCANNED: ScannedThread[] = [];
 
-/**
- * Create a synthetic placeholder `ChatMsg` for a thread root that hasn't been
- * decoded/loaded yet. The ThreadPanel detects tombstone roots (via
- * {@link isTombstoneRoot}) and renders a "message not loaded" placeholder
- * instead of the root's content/avatar. The real root replaces the tombstone
- * naturally once it loads (the next scan picks it up from `byId`).
- */
+/** Placeholder root for a thread whose root isn't loaded (see {@link isTombstoneRoot}). */
 function makeTombstoneRoot(rootId: string): ChatMsg {
   const ev: NostrEvent = {
     id: rootId,

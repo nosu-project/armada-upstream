@@ -3,13 +3,9 @@ import { useCallback } from "react";
 import { useStableNavigate } from "@/hooks/useStableNavigate";
 
 /**
- * A page-level Back: one step back when there is an entry IN THE APP to return
- * to, otherwise `fallback` (home by default), replacing the current entry.
- *
- * A cold load (a shared link, a fresh tab) has nothing in the app behind it.
- * `history.length` can't tell: it counts the tab's earlier sites too, and
- * stepping back to one would leave Armada. The router's own entry index can —
- * it is 0 on the entry the app was loaded into.
+ * Page-level Back: step back if there's an in-app entry, else replace with
+ * `fallback`. Uses the router's entry index (0 on a cold load); `history.length`
+ * counts other sites too.
  */
 export function useBackOrHome(fallback = "/"): () => void {
   const navigate = useStableNavigate();

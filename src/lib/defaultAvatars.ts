@@ -1,75 +1,27 @@
 /**
- * The dozen pictures offered to somebody who has just made an account.
+ * The dozen preset pictures offered to a new account. Exactly twelve (pinned
+ * in `ProfileStep.test.tsx`): a new picture DISPLACES a placeholder.
  *
- * A dozen is the size of the thing, not a count of what happens to be in the
- * list: a new picture DISPLACES a placeholder rather than joining it, so the
- * grid stays the one screenful of choices it was meant to be. The length is
- * pinned in `ProfileStep.test.tsx` so adding a thirteenth is a failing test
- * rather than a slightly longer scroll.
+ * Each is a content-addressed Blossom URL written verbatim into kind 0 — no
+ * bytes in the bundle or repo. If the host drops one, Armada recovers it by
+ * hash from the user's Blossom servers ({@link Avatar}), so keep them
+ * content-addressed.
  *
- * They exist because the alternative first thing a new account does is
- * nothing: a profile with no picture is the one everybody has, and a wall of
- * grey circles is how a network looks empty. One tap is a low enough price for
- * a face, and the pictures are ordinary enough that nobody is stuck with a
- * personality they did not choose.
+ * Artist submissions lead; the `PLACEHOLDER` rows are Signal's
+ * (Signal-Android `ic_avatar_*` on its `AvatarColor` pastels) and get replaced
+ * one at a time.
  *
- * Every one of them is a URL on a Blossom server and nothing else. No picture
- * here is in the bundle, in this repository, or in its history, and choosing
- * one moves no bytes: the URL is what goes into the kind 0 verbatim. The
- * alternative — a file under `public/avatars`, uploaded to the new account's
- * own Blossom server at signup — is what this used to be, and it made a copy
- * of every preset in the app, in git forever, and on whatever server each new
- * account happened to be pointed at.
- *
- * What that costs, and it is worth naming: a published `picture` now points at
- * a blob nobody but its host is keeping. If one is dropped there, every
- * profile that chose it loses its picture, where a copy on the user's own
- * server would have survived. Inside Armada a miss is retried against the
- * user's Blossom servers by hash ({@link Avatar}'s source walk, which is why
- * these must stay content-addressed URLs — the hash IS the recovery); in
- * another client it is an ordinary URL on a host Soapbox runs.
- *
- * The ones with an artist in the `label` were submitted, and they lead the
- * list. The `PLACEHOLDER` rows behind them are Signal's, rendered out of the
- * vector drawables in Signal-Android (`res/drawable/ic_avatar_*.xml`) onto the
- * pastel backgrounds its own `AvatarColor` table pairs them with, in the order
- * `Avatars.kt` lists them, and they are being replaced one at a time as
- * artwork comes in — each submission costing whichever of them it stands in
- * for, which is the whole of how this list gets shorter on Signal's side and
- * no longer overall.
- *
- * LICENSING, because those are not Soapbox's: Signal-Android is GPL-3.0, which
- * AGPL-3.0-or-later may be combined with — so the web and F-Droid builds were
- * always fine, and no build contains the artwork at all now that these are
- * links. That is not the whole of the question the STORE builds raise, which
- * rests on the section 7 additional permission in the README's License section
- * and which Soapbox can only grant for copyright it holds (see AGENTS.md: no
- * copyleft artwork you don't own may enter a store build unless its holder has
- * granted the same permission): the app still offers Signal's pictures as its
- * own presets and Soapbox still hosts them. Replacing the placeholders with
- * art Soapbox has permission for is the fix, as it always was.
+ * LICENSING: Signal-Android is GPL-3.0. Store builds rely on the README's
+ * section 7 permission, which Soapbox can only grant for copyright it holds
+ * (see AGENTS.md), so the placeholders must be replaced with art Soapbox has
+ * permission for.
  */
 export interface DefaultAvatar {
-  /**
-   * Which one was picked.
-   *
-   * A name for the choice, not for a file — swapping the picture behind a row
-   * keeps the id, and nothing resolves anything by it.
-   */
+  /** Names the choice, not the file; nothing resolves by it. */
   id: string;
-  /**
-   * The picture, and the profile picture it becomes.
-   *
-   * It ends up in `src`, could end up in a CSS `url()`, and is published as
-   * somebody's `picture` — so every one of them is written down here, and none
-   * may ever come off a relay.
-   */
+  /** Hard-coded here only — never from a relay (it lands in `src`/`url()` and kind 0). */
   url: string;
-  /**
-   * What it is a picture of, and who drew it where that is known — the label
-   * read out to a screen reader, and the one shown on hover. Nothing renders
-   * it as ordinary text, so it is the only place the credit appears.
-   */
+  /** Subject and artist credit: screen-reader label and hover text (the only credit shown). */
   label: string;
 }
 

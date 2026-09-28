@@ -36,41 +36,22 @@ import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
 
 /**
- * One concern per step: what it's called, what it looks like, where it lives,
- * how long it remembers. These used to share a single dialog screen, where a
- * name field, a retention timer and a relay list read as one undifferentiated
- * stack.
- *
- * "Where it lives" carries both lists a community is addressed by — relays for
- * its messages, voice servers for its calls — since they are one question and
- * one editor shape. The timer stays a step of its own: the relay editor is five
- * rows tall, and stacked with the create button it pushed it off the bottom of
- * a phone. The short step goes last, so the irreversible action is never the
- * thing that needs scrolling to.
+ * One concern per step. Relays and voice servers share a step; the timer is
+ * last so the create button never needs scrolling on a phone.
  */
 const CREATE_STEPS = ["name", "look", "relays", "rules"] as const;
 type CreateStep = (typeof CREATE_STEPS)[number];
 
-/** An uploaded image: the sealed pointer, plus the local plaintext to show. */
 interface StagedImage {
   pointer: ImagePointer;
-  /** Object URL of the cropped plaintext — the ciphertext is all that shipped. */
+  /** Object URL of the cropped plaintext; only ciphertext is uploaded. */
   preview: string;
 }
 
 /**
- * Founding a Concord community, as a full-screen wizard.
- *
- * It used to be a form crammed into the Add dialog, which left no room to ask
- * for anything but a name — so every new community was born faceless, its icon,
- * banner and description a settings trip nobody took, and its home relays
- * folded away behind a chevron glued to the submit button.
- *
- * Every step's answers go into the SAME genesis metadata edition (see
- * `create`): nothing publishes until the final button, so abandoning the wizard
- * leaves no half-made community behind — only, at worst, an orphaned encrypted
- * blob on a media server, which is unreadable without the key that never
- * shipped.
+ * Full-screen community founding wizard. Everything goes into ONE genesis
+ * metadata edition at the end, so abandoning leaves nothing (at worst an
+ * unreadable orphaned blob).
  */
 export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
@@ -86,25 +67,16 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
   const [banner, setBanner] = useState<StagedImage | null>(null);
   const [uploading, setUploading] = useState<"icon" | "banner" | null>(null);
 
-  // Disappearing messages (CORD-08), surfaced at creation on purpose:
-  // retention is a decision a community should make before its first message.
-  // Defaults to 30 days; "Off" is one of the presets.
+  // CORD-08 retention, decided before the first message. Defaults to 30 days.
   const [expiration, setExpiration] = useState(DEFAULT_MESSAGE_EXPIRATION_SECS);
 
-  // Which relays the community is minted on. `null` = untouched (use the
-  // configured default candidates); once the user edits the picker, `relays`
-  // holds the explicit set for this mint only, leaving the standing setting
-  // alone. Passing it at submit keeps what's shown identical to what's used.
+  // `null` = use configured defaults; otherwise an explicit set for this mint only.
   const [relays, setRelays] = useState<string[] | null>(null);
   const candidates = useCreateRelayCandidates();
   const effectiveRelays = relays ?? candidates;
 
-  // The community's voice servers (CORD-02 §6). Prefilled with the creator's
-  // own, because that is what the community would otherwise be minted with
-  // silently — and once minted, every member's calls resolve from this list
-  // rather than from their own setting (CORD-07 §5), which is a decision worth
-  // showing the person making it. Emptying it is a real answer: it leaves
-  // every member on their own server.
+  // Prefilled with the creator's own: once minted, members' calls resolve from
+  // this list (CORD-07 §5). Empty leaves members on their own servers.
   const [avBrokers, setAvBrokers] = useState<string[]>(() =>
     ownAvServers()
       .map(canonicalOrigin)
@@ -115,9 +87,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
   const nameTooLong = utf8Len(name.trim()) > NAME_MAX_BYTES;
   const descriptionTooLong = utf8Len(description.trim()) > DESCRIPTION_MAX_BYTES;
 
-  // Every object URL this wizard minted, revoked together on unmount. The
-  // previews outlive their own step (step 2 can be returned to), so they can't
-  // be revoked at the end of the handler that made them.
+  // Previews outlive their step, so revoke all on unmount.
   const objectUrls = useRef<string[]>([]);
   useEffect(() => {
     const urls = objectUrls.current;
@@ -145,8 +115,6 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
     const field = pendingField.current;
     setCropState({
       imageSrc: URL.createObjectURL(file),
-      // The icon renders in a square, the banner in the 3:1 strip the community
-      // pages give it — cropped here so neither is letterboxed.
       aspect: field === "icon" ? 1 : 3,
       field,
       title: field === "icon" ? "Crop icon" : "Crop banner",
@@ -166,8 +134,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
     setError(null);
     setUploading(field);
     try {
-      // CORD-02 §6: the media host only ever sees ciphertext; the per-image key
-      // rides inside the member-sealed metadata edition published at the end.
+      // CORD-02 §6: the media host only sees ciphertext; the key rides in the sealed metadata.
       const { ciphertext, key, nonce, hash } = await encryptImageBlob(blob);
       const tags = await uploadFile(
         new File([ciphertext], `${field}.enc`, { type: "application/octet-stream" }),
@@ -189,14 +156,10 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
   const handleCreate = async () => {
     setError(null);
     try {
-      // New communities are always Concord.
       const { communityId, name: created } = await create({
         name: name.trim(),
-        // Always the set shown on the previous step, so the community is minted
-        // on exactly the relays the user was told about (create derives the same
-        // default from config when this is empty).
+        // Mint on exactly the relays shown.
         relays: effectiveRelays,
-        // Exactly the list the previous step showed, empty included.
         avBrokers,
         messageExpirationSecs: expiration,
         description: description.trim() || undefined,
@@ -204,8 +167,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         banner: banner?.pointer,
       });
       toast({ title: "Encrypted community ready", description: created });
-      // Replaced, not pushed: going back from a brand-new community must not
-      // land on a filled-in wizard whose button would mint a second one.
+      // Replace so going back can't mint a second community.
       navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create the community.");
@@ -232,8 +194,6 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col items-center gap-8 text-center">
           <ArmadaCrest size={84} />
 
-          {/* The Add dialog is now just a door, so the case for an encrypted
-              community is made here, where it has room and isn't in the way. */}
           <StepHeading
             title="name your community"
             description="Serverless and end-to-end-encrypted. No host can read it, and you become the owner."
@@ -280,10 +240,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
             description="All optional. Images are encrypted before upload."
           />
 
-          {/* A live stand-in for the community's own header, so what's being
-              picked is shown in the composition it will be seen in: the icon
-              punches through the banner's bottom edge rather than floating in a
-              block of its own underneath it. */}
+          {/* Live stand-in for the community header: icon overlapping the banner edge. */}
           <div>
             <div className="relative">
               <ImageSlot
@@ -292,8 +249,6 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
                 busy={uploading === "banner"}
                 onPick={() => handlePickImage("banner")}
               />
-              {/* Half the icon's own height below the banner, so the overlap
-                  stays centred on the edge whatever either one measures. */}
               <div className="absolute -bottom-10 left-1/2 -translate-x-1/2">
                 <ImageSlot
                   variant="icon"
@@ -303,7 +258,6 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
                 />
               </div>
             </div>
-            {/* Clears the icon's overhang (40px) with room to spare. */}
             <h2 className="mt-12 text-center text-lg font-semibold leading-tight break-words">
               {name.trim()}
             </h2>
@@ -432,8 +386,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
-      {/* One input for both slots — `pendingField` says which asked. Outside the
-          steps so a re-render mid-pick can't unmount it under the file dialog. */}
+      {/* Shared input outside the steps so a re-render can't unmount it under the file dialog. */}
       <input
         ref={pickInputRef}
         type="file"
@@ -456,17 +409,8 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * The voice-server list, in the relay editor's shape: an identity row per
- * server, a remove button, an add form that validates on submit, and a cap
- * past which the form goes away. Not `RelayListEditor` itself, because its
- * rows are a NIP-11 lookup — name, AUTH/search badges — and a broker publishes
- * no document to look up; it answers one capability probe and nothing else.
- *
- * So the icon is the host's **favicon**, through the same service template
- * Ditto uses (`faviconUrl`), and the fallback is the host's initial: the shape
- * of a relay row without inventing metadata the protocol doesn't define. A
- * broken or missing favicon degrades to that initial on its own, so nothing
- * here distinguishes "no icon" from "not a website".
+ * Voice-server list in the relay editor's shape. Brokers publish no NIP-11
+ * document, so rows use the host's favicon (`faviconUrl`) with an initial fallback.
  */
 function VoiceServerListEditor({
   servers,
@@ -479,8 +423,7 @@ function VoiceServerListEditor({
 
   const handleAdd = () => {
     const raw = draft.trim();
-    // A bare host is the common way to type one; anything not https is refused,
-    // the token grant being a bearer credential (CORD-07 §2).
+    // Non-https refused: the token grant is a bearer credential (CORD-07 §2).
     const origin = canonicalOrigin(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
     if (!origin) {
       toast({
@@ -556,7 +499,6 @@ function VoiceServerListEditor({
   );
 }
 
-/** A step's title and its one line of framing, in the shell's voice. */
 function StepHeading({ title, description }: { title: string; description: string }) {
   return (
     <div className="space-y-2.5 text-center">
@@ -568,15 +510,7 @@ function StepHeading({ title, description }: { title: string; description: strin
   );
 }
 
-/**
- * An icon or banner slot. Geometry is per-variant rather than passed in: there
- * are exactly two of these, and the icon's ring, its letter fallback and the
- * size of its overlay badge all have to agree with each other.
- *
- * The pencil appears only once there's something to replace — while the slot is
- * empty the add glyph is already the affordance, and stacking a second one on
- * top of it was what made the pair look lopsided.
- */
+/** Icon or banner slot; the pencil shows only once there's something to replace. */
 function ImageSlot({
   variant,
   image,
@@ -595,7 +529,6 @@ function ImageSlot({
         type="button"
         className={cn(
           "grid place-items-center overflow-hidden transition-colors",
-          // The ring punches the icon out of the banner it overlaps.
           isIcon ? "size-20 rounded-2xl ring-4 ring-background" : "h-32 w-full rounded-lg",
           image
             ? "hover:opacity-90"

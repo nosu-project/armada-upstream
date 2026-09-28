@@ -7,33 +7,17 @@ import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { OpenedChat } from "@/concord/lib/chat";
 
-/**
- * How many newest rumors to read per channel for the community-wide derived
- * views (unread badges, threads). Sized for thread reconstruction (the most
- * demanding consumer); unread only needs the newest.
- */
+/** Newest rumors read per channel; sized for thread reconstruction. */
 const PER_CHANNEL = 200;
 
 /**
- * The single shared read of a Concord community's cached rumors, grouped by
- * channel. The community-wide derived views that only need each channel's
- * newest window — unread badges and the Threads tab — read from THIS one query
- * rather than each scanning the store independently. (Mentions deliberately do
- * NOT: a mention older than a busy channel's window must still surface, so
- * they keep their own index-backed `#p` filter — see `useConcordMentions`.)
+ * The single shared read of a community's cached rumors, grouped by channel, for
+ * the derived views that need only each channel's newest window (unread badges,
+ * Threads) — one transaction instead of one per channel per view. Mentions
+ * deliberately don't use it (see `useConcordMentions`).
  *
- * Why this exists: those views used to each loop every channel with its own
- * `queryChannelRumors`, so a community with N channels issued a transaction
- * per channel per view, all contending on the single connection with the
- * active channel's own timeline read — the channel-switch stall. Here it is
- * one `query()` (one transaction, one filter per channel) shared across
- * consumers, re-run only when the wire actually ingests a rumor for a watched
- * channel.
- *
- * The result is keyed by the channel SET (not any read-state), so opening a
- * channel — which advances read state but changes no rumors — never re-reads
- * the store; the read-dependent bits (is-unread, has-new) are derived downstream
- * as pure computation.
+ * Keyed by the channel SET, not read state, so opening a channel never re-reads
+ * the store; read-dependent bits are derived downstream.
  */
 export function useCommunityRumors(
   communityIdHex: string | undefined,
@@ -44,7 +28,6 @@ export function useCommunityRumors(
 } {
   const queryClient = useQueryClient();
 
-  // Stable key + membership set (recomputed only when the set changes).
   const channelSig = channelIds.join(",");
   const idSet = useMemo(() => new Set(channelIds), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -59,35 +42,15 @@ export function useCommunityRumors(
     queryFn: ({ signal }) =>
       queryRumorsByChannel(communityIdHex!, channelIds, { perChannel: PER_CHANNEL, signal }),
     enabled: !!communityIdHex && channelIds.length > 0,
-    // NO refetch interval: the wire bus below is the COMPLETE in-process live
-    // path. Every write of a community rumor rings `c2:<channel>` once it
-    // commits — `writeRumors` and `sweepExpiredCommunityRumors`, pinned in
-    // rumorStore.test.ts as a superset ring (over-rings, never under-rings) —
-    // and the delta handler below re-reads only the channels that changed.
-    //
-    // The old backstop re-ran the FULL N-channel scan for its community on a
-    // 2-minute clock, and the always-mounted rail mounts one of these PER
-    // joined community regardless of screen. So a power user paid N independent
-    // periodic full scans on unaligned phases, smearing across the window and
-    // contending on the one store connection — the recurring O(N) foreground
-    // load behind the "fine for new users, bad for power users" hitches. Its
-    // stated reason ("a write from another tab") is covered by the bus itself:
-    // each flushed batch is mirrored across same-origin contexts over a
-    // BroadcastChannel (bus.ts), so another tab's committed write rings this
-    // one's delta handler too — the single shared doorbell that cross-context
-    // gap wanted, not N forever-polls. On the single-context platforms
-    // (Android/iOS/desktop) — the ones with the lag — the mirror simply has no
-    // other subscriber, and the service-written rows ring through the drain's
-    // pass over wire ingest.
+    // No refetch interval: the wire bus is the complete live path (every community
+    // rumor write rings `c2:<channel>`, pinned in rumorStore.test.ts) and is
+    // mirrored across tabs over a BroadcastChannel. Polling here meant N periodic
+    // full scans for power users.
     staleTime: Infinity,
   });
 
-  // Delta-read when the wire ingests a rumor for a watched channel: re-scan
-  // ONLY the channels that changed and patch them into the cached map. The
-  // previous full invalidation re-ran the N×PER_CHANNEL scan on every ingest
-  // burst, serializing against the active channel's timeline read — a real
-  // channel-switch tax on busy communities. The bus already coalesces a burst
-  // of writes into one flush, so this fires at most once per burst.
+  // Re-scan ONLY the channels that changed and patch them into the cached map;
+  // the bus coalesces a burst into one flush.
   useWireScopes((scopes) => {
     const changed: string[] = [];
     for (const s of scopes) {
@@ -103,12 +66,9 @@ export function useCommunityRumors(
 const EMPTY: Map<string, OpenedChat[]> = new Map();
 
 /**
- * Delta reads waiting for this microtask, per query key. Every consumer of a
- * community's rumors (unread badges, threads, the members view, time
- * travelers) mounts its own copy of this hook, and the bus rings them all in
- * one flush — so without coalescing, ONE ring ran one store read and one cache
- * replacement PER CONSUMER, each replacement a render of everything reading
- * the key. Collected here, they run once.
+ * Delta reads pending this microtask, per query key. Every consumer mounts its
+ * own copy of this hook and the bus rings them all at once; coalescing makes it
+ * one store read and one cache replacement.
  */
 const pendingDeltas = new Map<string, Set<string>>();
 
@@ -132,16 +92,13 @@ function scheduleDelta(
     void queryRumorsByChannel(communityIdHex, ids, { perChannel: PER_CHANNEL })
       .then((delta) => {
         queryClient.setQueryData<Map<string, OpenedChat[]>>(queryKey, (old) => {
-          // Until the initial full scan lands there is nothing to patch — and
-          // that scan will include this delta's rows anyway.
+          // The pending initial full scan will include this delta's rows.
           if (!old) return undefined;
           let next: Map<string, OpenedChat[]> | undefined;
           for (const id of ids) {
             const rows = delta.get(id);
             const prev = old.get(id);
-            // A ring that changed nothing this channel shows (a sync round
-            // that found no news rings anyway) keeps the old arrays — and,
-            // when no channel changed, the old Map, so nothing re-renders.
+            // Unchanged rows keep the old arrays (and the old Map), so nothing re-renders.
             if (rows ? prev !== undefined && sameRows(prev, rows) : prev === undefined) continue;
             next ??= new Map(old);
             if (rows) next.set(id, rows);

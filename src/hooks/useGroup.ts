@@ -31,7 +31,7 @@ export interface GroupDetails {
 
 const GROUP_KINDS = [KIND_GROUP_METADATA, KIND_GROUP_ADMINS, KIND_GROUP_MEMBERS, KIND_GROUP_ROLES];
 
-/** Compose GroupDetails from a set of 39000-39003 events (newest per kind wins). */
+/** Newest per kind wins. */
 function composeGroupDetails(events: NostrRumor[], relayUrl: string): GroupDetails {
   const newest = new Map<number, NostrRumor>();
   for (const event of events) {
@@ -54,11 +54,8 @@ function composeGroupDetails(events: NostrRumor[], relayUrl: string): GroupDetai
 }
 
 /**
- * Fetch a single group's relay-signed state (metadata, admins, members,
- * roles). LOCAL-FIRST: the 39000-39003 events are plaintext and mirrored into
- * IndexedDB by NostrBatcher, so a group we've opened renders its member/admin
- * list instantly from cache on reload — the relay refresh happens in the
- * background and never gates the visible roster.
+ * A group's relay-signed state (39000-39003). Local-first from IndexedDB; the relay refresh
+ * never gates the roster.
  */
 export function useGroup(relayUrl: string | undefined, groupId: string | undefined) {
   const { nostr } = useNostr();
@@ -74,18 +71,14 @@ export function useGroup(relayUrl: string | undefined, groupId: string | undefin
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
-      // 1. LOCAL-FIRST: cached 39000-39003 for this group → instant roster.
-      // Scoped to THIS relay's tenant. Group state is relay-signed and
-      // addressable on the group id, and some relay software shares one identity
-      // across servers — so kind+pubkey+`d` is not unique across relays, and an
-      // unscoped read would let two servers' metadata replace one another.
+      // Scoped to THIS relay's tenant: some relay software shares one identity across servers, so
+      // kind+pubkey+`d` isn't unique.
       const cached = await store.query([{ kinds: GROUP_KINDS, "#d": [groupId!] }], {
         relay: relayUrl,
       });
       const local = composeGroupDetails(cached, relayUrl!);
 
-      // 2. BACKGROUND refresh from the host relay (mirrored back into the store).
-      //    Not awaited — the network never gates the visible member list.
+      // Background refresh; never awaited.
       void (async () => {
         if (signal.aborted) return;
         try {

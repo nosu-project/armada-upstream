@@ -4,36 +4,14 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
- * Decrypt client-encrypted Blossom attachments (Vector / 0xChat).
+ * Client-encrypted Blossom attachments (Vector / 0xChat): AES-256-GCM before
+ * upload, blob = `ciphertext || 16-byte tag` (WebCrypto's layout), key and
+ * 16-byte nonce in the NIP-92 `imeta` (`decryption-key` / `decryption-nonce`).
  *
- * Vector encrypts chat attachments with AES-256-GCM *before* uploading to
- * Blossom, so the blob at the URL is ciphertext (`ciphertext || 16-byte tag`,
- * which is exactly WebCrypto's `AES-GCM` output layout). The per-file key and
- * nonce ride in the message's NIP-92 `imeta` tag (`decryption-key` /
- * `decryption-nonce`), readable only by members who can open the event. Vector
- * uses a 16-byte (0xChat-compatible) nonce; WebCrypto's AES-GCM accepts an IV
- * of any length, so we pass the hex nonce through verbatim.
- *
- * Results are cached per (url, key, nonce) as object URLs. The same blob is
- * commonly rendered as an inline thumbnail and again in the lightbox, and
- * messages re-render frequently, so the object URL is shared across those.
- *
- * Each decrypted attachment holds its full plaintext bytes alive in a Blob for
- * as long as its object URL is live, so an unbounded, never-revoked cache is a
- * steady memory leak — on iOS Safari's low per-tab memory ceiling a media
- * channel scroll eventually OOM-kills the tab. The cache is therefore bounded
- * by total decrypted BYTES (not entry count: one 4K video dwarfs hundreds of
- * thumbnails), evicting least-recently-used entries and revoking their object
- * URLs. Revocation is deferred by a grace period so a `<video>`/`<img>` still
- * referencing a just-evicted URL keeps working until it can re-resolve.
- *
- * That cache budget bounds what is KEPT, which is a different question from
- * what a single decrypt may allocate: AES-GCM authenticates the whole message
- * and so cannot be streamed, meaning ciphertext and plaintext are necessarily
- * both resident before the budget is ever consulted. One hostile blob was
- * therefore enough to take the tab down regardless of the cache. Reads are now
- * capped (see {@link readCapped}) and decrypts run behind a small semaphore, so
- * a screenful of attachments can't all buffer at once either.
+ * Decrypts are cached as object URLs per (url, key, nonce), bounded by total
+ * BYTES (LRU, not count — iOS Safari OOMs otherwise), with revocation deferred
+ * so mounted elements can re-resolve. AES-GCM can't stream, so single reads are
+ * also capped ({@link readCapped}) and decrypts run behind a semaphore.
  */
 
 /** Max total decrypted bytes to keep alive as object URLs (~192 MB). */
@@ -42,22 +20,12 @@ const MAX_CACHED_BYTES = 192 * 1024 * 1024;
 const REVOKE_GRACE_MS = 30_000;
 
 /**
- * How much ciphertext an automatic, inline decrypt will pull into memory
- * without being asked twice.
- *
- * Nothing about rendering a message is an instruction to allocate: an embed
- * decrypts because it scrolled into view, so the size is chosen by the sender.
- * 64 MB covers every image, voice message and ordinary chat video while
- * staying survivable in a WKWebView. Past it the UI offers an explicit
- * "decrypt anyway" rather than failing outright — see {@link FileTooLargeError}.
+ * Ciphertext cap for automatic inline decrypts (sender-chosen size). Past it
+ * the UI offers "decrypt anyway" ({@link FileTooLargeError}).
  */
 export const MAX_DECRYPT_BYTES = 64 * 1024 * 1024;
 
-/**
- * Ceiling for a decrypt the user explicitly asked for (the oversized-media
- * override, a download, a share). Still bounded — a `size` field is
- * sender-controlled and a click shouldn't authorize an unbounded fetch.
- */
+/** Cap for explicitly requested decrypts; still bounded since `size` is sender-controlled. */
 export const MAX_EXPLICIT_DECRYPT_BYTES = 512 * 1024 * 1024;
 
 /** Thrown when a body exceeds the caller's `maxBytes` budget. */
@@ -73,14 +41,9 @@ export class FileTooLargeError extends Error {
 }
 
 /**
- * Read a response body, refusing to buffer more than `maxBytes`.
- *
- * Content-Length is checked before a single byte is read, and the body is then
- * streamed through a running count so a server that under-reports the header
- * can't get past it either — the header alone is a promise from the same party
- * serving the bytes. With a usable Content-Length the buffer is preallocated,
- * which also keeps peak memory at one copy instead of the chunk list plus its
- * concatenation.
+ * Read a body, refusing to buffer more than `maxBytes`: Content-Length is
+ * checked first, then enforced on the stream (the header can lie).
+ * Preallocates when the length is known, keeping peak memory at one copy.
  */
 export async function readCapped(res: Response, maxBytes: number): Promise<ArrayBuffer> {
   const header = res.headers.get("content-length");
@@ -90,7 +53,7 @@ export async function readCapped(res: Response, maxBytes: number): Promise<Array
   if (hasDeclared && declared > maxBytes) throw new FileTooLargeError(declared);
 
   if (!res.body) {
-    // No streaming support (older WebViews) — Content-Length is all we have.
+    // No streaming (older WebViews).
     const buffer = await res.arrayBuffer();
     if (buffer.byteLength > maxBytes) throw new FileTooLargeError(buffer.byteLength);
     return buffer;
@@ -115,7 +78,7 @@ export async function readCapped(res: Response, maxBytes: number): Promise<Array
   }
 
   if (preallocated) {
-    // A short body is legal; hand back only what actually arrived.
+    // A short body is legal.
     return total === preallocated.byteLength ? preallocated.buffer : preallocated.buffer.slice(0, total);
   }
 
@@ -128,14 +91,7 @@ export async function readCapped(res: Response, maxBytes: number): Promise<Array
   return joined.buffer;
 }
 
-/**
- * Limit how many decrypts run at once.
- *
- * Every visible attachment starts its own fetch + decrypt the moment it mounts,
- * so a media channel would otherwise hold a screenful of files in memory
- * simultaneously and contend for the main thread — each one within the cap and
- * the total far past it.
- */
+/** Limit concurrent decrypts, so a screenful of attachments can't all buffer at once. */
 function createSemaphore(limit: number) {
   let active = 0;
   const waiting: (() => void)[] = [];
@@ -155,15 +111,9 @@ function createSemaphore(limit: number) {
 const withDecryptSlot = createSemaphore(3);
 
 /**
- * Fetch a blob with a hard byte ceiling, for the callers that then decrypt it.
- *
- * Given several URLs — the order {@link mediaCandidates} produces — they are
- * the SAME bytes on different hosts, and are tried in turn: a network error or
- * a non-2xx moves to the next, so a dead or not-yet-mirrored server costs one
- * round-trip rather than the attachment. Two failures end the walk at once:
- * an abort, because the caller stopped wanting the bytes; and
- * {@link FileTooLargeError}, because a content-addressed blob is exactly as
- * big on every mirror. The last error is what surfaces when every host fails.
+ * Fetch a blob with a byte ceiling, walking same-content mirror URLs
+ * ({@link mediaCandidates} order) on network/HTTP errors. Aborts and
+ * {@link FileTooLargeError} end the walk immediately.
  */
 export async function fetchCapped(
   urls: string | readonly string[],
@@ -186,15 +136,13 @@ export async function fetchCapped(
 }
 
 interface Entry {
-  /** Resolved object URL, or the in-flight fetch/decrypt promise. */
   promise: Promise<string>;
-  /** Decrypted byte size (0 until resolved / on failure). */
+  /** Decrypted byte size (0 until resolved). */
   bytes: number;
-  /** Resolved object URL once known, for revocation on eviction. */
   url?: string;
 }
 
-/** key = `${url}\n${key}\n${nonce}` → cache entry. Insertion order = LRU order. */
+/** key = `${url}\n${key}\n${nonce}`; insertion order = LRU order. */
 const cache = new Map<string, Entry>();
 let totalBytes = 0;
 
@@ -202,21 +150,18 @@ function cacheKey(url: string, enc: ImetaEncryption): string {
   return `${url}\n${enc.key}\n${enc.nonce}`;
 }
 
-/** Mark an entry most-recently-used (re-insert at the tail of the Map). */
 function touch(k: string, entry: Entry): void {
   cache.delete(k);
   cache.set(k, entry);
 }
 
-/** Evict least-recently-used entries until the byte budget is satisfied. */
 function evictToBudget(keep: string): void {
   for (const [k, entry] of cache) {
     if (totalBytes <= MAX_CACHED_BYTES) break;
     if (k === keep) continue; // never evict the entry we just resolved
     cache.delete(k);
     totalBytes -= entry.bytes;
-    // Defer revocation: a still-mounted <img>/<video> may reference this URL
-    // for another frame; give it a grace window to re-resolve first.
+    // Defer revocation so still-mounted elements can re-resolve.
     const url = entry.url;
     if (url) setTimeout(() => URL.revokeObjectURL(url), REVOKE_GRACE_MS);
   }
@@ -231,13 +176,9 @@ function buf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 }
 
 /**
- * Verify decrypted bytes against the sender's `ox` (plaintext SHA-256).
- *
- * The key travels in the event, so anyone who can read the message can also
- * decrypt — but the BLOB lives on a media server that no one authenticated.
- * Checking `ox` is what makes a swapped or truncated blob fail closed instead
- * of rendering. Skipped when the sender published no `ox`; a forward may not
- * carry one, and refusing those would break plenty of legitimate messages.
+ * Verify decrypted bytes against the sender's `ox` (plaintext SHA-256), so a
+ * swapped/truncated blob on an unauthenticated server fails closed. Skipped
+ * without `ox` (forwards may lack it).
  */
 export async function verifyPlaintextHash(plaintext: Uint8Array, ox: string | undefined): Promise<void> {
   if (!ox) return;
@@ -246,17 +187,10 @@ export async function verifyPlaintextHash(plaintext: Uint8Array, ox: string | un
   }
 }
 
-/**
- * SHA-256 of a whole attachment through WebCrypto, which is native and runs
- * off the main thread. The pure-JS hash it replaces ran on the main thread
- * over every byte of every decrypted image, and on a phone was a visible share
- * of scrolling a channel full of them. Falls back where `crypto.subtle` isn't
- * available (an insecure context).
- */
+/** SHA-256 via native WebCrypto (off main thread); pure-JS fallback in insecure contexts. */
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   if (globalThis.crypto?.subtle) {
-    // Hashed in place when the view is ArrayBuffer-backed (it always is here):
-    // `buf` would copy a whole video just to satisfy the type.
+    // Hash in place; `buf` would copy a whole video.
     const view = bytes.buffer instanceof ArrayBuffer ? (bytes as Uint8Array<ArrayBuffer>) : buf(bytes);
     return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", view)));
   }
@@ -264,18 +198,8 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 /**
- * The already-resolved object URL for an attachment, or `undefined` if it has
- * never been decrypted, is still in flight, or has since been evicted.
- *
- * Exists so a remount can paint on its FIRST frame. {@link decryptAttachmentToObjectURL}
- * returns a cached promise on a hit, but a promise — even an already-resolved
- * one — can only deliver its value in a microtask, so a component driven by it
- * alone renders a placeholder, commits, and only then mounts the `<img>`. That
- * is a wasted commit and a height change per attachment on every channel
- * switch, for bytes that were in memory the whole time.
- *
- * Counts as a use for LRU purposes: a blob that is being rendered is live
- * whether or not the caller went through the async path to get it.
+ * The already-resolved object URL, or `undefined`. Lets remounts paint on the
+ * FIRST frame (a resolved promise still costs a commit). Counts as an LRU use.
  */
 export function peekAttachmentObjectURL(url: string, enc: ImetaEncryption): string | undefined {
   const k = cacheKey(url, enc);
@@ -286,18 +210,10 @@ export function peekAttachmentObjectURL(url: string, enc: ImetaEncryption): stri
 }
 
 /**
- * Fetch + AES-GCM-decrypt an encrypted attachment into an object URL suitable
- * for an `<img src>` / `<video src>`. `mime` is used as the resulting Blob's
- * type (display only).
- *
- * Throws on fetch / decrypt / integrity failure, and a {@link FileTooLargeError}
- * when the blob is past `maxBytes` — which callers should surface as its own
- * state, since unlike the others it's retryable with a bigger budget.
- *
- * `alternates` are other hosts holding the same ciphertext (declared
- * `fallback`s and derived Blossom mirrors), walked INSIDE this one resolve by
- * {@link fetchCapped}. The cache is keyed on the primary URL alone: whichever
- * host answered, it is the same blob under the same key and nonce.
+ * Fetch + AES-GCM-decrypt an attachment into an object URL (`mime` is display
+ * only). Throws on failure; {@link FileTooLargeError} is retryable with a
+ * bigger budget. `alternates` are mirrors of the same ciphertext; the cache is
+ * keyed on the primary URL.
  */
 export async function decryptAttachmentToObjectURL(
   url: string,
@@ -316,14 +232,11 @@ export async function decryptAttachmentToObjectURL(
 
   entry.promise = withDecryptSlot(async () => {
     const ciphertext = await fetchCapped([url, ...(opts.alternates ?? [])], opts);
-    // Hand the ArrayBuffer straight through: `readCapped` and `crypto.subtle`
-    // both already return one and a Blob accepts one, so threading buffers
-    // rather than views saves two full copies of a video.
+    // Pass ArrayBuffers through to avoid two full copies of a video.
     const plaintext = await decryptBuffer(ciphertext, enc.key, enc.nonce);
     await verifyPlaintextHash(new Uint8Array(plaintext), enc.ox);
     const blob = new Blob([plaintext], { type: mime || "application/octet-stream" });
     const objectUrl = URL.createObjectURL(blob);
-    // Record the resolved size + URL, then trim the cache to the byte budget.
     if (cache.get(k) === entry) {
       entry.bytes = plaintext.byteLength;
       entry.url = objectUrl;
@@ -333,8 +246,7 @@ export async function decryptAttachmentToObjectURL(
     return objectUrl;
   });
 
-  // Cache the in-flight entry so concurrent renders share one fetch/decrypt;
-  // drop it on failure so a transient error can be retried.
+    // Share in-flight work; drop on failure so it can be retried.
   cache.set(k, entry);
   entry.promise.catch(() => {
     if (cache.get(k) === entry) {
@@ -346,46 +258,32 @@ export async function decryptAttachmentToObjectURL(
   return entry.promise;
 }
 
-/** Result of encrypting a file for upload: the ciphertext blob + the params to put in imeta. */
 export interface EncryptedUpload {
-  /** Ciphertext as a File (`ciphertext || 16-byte GCM tag`), ready to upload to Blossom. */
+  /** `ciphertext || 16-byte GCM tag`, ready to upload. */
   file: File;
-  /** AES-256 key as lowercase hex (64 chars). */
   key: string;
-  /** 16-byte GCM nonce as lowercase hex (0xChat / Vector compatible). */
+  /** 16-byte GCM nonce as hex (0xChat / Vector compatible). */
   nonce: string;
-  /** SHA-256 (hex) of the ORIGINAL plaintext — published as the imeta `ox` field. */
+  /** Plaintext SHA-256 hex, published as imeta `ox`. */
   originalHash: string;
 }
 
 /**
- * Encrypt a file with AES-256-GCM for a client-encrypted Blossom upload,
- * matching Vector / 0xChat: a random 32-byte key and a **16-byte** nonce, with
- * the WebCrypto output (`ciphertext || 16-byte tag`) uploaded verbatim. The
- * returned key/nonce go into the message's `imeta` (`decryption-key` /
- * `decryption-nonce`) so members can decrypt; the blob on Blossom stays
- * ciphertext-at-rest.
- *
- * The ciphertext File keeps the original MIME type — many Blossom servers
- * reject `application/octet-stream`, and Vector sends the original MIME for
- * the same reason.
+ * Encrypt a file for a client-encrypted Blossom upload, matching Vector /
+ * 0xChat (random 32-byte key, 16-byte nonce). Keeps the original MIME: many
+ * Blossom servers reject `application/octet-stream`.
  */
 export async function encryptFileForUpload(file: File): Promise<EncryptedUpload> {
   return encryptFileWithParams(
     file,
     bytesToHex(crypto.getRandomValues(new Uint8Array(32))),
-    bytesToHex(crypto.getRandomValues(new Uint8Array(16))), // 16-byte (0xChat-compatible) nonce
+    bytesToHex(crypto.getRandomValues(new Uint8Array(16))),
   );
 }
 
 /**
- * Encrypt a file under caller-supplied AES-GCM parameters.
- *
- * Used for the companion blobs of an attachment — NIP-17 specifies that a
- * `thumb` (and any `fallback` source) is "encrypted with the same key, nonce"
- * as the file it belongs to, which is what lets every other client decrypt a
- * thumbnail from the single `decryption-key`/`decryption-nonce` pair in the
- * message.
+ * Encrypt under given params: NIP-17 companion blobs (`thumb`, `fallback`)
+ * use the same key and nonce as their file.
  */
 export async function encryptFileWithParams(
   file: File,
@@ -408,11 +306,7 @@ export async function encryptFileWithParams(
   };
 }
 
-/**
- * AES-256-GCM encrypt raw bytes with a hex key + nonce. Output is WebCrypto's
- * `ciphertext || 16-byte tag` layout (identical to Vector's 16-byte-nonce
- * aes-gcm), so blobs are decryptable cross-client. Exported for testing.
- */
+/** AES-256-GCM encrypt (`ciphertext || tag`, cross-client compatible). Exported for testing. */
 export async function encryptBytes(
   plaintext: Uint8Array,
   keyHex: string,
@@ -427,15 +321,7 @@ export async function encryptBytes(
   return new Uint8Array(ctBuffer);
 }
 
-/**
- * AES-256-GCM decrypt with a hex key + nonce, taking and returning an
- * `ArrayBuffer`.
- *
- * The buffer-in/buffer-out shape is the one that avoids copying a whole video
- * twice: `readCapped` and `crypto.subtle.decrypt` both already produce an
- * ArrayBuffer, and a `Blob` accepts one, so the media path never has to
- * materialize a view just to hand it on.
- */
+/** AES-256-GCM decrypt, ArrayBuffer in/out (avoids copying video on the media path). */
 export async function decryptBuffer(
   ciphertext: BufferSource,
   keyHex: string,

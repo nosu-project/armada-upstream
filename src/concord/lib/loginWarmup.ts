@@ -1,26 +1,9 @@
 /**
- * Post-login Concord warm-up — the work that makes a fresh device's
- * communities REAL before the SyncGate lifts (the Signal pattern: never drop
- * the user into a wall of empty rooms).
- *
- * Fetching the Community List alone (what the gate used to do) yields rail
- * icons but hollow communities: channels come from the control plane and
- * messages from per-channel backfills that previously only ran once you
- * navigated into a room. This module runs that catch-up eagerly, in order:
- *
- *   1. rehydrate each live membership entry into a runtime community;
- *   2. register the plane stream keys (NIP-42) and sweep every community's
- *      control + guestbook planes (batched per relay via planeSync);
- *   3. fold the control plane and PERSIST the fold snapshot, so channel lists
- *      and community names paint instantly when the app shows through;
- *   4. pull + decrypt the newest page of every channel into the rumor store,
- *      reporting per-channel progress to the caller (the gate's x/y line) and
- *      on the sync-activity signal (the in-chat bar takes over if the gate's
- *      time budget expires before the warm-up finishes).
- *
- * Everything is best-effort: a dead relay or an undecryptable channel skips,
- * never throws. The normal runtime paths (plane sweeps, channel backfills)
- * re-cover anything missed here — cursors only advance on their reads.
+ * Post-login Concord warm-up: make a fresh device's communities real before the
+ * SyncGate lifts — rehydrate memberships, register stream keys and sweep control
+ * + guestbook planes, persist the control fold snapshot, then pull + decrypt each
+ * channel's newest page with progress. Best-effort throughout; normal runtime
+ * paths re-cover anything missed.
  */
 
 import { channelsView } from "@/concord/lib/community";
@@ -49,18 +32,11 @@ interface NostrLike {
 }
 
 /**
- * Safety bound on channels decrypted at login, NOT a working limit. Channel
- * pulls are batched (one REQ per relay covering many channels), so warming a
- * whole membership is cheap — this only stops a pathological list from
- * spending the login on decrypt work. Anything past it heals via the normal
- * on-open backfill.
+ * Safety bound on channels decrypted at login (not a working limit); the rest
+ * heal via the on-open backfill.
  */
 const MAX_WARMUP_CHANNELS = 200;
-/**
- * Channel filters per batched REQ. Relays commonly cap filters-per-REQ
- * around 10-20; chunking keeps each REQ well under that while still
- * collapsing a whole community's channels into a couple of round-trips.
- */
+/** Channel filters per batched REQ; relays commonly cap around 10-20. */
 const FILTERS_PER_REQ = 10;
 /** Newest-page size per channel per relay (mirrors the channel backfill page). */
 const WARMUP_PAGE = 50;
@@ -68,19 +44,15 @@ const WARMUP_PAGE = 50;
 const CHANNEL_TIMEOUT_MS = 8_000;
 
 export interface WarmupResult {
-  /** Communities rehydrated and swept. */
   communities: number;
-  /** Channels whose newest page was pulled. */
   channels: number;
   /** Rumors decrypted into the store across all channels. */
   messages: number;
 }
 
 /**
- * Warm every live community for a freshly logged-in device. Reports
- * per-channel progress via `onProgress(done, total)`. Best-effort throughout;
- * respects `signal` for the channel pulls (plane sweeps share one batched REQ
- * per relay and run to completion on their own budget).
+ * Warm every live community for a freshly logged-in device. Best-effort;
+ * `signal` aborts only the channel pulls.
  */
 export async function warmupCommunities(
   nostr: NostrLike,
@@ -90,13 +62,8 @@ export async function warmupCommunities(
     onProgress?: (done: number, total: number) => void;
     /**
      * Whether retired control-snapshot sets may be dropped. Pass FALSE when
-     * more than one account is logged in on this device: "epochs this
-     * community no longer holds keys for" is judged from THIS account's list
-     * entry, and another logged-in account's entry for the same community can
-     * hold different epochs — pruning by the active account's keys deletes the
-     * other account's fold anchor. The sweep can rebuild a lost set (see
-     * planeSync's snapshot-rebuild pass), but only by re-decrypting the whole
-     * plane, so a switch-prune-switch loop would pay that on every switch.
+     * several accounts are logged in: pruning by this account's epochs would
+     * delete another account's fold anchor.
      */
     pruneSnapshots?: boolean;
   } = {},
@@ -109,13 +76,10 @@ export async function warmupCommunities(
   const result: WarmupResult = { communities: communities.length, channels: 0, messages: 0 };
   if (communities.length === 0) return result;
 
-  // Report on the sync-activity signal too: if the gate's time budget expires
-  // before the warm-up finishes, the in-chat status bar carries the rest.
+  // Also report on the sync-activity signal, so the in-chat bar carries on past the gate's budget.
   const task = beginSyncTask("message history");
   try {
-    // ── Plane sweeps (control + guestbook), one batched REQ per relay ───────
-    // Keys must register BEFORE the sweeps so the relays' NIP-42 challenges
-    // cover them (planeSync's auth gate holds the REQs until the AUTHs ack).
+    // Keys must register BEFORE the sweeps so NIP-42 challenges cover them.
     for (const c of communities) {
       registerStreamKeys([...controlGroups(c), ...guestbookGroups(c)], c.relays);
     }
@@ -126,27 +90,19 @@ export async function warmupCommunities(
       ]),
     );
 
-    // ── Fold + persist snapshots; derive readable channels ──────────────────
     const jobs = new Map<Community, Channel[]>();
     let totalChannels = 0;
     for (const c of communities) {
       try {
-        // Once per session, drop the control-snapshot sets of epochs this
-        // community no longer holds keys for — nothing reads them again.
-        // Only when this account is the device's sole reader (see the opt).
+        // Once per session, drop snapshot sets of epochs with no keys (only if
+        // this account is the device's sole reader).
         if (opts.pruneSnapshots !== false) {
           void pruneControlSnapshots(c.idHex, controlGroups(c).map((g) => g.pk));
         }
         const stored = await queryPlane(c.idHex, "control");
         const folded = foldControlState(openControlEditions(stored), c.id, c.owner);
-        // A sweep we KNOW came up short must never become the durable
-        // baseline. This fold ran with no floor and no snapshot to correct it,
-        // so persisting it would freeze a partial banlist/roster on disk — a
-        // ban beyond the budget would read as absent on every later launch,
-        // not just this one. Plane depth is attacker-controlled, so this is
-        // reachable on purpose, not just by a slow relay. The in-memory fold
-        // still renders: the member sees the community, they just don't get a
-        // shortcut past re-reading it next launch.
+        // Never persist a sweep known to be truncated: it would freeze a partial
+        // banlist/roster on disk (plane depth is attacker-controlled).
         if (!controlSweepTruncated(c)) {
           await writeFolded(controlFoldKey(c.idHex), folded);
         }
@@ -165,12 +121,8 @@ export async function warmupCommunities(
       }
     }
 
-    // ── Newest page per channel, BATCHED: one REQ per relay per chunk ───────
-    // One filter per channel (its own `authors` + `limit`, NIP-01 per-filter
-    // semantics), chunked so a big community is a couple of round-trips per
-    // relay instead of one REQ per channel — which is why warming the whole
-    // membership doesn't need a tight cap. Results demux by wrap author
-    // (every channel's stream addresses are distinct).
+    // Newest page per channel: one filter per channel, chunked into batched REQs
+    // per relay; results demux by wrap author.
     result.channels = totalChannels;
     let done = 0;
     opts.onProgress?.(0, totalChannels);
@@ -187,13 +139,9 @@ export async function warmupCommunities(
               limit: WARMUP_PAGE,
             }));
             /**
-             * Pull one relay's pages for this chunk, gated on NIP-42. A
-             * kind-1059 REQ racing the stream AUTHs gets CLOSED and reads
-             * back as a clean empty page — which made the warm-up "finish"
-             * with zero messages on auth-gating relays. Hold until the relay
-             * has acked our AUTHs; if the first round still comes back empty
-             * (the REQ itself may have triggered a lazy challenge), wait for
-             * the acks and re-ask once before believing the emptiness.
+             * Pull one relay's pages, gated on NIP-42: a kind-1059 REQ racing the
+             * AUTHs gets CLOSED and reads as empty. If the first round is empty,
+             * wait for the acks and re-ask once.
              */
             const pull = async (url: string): Promise<NostrEvent[]> => {
               for (let attempt = 1; attempt <= 2; attempt++) {
@@ -215,8 +163,7 @@ export async function warmupCommunities(
             };
             try {
               const wraps = (await Promise.all(community.relays.map(pull))).flat();
-              // Demux by wrap author (each channel decrypts only its own),
-              // deduped across relays by wrap id.
+              // Demux by wrap author, deduped across relays by wrap id.
               const channelByPk = new Map<string, Channel>();
               for (const ch of chunk) for (const s of ch.streams) channelByPk.set(s.group.pk, ch);
               const seen = new Set<string>();
@@ -233,13 +180,12 @@ export async function warmupCommunities(
               for (const [ch, chWraps] of byChannel) {
                 const opened = await openChatBatch(chWraps, ch);
                 if (opened.length > 0) {
-                  // writeRumors rings `c2:<channel>` on the wire bus once committed.
                   writeRumors(community.idHex, opened);
                   result.messages += opened.length;
                 }
               }
             } catch {
-              // Best-effort per chunk — the rooms backfill on open.
+              // Best-effort per chunk — rooms backfill on open.
             } finally {
               done += chunk.length;
               opts.onProgress?.(done, totalChannels);

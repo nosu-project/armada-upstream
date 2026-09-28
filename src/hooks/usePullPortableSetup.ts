@@ -97,21 +97,15 @@ import type { MetadataDoc } from "@/lib/schemas";
 const PULL_TIMEOUT_MS = 8_000;
 
 export interface PortableSetupPullResult {
-  /** Number of distinct portable records found, including the NIP-65 map. */
+  /** Distinct portable records found, including the NIP-65 map. */
   records: number;
-  /** Explicit account relays queried for the portable records. */
   sources: number;
-  /** Whether the pulled metadata document carried the Voice-page server. */
+  /** Whether the metadata document carried the Voice-page server. */
   voiceServer: boolean;
-  /**
-   * True when the signer cannot decrypt, so the private records (the 10009
-   * server list, the 10007 search list and every settings document) were not
-   * read at all. The public ones still were.
-   */
+  /** The signer can't decrypt, so private records (10009, 10007, settings) weren't read. */
   publicOnly: boolean;
 }
 
-/** One settings document as pulled: the event, its plaintext, and which it is. */
 interface PulledSettingsDoc {
   name: SettingsDocName;
   event: NostrEvent;
@@ -144,27 +138,14 @@ function knownWriteRelays(config: AppConfig, pubkey: string): string[] {
     .map((relay) => relay.url);
 }
 
-/** Let a macrotask scheduled during this turn run before we continue. */
 function nextMacrotask(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /**
- * Explicitly re-read the account's portable setup from its NIP-65 relays.
- *
- * This is the read half of {@link usePublishPortableSetup}, and exists because
- * the automatic path is not always available: a device with automatic settings
- * sync off applies nothing on its own, and a device whose relay set has drifted
- * may never have asked the relays that hold the newest documents.
- *
- * Three rules, all of which the tests hold to:
- *
- *  • It NEVER signs or publishes. Everything here is a read plus local state.
- *  • It is atomic in the records it can't half-apply: every private record is
- *    decrypted before anything is written, so a signer that refuses midway
- *    leaves the client exactly as it was.
- *  • An empty read clears nothing. A record no relay returned is left alone,
- *    because an empty answer is indistinguishable from a failed one.
+ * Explicitly re-read portable setup from NIP-65 relays (the read half of
+ * {@link usePublishPortableSetup}). Never signs or publishes; decrypts everything before writing
+ * anything (atomic); an empty read clears nothing.
  */
 export function usePullPortableSetup() {
   const { nostr } = useNostr();
@@ -178,9 +159,7 @@ export function usePullPortableSetup() {
   const pull = useCallback(async (): Promise<PortableSetupPullResult> => {
     if (!user) throw new Error("Not logged in");
     const { signer } = user;
-    // A signer without NIP-44 can still restore the records that carry no
-    // ciphertext. Refusing the whole pull would cost such an account its relay
-    // map and its DM/media lists over documents it was never going to read.
+    // Without NIP-44, still restore the public records.
     const canDecrypt = Boolean(signer.nip44);
 
     setIsPending(true);
@@ -314,8 +293,7 @@ export function usePullPortableSetup() {
         throw new Error("Your GIF favorites could not be decrypted completely; nothing was restored");
       }
 
-      // Decode every private record before changing any cache. A failed signer
-      // request must not leave the client with a half-applied setup.
+      // Decode every private record before changing any cache (atomicity).
       let groupList: UserGroupListQuery | undefined;
       if (groupEvent) {
         const previous = queryClient.getQueryData<UserGroupListQuery>([
@@ -341,11 +319,7 @@ export function usePullPortableSetup() {
         throw new Error("Your search-relay list could not be decrypted; nothing was restored");
       }
 
-      // The settings documents. ArmadaDB is the model for these (see
-      // `useSettingsDoc`), so a relay copy that is not strictly newer than what
-      // is already on disk is dropped rather than applied — the store would
-      // refuse the write anyway, and seeding the query cache with it would
-      // regress a version this device has already applied.
+      // Drop relay copies not strictly newer than what's on disk.
       const storedVersions = new Map<SettingsDocName, Pick<NostrEvent, "created_at" | "id">>();
       if (canDecrypt) {
         for (const name of SETTINGS_DOC_NAMES) {
@@ -383,12 +357,7 @@ export function usePullPortableSetup() {
         settingsFound += 1;
         if (!nip01VersionIsNewer(event, storedVersions.get(name))) continue;
 
-        // Deliberately not `decodeSettingsDoc`: it answers `null` both for a
-        // signer that refused and for a document this build cannot parse, and
-        // those must diverge. A refusal is the atomicity case — abort, having
-        // applied nothing. A document another client wrote in a shape this one
-        // doesn't understand is not a failure of the pull, and treating it as
-        // one would leave the button permanently broken for that account.
+        // Not `decodeSettingsDoc`, which conflates a refusal (abort) with an unparseable doc (skip).
         let plaintext: string;
         try {
           plaintext = await signer.nip44!.decrypt(user.pubkey, event.content);
@@ -449,11 +418,8 @@ export function usePullPortableSetup() {
         throw new Error("No portable setup was found on your account relays");
       }
 
-      // Adopt the relay map FIRST. `adopt` schedules an invalidation of every
-      // self-owned query key — including the four seeded below — for the next
-      // macrotask, so seeding before it would hand the newly-adopted pool a
-      // refetch that overwrites this pull's results. Yield past that
-      // invalidation, then seed.
+      // Adopt the relay map FIRST: `adopt` schedules invalidation of the keys seeded below; yield
+      // past it, then seed.
       if (discovery) {
         adopt(discovery);
         await nextMacrotask();
@@ -491,9 +457,7 @@ export function usePullPortableSetup() {
         );
       }
 
-      // Persist every exact private wire record before exposing its decrypted
-      // fold. This includes all Community List coordinates, the creator's
-      // Invite List, and per-installation topic shards.
+      // Persist exact wire records before exposing their decrypted folds.
       for (const event of [...communityEvents, ...inviteEvents, ...topicEditions]) {
         await store.event(event).catch(() => undefined);
       }
@@ -523,9 +487,7 @@ export function usePullPortableSetup() {
         queryClient.setQueryData([...favoriteGifsSyncQueryKey, user.pubkey], decodedFavoriteGifs);
       }
 
-      // Durable first, then visible — the same order every other settings
-      // writer uses. Without the store write a later refetch reads the disk
-      // and puts the pre-pull version straight back in the cache.
+      // Durable first, then visible; otherwise a refetch reads the pre-pull version back.
       for (const { name, event, doc } of settingsDocs) {
         try {
           await store.event(event);
@@ -536,10 +498,8 @@ export function usePullPortableSetup() {
         queryClient.setQueryData(settingsDocQueryKey(name, user.pubkey), { event, doc });
       }
 
-      // Fold everything that mirrors AppConfig into one update. The list hooks
-      // don't own their config mirrors (NostrSync does), and the settings
-      // documents are applied by `useConfigDocSync` only while automatic sync
-      // is on — which is precisely the case this action exists for.
+      // One AppConfig update; `useConfigDocSync` only applies docs while auto sync is on, which is
+      // the case this action exists for.
       const metadata = settingsDocs.find((entry) => entry.name === "metadata");
       updateConfig((current) => {
         let next: AppConfig = current;
@@ -562,8 +522,7 @@ export function usePullPortableSetup() {
           if (!(name in CONFIG_KEYS_BY_DOC)) continue;
           next = { ...next, ...docToConfigPatch(name as ConfigDocName, doc, next) };
         }
-        // None of this is a user edit, so it must not be echoed back out as
-        // one by the automatic publish watcher.
+        // Not a user edit, so the publish watcher must not echo it.
         markConfigSynced(next);
         return next;
       });

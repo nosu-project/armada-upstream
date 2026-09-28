@@ -8,39 +8,25 @@ import type { CurrencyDisplay } from "@/contexts/AppContext";
 
 interface AmountFieldProps {
   /**
-   * The raw input value, denominated in `currency`. A string while the user is
-   * typing (so a half-typed "0." survives a re-render), a number once a preset
-   * is picked or the edit is committed.
+   * Raw input in `currency`: a string while typing (so "0." survives a
+   * re-render), a number once a preset is picked or the edit is committed.
    */
   value: number | string;
-  /** Called with the new raw value. Callers typically also clear their error. */
   onValueChange: (value: number | string) => void;
   /** The user's display-currency preference. Drives units, step, and presets. */
   currency: CurrencyDisplay;
-  /** Whether the big number is in text-entry mode. */
   editing: boolean;
   setEditing: (editing: boolean) => void;
-  /** Preset chips for both currencies; the matching set is rendered. */
   presets: AmountPresetSet;
-  /**
-   * Renders the amount in the destructive colour — insufficient balance, an
-   * output below the dust limit, etc.
-   */
+  /** Destructive colour: insufficient balance, below dust limit, etc. */
   invalid?: boolean;
-  /** Accessible name for the amount, e.g. "Amount" or "Total amount". */
   label?: string;
 }
 
 /**
- * The big, tappable amount at the top of every payment surface, plus its row
- * of preset chips. Ported from Ditto so both zap panes share one control.
- *
- * The unit follows the user's `currencyDisplay` preference: USD renders a `$`
- * prefix and cent-precision steps, sats renders a `sats` suffix and whole-sat
- * steps. Presets are supplied per-currency rather than converted, so sats users
- * see round numbers (`1k`) instead of conversions of the dollar chips (`947`).
- *
- * Callers own the value and convert it to satoshis with `amountInputToSats`.
+ * The big amount at the top of every payment surface, plus preset chips.
+ * Presets are per-currency (not converted) so sats users see round numbers.
+ * Callers convert to sats with `amountInputToSats`.
  */
 export function AmountField({
   value,
@@ -59,8 +45,7 @@ export function AmountField({
   const numeric = typeof value === "string" ? parseFloat(value) : value;
   const hasValidAmount = Number.isFinite(numeric) && numeric > 0;
 
-  // Focus + select-all when the amount is clicked into edit mode, so typing
-  // replaces the current value rather than appending to it.
+  // Select-all so typing replaces the current value.
   useEffect(() => {
     if (editing) {
       inputRef.current?.focus();
@@ -70,14 +55,12 @@ export function AmountField({
 
   const commit = () => {
     setEditing(false);
-    // Normalize a cleared field to 0 so the display never shows a bare "$".
     if (typeof value === "string" && value.trim() === "") {
       onValueChange(0);
     }
   };
 
-  // Committed display: sats get thousand separators, USD keeps cents only for
-  // sub-dollar amounts ("$0.50" but "$5", not "$5.00").
+  // USD keeps cents only for sub-dollar amounts ("$0.50" but "$5").
   const display = !hasValidAmount
     ? "0"
     : isSats
@@ -157,11 +140,7 @@ export function AmountField({
   );
 }
 
-/**
- * Preset chip label. Five chips share one row, so sats presets abbreviate
- * ("1k" rather than "1,000") while USD drops the trailing zeros on whole
- * dollars ("$1", but "$0.10").
- */
+/** Sats abbreviate ("1k"); USD drops trailing zeros on whole dollars ("$1", "$0.10"). */
 export function formatPresetLabel(amount: number, currency: CurrencyDisplay): string {
   if (currency === "sats") return abbreviateSats(amount);
   return amount < 1 ? `$${amount.toFixed(2)}` : `$${amount}`;

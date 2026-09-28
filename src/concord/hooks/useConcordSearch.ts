@@ -17,16 +17,11 @@ import type { Community } from "@/concord/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
 
 /**
- * Community-wide message search over the local decrypted rumor store. Mirrors
- * NIP-29's {@link useGroupSearch}, minus the relay query: Concord chat is
- * end-to-end encrypted, so the rumor store is the only searchable corpus. The
- * structured {@link SearchFilters} (channels / authors / media / text) is
- * translated into an indexed store scan + in-memory predicates. Debounced
- * (300ms on the text), newest-first, cross-channel — each result carries its
- * own `channel` binding tag so callers can group by channel.
+ * Community-wide search over the local decrypted rumor store (Concord chat is
+ * E2E encrypted, so there's no relay query). Text is debounced 300ms; results
+ * are newest-first and carry their `channel` tag.
  *
- * @param allChannelIds every channel in the community (the default scope when
- *   the filter selects no specific channels).
+ * @param allChannelIds default scope when the filter selects no channels.
  */
 export function useConcordSearch(
   community: Community | undefined,
@@ -36,15 +31,11 @@ export function useConcordSearch(
   const communityIdHex = community?.idHex;
   const debouncedQuery = useDebounce(filters.query.trim(), 300);
 
-  // Effective scope: the chosen channels, or every channel when none picked.
   const channelIds = filters.channelIds.length > 0 ? filters.channelIds : allChannelIds;
 
-  // Debounce only the text; author/media/channel changes take effect at once.
   const effective: SearchFilters = { ...filters, query: debouncedQuery };
-  // Activation waits for the debounced query, but deactivation is immediate.
-  // In particular, closing search passes EMPTY_SEARCH_FILTERS while the old
-  // debounced text survives for 300ms; treating that stale text as active keeps
-  // the results pane mounted and the message timeline absent during a jump.
+  // Activation waits for the debounced query, but deactivation is immediate:
+  // stale debounced text after closing search would keep the results pane mounted.
   const active = searchIsActive(filters) && searchIsActive(effective);
 
   const channelsKey = [...channelIds].sort().join(",");
@@ -75,19 +66,12 @@ export function useConcordSearch(
     },
   });
 
-  // Search reads the store directly rather than the timeline, so every drop the
-  // fold performs has to be repeated here or search becomes the way around it.
-  //
-  // The Banlist is the sharp one. A moderator's delete never removes the row —
-  // the store refuses a kind-5 whose author isn't the target (NIP-09), so it is
-  // dropped in the fold and nowhere else — which means an abusive message whose
-  // author was deleted and banned was still sitting in `c2:<communityId>`,
-  // verbatim and findable by every member, indefinitely. CORD-04 §4 is explicit
-  // that every honest client drops every event from a banned npub.
+  // Search bypasses the timeline, so every drop the fold performs must be repeated
+  // here — notably the Banlist: a mod delete never removes the row (NIP-09), and
+  // CORD-04 §4 requires dropping every event from a banned npub.
   const { mutedPubkeys } = useMutedPubkeys();
   const moderation = useChatModeration(community);
-  // Re-derive when the persisted quarantine warms or grows, as the mentions tab
-  // does: a flood the fold quarantined must not be reachable through search.
+  // A flood the fold quarantined must not be reachable through search.
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
   const channelsSig = channelIds.join(",");
   const results = useMemo(() => {

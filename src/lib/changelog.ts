@@ -1,16 +1,9 @@
-/** Category types from Keep a Changelog format. */
 type ChangelogCategory = 'Added' | 'Changed' | 'Deprecated' | 'Removed' | 'Fixed' | 'Security';
 
-/** A single version entry in the changelog. */
 interface ChangelogEntry {
   version: string;
   date: string;
-  /**
-   * Optional plaintext summary paragraph that appears before any `### Category`
-   * heading. Used as the release blurb on the App Store, Play Store, and the
-   * in-app version-update toast. Convention is a single paragraph of at most
-   * 500 characters.
-   */
+  /** Pre-section summary paragraph (≤500 chars): the store and update-toast release blurb. */
   summary?: string;
   sections: {
     category: ChangelogCategory;
@@ -18,7 +11,6 @@ interface ChangelogEntry {
   }[];
 }
 
-/** Apply basic typographic transformations to a changelog item string. */
 function prettify(text: string): string {
   return text
     .replace(/ -- /g, ' \u2014 ')  // space-dash-dash-space → em dash
@@ -34,7 +26,6 @@ function parseChangelog(markdown: string): ChangelogEntry[] {
   const entries: ChangelogEntry[] = [];
   let current: ChangelogEntry | null = null;
   let currentCategory: ChangelogCategory | null = null;
-  /** Buffer for lines that are part of the summary paragraph (pre-section text). */
   let summaryLines: string[] = [];
 
   const flushSummary = () => {
@@ -45,7 +36,6 @@ function parseChangelog(markdown: string): ChangelogEntry[] {
   };
 
   for (const line of markdown.split('\n')) {
-    // Match version heading: ## [X.Y.Z] - YYYY-MM-DD
     const versionMatch = line.match(/^## \[([^\]]+)\]\s*-\s*(.+)$/);
     if (versionMatch) {
       flushSummary();
@@ -55,7 +45,6 @@ function parseChangelog(markdown: string): ChangelogEntry[] {
       continue;
     }
 
-    // Match category heading: ### Added, ### Changed, etc.
     const categoryMatch = line.match(/^### (.+)$/);
     if (categoryMatch && current) {
       flushSummary();
@@ -64,31 +53,25 @@ function parseChangelog(markdown: string): ChangelogEntry[] {
       continue;
     }
 
-    // Match list item: - Description
     const itemMatch = line.match(/^- (.+)$/);
     if (itemMatch && current) {
       const section = current.sections[current.sections.length - 1];
       if (section) {
         section.items.push(prettify(itemMatch[1]));
       } else {
-        // Bullet appearing before any category heading — flush any summary
-        // buffer and treat the bullet as a "Changed" entry. (Backward compat
-        // for legacy entries that opened straight into bullets.)
+        // Legacy entries opened straight into bullets: treat as "Changed".
         flushSummary();
         current.sections.push({ category: 'Changed', items: [prettify(itemMatch[1])] });
       }
       continue;
     }
 
-    // Non-blank, non-bullet, non-heading lines.
     const trimmed = line.trim();
     if (trimmed && current && !trimmed.startsWith('#')) {
       const section = current.sections[current.sections.length - 1];
       if (section) {
-        // Continuation of the current bullet section.
         section.items.push(prettify(trimmed));
       } else {
-        // Pre-section freeform text — accumulate as the summary paragraph.
         summaryLines.push(trimmed);
       }
     }

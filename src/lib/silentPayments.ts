@@ -1,38 +1,13 @@
 /**
- * BIP352 Silent Payments — sender side.
- *
- * Decodes silent payment addresses (`sp1…` mainnet, `tsp1…` testnets) and
- * derives the one-shot Taproot output(s) the sender must include in the
- * transaction.
- *
- * What we implement:
- *
- *   - The bech32m variant used by BIP352 (no length cap, witness version
- *     up to 31, "sp" / "tsp" HRPs).
- *   - Sender output derivation per the spec:
- *       a            = sum of input private keys (Taproot keys negated if
- *                      their pubkey has an odd Y)
- *       A            = a·G
- *       input_hash   = hashBIP0352/Inputs(outpoint_L || serP(A))
- *       ecdh         = input_hash·a·B_scan
- *       t_k          = hashBIP0352/SharedSecret(serP(ecdh) || ser32(k))
- *       P_mn         = B_spend + t_k·G
- *     P_mn is encoded x-only as a BIP341 taproot output.
- *
- * What we deliberately do NOT implement:
- *
- *   - The receiver side (scanning).
- *   - Labels (`m != 0`). The labelled flow only matters on the receiver,
- *     and the address payload already commits to the labelled `B_m`.
- *
- * The implementation is verified against the canonical BIP352
- * `send_and_receive_test_vectors.json` — see
- * `src/lib/silentPayments.test.ts` and
- * `src/test/fixtures/bip352_sender_vectors.json`.
- *
- * Backed by `@scure/btc-signer` (Address / p2tr / OutScript) and
- * `@noble/curves/secp256k1` (Point math) — no `bitcoinjs-lib` /
- * `@bitcoinerlab/secp256k1` dependency.
+ * BIP352 Silent Payments — sender side. Derives the one-shot Taproot outputs:
+ *   a          = sum of input private keys (Taproot keys negated if odd Y)
+ *   A          = a·G
+ *   input_hash = hashBIP0352/Inputs(outpoint_L || serP(A))
+ *   ecdh       = input_hash·a·B_scan
+ *   t_k        = hashBIP0352/SharedSecret(serP(ecdh) || ser32(k))
+ *   P_mn       = B_spend + t_k·G   (x-only BIP341 output)
+ * No receiver scanning or labels. Verified against BIP352 test vectors
+ * (`src/test/fixtures/bip352_sender_vectors.json`).
  */
 import * as btc from '@scure/btc-signer';
 import { hash160, taprootTweakPrivKey } from '@scure/btc-signer/utils.js';
@@ -43,10 +18,7 @@ import {
   type SilentPaymentAddress,
 } from './silentPaymentsCore';
 
-// Address decoding/validation lives in the dependency-light
-// `./silentPaymentsCore` (no `@scure/btc-signer`), so initial-load callers
-// can validate addresses cheaply. Re-exported here so wallet code can keep
-// importing everything from one place.
+// Re-exported so wallet code can import everything from here.
 export {
   isSilentPaymentAddress,
   decodeSilentPaymentAddress,
@@ -55,28 +27,11 @@ export {
   type SilentPaymentNetwork,
 } from './silentPaymentsCore';
 
-/**
- * secp256k1 Point class (used for all EC arithmetic).
- *
- * `@noble/curves` v1 exposes the projective-point constructor as
- * `secp256k1.ProjectivePoint`; v2 moved it to `schnorr.Point`. We use the
- * v1 export to match the rest of the ditto codebase.
- */
 const Point = schnorr.Point;
 
-// ---------------------------------------------------------------------------
-// BIP352 tagged hashes (BIP-340 style)
-// ---------------------------------------------------------------------------
-//
-// tagged(tag, msg) = SHA256( SHA256(tag) || SHA256(tag) || msg )
-// We compute these manually because BIP-352 introduces custom tags that
-// aren't in any predefined table.
-
+// BIP-340-style tagged hash: SHA256(SHA256(tag) || SHA256(tag) || msg).
 function taggedHash(tag: string, msg: Uint8Array): Uint8Array {
-  // `new TextEncoder().encode()` returns a Uint8Array, but in jsdom the
-  // returned instance is from a different realm than noble's internal
-  // `u8a` check — so we copy into a fresh `new Uint8Array(…)` to ensure
-  // the prototype matches.
+  // Copy: jsdom's TextEncoder returns a cross-realm Uint8Array that fails noble's check.
   const tagBytes = new Uint8Array(new TextEncoder().encode(tag));
   const tagHash = sha256(tagBytes);
   const data = new Uint8Array(tagHash.length * 2 + msg.length);
@@ -85,10 +40,6 @@ function taggedHash(tag: string, msg: Uint8Array): Uint8Array {
   data.set(msg, tagHash.length * 2);
   return sha256(data);
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function u32be(n: number): Uint8Array {
   if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) {
@@ -147,7 +98,7 @@ function bytesToHex(b: Uint8Array): string {
   return s;
 }
 
-/** Bigint <-> 32-byte big-endian. */
+/** 32-byte big-endian → bigint. */
 function bytesToScalar(b: Uint8Array): bigint {
   let v = 0n;
   for (const byte of b) v = (v << 8n) | BigInt(byte);
@@ -188,19 +139,12 @@ function privateNegate(privateKey: Uint8Array): Uint8Array {
   return scalarToBytes(SECP_N - k);
 }
 
-// ---------------------------------------------------------------------------
-// Eligible input pubkey extraction (for the BIP352 sender)
-// ---------------------------------------------------------------------------
-
 /**
- * Eligible-input pubkey returned by {@link extractEligibleInputPubKey}.
- *
- * `isTaproot` is critical because Taproot input private keys must be
- * negated if their corresponding x-only pubkey has an odd Y coordinate
- * before the sender sums them.
+ * Eligible-input pubkey. `isTaproot` matters because Taproot private keys are
+ * negated for odd Y before summing.
  */
 export interface EligibleInputPubKey {
-  /** 33-byte compressed pubkey. For taproot we set the parity to even. */
+  /** 33-byte compressed pubkey (even parity for taproot). */
   pubkey: Uint8Array;
   isTaproot: boolean;
 }
@@ -210,22 +154,9 @@ const NUMS_H_XONLY = hexToBytes(
 );
 
 /**
- * Parse a transaction input and decide whether it contributes to the silent
- * payment ECDH sum. The returned pubkey (if any) is the one the receiver
- * will recover when scanning, so the sender must match it exactly.
- *
- * Supported per BIP352:
- *   - P2TR (key-path and script-path; skips H-as-internal-key script-path)
- *   - P2WPKH
- *   - P2SH-P2WPKH
- *   - P2PKH (parses last push of scriptSig even on non-standard forms)
- *
- * Returns `null` for any other input type.
- *
- * @param scriptPubKeyHex hex of the prevout scriptPubKey
- * @param scriptSigHex    hex of the input's scriptSig (may be empty)
- * @param witness         array of witness items, each as a Uint8Array
- *                        (may be empty / undefined)
+ * The pubkey an input contributes to the BIP352 ECDH sum (must match what the
+ * receiver recovers), or null. Supports P2TR (skipping NUMS-H script paths),
+ * P2WPKH, P2SH-P2WPKH and P2PKH.
  */
 export function extractEligibleInputPubKey(
   scriptPubKeyHex: string,
@@ -243,8 +174,7 @@ export function extractEligibleInputPubKey(
     // Script path with NUMS-H internal key → skip per BIP352.
     if (wit.length >= 2) {
       const controlBlock = wit[wit.length - 1];
-      // The annex (if present) is the last witness item starting with 0x50.
-      // Strip it before reading the control block.
+      // Skip the annex (last item starting with 0x50) if present.
       let controlIdx = wit.length - 1;
       if (controlBlock.length > 0 && controlBlock[0] === 0x50 && wit.length >= 3) {
         controlIdx = wit.length - 2;
@@ -265,8 +195,7 @@ export function extractEligibleInputPubKey(
     };
   }
 
-  // P2WPKH: OP_0 (0x00) + push20 (0x14) + 20-byte key hash.
-  // scriptSig empty, witness = [signature, 33-byte compressed pubkey].
+  // P2WPKH: OP_0 push20 <hash>; witness = [sig, 33-byte pubkey].
   if (spk.length === 22 && spk[0] === 0x00 && spk[1] === 0x14) {
     if (ss.length !== 0) return null;
     if (wit.length < 2) return null;
@@ -277,10 +206,7 @@ export function extractEligibleInputPubKey(
     return null;
   }
 
-  // P2SH-P2WPKH:
-  //   scriptPubKey: HASH160 push20 <20-byte-hash> EQUAL  (23 bytes: 0xA9 0x14 ... 0x87)
-  //   scriptSig: push22 <0x00 0x14 <20-byte-hash>>       (23 bytes: 0x16 0x00 0x14 ...)
-  //   witness: [signature, 33-byte compressed pubkey]
+  // P2SH-P2WPKH: scriptPubKey A9 14 <hash> 87; scriptSig 16 00 14 <hash>.
   if (spk.length === 23 && spk[0] === 0xa9 && spk[1] === 0x14 && spk[22] === 0x87) {
     if (ss.length !== 23) return null;
     if (ss[0] !== 0x16 || ss[1] !== 0x00 || ss[2] !== 0x14) return null;
@@ -292,8 +218,7 @@ export function extractEligibleInputPubKey(
     return null;
   }
 
-  // P2PKH: OP_DUP OP_HASH160 push20 <hash> OP_EQUALVERIFY OP_CHECKSIG
-  // 25 bytes: 0x76 0xa9 0x14 ... 0x88 0xac
+  // P2PKH: 76 a9 14 <hash> 88 ac
   if (
     spk.length === 25 &&
     spk[0] === 0x76 &&
@@ -302,16 +227,8 @@ export function extractEligibleInputPubKey(
     spk[23] === 0x88 &&
     spk[24] === 0xac
   ) {
-    // Per BIP352, we MUST tolerate non-standard / malleated scriptSigs (e.g.
-    // `<dummy> OP_DROP <sig> <pk>`, or an `OP_IF/OP_ELSE/OP_ENDIF` branch
-    // that contains a pubkey that isn't being checked). We can't rely on
-    // "last push" because a malleated scriptSig may contain another 33-byte
-    // push that just happens not to be the spending pubkey.
-    //
-    // The reference implementation walks the scriptSig byte-by-byte with a
-    // 33-byte sliding window and accepts the first window whose HASH160
-    // matches the prevout's key hash. We do the same — scanning from the
-    // back, which matches the standard layout the fastest.
+    // BIP352 requires tolerating malleated scriptSigs, so (like the reference
+    // impl) slide a 33-byte window and take the one whose HASH160 matches.
     const targetHash = spk.subarray(3, 23);
     for (let i = ss.length; i >= 33; i--) {
       const candidate = ss.subarray(i - 33, i);
@@ -319,7 +236,6 @@ export function extractEligibleInputPubKey(
       if (candidate[0] !== 0x02 && candidate[0] !== 0x03) continue;
       const h = hash160(candidate);
       if (h.length === 20 && equalBytes(h, targetHash)) {
-        // Validate that it's a valid point on the curve.
         if (isValidCompressedPoint(candidate)) {
           return { pubkey: new Uint8Array(candidate), isTaproot: false };
         }
@@ -340,19 +256,9 @@ function xOnlyToEvenCompressed(xonly: Uint8Array): Uint8Array {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Outpoint serialization (little-endian txid || little-endian vout)
-// ---------------------------------------------------------------------------
-
 /**
- * Serialize an outpoint exactly as it appears in a Bitcoin transaction:
- *   - 32-byte txid in internal (little-endian) byte order; tools display the
- *     reverse,
- *   - 4-byte vout in little-endian.
- *
- * `txid` is accepted as either the display hex (32-byte big-endian; the form
- * everywhere in Esplora/mempool.space/RPC clients show) or the raw little-endian
- * bytes — pass `txidIsLittleEndian: true` for the latter.
+ * Serialize an outpoint as in a transaction: 32-byte little-endian txid +
+ * 4-byte LE vout. `txid` is display hex unless `txidIsLittleEndian`.
  */
 function serializeOutpoint(
   txidHex: string,
@@ -364,7 +270,6 @@ function serializeOutpoint(
   }
   const txid = hexToBytes(txidHex);
   if (!txidIsLittleEndian) {
-    // Reverse to little-endian internal byte order.
     txid.reverse();
   }
   const voutBuf = new Uint8Array(4);
@@ -375,18 +280,9 @@ function serializeOutpoint(
   return concatBytes(txid, voutBuf);
 }
 
-// ---------------------------------------------------------------------------
-// Sender output derivation
-// ---------------------------------------------------------------------------
-
 /**
- * A single sender input that contributes to BIP352 ECDH.
- *
- * `privateKey` is the input's signing private key. For Taproot inputs this is
- * the BIP341 *tweaked* key (the same scalar used to produce the Schnorr
- * signature on the input), NOT the untweaked Nostr-style internal key.
- *
- * `isTaproot` flips the negate-if-odd-Y rule on (BIP352 §"Creating outputs").
+ * A sender input contributing to BIP352 ECDH. For Taproot, `privateKey` is the
+ * BIP341 *tweaked* signing key, not the internal key.
  */
 export interface SilentPaymentInput {
   txid: string;
@@ -399,61 +295,32 @@ export interface SilentPaymentInput {
 
 /** A single resolved silent payment recipient + amount. */
 export interface SilentPaymentRecipient {
-  /** The decoded silent payment address. */
   address: SilentPaymentAddress;
-  /** Display string of the original address (for diagnostics). */
+  /** Original address string (diagnostics). */
   raw?: string;
 }
 
-/**
- * One concrete sender output (the receiver's per-`k` taproot output) ready to
- * be added to a PSBT.
- */
+/** One sender output (the receiver's per-`k` taproot output). */
 export interface SilentPaymentOutput {
   /** 32-byte x-only taproot key — the value of the output's scriptPubKey. */
   xOnlyPubKey: Uint8Array;
   /** Convenience: the matching mainnet/testnet P2TR address. */
   address: string;
-  /** The recipient this output was generated for. */
   recipient: SilentPaymentRecipient;
 }
 
 /**
- * Compute the BIP352 sender outputs for a fixed set of inputs and recipients.
- *
- * The inputs MUST be the final set that will be signed and broadcast: the
- * recipient's output depends on the input set (via `outpoint_L` and `A`).
- * Adding, removing, or replacing an input invalidates the derived outputs.
- *
- * `eligibleInputs` are the inputs that contribute to the BIP352 ECDH sum
- * (P2TR, P2WPKH, P2SH-P2WPKH, P2PKH with a compressed pubkey; NUMS-H
- * taproot script paths are excluded by the caller). `allOutpoints` is the
- * outpoint of *every* input in the transaction — including ineligible ones
- * — because BIP352 picks the lexicographically smallest outpoint across the
- * whole transaction for `input_hash`. When `allOutpoints` is omitted, the
- * outpoints of `eligibleInputs` are used (matches the common case where
- * every input is eligible — which is what the in-extension wallet always
- * produces).
- *
- * Throws if:
- *   - no eligible inputs are given,
- *   - the summed private key is zero,
- *   - `input_hash` or any `t_k` would be an invalid scalar,
- *   - a recipient group exceeds `K_max = 2323` (per BIP352).
- *
- * Recipients are matched by scan key: multiple silent payment addresses
- * sharing the same scan key are grouped, and each receives `k = 0, 1, …` in
- * input order.
+ * Compute BIP352 sender outputs. The inputs MUST be final: any change
+ * invalidates the outputs. `allOutpoints` must include INELIGIBLE inputs too,
+ * since outpoint_L is the smallest across the whole transaction (defaults to
+ * the eligible ones). Recipients sharing a scan key share `k = 0, 1, …`;
+ * throws if a group exceeds K_max = 2323 or any scalar is invalid.
  */
 export function deriveSilentPaymentOutputs(
   eligibleInputs: SilentPaymentInput[],
   recipients: SilentPaymentRecipient[],
   options: {
-    /**
-     * Outpoints of every input in the transaction. BIP352 picks the
-     * lexicographically smallest one across ALL inputs (not just eligible
-     * ones) for `input_hash`. Defaults to the outpoints of `eligibleInputs`.
-     */
+    /** Outpoints of every input in the tx; see above. */
     allOutpoints?: { txid: string; vout: number }[];
     network?: 'mainnet' | 'testnet';
   } = {},
@@ -465,11 +332,8 @@ export function deriveSilentPaymentOutputs(
   }
   if (recipients.length === 0) return [];
 
-  // ── Step 0: K_max check — done FIRST so we fail before any crypto work ─
+  // K_max check first, before any crypto work.
   const K_MAX = 2323;
-  // Group recipients by hex(scanPubKey) so the same payee with multiple
-  // amounts (or multiple labelled addresses) shares one ECDH derivation
-  // and a single `k` counter.
   const groups = new Map<string, SilentPaymentRecipient[]>();
   for (const r of recipients) {
     const key = bytesToHex(r.address.scanPubKey);
@@ -483,7 +347,6 @@ export function deriveSilentPaymentOutputs(
     }
   }
 
-  // ── Step 1: compute a = Σ a_i, negating Taproot keys with odd-Y pubkeys ──
   let aSum = 0n;
   for (const input of inputs) {
     if (input.privateKey.length !== 32) {
@@ -491,10 +354,8 @@ export function deriveSilentPaymentOutputs(
     }
     let pk = input.privateKey;
     if (input.isTaproot) {
-      // Derive the pubkey and check parity.
       const pubFull = pubKeyFromScalar(pk);
       if (pubFull[0] === 0x03) {
-        // Odd-Y → negate the private key.
         pk = privateNegate(pk);
       }
     }
@@ -508,10 +369,8 @@ export function deriveSilentPaymentOutputs(
     throw new Error('Silent payment: sum of input private keys is zero.');
   }
 
-  // A = a·G (compressed)
   const aPub = Point.BASE.multiply(aSum).toBytes(true);
 
-  // ── Step 2: outpoint_L = lex-smallest serialized outpoint ─────────────
   const outpointsForHash = options.allOutpoints ?? inputs.map((i) => ({ txid: i.txid, vout: i.vout }));
   if (outpointsForHash.length === 0) {
     throw new Error('Silent payment: no outpoints provided.');
@@ -525,7 +384,6 @@ export function deriveSilentPaymentOutputs(
   }
   if (!smallest) throw new Error('Silent payment: no outpoints.');
 
-  // ── Step 3: input_hash = hashBIP0352/Inputs(outpoint_L || A) ──────────
   const inputHash = taggedHash(
     'BIP0352/Inputs',
     concatBytes(smallest, aPub),
@@ -535,11 +393,9 @@ export function deriveSilentPaymentOutputs(
     throw new Error('Silent payment: invalid input_hash.');
   }
 
-  // ── Step 4: derive outputs per group ─────────────────────────────────
   const out: SilentPaymentOutput[] = [];
   for (const group of groups.values()) {
-    // ecdh = input_hash · a · B_scan
-    // Compute as Point arithmetic: ((input_hash * a) mod n) · B_scan.
+    // ecdh = ((input_hash * a) mod n) · B_scan
     const scanPoint = Point.fromBytes(group[0].address.scanPubKey);
     const combinedScalar = (inputHashScalar * aSum) % SECP_N;
     if (combinedScalar === 0n) {
@@ -561,16 +417,13 @@ export function deriveSilentPaymentOutputs(
       // P_mn = B_spend + t_k·G
       const spendPoint = Point.fromBytes(recipient.address.spendPubKey);
       const P = spendPoint.add(Point.BASE.multiply(tScalar));
-      // noble v1 has no `is0()`; an x=y=0 affine reading means the point
-      // at infinity. `toRawBytes` would throw on that, so the round-trip
-      // here doubles as a validity gate.
+      // x=y=0 affine means the point at infinity.
       const Paff = P.toAffine();
       if (Paff.x === 0n && Paff.y === 0n) {
         throw new Error('Silent payment: B_spend + t_k·G is point at infinity.');
       }
       const Pbytes = P.toBytes(true);
 
-      // BIP341 taproot output is the x-only of P.
       const xonly = new Uint8Array(Pbytes.subarray(1, 33));
       const addr = encodeP2TR(xonly, network);
       out.push({ xOnlyPubKey: xonly, address: addr, recipient });
@@ -584,9 +437,7 @@ export function deriveSilentPaymentOutputs(
 /** Encode an x-only key as a P2TR address using @scure/btc-signer. */
 function encodeP2TR(xonly: Uint8Array, network: 'mainnet' | 'testnet'): string {
   const net = network === 'mainnet' ? btc.NETWORK : btc.TEST_NETWORK;
-  // `p2tr(internalKey)` here is given the **output** key directly; passing
-  // it without a script tree and reading `.address` yields the bech32m
-  // encoding of `OP_1 push32 <xonly>` for the chosen network.
+  // Given the OUTPUT key with no script tree, so `.address` encodes OP_1 <xonly>.
   const pay = btc.p2tr(xonly, undefined, net);
   if (!pay.address) {
     throw new Error('Silent payment: failed to encode P2TR address.');
@@ -594,11 +445,7 @@ function encodeP2TR(xonly: Uint8Array, network: 'mainnet' | 'testnet'): string {
   return pay.address;
 }
 
-/**
- * Encode an x-only key as a P2TR scriptPubKey (`OP_1 push32 <xonly>`).
- * The 34-byte byte string that should be written into a Bitcoin transaction
- * output's scriptPubKey field.
- */
+/** The 34-byte P2TR scriptPubKey (`OP_1 push32 <xonly>`). */
 export function p2trScriptPubKey(xonly: Uint8Array): Uint8Array {
   if (xonly.length !== 32) {
     throw new Error('p2trScriptPubKey: xonly key must be 32 bytes.');
@@ -609,16 +456,6 @@ export function p2trScriptPubKey(xonly: Uint8Array): Uint8Array {
   out.set(xonly, 2);
   return out;
 }
-
-// ---------------------------------------------------------------------------
-// bech32m encoding (BIP-352 silent payment address writer)
-// ---------------------------------------------------------------------------
-
-
-
-// ---------------------------------------------------------------------------
-// BIP-375 / BIP-352 ECDH share computation (sender side)
-// ---------------------------------------------------------------------------
 
 /** Output of {@link aggregateSenderPrivateKey}. */
 export interface AggregateSenderKey {
@@ -633,20 +470,8 @@ export interface AggregateSenderKey {
 }
 
 /**
- * Compute the aggregate private scalar `a`, derived public key `A`, the
- * lexicographically smallest outpoint, and `input_hash` for a set of
- * BIP-352-eligible inputs.
- *
- * `eligibleInputs` are inputs that contribute to the ECDH sum (P2TR /
- * P2WPKH / P2SH-P2WPKH / P2PKH). Taproot inputs are expected to provide the
- * BIP-341 *tweaked* private key (the same scalar that produces the Schnorr
- * signature); a BIP-340 odd-Y negation is applied here per the BIP-352
- * sender algorithm.
- *
- * `allOutpoints` is the outpoint of *every* input in the transaction —
- * including ineligible ones — because BIP-352 picks the lex-smallest
- * across the whole transaction for `input_hash`. Defaults to the outpoints
- * of the eligible inputs.
+ * Compute `a` (with BIP-352 odd-Y negation of tweaked Taproot keys), `A`,
+ * outpoint_L and `input_hash`. `allOutpoints` must cover ineligible inputs too.
  */
 export function aggregateSenderPrivateKey(
   eligibleInputs: SilentPaymentInput[],
@@ -712,13 +537,8 @@ export function aggregateSenderPrivateKey(
 }
 
 /**
- * BIP-375 §"Computing the ECDH Shares": for a single recipient scan key,
- * compute the global ECDH share `C = a · B_scan`.
- *
- * NOTE: BIP-375 defines the share as `a · B_scan`, NOT the BIP-352 sender
- * formula `input_hash · a · B_scan`. The verifier multiplies by `input_hash`
- * locally after verifying the DLEQ proof (which proves the simpler
- * relation `C = a · B_scan` for the same `a` that produces `A`).
+ * BIP-375 ECDH share `C = a · B_scan` — NOT BIP-352's `input_hash · a · B_scan`;
+ * the verifier multiplies by `input_hash` after checking the DLEQ proof.
  */
 export function computeBip375EcdhShare(
   aggregateScalar: Uint8Array,
@@ -732,21 +552,9 @@ export function computeBip375EcdhShare(
   return scanPoint.multiply(k).toBytes(true);
 }
 
-// ---------------------------------------------------------------------------
-// Convenience for the in-extension wallet
-// ---------------------------------------------------------------------------
-
 /**
- * Compute the BIP341-tweaked private key for a Nostr nsec acting as a Taproot
- * internal key with no script tree (the wallet's only spending mode). This is
- * the scalar the user must contribute to BIP352's `a` sum, and the one that
- * actually signs the P2TR inputs.
- *
- * Returns 32 bytes. Throws if the input is invalid.
- *
- * `@scure/btc-signer/utils`' `taprootTweakPrivKey` already implements the
- * BIP-341 parity-flip + TapTweak (key-path only when `merkleRoot` is
- * `undefined`), so we just delegate.
+ * BIP341 key-path tweak of an nsec used as a Taproot internal key: the scalar
+ * that signs the wallet's P2TR inputs and joins BIP352's `a` sum.
  */
 export function tweakNsecForTaproot(privateKeyHex: string): Uint8Array {
   if (!/^[0-9a-fA-F]{64}$/.test(privateKeyHex)) {

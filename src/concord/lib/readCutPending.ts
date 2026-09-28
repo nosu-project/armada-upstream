@@ -1,21 +1,13 @@
 /**
- * Durable read-cut intent — the failure half of a rotating ban.
+ * Durable read-cut intent — the failure half of a rotating ban. A ban is
+ * Banlist → grant strip → Refounding; the rotation can fail on a relay outage,
+ * so the intent is marked BEFORE and cleared only on success, and the next visit
+ * retries it.
  *
- * A ban composes Banlist → grant strip → Refounding. The first two are cheap
- * and land; the rotation is heavy and can die on a relay outage, leaving a
- * "banned but still readable" member. Mark the intent BEFORE the attempt and
- * clear it only on success, so the next visit to the community retries the
- * cut — no member survives a transient failure, and no admin has to remember.
- *
- * The KEEP list is captured here too, at ban time, when the member list was
- * warm and the action user-initiated. A retry must never rebuild it from
- * whatever roster the retrying surface happens to hold — a cold page or a
- * roster-less view would rotate the community out from under its own members.
- *
- * Keyed per (account, community): this is the moderator's own bookkeeping, not
- * shared state. Held in ArmadaDB's KV, behind a synchronous cache — the retry
- * path awaits {@link readCutPendingReady} first, so it never mistakes an
- * unwarmed cache for "no cut owed".
+ * The KEEP list is captured at ban time; a retry must never rebuild it from
+ * whatever roster the retrying surface holds (a cold view would rotate out
+ * members). Keyed per (account, community) in ArmadaDB KV; await
+ * {@link readCutPendingReady} before trusting a miss.
  */
 import { KvPrefixCache } from "@/lib/db/kvCache";
 
@@ -35,7 +27,6 @@ export function readCutPendingReady(): Promise<void> {
   return cache.ready();
 }
 
-/** The pending intent, or undefined. */
 export function readCutPending(me: string, communityIdHex: string): ReadCutIntent | undefined {
   const parsed = cache.get(id(me, communityIdHex));
   if (typeof parsed !== "object" || parsed === null) return undefined;
@@ -48,12 +39,8 @@ export function readCutPending(me: string, communityIdHex: string): ReadCutInten
 
 /**
  * Add a target (idempotent); the freshest keep-list wins, minus all targets.
- *
- * Async, and the await is load-bearing: this MERGES with what is already
- * persisted, and an unwarmed cache reads as "nothing owed". Writing that back
- * would replace a stored `{targets: [A, B]}` with `{targets: [C]}` and drop the
- * read-cut for A and B — the exact failure this module exists to prevent, since
- * nothing else remembers a rotation that never landed.
+ * The await is load-bearing: this merges with persisted state, and an unwarmed
+ * cache would overwrite and drop earlier targets.
  */
 export async function addReadCutPending(
   me: string,

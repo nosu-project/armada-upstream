@@ -10,29 +10,9 @@ import { useFreshLogin } from "@/hooks/useFreshLogin";
 import { useInitialSync } from "@/hooks/useInitialSync";
 
 /**
- * Full-screen post-login sync overlay.
- *
- * After a *fresh* login (not a reload-restored session, see {@link useFreshLogin}),
- * Armada needs to pull the user's encrypted settings, their channel list, an
- * initial catch-up of messages, and their encrypted Concord communities before
- * the app is trustworthy. Rendering the app underneath at that point flashes
- * empty channels and a default theme that then snap into place a moment later.
- *
- * SyncGate blocks the UI with the Armada crest, the wordmark, and a vertical
- * terminal-style progress list (one line per sync step) until
- * {@link useInitialSync} reports `done`. The sync is timeout-bounded, so a slow
- * or dead relay can never trap the user.
- *
- * The overlay reads as jacking in: the wordmark's tagline slot carries a
- * "jacking in" prompt (flipping to "jacked in" as the gate lifts), under
- * {@link SignalStatic} — dead-channel interference whose strength is bound to
- * the real sync, dropping a step each time a phase resolves and cutting out
- * when the link is up. The static skips rendering under
- * prefers-reduced-motion; the caret is covered by
- * {@link ArmadaCrestKeyframes}' rule.
- *
- * Mounted alongside NostrSync in App. Renders nothing when there's no fresh
- * login in flight.
+ * Full-screen overlay after a *fresh* login ({@link useFreshLogin}) until
+ * {@link useInitialSync} is done, so the app doesn't flash empty channels and
+ * the default theme. Timeout-bounded; static skips under reduced motion.
  */
 export function SyncGate() {
   const { freshPubkey, acknowledge } = useFreshLogin();
@@ -40,37 +20,25 @@ export function SyncGate() {
   return <SyncOverlay pubkey={freshPubkey} onDone={acknowledge} />;
 }
 
-// The post-login setup flow must not start stacking its steps while the sync
-// overlay is still running (`LoginSetup` reads `useSyncGateActive`), and the
-// rail's occluded unread badges skip their warm-up churn the same way — both
-// through the standalone `syncGateState` store this component drives.
-
 function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void }) {
   const { log, done } = useInitialSync(pubkey);
   const [leaving, setLeaving] = useState(false);
 
-  // Interference level for the static: buried at first contact, stepping down
-  // with every phase of the real sync that resolves, gone once the link is up.
+  // Static strength steps down with each resolved phase.
   const resolvedCount = log.filter((line) => line.status !== undefined).length;
   const staticLevel = done ? 0 : Math.max(0.1, 0.5 * 0.72 ** resolvedCount);
 
-  // Fingerprint of live wire activity — changes on every log mutation (a
-  // phase resolving, a warmup x/y tick), each of which is a real relay
-  // round-trip. SignalStatic ripples on each change.
+  // Changes on every log mutation (each a real relay round-trip); SignalStatic ripples on it.
   const wireSignal = log.map((line) => `${line.id}:${line.status ?? ""}`).join("|");
 
   useEffect(() => {
     setSyncGateActive(true);
-    // A fresh login has no local data for a first paint — the initial sync IS
-    // the boot. Open the boot gate so the deferred ingest drivers mount now.
+    // A fresh login has no local data to paint: the sync IS the boot.
     markBootPainted();
     return () => setSyncGateActive(false);
   }, []);
 
-  // When the sync finishes, hold a brief beat so the final line lands, then
-  // fade the whole overlay out before unmounting — the app underneath (often
-  // the DMs page with its decrypt prompt) should be arrived at, not cut to.
-  // Pointer events drop the moment the fade starts.
+  // Hold a beat for the final line, then fade out before unmounting.
   useEffect(() => {
     if (!done) return;
     const beat = setTimeout(() => setLeaving(true), 400);
@@ -81,10 +49,7 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
     };
   }, [done, onDone]);
 
-  // The fade IS the app becoming interactive, so the gate must read as down
-  // the moment it starts — the deferred post-login steps (the DMs decrypt
-  // prompt among them) queue behind useSyncGateActive and would otherwise
-  // wait out the unmount timer too.
+  // The gate reads down as soon as the fade starts, so queued post-login steps don't wait for unmount.
   useEffect(() => {
     if (leaving) setSyncGateActive(false);
   }, [leaving]);
@@ -101,11 +66,7 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
         <ArmadaCrest size={96} loop />
         <BrandMark
           tagline={done ? "jacked in" : (
-            // A CSS typewriter: width in ch stepped one glyph at a time (the
-            // font is mono, so 1ch = 1 glyph), on a slow type/hold/erase loop.
-            // BrandMark's caret sits right after this span, so it rides the
-            // typed edge. Under reduced motion the animation is killed and the
-            // span falls back to its natural (full) width.
+            // CSS typewriter: width in ch (mono font) stepped per glyph.
             <span className="inline-block overflow-hidden whitespace-nowrap align-bottom animate-[armada-type_7s_steps(10,end)_infinite]">
               jacking in
             </span>
@@ -117,13 +78,10 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
         <TerminalProgress lines={log} />
       </div>
 
-      {/* Over the content, visor-fashion: the interference is between the
-          operator and the feed, not scenery behind it. */}
       <SignalStatic level={staticLevel} seed={pubkey} signal={wireSignal} />
 
       <ArmadaCrestKeyframes />
-      {/* Gate-only keyframes ("jacking in" is 10ch). Type over ~2s, hold,
-          erase quickly, breathe, retype. */}
+      {/* "jacking in" is 10ch. */}
       <style>{`
         @keyframes armada-type {
           0% { width: 0ch; }

@@ -1,23 +1,9 @@
 /**
- * The publish outbox: signed events that have not yet been accepted by a relay.
- *
- * This is the app's durable record of events the user has actually authored —
- * a message written offline, a profile edit made while every relay was down. It
- * is the ONLY place a signed event survives with its signature intact: the
- * event store drops `sig` (see `db/mainEventStore.ts`), so an event read back
- * from there can never be re-published. Retry paths must source from here.
- *
- * Stored in ArmadaDB's KV as ONE ENTRY PER EVENT, keyed `outbox:<eventId>`,
- * rather than a single array under one key. The array shape was safe only
- * because localStorage is synchronous, which made its read-modify-write atomic
- * within a tick; KV is async, so two concurrent `queueSignedEvent` calls would
- * both read the same array and one would lose its entry — dropping a message
- * the user believes was sent. Per-event keys remove the shared cell entirely.
- *
- * Wiped on logout by `purgeArmadaDB`. One behavior change from the localStorage
- * era: where IndexedDB is unavailable (iOS Lockdown Mode, some private-browsing
- * contexts) the KV degrades to a no-op, so the queue no longer survives a
- * reload there. Delivery still works; only the retry-after-restart does not.
+ * Durable outbox of signed events not yet accepted by a relay — the ONLY place
+ * a signed event keeps its `sig` (the event store drops it), so retries must
+ * source from here. One KV entry per event (`outbox:<eventId>`): KV is async,
+ * so a shared array's read-modify-write would lose entries. Wiped on logout.
+ * Without IndexedDB, KV is a no-op and the queue doesn't survive reloads.
  */
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { uniqueRelayUrls } from "@/lib/nip65";
@@ -26,7 +12,6 @@ import { isSigned } from "@/lib/nostrRumor";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Key prefix for one queued publish; the suffix is the event id. */
 const KEY_PREFIX = "outbox:";
 /** Pre-ArmadaDB localStorage key, drained by {@link migrateLegacyOutbox}. */
 const LEGACY_KEY = "armada:publish-outbox";
@@ -37,24 +22,15 @@ export interface QueuedPublish {
   event: NostrEvent;
   relay?: string;
   /**
-   * Exact account-state destinations still awaiting this signed event.
-   * Kept separate from `relay`, which is the single host of group-scoped
-   * traffic. A retry must not fall back to the generic pool: doing so can get
-   * one unrelated acknowledgement while the missing NIP-65 relay remains
-   * empty.
+   * Exact account-state destinations still pending (separate from group `relay`).
+   * Never fall back to the generic pool: one unrelated ack would hide a missing NIP-65 relay.
    */
   relays?: string[];
   enqueuedAt: number;
   attempts: number;
   nextAttemptAt?: number;
   lastError?: string;
-  /**
-   * When set, the entry is dropped undelivered after this time. For
-   * best-effort traffic whose relays may never come back (a Guestbook Leave to
-   * a community relay that died): without it, one dead relay keeps the entry
-   * retrying on every launch forever. Absent for anything the user expects to
-   * be sent, which waits as long as it takes.
-   */
+  /** Drop undelivered after this time — for best-effort traffic whose relays may be gone. Absent for user-expected sends. */
   expiresAt?: number;
 }
 
@@ -79,11 +55,8 @@ export class PublishOutboxConflictError extends Error {
 }
 
 /**
- * Serialize outbox edits. Different event ids can still name one replaceable
- * coordinate, so an id-scoped lock is insufficient: two same-coordinate
- * writes could both inspect the old queue, then independently delete/replace
- * it and lose a destination. The queue is tiny and mutations are local KV I/O,
- * making one short global chain the honest atomic boundary.
+ * Serialize outbox edits globally: different ids can share a replaceable
+ * coordinate, so per-id locks could lose a destination.
  */
 let mutationChain: Promise<void> = Promise.resolve();
 
@@ -126,8 +99,7 @@ function isQueuedPublish(value: unknown): value is QueuedPublish {
     typeof item.event.id === "string" &&
     typeof item.event.pubkey === "string" &&
     typeof item.event.kind === "number" &&
-    // A signature is the whole point of this queue: an entry without one can
-    // never be delivered, so it is not a valid entry.
+    // An entry without a signature can never be delivered.
     typeof item.event.sig === "string" &&
     item.event.sig.length > 0 &&
     Array.isArray(item.event.tags) &&
@@ -142,9 +114,8 @@ function isQueuedPublish(value: unknown): value is QueuedPublish {
 
 function replaceableKey(event: NostrEvent, relay?: string, relays?: string[]): string | null {
   const kind = event.kind;
-  // All explicit relay-set deliveries share one logical coordinate. When the
-  // NIP-65 set changes, a newer replaceable inherits every still-pending old
-  // target instead of leaving an older event queued for the previous set.
+  // Explicit relay-set deliveries share one coordinate, so a newer replaceable
+  // inherits the old one's pending targets when the NIP-65 set changes.
   const relayPart = relay ?? (relays ? "@explicit" : "*");
   if (kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000)) {
     return `${relayPart}:${kind}:${event.pubkey}`;
@@ -166,8 +137,7 @@ export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
     // `outbox:migrated` shares the prefix, and is a boolean rather than an entry.
     .filter(isQueuedPublish);
   const expired = items.filter((item) => item.expiresAt !== undefined && item.expiresAt <= now);
-  // Not awaited: this is also read from INSIDE an outbox mutation, which a
-  // chained one would wait behind forever.
+  // Not awaited: this is also read inside an outbox mutation, which would deadlock.
   if (expired.length > 0) {
     void mutateOutbox(async () => {
       const { kv } = getArmadaDB();
@@ -176,7 +146,7 @@ export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
   }
   return items
     .filter((item) => !expired.includes(item))
-    // `list()` comes back in key order, i.e. by event id — meaningless here.
+    // `list()` returns event-id order; sort by enqueue time.
     .sort((a, b) => a.enqueuedAt - b.enqueuedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
@@ -211,8 +181,7 @@ export async function queueSignedEvent(
         || (requiredRelays !== undefined
           && requiredRelays.some((target) => !targets.has(target)))
       ) {
-        // IndexedDB's degraded adapter deliberately resolves a write as a
-        // no-op. Only a read-back makes "queued" a durable claim.
+        // The degraded adapter resolves writes as no-ops; only a read-back proves durability.
         throw new Error("Publish outbox write could not be verified");
       }
       return stored;
@@ -234,10 +203,8 @@ export async function queueSignedEvent(
       return;
     }
 
-    // A replaceable coordinate only ever needs its newest edition delivered.
-    // Explicit multi-relay state also INHERITS targets from the superseded
-    // event, so rotating NIP-65 relays cannot strand an old version for an old
-    // destination while only the new set receives the replacement.
+    // Only the newest edition of a replaceable coordinate needs delivery; it
+    // inherits the superseded event's targets.
     const coord = replaceableKey(event, relay, exactRelays);
     const conflicting = coord
       ? (await getQueuedPublishes()).filter(
@@ -254,9 +221,7 @@ export async function queueSignedEvent(
     const inheritPendingTargets = options.inheritPendingTargets !== false;
     if (existingWins) {
       if (!inheritPendingTargets) {
-        // Even a subset cohort is unsafe: `event` is an older signed mutation,
-        // and sending it would regress any relay that does not yet hold the
-        // newer queued winner. Force the caller back through read/merge/sign.
+        // Sending this older signed mutation would regress relays; force a re-read/merge/sign.
         throw new PublishOutboxConflictError();
       }
       if (exactRelays) {
@@ -293,13 +258,10 @@ export async function queueSignedEvent(
       attempts: 0,
       ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
     } satisfies QueuedPublish;
-    // Establish and verify the replacement before removing its predecessor.
-    // If this write fails, the old signed obligation remains recoverable.
+    // Write and verify the replacement before removing its predecessor.
     await kv.set(itemKey(event.id), entry);
     await verify(event.id, relay, inheritedRelays);
-    // With inheritance disabled, preserve predecessor obligations for every
-    // target that did NOT participate in this document's source read. They can
-    // coexist by event id until a later complete merge supersedes them.
+    // Without inheritance, keep predecessor obligations for targets outside this source read.
     const replacementTargets = new Set(exactRelays ?? []);
     const cleanup = conflicting.map(async (item) => {
       if (!inheritPendingTargets && item.relays) {
@@ -311,18 +273,13 @@ export async function queueSignedEvent(
       }
       await kv.delete(itemKey(item.id));
     });
-    // A failed cleanup can only leave a redundant older retry. The verified
-    // winner carries every destination it is allowed to receive; relays reject
-    // an older addressable edition after accepting this one.
+    // A failed cleanup only leaves a redundant older retry; relays reject older editions anyway.
     await Promise.all(cleanup)
       .catch(() => undefined);
   });
 }
 
-/**
- * Apply one exact-relay delivery attempt. Relays added after the attempt began
- * remain queued; only attempted destinations that accepted are removed.
- */
+/** Apply one exact-relay attempt: only attempted destinations that accepted are removed. */
 export async function recordQueuedPublishAttempt(
   id: string,
   attemptedRelays: string[],
@@ -344,14 +301,8 @@ export async function recordQueuedPublishAttempt(
 }
 
 /**
- * The signed form of `rumor` — itself when it still carries a signature, or the
- * outbox's copy when it does not.
- *
- * A retry hands back whatever the UI is holding, and timelines are fed from the
- * event store, which drops `sig`. This is the lookup that turns such a copy
- * back into something a relay will accept, and unlike the timeline it survives
- * a reload. Throws when no signed copy exists anywhere: that is a dead end for
- * the caller, and saying so beats handing a relay an event it will reject.
+ * `rumor` itself if still signed, else the outbox's signed copy (timelines come
+ * from the store, which drops `sig`). Throws when no signed copy exists.
  */
 export async function withSignature(rumor: NostrRumor): Promise<NostrEvent> {
   if (isSigned(rumor)) return rumor;
@@ -391,20 +342,12 @@ export async function clearPublishOutbox(): Promise<void> {
   });
 }
 
-// ── migration ─────────────────────────────────────────────────────────────────
-
 let drain: Promise<void> | undefined;
 
 /**
- * Copy the pre-ArmadaDB localStorage queue into KV. Idempotent; runs at most
- * once per session, and is awaited by every accessor rather than driven by the
- * startup migration gate — that catalogue deletes IndexedDB *databases*, and
- * this legacy store is a localStorage key.
- *
- * The legacy key is removed only after the copy is confirmed readable. KV
- * degrades to a silent no-op when IndexedDB is unavailable, so deleting on the
- * strength of an unverified write would discard undelivered messages on exactly
- * the devices least able to spare them.
+ * Copy the legacy localStorage queue into KV, once per session, awaited by
+ * every accessor. The legacy key is removed only after the copy is read back:
+ * KV silently no-ops without IndexedDB.
  */
 export function migrateLegacyOutbox(): Promise<void> {
   drain ??= drainLegacyOutbox();
@@ -427,10 +370,8 @@ async function drainLegacyOutbox(): Promise<void> {
     }
 
     await kv.set(DONE_KEY, true);
-    // Confirm the write actually landed before dropping the only other copy.
     if (await kv.get<boolean>(DONE_KEY)) localStorage.removeItem(LEGACY_KEY);
   } catch {
-    // Retry next launch rather than marking a partial copy done.
     drain = undefined;
   }
 }

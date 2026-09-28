@@ -58,40 +58,27 @@ import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Query key for a channel's RAW opened-event set (all chat-plane kinds). */
 export const channelKey = (channelIdHex: string | null) => ["concord", "channel", channelIdHex] as const;
 const statusKey = (channelIdHex: string | null) => ["concord", "msg-status", channelIdHex] as const;
 const deletedKey = (channelIdHex: string | null) => ["concord", "msg-deleted", channelIdHex] as const;
 
-/**
- * Every chat-plane kind rides an identical kind-1059 wrap, so the relay can't
- * pre-filter messages from reactions — the decode window must absorb both.
- * Sized accordingly; the rumor cache serves re-reads with no decrypt.
- */
+/** Reactions share the wrap kind with messages (no relay pre-filter), so the window absorbs both. */
 const WINDOW_SIZE = 100;
 
 /**
- * How far back the flood detector's channel-history read looks, and its row cap
- * (see `queryChannelFirstSeen`).
- *
- * A time window rather than a row count, because what the detector needs is the
- * QUIET before a flood, and a row count spends itself on the flood. Seven days
- * so a weekend-quiet channel still has its regulars on the map when a Monday
- * flood arrives; the cap then bounds the cost on a genuinely busy channel,
- * where losing the map's oldest end costs a protection, never grants immunity.
+ * Flood detector history window: time-based to capture the QUIET before a
+ * flood (a row count spends itself on the flood); 7 days covers weekend lulls.
  */
 const FLOOD_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const FLOOD_HISTORY_MAX_ROWS = 4000;
 
 const EMPTY_RAW: OpenedChat[] = [];
 
-/** Exact route targets that must be read independently of the newest window. */
 export interface ChannelTimelineFocus {
   messageId?: string;
   threadRoot?: string;
 }
 
-/** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
 export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
   const byId = new Map<string, OpenedChat>();
   for (const m of old ?? []) byId.set(m.rumorId, m);
@@ -106,15 +93,11 @@ export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: Opened
   return [...byId.values()].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1));
 }
 
-/** Local shorthand. */
 const upsert = upsertOpenedChat;
 
 /**
- * Where scrolling back resumes in a channel: the oldest loaded row's second,
- * and the loaded rows AT that second (see `queryChannelPageBefore`). Kept per
- * channel beside the query cache, which outlives a mount, rather than derived
- * from the cache's oldest row — a permalinked row retained in the cache can be
- * far older than the paged history, and resuming from it would skip the gap.
+ * Scroll-back resume point, kept per channel beside the cache. Not derived
+ * from the cache's oldest row: a retained permalink row can be far older and skip the gap.
  */
 interface PageCursor {
   until: number;
@@ -123,7 +106,6 @@ interface PageCursor {
 const ROW_KINDS = new Set(CHAT_ROW_KINDS);
 const pageCursors = new Map<string, PageCursor>();
 
-/** Lower `cursor` to the oldest of `events`' rows; returns the (possibly new) cursor. */
 function lowerCursor(cursor: PageCursor | undefined, events: readonly OpenedChat[]): PageCursor | undefined {
   let out = cursor;
   for (const ev of events) {
@@ -134,24 +116,14 @@ function lowerCursor(cursor: PageCursor | undefined, events: readonly OpenedChat
   return out;
 }
 
-/** A cursor still describes `data` only while a row it names is in it. */
 function cursorHolds(cursor: PageCursor | undefined, data: readonly OpenedChat[]): cursor is PageCursor {
   return !!cursor && data.some((m) => cursor.ids.has(m.rumorId));
 }
 
 /**
- * The moderation context resolved from the community's control fold.
- *
- * `active` is the same network gate `useControlFold`/`useDissolved` take, and
- * it must be threaded rather than left at the default by any AMBIENT caller —
- * a rail button, a badge counter — that resolves moderation for a community
- * the reader has not opened. The fold serves `banned` from its persisted
- * snapshot either way; `active` only decides whether this mount ALSO issues
- * the on-open control sweep (one REQ per relay) and activates `useDissolved`'s
- * 5-minute probe. A single `active` observer lights the shared query key for
- * every passive one, so one ambient caller defaults the whole rail back into a
- * per-community fan-out on page load (see the regression test in
- * `useConcordUnread.network.test.tsx`).
+ * Moderation context from the control fold. AMBIENT callers (rail, badges)
+ * must pass `active` false: one active observer lights the shared key into
+ * a per-community network fan-out (see `useConcordUnread.network.test.tsx`).
  */
 export function useChatModeration(
   community: Community | undefined,
@@ -164,29 +136,19 @@ export function useChatModeration(
       banned: folded?.banned ?? new Set<string>(),
       canDelete: (deleter: string, author: string, action?: { citation?: AuthorityCitation; ms: number }) => {
         if (!folded || !community) return false;
-        // Death wins every race (CORD-02 §9), but it is an ORDERING rule, not a
-        // switch: the fold replays history, so a global "is dissolved" test
-        // would retroactively un-hide every moderation delete this community
-        // ever honored, including ones published years before the tombstone.
-        // Only actions published AFTER the tombstone are refused. The seal
-        // leaves SELF-deletes open regardless; they short-circuit in the fold
-        // before reaching here.
+        // CORD-02 §9: death is an ORDERING rule — only actions after the tombstone
+        // are refused, or old moderation would be un-hidden. Self-deletes short-circuit earlier.
         if (dissolvedAtMs !== null && dissolvedAtMs !== undefined && action && action.ms > dissolvedAtMs) {
           return false;
         }
-        // Authorization, resolved against the CURRENT roster. The citation is a
-        // completeness floor and never a grant of rank, so a since-demoted actor
-        // is refused here no matter what they cited (CORD-04 §5).
+        // Against the CURRENT roster: a citation is a completeness floor, never a grant (CORD-04 §5).
         if (!canActOnMember(folded.roster, deleter, folded.ownerHex, author, Permissions.MANAGE_MESSAGES)) {
           return false;
         }
-        // …then the sync floor: have we read enough of their Grant to trust the
-        // verdict above? Uncited means we have not, so the delete parks.
+        // Sync floor: uncited means we haven't read enough of their Grant, so park.
         return citationSatisfied(folded, community.id, deleter, action?.citation);
       },
-      // A timer notice is believed only from a MANAGE_METADATA holder
-      // (CORD-08 §4). False until the fold lands: an unverifiable notice is
-      // hidden, never trusted on faith.
+      // CORD-08 §4: only from MANAGE_METADATA; unverifiable until the fold lands.
       canSetTimer: (author: string) =>
         Boolean(folded && isAuthorized(folded.roster, author, folded.ownerHex, Permissions.MANAGE_METADATA)),
       isStaff: (author: string) => Boolean(folded && isStaff(folded.roster, author, folded.ownerHex)),
@@ -206,58 +168,31 @@ export function useChatModeration(
 }
 
 /**
- * One channel's timeline: the RAW opened-event set (messages, reactions,
- * edits, deletes — all sharing the wrap kind) read local-first from the
- * decrypted rumor cache, refreshed by a live subscription plus a resumable
- * relay backfill, then folded (with moderation) in memory.
+ * One channel's timeline, local-first from the decrypted rumor store and
+ * folded with moderation in memory. Wraps are never persisted.
  *
- * Wraps are never persisted: incoming kind-1059 wraps are decrypted once and
- * the recovered rumors are written to the rumor store, which the timeline reads
- * back with an ordinary `{ kinds, "#channel" }` query and no decrypt. A
- * per-channel sync cursor (persisted in the folded cache) lets a cold launch
- * resume where it left off instead of re-paging the newest window.
- *
- * LOCAL-FIRST IS THE LOADING CONTRACT. The queryFn resolves on the store read
- * and returns; the park drain and every relay pass run behind that return and
- * repaint through `setQueryData` as they land. So `isLoading` — the caller's
- * skeleton — covers the ArmadaDB read alone, and network catch-up is reported
- * on the sync-activity signal instead. Holding the skeleton until a relay
- * round settled meant a conversation whose entire history was already on disk
- * still opened on a placeholder for as long as the relays took.
+ * LOCAL-FIRST IS THE LOADING CONTRACT: the queryFn resolves on the store read;
+ * park drain and relay catch-up repaint via `setQueryData` and report as sync
+ * activity, never `isLoading`.
  */
 export function useChannelTimeline(
   community: Community | undefined,
   channel: Channel | undefined,
-  /**
-   * The channel id the CALLER already knows (the URL names it on the first
-   * render), so the persisted last-painted window can seed the cache before
-   * the key-derivation chain produces a {@link Channel}. Only ever used for
-   * the cache key and the snapshot; the query stays disabled until `channel`.
-   */
+  /** Known from the URL on first render, so the snapshot can seed before a {@link Channel} exists. */
   routeChannelIdHex?: string | null,
-  /** `/m/<id>` and `/t/<root>` targets parsed from the active route. */
   focus?: ChannelTimelineFocus,
 ) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const moderation = useChatModeration(community);
-  // The flood heuristic leaves the reader's own messages alone — and the
-  // persisted snapshot is keyed by this pubkey, since it is the one cache read
-  // from the ROUTE's channel id before any key proves membership.
+  // The snapshot is keyed by reader: it's read before any key proves membership.
   const { user: readingUser } = useCurrentUser();
-  // The community's active pause (CORD-04 §8), so the fold collapses non-staff
-  // messages posted while it holds — the read side of the pause signal. Via
-  // `useActivePause`, which schedules the `until` expiry: without the wake, a
-  // bounded pause would keep collapsing long after it lapsed, since nothing
-  // else re-renders this timeline on its behalf.
-  // Only the enactment time enters the fold, and taking it as a scalar keeps
-  // the memo from re-running on every render — `activePause` builds a fresh
-  // object each time, so depending on the pause itself would defeat it.
+  // CORD-04 §8 pause; `useActivePause` schedules the `until` wake. Scalar so
+  // the memo isn't defeated by a fresh object.
   const pauseSince = useActivePause(community)?.since;
 
   const channelIdHex = channel?.idHex ?? routeChannelIdHex ?? null;
-  // Cutoffs ride the signature too: a merge can teach this device an epoch's
-  // retirement without changing the epoch set, and the store must re-read.
+  // Cutoffs included: retirement can change without the epoch set changing.
   const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.retiredAt ?? ""}`).join(",") ?? "";
   const queryKey = useMemo(() => channelKey(channelIdHex), [channelIdHex]);
   const focusIds = useMemo(
@@ -266,32 +201,23 @@ export function useChannelTimeline(
   );
   const focusSig = focusIds.join(",");
 
-  // Seed the cache from the persisted last-painted window the moment the
-  // channel id is known — before the fold chain resolves a Channel — so a
-  // warm reload paints messages instead of a skeleton. Stale-seeded, so the
-  // real store read still runs and replaces it (see timelineSnapshot).
+  // Seed from the persisted window before the fold chain resolves (see timelineSnapshot).
   const viewerPubkey = readingUser?.pubkey;
   useEffect(() => {
     if (!viewerPubkey || !channelIdHex) return;
     void prewarmTimelineSnapshot(queryClient, viewerPubkey, channelIdHex, channelKey(channelIdHex));
   }, [viewerPubkey, channelIdHex, queryClient]);
 
-  // Physically purge expired disappearing messages (CORD-08 §3). Hiding them
-  // is the read filter's job; the plaintext leaving the store is this one's.
-  // Fire-and-forget — the sweep self-gates to one walk per community per
-  // interval, so channel switches never re-scan.
+  // Physically purge expired messages (CORD-08 §3); self-gated per community.
   useEffect(() => {
     if (community?.idHex) void sweepExpiredCommunityRumors(community.idHex).catch(() => undefined);
   }, [community?.idHex]);
 
-  // Set once scrolling back has found neither stored nor relay history left,
-  // so a live re-read of the newest page doesn't turn `hasMore` back on.
+  // Keeps a live re-read from turning `hasMore` back on.
   const endReachedRef = useRef(false);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  // Bumped when a held future-dated message's time arrives, to re-run the fold
-  // (which reads Date.now()) so the message re-enters the timeline. See the
-  // `folded.nextRevealMs` effect below — the same wake `useActivePause` arms.
+  // Wakes the fold (reads Date.now()) when a held future-dated message's time arrives.
   const [revealTick, setRevealTick] = useState(0);
 
   useEffect(() => {
@@ -300,9 +226,7 @@ export function useChannelTimeline(
     setIsLoadingOlder(false);
   }, [channelIdHex]);
 
-  // A caught-up rekey changes the held stream set: forget remembered decode
-  // failures, clear the exhaustion flag and force a sync round (a new stream
-  // key may unlock history a fresh stamp would skip), and re-read.
+  // A new stream key may unlock history: reset failures/exhaustion and force a round.
   useEffect(() => {
     if (!channelIdHex) return;
     forgetChatSkips();
@@ -313,30 +237,17 @@ export function useChannelTimeline(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
-  // The catch-up pull (cold opens, offline gaps, deep history) is owned by
-  // the sync scheduler: this view registers the context a `c2:` round needs
-  // (pool handle, community relays, stream keys), then declares standing
-  // interest in the topic. Freshness is a durable stamp, so switching back to
-  // a recently-synced channel is a pure store read — the per-mount throttle
-  // this replaces re-paged every relay on every switch. The context effect is
-  // declared BEFORE the want, so a round never starts without it.
+  // The sync scheduler owns catch-up; register the `c2:` context BEFORE the
+  // want so a round never starts without it. Freshness is a durable stamp.
   useEffect(() => {
     if (!community || !channel) return;
     return setChannelSyncContext(channel.idHex, { nostr, community, channel });
   }, [nostr, community, channel]);
   useSyncTopic(community && channel ? `c2:${channel.idHex}` : undefined);
 
-  // Live updates come from the wire: WireSync holds the standing kind-1059
-  // subscription for EVERY channel, decrypts with our stream keys, writes the
-  // rumor store, and announces `c2:<idHex>` on the bus. We just re-read.
-  // (Relay catch-up lives behind the sync scheduler, so a bus invalidation is
-  // a cheap local read, not a network round.)
-  //
-  // `c2park:<streamPk>` covers the wire's blind spot: a wrap for one of OUR
-  // stream addresses that the wire couldn't decrypt (its spec hadn't refreshed
-  // past a rekey yet) is parked, not stored — re-reading drains the park via
-  // the queryFn's peekPendingWraps pass, so the message paints now instead of
-  // after the next poll.
+  // WireSync decrypts live wraps and rings `c2:<idHex>`; we just re-read.
+  // `c2park:<streamPk>` covers wraps the wire parked (spec not yet past a
+  // rekey), drained by the queryFn's peekPendingWraps pass.
   useWireScopes((scopes) => {
     if (!channelIdHex) return;
     const mine =
@@ -348,12 +259,7 @@ export function useChannelTimeline(
     }
   });
 
-  // A route target is an exact local-store lookup, not a reason to walk the
-  // newest-page window eight pages at a time. Keep it in a separate query key
-  // so changing `/m/<id>` inside the same channel always performs the lookup
-  // even while the ordinary channel query is still fresh. Both a thread root
-  // and its focused reply are requested together, letting the panel resolve in
-  // one store transaction.
+  // Exact route-target lookup in its own key, so `/m/<id>` changes always look up.
   const focusQuery = useQuery<OpenedChat[]>({
     ...STORE_READ,
     queryKey: ["concord", "channel-focus", community?.idHex ?? null, channelIdHex, focusSig],
@@ -365,60 +271,33 @@ export function useChannelTimeline(
 
   const query = useQuery<OpenedChat[]>({
     queryKey,
-    // The queryFn resolves on the ArmadaDB read (see its comment), so this is a
-    // store read and takes the store-read policy: no pausing while the browser
-    // claims to be offline, no backoff ladder held at `isPending` — both of
-    // which this query's `isLoading` is a skeleton over.
+    // Store-read policy: no offline pause or backoff behind the skeleton.
     ...STORE_READ,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
-    // Keep the previous render's messages painted ONLY when they belong to
-    // THIS channel (the previous query has the same key), never the outgoing
-    // channel's timeline during a switch. Decided from the previous query's
-    // own key (race-free), NOT a ref updated by an effect: this inline closure
-    // defeats TanStack's placeholder memoization, so it re-runs on EVERY
-    // render while the new channel's first read is pending, and a ref would
-    // already point at the new channel by the second render.
+    // Keep previous data only for THIS channel, decided from the previous query's
+    // key (a ref would be stale since this closure re-runs every pending render).
     placeholderData: (prev, prevQuery) =>
       prevQuery && hashKey(prevQuery.queryKey) === hashKey(queryKey) ? prev : undefined,
-    // No refetch timer: live messages arrive over the wire's standing
-    // subscription, and periodic catch-up/healing is the sync scheduler's
-    // (its staleness interval re-runs the `c2:` round while this view holds
-    // its want, and every store write rings the bus back into this query).
+    // No refetch timer: live via the wire, catch-up via the scheduler.
     queryFn: async ({ signal }) => {
       const cursorKeyId = channelIdHex ?? "";
 
-      // Fold in any wraps the native service parked (it can't decrypt) so a
-      // notification's message lands from this read. Runs AFTER the store
-      // paint, not serially before it: the peek opens a second IndexedDB
-      // database and, with wraps parked, decrypts a notification batch —
-      // ahead of the store read that used to tax every channel-switch paint.
-      // writeRumors rings the bus once the drained rumors commit, so the
-      // timeline re-reads and paints them right after. Decode WITHOUT the
-      // query's abort signal (the batch is notification-sized) and acknowledge
-      // only what actually decoded — an interrupted or key-less decode leaves
-      // the wraps parked for the next read instead of destroying them.
+      // Drain natively parked wraps AFTER the store paint (it opens another IDB and
+      // decrypts). Decode without the abort signal; ack only what decoded.
       const drainParked = async () => {
         const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
         if (parked.length === 0) return;
         const opened = await openChatBatch(parked, channel!);
-        // ACK only once the rumors are actually stored. The ack DELETES the
-        // parked wrap, so acking over a failed write destroys the only copy of
-        // a message the user was already notified about.
+        // The ack DELETES the parked wrap, so only after the write succeeds.
         if (!(await writeRumors(community!.idHex, opened))) return;
         const openedWrapIds = new Set(opened.map((o) => o.wrapId));
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       };
 
       const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
-        // Only the NEWEST page, however far back the reader has scrolled:
-        // older pages are already in the cache (`upsert` keeps them) and were
-        // read once by `loadOlder`. Re-reading the whole scrolled window here
-        // made every live message cost a read of all of it.
-        //
-        // hasMore: the page is full OR relays may have more (the persisted
-        // cursor — the scheduler's round writes it — isn't exhausted). Read
-        // alongside the rumors, not serially.
+        // Only the NEWEST page: older pages are already cached, and re-reading them
+        // made every live message cost the whole window.
         const [rumors, saved] = await Promise.all([
           queryChannelRumors(community!.idHex, channelIdHex!, {
             limit: WINDOW_SIZE,
@@ -430,28 +309,19 @@ export function useChannelTimeline(
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
           (m) => m.channelIdHex === channelIdHex,
         );
-        // A cursor for a cache that has since been dropped would resume below
-        // rows nobody loaded; restart it from this page.
+        // A cursor for a dropped cache would skip rows; restart it from this page.
         const held = pageCursors.get(cursorKeyId);
         const cursor = lowerCursor(cursorHolds(held, prev) ? held : undefined, rumors);
         if (cursor) pageCursors.set(cursorKeyId, cursor);
         else pageCursors.delete(cursorKeyId);
-        // Fold in freshly-decrypted events directly rather than racing the
-        // fire-and-forget rumor write. The epoch-cutoff filter re-applies the
-        // ingest rule to rows persisted before the rotation was known locally.
+        // Fold in freshly-decrypted events directly (don't race the write). The
+        // cutoff filter re-applies to rows stored before a rotation was known.
         return filterEpochCutoff(upsert(prev, extra ? upsert(rumors, extra) : rumors), channel!);
       };
 
       const existing = queryClient.getQueryData<OpenedChat[]>(queryKey);
 
-      // No relay round starts here: the scheduler owns the `c2:` catch-up
-      // (wanted above), so a wire-bus invalidation is a cheap local re-read,
-      // never a network round. The round's writes ring the bus back into this
-      // queryFn, and its progress surfaces on the sync-activity signal and
-      // the topic's sync state — never on `isLoading`.
-
       if (existing && existing.length > 0) {
-        // Warm: paint what we have; heal in the background.
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore());
@@ -460,25 +330,15 @@ export function useChannelTimeline(
         return existing;
       }
 
-      // The store read is the whole of the first load. An empty result is NOT
-      // authoritative for Concord — history is decrypted by the scheduler's
-      // backfill, not the wire's live `since` window — but that is a SYNC
-      // state, not a loading one: the park drain runs behind this return, the
-      // relay round runs in the scheduler, and both repaint through the bus
-      // as they land.
+      // An empty store is a SYNC state, not a loading one: history comes from the scheduler's backfill.
       const local = await composeFromStore();
       void drainParked().catch(() => undefined);
       return local;
     },
   });
 
-  // Make focused rows visible immediately from the exact query, then retain
-  // them in the channel cache. Retention matters after `/m/` is cleared: the
-  // row the reader just visited must not disappear merely because it lies
-  // outside the newest bounded window.
-  // Keyed per channel (not a plain useMemo) so cycling back to a channel whose
-  // query data is unchanged returns the SAME array — letting `folded` and the
-  // whole downstream `useTransport` chain bail instead of reallocating.
+  // Focused rows paint immediately and are retained in the channel cache after `/m/` clears.
+  // Keyed per channel so a switch-back returns the same array (downstream memos bail).
   const raw = useKeyedMemo(
     channelIdHex,
     () =>
@@ -490,26 +350,17 @@ export function useChannelTimeline(
   useEffect(() => {
     const rows = focusQuery.data;
     if (!channel || !rows || rows.length === 0) return;
-    // Only ever ADD to a window the channel's own read has already produced.
-    // Seeding an empty (or placeholder-backed) cache entry would RESOLVE the
-    // query to these rows alone: `isLoading` drops on a one-row timeline,
-    // MessageTimeline pins that to the bottom, and the permalink is satisfied
-    // against a dataset about to be replaced — which lands the reader at the
-    // newest message, the exact jump this focus read exists to prevent. The
-    // `raw` memo above is what paints the hit; this effect is only retention.
+    // Only ADD to a window the channel read produced: seeding an empty cache
+    // would resolve the query to these rows alone and break the permalink jump.
     const old = queryClient.getQueryData<OpenedChat[]>(queryKey);
     if (!old || old.length === 0) return;
-    // Growth is also the termination condition: `query.data` is a dependency
-    // so this runs again when the window lands, and `upsert` returns a fresh
-    // array every time. A row the cutoff refuses never grows the window, so it
-    // is written once at most either way.
+    // Terminates: a refused row never grows the window.
     const next = filterEpochCutoff(upsert(old, rows), channel);
     if (next.length === old.length) return;
     queryClient.setQueryData<OpenedChat[]>(queryKey, next);
   }, [channel, focusQuery.data, query.data, queryClient, queryKey]);
 
-  // Keep the persisted window current. Content-compared inside, so repaint
-  // churn does not rewrite it.
+  // Content-compared inside, so churn doesn't rewrite it.
   useEffect(() => {
     if (viewerPubkey && channelIdHex && raw.length > 0) {
       void persistTimelineSnapshot(viewerPubkey, channelIdHex, raw);
@@ -522,9 +373,7 @@ export function useChannelTimeline(
     const cursorKeyId = channelIdHex ?? "";
     setIsLoadingOlder(true);
     try {
-      // The next stored page below the cursor — one bounded read, however far
-      // back the reader already is. Only when the store runs short are the
-      // relays paged for deeper history.
+      // One bounded store read below the cursor; relays only when the store runs short.
       const cached = queryClient.getQueryData<OpenedChat[]>(queryKey) ?? [];
       const held = pageCursors.get(cursorKeyId);
       const cursor = cursorHolds(held, cached) ? held : undefined;
@@ -554,11 +403,8 @@ export function useChannelTimeline(
           writeRumors(community!.idHex, opened);
           exhausted = older.exhausted;
 
-          // Deep-history paging never touches `newest` (that's the scheduler
-          // round's bridge job); the persisted merge is monotonic (`oldest`
-          // only recedes, `exhausted` sticky) and serialized per scope inside
-          // `updateStreamCursor`, so a scheduler round writing the same cursor
-          // concurrently merges with this rather than reading around it.
+          // Never touches `newest` (the scheduler's job). The merge is monotonic and
+          // serialized per scope in `updateStreamCursor`, so concurrent writers merge.
           void updateChannelCursor(cursorKeyId, {
             oldest: older.oldest,
             exhausted: older.exhausted ? true : undefined,
@@ -584,25 +430,16 @@ export function useChannelTimeline(
     }
   }, [hasMore, isLoadingOlder, raw, nostr, community, channel, channelIdHex, queryClient, queryKey]);
 
-  // The folded view (moderation + edits + reaction tallies), plus the
-  // optimistic-delete overlay.
   const optimisticDeleted = useQuery<string[]>({
     queryKey: deletedKey(channelIdHex),
-    // This query is never fetched — the overlay is populated imperatively via
-    // setQueryData in deleteMessage. The no-op queryFn only exists to satisfy
-    // React Query's "no queryFn" dev warning; enabled:false keeps it from running.
+    // Populated imperatively via setQueryData; the no-op queryFn only silences a dev warning.
     queryFn: () => [],
     enabled: false,
     initialData: [],
   }).data;
 
-  // Who was already in this CHANNEL, which the rendered window cannot say: a
-  // flood large enough to matter fills `WINDOW_SIZE` completely and every
-  // author in it then reads as new-together (see `queryChannelFirstSeen`).
-  // One indexed range read per channel open. It does NOT need to chase the
-  // flood live — new arrivals are dated by the batch itself, and an author's
-  // first-seen only ever moves earlier — but a slow refresh keeps a long
-  // session's map from aging out entirely.
+  // Channel first-seen map: a flood fills WINDOW_SIZE, so every author in it
+  // would look new (see `queryChannelFirstSeen`). One indexed read per open.
   const firstSeen = useQuery({
     ...STORE_READ,
     queryKey: ["concord-channel-first-seen", community?.idHex ?? null, channelIdHex],
@@ -620,21 +457,10 @@ export function useChannelTimeline(
   // Re-fold when the persisted quarantine warms or grows (see quarantineMemory.ts).
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
 
-  // A lower bound on when this room existed, for the drown rule's precedent
-  // (see FloodOptions.establishedSinceMs) — what lets a TOTAL nuke fold, whose
-  // every early speaker is itself a drowner so the speaker source is empty.
-  // Two sources, oldest wins:
-  //   1. The oldest control-plane rotation time we hold (`HeldRoot.retiredAt`,
-  //      epoch-seconds → ms). Unforgeable — only a staff rekey publishes one —
-  //      but often absent (never-rekeyed community, or roots retired before the
-  //      field existed).
-  //   2. The earliest channel activity the STORE has observed (min over the
-  //      7-day `firstSeen` map). Always available once history loads; a channel
-  //      that already had messages this long ago is not launching now. It is
-  //      chat-plane-derived, so best-effort: a flood can push it EARLIER (which
-  //      only adds precedent), and evading needs every message's `created_at`
-  //      clamped into one sub-10-min window — which collapses the wave's own
-  //      timespan the pace gate reads. Preferred source is (1) when present.
+  // Lower bound on the room's age for the drown rule (FloodOptions.establishedSinceMs),
+  // so a TOTAL nuke still folds. Oldest of: (1) oldest held root rotation
+  // (unforgeable, often absent); (2) earliest store activity in `firstSeen`
+  // (best-effort; evading it collapses the wave's timespan the pace gate reads).
   const establishedSinceMs = useMemo(() => {
     let oldest: number | undefined;
     for (const r of community?.heldRoots ?? []) {
@@ -647,9 +473,7 @@ export function useChannelTimeline(
     return oldest;
   }, [community?.heldRoots, firstSeen]);
 
-  // Keyed per channel so a switch-back returns the cached fold (stable
-  // reference) rather than re-folding the whole set — the switch's dominant
-  // allocation. Same deps as a useMemo, so a real input change still recomputes.
+  // Keyed per channel so a switch-back returns the cached fold.
   const folded: FoldedTimeline = useKeyedMemo(channelIdHex, () => {
     void memoryRev;
     void revealTick;
@@ -659,9 +483,7 @@ export function useChannelTimeline(
       ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
       ...(pauseSince !== undefined ? { pauseSince } : {}),
     });
-    // What past sessions remember folding here. The live rules re-derive from
-    // whatever context this session holds, and after a refresh that is only
-    // the newest window — the memory is what keeps yesterday's wall folded.
+    // Past sessions' verdicts keep yesterday's wall folded after a refresh.
     const remembered = community?.idHex && channelIdHex
       ? recallQuarantined(community.idHex, channelIdHex)
       : undefined;
@@ -669,11 +491,7 @@ export function useChannelTimeline(
     if (remembered) {
       quarantined = new Set(quarantined);
       for (const id of remembered) quarantined.add(id);
-      // A remembered verdict can predate the roster (or come from the badge
-      // path, which folds without one), so re-assert staff/self immunity over
-      // the merged set: a moderator's — or the reader's own — message must
-      // never be in the rendered quarantine, whatever a past session stored.
-      // (The fold already cleared them; this covers only the recall merge.)
+      // Re-assert staff/self immunity over recalled verdicts.
       const immune = (a: string) => a === readingUser?.pubkey || Boolean(moderation?.isStaff?.(a));
       for (const m of result.messages) if (quarantined.has(m.rumorId) && immune(m.author)) quarantined.delete(m.rumorId);
     }
@@ -685,40 +503,25 @@ export function useChannelTimeline(
     return merged;
   }, [raw, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev, revealTick]);
 
-  // A future-dated message the fold HELD (`foldTimeline` / FUTURE_HOLD_MS) is
-  // hidden until its `ms` is no longer ahead of now. Nothing else re-renders
-  // this timeline on its behalf — the fold's inputs don't change and no event
-  // arrives — so schedule a wake at that instant, exactly as `useActivePause`
-  // does for a bounded pause's `until`. Bumping `revealTick` re-runs the fold,
-  // which reads Date.now() afresh and lets the message back in.
+  // Wake the fold when a held future-dated message (FUTURE_HOLD_MS) comes due;
+  // nothing else re-renders this timeline for it.
   const nextRevealMs = folded.nextRevealMs;
   useEffect(() => {
     if (nextRevealMs === undefined) return;
-    // +1ms so the wake lands strictly PAST the ceiling the fold compares
-    // against, or it could re-arm on a message still a hair in the future.
+    // +1ms so the wake lands strictly past the fold's ceiling.
     const ms = nextRevealMs - Date.now() + 1;
     if (ms <= 0) {
       setRevealTick((n) => n + 1);
       return;
     }
-    // setTimeout's ceiling: a message dated absurdly far out (weeks) would
-    // otherwise fire immediately; clamp and re-arm via the tick.
+    // Clamp to setTimeout's max, or far-future dates fire immediately.
     const t = setTimeout(() => setRevealTick((n) => n + 1), Math.min(ms, 2_147_483_647));
     return () => clearTimeout(t);
   }, [nextRevealMs]);
 
-  // Remember what this fold decided (merge-only), so the verdict survives the
-  // session even when its evidence — history, arrival order, the wave around
-  // a message — won't be reloaded by the next one.
-  //
-  // PAUSE-collapsed ids are excluded, and the distinction is the whole reason
-  // the fold reports them separately. The memory exists for verdicts whose
-  // evidence won't come back; a pause's evidence is its folded head, which is
-  // always there and correctly STOPS applying the moment the pause lifts.
-  // Storing them here would make a transient directive permanent — the memory
-  // is merge-only and outlives the lift, so ordinary messages would stay
-  // collapsed forever, which is the "MUST NOT drop" of CORD-04 §8 reached by
-  // a slower route.
+  // Persist verdicts (merge-only) whose evidence won't reload. PAUSE-collapsed
+  // ids are excluded: a merge-only memory would make a transient pause
+  // permanent (violating CORD-04 §8 "MUST NOT drop").
   useEffect(() => {
     if (!community?.idHex || !channelIdHex || folded.quarantined.size === 0) return;
     const entries: Array<[string, number]> = [];
@@ -729,27 +532,11 @@ export function useChannelTimeline(
   }, [folded.quarantined, folded.paused, raw, community?.idHex, channelIdHex]);
 
   return {
-    /** The folded, moderated timeline + reaction tallies. */
     folded,
-    /**
-     * The RAW opened rows, pre-fold. The fold consumes Edits, deletes and
-     * reactions into their targets, so they exist nowhere else — and a Pin
-     * needs the Edit rumor itself to prove a revision (CORD-04 §7).
-     */
+    /** The RAW rows, pre-fold; a Pin needs the Edit rumor itself (CORD-04 §7). */
     raw,
-    // Loading skeleton gate: the LOCAL read, and nothing else. `isPending` is
-    // true from the moment the query mounts until its queryFn resolves, and
-    // that queryFn resolves on the rumor-store read — so a channel whose
-    // history is already in ArmadaDB paints as soon as IndexedDB answers,
-    // rather than sitting behind a relay round it doesn't need. Everything
-    // after that read (park drain, backfill, gap bridge) is network catch-up
-    // and surfaces as sync activity (`beginSyncTask` → SyncStatusIndicator and
-    // the timeline's `syncing` affordance), not as a loading state.
-    //
-    // Gated on `channel` so a query that is merely DISABLED (the community's
-    // channels haven't folded yet, or never will) reads as not-loading instead
-    // of hanging on a skeleton forever — `isPending` alone stays true for a
-    // disabled query.
+    // The LOCAL read only; network catch-up is sync activity. Gated on
+    // `channel` since a disabled query stays `isPending` forever.
     isLoading:
       Boolean(channel) &&
       (query.isPending || (focusIds.length > 0 && focusQuery.isPending)),
@@ -759,35 +546,17 @@ export function useChannelTimeline(
   };
 }
 
-// ── Sending ──────────────────────────────────────────────────────────────────
-
-/** The relay-publish surface {@link broadcastWrap} needs (a subset of NPool). */
 interface WrapPublisher {
   relay(url: string): { event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<unknown> };
 }
 
-/**
- * Grace period AFTER the failed/not-failed decision during which the relay
- * publishes keep running. A relay that ACKs slowly (past the signer's budget)
- * is still evidence the message reached a relay, so its late OK clears the
- * "failed" badge rather than leaving a delivered message looking unsent.
- */
+/** Publishes keep running this long after the failed decision so a late ACK clears "failed". */
 const LATE_ACK_GRACE_MS = 20_000;
 
 /**
- * Broadcast a wrap to the community relays, driving one message's optimistic
- * send status by rumor id through `onStatus`:
- *
- *  - the moment ANY relay accepts, clear the status — delivered; and if a retry
- *    had left it "failed", this is what retires that badge;
- *  - if NO relay accepts within the signer's publish budget, set "failed";
- *  - but keep the publishes running past that decision (the grace window), so a
- *    slow relay's LATE accept still clears a "failed" message. That late OK is
- *    the evidence the message DID reach a relay after we'd given up waiting —
- *    without it a delivered-but-slow send stays marked failed forever.
- *
- * Fire-and-forget: never throws. A non-visible kind (reaction/edit/delete)
- * passes a no-op `onStatus`, so it neither shows nor clears a badge.
+ * Broadcast a wrap, driving send status via `onStatus`: any accept clears it;
+ * no accept within the budget sets "failed", but a LATE accept within the
+ * grace window still clears it. Never throws.
  */
 export function broadcastWrap(
   nostr: WrapPublisher,
@@ -830,8 +599,7 @@ export function broadcastWrap(
       })
       .finally(() => {
         settled += 1;
-        // Every relay has answered and none accepted: settle on "failed" now
-        // rather than waiting out the grace window on a batch that's all done.
+        // All relays answered with no accept: fail now.
         if (settled === relays.length && !accepted) {
           clearTimeout(decide);
           onStatus("failed");
@@ -841,15 +609,9 @@ export function broadcastWrap(
 }
 
 /**
- * Send one chat-plane rumor: build (with the channel/epoch binding),
- * optimistically insert IMMEDIATELY, then sign the seal with the user's real
- * identity (a remote round-trip for NIP-46 logins), wrap under the CURRENT
- * epoch's stream key, and broadcast fire-and-forget. No pending spinner
- * the message is treated as sent the moment it renders —
- * clearing a spinner on the full broadcast meant awaiting every relay's OK,
- * so one dead relay held it for the whole publish timeout. A sign OR
- * broadcast failure marks the message "failed" (retry/discard) — it never
- * silently vanishes.
+ * Send one chat-plane rumor: insert optimistically, sign the seal (remote for
+ * NIP-46), wrap under the CURRENT epoch key, broadcast fire-and-forget. No
+ * pending spinner (one dead relay would hold it); failures mark it "failed", never vanish.
  */
 export function useSendMessage(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
@@ -857,10 +619,7 @@ export function useSendMessage(community: Community | undefined, channel: Channe
   const queryClient = useQueryClient();
   const channelIdHex = channel?.idHex ?? null;
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
-  // The community's disappearing-messages timer (CORD-08), read from the
-  // folded metadata at send time. A fold that hasn't landed reads as OFF —
-  // the tag as signed governs, so a client behind the head simply sends what
-  // it last knew, exactly the mixed-client behavior the CORD specifies.
+  // CORD-08 timer at send time; an unlanded fold reads as OFF (the signed tag governs).
   const { data: folded } = useControlFold(community);
   const timerSecs = messageExpirationOf(folded?.metadata);
 
@@ -881,63 +640,38 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       /** 9 message (default), 7 reaction, 5 delete, 3302 edit, 1111 thread reply. */
       kind?: number;
       /**
-       * Thread parent. Present ⇒ this rumor is a NIP-22 kind-1111 comment, tagged
-       * with `K`/`E`/`P` (root) + `k`/`e`/`p` (parent) by {@link buildConcordCommentTags}
-       * — NOT a kind-9 `q` (that's reserved for inline quote-replies, NIP-C7).
+       * Thread parent: makes this a NIP-22 kind-1111 comment ({@link buildConcordCommentTags}),
+       * NOT a kind-9 `q` (reserved for NIP-C7 quote-replies).
        */
       replyTo?: { id: string; kind: number; pubkey: string; tags: string[][] };
       /** `e`-target for reactions / deletes / edits. */
       target?: string;
       /** Kind of the `e`-target for deletes (NIP-09 `k` tag); defaults to message. */
       targetKind?: number;
-      /**
-       * Author of the `e`-target, for a NIP-25 `p` tag on reactions. Lives on
-       * the NIP-44-encrypted rumor (never the wrap), so it leaks nothing to the
-       * relay while making the reacted-to author recoverable to channel members.
-       */
+      /** NIP-25 `p` for reactions; on the encrypted rumor, so nothing leaks to relays. */
       targetPubkey?: string;
       /** Extra rumor tags appended verbatim (NIP-30 emoji, NIP-92 imeta, …). */
       extraTags?: string[][];
-      /**
-       * Override the rumor's millisecond timestamp (e.g. an edit republishes
-       * with the original's `ms` so it keeps its place in the timeline).
-       * Defaults to the current time.
-       */
+      /** Override the ms timestamp (edits keep the original's place). */
       ms?: number;
       /**
-       * Override the NIP-40 deadline instead of computing one from the current
-       * timer. A number pins it (an edit preserves the ORIGINAL rumor's signed
-       * `expiration` so the replacement disappears with the message it edits,
-       * not on the edit's own later clock); `null` pins "no expiration" (the
-       * original carried none — the timer was off when it was sent — so the edit
-       * must not sprout one from a timer turned on since). `undefined` = compute
-       * from send time + the community timer, the ordinary case.
+       * Override the NIP-40 deadline. A number pins it (edits keep the original's);
+       * `null` pins none; `undefined` computes from the community timer.
        */
       expiration?: number | null;
-      /**
-       * Skip the community send budget. Set by `retry`: re-sending a message a
-       * relay hiccup already failed is recovery, not new content, and a burst
-       * of failures must not spend the budget its own repair needs.
-       */
+      /** Skip the send budget (retries are recovery, not new content). */
       bypassRateLimit?: boolean;
     }) => {
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
-      // Death is one-way (CORD-02 §9). Gated at the PUBLISH, not just in the
-      // UI: `canWrite` is derived from a query that is undefined on its first
-      // tick, so a composer can be live for a moment before the verdict lands.
-      // This read is local and sticky — once dissolved, never writable again.
+      // CORD-02 §9: gated at publish because `canWrite` is undefined on first tick. Local and sticky.
       if ((await dissolvedAt(community.idHex)) !== undefined) {
         throw new Error("This community has been dissolved; it accepts no new messages.");
       }
 
-      // A threaded reply is a NIP-22 comment (kind 1111), not a kind-9 message.
       const effectiveKind = replyTo ? KIND_COMMENT : kind;
-      // Client-side spam speed bump, per community. Refused BEFORE the
-      // optimistic insert and the seal, so a blocked send leaves nothing in the
-      // timeline or the store to reconcile. The composer runs the same check
-      // (without spending) before it clears itself, so this throw is the
-      // backstop for the paths that don't — polls, thread replies, bots.
+      // Rate-limit before the optimistic insert/seal so a block leaves nothing to
+      // reconcile; backstop for paths the composer doesn't check.
       if (!bypassRateLimit && isRateLimitedKind(effectiveKind)) {
         const waitMs = consumeSend(community.idHex);
         if (waitMs > 0) throw new SendRateLimitError(waitMs);
@@ -946,30 +680,18 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       const tags: string[][] = [...channelBindingTags(channel.idHex, channel.current.epoch)];
       if (replyTo) tags.push(...buildConcordCommentTags(replyTo));
       if (target) tags.push(["e", target]);
-      // NIP-25: a reaction SHOULD carry a `p` for the reacted-to author. Safe
-      // in Concord — the tag lives on the NIP-44-encrypted rumor, never the wrap.
+      // NIP-25 `p` on the encrypted rumor, never the wrap.
       if (kind === KIND_REACTION && targetPubkey) tags.push(["p", targetPubkey]);
       if (kind === KIND_DELETE && target) tags.push(["k", String(targetKind ?? KIND_MESSAGE)]);
       if (extraTags) tags.push(...extraTags);
-      // CORD-08 §2: while the timer is set, every durable chat rumor except
-      // deletes (and timer notices) commits its NIP-40 deadline — send time
-      // plus the timer — inside the signed rumor; the wrap repeats it below so
-      // relays purge the ciphertext too. An explicit `expiration` override wins
-      // (an edit carries the original's deadline verbatim, `null` = none) so the
-      // replacement neither outlives the message it edits nor expires on the
-      // edit's own later clock.
+      // CORD-08 §2: durable chat rumors (not deletes/notices) sign a NIP-40
+      // deadline; the wrap repeats it so relays purge ciphertext. Override wins.
       const expiresAt =
         expiration !== undefined ? (expiration ?? undefined) : chatExpiresAt(effectiveKind, effectiveMs, timerSecs);
       if (expiresAt !== undefined) tags.push(["expiration", String(expiresAt)]);
 
       const rumor: NostrRumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
-      // The message renders IMMEDIATELY — before the seal, which for a
-      // NIP-46 login is a remote round-trip that can take seconds — and with
-      // NO pending spinner: the broadcast is near-instant in
-      // reality, and gating the spinner on the full broadcast meant one dead
-      // relay held it for the whole publish timeout. A message the user typed
-      // must never silently vanish: sign or broadcast failure flips it to
-      // "failed" (retry/discard affordance) instead of eating it.
+      // Render immediately, before the (possibly remote) seal; failures flip to "failed".
       const isVisible = effectiveKind === KIND_MESSAGE || effectiveKind === KIND_COMMENT || effectiveKind === KIND_POLL;
       const opened: OpenedChat = {
         rumorId: rumor.id,
@@ -979,8 +701,7 @@ export function useSendMessage(community: Community | undefined, channel: Channe
         tags,
         ms: effectiveMs,
         createdAt: rumor.created_at,
-        // Placeholders until sealed — the entry is re-upserted (same rumorId)
-        // with the real seal/wrap below, and is NOT persisted before that.
+        // Placeholders until sealed; not persisted before then.
         wrapId: "",
         streamPk: channel.current.group.pk,
         sealKind: KIND_SEAL_ENCRYPTED,
@@ -1008,7 +729,6 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       } catch (err) {
         logSync("send", `sealing ${rumor.id.slice(0, 8)} FAILED in ${sinceMs(sealStarted)}: ${err instanceof Error ? err.message : String(err)}`);
         if (isVisible) {
-          // The message stays in the timeline as failed — retryable.
           setStatus(rumor.id, "failed");
           return { rumorId: rumor.id, wrap: undefined };
         }
@@ -1017,14 +737,12 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
       const wrap = wrapSeal(seal, channel.current.group, expiresAt !== undefined ? { expiration: expiresAt } : undefined);
 
-      // The wrap is authored by the channel stream key rather than the user,
-      // so identify this exact relay event as local before its push can arrive.
+      // The wrap is authored by the stream key, so mark it ours before its push arrives.
       await markOwnWebPushEvent(wrap.id);
 
       const sealed: OpenedChat = { ...opened, seal, wrapId: wrap.id, streamPk: wrap.pubkey };
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [sealed]));
-      // Persist to the rumor cache so a refresh mid-flight keeps the message
-      // (and a self-delete removes its target via the store's NIP-09).
+      // Persist so a mid-flight refresh keeps it (and self-deletes apply via NIP-09).
       writeRumors(community.idHex, [sealed]);
 
       broadcastWrap(nostr, community.relays, wrap, user.method, (status) => {
@@ -1036,25 +754,18 @@ export function useSendMessage(community: Community | undefined, channel: Channe
   });
 }
 
-/** Retry / discard a failed optimistic message, and optimistic self-delete. */
 export function useMessageActions(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
-  // The fold supplies this actor's own Grant head, which a moderation delete
-  // cites (CORD-04 §5).
+  // Own Grant head, which a moderation delete cites (CORD-04 §5).
   const { data: folded } = useControlFold(community);
   const channelIdHex = channel?.idHex ?? null;
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
   const { mutateAsync: send } = useSendMessage(community, channel);
 
-  // Re-broadcast the ORIGINAL failed message under its own rumor id, so a
-  // message that actually reached a relay (a slow ACK we timed out on) is
-  // re-delivered as the SAME event and dedupes on arrival instead of appearing
-  // twice. The seal we already signed is reused verbatim when the failure was
-  // the broadcast; only a failure to seal in the first place (placeholder seal)
-  // re-signs — and even then buildRumor with the stored `ms`+tags reproduces
-  // the identical rumor id.
+  // Re-broadcast under the SAME rumor id so a slow-ACKed original dedupes.
+  // Reuse the signed seal when possible; otherwise buildRumor reproduces the id.
   const resend = useCallback(
     (msg: OpenedChat) => {
       if (!user || !community || !channel) return;
@@ -1075,14 +786,12 @@ export function useMessageActions(community: Community | undefined, channel: Cha
             });
             seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
           }
-          // Mirror the rumor's own signed NIP-40 onto the re-wrap so relays purge
-          // the ciphertext too (CORD-08 §2); the rumor inside is untouched.
+          // Mirror the rumor's NIP-40 onto the re-wrap (CORD-08 §2).
           const expTag = msg.tags.find((t) => t[0] === "expiration")?.[1];
           const expiration = expTag !== undefined && /^[0-9]+$/.test(expTag) ? Number(expTag) : undefined;
           const wrap = wrapSeal(seal, channel.current.group, expiration !== undefined ? { expiration } : undefined);
           await markOwnWebPushEvent(wrap.id);
-          // Keep the persisted copy current with the seal/wrap we just (re)built,
-          // so a refresh mid-flight keeps the message.
+          // Persist so a mid-flight refresh keeps it.
           writeRumors(community.idHex, [{ ...msg, seal, wrapId: wrap.id, streamPk: wrap.pubkey }]);
           broadcastWrap(nostr, community.relays, wrap, user.method, onStatus);
         } catch {
@@ -1099,24 +808,16 @@ export function useMessageActions(community: Community | undefined, channel: Cha
       const raw = queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? [];
       const msg = raw.find((m) => m.rumorId === id);
       if (!msg) return;
-      // Same epoch: re-send the ORIGINAL (preserve the rumor id). Optimistically
-      // clear the badge while it re-broadcasts — `broadcastWrap` re-asserts
-      // "failed" only if this attempt also finds no relay.
+      // `broadcastWrap` re-asserts "failed" only if this attempt finds no relay too.
       if (msg.epoch === channel.current.epoch) {
         setStatus(id, undefined);
         resend(msg);
         return;
       }
-      // The epoch rotated since the failure, retiring the binding the rumor id
-      // commits to — the one case a retry legitimately can't preserve the id, so
-      // re-send as a fresh rumor under the current epoch. A threaded reply
-      // (kind-1111 comment) carries its NIP-22 thread pointers in its own tags,
-      // so preserve them verbatim (minus the channel binding, which `send`
-      // re-adds) rather than rebuilding from a parent event.
+      // The epoch rotated, retiring the id's binding: re-send as a fresh rumor.
+      // Comments keep their NIP-22 thread tags (minus the channel binding `send` re-adds).
       const isComment = msg.kind === KIND_COMMENT;
-      // Also strip the failed attempt's `expiration` — the re-send computes a
-      // fresh one from its own send time, and duplicating the tag would make
-      // the binding ambiguous.
+      // Strip `expiration` too; the re-send computes a fresh one.
       const threadTags = isComment
         ? msg.tags.filter(([n]) => n !== "channel" && n !== "epoch" && n !== "expiration")
         : undefined;
@@ -1128,8 +829,7 @@ export function useMessageActions(community: Community | undefined, channel: Cha
         content: msg.content,
         kind: msg.kind,
         extraTags: threadTags,
-        // Repairing a failed send is not new content; a relay outage that
-        // failed a burst must not also exhaust the budget for retrying it.
+        // A failed burst must not exhaust the budget for retrying it.
         bypassRateLimit: true,
       }).catch(() => undefined);
     },
@@ -1146,14 +846,11 @@ export function useMessageActions(community: Community | undefined, channel: Cha
     [queryClient, channelIdHex, setStatus],
   );
 
-  /** Optimistic delete: hide now, publish the kind-5 in the background. */
   const deleteMessage = useCallback(
     (id: string) => {
       if (!user || !community || !channel) return;
-      // A delete of someone ELSE's message is an authority action, so it cites
-      // the Grant it acts under (CORD-04 §5) — without it a peer whose roster is
-      // one sweep stale cannot tell a moderator from a demoted one, and refuses
-      // the delete. A self-delete is not an authority action and never cites.
+      // Deleting someone else's message cites the Grant (CORD-04 §5) so stale
+      // peers can verify; self-deletes never cite.
       const target = (queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? [])
         .find((m) => m.rumorId === id);
       const moderating = Boolean(target && target.author !== user.pubkey);
@@ -1167,7 +864,7 @@ export function useMessageActions(community: Community | undefined, channel: Cha
         target: id,
         extraTags: citation ? [citationToTag(citation)] : undefined,
       }).catch(() => {
-        // Couldn't publish the delete — unhide so the user knows.
+        // Couldn't publish; unhide.
         queryClient.setQueryData<string[]>(deletedKey(channelIdHex), (old = []) => old.filter((d) => d !== id));
       });
     },
@@ -1177,7 +874,6 @@ export function useMessageActions(community: Community | undefined, channel: Cha
   return { retry, discard, deleteMessage };
 }
 
-/** The optimistic send-status map for a channel. */
 export function useSendStatus(channel: Channel | undefined): SendStatusMap {
   return useSendStatusMapValue(statusKey(channel?.idHex ?? null));
 }

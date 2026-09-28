@@ -1,17 +1,11 @@
 /**
- * The CORD-05 stock relay dictionary.
- *
- * Split out of `invite.ts` (which re-exports both names) so plain-data
- * consumers — the app config's community-relay default, the landing page's
- * relay lights — can read the set without pulling the fragment codec and its
- * crypto dependencies into their chunk. There is exactly one definition; edit
- * it here.
+ * The CORD-05 stock relay dictionary. A leaf module (re-exported by `invite.ts`)
+ * so config and the landing page avoid the codec's crypto deps.
  */
 
 /**
- * The stock relay dictionary, generation 4: four primaries every client knows,
- * referenced by a single byte. Versioned — it grows without breaking older
- * links; both Vector and Soapbox ship it identically.
+ * Stock relay dictionary, generation 4, referenced by a single byte. Versioned;
+ * Vector and Soapbox ship it identically.
  */
 export const RELAY_DICTIONARY: Record<number, string> = {
   1: "wss://jskitty.com/nostr",

@@ -15,10 +15,9 @@ const TYPING_WINDOW_MS = 8000;
 const TYPING_THROTTLE_MS = 4000;
 
 /**
- * Live "who is typing" for a Concord channel — the one EPHEMERAL action: a kind
- * 23311 rumor in a kind-21059 wrap at the channel's current address (CORD-02
- * Appendix B). Relays never store any layer, so this is subscription-only: a
- * live `req()` per relay feeds a decaying in-memory map.
+ * Live "who is typing" for a channel: kind 23311 rumor in a kind-21059 wrap at
+ * the channel's current address (CORD-02 Appendix B). Relays store nothing, so
+ * it's subscription-only into a decaying in-memory map.
  */
 export function useTyping(community: Community | undefined, channel: Channel | undefined): string[] {
   const { nostr } = useNostr();
@@ -36,8 +35,7 @@ export function useTyping(community: Community | undefined, channel: Channel | u
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
-    // Decay is a one-shot timer armed for the next signal to expire, so a
-    // channel nobody is typing in schedules no wakeups at all.
+    // One-shot timer for the next expiry, so an idle channel schedules no wakeups.
     let decay: ReturnType<typeof setTimeout> | undefined;
     const recompute = () => {
       if (decay) clearTimeout(decay);
@@ -72,8 +70,7 @@ export function useTyping(community: Community | undefined, channel: Channel | u
       }
     };
 
-    // One shared 21059 REQ per relay across every mounted channel — see
-    // `ephemeralSub.ts`.
+    // One shared 21059 REQ per relay across channels (see `ephemeralSub.ts`).
     const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
 
     return () => {

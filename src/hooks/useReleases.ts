@@ -12,17 +12,8 @@ import {
 } from "@/lib/releases";
 
 /**
- * Every published release of this build's repository, newest first.
- *
- * One query answers both halves of `/downloads` — the latest version's buttons
- * and the older-versions list — because artifacts are carried inline on the
- * release event rather than as separate events to resolve (see
- * `docs/releases.md`). There is no second round-trip and no partial state where
- * a version renders with some of its downloads missing.
- *
- * `authors` is not optional. `#D` alone would accept a release of "armada" from
- * anybody who cares to publish one, on a page whose entire output is
- * executables.
+ * Every release of this build's repository, newest first; artifacts ride inline on the release
+ * event (`docs/releases.md`). `authors` is mandatory: `#D` alone would accept anyone's executables.
  */
 export function useReleases() {
   const { nostr } = useNostr();
@@ -31,9 +22,7 @@ export function useReleases() {
     queryKey: ["releases", RELEASE_REPO_ID, RELEASE_RELAYS.join(",")],
     enabled: RELEASE_RELAYS.length > 0 && RELEASE_AUTHORS.length > 0,
     staleTime: 5 * 60_000,
-    // Unlike the static manifests this replaced, a failure here IS worth
-    // retrying: the page has no compiled-in fallback, so a cold pool or a slow
-    // relay is the difference between offering downloads and offering none.
+    // Retry: there's no compiled-in fallback for downloads.
     retry: 2,
     queryFn: async ({ signal }) => {
       const events = await nostr.group(RELEASE_RELAYS).query(

@@ -11,24 +11,15 @@ import {
 } from "@/lib/hiddenMessages";
 
 export interface HiddenMessages {
-  /** Ids hidden by this account, for the timeline filters. Stable reference. */
   hiddenIds: ReadonlySet<string>;
-  /** Whether hiding should be offered at all (there is an active account). */
   canHide: boolean;
-  /** Hide one message immediately, with an Undo toast. */
   hide: (id: string) => void;
   unhide: (id: string) => void;
 }
 
 /**
- * Everything a menu or timeline needs for per-message hiding, mirroring
- * {@link useMuteToggle}'s shape: the action sites get a one-liner, and the
- * undo lives in the toast because a hidden message appears in no list it
- * could be restored from.
- *
- * Reads the active account through the synchronous marker rather than the
- * login context, like {@link AppProvider} — the timeline filter must answer on
- * first render, and needs no signer.
+ * Undo lives in the toast: a hidden message appears in no list to restore it from. Reads the
+ * synchronous account marker (like {@link AppProvider}) so the filter answers on first render.
  */
 export function useHiddenMessages(): HiddenMessages {
   const pubkey = useSyncExternalStore(subscribeActivePubkey, getActivePubkey) ?? undefined;

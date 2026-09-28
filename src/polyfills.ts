@@ -1,7 +1,5 @@
-// Runtime polyfills. Imported FIRST by main.tsx as a side effect, so they are
-// in place before any other module evaluates — ES imports are hoisted, so a
-// call from main.tsx's body would run only after every import had already
-// been evaluated.
+// Imported FIRST by main.tsx so polyfills exist before any module evaluates
+// (imports are hoisted, so main.tsx's body would run too late).
 import { installAbortSignalPolyfills } from "@/lib/abortSignalPolyfill";
 
 installAbortSignalPolyfills();

@@ -1,10 +1,8 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Per-account proof that the notification settings currently in AppConfig are
- * not merely a fresh install's defaults. The proof is written only after a
- * persisted NIP-78 notification document has been applied, or a complete live
- * self-relay read has proved that document absent.
+ * Per-account proof that AppConfig notification settings aren't fresh-install
+ * defaults: written after a NIP-78 doc is applied, or a complete live read proves it absent.
  */
 const NOTIFICATION_SETTINGS_READY_PREFIX = "armada:notification-settings-ready:v1:";
 
@@ -29,12 +27,8 @@ export function notificationSettingsReady(pubkey: string | undefined): boolean {
 }
 
 /**
- * Whether the current AppConfig notification slice is the chosen policy.
- *
- * Turning automatic settings sync off is an explicit choice to use this
- * device's account-scoped config. That is session authority, but deliberately
- * not a durable NIP-78 proof: re-enabling sync must resume waiting for an
- * applied document or a complete live absence read.
+ * Whether the current notification settings are the chosen policy. Sync off is
+ * session authority but not a durable NIP-78 proof.
  */
 export function notificationPolicyIsAuthoritative(
   durableReady: boolean,
@@ -50,8 +44,7 @@ export function markNotificationSettingsReady(pubkey: string | undefined): void 
   try {
     localStorage.setItem(storageKey(pubkey), "1");
   } catch {
-    // The in-memory proof still protects this session. A future offline boot
-    // will conservatively wait for the stored document/source again.
+    // The in-memory proof still covers this session.
   }
   for (const listener of [...listeners]) listener();
 }
@@ -68,7 +61,6 @@ export function useNotificationSettingsReady(pubkey: string | undefined): boolea
   );
 }
 
-/** Test seam. Persistent state remains controlled by localStorage. */
 export function _resetNotificationSettingsAuthorityForTests(): void {
   readyAccounts.clear();
   listeners.clear();

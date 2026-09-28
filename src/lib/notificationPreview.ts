@@ -1,35 +1,12 @@
 /**
- * How a message is presented in a notification — one implementation, shared by
- * every surface that shows one.
- *
- * There are four notifiers in this project: the Android foreground service
- * (`NotificationRelayService.java`), the Web Push service worker (`public/sw.js`),
- * the in-app notifier that runs while a web/desktop client is open
- * (`useForegroundNotifications.ts`), and Electron by way of that same in-app
- * path. Android's is the one that reads well, and its text pipeline
- * (`NotificationContent.java`, `messagePreview`, `buildMessageText`) was itself
- * a port of the web client's preview rendering. This module is that pipeline
- * back in TypeScript, so the port has a source again instead of three
- * independent copies drifting apart.
- *
- * The shape it produces mirrors Android's `MessagingStyle`, because that is
- * what makes a conversation notification legible:
- *
- *   - a room (NIP-29 channel, Concord channel) titles the notification with
- *     the ROOM and puts the sender inside the body — "Armada / #general" +
- *     "alex: shipped it";
- *   - a DM has no conversation title, so the SENDER titles it and the body is
- *     the bare message — matching `setGroupConversation(false)`.
- *
- * Everything here is pure and platform-free: no DOM, no store, no network. The
- * caller resolves names, avatars and room images (each environment has its own
- * way to) and hands them in already resolved. That is what lets the same module
- * be bundled into the service worker, where none of the app's hooks exist.
+ * Notification presentation shared by every notifier (sw.js, the in-app
+ * notifier, Electron); a TypeScript port of Android's `NotificationContent.java`.
+ * Mirrors MessagingStyle: rooms are titled by the room with "sender: text"
+ * bodies; DMs are titled by the sender. Pure and platform-free, so it can be
+ * bundled into the service worker; callers pass names/images already resolved.
  */
 
-// The `nostr-tools/nip19` subpath, not the `nostr-tools` barrel: this module is
-// bundled into the service worker (`src/sw/`), where the barrel would drag the
-// whole library into a script that loads on every push.
+// `nostr-tools/nip19` subpath, not the barrel: this is bundled into the service worker.
 import { decode as nip19Decode } from "nostr-tools/nip19";
 
 import { ALL_MEDIA_EXTS } from "@/lib/mediaUrls";
@@ -45,52 +22,33 @@ export const NOTIFICATION_CONTENT_CAP = 140;
 export const NOTIFICATION_FALLBACK_ICON = "/favicon.png";
 
 /**
- * The small monochrome mark Android draws in the status bar (`badge`), the web
- * counterpart of `setSmallIcon(R.drawable.ic_stat_armada)`. It MUST be a
- * single-colour image on transparency: the platform discards colour and keeps
- * only the alpha channel, so a full-colour favicon here renders as a solid
- * blob.
- *
- * It is literally the same file the native build ships — a copy of
- * `drawable-xxxhdpi/ic_stat_armada.png`, which is already 96px — so a redraw
- * cannot leave the two clients showing different marks for the same
- * notification. `android/icon-src/ic_stat_armada.svg` is the source both come
- * from, and carries the Material live-area sizing rule.
+ * Monochrome status-bar mark (`badge`); must be single-colour on transparency
+ * (only alpha is used). Same file as Android's `drawable-xxxhdpi/ic_stat_armada.png`;
+ * source: `android/icon-src/ic_stat_armada.svg`.
  */
 export const NOTIFICATION_BADGE_ICON = "/badge-96.png";
 
 /**
- * A media URL plus any whitespace immediately before it, so stripping one out
- * of the middle of a sentence ("a <url> b") doesn't leave a double space.
- * Group 1 captures the extension so a media-only message can still be labelled
- * by kind. Mirrors `IMETA_MEDIA_URL_REGEX` and Android's `MEDIA_URL`.
+ * A media URL plus preceding whitespace (so stripping leaves no double space).
+ * Group 1 captures the extension. Mirrors `IMETA_MEDIA_URL_REGEX` and Android's `MEDIA_URL`.
  */
 const MEDIA_URL = new RegExp(`\\s*https?://\\S+\\.(${ALL_MEDIA_EXTS})(?:\\?\\S*)?`, "gi");
 
 /** A `nostr:npub…` / `nostr:nprofile…` (or bare) NIP-27 mention. */
 const MENTION = /(?:nostr:)?(npub1|nprofile1)[023456789acdefghjklmnpqrstuvwxyz]+/gi;
 
-/** Decode one `npub1…`/`nprofile1…` token to a hex pubkey, or undefined. */
 function mentionPubkey(token: string): string | undefined {
   try {
     const decoded = nip19Decode(token.replace(/^nostr:/i, "").toLowerCase());
     if (decoded.type === "npub") return decoded.data;
     if (decoded.type === "nprofile") return decoded.data.pubkey;
-  } catch {
-    // Not a valid, checksummed reference to a person — leave the token alone.
-  }
+  } catch { /* ignore */ }
   return undefined;
 }
 
 /**
- * Every pubkey named by a NIP-27 mention in `content`.
- *
- * Resolution itself is a separate step because naming a pubkey is async in the
- * page (a store read) and sync in the worker: callers collect the keys here,
- * resolve them however their environment can, and hand {@link cleanContent} the
- * resulting map. Names are NEVER worth a network round-trip — a notification is
- * the one surface with no time to wait — so a caller that can't answer locally
- * should simply omit the entry and let the raw token stand.
+ * Pubkeys named by NIP-27 mentions. Resolve them locally (never over the
+ * network) and pass the map to {@link cleanContent}; unresolved ones keep the raw token.
  */
 export function mentionPubkeys(content: string): string[] {
   const out = new Set<string>();
@@ -101,14 +59,7 @@ export function mentionPubkeys(content: string): string[] {
   return [...out];
 }
 
-/**
- * Strip inline media URLs and resolve mentions to `@name`.
- *
- * Media URLs the UI would render as an embed carry no textual meaning in a
- * notification, so "lol https://blossom.example/abcd.jpg" reads "lol". Non-media
- * links (an article URL) are kept verbatim. An author `names` can't name keeps
- * its raw token rather than showing a wrong one.
- */
+/** Strip embeddable media URLs and resolve mentions to `@name` (unknown names keep the raw token). */
 export function cleanContent(content: string, names?: Map<string, string>): string {
   if (!content) return "";
   return content
@@ -122,13 +73,9 @@ export function cleanContent(content: string, names?: Map<string, string>): stri
 }
 
 /**
- * Human label for the media a message carries — so a body left empty by
- * {@link cleanContent} can read "Sent an image" instead of "Sent a message".
- *
- * The imeta `m` MIME wins over the URL extension when given: an encrypted
- * (Concord / DM) attachment's blob URL carries no media extension at all, and a
- * voice message recorded into a `.webm`/`.mp4` container is only
- * distinguishable from video by its `audio/*` MIME.
+ * Label for attached media ("Sent an image"). The imeta MIME beats the URL
+ * extension: encrypted blob URLs have none, and voice notes in .webm/.mp4 are
+ * only distinguishable by `audio/*`.
  */
 export function mediaLabel(imetaMime: string | undefined, content: string): string | undefined {
   const byMime = labelForMime(imetaMime);
@@ -164,13 +111,8 @@ function mimeForMediaExt(ext: string): string | undefined {
 }
 
 /**
- * The MIME of the first NIP-92 `imeta` attachment, when the message declares
- * one.
- *
- * Deliberately a few lines rather than a call into `imeta.ts`: this module is
- * bundled into the service worker, the label only ever needs the `m` field, and
- * an encrypted attachment's URL — the case the MIME exists to cover — is
- * exactly the one whose entry `parseImetaMap` keys by an opaque blob address.
+ * MIME of the first NIP-92 `imeta`. Not via `imeta.ts`: this is bundled into the
+ * service worker and only needs `m`.
  */
 export function firstImetaMime(tags: string[][]): string | undefined {
   for (const tag of tags) {
@@ -182,13 +124,7 @@ export function firstImetaMime(tags: string[][]): string | undefined {
   return undefined;
 }
 
-/**
- * Whether a message is a reply inside a thread rather than to the room.
- *
- * Two signals, matching the Android service: a kind-1111 NIP-22 comment is
- * always one, and a Concord chat message carries the thread root in the
- * uppercase `E` tag NIP-22 pins the root with. A top-level message has neither.
- */
+/** Thread reply (matching Android): kind-1111 NIP-22 comment, or an uppercase `E` root tag (Concord). */
 export function isThreadReply(kind: number, tags: string[][]): boolean {
   if (kind === 1111) return true;
   return tags.some((tag) => tag[0] === "E" && typeof tag[1] === "string" && tag[1] !== "");
@@ -205,53 +141,32 @@ export function reactionEmoji(content: string | undefined): string {
   const raw = (content ?? "").trim();
   if (raw === "" || raw === "+") return "👍";
   if (raw === "-") return "👎";
-  // A `:shortcode:` custom emoji has no glyph here; the bare word reads better
-  // than the colons.
+  // A `:shortcode:` has no glyph here; show the bare word.
   const shortcode = /^:([^:\s]+):$/.exec(raw);
   return shortcode ? shortcode[1] : raw;
 }
 
 /** What a notification needs to know about one message. */
 export interface NotificationMessage {
-  /** Which plane it arrived on — DMs present differently (see the header). */
   plane: "nip29" | "dm" | "c2";
-  /** Message kind: NIP-29 9/1111/7, or the decrypted rumor kind (9/1111/7/14/15). */
+  /** NIP-29 9/1111/7, or the decrypted rumor kind (9/1111/7/14/15). */
   kind: number;
-  /** Raw message content, before media stripping / mention resolution. */
   content: string;
-  /** Sender's display name, already resolved. */
   authorName: string;
-  /** Sender's avatar URL, already resolved. */
   authorAvatar?: string;
-  /**
-   * The room's display title — "Community / #channel" for Concord, the group
-   * name for NIP-29. Unused for DMs, which the sender titles.
-   */
+  /** "Community / #channel" (Concord) or group name (NIP-29). Unused for DMs. */
   roomTitle?: string;
-  /**
-   * The room's image (Concord community icon, NIP-29 group picture), already
-   * resolved to something an `icon` can load. Falls back to the sender's
-   * avatar, which is all a DM ever has.
-   */
+  /** Room image (Concord icon, NIP-29 picture), already loadable. Falls back to the sender's avatar. */
   roomImage?: string;
-  /** Whether it `p`-tags the viewer. */
   mention?: boolean;
-  /** Whether it is a reaction to one of the viewer's OWN messages. */
+  /** A reaction to one of the viewer's OWN messages. */
   reaction?: boolean;
-  /** Whether it is a reply inside a thread rather than to the room. */
   threadReply?: boolean;
-  /** The imeta `m` MIME, when the message carries an attachment. */
   imetaMime?: string;
-  /** Resolved names for the pubkeys {@link mentionPubkeys} found, if any. */
   mentionNames?: Map<string, string>;
 }
 
-/**
- * The body text for one message line, before the sender is prefixed.
- *
- * Thread replies get a Signal-style "Replied in thread: …" prefix, because the
- * notification has to make sense without the parent message beside it.
- */
+/** Body text for one message; thread replies get Signal-style "Replied in thread: …". */
 export function messageLine(msg: NotificationMessage): string {
   if (msg.reaction) return `Reacted ${reactionEmoji(msg.content)} to your message`;
 
@@ -260,7 +175,6 @@ export function messageLine(msg: NotificationMessage): string {
   if (cleaned) {
     text = msg.threadReply ? `Replied in thread: ${cleaned}` : cleaned;
   } else {
-    // Stripping the URLs left nothing: name the media rather than the act.
     const label = mediaLabel(msg.imetaMime, msg.content);
     if (label) text = `Sent ${label}`;
     else if (msg.kind === KIND_DM_FILE) text = "Sent a file";
@@ -268,8 +182,7 @@ export function messageLine(msg: NotificationMessage): string {
     else text = msg.plane === "dm" ? "Sent you a direct message" : "Sent a message";
   }
 
-  // A mention is the reason this notification interrupted at all; say so where
-  // the room, not the sender, is the title.
+  // Where the room is the title, flag the mention in the body.
   return msg.mention && msg.plane !== "dm" ? `@you ${text}` : text;
 }
 
@@ -282,12 +195,8 @@ export interface PresentedNotification {
 }
 
 /**
- * Title, body and icon for one message, in the MessagingStyle shape.
- *
- * `lines` lets a busy conversation read as a thread rather than showing only
- * the newest message — the closest a Web Notification gets to MessagingStyle's
- * expansion. Pass the room's recent lines (this one last); pass nothing for a
- * single-line body.
+ * Title, body and icon for one message, MessagingStyle-shaped. `lines` are the
+ * room's recent lines (this one last) so busy rooms read as a thread.
  */
 export function presentNotification(
   msg: NotificationMessage,
@@ -296,8 +205,7 @@ export function presentNotification(
   const line = messageLine(msg);
   const isDm = msg.plane === "dm";
 
-  // A DM's own line needs no attribution — the title is the sender. A room's
-  // does, exactly as MessagingStyle attributes each line to its Person.
+  // Room lines are attributed to their sender; DM lines aren't (the title is the sender).
   const attributed = isDm ? line : `${msg.authorName}: ${line}`;
   const body = lines && lines.length > 0 ? lines.join("\n") : attributed;
 

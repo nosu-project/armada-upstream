@@ -19,17 +19,13 @@ import { relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 interface BuzzInviteEmbedProps {
-  /** The full invite URL as it appeared in the message. */
   url: string;
   className?: string;
 }
 
 /**
- * Discord-style "join" card for a Buzz / NIP-29 relay invite link posted in
- * chat (`https://<host>/invite/<code>`). Unlike a Concord invite, this is an
- * HTTP claim against the relay: we preview the relay's NIP-11 name/icon and
- * offer a one-tap Join. A relay that requires a join policy sends the user to
- * the full invite page, where the terms can be shown and accepted.
+ * Join card for a Buzz / NIP-29 relay invite link (`https://<host>/invite/<code>`).
+ * A relay with a join policy hands off to the full invite page.
  */
 export function BuzzInviteEmbed({ url, className }: BuzzInviteEmbedProps) {
   const invite = parseBuzzInviteUrl(url);
@@ -76,9 +72,7 @@ function BuzzInviteCard({
         if (!cancelled) setPreview(info ?? {});
       })
       .catch(() => {
-        // A blocked/failed NIP-11 fetch must not turn a joinable invite into an
-        // error card — the claim is an HTTP POST that CORS doesn't gate the same
-        // way, so fall back to the bare host as the name.
+        // NIP-11 may be CORS-blocked while the claim POST isn't; fall back to the host.
         if (!cancelled) setPreview({});
       });
     return () => {
@@ -96,17 +90,14 @@ function BuzzInviteCard({
     setJoining(true);
     setError(null);
     try {
-      // A relay with a join policy needs the terms shown and accepted first —
-      // hand off to the full invite page rather than claim blind here.
       const policy = await fetchBuzzJoinPolicy(invite.origin).catch(() => undefined);
       if (policy) {
         navigate(`/invite/${encodeURIComponent(invite.code)}?r=${encodeURIComponent(invite.host)}`);
         return;
       }
       await claimBuzzInvite(user.signer, invite);
-      // The kind 10009 list is the only store for added servers, so this write
-      // IS the add — awaited so a rejected publish surfaces as an error rather
-      // than a rail icon that vanishes at the next sync.
+      // Kind 10009 is the only store for added servers, so this write IS the add.
+      // Awaited so a rejected publish surfaces as an error.
       await updateList({ type: "add-server", url: invite.relayUrl });
       toast({ title: "Joined", description: preview?.name || invite.host });
       navigate(`/s/${relayToRouteParam(invite.relayUrl)}`);

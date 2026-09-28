@@ -1,14 +1,9 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * The landing's product captures, as Blossom blobs rather than files in the
- * static build. Each is on all three of the app's default servers; the URL
- * names the first and `CAPTURE_MIRRORS` the rest, so `FallbackImage` walks to
- * another copy when one server is down — the same walk every other image takes,
- * under the same media policy.
- *
- * Regenerating them (`e2e/landing-screenshots.spec.ts`) writes local files;
- * upload those and replace the hashes here.
+ * Landing captures as Blossom blobs on all three default servers; the URL names
+ * the first and `CAPTURE_MIRRORS` the rest for `FallbackImage`. Regenerate with
+ * `e2e/landing-screenshots.spec.ts`, upload, and replace the hashes here.
  */
 
 export type CaptureSize = "desktop" | "mobile";
@@ -39,13 +34,11 @@ const HASHES: Record<string, Record<CaptureSize, string>> = {
   },
 };
 
-/** The capture's primary URL, or `undefined` for a slug with none. */
 export function captureUrl(slug: string, size: CaptureSize): string | undefined {
   const hash = HASHES[slug]?.[size];
   return hash ? `${PRIMARY}/${hash}.webp` : undefined;
 }
 
-/** The same blob on the other servers, as declared fallbacks. */
 export function captureMirrors(slug: string, size: CaptureSize): string[] {
   const hash = HASHES[slug]?.[size];
   return hash ? MIRRORS.map((server) => `${server}/${hash}.webp`) : [];
@@ -62,7 +55,6 @@ function subscribe(onChange: () => void): () => void {
 
 const getSize = (): CaptureSize => (window.matchMedia(PHONE_QUERY).matches ? "mobile" : "desktop");
 
-/** Which capture fits this viewport: the phone one under `sm`. */
 export function useCaptureSize(): CaptureSize {
   return useSyncExternalStore(subscribe, getSize);
 }

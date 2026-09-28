@@ -12,45 +12,31 @@ import type { MessageReactions } from "@/components/chat/transport";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * A NIP-25 reaction, identified by its display emoji. A `+` or empty content
- * is normalized to 👍 and `-` to 👎; custom NIP-30 emoji keep their
- * `:shortcode:` form and carry the image URL from the reaction's `emoji` tag.
+ * A NIP-25 reaction by display key: `+`/empty → 👍, `-` → 👎; NIP-30 emoji keep `:shortcode:`
+ * with the image URL from the `emoji` tag.
  */
 export interface ReactionTally {
-  /** The normalized reaction key (emoji, 👍/👎, or `:shortcode:`). */
   key: string;
   /** Custom emoji image URL when the key is a `:shortcode:`. */
   url?: string;
-  /** Number of distinct pubkeys that reacted with this key. */
+  /** Distinct pubkeys that reacted with this key. */
   count: number;
-  /** The distinct pubkeys that reacted with this key, in reaction order. */
   pubkeys: string[];
-  /** Whether the current user reacted with this key. */
   mine: boolean;
-  /** The current user's reaction event id for this key (used to retract it). */
+  /** The user's reaction event id for this key (to retract it). */
   mineEventId?: string;
 }
 
 export interface ReactInput {
-  /** The display key being toggled (emoji, 👍/👎, or `:shortcode:`). */
   key: string;
   /** Raw content to publish (e.g. `+`, the emoji, or `:shortcode:`). */
   content: string;
-  /** Custom emoji image URL when reacting with a `:shortcode:`. */
   emojiUrl?: string;
-  /**
-   * When set, remove the user's prior reaction (by its event id) instead of
-   * adding a new one — publishes a NIP-09 kind-5 deletion targeting it.
-   */
+  /** Remove the user's prior reaction instead (NIP-09 kind-5 deletion). */
   mineEventId?: string;
 }
 
-/**
- * NIP-30 custom-emoji tag for a reaction: when the content is a `:shortcode:`
- * with an image URL, the pill renders the image via an `["emoji", code, url]`
- * tag. Native/unicode reactions carry no extra tag. Shared by NIP-29 group
- * reactions and Concord so both build the tag identically.
- */
+/** NIP-30 `["emoji", code, url]` tag for a `:shortcode:` reaction. Shared by NIP-29 and Concord. */
 export function customEmojiReactionTags(content: string, emojiUrl?: string): string[][] {
   if (emojiUrl && content.startsWith(":") && content.endsWith(":")) {
     return [["emoji", content.slice(1, -1), emojiUrl]];
@@ -58,26 +44,17 @@ export function customEmojiReactionTags(content: string, emojiUrl?: string): str
   return [];
 }
 
-/** Normalize a kind 7 reaction's content into a display key. */
 export function reactionKey(event: NostrRumor): string {
   return reactionContentKey(event.content);
 }
 
-/** Normalize raw reaction content into a display key (`+`/`` → 👍, `-` → 👎). */
 export function reactionContentKey(content: string): string {
   if (content === "+" || content === "") return "👍";
   if (content === "-") return "👎";
   return content;
 }
 
-/**
- * Tally a flat list of reaction events into per-key tallies for one message.
- *
- * `muted` drops reactors the user has muted before anything is counted, so the
- * pill's number, its hover list of names and `mine` all agree — a muted person
- * shouldn't be able to put a name in a tooltip or a +1 on a count any more than
- * they can put a message on the timeline.
- */
+/** `muted` reactors are dropped before counting, so counts, names and `mine` agree. */
 function tallyReactions(
   reactions: NostrRumor[],
   userPubkey: string | undefined,
@@ -112,15 +89,12 @@ function tallyReactions(
   return [...byKey.values()].sort((a, b) => b.count - a.count);
 }
 
-/** Shared empty tally array so a message with no reactions keeps a stable prop. */
+/** Stable empty prop for messages without reactions. */
 const EMPTY_TALLIES: ReactionTally[] = [];
 
 /**
- * How long a reaction is trusted from the query cache alone before the
- * IndexedDB mirror becomes authoritative for it. Live-subscription events are
- * mirrored to the store best-effort and asynchronously, so a just-arrived
- * reaction is legitimately missing from a store read; a minute later, missing
- * means deleted.
+ * Live events are mirrored to the store asynchronously, so a fresh reaction may be missing
+ * from a store read; after this long, missing means deleted.
  */
 const MIRROR_GRACE_SECONDS = 60;
 
@@ -129,31 +103,16 @@ function reactionsKey(relayUrl: string | undefined, groupId: string | undefined)
 }
 
 /**
- * Load and toggle NIP-25 reactions (kind 7) for a whole NIP-29 group in ONE
- * batched query, keyed by the ids of the messages currently in view.
- *
- * This replaces the previous per-message `useReactions` fan-out (one relay
- * query + one live subscription PER rendered message — 50 messages meant 50
- * queries). Mirroring Concord's `useConcordReactions`, we fetch every reaction
- * referencing the loaded messages in a single `#e` query, tally them into a
- * `Map<messageId, ReactionTally[]>`, and expose a `reactionsFor(id)` accessor
- * that returns the shared {@link MessageReactions} shape per row.
- *
- * Local-first like {@link useGroupMessages}: the store (NostrBatcher mirrors
- * every reaction the relay ever returned into IndexedDB) is read immediately so
- * reactions paint with the timeline, then a background relay refresh + a single
- * live subscription keep them current.
+ * NIP-25 reactions for a whole NIP-29 group in ONE batched `#e` query over the visible ids
+ * (like Concord's `useConcordReactions`), with `reactionsFor(id)` per row. Local-first from the
+ * store, then a background refresh + one live subscription.
  */
 export function useGroupReactions(
   relayUrl: string | undefined,
   groupId: string | undefined,
   messageIds: string[],
   opts?: {
-    /**
-     * The react-query cache key holding this room's message list, used to
-     * resolve a reaction's target event at click time. Defaults to the NIP-29
-     * messages key; Buzz channels pass their own (see useBuzzMessages).
-     */
+    /** Messages cache key for resolving targets at click time; Buzz channels pass their own. */
     messagesKey?: readonly unknown[];
   },
 ): { reactionsFor: (id: string) => MessageReactions } {
@@ -165,12 +124,9 @@ export function useGroupReactions(
   const queryClient = useQueryClient();
   const queryKey = reactionsKey(relayUrl, groupId);
 
-  // The set of message ids to resolve reactions for. Sorted + joined so the
-  // effect/query deps are a stable primitive (not a fresh array each render).
+  // Stable primitive dep.
   const idsSig = useMemo(() => [...messageIds].sort().join(","), [messageIds]);
 
-  // All reactions in this group, keyed by message id. A single query for the
-  // whole visible window instead of one per message.
   const reactionsQuery = useQuery<Map<string, NostrRumor[]>>({
     queryKey,
     queryFn: async ({ signal }) => {
@@ -178,15 +134,12 @@ export function useGroupReactions(
       if (!relayUrl || !groupId || ids.length === 0) return new Map();
       const store = await eventStore;
 
-      // A generous cap so each per-id index cursor stops early instead of being
-      // walked to exhaustion (NIndexedDB stops a cursor at `limit` matches), so
-      // the scan cost scales with the window, not the whole reaction history.
+      // Cap so each per-id index cursor stops early (scan cost scales with the window).
       const limit = ids.length * 20;
 
-      // 1. LOCAL-FIRST: read mirrored reactions out of IndexedDB immediately.
       const cached = await store.query([{ kinds: [KIND_REACTION], "#e": ids, limit }]);
 
-      // 2. BACKGROUND refresh from the relay (NOT awaited — never gates render).
+      // Not awaited — never gates render.
       void (async () => {
         if (signal.aborted) return;
         try {
@@ -203,16 +156,8 @@ export function useGroupReactions(
         }
       })();
 
-      // Union the store read with what's already cached, but let the store
-      // PRUNE anything settled. Returning the store read alone discarded every
-      // reaction merged in since the last run — the live subscription's and the
-      // background refresh's — so each `onSuccess` invalidation below removed
-      // pills that reappeared a moment later when the refresh resolved. A plain
-      // union would fix the flicker but resurrect deleted reactions, since the
-      // store self-applies NIP-09 and a delete shows up only as an ABSENCE
-      // here. So: a reaction older than the mirror grace has had time to reach
-      // IndexedDB, and its absence there means deleted; a fresher one may
-      // simply not be mirrored yet, so it's kept.
+      // Union with the cache, but let the store PRUNE settled reactions: NIP-09 deletes show up only
+      // as absence, and a fresh reaction may not be mirrored yet (see MIRROR_GRACE_SECONDS).
       const prev = queryClient.getQueryData<Map<string, NostrRumor[]>>(queryKey);
       const settledBefore = Math.floor(Date.now() / 1000) - MIRROR_GRACE_SECONDS;
       const unmirrored: NostrRumor[] = [];
@@ -231,7 +176,6 @@ export function useGroupReactions(
     staleTime: 15_000,
   });
 
-  // One live subscription for the whole group (replaces one-per-message).
   useEffect(() => {
     if (!relayUrl || !groupId || !idsSig) return;
     const ids = idsSig.split(",");
@@ -260,9 +204,7 @@ export function useGroupReactions(
   }, [nostr, relayUrl, groupId, idsSig, queryClient]);
 
   const react = useMutation({
-    // Removing a reaction has to drop it from the cache up front: the queryFn's
-    // grace window would otherwise hold a just-added reaction on screen for the
-    // whole window, since a NIP-09 delete registers only as an absence.
+    // Drop removals up front, or the grace window would keep them on screen.
     onMutate: ({ mineEventId }: { target: NostrRumor } & ReactInput) => {
       if (!mineEventId) return;
       queryClient.setQueryData<Map<string, NostrRumor[]>>(queryKey, (old) => {
@@ -277,10 +219,7 @@ export function useGroupReactions(
     },
     mutationFn: async ({ target, content, emojiUrl, mineEventId }: { target: NostrRumor } & ReactInput) => {
       if (mineEventId) {
-        // Removing: publish a NIP-09 kind-5 deletion of the user's prior
-        // reaction event. The store self-applies NIP-09 (same-author delete),
-        // so the reaction is removed from the local cache immediately; the
-        // relay enforces author-only deletion on its side.
+        // The store self-applies same-author NIP-09; the relay enforces author-only deletion.
         await createEvent({
           kind: KIND_DELETE,
           content: "",
@@ -307,7 +246,6 @@ export function useGroupReactions(
     },
   });
 
-  // Per-message tallies, derived once from the batched reaction map.
   const talliesById = useMemo(() => {
     const out = new Map<string, ReactionTally[]>();
     const map = reactionsQuery.data;
@@ -318,10 +256,8 @@ export function useGroupReactions(
     return out;
   }, [reactionsQuery.data, user?.pubkey, mutedPubkeys]);
 
-  // Stable `react` closures + `MessageReactions` objects per id, so a row whose
-  // tally didn't change keeps a stable `reactions` prop (preserving React.memo).
-  // The mutation's `mutate` identity churns each render, so we hold it in a ref
-  // and read it at click time rather than capturing it in the closure.
+  // Stable closures/objects per id so unchanged rows keep React.memo; `mutate` churns, so read it
+  // from a ref at click time.
   const reactRef = useRef(react.mutate);
   reactRef.current = react.mutate;
   const reactCache = useRef(new Map<string, (input: ReactInput) => void>());
@@ -335,7 +271,7 @@ export function useGroupReactions(
       if (hit && hit.tallies === tallies) return hit.value;
       let fn = reactCache.current.get(id);
       if (!fn) {
-        // Resolve the target event from the messages cache lazily at click time.
+        // Resolve the target from the messages cache lazily at click time.
         const reactFn = (input: ReactInput) => {
           const messages =
             queryClient.getQueryData<NostrRumor[]>(messagesKey) ?? [];
@@ -349,8 +285,7 @@ export function useGroupReactions(
       objCache.current.set(id, { tallies, value });
       return value;
     },
-    // messagesKey is an array literal at the call site; its parts are covered
-    // by relayUrl/groupId at every caller.
+    // messagesKey's parts are covered by relayUrl/groupId at every caller.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [talliesById, queryClient, relayUrl, groupId],
   );
@@ -358,7 +293,6 @@ export function useGroupReactions(
   return { reactionsFor };
 }
 
-/** Bucket a flat reaction list into `target id → reactions`. */
 function groupReactionsByTarget(reactions: NostrRumor[]): Map<string, NostrRumor[]> {
   const out = new Map<string, NostrRumor[]>();
   for (const r of reactions) {
@@ -371,7 +305,7 @@ function groupReactionsByTarget(reactions: NostrRumor[]): Map<string, NostrRumor
   return out;
 }
 
-/** Merge new reactions into an existing target→reactions map (de-duped by id). */
+/** De-duped by id. */
 function mergeReactions(
   old: Map<string, NostrRumor[]> | undefined,
   incoming: NostrRumor[],

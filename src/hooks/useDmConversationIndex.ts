@@ -38,7 +38,6 @@ function notify(): void {
   for (const listener of listeners) listener();
 }
 
-/** Warm the async ArmadaDB-backed caches before any read-modify-write. */
 export function readyDmConversationIndex(): Promise<void> {
   if (shardStore.warmed && mergedStore.warmed) return Promise.resolve();
   warmPromise ??= Promise.all([shardStore.ready(), mergedStore.ready()]).then(() => {
@@ -60,7 +59,7 @@ function randomDeviceId(): string {
     .slice(0, 64);
 }
 
-/** Stable, opaque installation id; account-scoped so account switching cannot alias shards. */
+/** Account-scoped so account switching cannot alias shards. */
 export function dmConversationDeviceId(pubkey: string): string {
   const held = deviceIdMemory.get(pubkey);
   if (held) return held;
@@ -131,8 +130,7 @@ async function saveOwn(pubkey: string, shard: DmConversationIndexShard): Promise
   ownShardCache.set(pubkey, byBucket);
   const id = ownShardStoreId(pubkey, shard.bucket);
   shardStore.set(id, fitted);
-  // KvPrefixCache writes through for ordinary cache users. Await a direct copy
-  // here as well: this shard is the durable dirty state after signer refusal.
+  // Await a direct copy too: this shard is the durable dirty state after signer refusal.
   await getArmadaDB().kv.set(`${SHARD_STORE_PREFIX}${id}`, fitted).catch(() => undefined);
 }
 
@@ -153,7 +151,6 @@ function sameRecords(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** Current durable union, newest first. */
 export async function getDmConversationIndexRecords(
   pubkey: string,
 ): Promise<DmConversationIndexRecord[]> {
@@ -168,10 +165,7 @@ export async function loadOwnDmConversationIndexShards(
   return loadOwnShards(pubkey);
 }
 
-/**
- * Record only rows already classified into the main inbox by DMsPage. Callers
- * must not pass request-tier rows; validation here supplies a second boundary.
- */
+/** Main-inbox rows only (classified by DMsPage); never request-tier rows. */
 export async function recordDmConversationIndex(
   pubkey: string,
   records: readonly DmConversationIndexRecord[],
@@ -209,7 +203,6 @@ export async function recordDmConversationIndex(
   return true;
 }
 
-/** Fold valid remote installation shards into the local add-only union. */
 export async function hydrateDmConversationIndexShards(
   pubkey: string,
   shards: readonly DmConversationIndexShard[],
@@ -288,7 +281,7 @@ function snapshot(pubkey: string | undefined): DmConversationIndexRecord[] {
   return records;
 }
 
-/** Local account-scoped roster; network ownership lives in NostrSync. */
+/** Network ownership lives in NostrSync. */
 export function useDmConversationIndex(): DmConversationIndexRecord[] {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
@@ -302,7 +295,6 @@ export function useDmConversationIndex(): DmConversationIndexRecord[] {
   );
 }
 
-/** True once the local ArmadaDB index has finished its cold-start warm. */
 export function useDmConversationIndexReady(): boolean {
   return useSyncExternalStore(
     (listener) => {
@@ -315,7 +307,7 @@ export function useDmConversationIndexReady(): boolean {
   );
 }
 
-/** Test seam; account data itself is normally cleared by ArmadaDB logout. */
+/** Test seam; account data is normally cleared by ArmadaDB logout. */
 export async function resetDmConversationIndexCache(): Promise<void> {
   ownShardCache.clear();
   mergedCache.clear();

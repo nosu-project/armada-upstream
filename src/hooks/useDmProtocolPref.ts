@@ -4,27 +4,19 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { dmScopeKey } from "@/hooks/useNotifLevels";
 
 /**
- * A per-conversation DM encryption preference:
- *   - `auto`  — the default. Prefer private NIP-17 (gift-wrapped kind 14),
- *               falling back to legacy NIP-04 only on explicit opt-in.
- *   - `nip17` — always send private (NIP-17), best-effort to shared relays
- *               when the peer hasn't published a kind-10050 inbox.
- *   - `nip04` — always send legacy kind-4 (a privacy downgrade).
+ * Per-conversation DM encryption preference:
+ * - `auto`: prefer NIP-17; NIP-04 only on explicit opt-in.
+ * - `nip17`: always NIP-17, best-effort to shared relays without a peer kind-10050.
+ * - `nip04`: always legacy kind-4 (a privacy downgrade).
  */
 export type DmProtocolPref = "auto" | "nip17" | "nip04";
 
 export interface UseDmProtocolPrefReturn {
-  /** The chosen protocol for this peer (`auto` when nothing is set). */
   pref: DmProtocolPref;
-  /** Set (or reset to `auto`) the protocol for this peer, persisted + synced. */
   setPref: (next: DmProtocolPref) => void;
 }
 
-/**
- * Read/write the user's per-conversation DM encryption preference for `peer`,
- * persisted to app config (keyed by `dm:${pubkey}`) and synced across devices.
- * `auto` entries are pruned so the map stays sparse.
- */
+/** Persisted to app config under `dm:${pubkey}` and synced; `auto` entries are pruned. */
 export function useDmProtocolPref(peer: string): UseDmProtocolPrefReturn {
   const { config, updateConfig } = useAppContext();
   const key = dmScopeKey(peer);

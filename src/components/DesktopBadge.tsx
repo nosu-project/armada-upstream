@@ -9,23 +9,12 @@ import { useRelayUnread } from "@/hooks/useRelayUnread";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isDesktop, setDesktopBadge } from "@/lib/desktop";
 
-/**
- * Reports the user's total unread/mention count to the desktop shell so it can
- * show a tray / OS badge. Renders nothing, and does nothing on the web (the
- * desktop bridge is absent).
- *
- * Reuses the same per-relay and per-community unread computations the server
- * rail uses. One child subscribes per NIP-29 server and one per Concord
- * community; the parent sums their counts and pushes the total through the
- * bridge. (The macOS badge previously counted only NIP-29 groups, so a Concord
- * community's unread never lit the dock and a stale badge never cleared.)
- */
+/** Reports total unread/mention count to the desktop shell for the tray/OS badge. No-op on web. */
 export function DesktopBadge() {
   const { user } = useCurrentUser();
   const { data: groupList } = useUserGroupList();
   const communities = useLiveCommunities();
 
-  // Group the user's joined groups by their host relay.
   const byRelay = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const g of groupList?.groups ?? []) {
@@ -36,14 +25,12 @@ export function DesktopBadge() {
     return map;
   }, [groupList]);
 
-  // Per-relay counts, keyed by relay url.
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   const report = (relay: string, count: number) => {
     setCounts((prev) => (prev[relay] === count ? prev : { ...prev, [relay]: count }));
   };
 
-  // Sum and push to the desktop shell whenever it changes.
   const total = useMemo(
     () => Object.values(counts).reduce((a, b) => a + b, 0),
     [counts],
@@ -79,7 +66,6 @@ export function DesktopBadge() {
   );
 }
 
-/** Subscribes to one Concord community and reports its count of unread channels. */
 function ConcordUnreadCounter({
   communityId,
   onCount,
@@ -101,7 +87,6 @@ function ConcordUnreadCounter({
   return null;
 }
 
-/** Subscribes to one relay's unread and reports the count of unread groups. */
 function RelayUnreadCounter({
   relay,
   groupIds,
@@ -113,8 +98,7 @@ function RelayUnreadCounter({
 }) {
   const { byGroup } = useRelayUnread(relay, groupIds);
   const { isChannelMuted } = useMutes();
-  // Muted channels don't count toward the OS badge — unless they carry an
-  // unread mention (mentions pierce mutes, Discord-style).
+  // Muted channels don't count unless they hold a mention.
   const count = Object.entries(byGroup).filter(
     ([id, g]) => g.mention || !isChannelMuted(relay, id),
   ).length;

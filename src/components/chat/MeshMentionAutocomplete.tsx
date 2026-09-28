@@ -10,7 +10,6 @@ import type { MeshPeer } from "@/lib/bluetoothMesh";
 interface MeshMentionAutocompleteProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   content: string;
-  /** Nearby peers to suggest. */
   peers: MeshPeer[];
   /** Splice the `@name#suffix ` token into the draft. */
   onInsertMention: (params: { start: number; end: number; replacement: string }) => void;
@@ -21,10 +20,8 @@ interface MeshCandidate extends MeshIdentity {
 }
 
 /**
- * `@`-mention autocomplete for the Bluetooth mesh. Reuses the caret/positioning
- * machinery from the Nostr `MentionAutocomplete`, but its candidates are nearby
- * mesh peers (not Nostr profiles) and it inserts a plain-text `@name#suffix`
- * token that survives the BLE wire (and reads on bitchat too).
+ * Mesh `@`-mention autocomplete over nearby peers; inserts a plain-text
+ * `@name#suffix` token that survives BLE (and reads on bitchat).
  */
 export function MeshMentionAutocomplete({
   textareaRef,
@@ -47,8 +44,6 @@ export function MeshMentionAutocomplete({
     dropdownHeight: 240,
   });
 
-  // Candidates: resolve each peer to its display identity, then filter by the
-  // query against the name (case-insensitive prefix-ish substring match).
   const q = query.trim().toLowerCase();
   const candidates: MeshCandidate[] = useMemo(
     () =>
@@ -67,7 +62,7 @@ export function MeshMentionAutocomplete({
       const cursor = cursorPos ?? textarea.selectionStart;
       const value = text ?? textarea.value;
 
-      // Walk back to an `@` that begins a mention (start-of-line or after space).
+      // An `@` at start-of-line or after a space.
       let atPos = -1;
       for (let i = cursor - 1; i >= 0; i--) {
         const ch = value[i];
@@ -124,7 +119,7 @@ export function MeshMentionAutocomplete({
     };
   }, [textareaRef, detectMention]);
 
-  // Re-detect when the draft changes externally (e.g. a slash command seeds `@`).
+  // Re-detect on external changes (e.g. a slash command seeds `@`).
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -200,9 +195,7 @@ export function MeshMentionAutocomplete({
               "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
               index === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
             )}
-            // Select on pointer-down so it fires reliably on touch (a
-            // mousedown-preventDefault can swallow the synthetic click);
-            // preventDefault keeps the composer focused.
+            // Pointer-down fires reliably on touch; preventDefault keeps composer focus.
             onPointerDown={(e) => {
               e.preventDefault();
               selectCandidate(candidate);

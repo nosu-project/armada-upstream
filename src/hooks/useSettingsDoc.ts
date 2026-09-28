@@ -30,46 +30,24 @@ import {
 import type { MetadataDoc } from "@/lib/schemas";
 
 /**
- * Read and write one of the user's encrypted NIP-78 settings documents (kind
- * 30078, `d = ${APP_ID}/<name>`). See `lib/settingsDocs.ts` for the catalogue
- * and `docs/settings-documents.md` for the design.
- *
- * ARMADADB IS THE MODEL. This hook never reads a relay. A document reaches
- * disk from three places, and all three are live rather than polled:
- *
- *   • NostrSync's standing self-state REQ, which carries no `since` and so
- *     redelivers the current version on every (re)subscribe;
- *   • on Android, the notification service's identical standing REQ, which
- *     writes to the SAME database file while this process is dead;
- *   • useInitialSync's cold-boot read, and an explicit portable-setup publish.
- *
- * The store settles versions by NIP-01 addressable supersession — strictly
- * newer `created_at` replaces, ties keep what is stored — so "the document on
- * disk" is by construction the newest one this device has ever seen, from any
- * source. That is what a write merges over, and it is why none of the sync
- * arbitration this hook used to carry (a source discriminator, a completeness
- * flag, a localStorage watermark, a module-global write clock) exists any more:
- * they were all standing in for an ordering the store already enforces.
- *
- * The one rule callers must keep: {@link UseSettingsDocReturn.update} merges
- * its patch over `{}` when the store holds no document. Because these are
- * replaceable events, publishing that would REPLACE the user's real document
- * with whatever subset the caller passed, on every device. So a caller that
- * publishes on its own schedule must first check that `doc` is non-null.
+ * Read/write one encrypted NIP-78 settings document (kind 30078, `d = ${APP_ID}/<name>`); see
+ * `lib/settingsDocs.ts` and `docs/settings-documents.md`.
+ * ARMADADB IS THE MODEL: this hook never reads a relay. Documents arrive via NostrSync's standing
+ * REQ, the Android service's identical REQ, and useInitialSync / portable-setup publish; the store
+ * keeps the newest by NIP-01 supersession.
+ * Callers must check `doc` is non-null before publishing on their own schedule: `update` merges over
+ * `{}` when nothing is stored, which would REPLACE the user's real document everywhere.
  */
 
 type DocSchemas = typeof SETTINGS_DOC_SCHEMAS;
 
-/** The plaintext type of the document named `N`. */
 export type SettingsDocOf<N extends SettingsDocName> = z.infer<DocSchemas[N]>;
 
-/** A settings document as stored: the event it came in, and its plaintext. */
 export interface StoredSettingsDoc<N extends SettingsDocName> {
   event: NostrRumor;
   doc: SettingsDocOf<N>;
 }
 
-/** Filter matching one of a user's settings documents. */
 export function settingsDocFilter(pubkey: string, name: SettingsDocName): NostrFilter {
   return {
     kinds: [SETTINGS_KIND],
@@ -79,19 +57,11 @@ export function settingsDocFilter(pubkey: string, name: SettingsDocName): NostrF
   };
 }
 
-/** React-query key for a settings document. */
 export function settingsDocQueryKey(name: SettingsDocName, pubkey: string | undefined) {
   return ["settings-doc", name, pubkey];
 }
 
-/**
- * The newest version of a settings document in ArmadaDB, decrypted, or null
- * when there is none (or it can't be decrypted — a signer that changed, a
- * corrupt payload).
- *
- * Exported because the write path needs exactly this read, and so do the
- * cold-boot sync and the explicit portable-setup publish.
- */
+/** Newest stored version, decrypted; null if none or undecryptable. */
 export async function readSettingsDoc<N extends SettingsDocName>(
   store: ArmadaEventStore,
   signer: NostrSigner,
@@ -113,7 +83,6 @@ export async function readSettingsDoc<N extends SettingsDocName>(
   return decodeSettingsDoc(event, signer, pubkey, name);
 }
 
-/** Decrypt and parse a settings event known to be the right document. */
 export async function decodeSettingsDoc<N extends SettingsDocName>(
   event: NostrRumor,
   signer: NostrSigner,
@@ -134,10 +103,7 @@ export async function decodeSettingsDoc<N extends SettingsDocName>(
   }
 }
 
-/**
- * Build the plaintext of the next version of a document from the previous one
- * plus a patch, applying the two rules that are specific to `metadata`.
- */
+/** Previous doc + patch, applying the `metadata`-specific rules. */
 export function nextSettingsDoc<N extends SettingsDocName>(
   name: N,
   previous: SettingsDocOf<N> | undefined,
@@ -146,35 +112,24 @@ export function nextSettingsDoc<N extends SettingsDocName>(
   const merged = { ...(previous ?? {}), ...patch } as SettingsDocOf<N>;
   if (name !== "metadata") return merged;
   return {
-    // Fields that moved into their own documents are dropped rather than
-    // carried forward — see `stripMigratedKeys`.
+    // Fields that moved into their own documents are dropped — see `stripMigratedKeys`.
     ...stripMigratedKeys(merged as MetadataDoc),
-    // Kept for older Armada builds on the user's other devices, which order
-    // versions by this rather than by `created_at`. Metadata only: the split
-    // documents postdate every build that reads it.
+    // For older builds that order versions by this rather than `created_at`. Metadata only.
     lastSync: Date.now(),
   } as SettingsDocOf<N>;
 }
 
 /**
- * All writes to one settings document run one at a time, process-wide.
- *
- * A write is a read-modify-write spanning a store read, two signer round-trips
- * (decrypt + encrypt/sign) and a store write — seconds on a NIP-46 signer. Two
- * rail edits whose debounces fire back to back would otherwise both read the
- * SAME previous version, merge their patches independently, and stamp the same
- * `created_at` — so the second edit either overwrites the first or loses the
- * NIP-01 tie to it. Serializing per document makes each write observe the
- * previous one's result; distinct documents are distinct coordinates and may
- * still write concurrently. Same shape as `serializeGroupListWrite` for 10009.
+ * Writes to one document run one at a time: concurrent read-modify-writes would read the same
+ * version and collide on `created_at`. Distinct documents may write concurrently (cf.
+ * `serializeGroupListWrite`).
  */
 const settingsWriteChains = new Map<SettingsDocName, Promise<unknown>>();
 
 function serializeSettingsWrite<T>(name: SettingsDocName, write: () => Promise<T>): Promise<T> {
   const chain = settingsWriteChains.get(name) ?? Promise.resolve();
   const run = chain.then(write, write);
-  // Swallow the result on the chain itself so one failed write neither wedges
-  // the queue nor surfaces as an unhandled rejection; the caller still gets it.
+  // Swallow on the chain so one failure doesn't wedge the queue; the caller still gets it.
   settingsWriteChains.set(name, run.then(() => undefined, () => undefined));
   return run;
 }
@@ -182,12 +137,10 @@ function serializeSettingsWrite<T>(name: SettingsDocName, write: () => Promise<T
 export interface UseSettingsDocReturn<N extends SettingsDocName> {
   /** The decrypted document, or null when none is on disk. */
   doc: SettingsDocOf<N> | null;
-  /** The event it was decrypted from — identity, for "have I applied this?". */
+  /** Identity, for "have I applied this?". */
   event: NostrRumor | null;
   isLoading: boolean;
-  /** True once the store has been read at least once. */
   isFetched: boolean;
-  /** Merge a patch into the document, then store and publish it. */
   update: (patch: Partial<SettingsDocOf<N>>) => Promise<SettingsDocOf<N>>;
   hasNip44Support: boolean;
 }
@@ -219,12 +172,8 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
       }
       const store = await eventStore;
 
-      // Read, then write — from the store, not from this query's cache. The
-      // cache is a snapshot taken whenever the query last ran; the store is
-      // written the moment a new version arrives on the wire, and on Android
-      // it is written by the notification service with no JS running at all.
-      // Merging a patch over the cache and stamping it newest is how another
-      // device's change gets reverted.
+      // Merge over the STORE, not the query cache: the store may hold a newer version (wire, Android
+      // service), and merging over a stale cache reverts other devices' changes.
       const previous = await readSettingsDoc(store, user.signer, user.pubkey, name);
       const next = nextSettingsDoc(name, previous?.doc, patch);
 
@@ -235,38 +184,25 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
           ["d", settingsDTag(name)],
           ["title", `${APP_NAME} Settings`],
         ],
-        // Strictly newer than what we merged over, so this version wins the
-        // coordinate rather than being discarded — including by our own store,
-        // which refuses a write that isn't newer than what it holds. Two edits
-        // inside one second would otherwise leave the second one nowhere.
+        // Strictly newer than what we merged over, or the store (and relays) would discard it.
         created_at: Math.max(Math.floor(Date.now() / 1000), (previous?.event.created_at ?? 0) + 1),
       });
 
-      // Durable first, then visible, then published. An edit survives a kill
-      // between the signature and the relay round-trip.
-      // Keep the signature and the exact destination set before any network
-      // work. A partial fanout must retry only the account relays still
-      // missing this version, never the generic pool.
+      // Durable first, then visible, then published; keep the exact destination set so a partial
+      // fanout retries only missing account relays.
       let durablyQueued = false;
       try {
         await queueSignedEvent(event, undefined, relays);
         durablyQueued = true;
       } catch {
-        // Immediate delivery may still succeed. A later transport failure is
-        // only called queued when the exact signed obligation was read back.
+        // Only called queued once the signed obligation was read back.
       }
       await store.event(event);
-      // A refetch already in flight (a relay echo of the PREVIOUS version
-      // invalidates this key) read the store before this event existed;
-      // letting it resolve after setQueryData would regress the cache to that
-      // older version, and the config sync would apply it over what the user
-      // just did. Cancel it — the store now supersedes anything it could carry.
+      // Cancel in-flight refetches that could regress the cache to the previous version.
       await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData<StoredSettingsDoc<N>>(queryKey, { event, doc: next });
       const result = await publishSignedEventToRelays(nostr, event, relays, 8000);
-      // Settle only this attempt's current destinations. A newer replaceable
-      // can inherit a still-missing OLD NIP-65 relay from the superseded event;
-      // that relay must remain queued even when every current relay accepts.
+      // Settle only this attempt's destinations; inherited old NIP-65 relays stay queued.
       await recordQueuedPublishAttempt(event.id, relays, result.rejected).catch(() => undefined);
       if (result.rejected.length > 0) {
         const cause = new Error(
@@ -275,9 +211,7 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
             : "No account relay accepted the settings update",
         );
         console.warn(`Failed to publish ${name} settings:`, cause);
-        // The version is already durable locally. Surface the transport
-        // failure so the automatic config sync can retry the exact snapshot;
-        // a later manual "Sync now" also republishes it.
+        // Durable locally; surface the failure so auto sync (or "Sync now") retries the exact snapshot.
         if (durablyQueued) throw new PublishQueuedError(event, cause);
         throw cause;
       }

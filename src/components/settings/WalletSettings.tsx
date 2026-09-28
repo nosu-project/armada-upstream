@@ -24,11 +24,8 @@ import { useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
 
 /**
- * Settings → Wallet: Nostr Wallet Connect management + zap preferences.
- *
- * The connection string is a SPENDING SECRET: it is validated, stored in
- * per-account local storage, and never rendered back — rows show only the
- * alias and the wallet service's pubkey prefix.
+ * NWC management + zap preferences. The connection string is a SPENDING
+ * SECRET: stored per account, never rendered back (only alias and pubkey prefix).
  */
 export function WalletSettings() {
   const { connections, activeConnection, addConnection, removeConnection, setActive, webln } = useWallet();

@@ -21,51 +21,31 @@ import {
 import { generateDLEQProof } from '@/lib/dleq';
 
 /**
- * Heavy PSBT-signing implementation for {@link NSecSignerBtc}.
- *
- * This module pulls in the entire Bitcoin / PSBT / silent-payments / DLEQ
- * stack (`@scure/btc-signer`, `bitcoin.ts`, `psbtV2.ts`, `silentPayments.ts`,
- * `dleq.ts`), so it is **never** imported statically by `useCurrentUser` —
- * which loads on every page. The thin signer classes in `bitcoin-signers.ts`
- * dynamically `import()` this module only when `signPsbt` is actually called,
- * keeping the crypto out of the app's entry chunk.
+ * Heavy PSBT-signing implementation for {@link NSecSignerBtc}; only ever
+ * dynamically imported, to keep the BTC/SP/DLEQ stack out of the entry chunk.
  */
 
 /** Local nsec PSBT signing — fast path for v0, BIP-375 path for SP outputs. */
 export function signNsecPsbt(psbtHex: string, secretKeyBytes: Uint8Array): string {
   const privateKeyHex = hex.encode(secretKeyBytes);
 
-  // Fast path: regular PSBT v0 — just sign and return.
   if (!hasBip375SpOutputs(psbtHex)) {
     return signPsbtLocal(psbtHex, privateKeyHex);
   }
 
-  // BIP-375 path: resolve SP outputs to P2TR, build a PSBT v0, sign it,
-  // and re-emit a finalized PSBT v2 so the caller's `extractTxFromSignedPsbtV2`
-  // produces the correct transaction (same outputs, same inputs, same
-  // amounts — just with the previously-blank SP scriptPubKeys filled in).
+  // BIP-375: resolve SP outputs to P2TR, sign, and re-emit a finalized PSBT v2.
   return signBip375PsbtV2Locally(psbtHex, privateKeyHex, secretKeyBytes);
 }
 
-/**
- * Cheap sniff: does the hex string contain at least one `PSBT_OUT_SP_V0_INFO`
- * row? Used to decide whether to take the BIP-375 fast path. A full parse
- * follows only when the cheap check matches.
- */
+/** Cheap sniff for a `PSBT_OUT_SP_V0_INFO` row, avoiding a full parse for v0. */
 function hasBip375SpOutputs(psbtHex: string): boolean {
-  // PSBT v2 only — peek at the version global. We look for the byte pattern
-  // `0x01 0xfb 0x04 0x02 0x00 0x00 0x00` (key-len=1, keytype=0xfb VERSION,
-  // val-len=4, value=2) and the `PSBT_OUT_SP_V0_INFO` key prefix
-  // (`0x01 0x09`). Both heuristics keep us off the parser hot path for the
-  // common PSBT v0 case.
+  // PSBT v2 VERSION global (`01fb0402000000`) plus the SP_V0_INFO key prefix (`0109`).
   return /01fb0402000000/i.test(psbtHex) && /(?:^|[0-9a-f])0109/i.test(psbtHex);
 }
 
 /**
- * Resolve BIP-375 silent payment outputs in a PSBT v2 to concrete P2TR
- * outputs, build a finalized PSBT v2 (script written in, signatures
- * present), and return its hex. Assumes every input is the sender's own
- * P2TR — which is the only shape Ditto's wallet produces.
+ * Resolve BIP-375 silent payment outputs in a PSBT v2 to P2TR, sign, and return
+ * a finalized PSBT v2. Assumes every input is the sender's own P2TR.
  */
 function signBip375PsbtV2Locally(
   psbtHex: string,
@@ -74,25 +54,18 @@ function signBip375PsbtV2Locally(
 ): string {
   const psbt = parsePsbtV2(psbtHex);
 
-  // Re-derive the sender's taproot internal pubkey from the private key —
-  // every input's `tapInternalKey` is expected to match.
+  // Every input's `tapInternalKey` is expected to match.
   const internalPubkey = pubSchnorr(secretKeyBytes);
   const senderPayment = btc.p2tr(internalPubkey, undefined, btc.NETWORK);
   const senderScript = senderPayment.script;
 
-  // Derive the BIP-341 *tweaked* private key — the same scalar the wallet
-  // uses to sign each P2TR input — and feed it into the BIP-352 sender
-  // derivation as the input's contribution.
+  // BIP-341 tweaked key: the scalar each P2TR input signs with, and its BIP-352 contribution.
   const tweakedPrivKey = taprootTweakPrivKey(secretKeyBytes);
 
-  // SP outputs are identified by an `unknown` row with keytype 0x09 (the
-  // BIP-375 PSBT_OUT_SP_V0_INFO field number).
+  // BIP-375 PSBT_OUT_SP_V0_INFO field number.
   const O_SP_V0_INFO = 0x09;
 
-  // Every input must be the sender's own P2TR before we can treat
-  // `tweakedPrivKey` as the private key behind all of them. This used to be
-  // checked seventy lines further down, inside the transaction-building loop —
-  // long after the silent-payment derivation had already assumed it.
+  // Every input must be the sender's P2TR before `tweakedPrivKey` stands for all of them.
   for (const inp of psbt.inputs) {
     if (!inp.witnessUtxo) {
       throw new Error('NSecSignerBtc: input is missing witnessUtxo.');
@@ -102,20 +75,11 @@ function signBip375PsbtV2Locally(
     }
   }
 
-  // Resolve every SP output once, since the wallet uses every UTXO and the
-  // derivation depends on the full input set's outpoints (BIP-352 picks the
-  // lex-smallest outpoint for `input_hash`).
+  // BIP-352 `input_hash` uses the lex-smallest outpoint across all inputs.
   const allOutpoints = psbt.inputs.map((i) => ({ txid: i.txid, vout: i.vout }));
 
-  // BIP-352 requires the sender to aggregate the private keys of *every*
-  // eligible input (`a = Σ aᵢ`), because the recipient reconstructs the
-  // matching `A = Σ Pᵢ` from the transaction's inputs when scanning. Deriving
-  // from `inputs[0]` alone produced a different `input_hash` and a different
-  // ECDH secret the moment the wallet held more than one UTXO — which, since
-  // it spends all of them on every send, is the steady state for any wallet
-  // that has received a payment. The transaction confirmed and the change came
-  // back correctly; the recipient simply never saw the payment, because it
-  // paid a key nobody was scanning for.
+  // BIP-352: aggregate every eligible input's key (`a = Σ aᵢ`); the recipient
+  // scans with `A = Σ Pᵢ`, so deriving from one input pays an unscanned key.
   const spInputs: SilentPaymentInput[] = psbt.inputs.map((i) => ({
     txid: i.txid,
     vout: i.vout,
@@ -123,10 +87,8 @@ function signBip375PsbtV2Locally(
     isTaproot: true,
   }));
 
-  // Collect all SP recipients up-front so `deriveSilentPaymentOutputs` can
-  // group them by scan key and assign `k = 0, 1, …` per group. The PSBT-
-  // output order is preserved alongside so we can re-pair derived xonly
-  // keys with the right `PsbtV2Output` after derivation.
+  // Collect SP recipients up-front so derivation can assign `k` per scan-key
+  // group; keep their PSBT output indexes to re-pair afterwards.
   const spRecipientIndex: number[] = [];
   const spRecipients: SilentPaymentRecipient[] = [];
   const resolvedOutputs: PsbtV2Output[] = psbt.outputs.map((out, idx) => {
@@ -154,7 +116,6 @@ function signBip375PsbtV2Locally(
     };
     spRecipientIndex.push(idx);
     spRecipients.push({ address: spAddress });
-    // Placeholder; filled in after the batch derivation below.
     return { type: 'script', amount: out.amount, script: new Uint8Array(0) };
   });
 
@@ -163,11 +124,7 @@ function signBip375PsbtV2Locally(
       allOutpoints,
       network: 'mainnet',
     });
-    // `deriveSilentPaymentOutputs` returns outputs grouped by scan key, in
-    // recipient-input order within each group. Walk the result and match
-    // each derived xonly back to its original PSBT output by reference-
-    // equality on the recipient object — that's how we threaded the
-    // PSBT-output index through.
+    // Derived outputs are grouped by scan key; match back by recipient identity.
     for (const out of derived) {
       const i = spRecipients.indexOf(out.recipient);
       if (i < 0) throw new Error('NSecSignerBtc: derived SP output has no matching recipient.');
@@ -181,17 +138,12 @@ function signBip375PsbtV2Locally(
     }
   }
 
-  // Compute the BIP-375 global ECDH share + DLEQ proof per recipient scan
-  // key. Per BIP-375 §"Computing the ECDH Shares and DLEQ Proofs", a single
-  // signer that owns every eligible input should emit one global share per
-  // scan key — which is exactly our case (all inputs are P2TR owned by the
-  // sender). We attach these to the finalized PSBT v2 so an external
-  // BIP-375 verifier can re-derive the output scripts without trusting us.
+  // BIP-375 global ECDH share + DLEQ proof per scan key (single signer owning
+  // all inputs), so external verifiers can re-derive the output scripts.
   const spGlobals: { scanPubKey: Uint8Array; ecdhShare: Uint8Array; dleqProof: Uint8Array }[] = [];
   if (spRecipients.length > 0) {
     const agg = aggregateSenderPrivateKey(spInputs, allOutpoints);
-    // Group recipient scan keys, deduplicating so we emit one share per
-    // unique scan key (multiple SP outputs to the same recipient share).
+    // One share per unique scan key.
     const seen = new Map<string, Uint8Array>();
     for (const r of spRecipients) {
       const key = bytesToHexLocal(r.address.scanPubKey);
@@ -206,14 +158,10 @@ function signBip375PsbtV2Locally(
     }
   }
 
-  // Re-encode as a regular (script-only) PSBT v2 so we can hand it off to
-  // the @scure/btc-signer PSBT v0 signing path. We emit v2 → convert to v0
-  // by leveraging the library's PSBT version handling: the easiest route
-  // is to use `Transaction` directly because we control every input/output.
+  // Sign via a plain @scure/btc-signer Transaction (we control every input/output).
   const tx = new btc.Transaction();
   for (const inp of psbt.inputs) {
-    // Already validated up front, before the silent-payment derivation that
-    // depends on it; repeated here only to narrow the type.
+    // Validated above; repeated only to narrow the type.
     if (!inp.witnessUtxo) {
       throw new Error('NSecSignerBtc: input is missing witnessUtxo.');
     }
@@ -239,10 +187,7 @@ function signBip375PsbtV2Locally(
   }
   tx.finalize();
 
-  // Round-trip back to a finalized PSBT v2 with the resolved scripts plus
-  // the input-level final witnesses and any BIP-375 global ECDH shares +
-  // DLEQ proofs. The caller's `extractTxFromSignedPsbtV2` will pull out the
-  // raw transaction hex from this.
+  // Back to a finalized PSBT v2 with witnesses and any BIP-375 globals.
   return finalizedTxToPsbtV2(tx, psbt.inputs, resolvedOutputs, spGlobals);
 }
 
@@ -259,12 +204,8 @@ function bytesToHexLocal(b: Uint8Array): string {
 }
 
 /**
- * Serialize a fully-signed `@scure/btc-signer` `Transaction` back into the
- * PSBT v2 wire format with `finalScriptWitness` set on each input and
- * resolved scripts on each output. The library's own `tx.toPSBT(2)` would
- * be simpler but strips unknown fields and brings in v0/v2 hybrid
- * plumbing we don't need — re-emitting through our typed encoder, which
- * knows about `finalScriptWitness` natively, is straightforward.
+ * Serialize a signed `Transaction` into PSBT v2 with `finalScriptWitness` per
+ * input. `tx.toPSBT(2)` would strip unknown fields.
  */
 function finalizedTxToPsbtV2(
   tx: btc.Transaction,
@@ -295,8 +236,7 @@ function finalizedTxToPsbtV2(
     silentPaymentGlobals: silentPaymentGlobals && silentPaymentGlobals.length > 0
       ? silentPaymentGlobals
       : undefined,
-    // Once we've resolved every SP output script and signed, BIP-375
-    // requires `PSBT_GLOBAL_TX_MODIFIABLE` to be 0.
+    // BIP-375: `PSBT_GLOBAL_TX_MODIFIABLE` must be 0 once SP outputs are resolved and signed.
     txModifiable: silentPaymentGlobals && silentPaymentGlobals.length > 0 ? 0 : undefined,
   });
 }

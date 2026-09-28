@@ -7,24 +7,16 @@ import { useBackOrHome } from "@/hooks/useBackOrHome";
 import type { ReactNode } from "react";
 
 interface DetailPageProps {
-  /** The header's title. */
   title: ReactNode;
-  /** A small icon before the title. */
   icon?: ReactNode;
   children: ReactNode;
   /** Drawn inside `<main>`, over the body (e.g. the profile overlay). */
   overlay?: ReactNode;
 }
 
-/**
- * The frame of a page that shows ONE thing reached by link — a person, a
- * shared theme or emoji pack: the server rail, the floating chrome header with
- * a back button, and a centred scrolling column. `<main>` is `relative` so an
- * `overlay` fills the pane and stops at the rail.
- */
+/** Frame for a single linked item (person, theme, emoji pack): rail, header with back, centred column. */
 export function DetailPage({ title, icon, children, overlay }: DetailPageProps) {
-  // A cold load (a shared link) has nothing in the app to go back to, so it
-  // lands home.
+  // A cold load has nothing to go back to, so it lands home.
   const back = useBackOrHome();
 
   return (

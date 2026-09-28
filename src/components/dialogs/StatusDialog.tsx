@@ -14,7 +14,7 @@ import { toast } from "@/hooks/useToast";
 import { useSetUserStatus, useUserStatus } from "@/hooks/useUserStatus";
 import { collectEmojiTags } from "@/lib/customEmoji";
 
-/** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
+/** Lazy so emoji-mart stays out of the main bundle. */
 const LazyEmojiPicker = lazy(() =>
   import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })),
 );
@@ -24,16 +24,11 @@ interface StatusDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/** A few one-tap status suggestions. */
 const PRESETS = ["👋 Available", "🎧 Focusing", "🌴 Away", "💤 Sleeping", "🍕 Lunch"];
 
 const MAX_LEN = 140;
 
-/**
- * Set or clear the current user's NIP-38 status (kind 30315, `d: "general"`).
- * The status is a short, ephemeral message shown next to your name in member
- * lists and your profile card. Leaving it empty and saving clears it.
- */
+/** Set or clear the user's NIP-38 status (kind 30315, `d: "general"`). Saving empty clears it. */
 export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
   const { user } = useCurrentUser();
   const { data } = useUserStatus(user?.pubkey);
@@ -44,11 +39,9 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Same insertion helpers the chat composer uses (caret splice + focus restore).
   const setClampedContent = useCallback((value: string) => setContent(value.slice(0, MAX_LEN)), []);
   const { insertAtCursor, insertEmoji } = useInsertText(inputRef, content, setClampedContent);
 
-  // Hydrate from the current status whenever the dialog opens.
   useEffect(() => {
     if (open) {
       setContent(data?.status?.content ?? "");
@@ -79,9 +72,7 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent
         title="Set a status"
-        // The shortcode-autocomplete dropdown portals to document.body (to
-        // escape the dialog's transform); don't let taps on it count as an
-        // outside interaction that would close the dialog.
+        // The autocomplete dropdown portals to body; don't treat taps on it as outside.
         onInteractOutside={(e) => {
           const target = e.target as Element | null;
           if (target?.closest?.("[data-autocomplete-dropdown]")) {
@@ -127,7 +118,6 @@ export function StatusDialog({ open, onOpenChange }: StatusDialogProps) {
                 autoFocus
                 className="pr-10 bg-background/40 border-transparent"
               />
-              {/* Same `:shortcode` autocomplete as the chat composer (native + custom emojis). */}
               <EmojiShortcodeAutocomplete
                 textareaRef={inputRef}
                 content={content}

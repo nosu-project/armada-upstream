@@ -1,19 +1,9 @@
 /**
- * The device-local bookkeeping every nostr-push controller keeps.
- *
- * Shared by `useNostrPush` (Web Push) and `useIosPush` (APNs) — one device runs
- * only one of them, so they are the same three facts under the same three keys
- * rather than a per-platform copy that could disagree about what "on" means:
- *
- *  - the user's INTENT, which is not the same as the OS permission. Intent is
- *    opt-out and survives a revoked-then-regranted permission, so returning to
- *    the app repairs push instead of silently leaving it off.
- *  - the per-type prefs, which are account-global and shared with the Android
- *    service and the in-app notifier too (see `pushPrefs.ts`).
- *  - the subscription ids last registered with the gateway. Registrations are
- *    SERVER-side and outlive the process, so this is the only durable record of
- *    what needs pruning when the watch set shrinks — and, on a cold start, the
- *    only way to tell "nothing to watch yet" from "was watching, now nothing".
+ * Device-local bookkeeping shared by `useNostrPush` (Web Push) and `useIosPush`
+ * (APNs): the user's opt-out INTENT (distinct from OS permission, so push
+ * repairs itself after a re-grant), per-type prefs (see `pushPrefs.ts`), and the
+ * ids last registered with the gateway — the only durable record of what to
+ * prune, since registrations are server-side.
  */
 
 import {
@@ -50,11 +40,9 @@ interface StoredPushRegistrationState {
 type ScopedPushRegistry = Record<string, StoredPushRegistrationState>;
 
 /**
- * Final purge cannot cancel an async exit handler that already timed out.
- * Fence its account/install for the remainder of this document so any late
- * reconciliation save stays in the hash-only tombstone instead of recreating
- * the raw scoped registry after it was wiped. A hard reload naturally clears
- * this set before a legitimate relogin consumes the tombstone.
+ * Accounts/installs fenced by a final purge, so a timed-out exit handler's late
+ * save goes to the hash-only tombstone instead of recreating the wiped
+ * registry. Cleared by a hard reload.
  */
 const purgeFencedAccounts = new Set<string>();
 
@@ -167,13 +155,9 @@ function consumePushCleanup(scope: PushRegistryScope): void {
 }
 
 /**
- * Snapshot only the outgoing account/current installation's unresolved ids
- * into a hash-keyed, nonsecret tombstone before a final storage purge.
- *
- * Returns whether the purge must preserve the cleanup key and stable
- * installation id. Fencing an account is sufficient even before an orphan id
- * exists, because a timed-out first PUT may create one later. Passing no
- * account stages nothing but still protects an already-pending tombstone.
+ * Before a final purge, snapshot the outgoing account/install's unresolved ids
+ * into a hash-keyed tombstone. Returns whether the purge must preserve the
+ * cleanup key and installation id (always once fenced: a late PUT may still land).
  */
 export function stagePushCleanupForPurge(pubkey?: string | null): boolean {
   const cleanup = loadCleanupRegistry();
@@ -184,8 +168,7 @@ export function stagePushCleanupForPurge(pubkey?: string | null): boolean {
       if (installation) {
         fencedInstallation = true;
         const normalizedPubkey = pubkey.toLowerCase();
-        // Set before any subsequent storage work: a timed-out handler can
-        // resume at any await boundary while purge is staging its tombstone.
+        // Fence before any storage work: a timed-out handler can resume at any await.
         purgeFencedAccounts.add(pushCleanupAccountKey(normalizedPubkey, installation));
         let changed = false;
         for (const [key, record] of Object.entries(loadScopedRegistry())) {
@@ -213,10 +196,8 @@ export function stagePushCleanupForPurge(pubkey?: string | null): boolean {
       // Storage unavailable: the ordinary scoped registry remains best-effort.
     }
   }
-  // Preserve the opaque installation id as soon as this document is fenced,
-  // even when the current prune set is empty. A first-ever gateway PUT may
-  // still commit after the bounded exit window; its late save needs this exact
-  // id to create a tombstone the same signer can consume after the hard reload.
+  // Keep the installation id once fenced, even with nothing to prune: a late
+  // first PUT needs it to create a consumable tombstone.
   return fencedInstallation || Object.keys(loadCleanupRegistry()).length > 0;
 }
 
@@ -233,9 +214,7 @@ export function loadPushIntent(): boolean {
 export function savePushIntent(on: boolean): void {
   try {
     localStorage.setItem(INTENT_KEY, String(on));
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
 }
 
 export function savePushPrefs(prefs: PushPrefs, pubkey?: string | null): void {
@@ -252,31 +231,21 @@ export function loadRegisteredPushIds(): string[] {
         return parsed.filter((id): id is string => typeof id === "string");
       }
     }
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
   return [];
 }
 
 export function saveRegisteredPushIds(ids: string[]): void {
   try {
     localStorage.setItem(SUBS_KEY, JSON.stringify(uniqueSortedIds(ids)));
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
 }
 
 /**
- * Load this account/install's durable prune set.
- *
- * `legacyIds` are the no-installation ids the current logical specs used in
- * older web builds. Until migration completes they are included even when the
- * old flat registry was evicted, so an authoritative sync can release their
- * quota slot and replace them with installation-scoped records.
- *
- * The old flat registry can contain another account after an account switch.
- * Only ids carrying THIS account/domain's legacy digest are adopted; a signer
- * must never try to delete a different account's opaque records.
+ * Load this account/install's durable prune set. Until migration completes,
+ * includes the legacy (no-installation) web ids so they can be released. Only
+ * ids with THIS account/domain's legacy digest are adopted from the old flat
+ * registry — never another account's.
  */
 export function loadPushRegistrationState(
   scope: PushRegistryScope,
@@ -327,23 +296,16 @@ export function savePushRegistrationState(
 
   const registry = loadScopedRegistry();
   const key = pushRegistryScopeKey(scope);
-  // Keep an empty completed entry: without its migration latch, the next load
-  // would synthesize the legacy ids again and DELETE them on every sync.
+  // Keep the completed entry, or the next load re-synthesizes legacy ids and deletes them every sync.
   registry[key] = {
     ids,
     legacyMigrationComplete: state.legacyMigrationComplete,
   };
-  // Consume the matching tombstone only after the merged state has a durable
-  // ordinary home again. A crash between load and save therefore retries the
-  // orphan cleanup instead of forgetting it.
+  // Consume the tombstone only after the merged state is durably saved, so a crash retries cleanup.
   if (saveScopedRegistry(registry)) consumePushCleanup(scope);
 }
 
-/**
- * Finish the web-id migration and remove only this account/domain's entries
- * from the pre-v2 flat registry. Failed deletes remain in the scoped state and
- * therefore never reach this function.
- */
+/** Finish the web-id migration: drop this account/domain's entries from the pre-v2 flat registry. */
 export function completePushIdMigration(
   scope: PushRegistryScope,
   ids: readonly string[],
@@ -358,13 +320,8 @@ export function completePushIdMigration(
 }
 
 /**
- * A stable id for this browser/app install.
- *
- * nostr-push registration is replace-by-id, so two browsers at one origin
- * need different ids just as two native devices do. Local storage makes the
- * value stable across ordinary reloads; a storage reset intentionally creates
- * a new install identity. When storage is unavailable the session-only value
- * still avoids sharing another install's record.
+ * Stable id for this browser/app install: registration is replace-by-id, so
+ * installs must differ. Session-only when storage is unavailable.
  */
 let ephemeralInstallationId: string | undefined;
 export function pushInstallationId(): string {
@@ -376,9 +333,7 @@ export function pushInstallationId(): string {
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(PUSH_INSTALLATION_KEY, id);
     return id;
-  } catch {
-    // Private mode / storage disabled — use one stable value for this session.
-  }
+  } catch { /* ignore */ }
   if (!ephemeralInstallationId) {
     ephemeralInstallationId = typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()

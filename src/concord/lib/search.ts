@@ -1,11 +1,6 @@
 /**
- * Concord message search — the filter model + local matchers.
- *
- * Concord chat is end-to-end encrypted at each channel's stream address, so there is
- * NO relay NIP-50 search to fall back on: the decrypted rumor store is the only
- * searchable corpus. This module defines the structured filter object (mirroring
- * Ditto's search: one filter object → one query-builder → one client-side
- * matcher) and the content/media predicates the store scan applies in memory.
+ * Concord message search — the filter model + local matchers. Chat is E2EE, so
+ * there's no relay NIP-50: the decrypted rumor store is the only corpus.
  */
 
 import { parseImetaMap } from "@/lib/imeta";
@@ -14,11 +9,7 @@ import { AUDIO_EXTS, IMAGE_URL_REGEX, VIDEO_EXTS } from "@/lib/mediaUrls";
 /** A media-attachment facet. `all` disables the media constraint. */
 export type SearchMedia = "all" | "images" | "videos" | "links" | "none";
 
-/**
- * The structured search filter. `channelIds` empty means "every channel in the
- * community"; `authors` empty means "anyone". The free-text `query` and the
- * `media` facet are applied as in-memory predicates over the store scan.
- */
+/** The structured search filter; empty `channelIds`/`authors` mean all/anyone. */
 export interface SearchFilters {
   query: string;
   /** Channel idHex allow-list; empty = all channels. */
@@ -36,10 +27,8 @@ export const EMPTY_SEARCH_FILTERS: SearchFilters = {
 };
 
 /**
- * Whether the filters constitute an ACTIVE search (results replace the
- * timeline) rather than the default state. A ≥2-char query, a chosen author, or
- * a media facet activates search; a channel narrowing alone only scopes an
- * otherwise-active search (it must not dump every message in a channel).
+ * Whether the filters make an ACTIVE search (results replace the timeline): a
+ * ≥2-char query, an author, or a media facet. Channel narrowing alone doesn't.
  */
 export function searchIsActive(f: SearchFilters): boolean {
   return f.query.trim().length >= 2 || f.authors.length > 0 || f.media !== "all";
@@ -54,8 +43,7 @@ export function activeFacetCount(f: SearchFilters): number {
   );
 }
 
-// Non-global (`.test`-safe) media-URL probes. The exported VIDEO/AUDIO regexes
-// carry the global flag (stateful `lastIndex`), so build local `i`-only copies.
+// `.test`-safe copies: the exported VIDEO/AUDIO regexes are global (stateful `lastIndex`).
 const VIDEO_URL_TEST = new RegExp(`https?:\\/\\/[^\\s]+\\.(${VIDEO_EXTS})(\\?[^\\s]*)?`, "i");
 const AUDIO_URL_TEST = new RegExp(`https?:\\/\\/[^\\s]+\\.(${AUDIO_EXTS})(\\?[^\\s]*)?`, "i");
 const ANY_URL_TEST = /https?:\/\/\S+/i;
@@ -99,7 +87,6 @@ export function messageMatchesMedia(content: string, tags: string[][], media: Se
     case "links":
       return f.hasUrl;
     case "none":
-      // Plain text: no attachment and no link.
       return !f.hasUrl && !f.hasImage && !f.hasVideo && !f.hasAudio;
     default:
       return true;

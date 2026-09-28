@@ -1,35 +1,13 @@
 /**
- * NIP-17 opened-DM cache — the decrypted store for the modern DM plane.
+ * NIP-17 opened-DM cache. Wraps are never persisted (re-opening costs two
+ * NIP-44 decrypts); opened rumors are stored unsigned, one ArmadaDB tenant per
+ * viewer (`dm17:<self>`) for account isolation.
  *
- * Gift wraps are NEVER persisted (NostrBatcher already drops kind 1059 from
- * the shared cache): caching ciphertext would re-run two NIP-44 opens per
- * event on every cold read. Instead, wraps are opened once on sync and the
- * recovered rumor is persisted here as a signature-less event carrying its
- * real kind / author / content / tags, plus conversation provenance folded
- * into synthetic tags:
+ * Kind-5 rumors physically remove their author's targets (NIP-09, self-only).
+ * Expired NIP-40 rumors are refused on write, filtered on read, and removed by
+ * {@link sweepExpiredDm17Rumors} — "disappeared" must mean gone from disk.
  *
- *   `peer` — the conversation partner (how threads and the list query);
- *   `wrap` — the carrier wrap id (debugging/provenance only).
- *
- * Backed by one ArmadaDB tenant PER VIEWER (`dm17:<self>`). Every read and
- * write names the account it is for, so one logged-in profile's decrypted
- * messages are not merely filtered out of another's reads — they are in a
- * different database. (The store this replaced was global, keyed only by
- * `peer`, and account isolation rested on nothing.)
- *
- * Deletes ARE deletes: a kind-5 rumor written here triggers the store's
- * self-only NIP-09 pass, physically removing the targeted rumor its author
- * wrote — a peer deletes their own messages/reactions, never ours.
- *
- * So are expirations. A rumor carrying a passed NIP-40 `expiration`
- * (disappearing messages) is refused on write and filtered out of every read,
- * and {@link sweepExpiredDm17Rumors} physically removes the ones that expired
- * while they sat here. The read filter is the backstop, not the mechanism:
- * "disappeared" has to mean gone from disk, not merely hidden.
- *
- * Trust note: this persists DECRYPTED messages at rest — the same device-trust
- * level as the DM thread snapshots and the signer's decrypt cache. Wiped on
- * logout (see purgeClientStorage).
+ * Stores DECRYPTED messages at rest; wiped on logout (purgeClientStorage).
  */
 
 import { NIndexedDB } from "@nostrify/indexeddb";
@@ -62,93 +40,48 @@ import {
 } from "@/lib/nip17/protocol";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 
-/** The global pre-tenant database, drained into the tenants on first use. */
 const LEGACY_DB_NAME = "armada-dm17-rumors";
 
 /**
- * Tag names earlier builds INJECTED onto the stored event. Nothing writes them
- * any more; they are dropped from anything copied out of the legacy database.
- *
- * A rumor's tags are the bytes its id commits to, so rewriting them to carry
- * bookkeeping made the stored row something its sender never signed — and made
- * the store's idea of a conversation forgeable by anyone who spelled `peer`
- * themselves. Neither value needed a tag: NIP-17 requires the rumor to name its
- * recipients in `p`, so the conversation is always derivable
- * ({@link dmPeersOf}), and nothing on this side of the store reads a wrap id.
+ * Tags earlier builds injected; stripped when copying legacy rows. Rumor tags
+ * are what the id commits to, and a `peer` tag was forgeable — the conversation
+ * is derivable from `p` ({@link dmPeersOf}).
  */
 const PROVENANCE = new Set(["peer", "wrap"]);
 
 /**
- * The opened-DM store for one account.
- *
- * Acquired WITH its derived-term policy, which is what files each rumor under
- * the one conversation it belongs to — a fact `p` tags and `pubkey` imply
- * together but neither states, and so a fact no NIP-01 filter can ask for. The
- * policy is bound to the tenant rather than named at each write, so the writers
- * that never reach this module (Android's notification service, iOS's
- * notification extension) are covered by construction; those engines declare the
- * same policy against the same tenant id, in their own languages.
+ * The opened-DM store for one account, bound to its conversation term policy
+ * (also declared natively by the Android service and iOS extension).
  */
 export function dm17Store(self: string): NRumorStore {
   const id = `dm17:${self}`;
   return getArmadaDB().tenant(id, tenantOptsFor(id));
 }
 
-// ── Legacy drain ────────────────────────────────────────────────────────────
-//
-// DMs used to live in one global database keyed only by `peer` — it never
-// recorded WHICH account opened a rumor. Dropping it on upgrade would lose DM
-// history for good (re-decrypting means refetching gift wraps relays may have
-// already dropped), but copying it wholesale into the first account that reads
-// would hand that account another profile's messages — the leak the per-viewer
-// tenant exists to make impossible.
-//
-// So records are attributed before they move. A NIP-17 message names the
-// author in `pubkey` and its recipients in `p` tags, so `self` is one of the
-// two. Reactions and deletes name neither, but they carry an `e` pointing at
-// what they act on — so they come across when that target did. Attributing
-// them by shared `peer` instead would be wrong: two accounts on one device can
-// both have talked to the same person, and every record in that conversation
-// would then match both. On the ordinary single-account install everything
-// qualifies either way.
+// Legacy drain: the old global DB didn't record which account opened a rumor,
+// so records are attributed before moving — messages by `pubkey`/`p`, then
+// reactions/deletes via their `e` target. Attributing by shared `peer` would
+// leak between two accounts that talked to the same person.
 
-/**
- * Records read per page of the newest-first scan.
- *
- * The whole store is read, not a single capped query: attribution needs every
- * record at once (a delete of a reaction of a message is only attributable
- * once its target is), so pages are accumulated rather than processed one by
- * one. This is a page size, not a ceiling on what is copied.
- */
+/** Page size for the full legacy scan (attribution needs every record at once). Not a ceiling. */
 export const DM17_DRAIN_PAGE = 500;
 
-/**
- * Pages a single drain will walk. A store this deep is far past any real DM
- * history; hitting the bound means something is wrong with the paging, and the
- * drain FAILS rather than copying a prefix and letting the gate delete the
- * rest.
- */
+/** Hitting this means broken paging; the drain FAILS rather than copy a prefix the gate then deletes. */
 const DRAIN_MAX_PAGES = 2_000;
 
 const DRAIN_KEY = (self: string) => `dm17:migrated:${self}`;
 
-/** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
 /**
- * Copy `self`'s share of the legacy database across. Idempotent and memoised.
- *
- * REJECTS on failure: the startup gate deletes the legacy database only once
- * every drain has resolved for every account, so a drain that swallowed its
- * error and resolved would have the gate delete DM history nobody copied.
- * Every caller in this module already guards the call.
+ * Copy `self`'s share of the legacy DB. Idempotent, memoised. REJECTS on failure:
+ * the startup gate deletes the legacy DB only once every drain resolved.
  */
 export function migrateLegacyDms(self: string): Promise<void> {
   let drain = drains.get(self);
   if (!drain) {
     drain = drainLegacyDms(self).catch((err: unknown) => {
-      // Drop the memo so a later read retries: writes are keyed by rumor id,
-      // so recopying what already landed costs nothing.
+      // Drop the memo so a later read retries; rewrites by id are free.
       drains.delete(self);
       throw err;
     });
@@ -162,7 +95,7 @@ function namesSelf(ev: NostrEvent, self: string): boolean {
   return ev.pubkey === self || ev.tags.some(([name, value]) => name === "p" && value === self);
 }
 
-/** Every legacy record, newest first, paged so a deep history isn't truncated. */
+/** Every legacy record, newest first, paged. */
 async function readLegacyDms(legacy: NIndexedDB): Promise<NostrEvent[]> {
   const all: NostrEvent[] = [];
   const seen = new Set<string>();
@@ -175,8 +108,7 @@ async function readLegacyDms(legacy: NIndexedDB): Promise<NostrEvent[]> {
     };
     if (until !== undefined) filter.until = until;
     const rows = await legacy.query([filter]);
-    // Ties on `created_at` make pages overlap, so progress is measured in NEW
-    // ids rather than in rows returned.
+    // `created_at` ties make pages overlap, so count progress in new ids.
     const fresh = rows.filter((ev) => !seen.has(ev.id));
     if (fresh.length === 0) return all;
     for (const ev of fresh) {
@@ -194,23 +126,18 @@ async function drainLegacyDms(self: string): Promise<void> {
   const db = getArmadaDB();
   const key = DRAIN_KEY(self);
   if (await db.kv.get<boolean>(key)) return;
-  // `NIndexedDB` CREATES the database on its first query, which would leave a
-  // device that never had one with the very database the startup gate scans
-  // for. See `skipLegacyDrain`.
+  // `NIndexedDB` creates the DB on first query, which would confuse the startup gate.
   if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
 
   const legacy = new NIndexedDB(LEGACY_DB_NAME);
   try {
     const all = await readLegacyDms(legacy);
 
-    // Pass one: records that name `self` outright.
     const mine = new Set<string>();
     for (const ev of all) {
       if (namesSelf(ev, self)) mine.add(ev.id);
     }
-    // Pass two: reactions/deletes pointing at something already attributed.
-    // Repeated to a fixpoint so a delete of a reaction of a message follows
-    // the chain; `all` is finite and `mine` only grows, so this terminates.
+    // Pass two: reactions/deletes targeting attributed records, to a fixpoint.
     for (;;) {
       let added = false;
       for (const ev of all) {
@@ -228,10 +155,7 @@ async function drainLegacyDms(self: string): Promise<void> {
     for (const ev of all) {
       if (!mine.has(ev.id)) continue;
       const { sig: _sig, ...rumor } = ev;
-      // The legacy rows carry the tags that store injected. Dropping them is
-      // what makes every row this store holds the rumor its sender signed —
-      // and nothing is lost with them: attribution comes from `pubkey` and the
-      // `p` tags NIP-17 requires, which is what the passes above just used.
+      // Strip injected provenance tags so every stored row is what its sender signed.
       await tenant.event({ ...rumor, tags: rumor.tags.filter((t) => !PROVENANCE.has(t[0])) });
     }
   } finally {
@@ -240,8 +164,6 @@ async function drainLegacyDms(self: string): Promise<void> {
 
   await db.kv.set(key, true);
 }
-
-// ── Codec: OpenedDm ⇆ stored event ───────────────────────────────────────────
 
 /** Build the stored rumor for an opened DM: the rumor itself, unaltered. */
 export function dm17ToStored(opened: OpenedDm): NostrRumor {
@@ -255,13 +177,7 @@ export function dm17ToStored(opened: OpenedDm): NostrRumor {
   };
 }
 
-/**
- * Reconstruct an OpenedDm from a stored rumor, as seen by `self`.
- *
- * The conversation is DERIVED from the rumor — see {@link dmPeersOf} — which is
- * why nothing has to be injected on the way in. `wrapId` is not recoverable and
- * nothing consumes it; the transport dedupes on wraps it holds in hand.
- */
+/** Reconstruct an OpenedDm as seen by `self`; the conversation is derived ({@link dmPeersOf}). `wrapId` is not recoverable. */
 export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
   return {
     rumorId: ev.id,
@@ -275,26 +191,18 @@ export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
   };
 }
 
-// ── Reads / writes ────────────────────────────────────────────────────────────
-
 /**
- * Persist opened DM rumors, then ring the wire bus's coarse conversation-list
- * scope plus one scope per affected peer. Kind-5 rumors trigger the store's
- * self-only NIP-09 removal of their targets. Best-effort; resolves once the
- * write commits.
+ * Persist opened rumors and ring the conversation-list scope plus one per
+ * affected peer. Best-effort; resolves once committed.
  */
 export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise<void> {
-  // Already-expired rumors never reach persistent storage. `openDmWrap` also
-  // rejects them, but this is the single choke point every writer goes through
-  // (sync, backfill, our own optimistic sends), so it's where the guarantee
-  // belongs: a disappearing message that arrives late is simply never stored.
+  // Single choke point for every writer: already-expired rumors are never stored.
   const fresh = opened.filter((o) => !isExpired(o.tags));
   if (fresh.length === 0) return;
   const s = dm17Store(self);
   await Promise.all(
     fresh.map((o) =>
       s.event(dm17ToStored(o)).catch(() => {
-        // Duplicate or rejected — the store's state is authoritative.
       }),
     ),
   );
@@ -306,20 +214,10 @@ export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise
 }
 
 /**
- * Read one conversation's cached rumors (messages, reactions, deletes),
- * newest-first up to `limit`. `before` (exclusive `created_at` upper bound)
- * pages older history out of the store.
- *
- * `limit` rows are asked for and `limit` rows come back: the filter selects the
- * conversation exactly, so there is no over-fetch to pay and no page that comes
- * back short because its neighbours crowded it out.
- *
- * The conversation is re-derived per row anyway. Not as narrowing — the index
- * already did that — but because the index is derived state maintained by four
- * engines in three languages, and this is where a disagreement between them
- * surfaces. Checking makes such a bug a MISSING message; not checking would
- * make it someone else's message in this thread, which is the worse of the two
- * by a distance.
+ * One conversation's rumors, newest-first up to `limit`; `before` is an
+ * exclusive `created_at` bound. The conversation is re-checked per row: the
+ * index is maintained by several engines, and a mismatch should cost a missing
+ * message, never someone else's message in this thread.
  */
 export async function queryDm17Thread(
   self: string,
@@ -338,12 +236,8 @@ export async function queryDm17Thread(
 }
 
 /**
- * Count incoming chat/file rumors in one conversation after its read stamp.
- *
- * This stays a count-only indexed read: the conversation term selects the
- * exact participant set, `authors` excludes the viewer's own messages, and
- * `since` applies the same strict `created_at > lastRead` rule as the DM list.
- * Note to Self has no incoming author and therefore no unread count.
+ * Count incoming chat/file rumors after the read stamp (`created_at > lastRead`).
+ * Note to Self never has unread.
  */
 export async function countUnreadDm17Messages(
   self: string,
@@ -365,15 +259,8 @@ export async function countUnreadDm17Messages(
 }
 
 /**
- * Read one exact rumor from a conversation, independently of the thread's
- * newest-first window.
- *
- * Message-search results can name history far behind the rows a thread has
- * paged into memory. Querying by id lets that one row be focused immediately
- * without widening every ordinary thread read to the whole local archive. The
- * participant-set check is essential: rumor ids are account-tenant scoped, not
- * conversation scoped, so an id from another DM must never be admitted into
- * the open thread merely because it exists on this device.
+ * One rumor by id (e.g. a search hit beyond the loaded window). The
+ * participant-set check is essential: ids are tenant-scoped, not conversation-scoped.
  */
 export async function queryDm17Rumor(
   self: string,
@@ -393,41 +280,19 @@ export async function queryDm17Rumor(
 }
 
 /**
- * The filter selecting one conversation, from `self`'s side.
- *
- * One filter, and an exact one: the conversation is a derived index TERM
- * (`nip17/conversation.ts`), looked up as a NIP-50 extension, so the store
- * returns this participant set's rumors and nobody else's.
- *
- * It reads as a small thing and is not. A conversation is a participant SET,
- * and a NIP-01 filter cannot ask for one — its tag values are alternatives, so
- * `authors: [ana, ben]` also matches everything Ana sent in another room and
- * `"#p": [ana, ben]` matches everything we sent to either of them separately.
- * The two-filter form this replaces could therefore only OVER-select, in both
- * directions at once (a subset query pulling in supersets, and a superset query
- * pulling in its members' 1:1s), and every caller narrowed the result in
- * JavaScript afterwards — which meant reading three screens for one
- * (`CONVERSATION_OVERFETCH`), per filter, on every thread page, whether or not
- * the viewer had a single group. The term index is what the filter language
- * could not express, so the narrowing is an index seek instead.
- *
- * Note to Self needs no special case any more. It used to: the incoming half
- * degenerated to `authors: [self]` with no `p` constraint — every DM the viewer
- * had ever sent to anyone — so the two-filter form had to be reduced to its
- * outgoing half by hand. A term is just a term.
+ * The filter selecting one conversation from `self`'s side, via the derived
+ * index term (`nip17/conversation.ts`) as a NIP-50 extension. NIP-01 filters
+ * can't express a participant set: tag values are alternatives.
  */
 export function conversationFilters(
   self: string,
   peers: readonly string[],
   opts: { limit?: number; before?: number } = {},
 ): NostrFilter[] {
-  // Canonicalized the way `dmPeersOf` does, so a caller that spelled the
-  // viewer into their own conversation still names the term the store filed.
+  // Canonicalize like `dmPeersOf`, in case the caller included the viewer.
   const others = peers.filter((peer) => peer !== self);
   const filter: NostrFilter = {
-    // Not every stored kind: app state (3310) is read by its own session query.
-    // One filter is one `limit`, so a kind in here spends the conversation's
-    // page budget — see DM_THREAD_KINDS.
+    // App state (3310) has its own query; each kind here spends the thread's `limit` (see DM_THREAD_KINDS).
     kinds: DM_THREAD_KINDS,
     search: dmConvTerm(others.length > 0 ? others : [self]),
   };
@@ -437,20 +302,9 @@ export function conversationFilters(
 }
 
 /**
- * The conversation's current disappearing-messages timer in seconds (0 = off),
- * or undefined when neither side has ever set one.
- *
- * Read as its own small query rather than off the thread window: a timer set
- * months ago is still in force today, and the thread only reads back the
- * newest few hundred rumors. Timer rumors never expire, so the newest one is
- * always the live setting — whichever participant sent it.
- *
- * `limit: 1` is exactly right now, and used not to be. While the filters could
- * only over-select, the newest row returned might belong to a neighbouring
- * conversation, so the read had to take a window of 32 and pick through it; a
- * `limit: 1` page would have silently misreported whether this conversation
- * disappears. The term index answers the question the filter is actually
- * asking, so the newest matching row IS the newest row.
+ * The conversation's disappearing timer in seconds (0 = off), or undefined if
+ * never set. Separate query: a timer set long ago outlives the thread window.
+ * Timer rumors never expire, so the newest is live.
  */
 export async function queryDm17Timer(
   self: string,
@@ -473,22 +327,13 @@ export async function queryDm17Timer(
   return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
 }
 
-/** How many app-state rumors one session reads back. Concord's own bound. */
+/** App-state rumors per session read; matches Concord. */
 const WEBXDC_PAGE = 1000;
 
 /**
- * One app session's durable state, oldest first — the DM twin of Concord's
- * `queryWebxdcRumors`.
- *
- * Its OWN query, and that is the point: a thread read is one filter with one
- * `limit` shared by every kind in it (see {@link conversationFilters}), so
- * reading app state off the thread window would make a chatty game evict the
- * conversation from its own page and, in the same breath, truncate the game's
- * history to whatever the messages left over. A session is bounded by its
- * `i` tag instead, so the two never compete.
- *
- * Ascending, because a webxdc `sendUpdate` stream is a log the app replays in
- * order and assigns serials to by position.
+ * One app session's durable state, oldest first (DM twin of Concord's
+ * `queryWebxdcRumors`). Separate query so a chatty app can't evict messages
+ * from the thread's `limit`. Ascending: apps replay updates in order.
  */
 export async function queryDm17Webxdc(
   self: string,
@@ -513,51 +358,24 @@ export async function queryDm17Webxdc(
     .sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
 }
 
-/** One row of the conversation list: a participant set and its newest message. */
 export interface Dm17ConversationRow {
-  /** The conversation key — see {@link dmConvKey}. */
   key: string;
   /** The participants, everyone but the viewer (`[self]` for Note to Self). */
   peers: string[];
   latest: OpenedDm;
-  /** The viewer has authored at least one message in this conversation. */
   mine: boolean;
   /**
-   * When the viewer last sent here (unix seconds), or undefined for a
-   * conversation they have never written in.
-   *
-   * The `distinct:convmine` collapse below already reads exactly this rumor to
-   * compute {@link mine}; keeping its timestamp costs no extra query. It is
-   * what Android's Direct Share suggestions rank DMs by — "who do I message"
-   * rather than `latest.createdAt`'s "who messages me" (see
-   * `useShareShortcuts`), and unlike the local `shareTargets` ledger it is
-   * derived from the message history, so it survives a reinstall.
+   * When the viewer last sent here (unix seconds). Free from the `convmine`
+   * collapse; used by Android Direct Share ranking (`useShareShortcuts`).
    */
   mineAt?: number;
 }
 
 /**
- * The newest chat/file rumor per conversation — the NIP-17 side of the
- * conversation list.
- *
- * TWO collapsed reads, and no window at all. `distinct:convmsg` returns the
- * newest message of every conversation, one row each, and `distinct:convmine`
- * the newest the VIEWER sent — so the list is complete and `mine` is complete,
- * for a cost per conversation rather than per message. What this replaces read
- * the newest 500 message rumors and grouped them in memory, which was not a
- * window on the list but a SAMPLE of it: one busy thread with 500 recent
- * messages hid every other conversation, and a peer the viewer had written to a
- * year ago fell out of `mine` — which the push gateways read as "stranger", so
- * their next message arrived as a request (see `useNostrPush`).
- *
- * Grouping by the full participant set is what makes a group thread ONE row
- * rather than one per member, and the key is the same whether we sent the
- * message or received it. The key is still re-derived from every row rather than
- * read off the term that fetched it: a divergence between the two should cost a
- * missing message, never a message in the wrong thread.
- *
- * `mine` marks conversations the viewer has authored a message in, so the list
- * can keep a thread you started with someone you don't follow.
+ * The newest chat/file rumor per conversation, via two collapsed reads
+ * (`distinct:convmsg`, `distinct:convmine`) — complete, costing per conversation
+ * rather than per message. `mine` must be complete or push gateways treat
+ * known peers as strangers (see `useNostrPush`). Keys are re-derived per row.
  */
 export async function queryDm17Conversations(
   self: string,
@@ -566,9 +384,8 @@ export async function queryDm17Conversations(
   await migrateLegacyDms(self).catch(() => undefined);
   const collapse = (namespace: string): NostrFilter => {
     const filter: NostrFilter = { search: `distinct:${namespace}` };
-    // Deliberately no `kinds`: the namespace already means chat-or-file, and a
-    // kind constraint would have to be tested INSIDE the grouping, which costs a
-    // row read per index entry. The loop below asserts the kinds instead.
+    // No `kinds`: the namespace already implies chat-or-file, and a kind test inside
+    // the grouping costs a row read per index entry. The loop asserts kinds.
     if (opts.limit !== undefined) filter.limit = opts.limit;
     return filter;
   };
@@ -588,20 +405,12 @@ export async function queryDm17Conversations(
     const opened = storedToDm17(ev, self);
     if (opened.peers.length === 0) return;
     if (!DM_MESSAGE_KINDS.includes(ev.kind)) return;
-    // Filter out WebXDC updates (kind-3310)
     if (ev.kind === KIND_DM_WEBXDC) return;
     const key = dmConvKey(opened.peers);
-    // BEFORE the expiry check, and that ordering is the whole point: expiry
-    // decides what is DISPLAYED, not whether the viewer ever wrote here. The
-    // `convmine:` collapse returns exactly one row per conversation, so a
-    // viewer whose newest own message has expired unswept has no older row to
-    // fall back to — and dropping the flag moves a thread they have written in
-    // for a year into the request tier, and tells the push gateways its sender
-    // is a stranger (`useNostrPush`). It cannot mint a phantom row: the result
-    // is built from `byConversation`, which an expired rumor never reaches.
-    // The MAX, not the last seen: the two collapses can each hand back a rumor
-    // the viewer wrote (`convmsg`'s newest-overall is theirs whenever they sent
-    // last), and the expired-row retry below folds older ones still.
+    // Before the expiry check: expiry affects display, not whether the viewer wrote
+    // here. `convmine` yields one row per conversation, so dropping the flag for an
+    // expired row would demote a long-standing thread to a request. Take the MAX
+    // since both collapses can return the viewer's rumors.
     if (opened.author === self) {
       const prev = mine.get(key);
       if (prev === undefined || opened.createdAt > prev) mine.set(key, opened.createdAt);
@@ -617,12 +426,8 @@ export async function queryDm17Conversations(
 
   for (const ev of events) fold(ev);
 
-  // A conversation whose collapsed row turned out to be expired has no row at
-  // all yet, though an older live message may still be in it — the collapse
-  // returns one rumor per group and cannot know which of them a sweep is about
-  // to remove. Those conversations are re-read once, by term, below the expired
-  // row: one filter each, all in one call, and only when disappearing messages
-  // are in play.
+  // A conversation whose collapsed row expired may still have an older live
+  // message; re-read those once, by term.
   const missing = [...stale].filter(([key]) => !byConversation.has(key));
   if (missing.length > 0) {
     const retry = await store.query(
@@ -648,19 +453,12 @@ export async function queryDm17Conversations(
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
 
-/**
- * How far back the conversation list looks for a live message when the newest
- * one has expired. A handful, not a page: a thread whose last several messages
- * have all expired unswept is a thread with nothing to show, and the sweep is
- * what settles it.
- */
+/** How far back to look for a live message when the newest has expired; the sweep settles the rest. */
 const EXPIRED_RETRY = 8;
 
 /**
- * Every locally-cached chat/file rumor whose decrypted content matches
- * `query` (case-insensitive substring), across all conversation partners.
- * Purely local — the rumors are already decrypted at rest, so this never
- * prompts the signer. Newest-first, capped at `limit` matches.
+ * Local case-insensitive substring search over decrypted chat/file rumors
+ * (never prompts the signer). Newest-first, capped at `limit`.
  */
 export async function searchDm17Rumors(
   self: string,
@@ -694,21 +492,15 @@ export async function searchDm17Rumors(
   return matches.slice(0, opts.limit ?? 200);
 }
 
-// ── Expiry sweep ─────────────────────────────────────────────────────────────
-
 /** Rumors scanned per sweep page. */
 const SWEEP_PAGE = 1000;
 /** Pages a single sweep will walk (bounds a huge history to a bounded cost). */
 const SWEEP_MAX_PAGES = 20;
 
 /**
- * Physically remove every stored rumor whose NIP-40 `expiration` has passed.
- *
- * Read paths filter expired rumors out too, but hiding is not disappearing:
- * the plaintext has to leave IndexedDB. `expiration` is a multi-letter tag and
- * is not indexed (and a range query over it wouldn't exist anyway), so this
- * walks the store newest-first by `created_at` in bounded pages and removes
- * matches by id. Returns how many were removed.
+ * Physically remove rumors whose NIP-40 `expiration` passed (hiding isn't
+ * disappearing). `expiration` isn't indexed, so walk newest-first in bounded
+ * pages. Returns the count removed.
  */
 export async function sweepExpiredDm17Rumors(
   self: string,
@@ -740,8 +532,7 @@ export async function sweepExpiredDm17Rumors(
       }
     }
     if (events.length < SWEEP_PAGE) break;
-    // Page strictly older than this page's oldest row. Ties on `created_at`
-    // would otherwise loop forever on the same boundary second.
+    // Page strictly older; `created_at` ties would otherwise loop forever.
     const oldest = Math.min(...events.map((ev) => ev.created_at));
     if (until !== undefined && oldest - 1 >= until) break;
     until = oldest - 1;
@@ -753,36 +544,20 @@ export async function sweepExpiredDm17Rumors(
   return removed;
 }
 
-// ── Sync cursor ───────────────────────────────────────────────────────────────
-//
-// The inbox scan's resume position, persisted so a cold launch tops up from
-// where it left off instead of re-reading the whole `#p` backlog. Wrap
-// timestamps are backdated ≤ 2 days (NIP-59), so consumers re-scan a slack
-// window behind each relay's `relayNewest` watermark — see useDm17's
-// RESYNC_SLACK and relayScanWatermarks.
+// Sync cursor: the inbox scan's persisted resume position. Wraps are backdated
+// ≤ 2 days (NIP-59), so consumers rescan a slack window (see useDm17's
+// RESYNC_SLACK and relayScanWatermarks).
 
-/** The DM inbox's persisted sync position. */
 export interface Dm17Cursor {
-  /**
-   * `created_at` of the newest wrap ingested, account-wide. Current inbox
-   * scans resume from `relayNewest` and never read this; it is still
-   * maintained so a build predating the per-relay watermarks resumes sanely.
-   */
+  /** Newest wrap ingested, account-wide. Unused by current scans; kept for older builds. */
   newest: number;
   /** `created_at` of the oldest wrap paged back to (the backfill `until`). */
   oldest: number;
   /** No relay had deeper history past `oldest` — stop older-backfills. */
   exhausted: boolean;
   /**
-   * Per-relay resume watermark: a timestamp at or below which that relay is
-   * proven scanned (the newest wrap it returned, floored by the NIP-59
-   * backdate horizon — see useDm17's relayScanWatermarks).
-   *
-   * A single account-wide cursor is not sufficient: inbox relays are
-   * heterogeneous, and one may be offline or still completing NIP-42 while
-   * another answers. Missing entries deliberately mean "never completed a
-   * scan" so an upgrade from the legacy cursor performs one full pass on every
-   * relay instead of inheriting progress another relay made.
+   * Per-relay watermark at or below which that relay is proven scanned. Missing
+   * means "never completed a scan", so a legacy upgrade rescans every relay.
    */
   relayNewest?: Record<string, number>;
 }
@@ -795,15 +570,9 @@ export function readDm17Cursor(self: string): Promise<Dm17Cursor | undefined> {
 }
 
 /**
- * Merge sync progress into the cursor (best-effort). `newest` only advances,
- * `oldest` only recedes, `exhausted` is sticky, and each `relayNewest` entry
- * only advances. There is no write lock: every field merges monotonically, so
- * two overlapping read-modify-writes can only lose an advance one of them
- * already made — costing a re-scan of an already-seen window, never a skip.
- *
- * `pruneRelaysTo` drops watermarks for relays no longer in the caller's set —
- * the record lives inside this one row and is re-serialized on every pass, so
- * without it a removed relay's entry would ride along forever.
+ * Merge sync progress (best-effort, no lock): every field merges monotonically,
+ * so a race can only cost a re-scan, never a skip. `pruneRelaysTo` drops
+ * watermarks for relays no longer in the set.
  */
 export async function updateDm17Cursor(
   self: string,
@@ -836,58 +605,38 @@ export async function updateDm17Cursor(
   await writeFolded(cursorKey(self), next);
 }
 
-// ── Opened-wrap memo ─────────────────────────────────────────────────────────
-//
-// Wrap ids the inbox scan has already opened (rumor stored, or judged not
-// ours / a foreign rumor kind), persisted per viewer. The scan re-fetches a
-// 2-day slack window behind its cursor on every pass (NIP-59 backdating), so
-// with only a session-scoped seen set every cold launch re-decrypted up to a
-// full inbox page — two NIP-44 opens per wrap — before the UI settled. An
-// Android WebView kill makes every resume a cold start, so the memo must be
-// durable. Wiped with the rest of the fold cache on logout; a lost or evicted id
-// merely re-decrypts once.
+// Opened-wrap memo: wrap ids already opened, persisted per viewer so the 2-day
+// NIP-59 rescan doesn't re-decrypt a full page on every cold start (Android kills
+// the WebView often). Wiped on logout; a lost id just re-decrypts once.
 
 const seenWrapsKey = (self: string) => `dm17-seen:${self}`;
 
 /** Cap on persisted opened-wrap ids (callers half-evict at this bound). */
 export const DM17_SEEN_CAP = 4096;
 
-/** Read the viewer's persisted opened-wrap ids (insertion order preserved). */
 export function readDm17SeenWrapIds(self: string): Promise<string[] | undefined> {
   return readFolded<string[]>(seenWrapsKey(self));
 }
 
-/** Persist the viewer's opened-wrap ids (best-effort). */
 export async function writeDm17SeenWrapIds(self: string, ids: Iterable<string>): Promise<void> {
   await writeFolded(seenWrapsKey(self), [...ids]);
 }
 
-// ── Live inbound-wrap buffer ────────────────────────────────────────────────
-//
-// The wire's standing kind-1059 subscription RECEIVES a DM gift wrap live, but
-// can't decrypt it (that needs the user's signer + the consent gate, owned by
-// useDm17). Rather than have useDm17 re-fetch the same wrap from the relays —
-// a second round-trip that re-pays NIP-42 auth on gating relays (the ~10-20s
-// live-DM latency) — the wire stashes the RAW wrap here and rings `dm:wrap`.
-// useDm17 drains and decrypts the in-hand ciphertext directly: no re-query.
-//
-// The wire's wrap filter deliberately rewinds `since` by the NIP-59 backdate
-// window (see stampRoundSince), so every fresh REQ round REPLAYS recent wraps.
-// A session-seen id set makes buffering idempotent: a replayed wrap is never
-// re-buffered, never re-rings the doorbell, and never re-notifies. Bounded so
-// a flood can't grow unboundedly; ciphertext only, never persisted.
+// Live inbound-wrap buffer: the wire receives DM wraps live but can't decrypt
+// them (signer + consent gate live in useDm17), so it stashes raw wraps here
+// and rings `dm:wrap` — avoiding a refetch and its NIP-42 latency. Replayed
+// wraps (the wire rewinds `since` by the NIP-59 window) are deduped by a
+// session-seen set. Bounded; ciphertext only, never persisted.
 
 /** Cap on buffered live wraps (a burst past this falls back to the poll). */
 const LIVE_WRAP_CAP = 256;
 /** Cap on remembered wrap ids (oldest halves are shed — the poll dedupes deeper). */
 const LIVE_SEEN_CAP = 4096;
 const liveWraps = new Map<string, NostrEvent>();
-/** Ids ever accepted into the buffer this session (replay dedupe). */
 const liveWrapSeen = new Set<string>();
 
 function rememberLiveWrap(id: string): void {
   if (liveWrapSeen.size >= LIVE_SEEN_CAP) {
-    // Shed the oldest half (Sets iterate in insertion order).
     let drop = LIVE_SEEN_CAP >> 1;
     for (const old of liveWrapSeen) {
       liveWrapSeen.delete(old);
@@ -897,20 +646,12 @@ function rememberLiveWrap(id: string): void {
   liveWrapSeen.add(id);
 }
 
-/**
- * Stash raw DM gift wraps the wire received live. Returns the wraps actually
- * accepted — ids already seen this session (a replayed round) are skipped, so
- * callers can gate the `dm:wrap` doorbell / notifications on genuinely new
- * arrivals.
- */
+/** Stash live DM wraps; returns only those not seen this session (gate doorbell/notifications on these). */
 export function bufferLiveDmWraps(wraps: NostrEvent[]): NostrEvent[] {
   const fresh: NostrEvent[] = [];
   const now = Math.floor(Date.now() / 1000);
   for (const w of wraps) {
-    // A wrap whose NIP-40 deadline has already passed is dropped on arrival —
-    // never buffered, never decrypted, never allowed to ring the doorbell (and
-    // so never able to raise a notification for a message that no longer
-    // exists). `openDmWrap` re-checks; this just stops it earlier.
+    // Drop expired wraps on arrival so they can't notify for a message that no longer exists.
     if (isExpired(w.tags, now)) continue;
     if (liveWrapSeen.has(w.id)) continue;
     if (liveWraps.size >= LIVE_WRAP_CAP) continue;
@@ -921,11 +662,7 @@ export function bufferLiveDmWraps(wraps: NostrEvent[]): NostrEvent[] {
   return fresh;
 }
 
-/**
- * Put drained wraps BACK (a consent-gate decline deferred the decrypt). This
- * bypasses the session-seen skip — the ids were marked seen when first
- * buffered — so the interactive retry / poll backstop can drain them again.
- */
+/** Re-buffer wraps after a deferred decrypt, bypassing the session-seen skip. */
 export function rebufferLiveDmWraps(wraps: NostrEvent[]): void {
   for (const w of wraps) {
     if (liveWraps.size >= LIVE_WRAP_CAP && !liveWraps.has(w.id)) continue;
@@ -933,7 +670,6 @@ export function rebufferLiveDmWraps(wraps: NostrEvent[]): void {
   }
 }
 
-/** Whether any live wraps are currently buffered awaiting a drain. */
 export function hasBufferedLiveDmWraps(): boolean {
   return liveWraps.size > 0;
 }

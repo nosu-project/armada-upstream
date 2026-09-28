@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
 
 /**
- * A per-session memo of something derived from an attachment's bytes, keyed
- * by the attachment's URL rather than the per-decrypt object URL it resolved
- * to. What it holds may be derived from decrypted plaintext, so every cache
- * made here is cleared with the purge (`purgeClientStorage`).
+ * A per-session memo of something derived from an attachment's bytes, keyed by
+ * attachment URL. May hold plaintext-derived data, so it's cleared on purge.
  */
 export interface AttachmentCache<T> {
   /** Seed with a value already computed elsewhere (the composer's local file). */
   prime(key: string, value: T): void;
   clear(): void;
-  /**
-   * The value for `key`. Computed from `src` when given and not already
-   * known; without one only a known value is returned.
-   */
+  /** The value for `key`, computed from `src` if given and unknown; else only a known value. */
   useValue(key: string, src?: string): T | undefined;
 }
 

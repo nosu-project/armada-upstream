@@ -7,14 +7,9 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
- * Edit a message the current user authored, NIP-09 style: delete the original
- * (kind 5) and republish a fresh event with the SAME `created_at` so the edit
- * keeps its place in the timeline. The relay enforces author-only deletion and
- * (via a kind-9 timestamp exemption) accepts the back-dated republish.
- *
- * The original tags are preserved (reply refs, mentions, imeta, etc.) except
- * for any prior `edited` marker; an `["edited", <unix>]` tag records the edit.
- * Returns the new event (with its new id) on success.
+ * Edit an own message NIP-09 style: delete (kind 5) and republish with the SAME
+ * `created_at` (the relay has a kind-9 timestamp exemption). Tags are preserved; an
+ * `["edited", <unix>]` tag records the edit. Returns the new event.
  */
 export function useEditMessage(relayUrl: string, groupId: string) {
   const { mutateAsync: publish } = useNostrPublish();
@@ -23,10 +18,9 @@ export function useEditMessage(relayUrl: string, groupId: string) {
     mutationFn: async ({ original, content }) => {
       const trimmed = content.trim();
       if (!trimmed) throw new Error("Message cannot be empty");
-      if (trimmed === original.content.trim()) return null; // no-op
+      if (trimmed === original.content.trim()) return null;
 
-      // 1. Delete the original (NIP-09). The `h` tag routes/scopes it to the
-      //    group; `k` records the deleted kind per NIP-09.
+      // `h` scopes the delete to the group; `k` records the deleted kind per NIP-09.
       await publish({
         kind: KIND_DELETE,
         content: "",
@@ -38,8 +32,6 @@ export function useEditMessage(relayUrl: string, groupId: string) {
         relay: relayUrl,
       });
 
-      // 2. Republish with the original timestamp + tags, swapping the content
-      //    and stamping an `edited` marker.
       const tags = original.tags.filter(([name]) => name !== "edited");
       tags.push(["edited", String(Math.floor(Date.now() / 1000))]);
 
@@ -56,13 +48,7 @@ export function useEditMessage(relayUrl: string, groupId: string) {
   });
 }
 
-/**
- * Delete a message the current user authored, NIP-09 style (kind 5). The relay
- * enforces author-only deletion; the `h` tag scopes it to the group and `k`
- * records the deleted kind per NIP-09. Use this for self-deletes; moderator
- * deletion of others' messages goes through the NIP-29 moderation event
- * (kind 9005) in `useGroupModeration`.
- */
+/** Self-delete (NIP-09 kind 5). Moderator deletes use kind 9005 in `useGroupModeration`. */
 export function useDeleteOwnMessage(relayUrl: string, groupId: string) {
   const { mutateAsync: publish } = useNostrPublish();
 

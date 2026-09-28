@@ -9,42 +9,26 @@ import { useEventStore } from '@/hooks/useEventStore';
 const SEED_FRESH_MS = 60_000;
 
 interface CacheFirstSeedOptions<T> {
-  /**
-   * The TanStack Query key to seed. Pass `undefined` to disable (e.g. while a
-   * required pubkey is missing) — the effect becomes a no-op.
-   */
+  /** The query key to seed; `undefined` disables. */
   queryKey: QueryKey | undefined;
   /** Store filter used to read the cached event. The first match is used. */
   filter: NostrFilter;
   /** Map the cached event into the query's data shape. */
   toData: (event: NostrRumor) => T;
-  /**
-   * Pull the representative event out of existing query data so the seed can
-   * avoid downgrading a newer event the network may have already written.
-   */
+  /** Extract the event from existing data, so the seed never downgrades it. */
   getEvent: (data: T) => NostrRumor | undefined;
 }
 
 /**
- * Seed a TanStack Query from the local IndexedDB event store so cached data
- * renders immediately, before the network query resolves.
- *
- * This handles only the "read cached event, seed if newer" half of the
- * cache-first pattern. The owning hook keeps its own `useQuery` (network
- * fetch, staleTime, enabled, relay-miss fallback) — that query stays
- * authoritative and overwrites the seed when it resolves.
- *
- * The seed never downgrades data already in the cache: if the existing entry
- * holds an event at least as new as the cached one, it's left untouched. This
- * also closes the race where a slow store read could clobber a fresh network
- * result that landed first.
+ * Seed a TanStack Query from the local event store so cached data renders before
+ * the network resolves. The owner's `useQuery` stays authoritative. Never
+ * downgrades newer data already in the cache (also covers a slow store read).
  */
 export function useCacheFirstSeed<T>(opts: CacheFirstSeedOptions<T>): void {
   const { queryKey, filter, toData, getEvent } = opts;
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
 
-  // Serialize the key so the effect re-runs when it changes by value.
   const queryKeyString = queryKey ? JSON.stringify(queryKey) : '';
 
   useEffect(() => {
@@ -52,10 +36,7 @@ export function useCacheFirstSeed<T>(opts: CacheFirstSeedOptions<T>): void {
       return;
     }
 
-    // An entry written moments ago (by the network query, a publish, or an
-    // earlier seed) already holds at least what the store does. Skipping the
-    // read keeps remount-heavy views — every member row's status on every
-    // channel switch — from re-querying the store for the same event.
+    // Skip the store read if the entry was written moments ago (remount-heavy views).
     const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
     if (Date.now() - updatedAt < SEED_FRESH_MS) {
       return;
@@ -80,8 +61,7 @@ export function useCacheFirstSeed<T>(opts: CacheFirstSeedOptions<T>): void {
     return () => {
       cancelled = true;
     };
-    // `filter`, `toData`, and `getEvent` are stable per render at call sites
-    // (literal/imported); `queryKeyString` captures key changes by value.
+    // `filter`/`toData`/`getEvent` are stable at call sites; the key is compared by value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKeyString, eventStore, queryClient]);
 }

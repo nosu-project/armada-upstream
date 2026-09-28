@@ -13,29 +13,19 @@ interface DropdownBottomPosition {
 }
 
 interface UsePortalDropdownOptions {
-  /** Ref to the textarea (or single-line input) the dropdown is anchored to. */
   textareaRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
-  /** Whether the dropdown is currently visible. */
   isOpen: boolean;
-  /** Callback to close the dropdown (e.g. on scroll/resize). */
   onClose: () => void;
-  /** Max height of the dropdown in px (must match the CSS max-h value). */
+  /** Max height in px (must match the CSS max-h value). */
   dropdownHeight: number;
-  /** Width of the dropdown in px (must match the CSS width value). */
+  /** Width in px (must match the CSS width value). */
   dropdownWidth?: number;
 }
 
 /**
- * Computes fixed viewport coordinates for an autocomplete dropdown anchored
- * to a caret position inside a textarea. The dropdown is positioned below
- * the caret line, or flipped above if it would overflow the viewport bottom.
- *
- * Also dismisses the dropdown on scroll or resize, since fixed positioning
- * would cause misalignment.
- *
- * Use `renderPortal` to render the dropdown as a portal to `document.body`
- * so it escapes ancestor overflow clipping and CSS transform containing
- * blocks (e.g. Radix Dialog).
+ * Fixed viewport coordinates for a caret-anchored autocomplete dropdown, flipped above on
+ * bottom overflow; dismissed on scroll/resize. `renderPortal` escapes overflow clipping and
+ * transformed ancestors (e.g. Radix Dialog).
  */
 export function usePortalDropdown({
   textareaRef,
@@ -45,7 +35,6 @@ export function usePortalDropdown({
   dropdownWidth = 280,
 }: UsePortalDropdownOptions) {
 
-  /** Compute fixed viewport position for the dropdown given a caret index. */
   const computePosition = useCallback(
     (caretCoords: { top: number; left: number }): DropdownPosition => {
       const textarea = textareaRef.current;
@@ -56,7 +45,6 @@ export function usePortalDropdown({
       const top = rect.top + caretCoords.top - textarea.scrollTop + lineHeight + 4;
       const left = rect.left + Math.max(0, Math.min(caretCoords.left, textarea.clientWidth - dropdownWidth));
 
-      // If the dropdown would overflow the bottom of the viewport, flip above
       const flippedTop = rect.top + caretCoords.top - textarea.scrollTop - dropdownHeight - 4;
       const useFlipped = top + dropdownHeight > window.innerHeight && flippedTop > 0;
 
@@ -68,12 +56,7 @@ export function usePortalDropdown({
     [textareaRef, dropdownHeight, dropdownWidth],
   );
 
-  /**
-   * Compute a BOTTOM-anchored position: the dropdown's bottom edge sits just
-   * above the textarea's top, so a short list hugs the composer (and a long one
-   * grows upward) instead of floating at a fixed offset below the caret. `left`
-   * still tracks the caret column, clamped to the viewport.
-   */
+  /** Bottom edge just above the textarea so a short list hugs the composer; `left` tracks the caret. */
   const computeBottomPosition = useCallback(
     (caretCoords: { left: number }): DropdownBottomPosition => {
       const textarea = textareaRef.current;
@@ -88,10 +71,7 @@ export function usePortalDropdown({
     [textareaRef, dropdownWidth],
   );
 
-  // Dismiss the dropdown when any ancestor scrolls or the window resizes,
-  // since fixed positioning would cause the dropdown to become misaligned.
-  // Scrolling *inside* the dropdown itself (e.g. paging through a long list)
-  // must not dismiss it, so ignore scroll events that originate within it.
+  // Fixed positioning misaligns on scroll/resize; scrolling inside the dropdown is ignored.
   useEffect(() => {
     if (!isOpen) return;
     const handleScroll = (e: Event) => {

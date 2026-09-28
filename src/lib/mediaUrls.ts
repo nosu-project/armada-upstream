@@ -1,31 +1,25 @@
-/** Image extensions rendered inline. */
 import { WEBXDC_MIME } from "@/lib/webxdcMime";
 export const IMAGE_EXTS = 'jpg|jpeg|png|gif|webp|svg|avif';
 
 /** Video extensions rendered as players. */
 export const VIDEO_EXTS = 'mp4|webm|mov|qt|avi|mkv|flv';
 
-/** Audio extensions rendered as players. Includes the mime-db-first synonyms
- *  Blossom servers pick when naming content-addressed blobs from the upload's
- *  Content-Type (audio/mpeg → `.mpga`, audio/ogg → `.oga`, audio/webm → `.weba`). */
+/** Includes mime-db synonyms Blossom uses for content-addressed blobs (`.mpga`, `.oga`, `.weba`). */
 export const AUDIO_EXTS = 'mp3|mpga|wav|ogg|oga|flac|m4a|aac|opus|weba';
 
 /** All media extensions (image + video + audio + webxdc). */
 export const ALL_MEDIA_EXTS = `${IMAGE_EXTS}|${VIDEO_EXTS}|${AUDIO_EXTS}|xdc`;
 
-/** Matches image URLs. */
 export const IMAGE_URL_REGEX = new RegExp(
   `https?:\\/\\/[^\\s]+\\.(${IMAGE_EXTS})(\\?[^\\s]*)?`,
   'i',
 );
 
-/** Matches video URLs. */
 export const VIDEO_URL_REGEX = new RegExp(
   `https?:\\/\\/[^\\s]+\\.(${VIDEO_EXTS})(\\?[^\\s]*)?`,
   'gi',
 );
 
-/** Matches audio URLs. */
 export const AUDIO_URL_REGEX = new RegExp(
   `https?:\\/\\/[^\\s]+\\.(${AUDIO_EXTS})(\\?[^\\s]*)?`,
   'gi',
@@ -43,21 +37,12 @@ export const IMETA_MEDIA_URL_REGEX = new RegExp(
   'gi',
 );
 /**
- * Hosts whose "video" files are really silent, looping GIF renditions. Other
- * clients' GIF pickers (Tenor/Giphy) share the `.mp4`/`.webm` rendition rather
- * than the `.gif`, so a plain `<video controls>` renders a GIF as a heavy,
- * chrome-laden clip that doesn't autoplay. Matched against the URL host with a
- * leading-dot boundary so only these domains and their subdomains qualify
- * (`media.tenor.com`, `media1.giphy.com`), never a lookalike like `nottenor.com`.
+ * Hosts whose "videos" are GIF renditions (Tenor/Giphy pickers share .mp4/.webm).
+ * Dot-boundary match so lookalikes like `nottenor.com` don't qualify.
  */
 const GIF_VIDEO_HOST_REGEX = /(^|\.)(tenor\.com|giphy\.com)$/i;
 
-/**
- * Whether a media URL should present as a GIF (autoplay, loop, muted, no
- * controls) rather than a video. True for known GIF-CDN hosts and for the
- * `.gif.mp4` / `.gif.webm` filename convention some pickers emit. A real `.gif`
- * is already an `<img>`, so this only matters for the video render path.
- */
+/** Whether a video URL should render as a GIF (autoplay, loop, muted): known GIF hosts or `.gif.mp4`/`.gif.webm`. */
 export function isGifLikeUrl(url: string): boolean {
   let parsed: URL;
   try {
@@ -70,28 +55,16 @@ export function isGifLikeUrl(url: string): boolean {
 }
 
 /**
- * Video container extensions no browser can decode in a `<video>` element —
- * they are in {@link VIDEO_EXTS} (so they classify as video) but only ever
- * render as "unavailable" if handed to the player. mp4/webm/mov play; these
- * never do, so the render path offers a download instead. mkv is deliberately
- * omitted: Chromium plays it when the codecs inside are supported.
+ * Containers in {@link VIDEO_EXTS} no browser plays; rendered as downloads.
+ * mkv is omitted: Chromium plays it when the codecs are supported.
  */
 const UNPLAYABLE_VIDEO_EXTS = /^(avi|flv|wmv|asf|mpg|mpeg|vob|rm|rmvb|divx)$/;
 
-/**
- * MIME types for the same never-playable containers, for URLs whose type is
- * only known from an imeta `m` tag (extension-less Blossom URLs) — the AVI a
- * browser reports as `video/x-msvideo` or `video/vnd.avi`, etc.
- */
+/** MIME equivalents, for extension-less URLs typed only by imeta `m`. */
 const UNPLAYABLE_VIDEO_MIME =
   /^video\/(x-msvideo|vnd\.avi|avi|msvideo|x-ms-wmv|x-ms-asf|x-flv|flv|mpeg|vnd\.rn-realvideo|divx)$/;
 
-/**
- * Whether a video URL/MIME is a container the browser cannot play inline, so it
- * should render as a download card rather than a `<video>` that fails to a
- * "Video unavailable" placeholder. Checks the imeta/declared MIME first, then
- * the URL extension.
- */
+/** Whether a video should render as a download card instead of `<video>`; checks MIME, then extension. */
 export function isUnplayableVideo(url: string, mime?: string): boolean {
   if (mime && UNPLAYABLE_VIDEO_MIME.test(mime.toLowerCase())) return true;
   let ext = "";
@@ -99,9 +72,7 @@ export function isUnplayableVideo(url: string, mime?: string): boolean {
     const seg = new URL(url).pathname.split("/").pop() ?? "";
     const dot = seg.lastIndexOf(".");
     if (dot > 0 && dot < seg.length - 1) ext = seg.slice(dot + 1).toLowerCase();
-  } catch {
-    // not a URL — no extension to read
-  }
+  } catch { /* ignore */ }
   return ext ? UNPLAYABLE_VIDEO_EXTS.test(ext) : false;
 }
 

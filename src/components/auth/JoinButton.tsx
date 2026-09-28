@@ -5,10 +5,8 @@ import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
 
 /**
- * The canonical logged-out call to action: a single "Join" button that opens
- * the login dialog (with its sign-up escape hatch) — the same pattern as the
- * channel sidebar and welcome page. Render it anywhere a signed-out user
- * needs an account; never show a raw Log in / Sign up pair.
+ * The canonical logged-out call to action; opens the login dialog. Never show a
+ * raw Log in / Sign up pair.
  */
 export function JoinButton({
   className,

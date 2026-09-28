@@ -1,42 +1,15 @@
 /**
- * Content-blind push subscription set.
+ * Content-blind push subscription set: maps the native service's notification
+ * inputs to NIP-PUSH filter registrations. The server matches raw
+ * kinds/tags/authors and sends a wake-up; the service worker decrypts/renders.
+ * NIP-29 by `#h` (mentions-only via `#p`), NIP-17 wraps to the user, friends-only
+ * kind-4, Concord stream authors merged by relay set (per-user quota). Ids and
+ * arrays are deterministic to avoid server churn. Pure: no browser objects.
  *
- * Maps Armada's notification model (the same inputs the native background
- * service in `useNativeNotifications` watches) to a set of NIP-PUSH filter
- * registrations for the nostr-push server. The server matches raw
- * kinds/tags/authors and sends a static wake-up; it never sees plaintext. The
- * service worker fetches the referenced event and decrypts/renders it (see
- * `sw.js`).
- *
- * Design goals mirroring native:
- *   - NIP-29 groups by `#h`; "all messages" vs "mentions-only" split so a
- *     mentions-only group only wakes on messages that `#p`-tag the user.
- *   - NIP-17 DMs (kind 1059) addressed to the user, plus friends-only legacy
- *     kind-4 DMs scoped to the follow set.
- *   - Concord (kind-1059 stream authors), merged by relay set
- *     to keep the subscription count under the server's per-user quota.
- *   - deterministic subscription ids and sorted tag/author arrays, so an
- *     unrelated refetch that merely reorders doesn't churn the server.
- *
- * The builder is pure (no browser objects): it emits `PushSubscriptionSpec`s;
- * the caller merges in `domain` + the browser `push_subscription`.
- *
- * Every subscription the worker can OPEN sets `inline_event` (all but the
- * legacy NIP-04 one — see below), which asks the server to embed the matched
- * event in the push payload itself (see nostr-push). It started as a
- * NIP-17 necessity — a gift wrap's sender is hidden until it's unsealed, so the
- * request-vs-known decision can only be made client-side — but it is what makes
- * every scope presentable: the worker renders the real message from the real
- * event rather than showing "New message" and then racing a relay for the text.
- * The server's static `title`/`body` below stay as the fallback for when it
- * doesn't arrive.
- *
- * It is best-effort by design and can never fail a delivery. nostr-push drops
- * the inlined event if the WHOLE payload would exceed its ~3800-unit web-push
- * budget, and the static wake-up (still carrying `event_id`) goes out instead —
- * so a long message degrades rather than disappearing. That budget is also why
- * `notification.data` stays lean here: every byte of routing hint is a byte the
- * event doesn't get.
+ * Every openable scope sets `inline_event` so the worker renders the real
+ * event; the server drops it when the payload would exceed its ~3800-unit
+ * web-push budget (hence lean `notification.data`), and static title/body remain
+ * the fallback.
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -46,29 +19,23 @@ import type { PushPrefs } from "@/lib/pushPrefs";
 import type { NostrFilter } from "@nostrify/types";
 import type { ConcordSub } from "@/concord/lib/concordNotifications";
 
-// Kinds we key notifications off (all plaintext-or-encrypted matched by tag).
 const KIND_GROUP_MESSAGE = 9;
 const KIND_GROUP_REPLY = 1111;
 const KIND_REACTION = 7;
 const KIND_DM_NIP04 = 4;
 const KIND_GIFT_WRAP = 1059;
 
-/** How the service worker should fetch + render the referenced event. */
+/** How the service worker fetches and renders the referenced event. */
 export type PushScope = "group" | "group-mention" | "dm" | "c2";
 
 /** Routing hints carried in the push payload's `data` for the service worker. */
 export interface PushNotifData {
   scope: PushScope;
-  /** Relays the SW can fetch the event id from. */
   relays: string[];
-  /** Opaque, JSON-serialised to the wire alongside the server's own fields. */
   [key: string]: unknown;
 }
 
-/**
- * One content-blind subscription: a stable id, the relays the server should
- * watch, the raw filter, and the static notification (+ SW routing data).
- */
+/** One content-blind subscription: stable id, relays, raw filter, static notification + SW routing data. */
 export interface PushSubscriptionSpec {
   id: string;
   /** Older logical ids this exact watch supersedes (quota-safe migration). */
@@ -85,47 +52,25 @@ export interface Nip29PushGroup {
   level: "all" | "mentions";
 }
 
-/** Everything needed to compute the subscription set (mirrors native inputs). */
 export interface PushSubscriptionInput {
   pubkey: string;
   /** Relay-scoped NIP-29 groups; a bare `h` id is never globally unique. */
   nip29Groups: Nip29PushGroup[];
   prefs: PushPrefs;
-  /** Relays DMs are read from. */
   dmRelays: string[];
-  /** Follows — friends-only kind-4 DM authors. */
+  /** Follows: friends-only kind-4 DM authors. */
   dmFollows: string[];
   /** Explicit per-conversation DM levels, keyed by canonical conversation key. */
   dmLevels: Record<string, "all" | "mentions" | "nothing">;
-  /**
-   * Watched Concord channels. A `muted` channel is present so callers can seal
-   * it into the decrypt config, but it MUST NOT become a gateway subscription —
-   * it is skipped here.
-   */
+  /** Watched Concord channels. `muted` ones are here only for the decrypt config and get NO gateway subscription. */
   concord: Array<ConcordSub & { muted?: boolean }>;
 }
 
 /**
- * Convert an app-local subscription id into the globally unique id expected by
- * nostr-push. The server indexes subscriptions by `subscription_id` alone, so
- * a shared id such as `armada-groups` would otherwise be claimed by whichever
- * user registers it first. Include both owner and domain because the same
- * Nostr identity may use Armada from more than one web origin.
- *
- * `installation` adds a per-install dimension, and registering an id is
- * REPLACE — so any two installs that compute the same id take the gateway's one
- * record in turn, and whichever synced last is the only one still reachable.
- * The native builds pass one (`nativePush.ts`), because they share the public
- * web origin as their `domain` with the hosted client: without it, signing in
- * on the iPhone would silently overwrite the same account's browser
- * registrations, and the browser's next sync would overwrite the iPhone's back.
- *
- * Web and native callers both pass a stable installation id. Older web builds
- * omitted it, so their callers must register the new id before pruning the
- * legacy id; `pushRegistry.ts` carries that migration state.
- *
- * Keep the readable logical id for server logs and append a 128-bit digest;
- * nostr-push caps subscription ids at 64 characters.
+ * Make an app-local id globally unique for nostr-push (ids are server-global):
+ * owner + domain + installation, since registration is REPLACE and native builds
+ * share the web origin. Readable id plus a 128-bit digest (ids cap at 64 chars).
+ * Legacy web ids lacked installation; `pushRegistry.ts` handles that migration.
  */
 export function scopePushSubscriptionId(
   logicalId: string,
@@ -142,26 +87,10 @@ export function scopePushSubscriptionId(
 }
 
 /**
- * The same subscription, with a body that can stand on its own.
- *
- * The group scopes register an EMPTY body on purpose: on the web it shows for
- * only the instant before the service worker replaces it with the decrypted
- * message. iOS has a decrypt stage too now — the Notification Service Extension
- * (`ios/App/NotificationService`) — so `inline_event` and `relays` ride through
- * unchanged and the extension does the same rewrite.
- *
- * What differs is the FALLBACK. On the web an un-rewritten notification is a
- * flash; on iOS it is what stays on the lock screen, and there are two ordinary
- * ways to get one: an event too large for the gateway to inline (APNs allows
- * 4096 bytes of payload, and inlining is best-effort by design), and a login
- * whose key never reaches the device (NIP-46/NIP-07), for which the extension
- * cannot decrypt anything at all. An alert with a title and no body is the one
- * outcome that reads as broken rather than as terse, so the body is filled.
- *
- * Deliberately NOT filled with NIP-PUSH's `{{content}}` template, which would
- * be the obvious way to do better: that is resolved SERVER-side, and would put
- * the message text into a payload built by a gateway whose entire point is that
- * it never handles plaintext.
+ * The subscription with a non-empty fallback body. On web the empty body is
+ * replaced instantly; on iOS an unrewritten notification (event too large to
+ * inline, or a NIP-46/07 login that can't decrypt) stays on the lock screen.
+ * Not `{{content}}`: that is resolved server-side and would expose plaintext.
  */
 export function standaloneNotification(
   spec: PushSubscriptionSpec,
@@ -186,20 +115,14 @@ function uniqSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
 
-/**
- * Build the content-blind subscription set. Returns `[]` when there's nothing
- * to watch (the caller then registers nothing / clears the server record).
- */
+/** Build the subscription set; `[]` when there's nothing to watch. */
 export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscriptionSpec[] {
   const { pubkey, prefs } = input;
   const specs: PushSubscriptionSpec[] = [];
 
-  // A group id is meaningful only at its relay. The former parallel arrays
-  // (`relayUrls` + `groupIds`) made the gateway watch their Cartesian product:
-  // joining `general` on relay A also subscribed to `general` on relay B, and
-  // two same-named rooms with different exact levels collapsed into one. Keep
-  // each filter on exactly one relay; the relay digest keeps logical ids stable
-  // and distinct while the old flat ids are listed for quota-safe migration.
+  // A group id is only meaningful at its relay: keep each filter on exactly one
+  // relay (parallel relay/group arrays watched their Cartesian product). The
+  // relay digest keeps ids stable; old flat ids are listed for migration.
   const nip29ByRelay = new Map<
     string,
     { all: Set<string>; mentions: Set<string> }
@@ -214,8 +137,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     nip29ByRelay.set(item.relay, bucket);
   }
 
-  // Replies and reactions have different kinds, so they cannot overlap either
-  // kind-9 filter. They apply to every non-muted channel on its exact relay.
+  // Replies/reactions have different kinds, so they can't overlap the kind-9 filters.
   const directedKinds = [
     ...(prefs.replies ? [KIND_GROUP_REPLY] : []),
     ...(prefs.reactions ? [KIND_REACTION] : []),
@@ -226,11 +148,8 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     const allGroups = [...bucket.all].sort();
     const mentionOnly = [...bucket.mentions].filter((id) => !bucket.all.has(id)).sort();
     const watchedGroups = uniqSorted([...allGroups, ...mentionOnly]);
-    // IDs remain relay-scoped even when this snapshot currently has only one
-    // relay. Switching 2→1 must keep the surviving child's id, and a one-relay
-    // level change must expose the old category as authoritative stale state
-    // before its replacement PUT. Reverting to the flat base in either case
-    // creates a new id at exact quota and aborts every later DM/Concord refresh.
+    // Stay relay-scoped even with one relay: reverting to the flat id would create
+    // a new id at exact quota and abort later refreshes.
     const logicalId = (base: string) => `${base}-${tag}`;
     const replaces = (base: string) => [base];
 
@@ -281,14 +200,11 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     }
   }
 
-  // Direct messages — modern NIP-17 plus legacy NIP-04.
   const dmRelays = uniqSorted(input.dmRelays);
   const dmFollows = uniqSorted(input.dmFollows);
 
-  // NIP-17 wrap authors are single-use ephemeral keys, so sender/follow
-  // filtering is impossible until the client decrypts the wrap. Watch every
-  // gift wrap addressed to the user, matching the wire and native notification
-  // service. This is also what lets message requests wake web push.
+  // NIP-17 wrap authors are ephemeral, so watch every wrap to the user (as the
+  // native service does); this also lets message requests wake push.
   const hasExplicitDmWatch = Object.values(input.dmLevels)
     .some((level) => level !== "nothing");
   if ((prefs.directMessages || hasExplicitDmWatch) && dmRelays.length > 0) {
@@ -304,18 +220,10 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     });
   }
 
-  // Legacy NIP-04 remains friends-only because its public author is available
-  // to the content-blind push server and unknown senders would be a spam path.
-  // Exact 1:1 overrides still win over that global fallback: an explicit
-  // `all`/`mentions` adds the peer while global DMs are off, and `nothing`
-  // removes them while global DMs are on. Canonical group-DM participant sets
-  // contain a comma and must never be flattened into unrelated author trust.
-  //
-  // The ONE subscription that does not ask for `inline_event`: the worker
-  // opens NIP-17 envelopes and Concord stream wraps, and a kind-4 ciphertext is
-  // neither — it would arrive, fail to open, and fall back to this same static
-  // wake-up, having spent payload budget to do it. Inline it if and when the
-  // worker learns NIP-04.
+  // NIP-04 stays friends-only (its author is public, so strangers would be a spam
+  // path). Exact 1:1 overrides win over the global setting; group keys contain a
+  // comma and are never flattened into author trust. No `inline_event`: the worker
+  // can't open NIP-04.
   const legacyDmAuthors = new Set(prefs.directMessages ? dmFollows : []);
   for (const [conversation, level] of Object.entries(input.dmLevels)) {
     if (!/^[0-9a-f]{64}$/.test(conversation)) continue;
@@ -336,10 +244,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     });
   }
 
-  // Concord (kind-1059 stream authors), merged by relay set. A muted channel is
-  // in `input.concord` only so the caller can seal its decrypt key — it must
-  // raise no gateway subscription, or the mute would be the thing that starts
-  // the wake-ups.
+  // Muted Concord channels raise no gateway subscription.
   for (const spec of mergeByRelaySet(
     input.concord
       .filter((s) => !s.muted)
@@ -362,12 +267,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
   return specs;
 }
 
-/**
- * Collapse subscriptions that share an identical relay set into one filter
- * (dedup + sort the merged tag/author values). Keeps the subscription count
- * under the server's per-user quota. `scope` is only used to disambiguate the
- * (unused here) call sites; ids come from `make`.
- */
+/** Merge subscriptions with identical relay sets (deduped, sorted) to stay under the per-user quota. */
 function mergeByRelaySet(
   items: Array<{ relays: string[]; values: string[] }>,
   _scope: PushScope,

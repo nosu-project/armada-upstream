@@ -6,10 +6,8 @@ import { useStableNavigate } from "@/hooks/useStableNavigate";
 import { cn } from "@/lib/utils";
 
 /**
- * Icon button to Discover's emoji packs, for a picker header that already has
- * a row to sit in. Calls `onBrowse` first so the host can close itself.
- * Kept out of `EmojiPicker` so importing it doesn't pull emoji-mart into the
- * main bundle.
+ * Icon button to Discover's emoji packs. Kept out of `EmojiPicker` so importing
+ * it doesn't pull emoji-mart into the main bundle.
  */
 export function BrowseEmojiPacksButton({ onBrowse, className }: { onBrowse: () => void; className?: string }) {
   const navigate = useStableNavigate();

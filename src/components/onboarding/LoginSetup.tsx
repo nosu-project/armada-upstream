@@ -40,41 +40,19 @@ import {
 } from "@/lib/webPushPrompt";
 
 /**
- * The post-login setup flow.
- *
- * Everything a user has to answer after signing in — the OS notification
- * permission, the Android battery-optimization exemption, and the bulk-decrypt
- * consent — used to arrive as three unrelated interruptions: two of them raw
- * system dialogs fired from headless mounts with no explanation, one a toast,
- * one a modal, all racing each other and the sync overlay. This replaces them
- * with one queue of full-screen steps in the signup wizard's chrome: a progress
- * bar, one question at a time, each with the context needed to answer it, and
- * each skippable.
- *
- * Steps are enqueued only when they actually apply, so a web user with a local
- * key sees nothing at all. The flow holds off entirely while the sync gate is
- * up, then presents whatever is queued.
+ * Post-login setup: one queue of skippable full-screen steps (notification
+ * permission, battery exemption, bulk-decrypt consent, …). Steps enqueue only
+ * when they apply, and the flow waits while the sync gate is up.
  */
 
-/** Steps, in the order they're offered. */
 type StepId = "relays" | "notifications" | "webpush" | "battery" | "decrypt";
 
-/**
- * Set once the notification step has been shown. Unlike the old launch-time OS
- * prompt (which re-fired every launch until the user answered at OS level), a
- * declined full-screen step is not re-asked — the Settings toggle is the way
- * back in.
- */
+/** Set once the notification step was shown; declined steps aren't re-asked (Settings is the way back). */
 const NOTIF_PROMPT_KEY = "armada:notif-prompt-shown";
 
 
 
-/**
- * Set once the battery-exemption step has been shown. Keep the original key so
- * timestamps written by older releases also count as "already offered". A
- * user who keeps Android's optimized setting has made a valid choice; the
- * persistent warning in notification Settings remains the non-modal way back.
- */
+/** Set once the battery step was shown. Original key kept so older releases' timestamps count. */
 const BATTERY_PROMPT_KEY = "armada:battery-exemption-nudged-at";
 
 function read(key: string): string | null {
@@ -88,12 +66,9 @@ function read(key: string): string | null {
 function write(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
-  } catch {
-    // best-effort
-  }
+  } catch { /* ignore */ }
 }
 
-/** Whether the Android battery-optimization step should be offered right now. */
 async function batteryStepApplies(): Promise<boolean> {
   if (Capacitor.getPlatform() !== "android") return false;
   if (read(BATTERY_PROMPT_KEY)) return false;
@@ -104,26 +79,22 @@ export function LoginSetup() {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const syncing = useSyncGateActive();
-  // Signup logs the user in before the profile/create-join steps render (and
-  // suppresses the sync gate), so hold every step until the wizard is done —
-  // otherwise a queued step paints over profile creation at z-[260].
+  // Signup logs in before profile steps render, so hold every step until the
+  // wizard is done or one paints over it at z-[260].
   const onboarding = useOnboardingActive();
 
   const { logout } = useLoginActions();
   const [queue, setQueue] = useState<StepId[]>([]);
   const [completed, setCompleted] = useState(0);
   const [leaving, setLeaving] = useState(false);
-  // Backing out signs the account out, and logout wipes this device's copy of
-  // its data — so the arrow and Escape ask first rather than doing it.
+  // Backing out logs out, which wipes this device's data, so confirm first.
   const [confirmingBack, setConfirmingBack] = useState(false);
   const ownsRelayList = user
     ? !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user.pubkey
     : false;
   const hasSignedRelayList = ownsRelayList && config.relayMetadata.relays.length > 0;
 
-  // The recovery prompt is only meaningful when sync came back empty-handed.
-  // If the account already has a relay list, restored encrypted settings, or
-  // any joined server, there is nothing to recover — don't interrupt.
+  // Only prompt for recovery when sync found nothing (no relay list, settings, or servers).
   const { doc: settings, isFetched: settingsFetched } = useEncryptedSettings();
   const joinedServers = useNip29Servers();
   const hasRestoredData =
@@ -138,48 +109,31 @@ export function LoginSetup() {
     setCompleted((c) => c + 1);
   }, []);
 
-  // The decrypt step is demand-driven: the consent gate opens it the first time
-  // a surface needs a real (uncached) decrypt, which for most users is landing
-  // on /dm right after login — but it can also be much later, long after the
-  // other steps are done. Either way it joins the same queue.
+  // Demand-driven: opened the first time a surface needs an uncached decrypt.
   useEffect(() => registerConsentPromptOpener(() => enqueue("decrypt")), [enqueue]);
 
-  // The web-push opt-in is driven by the app-wide push bridge
-  // (WebPushNotifications), which knows when a fresh user could receive push.
-  // It asks us to surface the step here — parallel to the native
-  // `NotificationsStep`, but for web/PWA.
+  // WebPushNotifications knows when a fresh user could receive push.
   useEffect(() => registerWebPushOptInOpener(() => enqueue("webpush")), [enqueue]);
 
-  // Login discovery adopts a signed relay list before the sync gate lifts, and
-  // the account wizard opts brand-new accounts out entirely. What's left for
-  // this step is the genuine recovery case: an existing account whose setup
-  // sync couldn't find. Offer a plain, skippable lookup; the same form lives in
-  // Settings for later. A skip is remembered per account.
+  // Genuine recovery case only (existing account, setup not found). Skips are remembered per account.
   useEffect(() => {
     if (!user || syncing || onboarding) return;
-    // Restore can settle across adjacent renders. If any data arrives after the
-    // prompt was queued from an empty render, pull it rather than leaving a
-    // stale "couldn't find your setup" screen over a working account.
+    // Restore can settle across renders; drop a stale prompt when data arrives.
     if (hasRestoredData) {
       setQueue((current) => current.filter((candidate) => candidate !== "relays"));
       return;
     }
-    // An in-flight settings read looks empty; wait for it to resolve so a slow
-    // relay is never mistaken for "nothing found".
+    // An in-flight settings read looks empty; don't mistake a slow relay for "nothing found".
     if (!settingsFetched) return;
     if (relayRecoveryPromptShown(user.pubkey)) return;
     enqueue("relays");
   }, [user, syncing, onboarding, hasRestoredData, settingsFetched, enqueue]);
 
-  // If this unmounts with a decrypt prompt still queued, the callers awaiting
-  // that decision would hang forever. Release them as "not now" (unpersisted,
-  // so they're asked again next time).
+  // Release pending decrypt callers as "not now" on unmount, or they hang forever.
   useEffect(() => {
     return () => resolveConsentPrompt("declined");
   }, []);
 
-  // Probe the native permission steps once the user is in and the sync overlay
-  // is gone.
   useEffect(() => {
     if (!user || syncing || onboarding) return;
     if (!hasNativeNotificationService()) return;
@@ -192,12 +146,11 @@ export function LoginSetup() {
           if (nativeNotificationIntent() && !read(NOTIF_PROMPT_KEY)) enqueue("notifications");
           return;
         }
-        // Already granted — the exemption is the only thing that may be missing.
         if (await batteryStepApplies()) {
           if (!cancelled) enqueue("battery");
         }
       } catch {
-        // Permission probe failed — offer nothing rather than guess.
+        // Probe failed: offer nothing rather than guess.
       }
     })();
     return () => {
@@ -207,8 +160,7 @@ export function LoginSetup() {
 
   const step = queue[0];
 
-  // Record that a step was surfaced as it renders, so a user who force-quits
-  // mid-flow isn't asked the same thing on every launch.
+  // Record at render so a force-quit mid-flow isn't re-asked every launch.
   useEffect(() => {
     if (step === "relays" && user?.pubkey) markRelayRecoveryPromptShown(user.pubkey);
     if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
@@ -216,15 +168,12 @@ export function LoginSetup() {
     if (step === "battery") write(BATTERY_PROMPT_KEY, "1");
   }, [step, user?.pubkey]);
 
-  // Do not paint one contradictory frame while the effect above removes a
-  // relay step that was queued just before restore data arrived.
+  // Avoid a contradictory frame while the relay step is being removed.
   if (!step || syncing || onboarding || (step === "relays" && hasRestoredData)) return null;
 
   const total = completed + queue.length;
 
-  // The recovery step is the first thing a login lands on, so going back from
-  // it means changing one's mind about the login: sign that account out. The
-  // marker goes with it, so the same key signing in again is asked again.
+  // Backing out of the first step signs the account out; the marker goes too.
   const backOutOfLogin = step === "relays" && completed === 0 && user && !leaving
     ? () => {
       setLeaving(true);
@@ -245,8 +194,7 @@ export function LoginSetup() {
       {step === "notifications" && (
         <NotificationsStep
           onDone={async (granted) => {
-            // Granting is what makes the exemption matter, so chain straight
-            // into it rather than waiting for the next launch to notice.
+            // Granting is what makes the exemption matter, so chain into it.
             if (granted && (await batteryStepApplies())) enqueue("battery");
             advance();
           }}
@@ -281,11 +229,8 @@ function RelayStep({
   onConfirmBack?: () => void;
   onCancelBack: () => void;
 }) {
-  // The shell binds Escape only to a close, which this step has none of;
-  // Escape here backs out of the login like the arrow does (or, at the
-  // confirmation, steps back from it) — unless it was spent dismissing a
-  // popover first (Radix prevents the default then), belongs to a field being
-  // typed in, or is ending an IME composition.
+  // Escape backs out like the arrow, unless spent on a popover (default
+  // prevented), inside a text field, or ending an IME composition.
   useEffect(() => {
     if (!onBack) return;
     const onKey = (e: KeyboardEvent) => {
@@ -336,13 +281,11 @@ function RelayStep({
   );
 }
 
-/** Whether a key event belongs to a field the user is typing in. */
 function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement
     && (target.isContentEditable || /^(input|textarea|select)$/i.test(target.tagName));
 }
 
-/** Circular glyph frame matching the signup wizard's brand marks. */
 function StepGlyph({ children }: { children: ReactNode }) {
   return (
     <div className="flex size-20 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
@@ -397,25 +340,19 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
   );
 }
 
-/**
- * The web/PWA counterpart to `NotificationsStep`. Unlike the native path, this
- * uses Web Push (a push service is involved), so the copy stays honest about
- * that rather than claiming nothing leaves the device.
- */
+/** Web/PWA counterpart to `NotificationsStep`; copy is honest that a push service is involved. */
 function WebPushStep({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
-  // Where Web Push is unavailable this same step offers the in-page notifier
-  // instead, so the copy must not promise closed-app delivery.
+  // Foreground mode must not promise closed-app delivery.
   const foreground = webPushOptInMode() === "foreground";
 
   const enable = async () => {
     setBusy(true);
     try {
-      // Runs the live hook's enable() — this click is the gesture that grants
-      // Notification permission.
+      // This click is the gesture that grants Notification permission.
       await runWebPushEnable();
     } catch {
-      // Permission denied or subscribe failed — the Settings toggle remains.
+      // Denied or subscribe failed; the Settings toggle remains.
     } finally {
       setBusy(false);
       onDone();
@@ -463,12 +400,8 @@ function BatteryStep({ onDone }: { onDone: () => void }) {
     setBusy(true);
     try {
       await requestIgnoreBatteryOptimizations();
-    } catch {
-      // The OS dialog may be unavailable; the settings warning remains.
-    } finally {
-      // The step advances either way: an OS that declined to show the dialog
-      // (already exempt, OEM without the intent) is indistinguishable from one
-      // that showed it, and a step that stays put reads as a dead button.
+    } catch { /* ignore */ } finally {
+      // Advance either way: an OS that didn't show the dialog is indistinguishable from one that did.
       setBusy(false);
       onDone();
     }

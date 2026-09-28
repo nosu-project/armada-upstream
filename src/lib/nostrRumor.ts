@@ -4,13 +4,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export type NostrRumor = Omit<NostrEvent, "sig">;
 
 /**
- * Whether a rumor still carries its signature, narrowing it to a full
- * `NostrEvent`.
- *
- * Timelines mix the two freely — relay reads are signed, local-store reads are
- * not (`db/mainEventStore.ts` drops `sig`) — and rendering does not care. This
- * is for the few places that do: anything that re-publishes an event verbatim,
- * where an unsigned copy is rejected by every relay.
+ * Narrow a rumor to a signed `NostrEvent`. Local-store reads are unsigned
+ * (`db/mainEventStore.ts` drops `sig`); needed wherever an event is re-published verbatim.
  */
 export function isSigned(rumor: NostrRumor): rumor is NostrEvent {
   const sig = (rumor as Partial<NostrEvent>).sig;

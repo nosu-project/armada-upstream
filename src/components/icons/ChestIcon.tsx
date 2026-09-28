@@ -1,9 +1,6 @@
 import React from "react";
 
-/**
- * Chest icon — used for Treasures (kind 37516). A lucide-style stroked SVG.
- * Ported from Ditto (originally @lucide/lab).
- */
+/** Chest icon for Treasures (kind 37516). Ported from Ditto (@lucide/lab). */
 export const ChestIcon = React.forwardRef<SVGSVGElement, React.SVGProps<SVGSVGElement>>(
   ({ className, strokeWidth = 2, ...props }, ref) => (
     <svg

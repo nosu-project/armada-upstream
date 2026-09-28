@@ -41,9 +41,7 @@ import { APP_NAME, normalizeRelayUrl } from "@/lib/platform";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
 import { queryRelayStrict } from "@/lib/strictRelayQuery";
 
-/** A conversation burst should produce one signer interaction, not one per message. */
 export const DM_CONVERSATION_INDEX_PUBLISH_DEBOUNCE_MS = 60_000;
-/** Recheck an unavailable merge base without polling once sync is healthy. */
 export const DM_CONVERSATION_INDEX_PULL_RETRY_MS = 60_000;
 export const DM_CONVERSATION_INDEX_RETRY_MS = 5 * 60_000;
 
@@ -54,27 +52,19 @@ export interface DecodedDmConversationIndex {
 }
 
 interface DmConversationIndexPull extends DecodedDmConversationIndex {
-  /** Binds this result to the exact account + relay set it was read from. */
   baseKey: string;
-  /** Only relays whose current edition participated in this merge base. */
   publishRelays: string[];
-  /** Decrypt-validated relay-local heads; aggregate winners cannot hide a stale relay. */
   relayReads: Map<string, DmConversationIndexRelayRead>;
-  /** Exact own-shard coordinates each answered relay still needs. */
   repairTargets: Map<number, string[]>;
-  /** Exact non-current-installation coordinate repairs, keyed by full d-tag. */
   departedRepairs: Map<string, DmConversationIndexCoordinateRepair>;
-  /** A failed, unreadable, stale or missing relay-local read still needs confirmation. */
   repairPending: boolean;
 }
 
 type DmConversationIndexRelayTargets = ReadonlyMap<number, readonly string[]>;
 
 /**
- * One relay's answer to the index pull. `truncated` marks an answer that hit
- * the filter's `limit`: the relay may hold coordinates it did not return, so a
- * coordinate ABSENT from it proves nothing — except this installation's own,
- * which the pull also asks for by exact `d` (dmConversationIndexOwnFilter).
+ * `truncated`: the answer hit `limit`, so an ABSENT coordinate proves nothing — except
+ * our own, also asked for by exact `d` (dmConversationIndexOwnFilter).
  */
 type DmConversationIndexRelayRead = Pick<DecodedDmConversationIndex, "heads" | "unreadable"> & {
   truncated: boolean;
@@ -96,21 +86,15 @@ function dmConversationIndexDepartedRepairPlan(
   for (const shard of decoded.shards) {
     if (shard.deviceId === ownDeviceId) continue;
     const identifier = dmConversationIndexDTag(shard.deviceId, shard.bucket);
-    // A newer undecryptable aggregate head may contain facts absent from the
-    // readable union. Never consolidate that coordinate until it decrypts.
+    // A newer undecryptable head may hold unknown facts; never consolidate it.
     if (decoded.unreadable.has(identifier)) continue;
     const serialized = serializeDmConversationIndexShard(shard);
     const targets = answeredRelays.filter((relay) => {
       const read = relayReads.get(relay);
       if (!read || read.unreadable.has(identifier)) return false;
       const remote = read.heads.get(identifier)?.shard;
-      // Absent from a truncated answer is not absent from the relay. Treating
-      // it as missing made every installation republish a coordinate the
-      // relay's newest-`limit` window had merely left out — which pushed
-      // ANOTHER coordinate out of the window for the next pull. With more
-      // coordinates than the limit (an account with many past installations),
-      // every running client republished shards forever: measured as tens of
-      // MB a minute of these events on every one of the account's devices.
+      // Absent from a truncated answer is not absent from the relay; treating it so caused
+      // endless republishing across installations.
       if (!remote) return !read.truncated;
       return serializeDmConversationIndexShard(remote) !== serialized;
     });
@@ -152,9 +136,7 @@ async function dmConversationIndexRelayRepairPlan(
         remote
         && serializeDmConversationIndexShard(remote) === serializeDmConversationIndexShard(shard)
       ) continue;
-      // No truncation guard here, unlike the departed plan: own coordinates
-      // are also asked for by exact `d`, so one absent from the answer is
-      // absent from the relay.
+      // No truncation guard: own coordinates are also queried by exact `d`.
       const held = targets.get(shard.bucket) ?? [];
       held.push(relay);
       targets.set(shard.bucket, held);
@@ -163,15 +145,12 @@ async function dmConversationIndexRelayRepairPlan(
   return { targets, blockedBuckets };
 }
 
-/** Valid decryptions are immutable by event id and safe to reuse on invalidation. */
 const decodedEventCache = new Map<string, DmConversationIndexShard>();
 const MAX_DECODE_CACHE = 256;
 
 /**
- * Relay results cross a trust boundary and must carry a valid signature.
- * ArmadaDB rumors are admitted only after verified ingest and deliberately
- * have their signature stripped; a cached item that still has a signature is
- * rechecked too, so a malformed signed row never wins a coordinate.
+ * Relay results must carry a valid signature. ArmadaDB strips signatures after verified
+ * ingest; a cached row that still has one is rechecked.
  */
 export function verifiedDmConversationIndexEvents(
   remote: readonly NostrEvent[],
@@ -200,11 +179,7 @@ function rememberDecoded(event: NostrRumor, shard: DmConversationIndexShard): vo
   }
 }
 
-/**
- * Decrypt at most one winner per bounded installation coordinate. This runs
- * sequentially so a remote signer sees one request at a time rather than a
- * burst of simultaneous approval prompts.
- */
+/** Sequential so a remote signer sees one request at a time. */
 export async function decodeDmConversationIndexEvents(
   events: readonly NostrRumor[],
   signer: NostrSigner,
@@ -248,17 +223,14 @@ export async function decodeDmConversationIndexEvents(
       mergeDmConversationIndexRecords(valid.map((edition) => edition.records)),
     );
     decodedShards.push(shard);
-    // `heads` is the actual NIP-01 winner, not the semantic union above. The
-    // distinction is what makes a newer partial head compare dirty against
-    // the hydrated A∪B local shard and triggers a consolidating rewrite.
+    // `heads` is the NIP-01 winner, not the union, so a newer partial head compares dirty
+    // and triggers a consolidating rewrite.
     if (headShard) heads.set(identifier, { event: head, shard: headShard });
-    // Even when the newest edition is unreadable, an older valid edition is a
-    // safe discovery hint. `unreadable` still blocks replacing the coordinate.
+    // An older valid edition is still a discovery hint; `unreadable` blocks replacement.
   }
   return { shards: decodedShards, heads, unreadable };
 }
 
-/** Shared by cold login, explicit Pull and the standing sync owner. */
 export async function decodeAndHydrateDmConversationIndex(
   events: readonly NostrRumor[],
   signer: NostrSigner,
@@ -270,11 +242,8 @@ export async function decodeAndHydrateDmConversationIndex(
 }
 
 /**
- * Build consolidation editions for an explicit Setup Sync. Every readable
- * divergent coordinate is repaired to its semantic union before the caller
- * fans state to a new relay set; otherwise a departed device's newer partial
- * head would permanently discard facts held only by an older relay copy.
- * Local buckets from this installation are included too.
+ * Repair every divergent coordinate to its union before Setup Sync fans out to new
+ * relays, or facts held only by an older relay copy would be lost.
  */
 export async function signCurrentDmConversationIndexEvents(
   remoteEvents: readonly NostrRumor[],
@@ -287,10 +256,8 @@ export async function signCurrentDmConversationIndexEvents(
     if (remoteEvents.length === 0 && !hasLocalRecords) return [];
     throw new Error("Your signer cannot encrypt the DM conversation index");
   }
-  // Relay editions arrive signed and are verified at this boundary. ArmadaDB
-  // intentionally strips signatures after verified ingest; retain those
-  // trusted cached rumors as semantic inputs so an Android-background update
-  // cannot disappear during a relay rotation.
+  // Keep trusted signature-stripped cached rumors as inputs so a background update
+  // survives a relay rotation.
   const verified = verifiedDmConversationIndexEvents(
     remoteEvents.filter(isSigned),
     remoteEvents.filter((event) => !isSigned(event)),
@@ -331,9 +298,7 @@ export async function signCurrentDmConversationIndexEvents(
     signed.push(event);
   };
 
-  // Repair EVERY divergent remote coordinate, not only this installation's.
-  // An old device may never return to rewrite its own d-tag, while Setup Sync
-  // is precisely the operation that migrates those records to a new relay set.
+  // Repair EVERY coordinate: old devices may never rewrite their own d-tag.
   for (const merged of [...decoded.shards].sort((a, b) =>
     dmConversationIndexDTag(a.deviceId, a.bucket)
       .localeCompare(dmConversationIndexDTag(b.deviceId, b.bucket)))) {
@@ -370,10 +335,8 @@ export async function signCurrentDmConversationIndexEvents(
 }
 
 /**
- * Always-mounted, noninteractive discovery recorder. It sees both DM planes
- * even when the user never opens DMs, but never decrypts NIP-04 previews or
- * requests interactive NIP-17 approval. Trust has fully settled before any
- * real, main-inbox row is admitted to the local shard.
+ * Always-mounted, noninteractive discovery recorder: never decrypts NIP-04 previews or
+ * requests NIP-17 approval.
  */
 export function useRecordDmConversationIndex(): void {
   const { user } = useCurrentUser();
@@ -414,9 +377,8 @@ export function useRecordDmConversationIndex(): void {
 }
 
 /**
- * Network owner for the encrypted, per-installation DM conversation roster.
- * Automatic settings sync is the consent gate; explicit portable Pull/Sync
- * call the pure helper above and remain available while the gate is off.
+ * Network owner for the encrypted per-installation DM roster. Automatic settings sync
+ * is the consent gate; explicit Pull/Sync use the helpers above.
  */
 export function useDmConversationIndexSync(): void {
   const { nostr } = useNostr();
@@ -442,9 +404,7 @@ export function useDmConversationIndexSync(): void {
     () => nip65WriteRelayKey ? nip65WriteRelayKey.split("\u0000") : [],
     [nip65WriteRelayKey],
   );
-  // Prefer current NIP-65 write declarations. Accounts without an owned
-  // kind-10002 still need a bootstrap authority, so their explicitly selected
-  // self-state/app relays form the canonical set until a pointer exists.
+  // Accounts without a kind-10002 bootstrap from their self-state/app relays.
   const canonicalSourceRelays = nip65WriteRelays.length > 0 ? nip65WriteRelays : relays;
   const canAutomaticallySync = automaticSettingsSync
     && !!user?.pubkey
@@ -469,8 +429,7 @@ export function useDmConversationIndexSync(): void {
     buckets: readonly number[],
     relayTargets?: DmConversationIndexRelayTargets,
   ) => Promise<number[]>>(async (buckets) => [...buckets]);
-  // `null` means retry against the current completed cohort; a Set preserves
-  // the exact relay scope of a per-relay repair failure.
+  // `null` = retry against the current cohort; a Set keeps a repair's exact relay scope.
   const retryBucketsRef = useRef<Map<number, Set<string> | null>>(new Map());
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const syncEnabledRef = useRef(false);
@@ -497,8 +456,7 @@ export function useDmConversationIndexSync(): void {
           repairPending: false,
         } satisfies DmConversationIndexPull;
       }
-      // Never let queryExplicitRelays' general-pool fallback widen this private
-      // self-state read. An empty target set is an unavailable sync, not a pool query.
+      // Never let the general-pool fallback widen this private read.
       if (relays.length === 0) throw new Error("No self-state relays configured");
       const filter = dmConversationIndexFilter(user.pubkey);
       const ownFilter = dmConversationIndexOwnFilter(user.pubkey, dmConversationDeviceId(user.pubkey));
@@ -506,18 +464,13 @@ export function useDmConversationIndexSync(): void {
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
       const [settled, cached] = await Promise.all([
         Promise.allSettled(
-          // Strict: a relay that CLOSED the REQ (auth-required, rate-limited)
-          // must land in `failedRelays`. Read as an empty answer, it is a
-          // relay missing every coordinate — and the repair plans republish
-          // all of them to it on every pull, forever.
+          // Strict: a CLOSED REQ must land in `failedRelays`, or it reads as missing every
+          // coordinate and gets republished forever.
           relays.map((relay) => queryRelayStrict(nostr.relay(relay), [filter, ownFilter], { signal: deadline })),
         ),
         store.query([filter]).catch(() => []),
       ]);
-      // The two filters overlap (own coordinates are in the broad one too), so
-      // one event can arrive twice. Deduplicated, the answer reaches the broad
-      // filter's limit only when that filter did: when it came back complete,
-      // every own coordinate was already in it.
+      // Filters overlap; deduped, the answer hits the broad limit only if that filter did.
       const completed = settled.flatMap((result, index) => result.status === "fulfilled" ? [{
         relay: relays[index]!,
         events: [...new Map(result.value.map((event) => [event.id, event])).values()],
@@ -531,16 +484,11 @@ export function useDmConversationIndexSync(): void {
         user.signer,
         user.pubkey,
       );
-      // App relays can contribute discovery, but only the account's signed
-      // NIP-65 write set establishes authority for a portable-state rewrite.
-      // Unanswered relays are deliberately absent from `publishRelays`: they
-      // may hold a richer divergent edition and must not receive this round's
-      // replacement until they have participated in a later merge.
+      // Only the NIP-65 write set has authority to rewrite. Unanswered relays are excluded from
+      // `publishRelays` since they may hold a richer edition.
       const completedRelays = completed.map(({ relay }) => relay);
       const relayReads = new Map<string, DmConversationIndexRelayRead>();
-      // Decode the aggregate first so valid editions enter the immutable
-      // cache. The relay-local passes below then retain provenance without a
-      // second signer prompt for the same event.
+      // Decode the aggregate first so relay-local passes reuse the cache (no second prompt).
       for (const { relay, events } of completed) {
         const relayDecoded = await decodeDmConversationIndexEvents(
           verifiedDmConversationIndexEvents(events, []),
@@ -553,18 +501,14 @@ export function useDmConversationIndexSync(): void {
           truncated: filter.limit !== undefined && events.length >= filter.limit,
         });
       }
-      // One unreadable relay-local coordinate means that relay's current state
-      // was not fully observed. It remains a read/repair obligation but cannot
-      // join any write cohort until a later clean read.
+      // An unreadable relay-local coordinate keeps that relay out of write cohorts.
       const safeCompletedRelays = completedRelays.filter(
         (relay) => relayReads.get(relay)?.unreadable.size === 0,
       );
       if (!safeCompletedRelays.some((relay) => canonicalSourceRelays.includes(relay))) {
         throw new Error("A declared NIP-65 write relay must complete a readable DM index pull");
       }
-      // Hydration above merged every answered edition before this comparison.
-      // A returning richer relay can therefore widen the desired own shard;
-      // it is never overwritten with the shorter pre-read copy.
+      // Hydration merged every edition first, so a richer relay widens our shard, never loses.
       const repair = await dmConversationIndexRelayRepairPlan(
         user.pubkey,
         safeCompletedRelays,
@@ -601,9 +545,8 @@ export function useDmConversationIndexSync(): void {
   const pullFetchStatus = query.fetchStatus;
   const refetchPull = query.refetch;
 
-  // React Query's normal retries are intentionally finite. Keep one bounded
-  // retry outstanding while the base is missing or a relay-local repair still
-  // needs read-back confirmation; a healthy sync performs no polling.
+  // Keep one bounded retry outstanding while the base is missing or a repair needs
+  // confirmation; healthy sync doesn't poll.
   useEffect(() => {
     if (
       !canAutomaticallySync
@@ -650,8 +593,7 @@ export function useDmConversationIndexSync(): void {
         (await loadOwnDmConversationIndexShards(pubkey)).map((shard) => [shard.bucket, shard]),
       );
       const failed: number[] = [];
-      // One stable bucket per event avoids rewrite conflicts. Sequential
-      // signing keeps a remote signer from receiving simultaneous prompts.
+      // One bucket per event; sequential signing avoids simultaneous prompts.
       for (const bucket of buckets) {
         if (activeBaseKeyRef.current !== baseKey) {
           failed.push(bucket);
@@ -673,8 +615,7 @@ export function useDmConversationIndexSync(): void {
           continue;
         }
         const plaintext = serializeDmConversationIndexShard(shard);
-        // Aggregate equality can conceal an empty/stale answered relay. Exact
-        // repair targets deliberately bypass the global clean fingerprint.
+        // Exact repair targets bypass the clean fingerprint (aggregate equality can hide a stale relay).
         if (!hasExactTargets && lastSignedFingerprintRef.current.get(bucket) === plaintext) continue;
         let content: string;
         try {
@@ -716,11 +657,9 @@ export function useDmConversationIndexSync(): void {
             },
           });
         } catch (error) {
-          // A queued event retains its exact explicit relay targets. Signer
-          // refusal leaves the local bucket dirty for a later pull.
+          // Queued events keep their targets; signer refusal leaves the bucket dirty.
           if (!isPublishQueuedError(error)) {
-            // onSigned runs before the relay attempt. Undo its clean marker
-            // when neither delivery nor a durable outbox entry is guaranteed.
+            // onSigned runs before the relay attempt; undo it when delivery isn't guaranteed.
             lastSignedFingerprintRef.current.delete(bucket);
             console.warn("Failed to sync DM conversation index:", error);
             failed.push(bucket);
@@ -796,8 +735,7 @@ export function useDmConversationIndexSync(): void {
             inheritPendingTargets: false,
           });
         } catch (error) {
-          // Queued failures retain these exact read-authorized targets. An
-          // unqueued failure remains repairPending and is replanned next pull.
+          // Queued failures keep their targets; unqueued ones are replanned next pull.
           if (!isPublishQueuedError(error)) {
             console.warn("Failed to repair departed DM conversation index shard:", error);
           }
@@ -819,7 +757,6 @@ export function useDmConversationIndexSync(): void {
     const enqueue = (bucket: number, exactTargets?: readonly string[]) => {
       const pending = retryBucketsRef.current;
       if (!exactTargets) {
-        // A general local edit supersedes any narrower repair for this bucket.
         pending.set(bucket, null);
         return;
       }
@@ -868,9 +805,7 @@ export function useDmConversationIndexSync(): void {
     retryTimerRef.current = undefined;
   }, [syncBaseKey]);
 
-  // A completed canonical pull establishes the publication base. Relay-local
-  // provenance then narrows each repair to copies proven stale or empty. A
-  // local edit racing the pull widens only its bucket to the answered cohort.
+  // A completed pull sets the publication base; repairs narrow to copies proven stale.
   useEffect(() => {
     const pubkey = user?.pubkey;
     const baseKey = syncBaseKey;
@@ -914,8 +849,7 @@ export function useDmConversationIndexSync(): void {
       );
       for (const bucket of dirtyBuckets) targets.set(bucket, [...pull.publishRelays]);
 
-      // A confirming read cancels only obsolete exact-repair retries. General
-      // local-edit retries remain until their own publish succeeds.
+      // A confirming read cancels only obsolete exact-repair retries.
       for (const [bucket, pending] of retryBucketsRef.current) {
         if (pending === null) continue;
         const stillNeeded = new Set(targets.get(bucket) ?? []);
@@ -954,8 +888,7 @@ export function useDmConversationIndexSync(): void {
     user?.pubkey,
   ]);
 
-  // Settled inbox changes update local state immediately; this subscription
-  // only schedules the encrypted rewrite and collapses a message burst.
+  // This only schedules the encrypted rewrite and collapses bursts.
   useEffect(() => {
     const pubkey = user?.pubkey;
     if (!automaticSettingsSync || !pubkey || !user.signer.nip44) return;

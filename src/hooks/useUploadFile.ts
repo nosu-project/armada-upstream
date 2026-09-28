@@ -10,16 +10,14 @@ import { useCurrentUser } from "./useCurrentUser";
 
 import type { NostrSigner } from "@nostrify/nostrify";
 
-/** An upload that can be cancelled. */
 export interface UploadRequest {
   file: File;
   signal?: AbortSignal;
 }
 
 /**
- * Upload a file to the user's Blossom servers (BUD-02), mirroring to the
- * remaining servers in the background (BUD-04). Returns NIP-94-style tags
- * describing the uploaded blob (`[["url", ...], ["m", ...], ["x", ...], ...]`).
+ * Upload to the user's Blossom servers (BUD-02), mirroring to the rest in the background
+ * (BUD-04). Returns NIP-94-style tags.
  */
 export function useUploadFile() {
   const { config } = useAppContext();
@@ -32,17 +30,14 @@ export function useUploadFile() {
       }
       const { file, signal } = request instanceof File ? { file: request } as UploadRequest : request;
 
-      // App default servers merged with the user's kind 10063 list, which
-      // NostrSync keeps cached in config.blossomServerMetadata.
+      // App defaults merged with the user's kind 10063 list (config.blossomServerMetadata).
       const servers = getEffectiveBlossomServers(
         config.appBlossomServers,
         config.blossomServerMetadata,
         config.useAppBlossomServers,
       );
 
-      // Per-server timeout so a hanging server doesn't block the upload
-      // promise indefinitely — scaled to the file, since a flat one would cap
-      // the upload size by the uplink speed.
+      // Scaled to the file size, so a flat timeout doesn't cap upload size by uplink speed.
       const timeoutMs = uploadTimeoutMs(file.size);
       const uploader = new BlossomUploader({
         servers,
@@ -58,15 +53,10 @@ export function useUploadFile() {
 
       const tags = await uploader.upload(file, { signal });
 
-      // Repair a doubled scheme some Blossom servers emit in their BlobDescriptor
-      // `url` (e.g. `https://https//blossom.example/<hash>` or
-      // `https://https://blossom.example/<hash>`). Left as-is it renders as a
-      // broken image and, once sealed into a Concord/NIP-92 message, is
-      // permanently wrong. Collapse the leading duplicate scheme back to one.
+      // Some servers emit a doubled scheme; once sealed into a message it'd be permanently wrong.
       tags[0][1] = repairDoubledScheme(tags[0][1]);
 
-      // Blossom URLs are content-addressed (`/<sha256>`) and may omit the
-      // extension. Append it so media-type detection keeps working.
+      // Content-addressed URLs may omit the extension; append it for media-type detection.
       const ext = getFileExtension(file.name);
       if (ext) {
         tags[0][1] = appendExtensionIfMissing(tags[0][1], ext);
@@ -89,9 +79,8 @@ export function useUploadFile() {
 }
 
 /**
- * Ask the servers {@link useUploadFile} would upload to whether they'll take a
- * blob (BUD-06), before the work of preparing it. Resolves to the refusal when
- * every server refuses, else undefined — see `preflightRefusal`.
+ * Ask the target servers whether they'll take a blob (BUD-06) before preparing it; resolves to
+ * the refusal when every server refuses — see `preflightRefusal`.
  */
 export function useUploadPreflight() {
   const { config } = useAppContext();
@@ -107,7 +96,6 @@ export function useUploadPreflight() {
   );
 }
 
-/** Extract the file extension (with leading dot) from a filename, or empty string if none. */
 function getFileExtension(filename: string): string {
   const dotIndex = filename.lastIndexOf(".");
   if (dotIndex <= 0) return "";
@@ -115,14 +103,8 @@ function getFileExtension(filename: string): string {
 }
 
 /**
- * Repair a doubled scheme some Blossom servers emit in their BlobDescriptor
- * `url`:
- *   `https://https//host/<hash>`   (second scheme missing its colon)
- *   `https://https://host/<hash>`  (second scheme intact)
- * Collapse one leading `scheme://` when it's immediately followed by another
- * `scheme` token (with or without the colon), leaving a single valid scheme.
- * Left unrepaired this renders as a broken image and, once sealed into a
- * Concord/NIP-92 message, is permanently wrong.
+ * Collapse a doubled leading scheme (`https://https//host/…` or `https://https://host/…`)
+ * some Blossom servers emit.
  */
 export function repairDoubledScheme(url: string): string {
   const m = url.match(/^(https?):\/\/(https?):?\/\/(.+)$/i);
@@ -130,7 +112,6 @@ export function repairDoubledScheme(url: string): string {
   return url;
 }
 
-/** Append a file extension to a URL if its path doesn't already have one. */
 function appendExtensionIfMissing(urlString: string, ext: string): string {
   try {
     const url = new URL(urlString);
@@ -143,11 +124,7 @@ function appendExtensionIfMissing(urlString: string, ext: string): string {
   }
 }
 
-/**
- * Mirror a blob to additional Blossom servers (BUD-04), each with its own
- * `PUT /mirror`, so every server gets a copy rather than the first to answer.
- * Exported for testing.
- */
+/** Each server gets its own `PUT /mirror`. Exported for testing. */
 export async function mirrorToServers(
   sourceUrl: string,
   servers: string[],
@@ -155,10 +132,8 @@ export async function mirrorToServers(
 ): Promise<void> {
   await Promise.allSettled(
     servers.map((server) => {
-      // Use Nostrify's BUD-04/BUD-11 implementation so the authorization has
-      // the required upload verb, blob hash, and event URL encoding. The old
-      // hand-built `t=mirror` event was rejected with HTTP 403 by conforming
-      // servers even though the original upload had succeeded.
+      // Nostrify's BUD-04/BUD-11 auth carries the required verb, hash and URL; hand-built
+      // `t=mirror` events got 403s from conforming servers.
       const uploader = new BlossomUploader({
         servers: [server],
         signer,

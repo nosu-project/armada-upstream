@@ -21,7 +21,6 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** How many content rows to fetch per page (initial load and each backfill). */
 const PAGE_SIZE = 40;
 /** Aux (edit/delete/vote) window fetched alongside each content read. */
 const AUX_LIMIT = 300;
@@ -41,12 +40,8 @@ function statusKey(relayUrl: string | undefined, channelId: string | undefined) 
 }
 
 /**
- * Sort ascending and de-duplicate by id.
- *
- * Later entries win, except that a signed copy is never replaced by an unsigned
- * one — the local store drops `sig` and is merged last, so otherwise it would
- * overwrite the signed copy of an event we just sent and leave retry publishing
- * an empty signature (see `useGroupMessages`).
+ * Sort ascending and de-dupe by id; later wins, except a signed copy is never
+ * replaced by an unsigned one (the local store drops `sig`, which would break retry).
  */
 function sortDedupe(events: NostrRumor[]): NostrRumor[] {
   const byId = new Map<string, NostrRumor>();
@@ -58,7 +53,6 @@ function sortDedupe(events: NostrRumor[]): NostrRumor[] {
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 
-/** Gap-aware `until` cursor from a page of events (see useGroupMessages). */
 function paginationCursor(events: NostrRumor[]): number | undefined {
   if (events.length === 0) return undefined;
   const ascending = [...events].sort((a, b) => a.created_at - b.created_at);
@@ -69,7 +63,7 @@ function paginationCursor(events: NostrRumor[]): number | undefined {
 }
 
 export interface BuzzMessages extends BuzzFoldedTimeline {
-  /** RAW (unfolded) events currently loaded — content + aux mixed. */
+  /** RAW (unfolded) events: content + aux mixed. */
   raw: NostrRumor[];
   isLoading: boolean;
   status: SendStatusMap;
@@ -80,30 +74,18 @@ export interface BuzzMessages extends BuzzFoldedTimeline {
   loadOlder: () => Promise<number>;
   hasMore: boolean;
   isLoadingOlder: boolean;
-  /** Threaded-reply count for a root id (from the loaded window). */
   replyCountFor: (id: string) => number;
-  /** Ascending thread replies for a root id (from the loaded window). */
   threadRepliesFor: (rootId: string) => NostrRumor[];
   /** Backfill a full thread by `#e` reference (called when a thread opens). */
   fetchThread: (rootId: string) => Promise<void>;
-  /** Merge externally-fetched events (e.g. a search hit's context) into the window. */
   mergeEvents: (events: NostrRumor[]) => void;
 }
 
 /**
- * The message window for a Buzz channel, hydrated from the shared IndexedDB
- * event store (the wire's standing Buzz subscription feeds it) and folded per
- * the Buzz protocol: kind 5/9005 deletions applied, kind-40003 edits folded
- * in (content swap + imeta overlay), thread replies (NIP-10 marked kind-9)
- * partitioned out of the timeline into per-root buckets.
- *
- * Mirrors useGroupMessages' architecture: no sockets here — local-first store
- * reads re-triggered by the wire bus (`nip29:<channelId>` — Buzz channels
- * share the `#h` scope namespace), plus throttled relay top-ups and explicit
- * scroll-up pagination.
- *
- * `forum` switches the content kinds to forum posts/comments (45001/45003)
- * and additionally folds vote (45002) aux events into the raw window.
+ * A Buzz channel's message window: local-first store reads re-triggered by the
+ * wire bus (`nip29:<channelId>` scope), throttled relay top-ups and scroll-up
+ * pagination, folded per the Buzz protocol (see protocol.ts). `forum` switches
+ * to 45001/45003 content and folds votes (45002).
  */
 export function useBuzzMessages(
   relayUrl: string | undefined,
@@ -131,7 +113,6 @@ export function useBuzzMessages(
         ? [...BUZZ_AUX_KINDS, KIND_FORUM_VOTE]
         : [
             ...BUZZ_AUX_KINDS,
-            // Huddle lifecycle overlays fold into the 48100 session card.
             KIND_HUDDLE_PARTICIPANT_JOINED,
             KIND_HUDDLE_PARTICIPANT_LEFT,
             KIND_HUDDLE_ENDED,
@@ -161,12 +142,7 @@ export function useBuzzMessages(
       const store = await eventStore;
       const existing = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
 
-      // Content + aux in parallel from the local store. The wire writes every
-      // incoming Buzz event here before the bus asks us to re-read.
-      //
-      // Scoped to THIS relay: Buzz channels are `h`-scoped like any NIP-29 group,
-      // so a channel id names nothing without the relay hosting it and the store
-      // keeps each relay's events in its own tenant.
+      // Scoped to THIS relay: a channel id names nothing without its relay.
       const [content, aux] = await Promise.all([
         store.query(
           [{ kinds: contentKinds, "#h": [channelId!], limit: Math.max(PAGE_SIZE * 2, existing.length) }],
@@ -176,8 +152,8 @@ export function useBuzzMessages(
       ]);
       const local = sortDedupe([...existing, ...content, ...aux]);
 
-      // Throttled background top-up (never gates paint): the newest content
-      // page + a fresh aux window, for history the wire's since-window missed.
+      // Throttled background top-up (never gates paint) for history the wire's
+      // since-window missed.
       const now = Date.now();
       if (now - lastPullRef.current >= PULL_MIN_INTERVAL_MS) {
         lastPullRef.current = now;
@@ -227,8 +203,7 @@ export function useBuzzMessages(
       prevQuery && hashKey(prevQuery.queryKey) === hashKey([...queryKey]) ? prev : undefined,
   });
 
-  // Wire hydration: Buzz events carry `#h`, so the bus announces the shared
-  // `nip29:<channelId>` scope for them (see wire/ingest.ts scopeOf).
+  // Buzz events carry `#h`, so they share the `nip29:<channelId>` scope (see wire/ingest.ts scopeOf).
   useWireScopes((scopes) => {
     if (channelId && scopes.has(`nip29:${channelId}`)) {
       void queryClient.invalidateQueries({ queryKey });
@@ -242,7 +217,6 @@ export function useBuzzMessages(
       if (events.length === 0) return;
       queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => sortDedupe([...old, ...events]));
     },
-    // queryKey is derived from relayUrl + channelId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [queryClient, relayUrl, channelId],
   );
@@ -294,7 +268,7 @@ export function useBuzzMessages(
 
       if (fresh.length === 0) return 0;
       mergeEvents(fresh);
-      // Report only prepended CONTENT rows so scroll restoration is accurate.
+      // Only prepended CONTENT rows, so scroll restoration is accurate.
       return fresh.filter((e) => contentKinds.includes(e.kind)).length;
     } catch {
       return 0;
@@ -306,9 +280,8 @@ export function useBuzzMessages(
   }, [nostr, relayUrl, channelId, hasMore, queryClient, mergeEvents, contentKinds, auxKinds]);
 
   /**
-   * Backfill a full thread by reference: replies carry marked `e` tags naming
-   * the root, so a `#e` query returns the whole thread even where the loaded
-   * `#h` window doesn't cover it. Aux for those replies rides the same query.
+   * Marked `e` tags name the root, so a `#e` query returns the whole thread even
+   * beyond the loaded `#h` window.
    */
   const fetchThread = useCallback(
     async (rootId: string) => {

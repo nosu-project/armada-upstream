@@ -1,9 +1,6 @@
 /**
- * Desktop (Electron) bridge.
- *
- * The Armada desktop shell injects `window.armadaDesktop` (see
- * client/electron/preload.js). On the web this is absent and every helper here
- * no-ops, so call sites don't need platform branches.
+ * Desktop (Electron) bridge: `window.armadaDesktop` from electron/preload.js.
+ * Absent on the web, where every helper no-ops.
  */
 
 export interface ScreenSource {
@@ -29,11 +26,7 @@ export type LinuxShareAudioSelection =
   | { mode: "system" }
   | { mode: "applications"; sourceIds: string[] };
 
-/**
- * OS-level microphone access status, independent of the in-app permission
- * handler. "granted" always on Linux; reflects the system privacy setting on
- * macOS (TCC) and Windows ("let desktop apps use the microphone").
- */
+/** OS-level mic access (TCC on macOS, privacy setting on Windows); always "granted" on Linux. */
 export type MicAccessStatus =
   | "not-determined"
   | "granted"
@@ -42,9 +35,8 @@ export type MicAccessStatus =
   | "unknown";
 
 /**
- * Which OS facility is encrypting stored secrets. On Linux this is Chromium's
- * selected password store; `basic_text` is a hardcoded key (obfuscation, not
- * encryption) and is what a machine with no keyring daemon gets.
+ * The OS facility encrypting stored secrets. On Linux, `basic_text` is a
+ * hardcoded key (obfuscation, not encryption) — no keyring daemon.
  */
 export interface SecretsStatus {
   available: boolean;
@@ -62,11 +54,9 @@ export interface SecretsStatus {
 }
 
 export interface DesktopLaunchSettings {
-  /** Whether launch-at-login can be configured on this OS/build. */
+  /** Whether launch-at-login is configurable on this OS/build. */
   supported: boolean;
-  /** The app is registered to start when the user logs in. */
   openAtLogin: boolean;
-  /** When starting at login, start minimized to the tray rather than shown. */
   openAsHidden: boolean;
 }
 
@@ -130,13 +120,9 @@ export interface DesktopHevcScreenShareConfig {
 }
 
 /**
- * The desktop shell's ArmadaDB store: one SQLite file in the OS's per-app
- * config directory, with the query engine in the main process.
- *
- * `available` is resolved by the shell at preload time — the file is opened
- * before the window loads — so the renderer can decide which adapter to build
- * synchronously, and can fall back to IndexedDB when the shell couldn't open
- * it. `call` dispatches one `ArmadaDbPlugin` method; see `ElectronArmadaDB.ts`.
+ * The desktop shell's SQLite ArmadaDB store (main-process engine). `available`
+ * is known synchronously at preload so the renderer can fall back to
+ * IndexedDB; `call` dispatches one `ArmadaDbPlugin` method (see `ElectronArmadaDB.ts`).
  */
 interface ArmadaDesktopDb {
   available: boolean;
@@ -165,8 +151,7 @@ interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
   getInfo: () => Promise<{ platform: string; version: string }>;
-  // Optional: a newer web bundle can run inside an older shell that predates
-  // these, so every call site feature-detects rather than assuming.
+  // Optional members: newer bundles may run in older shells; feature-detect.
   onResume?: (handler: () => void) => () => void;
   onWindowHidden?: (handler: () => void) => () => void;
   getLaunchSettings?: () => Promise<DesktopLaunchSettings>;
@@ -202,20 +187,14 @@ interface ArmadaDesktopBridge {
   setPushToTalkActive?: (active: boolean) => Promise<boolean>;
   onPushToTalkState?: (handler: (pressed: boolean) => void) => () => void;
   onPushToTalkStatus?: (handler: (status: DesktopPushToTalkStatus) => void) => () => void;
-  // Optional: a newer web bundle can run inside an older shell that predates
-  // these, so every call site feature-detects rather than assuming.
   getSecretsStatus?: () => Promise<SecretsStatus>;
   encryptSecret?: (plaintext: string) => Promise<string | null>;
   decryptSecret?: (base64: string) => Promise<string | null>;
   signalWebReady?: () => void;
-  // Optional for the same reason: a copied message/invite link clicked inside
-  // an OLDER shell has no interception path and simply opens in the browser as
-  // it did before. The renderer reports its App Links host at boot, and the
-  // shell hands back the router path of a link to that host it caught.
+  // Renderer reports its App Links host; the shell returns router paths of caught links.
   registerDeepLinkHost?: (host: string) => void;
   onDeepLink?: (handler: (path: string) => void) => () => void;
   armadaDb?: ArmadaDesktopDb;
-  // Optional: an older shell simply doesn't flash.
   requestAttention?: () => void;
 }
 
@@ -233,9 +212,7 @@ export function desktop(): ArmadaDesktopBridge | undefined {
 /** True when running inside the Armada desktop app. */
 export const isDesktop = (): boolean => Boolean(desktop()?.isDesktop);
 
-// An IPC handler that throws rejects the renderer's promise, so — like every
-// other bridge wrapper here — an unreachable or failing shell reads as "no
-// answer" rather than propagating into whatever rendered the control.
+// Bridge wrappers treat a failing shell as "no answer" rather than propagating.
 export async function getDesktopVideoEncoderState(): Promise<DesktopVideoEncoderState | null> {
   try {
     return (await desktop()?.getVideoEncoderMode?.()) ?? null;
@@ -256,11 +233,7 @@ export async function setDesktopVideoEncoderMode(
   }
 }
 
-/**
- * Subscribe to the desktop shell's power-resume signal (wake from suspend, or
- * unlock of a machine that slept locked). Returns an unsubscribe; a no-op on
- * the web and in a shell older than the bridge method.
- */
+/** Subscribe to the shell's power-resume signal (wake/unlock). No-op on web/older shells. */
 export function onDesktopResume(handler: () => void): () => void {
   try {
     return desktop()?.onResume?.(handler) ?? (() => {});
@@ -269,10 +242,7 @@ export function onDesktopResume(handler: () => void): () => void {
   }
 }
 
-/**
- * Subscribe to the desktop window being closed to the tray. Returns an
- * unsubscribe; a no-op on the web and in a shell older than the bridge method.
- */
+/** Subscribe to the window being closed to the tray. No-op on web/older shells. */
 export function onDesktopWindowHidden(handler: () => void): () => void {
   try {
     return desktop()?.onWindowHidden?.(handler) ?? (() => {});
@@ -281,10 +251,7 @@ export function onDesktopWindowHidden(handler: () => void): () => void {
   }
 }
 
-/**
- * Read the desktop "launch at login" settings. Resolves null on the web and in
- * an older shell; callers hide the control when it can't be read.
- */
+/** Launch-at-login settings, or null on web/older shells (hide the control). */
 export async function getDesktopLaunchSettings(): Promise<DesktopLaunchSettings | null> {
   try {
     return (await desktop()?.getLaunchSettings?.()) ?? null;
@@ -294,7 +261,6 @@ export async function getDesktopLaunchSettings(): Promise<DesktopLaunchSettings 
   }
 }
 
-/** Enable/disable launch-at-login and the start-minimized flag. */
 export async function setDesktopLaunchSettings(settings: {
   openAtLogin: boolean;
   openAsHidden: boolean;
@@ -307,7 +273,6 @@ export async function setDesktopLaunchSettings(settings: {
   }
 }
 
-/** Probe the custom Linux FFmpeg/VA-API H.265 path. */
 export async function desktopHevcScreenShareCapability(): Promise<DesktopHevcScreenShareCapability> {
   const bridge = desktop();
   if (!bridge?.getHevcScreenShareCapability) {
@@ -344,7 +309,6 @@ let hevcFrameGeneration = 0;
 const pendingHevcPorts = new Map<string, MessagePort>();
 const waitingHevcPorts = new Map<string, (port: MessagePort) => void>();
 
-/** Accept the frame channel transferred by preload for one exact shell session. */
 export function acceptDesktopHevcScreenShareFramePort(
   sessionId: string,
   port: MessagePort,
@@ -450,7 +414,6 @@ function closeHevcFramePorts(): void {
   waitingHevcPorts.clear();
 }
 
-/** Stop renderer conversion without asking the shell to stop again. */
 export function cancelDesktopHevcScreenShareFrames(): void {
   cancelHevcFramePump();
   closeHevcFramePorts();
@@ -618,8 +581,7 @@ function postHevcFrame(
       return;
     }
     try {
-      // Electron 43 cannot reliably transfer this ArrayBuffer through its
-      // main-process MessagePort. Keep one reusable cloned buffer in flight.
+      // Electron 43 can't reliably transfer this ArrayBuffer through its main-process MessagePort; clone one reusable buffer.
       port.postMessage({ type: "frame", sequence, frame });
     } catch (error) {
       finish(false, error instanceof Error ? error : new Error(String(error)));
@@ -628,9 +590,8 @@ function postHevcFrame(
 }
 
 /**
- * Convert the trusted Chromium capture to bounded RGBA frames and feed the
- * Linux FFmpeg/VA-API publisher. Resolves only after real HEVC bytes have been
- * published, so an empty signaling track is never reported as success.
+ * Convert the Chromium capture to bounded RGBA frames for the Linux
+ * FFmpeg/VA-API publisher. Resolves only once real HEVC bytes are published.
  */
 export async function startDesktopHevcScreenShare(
   track: MediaStreamTrack,
@@ -739,9 +700,7 @@ export async function startDesktopHevcScreenShare(
       } catch (error) {
         if (!controller.signal.aborted) {
           console.warn("[screen-share] H.265 frame conversion stopped", error);
-          // postMessage on a closed or disentangled port is a silent no-op
-          // rather than a throw, so the shell is asked to stop unconditionally
-          // instead of only from a catch that would never run.
+          // postMessage on a closed port is a silent no-op, so stop unconditionally.
           try {
             port?.postMessage({
               type: "error",
@@ -757,9 +716,7 @@ export async function startDesktopHevcScreenShare(
       } finally {
         disposeHevcPreview(video);
         if (hevcFrameAbort === controller) hevcFrameAbort = null;
-        // The pump can end on its own (a conversion or acknowledgement
-        // timeout), and a later stop only closes the port it still knows
-        // about — so clearing the reference without closing strands it.
+        // The pump may end on its own; close the port before dropping the reference.
         if (hevcFramePort === port) {
           try {
             port?.close();
@@ -823,43 +780,30 @@ export async function stopDesktopHevcScreenShare(): Promise<DesktopHevcScreenSha
 }
 
 /**
- * Tell the desktop shell this web bundle painted.
- *
- * The shell serves a swappable bundle out of userData, and silence past its
- * grace period is how it learns the bundle it chose does not come up — which
- * makes it look for a newer one immediately instead of waiting for the next
- * scheduled check. Recovery is forward-only, so this signal is the difference
- * between minutes and hours of a broken client.
+ * Tell the desktop shell this bundle painted. Silence past its grace period
+ * makes it look for a newer swappable bundle immediately (recovery is forward-only).
  */
 export function signalDesktopWebReady(): void {
   try {
     desktop()?.signalWebReady?.();
   } catch {
-    // An older shell, or a bridge torn down mid-shutdown. The shell's grace
-    // period simply expires; never let this break first paint.
+    // Older shell or mid-shutdown bridge; never break first paint.
   }
 }
 
 /**
- * Tell the desktop shell which host our shareable links are built on, so it can
- * catch a link to that host clicked inside the app (a copied message or invite
- * link) and route it through the router instead of the system browser. No-op on
- * the web and in a shell older than the bridge method.
+ * Tell the shell our share-link host so in-app clicks on those links route
+ * internally instead of the browser. No-op on web/older shells.
  */
 export function registerDesktopDeepLinkHost(host: string): void {
   try {
     desktop()?.registerDeepLinkHost?.(host);
   } catch {
-    // An older shell without the interception path; the link opens in the
-    // browser as before. Never let this break boot.
+    // Older shell: links open in the browser. Never break boot.
   }
 }
 
-/**
- * Subscribe to in-app deep links the desktop shell intercepted. The handler
- * receives the router path. Returns an unsubscribe; a no-op on the web or in an
- * older shell.
- */
+/** Subscribe to deep-link router paths the shell intercepted. No-op on web/older shells. */
 export function onDesktopDeepLink(handler: (path: string) => void): () => void {
   try {
     return desktop()?.onDeepLink?.(handler) ?? (() => {});
@@ -869,10 +813,8 @@ export function onDesktopDeepLink(handler: (path: string) => void): () => void {
 }
 
 /**
- * Ask the shell to draw the user's attention to the window without raising
- * it: the taskbar flash on Windows, the urgency hint on Linux, a dock bounce
- * on macOS. The shell ignores it while the window is focused and clears it on
- * focus. No-op on the web and in a shell that predates it.
+ * Flash/bounce the window for attention without raising it (ignored while
+ * focused). No-op on web/older shells.
  */
 export function requestDesktopAttention(): void {
   try {
@@ -892,10 +834,8 @@ export function setDesktopBadge(count: number): void {
 }
 
 /**
- * OS-level microphone access status in the desktop app. Resolves "granted" on
- * the web (where the browser/OS handles the prompt) and whenever the bridge is
- * unavailable, so callers can treat anything other than "denied"/"restricted"
- * as "try getUserMedia and let the browser prompt".
+ * OS mic access. "granted" on web or without the bridge, so callers try
+ * getUserMedia unless "denied"/"restricted".
  */
 export async function desktopMicAccessStatus(): Promise<MicAccessStatus> {
   const bridge = desktop();
@@ -907,10 +847,7 @@ export async function desktopMicAccessStatus(): Promise<MicAccessStatus> {
   }
 }
 
-/**
- * Open the OS microphone privacy settings (Windows/macOS). Returns true if a
- * settings page was opened, false on web or unsupported platforms.
- */
+/** Open OS mic privacy settings (Windows/macOS); false if unsupported. */
 export async function openDesktopMicSettings(): Promise<boolean> {
   const bridge = desktop();
   if (!bridge?.openMicPrivacySettings) return false;
@@ -943,11 +880,7 @@ export async function openDesktopScreenCaptureSettings(): Promise<boolean> {
   }
 }
 
-/**
- * Whether the desktop shell can encrypt secrets with the OS credential store,
- * and which backend does it. Resolves `available: false` on the web and in
- * shells older than the bridge method.
- */
+/** Whether the shell can encrypt secrets with the OS credential store, and which backend. */
 export async function desktopSecretsStatus(): Promise<SecretsStatus> {
   const bridge = desktop();
   if (!bridge?.getSecretsStatus) return { available: false, backend: "unknown" };
@@ -958,11 +891,7 @@ export async function desktopSecretsStatus(): Promise<SecretsStatus> {
   }
 }
 
-/**
- * Encrypt a string with the OS credential store. Resolves null on the web, in
- * an older shell, or whenever encryption is unavailable — callers fall back to
- * storing plaintext rather than failing the write.
- */
+/** Encrypt with the OS credential store; null when unavailable (callers store plaintext). */
 export async function desktopEncryptSecret(plaintext: string): Promise<string | null> {
   const bridge = desktop();
   if (!bridge?.encryptSecret) return null;
@@ -974,9 +903,8 @@ export async function desktopEncryptSecret(plaintext: string): Promise<string | 
 }
 
 /**
- * Decrypt base64 ciphertext from `desktopEncryptSecret`. Null means the blob
- * could not be opened — "locked", not "empty". Callers must preserve the
- * ciphertext rather than overwriting it.
+ * Decrypt from `desktopEncryptSecret`. Null means "locked", not "empty":
+ * callers must preserve the ciphertext.
  */
 export async function desktopDecryptSecret(base64: string): Promise<string | null> {
   const bridge = desktop();
@@ -994,7 +922,6 @@ let linuxShareAudioGeneration: number | null = null;
 let shareAudioDeclined = false;
 let displayMediaAudioInstalled = false;
 
-/** List the applications PipeWire can route into a Linux screen share. */
 export async function desktopShareAudioSources(): Promise<LinuxShareAudioSources> {
   const bridge = desktop();
   if (!bridge?.getLinuxShareAudioSources) {
@@ -1007,7 +934,6 @@ export async function desktopShareAudioSources(): Promise<LinuxShareAudioSources
   }
 }
 
-/** Prepare the Linux virtual microphone selected in the screen-share dialog. */
 export async function prepareDesktopShareAudio(
   selection: LinuxShareAudioSelection,
 ): Promise<boolean> {
@@ -1024,18 +950,13 @@ export async function prepareDesktopShareAudio(
   }
 }
 
-/** Tear down any PipeWire virtual microphone created for a share. */
 export async function stopDesktopShareAudio(): Promise<void> {
   return stopDesktopShareAudioGeneration();
 }
 
 /**
- * Record that the next capture is to carry no share audio.
- *
- * The teardown is deferred to that capture rather than done here, because the
- * picker may still be cancelled. Unlinking at selection time silences the share
- * the user currently has published and leaves nothing to restore it — the same
- * acquire-before-replace rule the rest of this module follows.
+ * Mark the next capture as carrying no share audio. Teardown is deferred to
+ * that capture since the picker may still be cancelled (acquire-before-replace).
  */
 export function declineDesktopShareAudio(): void {
   shareAudioDeclined = true;
@@ -1056,9 +977,8 @@ function wait(ms: number): Promise<void> {
 }
 
 async function findVenmicDevice(mediaDevices: MediaDevices): Promise<MediaDeviceInfo | null> {
-  // PipeWire and Chromium discover the virtual source asynchronously. In the
-  // common case it is present on the first pass; the short retry window keeps
-  // slower graph updates from silently producing video-only shares.
+  // PipeWire/Chromium discover the virtual source asynchronously; retry briefly
+  // to avoid silently video-only shares.
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const devices = await mediaDevices.enumerateDevices();
     const device = devices.find(
@@ -1072,12 +992,8 @@ async function findVenmicDevice(mediaDevices: MediaDevices): Promise<MediaDevice
 }
 
 /**
- * Add venmic's PipeWire audio track to Electron's Linux display stream.
- *
- * LiveKit calls navigator.mediaDevices.getDisplayMedia directly. Installing
- * this wrapper before React mounts lets the existing call path stay unchanged:
- * the screen picker prepares venmic, Electron returns video, and this function
- * attaches the virtual microphone before LiveKit sees the stream.
+ * Attach venmic's PipeWire audio track to Electron's Linux display stream,
+ * wrapping getDisplayMedia (which LiveKit calls directly) before React mounts.
  */
 export function installDesktopDisplayMediaAudio(): void {
   if (displayMediaAudioInstalled || typeof navigator === "undefined") return;
@@ -1101,8 +1017,7 @@ export function installDesktopDisplayMediaAudio(): void {
     try {
       stream = await originalGetDisplayMedia(constraints);
     } catch (error) {
-      // Cancelling a switch must leave the existing share's route alone. Only
-      // tear down audio when the picker prepared a NEW route before failing.
+      // Cancelling must leave the existing share's route; only tear down a NEW route.
       if (linuxShareAudioGeneration !== generationBeforeCapture) {
         await stopDesktopShareAudio();
       }
@@ -1152,8 +1067,7 @@ export function installDesktopDisplayMediaAudio(): void {
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.addEventListener("ended", stopAudio, { once: true });
-        // MediaStreamTrack.stop() does not dispatch `ended`, and LiveKit uses
-        // stop() when the user unpublishes. Wrap it so PipeWire still unlinks.
+        // stop() doesn't dispatch `ended` (LiveKit uses stop()); wrap so PipeWire unlinks.
         const stopVideo = videoTrack.stop.bind(videoTrack);
         videoTrack.stop = () => {
           stopAudio();
@@ -1168,9 +1082,7 @@ export function installDesktopDisplayMediaAudio(): void {
       return stream;
     } catch (error) {
       console.warn("[screen-share] failed to attach Linux application audio", error);
-      // Scope the teardown like every other one here: findVenmicDevice retries
-      // for about a second and getUserMedia can stall, which is long enough for
-      // a newer share to have prepared its own route.
+      // Scope the teardown: retries/stalls leave time for a newer share's route.
       await stopDesktopShareAudioGeneration(captureGeneration);
       return stream;
     }

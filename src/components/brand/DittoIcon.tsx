@@ -1,13 +1,8 @@
 import type { SVGProps } from "react";
 
 /**
- * The Ditto wordmark glyph — the cursive figure from ditto.pub's logo.svg.
- * Rendered as `currentColor` so it tints with the surrounding text
- * classes (`text-muted-foreground`, hover `text-primary`, etc).
- *
- * Sourced from https://ditto.pub/logo.svg. Armada publishes group and
- * profile events to Nostr, so any event/author it renders has a fuller
- * social view on ditto.pub; this glyph marks those off-ramp links.
+ * The Ditto glyph (from https://ditto.pub/logo.svg) in `currentColor`; marks
+ * off-ramp links to ditto.pub.
  */
 export function DittoIcon(props: SVGProps<SVGSVGElement>) {
   return (

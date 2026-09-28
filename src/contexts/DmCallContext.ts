@@ -3,18 +3,13 @@ import { createContext, useContext } from "react";
 import type { DmCallSignal } from "@/lib/dmCall";
 
 /**
- * The 1:1 call signaling surface (see `src/lib/dmCall.ts` and
- * `DmCallProvider`). The provider owns the offer/answer/decline/end rumor
- * traffic, the incoming-call ring UI, and the outgoing ring timeout; the
- * connected room itself lives in CallProvider/PersistentVoiceRoom.
+ * 1:1 call signaling (`src/lib/dmCall.ts`, `DmCallProvider`): offer/answer/
+ * decline/end, ring UI and timeout. The room itself lives in CallProvider.
  */
 export interface DmCallState {
   /** The fresh incoming offer currently ringing, or null. */
   incoming: DmCallSignal | null;
-  /**
-   * Start a call to `peer`: mint the per-call secret, resolve a broker, send
-   * the gift-wrapped offer, and join the room. Surfaces failures as toasts.
-   */
+  /** Start a call: mint the secret, resolve a broker, send the gift-wrapped offer, join. Failures toast. */
   startCall: (peer: string) => Promise<void>;
   /** Accept the ringing offer (sends "answer" and joins the room). */
   acceptCall: () => void;

@@ -4,23 +4,9 @@ import { useOverlayBack } from "@/hooks/useAndroidBack";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 
 /**
- * Open state of the mobile member overlay — the roster that slides over the
- * chat pane below the `sidebar` breakpoint (Concord and NIP-29 pages alike).
- * The desktop roster is a persisted preference (`memberListVisible`) and is
- * not this.
- *
- * The overlay lives INSIDE the chat pane, so it must never outlive the chat
- * it covers:
- *
- * - `contextKey` names the room it was opened over; a new key closes it
- *   during render, so the new room never paints under the old overlay.
- * - `listOpen` is the drill-down's revealed channel list. Revealing the list
- *   (back, swipe, the header chevron) closes it, so tapping a channel —
- *   including the one already open, which changes no key — brings back the
- *   messages rather than the overlay.
- * - While open on the narrow layout, back (Android's and the browser's)
- *   closes it first, like any other sheet, instead of reaching the
- *   drill-down's reveal underneath.
+ * Open state of the mobile member overlay (below the `sidebar` breakpoint; the desktop roster
+ * is `memberListVisible`). It must never outlive the chat it covers: a new `contextKey` closes it
+ * during render, revealing the list (`listOpen`) closes it, and back closes it first.
  */
 export function useMobileMembersOverlay(
   contextKey: string,

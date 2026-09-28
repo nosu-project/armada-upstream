@@ -1,40 +1,24 @@
-/**
- * Detection of embedded image metadata (EXIF, XMP, IPTC, comments).
- *
- * Used to decide whether an image must be re-encoded before upload. Phone
- * cameras embed GPS coordinates in EXIF, so an image that carries metadata is
- * re-encoded through a canvas — which drops every ancillary chunk — while a
- * clean image is uploaded byte-for-byte, avoiding needless generation loss.
- */
+// Detects embedded image metadata (EXIF GPS etc.): such images are re-encoded
+// via canvas before upload; clean ones upload byte-for-byte.
 
 /** How much of the file to inspect. Metadata lives near the front in practice. */
 export const METADATA_SCAN_BYTES = 64 * 1024;
 
 /**
- * Whether `bytes` (the head of an image file) contains metadata worth
- * stripping.
- *
- * JPEG is parsed exactly by walking its marker segments. Other formats fall
- * back to scanning for known metadata chunk names, which can in principle
- * report a false positive — the cost of that is one unnecessary re-encode, so
- * the check errs toward stripping.
+ * Whether the image head contains metadata worth stripping. JPEG is parsed
+ * exactly; other formats scan for chunk names and may false-positive (one extra re-encode).
  */
 export function hasStrippableMetadata(bytes: Uint8Array): boolean {
   if (bytes.length < 4) return false;
 
-  // JPEG: FF D8 followed by marker segments.
   if (bytes[0] === 0xff && bytes[1] === 0xd8) return jpegHasMetadata(bytes);
 
   return containsMetadataChunkName(bytes);
 }
 
 /**
- * Walk a JPEG's marker segments looking for the ones that carry metadata:
- * APP1 (EXIF/XMP), APP2 (ICC/FlashPix), APP13 (IPTC/Photoshop) and COM.
- *
- * Other APPn markers are left alone: APP0 is the JFIF header and APP14 is
- * Adobe's colour-transform marker, both of which affect decoding rather than
- * describing the photographer.
+ * JPEG metadata segments: APP1 (EXIF/XMP), APP2 (ICC/FlashPix), APP13 (IPTC), COM.
+ * APP0 (JFIF) and APP14 (Adobe) affect decoding, so they're ignored.
  */
 function jpegHasMetadata(bytes: Uint8Array): boolean {
   let offset = 2;
@@ -81,13 +65,9 @@ function containsMetadataChunkName(bytes: Uint8Array): boolean {
   return METADATA_CHUNK_NAMES.some((name) => text.includes(name));
 }
 
-/**
- * Whether an image is animated, and so must not be round-tripped through a
- * canvas (which would flatten it to a single frame).
- */
+/** Animated images must not be canvas round-tripped (flattens to one frame). */
 export function isAnimatedImage(mime: string, bytes: Uint8Array): boolean {
-  // Any multi-frame GIF; treating all GIFs as animated is the safe default and
-  // GIF has no EXIF to leak anyway.
+  // Treat all GIFs as animated; GIF has no EXIF to leak anyway.
   if (mime === "image/gif") return true;
 
   if (mime === "image/webp") {

@@ -10,9 +10,8 @@ export interface DmLatestMarker {
 }
 
 /**
- * A closed row stays hidden only while its newest message is the one that was
- * present at close time (or older). A different id at the same second counts
- * as new because Nostr timestamps have only one-second precision.
+ * A closed row stays hidden only while its newest message is the one present at
+ * close (or older). A different id in the same second counts as new (1s precision).
  */
 export function dmRemainsClosed(
   marker: ClosedDmMarker | undefined,
@@ -39,8 +38,7 @@ export function useClosedDms() {
     (peer: string, latest: DmLatestMarker | undefined) => {
       updateConfig((current) => ({
         ...current,
-        // A closed row should return as an ordinary recent DM, not silently
-        // retain a pin that is no longer visible.
+        // A reopened row returns unpinned.
         pinnedDms: current.pinnedDms.filter((p) => p !== peer),
         closedDms: {
           ...current.closedDms,

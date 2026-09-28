@@ -1,27 +1,9 @@
 /**
- * Bridges the app-wide web-push hook to the post-login wizard so a fresh
- * web/PWA user is offered a one-time notification opt-in.
- *
- * Web Push is opt-out and auto-syncs on every load, but a brand-new user sits at
- * Notification permission `"default"` — and the browser refuses to grant
- * permission without a user gesture, which a headless auto-sync doesn't have. So
- * without an explicit ask, a fresh user never gets push until they hunt down the
- * Settings toggle. On iOS this is the *only* way in: the Push API exists solely
- * for a Home-Screen PWA, and it likewise needs the tap.
- *
- * The same gap, and the same fix, applies where Web Push is UNAVAILABLE and the
- * in-page notifier is all there is: its intent defaults to on, so it looks
- * enabled from the first launch while permission sits at `"default"` and it can
- * never fire. One step serves both — see {@link OptInMode}.
- *
- * The heavy push hook (`useNostrPush`) is already mounted once, app-wide, by
- * `WebPushNotifications`. Rather than mount a second
- * copy inside the wizard (doubling every subscribe/register), that single
- * instance drives this module: it keeps the live `enable` action current
- * (`setWebPushEnable`) and, when a fresh logged-in user could receive push,
- * calls `requestWebPushOptIn()`. `LoginSetup` registers an opener that surfaces
- * the step; the step's button runs `runWebPushEnable()` (the tap that grants
- * permission).
+ * One-time post-login notification opt-in. Permission needs a user gesture
+ * (and on iOS PWAs push is otherwise unreachable), so the app-wide
+ * `WebPushNotifications` hook calls `requestWebPushOptIn()` and keeps `enable`
+ * current; `LoginSetup` registers the opener and the step's button runs
+ * `runWebPushEnable()`. Also used for the foreground notifier — see {@link OptInMode}.
  */
 
 /** Set once the opt-in step has been surfaced; a declined step is not re-asked. */
@@ -30,13 +12,8 @@ const SHOWN_KEY = "armada:webpush-prompt-shown";
 type EnableFn = () => Promise<void>;
 
 /**
- * Which notifier the step is offering.
- *
- * `"push"` delivers with the tab closed, through a push service.
- * `"foreground"` is the fallback where Web Push is unavailable — no gateway
- * configured for this build, or a browser without it — and only fires while
- * Armada is open. The step's copy has to say which, because "even while it's
- * closed" is false for the second and the ask is otherwise identical.
+ * `"push"` delivers with the tab closed; `"foreground"` (no Web Push) only while
+ * Armada is open, so the copy must differ.
  */
 export type OptInMode = "push" | "foreground";
 
@@ -86,9 +63,8 @@ export function markWebPushPromptShown(): void {
 }
 
 /**
- * Ask the post-login wizard to surface the one-time web-push opt-in. No-ops if
- * it's already been shown (this or a previous load) or already requested this
- * session. Held until an opener registers if the wizard hasn't mounted yet.
+ * Ask the wizard to show the opt-in once (per install and session); held until
+ * an opener registers.
  */
 export function requestWebPushOptIn(): void {
   if (requestedThisSession || alreadyShown()) return;
@@ -97,10 +73,7 @@ export function requestWebPushOptIn(): void {
   else pendingRequest = true;
 }
 
-/**
- * Register the wizard's opener. Fires immediately if a request is already
- * waiting. Returns an unsubscribe.
- */
+/** Register the wizard's opener; fires at once if a request is waiting. */
 export function registerWebPushOptInOpener(open: () => void): () => void {
   opener = open;
   if (pendingRequest) {

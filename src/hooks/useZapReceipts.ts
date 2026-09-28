@@ -43,17 +43,10 @@ function mergeReceipts(
 }
 
 /**
- * Load public NIP-57 zap receipts (kind 9735) and on-chain zap events
- * (kind 8333) for a whole timeline in ONE batched `#e` query, mirroring
- * {@link useGroupReactions}' structure exactly: local-first store read,
- * un-awaited pool refresh, one live subscription, and per-id object caching
- * so unchanged rows keep stable props.
- *
- * Lightning receipts are queried from the POOL (app relays) rather than the
- * group's host relay: the 9734 zap request lists the app relays, so that's
- * where providers publish receipts (see useZap). On-chain zaps (kind 8333)
- * are published to the app relays too (the `useOnchainZap` publish path),
- * so the same pool query catches them.
+ * Load NIP-57 zap receipts (kind 9735) and on-chain zaps (kind 8333) for a
+ * timeline in one batched `#e` query, structured like {@link useGroupReactions}.
+ * Queried from the app-relay pool (not the group relay): that's where the 9734
+ * request tells providers to publish, and where on-chain zaps are published.
  */
 export function useZapReceipts(
   scope: string | undefined,
@@ -75,10 +68,9 @@ export function useZapReceipts(
       const store = await eventStore;
       const limit = ids.length * 10;
 
-      // 1. LOCAL-FIRST: mirrored receipts out of IndexedDB immediately.
       const cached = await store.query([{ kinds: [KIND_ZAP_RECEIPT, KIND_ONCHAIN_ZAP], "#e": ids, limit }]);
 
-      // 2. BACKGROUND refresh from the pool (NOT awaited — never gates render).
+      // Background refresh; never gates render.
       void (async () => {
         if (signal.aborted) return;
         try {
@@ -101,8 +93,7 @@ export function useZapReceipts(
     staleTime: 15_000,
   });
 
-  // One live subscription for the whole window: a receipt appears the moment
-  // the provider publishes it, so the ⚡ chip lands without a poll.
+  // Live subscription so the ⚡ chip lands without a poll.
   useEffect(() => {
     if (!scope || !idsSig) return;
     const ids = idsSig.split(",");
@@ -130,7 +121,6 @@ export function useZapReceipts(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nostr, scope, idsSig, queryClient]);
 
-  // Per-message tallies, derived once from the batched receipt map.
   const talliesById = useMemo(() => {
     const out = new Map<string, ZapTally>();
     const map = receiptsQuery.data;

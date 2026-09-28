@@ -11,19 +11,13 @@ import {
   type ServerProfile,
 } from "@/lib/nip29";
 
-/** Query key for a user's per-server self-profile on one relay. */
 function serverProfileKey(relayUrl: string | undefined, pubkey: string | undefined) {
   return ["server-profile", relayUrl ?? "", pubkey ?? ""] as const;
 }
 
 /**
- * Read a user's per-server nickname/label for a single relay (server).
- *
- * These are NIP-32 kind-1985 self-labels (see `lib/nip29.ts`). The value is
- * scoped to one relay by *convention enforced in this client*: we query ONLY
- * the target relay and only accept events whose `r` tag matches it, so a
- * nickname set on one server never bleeds into another. (A signed label event
- * is public, so this is a client convention, not a cryptographic guarantee.)
+ * Per-server nickname/label: NIP-32 kind-1985 self-labels (see `lib/nip29.ts`), read ONLY from
+ * the target relay with a matching `r` tag. A client convention, not cryptographic isolation.
  */
 export function useServerProfile(relayUrl: string | undefined, pubkey: string | undefined) {
   const { nostr } = useNostr();
@@ -55,12 +49,7 @@ export function useServerProfile(relayUrl: string | undefined, pubkey: string | 
   });
 }
 
-/**
- * Publish/replace the current user's per-server nickname + label for a relay.
- * Passing empty strings clears the corresponding field. The event is published
- * ONLY to the target relay (never fanned out to app relays), keeping the value
- * confined to its server.
- */
+/** Empty strings clear a field. Published ONLY to the target relay. */
 export function useUpdateServerProfile(relayUrl: string | undefined) {
   const { user } = useCurrentUser();
   const { mutateAsync: publish } = useNostrPublish();

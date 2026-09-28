@@ -1,15 +1,9 @@
 /**
- * Discover activity — cheap "last wrap" probes for public Concord listings.
- *
- * A Discover invite unlocks the bundle, so guestbook / control / any vended
- * private-channel stream addresses are derivable without joining. Kind-1059
- * wraps are NOT NIP-17-fuzzed (CORD-01): outer `created_at` is wall-clock, so
- * the newest wrap's timestamp is a real "last active" signal.
- *
- * Public chat streams need channel ids from the Control fold; public link
- * bundles deliberately omit those (CORD-05 — `channels` is private grants
- * only). Callers that already hold a fold can pass public channel ids via
- * {@link discoverStreamAuthors}'s `publicChannelIdHexes`.
+ * Discover activity — cheap "last wrap" probes for public Concord listings. The
+ * invite bundle makes stream addresses derivable without joining, and kind-1059
+ * wraps aren't NIP-17-fuzzed (CORD-01), so the newest wrap's `created_at` is a real
+ * "last active" signal. Public chat streams need channel ids from a Control fold
+ * (bundles omit them), passed via `publicChannelIdHexes`.
  */
 
 import {
@@ -30,14 +24,10 @@ export interface DiscoverActivityTarget {
   linkSigner: string;
   /** Stream author pubkeys to probe (guestbook, control, channel streams). */
   authors: string[];
-  /** Community home relays (where the wraps live). */
   relays: string[];
 }
 
-/**
- * Derive the stream author pubkeys a Discover listing can probe from its
- * invite bundle (plus optional public channel ids from a Control fold).
- */
+/** Derive probeable stream authors from an invite bundle (plus optional public channel ids). */
 export function discoverStreamAuthors(
   bundle: InviteBundle,
   opts?: { publicChannelIdHexes?: readonly string[] },
@@ -55,9 +45,7 @@ export function discoverStreamAuthors(
 
   try {
     out.add(guestbookGroupKey(root, communityId, epoch).pk);
-  } catch {
-    // malformed inputs — skip
-  }
+  } catch { /* ignore */ }
 
   if (typeof bundle.control_pk === "string" && /^[0-9a-f]{64}$/i.test(bundle.control_pk)) {
     out.add(bundle.control_pk.toLowerCase());
@@ -65,40 +53,28 @@ export function discoverStreamAuthors(
     try {
       // Legacy pre-split: the read key's pk is also the wrap address.
       out.add(controlGroupKey(root, communityId, epoch).pk);
-    } catch {
-      // skip
-    }
+    } catch { /* ignore */ }
   }
 
   for (const ch of Array.isArray(bundle.channels) ? bundle.channels : []) {
     try {
       out.add(channelGroupKey(hex32(ch.key), hex32(ch.id), ch.epoch).pk);
-    } catch {
-      // skip malformed channel entries
-    }
+    } catch { /* ignore */ }
   }
 
   for (const idHex of opts?.publicChannelIdHexes ?? []) {
     try {
       out.add(channelGroupKey(root, hex32(idHex), epoch).pk);
-    } catch {
-      // skip
-    }
+    } catch { /* ignore */ }
   }
 
   return [...out];
 }
 
 /**
- * One `limit: 1` filter per target — relays return newest first.
- *
- * `until` is not decoration. A wrap's `created_at` is whatever its publisher
- * typed, and a Discover invite hands every link-holder the guestbook stream's
- * SECRET (its group key derives from the bundle's own `community_root`), so
- * any passer-by can post a wrap dated 2038 and pin the listing at "Active
- * now" forever. Bounding the REQ makes the relay skip past the forgery to the
- * newest wrap that is actually in the past — the same bound `planeSync`'s
- * pager applies, and for the same reason.
+ * One `limit: 1` filter per target. `until` matters: every link-holder holds the
+ * guestbook stream's secret and can post a wrap dated 2038, pinning "Active now";
+ * bounding the REQ skips past such forgeries (as `planeSync` does).
  */
 export function discoverActivityFilters(
   targets: DiscoverActivityTarget[],
@@ -115,9 +91,8 @@ export function discoverActivityFilters(
 }
 
 /**
- * Relays commonly cap filters per REQ, and the cap is enforced by rejecting
- * the whole subscription — so an over-wide REQ costs EVERY listing in it its
- * timestamp, not just the ones past the limit.
+ * Relays commonly cap filters per REQ by rejecting the whole subscription, so an
+ * over-wide REQ costs every listing its timestamp.
  */
 const MAX_FILTERS_PER_REQ = 20;
 
@@ -128,13 +103,8 @@ export interface DiscoverActivityBatch {
 }
 
 /**
- * Split targets into REQs grouped by RELAY SET, then chunked.
- *
- * Sending every community's filters to the union of every community's relays
- * would ask each relay about listings it hosts nothing for — N×M authors on
- * the wire to answer N questions, and it tells each operator the whole set of
- * communities this client is looking at. Grouping by relay set keeps a
- * listing's authors on the relays that listing actually names.
+ * Split targets into REQs grouped by RELAY SET, then chunked, so each relay is
+ * asked only about listings it hosts (less traffic, less leaked interest).
  */
 export function discoverActivityBatches(
   targets: DiscoverActivityTarget[],
@@ -167,11 +137,7 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-/**
- * Map wrap events back to link-signers by stream author. Authors are
- * community-unique derivations, so a pubkey collision across listings is not
- * expected; if it happened, both would share the same timestamp (harmless).
- */
+/** Map wrap events back to link-signers by stream author (community-unique derivations). */
 export function activityByLinkSigner(
   targets: DiscoverActivityTarget[],
   events: ReadonlyArray<{ pubkey: string; created_at: number }>,
@@ -187,10 +153,7 @@ export function activityByLinkSigner(
   }
   const out: Record<string, number> = {};
   for (const ev of events) {
-    // The filter's `until` asked the relay for this, but the answer is not the
-    // filter: a relay is free to serve a future-dated wrap anyway, and one is
-    // enough to freeze the card at "Active now" (shortTimeAgo reads a negative
-    // age as "now"). Re-check rather than trust the REQ.
+    // Relays may ignore `until`; re-check, since one future-dated wrap freezes "Active now".
     if (ev.created_at > now) continue;
     const signers = authorToSigners.get(ev.pubkey);
     if (!signers) continue;

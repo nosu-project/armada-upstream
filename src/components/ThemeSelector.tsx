@@ -24,7 +24,6 @@ import {
 
 import type { Theme } from "@/contexts/AppContext";
 
-/** A small preview swatch showing a theme's background + primary. */
 function Swatch({ colors }: { colors: CoreThemeColors }) {
   const tokens = coreToTokens(colors);
   return (
@@ -73,10 +72,7 @@ function ThemeTile({ label, emoji, colors, active, onClick }: TileProps) {
   );
 }
 
-/**
- * Theme picker: System / Light / Dark, named presets, and a custom theme
- * builder. Adapted from Ditto's ThemeSelector for Armada's web context.
- */
+/** Theme picker, adapted from Ditto's ThemeSelector. */
 export function ThemeSelector() {
   const { theme, customTheme, setTheme, applyCustomTheme } = useTheme();
   const { data: userThemes, isLoading: userThemesLoading } = useUserThemes();

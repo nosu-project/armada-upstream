@@ -38,44 +38,18 @@ import {
 import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 
 /**
- * useIosPush
- *
- * Background notifications for the iOS app, against the SAME content-blind
- * nostr-push gateway (NIP-PUSH) the web client uses — only the last hop
- * differs. The app takes an APNs device token from
- * `ArmadaPushPlugin.swift` and registers it as a `type: "apns"` subscription
- * carrying exactly the filters `useNostrPush` registers as `type: "web"`
- * (`usePushWatchSet`), so the two platforms watch one watch set.
- *
- * Apple is in the delivery path and cannot be taken out of it — iOS has no
- * equivalent of the Android foreground service, and WKWebView has no Web Push,
- * so this is the only route to a notification while Armada is closed. What it
- * does keep is the gateway's content-blindness: it matches kinds and tags and
- * sends a fixed string, never a rendered message.
- *
- * What the lock screen SHOWS is decided on the device, by the Notification
- * Service Extension (`ios/App/NotificationService`, over the `ArmadaNotify`
- * package): the gateway inlines the matched event, the extension opens it,
- * writes it into the same ArmadaDB the WebView reads, and rewrites the
- * notification from the plaintext. That is the third port of the pipeline
- * `sw.js` + `pushRuntime.ts` are on the web and `Dm17.kt` + `ServiceStore.kt`
- * are on Android.
- *
- * This hook's job on that front is `writeIosPushConfig`: the extension runs in
- * its own process with no WebView and no localStorage, so everything it needs
- * to decrypt has to be put somewhere it can read first.
- *
- * Exposes the shared `UsePushNotificationsReturn` the settings UI drives, so
- * `NotificationSettings` needs to know nothing about which one it has.
+ * Background notifications for the iOS app via the same content-blind NIP-PUSH gateway as
+ * the web: registers an APNs token as a `type: "apns"` subscription with the same filters as
+ * `useNostrPush` (`usePushWatchSet`).
+ * The Notification Service Extension (`ios/App/NotificationService`) decrypts the inlined event and
+ * rewrites the notification; `writeIosPushConfig` gives it what it needs, since it has no WebView or
+ * localStorage.
  */
 
 /** Retries for a transient sync failure, matching the web controller. */
 const MAX_SYNC_RETRIES = 3;
 
-/**
- * How long the config write will wait on the DM store before giving up on the
- * "conversations I have written in" set and writing without it.
- */
+/** Max wait on the DM store for the authored-conversations set before writing without it. */
 const MINE_PEERS_TIMEOUT_MS = 3_000;
 
 function errorText(err: unknown): string {
@@ -84,16 +58,9 @@ function errorText(err: unknown): string {
 }
 
 /**
- * The `domain` every RPC is scoped by.
- *
- * NIP-PUSH wants "a valid hostname matching the app's origin", which the app
- * does not have: WKWebView serves it from `capacitor://localhost`, a name every
- * Capacitor app on earth shares. It uses the public deployment's host instead —
- * the same origin `shareOrigin()` builds links on and the AASA file associates
- * — so the gateway's per-domain quota counts this account's iPhone against the
- * same deployment its browser counts against, which is the honest answer.
- * Sharing the domain with the web client is exactly why subscription ids carry
- * an installation id (`pushInstallationId`).
+ * NIP-PUSH wants a hostname matching the app's origin, but WKWebView uses the shared
+ * `capacitor://localhost`, so use the public deployment's host (as `shareOrigin()` does).
+ * Subscription ids carry an installation id (`pushInstallationId`) since the web shares the domain.
  */
 function pushDomain(): string {
   try {
@@ -120,7 +87,6 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
-  /** A failed config write, reported separately from sync failures. */
   const [configError, setConfigError] = useState<string>();
   const prefs = config.pushPrefs;
   const [nonce, setNonce] = useState(0);
@@ -139,40 +105,26 @@ export function useIosPush(): UsePushNotificationsReturn {
   } = usePushWatchSet(prefs);
   const mediaPolicy = useMediaPolicyConfig();
 
-  // Keep the extension's config current: the DM policy and known set for every
-  // enabled session, the decrypt key for nsec logins, and the per-channel
-  // Concord stream keys. Cleared whenever push is off or logged out, so no key
-  // lingers past a session that can use it.
+  // Keep the extension's config current; cleared whenever push is off or logged out so no key
+  // lingers.
   useEffect(() => {
     if (!supported || !user || !enabled) {
       void clearIosPushConfig();
       return;
     }
-    // Wait for the full established-peer roster: writing while it loads would freeze an
-    // empty known set on disk, reclassifying every known conversation as a
-    // request until the next rewrite.
+    // Writing while the roster loads would freeze an empty known set on disk.
     if (!configReady) return;
     let cancelled = false;
     (async () => {
-      // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer has
-      // authored a message in is known even where `acceptedDms` cannot say so
-      // (it is device-local, so a fresh install starts it empty while the
-      // synced history still shows the viewer's own messages).
-      //
-      // RACED AGAINST A TIMEOUT, because this is an enhancement and the write
-      // below is not. It reads ArmadaDB, and a store that is slow — or wedged,
-      // which on this platform is a real state — must not be able to stop the
-      // extension's config from being written at all. That failure mode is
-      // invisible from the device: every push just quietly falls back to the
-      // gateway's static text, with nothing to say why.
+      // Mirror useKnownDmPeers' `mine` dimension (`acceptedDms` is device-local). Raced against a
+      // timeout: a slow/wedged store must not block the config write.
       let mineConversationKeys: string[] = [];
       try {
         const rows = await Promise.race([
           queryDm17Conversations(user.pubkey),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), MINE_PEERS_TIMEOUT_MS)),
         ]);
-        // Preserve exact group identity. A participant in an authored group is
-        // not thereby a trusted sender in an unrelated 1:1 conversation.
+        // An authored group doesn't make its participants trusted in unrelated 1:1s.
         if (rows) {
           const muted = new Set(dmMutedPeers);
           mineConversationKeys = rows
@@ -193,10 +145,8 @@ export function useIosPush(): UsePushNotificationsReturn {
           ...new Set([...dmKnownConversationKeys, ...mineConversationKeys]),
         ].sort(),
         mutedPeers: dmMutedPeers,
-        // One entry per watched channel's CURRENT epoch. The conversation key
-        // reads that channel at that epoch and nothing else — the wrap-signing
-        // secret stays in the page — and the set goes stale by itself at the
-        // next rekey, which `concord` changing rewrites.
+        // One entry per watched channel's CURRENT epoch; the wrap-signing secret stays in the page,
+        // and a rekey rewrites the set.
         concord: concord.flatMap((sub) =>
           sub.streams.map((stream) => ({
             pk: stream.pk,
@@ -210,9 +160,7 @@ export function useIosPush(): UsePushNotificationsReturn {
             muted: sub.muted,
           }))
         ),
-        // An nsec login decrypts on the device; a bunker login hands over the
-        // client key so the extension can ask the bunker instead. Never both —
-        // a login is one or the other.
+        // nsec logins decrypt on device; bunker logins hand over the client key. Never both.
         ...(dmSk ? { sk: dmSk } : {}),
         ...(!dmSk && dmBunker ? { nip46: dmBunker } : {}),
         mediaPolicy,
@@ -220,10 +168,7 @@ export function useIosPush(): UsePushNotificationsReturn {
       if (!cancelled) setConfigError(undefined);
     })().catch((err) => {
       if (cancelled) return;
-      // NOT swallowed. Without a config the extension cannot open anything, so
-      // every notification silently degrades to "New direct message" — the one
-      // symptom that looks identical to "the feature isn't built yet". Say so
-      // where the user can read it.
+      // NOT swallowed: without a config every notification silently degrades to static text.
       console.warn("[ios-push] writing the extension config failed:", err);
       setConfigError(
         `Armada couldn't hand its notification extension the keys it needs, so `
@@ -260,10 +205,8 @@ export function useIosPush(): UsePushNotificationsReturn {
     });
   }, [supported, user, nostr]);
 
-  // Read the authorization status without prompting. Unlike Web Push there is
-  // nothing to prepare — no service worker, no VAPID key — so `ready` is just
-  // "we have asked the OS what it thinks", and the enable action does not have
-  // to be gesture-bound.
+  // Read authorization without prompting; no worker or VAPID key needed, so enable needn't be
+  // gesture-bound.
   useEffect(() => {
     if (!supported) {
       setReady(false);
@@ -277,8 +220,7 @@ export function useIosPush(): UsePushNotificationsReturn {
       setReady(true);
     })().catch(() => {
       if (cancelled) return;
-      // The plugin is present (hasIosPush) but did not answer — treat it as an
-      // ordinary recoverable failure rather than as an unsupported platform.
+      // Plugin present but unresponsive: a recoverable failure, not an unsupported platform.
       setReady(false);
       setError("Armada couldn't check its notification permission. Try again.");
     });
@@ -288,13 +230,8 @@ export function useIosPush(): UsePushNotificationsReturn {
   }, [supported, nonce]);
 
   /**
-   * Re-take the device token and register the current specs.
-   *
-   * The token is re-taken on every sync rather than cached across launches
-   * because APNs may hand back a different one at any time (a restore from
-   * backup, or the OS simply rotating it), and a stale token is not an error
-   * anyone reports — it is a device that silently stops receiving. Asking is
-   * cheap: after the first authorization, `register()` prompts for nothing.
+   * The token is re-taken on every sync since APNs may rotate it silently; `register()` prompts
+   * for nothing after the first authorization.
    */
   const sync = useCallback(async () => {
     if (!client || !user) throw new Error("Push not ready");
@@ -325,12 +262,8 @@ export function useIosPush(): UsePushNotificationsReturn {
       notification: standaloneNotification(spec),
     }));
 
-    // Registered one at a time, and the index matters on failure: the gateway
-    // enforces a quota per (pubkey, domain) and REFUSES a new id past it rather
-    // than replacing anything, so a partial success is a real state — the first
-    // few subscriptions live, the rest silently absent. Naming which one
-    // stopped is the difference between "push is broken" and "the sixth
-    // registration was refused".
+    // One at a time: the gateway REFUSES new ids past its per (pubkey, domain) quota, so partial
+    // success is real and the failing index is reported.
     let registered = 0;
     const trackedIds = new Set(loadRegisteredPushIds());
     try {
@@ -344,9 +277,8 @@ export function useIosPush(): UsePushNotificationsReturn {
           push_subscription: pushSubscription,
         });
         const removed: string[] = [];
-        // A flat NIP-29 record can already occupy the gateway's last quota
-        // slot. On an authoritative pass release that exact predecessor before
-        // its first per-relay PUT; partial snapshots remain additive only.
+        // A flat NIP-29 record may hold the last quota slot; release it on an authoritative pass
+        // before the per-relay PUTs.
         if (!watchSetLoading) {
           for (const oldId of spec.replacementIds) {
             if (!trackedIds.has(oldId) || oldId === spec.id) continue;
@@ -359,9 +291,7 @@ export function useIosPush(): UsePushNotificationsReturn {
         try {
           await registerAs(spec.id);
         } catch (error) {
-          // Best-effort bounded-gap rollback. The old logical id now carries
-          // this exact relay filter, which is safer than losing the watch and
-          // is replaced again on the next retry.
+          // Best-effort rollback; replaced again on the next retry.
           for (const oldId of removed) {
             await registerAs(oldId).then(() => {
               trackedIds.add(oldId);
@@ -384,19 +314,10 @@ export function useIosPush(): UsePushNotificationsReturn {
       throw err;
     }
 
-    // Prune gateway records we no longer want (left group, muted, logged out)
-    // — but ONLY once the watch set has settled. The sources load at different
-    // speeds, so an early sync produces a real-looking set that is merely
-    // incomplete, and pruning from it deletes the records for every community
-    // that had not loaded yet. Registering from a partial set is harmless
-    // (registration replaces); deleting from one is not, and the user's only
-    // symptom is that some rooms quietly stop notifying.
+    // Prune only once the watch set has settled: registering from a partial set is harmless,
+    // deleting from one silently stops notifications.
     const currentIds = new Set(scopedSpecs.map((s) => s.id));
-    // Concord's folds load after everything else, but `watchSetLoading` already
-    // waits for them: it holds until the membership list is confirmed and every
-    // live community's fold is on disk. An empty Concord set past that point is
-    // real — the user left their last community — and must prune, or its
-    // records keep waking the device for a community it no longer reads.
+    // `watchSetLoading` already waits for Concord folds, so an empty Concord set here is real.
     const registeredIds = [...trackedIds];
     if (watchSetLoading) {
       await recordPushStatus(
@@ -411,11 +332,8 @@ export function useIosPush(): UsePushNotificationsReturn {
       }
     }
     saveRegisteredPushIds([...currentIds]);
-    // The relays the DM subscription asks the gateway to watch. Recorded
-    // because the gateway's own relay set is a SEPARATE thing: it answers the
-    // RPC over `NOSTR_PUSH_RELAYS` regardless, which can make a broken watch
-    // set look healthy — the relay the gateway connects to is not necessarily
-    // a relay the user's DMs ever touch.
+    // Recorded because the gateway's own relay set (`NOSTR_PUSH_RELAYS`) can make a broken watch
+    // set look healthy.
     const dmRelays = specs.find((spec) => spec.id === "armada-dm17")?.relays ?? [];
     await recordPushStatus(
       `ok ${registered} subs on ${domain} dmRelays=[${dmRelays.join(" ")}]`
@@ -423,9 +341,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     );
   }, [client, user, specs, watchSetLoading]);
 
-  // Auto-(re)sync whenever the watch set changes, exactly as the web
-  // controller does: as long as the user intends push and the OS has granted
-  // it, the gateway's records stay current without a visit to Settings.
+  // Auto-(re)sync on watch-set changes while intent + permission hold, like the web controller.
   const syncSig = useMemo(
     () => JSON.stringify({ pubkey: user?.pubkey, specs }),
     [user?.pubkey, specs],
@@ -437,11 +353,8 @@ export function useIosPush(): UsePushNotificationsReturn {
     if (!supported || !ready || !client || !user) return;
     if (permission !== "granted") return;
     if (!loadPushIntent()) return;
-    // Empty specs is ambiguous — "still loading" on a cold start, "was
-    // watching, now nothing" once something is registered — and only the second
-    // must run, so `sync` prunes the stale gateway records. The persisted id
-    // list is the durable half of that answer, since registrations outlive the
-    // process and a session ref cannot see across a relaunch.
+    // Empty specs is ambiguous (loading vs. now nothing); only the latter should sync to prune.
+    // The persisted id list survives relaunches.
     if (specs.length === 0 && !hadSpecs.current && loadRegisteredPushIds().length === 0) return;
     if (specs.length > 0) hadSpecs.current = true;
     if (lastSynced.current === syncSig) return;
@@ -474,10 +387,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     };
   }, [supported, ready, permission, client, user, specs.length, syncSig, sync, nonce]);
 
-  // Coming back to the foreground: clear the badge and the delivered pile the
-  // user has now seen, and recheck a permission they may have changed in
-  // Settings while Armada was away (revoking it, or granting it back — the
-  // latter is repaired by the sync effect above once `permission` updates).
+  // On foreground: clear the badge and delivered notifications, and recheck permission.
   useEffect(() => {
     if (!supported) return;
     let cancelled = false;
@@ -500,8 +410,6 @@ export function useIosPush(): UsePushNotificationsReturn {
     };
   }, [supported]);
 
-  // ── Public actions ─────────────────────────────────────────────────────────
-
   const enable = useCallback(async () => {
     if (!supported || !ready || !user) return;
     setBusy(true);
@@ -513,8 +421,7 @@ export function useIosPush(): UsePushNotificationsReturn {
       lastSynced.current = syncSig;
       setEnabled(true);
     } catch (err) {
-      // A refused prompt is the user's answer, not a fault to report: `sync`
-      // has already set permission to "denied" and the UI explains that state.
+      // A refused prompt is the user's answer, not a fault.
       const { status } = await ArmadaPush.permission().catch(() => ({ status: permission }));
       setPermission(status === "default" ? "default" : status);
       if (status !== "denied") {
@@ -529,10 +436,7 @@ export function useIosPush(): UsePushNotificationsReturn {
   const disable = useCallback(async () => {
     setBusy(true);
     try {
-      // Intent first, and locally: everything below goes over the network or
-      // the bridge and can fail, and "off" must not depend on the gateway
-      // honoring the deletes. The sync effect reads this on every pass, so a
-      // half-finished teardown does not resurrect itself.
+      // Intent first and locally: "off" must not depend on the gateway honoring deletes.
       savePushIntent(false);
       const domain = pushDomain();
       if (client) {
@@ -541,9 +445,7 @@ export function useIosPush(): UsePushNotificationsReturn {
         }
       }
       saveRegisteredPushIds([]);
-      // Give up the token too. Deleting the gateway records is what actually
-      // stops the pushes; this makes the device stop holding a token the app no
-      // longer uses, and any push racing the deletes has nowhere to land.
+      // Deleting gateway records stops pushes; this also drops the unused token.
       await ArmadaPush.unregister().catch(() => {});
       // The identity key must not outlive the session that could use it.
       await clearIosPushConfig();

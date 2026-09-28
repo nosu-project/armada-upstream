@@ -23,14 +23,13 @@ interface AudioMessageProps {
   fallbacks?: string[];
   /** Space-separated 0–100 amplitude samples from the imeta `waveform` field. */
   waveform?: string;
-  /** Duration in seconds from the imeta `duration` field. */
+  /** Seconds, from the imeta `duration` field. */
   duration?: string;
   className?: string;
 }
 
 const BAR_COUNT = 48;
 
-/** Parse the imeta `waveform` field's space-separated amplitudes. */
 function parseWaveform(waveform: string | undefined): number[] {
   return waveform
     ?.split(/\s+/)
@@ -38,11 +37,9 @@ function parseWaveform(waveform: string | undefined): number[] {
     .filter((n) => Number.isFinite(n)) ?? [];
 }
 
-/** Downsample (or pad) a waveform to a fixed number of bars. */
 function toBars(raw: number[] | null | undefined): number[] {
   if (!raw || raw.length === 0) {
-    // Flat while the real shape is unknown (not yet decoded, or undecodable):
-    // anything else would be a shape the file doesn't have.
+    // Flat while the real shape is unknown.
     return Array.from({ length: BAR_COUNT }, () => 20);
   }
 
@@ -63,11 +60,8 @@ function toBars(raw: number[] | null | undefined): number[] {
 }
 
 /**
- * Compact chat audio player: play/pause button, clickable waveform with
- * playback progress, and a duration label. Used for voice messages and
- * other audio attachments. A music file that carries its own tags or cover
- * art (read out of the file, not the event) is presented as a track: the art
- * beside its title, artist and album.
+ * Compact chat audio player (voice messages and other audio). A music file
+ * with its own tags or cover art is presented as a track.
  */
 export function AudioMessage({
   src,
@@ -79,9 +73,8 @@ export function AudioMessage({
   className,
 }: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  // Set when a coordinated `play()` request arrives before the <audio> element
-  // has mounted (encrypted blobs mount lazily once decrypted); consumed on the
-  // next play attempt.
+  // A play request that arrived before the <audio> mounted (encrypted blobs mount
+  // after decrypt).
   const wantsPlayRef = useRef(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -90,21 +83,16 @@ export function AudioMessage({
     return Number.isFinite(parsed) ? parsed : 0;
   });
 
-  // Encrypted (Concord/Vector) attachments are AES-GCM ciphertext on Blossom:
-  // fetch + decrypt to an object URL before handing anything to <audio>.
-  // Plain URLs resolve immediately to themselves.
+  // Encrypted attachments are fetched + decrypted to an object URL first.
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
 
   const resolvedSrc = resolved.status === "ready" ? resolved.src : undefined;
 
-  // The file's own tags. Read from the resolved bytes: a decrypted object URL
-  // in memory, or a plain URL read by range request for just the tag block.
+  // Tags read from the decrypted object URL, or by range request for plain URLs.
   const meta = useAudioMetadata(src, resolvedSrc);
 
-  // A voice message carries its recorder's waveform. Anything else has its
-  // shape computed from its own decoded samples: at once when the bytes are
-  // already in memory (a decrypted `blob:`), but for a plain URL only once it
-  // is played, since that means downloading the whole file.
+  // Voice messages carry a waveform; others compute one from decoded samples —
+  // immediately for a `blob:`, but for a plain URL only once played (full download).
   const declared = useMemo(() => parseWaveform(waveform), [waveform]);
   const [hasPlayed, setHasPlayed] = useState(false);
   const waveformSrc = declared.length > 0 || !resolvedSrc
@@ -120,15 +108,9 @@ export function AudioMessage({
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  // A rejected play() is either the browser refusing to start without a
-  // gesture (NotAllowedError — leave it paused for the user to tap) or the
-  // source being unplayable (NotSupportedError). The latter is a failed
-  // candidate just like an `error` event, so it walks to the next one — and
-  // the viewer asked to hear it, so the next candidate starts playing.
-  //
-  // Only for the element still mounted: a candidate whose <source> error has
-  // already walked the fallback on can reject its play() afterwards, and
-  // acting on that too would skip the candidate that replaced it.
+  // NotAllowedError (no gesture): leave paused. NotSupportedError: a failed
+  // candidate, so walk to the next and play it. Ignore rejections from an
+  // element already replaced.
   const playOn = useCallback((audio: HTMLAudioElement) => {
     audio.play().catch((err: unknown) => {
       if (audioRef.current !== audio) return;
@@ -138,9 +120,7 @@ export function AudioMessage({
     });
   }, []);
 
-  // Imperatively start playback. Used both by the play button and by the
-  // playback coordinator (auto-advance). If the <audio> element hasn't mounted
-  // yet (encrypted blob still decrypting), flag it to play as soon as it does.
+  // Used by the play button and the coordinator (auto-advance).
   const play = useCallback(() => {
     const audio = audioRef.current;
     if (audio) {
@@ -150,38 +130,31 @@ export function AudioMessage({
     }
   }, [playOn]);
 
-  // Register with the cross-component coordinator so this player participates in
-  // single-playback and auto-advance. `play` is stable, so this runs once.
+  // Single-playback and auto-advance. `play` is stable, so this runs once.
   useEffect(() => registerAudioPlayer({ get el() { return audioRef.current; }, play }), [play]);
 
-  // The <audio> element only mounts once the src is resolved, and is replaced
-  // whenever the fallback walk moves to another candidate (see its `key`), so
-  // re-attach listeners to whichever element is current.
+  // The element is replaced on each fallback step (see its `key`); re-attach.
   const currentSrc = resolved.status === "ready" ? resolved.src : undefined;
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    // A replacement element starts from nothing; the one it replaced may have
-    // been torn down mid-playback, before its `pause` could arrive.
+    // The replaced element may have been torn down before its `pause` arrived.
     setIsPlaying(!audio.paused);
     setCurrentTime(audio.currentTime);
     const onPlay = () => {
       setIsPlaying(true);
       setHasPlayed(true);
-      // Only one voice note plays at a time.
       pauseOthers(audio);
     };
     const onPause = () => setIsPlaying(false);
     const onEnded = () => {
       setIsPlaying(false);
-      // Continue the thread: play the next voice note in document order.
       playNextAfter(audio);
     };
     const onTime = () => setCurrentTime(audio.currentTime);
     const onDur = () => {
       if (Number.isFinite(audio.duration)) setMediaDuration(audio.duration);
     };
-    // Honour a play request that arrived before this element mounted.
     if (wantsPlayRef.current) {
       wantsPlayRef.current = false;
       playOn(audio);
@@ -202,8 +175,7 @@ export function AudioMessage({
     };
   }, [currentSrc, playOn]);
 
-  // A walk that ran out of candidates drops the request to play: a later
-  // Retry is a fresh start, not permission to begin playing unprompted.
+  // An exhausted walk drops the play request, so Retry doesn't autoplay.
   useEffect(() => {
     if (failed) wantsPlayRef.current = false;
   }, [failed]);
@@ -225,15 +197,11 @@ export function AudioMessage({
     audio.currentTime = ratio * mediaDuration;
   };
 
-  // Every mirror failed (bad key, blob gone, all servers down): link + retry.
   if (failed) {
     return <MediaFallback {...fallbackProps} label="Audio" />;
   }
 
-  // Keyed by source: changing a mounted <source>'s src does nothing until
-  // load() is called, so a fallback step would otherwise leave the element
-  // stuck on the candidate that just failed. A fresh element runs resource
-  // selection on the new one.
+  // Keyed by source: changing a mounted <source>'s src does nothing without load().
   const element = resolved.status === "ready" && (
     <audio key={resolved.src} ref={audioRef} preload="metadata" className="hidden" onError={onError}>
       {mime ? <source src={resolved.src} type={mime} /> : <source src={resolved.src} />}

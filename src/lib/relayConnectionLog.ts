@@ -1,19 +1,8 @@
 /**
- * Dev-only audit of every relay CONNECTION the pool opens, with the code path
- * that first demanded it — for hunting connections to relays the user never
- * configured (stale hints in nevents, authors' NIP-65 lists, peers' kind-10050
- * lists, hardcoded discovery sets, invite bootstrap dictionaries…).
- *
- * `NPool.open(url)` runs once per URL, synchronously inside the first
- * `pool.relay(url)` / `pool.group(urls)` call, so a stack captured here names
- * the hook/component that introduced the relay. Pool-routed traffic
- * (reqRouter) opens from inside the pool's request machinery instead; those
- * stacks are less specific, but those URLs come from the configured relay
- * sets, which are logged alongside — the mystery connections are the targeted
- * ones.
- *
- * Same toggle as the REQ log: `localStorage.debugNostr = '1'` (default on in
- * dev). Run `__relayReport()` in the console for the full table.
+ * Dev-only audit of every relay CONNECTION the pool opens and the code path
+ * that first demanded it, for finding unconfigured relays. `NPool.open(url)`
+ * runs synchronously in the first `relay()`/`group()` call, so the stack names
+ * the caller. Toggle: `localStorage.debugNostr`; console: `__relayReport()`.
  */
 
 let seq = 0;
@@ -38,7 +27,7 @@ function enabled(): boolean {
   return import.meta.env?.DEV ?? false;
 }
 
-/** Frames of the app's own code — drop the Error header, this module, the pool internals. */
+/** App-code frames only (drops the Error header, this module, pool internals). */
 function appFrames(stack: string): string[] {
   return stack
     .split("\n")
@@ -56,9 +45,7 @@ export function logRelayOpen(url: string): void {
   if (!enabled()) return;
   const stack = new Error().stack ?? "";
   const frames = appFrames(stack);
-  // First frame past NostrProvider's open() itself is the caller that
-  // introduced the URL (NostrBatcher's relay()/group() wrappers are app code
-  // and useful context, so they stay in).
+  // First frame past NostrProvider's open() is the caller that introduced the URL.
   const origin = frames.find((f) => !f.includes("NostrProvider")) ?? frames[0] ?? "(no stack)";
   const n = ++seq;
   records.push({ n, t: Date.now(), url, origin, stack });
@@ -73,10 +60,6 @@ export function logRelayOpen(url: string): void {
   console.groupEnd();
 }
 
-/**
- * Print every relay connection opened so far with its origin. Call from the
- * console: __relayReport()
- */
 function relayReport(): void {
   if (records.length === 0) {
     console.log("[relay report] no connections recorded yet");
@@ -96,7 +79,6 @@ function relayReport(): void {
   console.log("full stacks:", records);
 }
 
-// Expose on window for interactive use in dev.
 if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__relayReport = relayReport;
 }

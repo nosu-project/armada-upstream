@@ -44,9 +44,7 @@ const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          // Centered within the SAFE area, not the raw viewport: a tall dialog
-          // centered on 100dvh extends under the Android status bar and parks
-          // the close button beneath it.
+          // Centered within the SAFE area, or tall dialogs put the close button under the Android status bar.
           "fixed left-[50%] top-[calc(50%+(var(--safe-area-inset-top,env(safe-area-inset-top,0px))-var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))/2)] z-[250] grid w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem-var(--safe-area-inset-top,env(safe-area-inset-top,0px))-var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto overscroll-contain border bg-background p-6 shadow-lg rounded-xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
           className
         )}
@@ -66,13 +64,9 @@ const DialogContent = React.forwardRef<
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 /**
- * The "terminal square with cut edges" modal shell — Armada's single dialog
- * idiom. Strips the default bordered/rounded chrome and renders the body inside
- * a cut-corner chrome vessel (the same shape as the roster / composer). The
- * inner card is an inline-size container, so children can size text in `cqw`
- * (and the `.chrome-dialog-title` helper) to stay readable without overflowing
- * on a narrow phone. Pass the dialog's accessible title via `title` (rendered
- * visually-hidden unless you render your own heading inside).
+ * Armada's single dialog idiom: a cut-corner chrome vessel. The inner card is
+ * an inline-size container (children can use `cqw`). `title` is visually hidden
+ * unless you render your own heading.
  */
 const ChromeDialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,

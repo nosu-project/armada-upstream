@@ -58,19 +58,13 @@ import {
 } from "@/lib/desktop";
 
 /**
- * Shared in-call control buttons — the single styled source for the media
- * controls that appear in BOTH the call-control bar (the channel-list panel)
- * and the video pane (the floating PiP window + theater mode), so the two never
- * drift apart. Every button is a compact filled icon that reflects its live
- * state, and grows to a 44px touch target on real touch devices. All must
- * render inside a `LiveKitRoom` context (they read the local participant).
+ * Shared in-call control buttons for both the call-control bar and the video
+ * pane, so they never drift apart. Must render inside a `LiveKitRoom`.
  */
 
-/** Whether this browser can capture the screen (absent on most mobile). */
 const supportsScreenShare =
   typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
 
-/** The shared icon-button frame: compact on pointer, 44px on touch. */
 const CTRL = "inline-flex items-center justify-center rounded-md size-8 touch:size-11 shrink-0 transition-colors";
 
 export function MicButton({ className }: { className?: string }) {
@@ -90,10 +84,8 @@ export function MicButton({ className }: { className?: string }) {
       aria-label={label}
       title={label}
       onClick={() => {
-        // While push to talk owns the microphone this button is the override,
-        // not a toggle: a global shortcut can lose its key-up (another window
-        // grabs the keyboard, the machine sleeps mid-press), and disabling the
-        // button would leave the user transmitting with no way back.
+        // Under push to talk this is an override, not a toggle: a global shortcut can
+        // lose its key-up, so disabling it could leave the user stuck transmitting.
         if (pushToTalk.ready) {
           playMuteSound();
           requestPushToTalkOverride();
@@ -101,23 +93,19 @@ export function MicButton({ className }: { className?: string }) {
           return;
         }
         const enabling = !isMicrophoneEnabled;
-        // Self-only feedback, on the click gesture (AudioContext unlocked).
+        // On the click gesture (AudioContext unlocked).
         if (enabling) playUnmuteSound();
         else playMuteSound();
         void (async () => {
           try {
-            // `webAudioMix` plays remote audio through a Web Audio graph that
-            // starts suspended until a user gesture unlocks it; without this the
-            // mic can toggle while you hear nobody. Runs on the click gesture.
+            // `webAudioMix`'s graph starts suspended until a gesture unlocks it.
             if (enabling && room && !room.canPlaybackAudio) {
               await room.startAudio();
             }
             await localParticipant.setMicrophoneEnabled(enabling);
           } catch (err) {
             console.warn("failed to toggle microphone", err);
-            // A silently-swallowed unmute rejection is the reported "can't
-            // unmute" bug: retry once, then surface it instead of leaving the
-            // button showing muted with no explanation.
+            // Don't swallow an unmute rejection silently: retry once, then surface it.
             if (!enabling) return;
             try {
               await localParticipant.setMicrophoneEnabled(true);
@@ -187,10 +175,8 @@ export function ScreenShareButton({
   const customHevcActive = Boolean(hevcScreenShare?.active);
   const shareActive = isScreenShareEnabled || customHevcActive;
   const screenSharePublication = localParticipant.getTrackPublication(Track.Source.ScreenShare);
-  // A share that is publishing video but no audio track is silent — the state
-  // the audio-source failure used to leave behind invisibly. Surface it so a
-  // muted share is never a surprise. Scoped to the standard LiveKit path; the
-  // custom H.265 publisher carries its audio separately.
+  // A share publishing video with no audio is silent; surface it. LiveKit path
+  // only; the custom H.265 publisher carries audio separately.
   const screenShareAudioMissing =
     isScreenShareEnabled &&
     !customHevcActive &&
@@ -203,9 +189,7 @@ export function ScreenShareButton({
 
   const handleCapturePermission = async (error: unknown): Promise<boolean> => {
     if (!(error instanceof Error) || error.name !== "NotAllowedError") return false;
-    // A cancelled picker and a platform denial are the same DOMException
-    // outside macOS, so this stays silent — but never unlogged, or a denied
-    // xdg-desktop-portal request leaves no trace anywhere.
+    // Cancel and denial are the same DOMException outside macOS; log, don't toast.
     console.warn("screen capture was not permitted", error);
     const status = await desktopScreenCaptureAccessStatus();
     if (status === "denied" || status === "restricted") {
@@ -223,7 +207,6 @@ export function ScreenShareButton({
         ),
       });
     }
-    // A normal picker cancellation is also NotAllowedError and stays silent.
     return true;
   };
 
@@ -233,8 +216,7 @@ export function ScreenShareButton({
         hevcScreenShare?.capability?.reason || "The Linux H.265 encoder is unavailable.",
       );
     }
-    // This goes through the same trusted desktop picker/audio wrapper as the
-    // regular LiveKit path; only encoding and publication diverge afterward.
+    // Same trusted picker/audio wrapper as the LiveKit path; only encoding differs.
     return navigator.mediaDevices.getDisplayMedia(screenShareDisplayMediaOptions(quality));
   };
 
@@ -251,9 +233,8 @@ export function ScreenShareButton({
     void (async () => {
       if (quality.codec === "h265" && customHevcAvailable) {
         const stream = await acquireCustomHevc(quality);
-        // Bring up the replacement before retiring LiveKit's standard share.
-        // A failed normal→custom transition therefore leaves the old share
-        // running instead of stranding the presenter with a false success.
+        // Start the replacement before retiring LiveKit's share, so a failed
+        // transition leaves the old share running.
         await hevcScreenShare!.start(stream, quality);
         if (isScreenShareEnabled) {
           try {
@@ -262,8 +243,7 @@ export function ScreenShareButton({
             try {
               await hevcScreenShare!.stop();
             } catch {
-              // The truthful transition error below is more useful; the shell
-              // also tears its publisher down when the capture stream ends.
+              // The transition error below is more useful; the shell also tears down on stream end.
             }
             throw new Error(
               `The H.265 sender started, but the previous share could not be retired. The previous share remains active: ${error instanceof Error ? error.message : String(error)}`,
@@ -292,17 +272,11 @@ export function ScreenShareButton({
       await applyPublishedScreenShareQuality(localParticipant, quality);
     })()
       .then(() => {
-        // `rememberAs` lets the audio-off recovery below capture this ONE
-        // surface without audio while persisting the user's real preference
-        // unchanged. Without it, one window with no openable loopback endpoint
-        // would write `captureAudio: false` globally and silently mute every
-        // later share — a different window, or the entire screen — until the
-        // user found the buried toggle. The persisted preference is not scoped
-        // to a surface, so a per-surface failure must never rewrite it.
+        // `rememberAs` keeps a per-surface audio-off retry from persisting
+        // `captureAudio: false` globally (the preference isn't surface-scoped).
         rememberScreenShareQuality(options?.rememberAs ?? quality);
-        // A capture whose audio could not be confirmed free of the call's own
-        // playback goes out without it (screenShareOwnAudio.ts). Say so — a
-        // silent share is exactly the surprise this exists to prevent.
+        // Audio not confirmed free of the call's own playback is dropped
+        // (screenShareOwnAudio.ts); say so.
         const dropped = consumeOwnAudioDrop();
         if (dropped) {
           toast({ title: "Sharing without audio", description: describeOwnAudioDrop(dropped) });
@@ -318,10 +292,8 @@ export function ScreenShareButton({
         consumeOwnAudioDrop();
         if (await handleCapturePermission(error)) return;
         console.warn("failed to update screen share quality", error);
-        // Windows/Chromium fails the WHOLE capture when it cannot open the
-        // surface's audio endpoint. Offer the one action that recovers it —
-        // retry with audio off — rather than a dead "try again" that would
-        // hit the same wall. Only when audio was actually requested.
+        // Windows/Chromium fails the WHOLE capture when it can't open the surface's
+        // audio endpoint; offer retry with audio off.
         if (quality.captureAudio && isScreenShareAudioSourceFailure(error)) {
           toast({
             title: "Couldn't share screen audio",
@@ -382,8 +354,8 @@ export function ScreenShareButton({
       console.warn("failed to switch screen share", error);
       toast({
         title: "Couldn't switch the screen share",
-        // The new source is already published once the video swap lands, so
-        // only a swap that failed before that leaves the previous share up.
+        // Once the video swap lands the new source is published, so only an earlier
+        // failure leaves the previous share up.
         description: customHevcActive || isScreenShareSwitchPartialFailure(error)
           ? error instanceof Error
             ? error.message
@@ -522,9 +494,8 @@ export function LeaveButton({ className }: { className?: string }) {
   const { leaveCall } = useCall();
   return (
     <DisconnectButton
-      // Play the leave chirp inside the gesture, before the disconnect tears
-      // down the room audio. `leaveCall` runs the exit animation + teardown;
-      // DisconnectButton also disconnects. Both are idempotent.
+      // Leave chirp inside the gesture, before disconnect tears down audio. Both
+      // handlers are idempotent.
       onClick={() => {
         playLeaveSound();
         leaveCall();
@@ -538,11 +509,7 @@ export function LeaveButton({ className }: { className?: string }) {
   );
 }
 
-/**
- * Raise / lower your hand — a distinct toggle (Armada client feature; Concord
- * calls only). Renders nothing where the feature is unavailable. Sits beside
- * {@link ReactionsMenu} in the video pane.
- */
+/** Raise / lower your hand (Concord calls only); renders nothing elsewhere. */
 export function RaiseHandButton({ className }: { className?: string }) {
   const { enabled, myHandRaised, toggleHand } = useCallSignals();
   if (!enabled) return null;
@@ -567,17 +534,10 @@ export function RaiseHandButton({ className }: { className?: string }) {
   );
 }
 
-/**
- * The quick emoji tray, à la Zoom/Signal in-call reactions. A small fixed set —
- * a floating burst is a glance, not a message (and reactions ride a
- * size-bounded presence tag; see voice.ts).
- */
+/** Quick in-call reactions; kept small since they ride a size-bounded presence tag (see voice.ts). */
 const QUICK_EMOJI = ["👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "👏"] as const;
 
-/**
- * The emoji-reaction tray button (Concord calls only). Renders nothing where
- * the feature is unavailable. Pairs with {@link RaiseHandButton}.
- */
+/** Emoji-reaction tray (Concord calls only); renders nothing elsewhere. */
 export function ReactionsMenu({
   className,
   portalContainer,

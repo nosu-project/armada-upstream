@@ -6,28 +6,14 @@ import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 import { takePendingPushOpen } from "@/lib/nativePush";
 
 /**
- * Cold-launch deep-link resolution, resolved ONCE at startup.
- *
- * A notification tap launches the process with an `armada://open<path>` URL on
- * Android and through the notification delegate on iOS (`nativePush.ts`), and
- * an App Link tap with an `https://armada.buzz/<path>` URL, but
- * Capacitor still loads the SPA at its root (`/`), and `App.getLaunchUrl()` is
- * async — it resolves a beat AFTER React mounts. By then the router's
- * `HomeRedirect` has already sent `/` to the default server, `ServerPage` has
- * auto-opened the default group, and a late `navigate(deepLink)` ends up
- * fighting (and losing to) that chain. The symptom: a tapped notification opens
- * the default server/channel instead of the room it was about.
- *
- * Fix: resolve the launch URL ONCE here, and let `HomeRedirect` WAIT for it
- * before choosing a destination — so the deep link is the first real navigation,
- * never an override applied after the default already won.
- *
- * `getLaunchUrl()` returns the same value for the whole process, so resolving it
- * exactly once (and consuming the path exactly once) also prevents it from
- * re-navigating on later effect runs (which would trap the user in the room).
+ * Cold-launch deep-link resolution, resolved ONCE at startup. Notification and
+ * App Link taps still load the SPA at `/`, and `getLaunchUrl()` resolves after
+ * React mounts, so a late navigate loses to `HomeRedirect`'s default chain.
+ * `HomeRedirect` waits for this instead; consuming once also avoids
+ * re-navigating on later effects.
  */
 
-let resolved = !isNativeRuntime(); // web: nothing to wait for
+let resolved = !isNativeRuntime();
 let deepLinkPath: string | null = null;
 /** The launch deep link, retained past consumption (for non-navigation uses). */
 let launchDeepLinkPath: string | null = null;
@@ -42,22 +28,12 @@ function settle(path: string | null): void {
   waiters.clear();
 }
 
-// Kick off the single launch-URL read at module load (before React mounts).
 if (isNativeRuntime()) {
-  // Guard so a hung bridge can't pin HomeRedirect (or the native splash —
-  // signalWebReady holds it while this is pending) forever. Generous on
-  // purpose: on a slow cold start the bridge answers getLaunchUrl only after
-  // it finishes initializing, and a guard that fires first sends the user to
-  // the default route with the notification's room arriving as a SECOND
-  // visible navigation moments later. The native splash stays up while we
-  // wait (its own cap is 8s), so patience here costs nothing on screen.
+  // Guard against a hung bridge pinning HomeRedirect and the native splash.
+  // Generous: slow cold starts answer late, and the splash (8s cap) covers the wait.
   const timeout = setTimeout(() => settle(null), 4000);
-  // Two cold sources, read together. An iOS push tap is delivered to the
-  // notification delegate rather than as a URL open, so it produces no launch
-  // URL — but it is the same kind of fact, arrives at the same moment, and must
-  // beat HomeRedirect's default in the same way. Reading both here is what
-  // keeps that one race in one place; a tap resolved separately would navigate
-  // AFTER the default had already won, which is a tap that "didn't work".
+  // An iOS push tap arrives via the notification delegate, not a launch URL;
+  // read both together so both beat HomeRedirect's default.
   Promise.all([
     CapacitorApp.getLaunchUrl()
       .then((res) => pathFromDeepLinkUrl(res?.url))
@@ -65,19 +41,15 @@ if (isNativeRuntime()) {
     takePendingPushOpen().catch(() => null),
   ])
     .then(([urlPath, pushPath]) => {
-      // Only one of them can be why the process started; prefer the URL, which
-      // is the more specific of the two (a push tap knows only the DM tier).
+      // Prefer the URL: more specific than a push tap (DM tier only).
       const path = urlPath ?? pushPath;
       if (!resolved) {
         clearTimeout(timeout);
         settle(path);
         return;
       }
-      // The guard already fired and HomeRedirect committed to the default
-      // route — this launch URL used to be silently dropped here, which is a
-      // notification tap that "didn't work". Hand it to the late listeners
-      // (useNotificationNavigation) instead: a second navigation moments
-      // after boot beats none.
+      // Guard already fired: hand the path to late listeners
+      // (useNotificationNavigation) — a second navigation beats none.
       if (path) {
         launchDeepLinkPath = path;
         for (const w of lateWaiters) w(path);
@@ -94,25 +66,16 @@ export function coldLaunchPending(): boolean {
   return !resolved;
 }
 
-/**
- * The cold-launch deep-link path (consumed once). Returns null if the launch
- * wasn't a deep link, or after it's already been consumed.
- */
+/** The cold-launch deep-link path, consumed once; null if none or already consumed. */
 export function consumeColdLaunchDeepLink(): string | null {
   const p = deepLinkPath;
   deepLinkPath = null;
-  // The consumer (HomeRedirect) renders this as its first navigation — mark
-  // it so SwipeReveal lands on the destination without an entrance slide.
+  // Lets SwipeReveal land on the destination without an entrance slide.
   if (p) markDeepLinkNavigation();
   return p;
 }
 
-/**
- * Non-consuming read of the cold-launch deep-link path, retained even after
- * HomeRedirect consumes it for navigation. Used by the warmup path
- * (pre-connecting the target room's relay). Null before resolution / when the
- * launch wasn't a deep link.
- */
+/** Non-consuming read of the launch deep link (for warmup, e.g. pre-connecting the room's relay). */
 export function peekColdLaunchDeepLink(): string | null {
   return launchDeepLinkPath;
 }
@@ -128,10 +91,8 @@ export function onColdLaunchResolved(cb: () => void): () => void {
 }
 
 /**
- * Run `cb` if the launch URL resolves to a deep link AFTER the 1.5s guard has
- * already released HomeRedirect (which then owns no navigation any more —
- * it's unmounted). The subscriber applies the path as an ordinary in-router
- * navigation, exactly once per process (the read itself is once-only).
+ * Run `cb` if the launch URL resolves to a deep link after the guard timeout
+ * already released HomeRedirect; applied once as an ordinary navigation.
  */
 export function onLateColdLaunchDeepLink(cb: (path: string) => void): () => void {
   lateWaiters.add(cb);

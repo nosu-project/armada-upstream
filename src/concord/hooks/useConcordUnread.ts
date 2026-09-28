@@ -30,25 +30,15 @@ export interface ConcordUnread {
 }
 
 /**
- * Per-channel unread state for a Concord community, derived PURELY from the
- * shared community rumor scan ({@link useCommunityRumors}) and the shared
- * read-state map ({@link useReadState}) — no store access of its own. A channel
- * is unread when its newest non-self kind-9 is newer than the last-read
- * timestamp at its `c2:<channelIdHex>` read key.
- *
- * Read state lives in the one shared map alongside NIP-29 channels and DMs, so
- * it persists locally and syncs across devices via the encrypted NIP-78
- * settings event. Because the derivation is pure (no IndexedDB), a `markRead`
- * recomputes every mounted instance (rail + page) instantly.
- *
- * Returns `byChannel[channelIdHex]` (present ⇒ unread), a `markRead(channel,
- * ts)` to advance a channel's read stamp, and a `getLastRead` accessor.
+ * Per-channel unread state, derived purely from {@link useCommunityRumors} and
+ * the shared read-state map (key `c2:<channelIdHex>`, synced via NIP-78). A
+ * channel is unread when its newest non-self kind-9 is newer than that stamp.
+ * `byChannel[id]` present ⇒ unread.
  */
 export function useConcordUnread(
   community: Community | undefined,
   channels: Channel[],
-  // A shared empty default: a fresh `new Map()` per render would invalidate
-  // the memo below on every render of a caller that passes none.
+  // Shared default: a fresh Map per render would invalidate the memo below.
   gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = NO_GIT,
   active = false,
 ): {
@@ -60,21 +50,9 @@ export function useConcordUnread(
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
   const { mutedPubkeys } = useMutedPubkeys();
-  // This scan reads the raw store, so the Banlist has to be applied here as
-  // well as in the fold — otherwise a banned author keeps lighting channel
-  // badges the timeline has nothing in it to clear (CORD-04 §4).
-  //
-  // Passive by DEFAULT, unlike the fold hooks below it. Every caller but the
-  // open community's page is ambient — the rail's buttons, its folder mini
-  // icons, its unread probes, the desktop badge counter — and each is mounted
-  // once per joined community on every page of the app. Resolving moderation
-  // actively there issues a control sweep per relay plus a 5-minute dissolved
-  // probe for every community the reader has not opened, which is exactly the
-  // fan-out the rail's own `useControlFold(community, false)` calls exist to
-  // avoid. `banned` comes off the fold's persisted snapshot regardless, so the
-  // Banlist drop is unaffected. The default is false so that a NEW ambient
-  // caller cannot reintroduce the fan-out by forgetting to pass the flag; the
-  // page opts in explicitly instead.
+  // This scan reads the raw store, so the Banlist must be applied here too (CORD-04 §4).
+  // Passive by DEFAULT: ambient callers are mounted per joined community, and an
+  // active resolve fans out a control sweep for each. The page opts in explicitly.
   const { banned, canMentionEveryone } = useChatModeration(community, active);
   const {
     readState,
@@ -85,17 +63,14 @@ export function useConcordUnread(
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The one shared community read (see useCommunityRumors).
   const { byChannel: rumorsByChannel } = useCommunityRumors(communityIdHex, channelIds);
 
-  // Re-derive when the persisted quarantine warms or grows: after a refresh
-  // the live rules may see too little of the flood to re-fold it, and the
-  // memory is what keeps its badges from coming back (see quarantineMemory.ts).
+  // Re-derive when the persisted quarantine memory warms or grows; after a
+  // refresh it is what keeps a flood's badges from coming back.
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
 
-  // Remember what the badge path detected, so a refresh cannot resurrect it.
-  // Merge-only, so a shallow batch here can never un-remember what the
-  // timeline's better-informed fold stored.
+  // Remember what the badge path detected so a refresh can't resurrect it.
+  // Merge-only, so it never un-remembers the timeline fold's verdicts.
   useEffect(() => {
     if (!communityIdHex) return;
     for (const [idHex, rumors] of rumorsByChannel) {
@@ -107,27 +82,23 @@ export function useConcordUnread(
     }
   }, [communityIdHex, rumorsByChannel, pubkey]);
 
-  // Depend on this community's stamps only: `readState` is a new object on every
-  // markRead anywhere, and the rail mounts one of these per community.
+  // Depend on this community's stamps only: `readState` changes on every markRead
+  // anywhere, and the rail mounts one of these per community.
   const readStateRef = useRef(readState);
   readStateRef.current = readState;
   let readSig = "";
   for (const idHex of rumorsByChannel.keys()) readSig += `${readState[concordReadKey(idHex)] ?? 0},`;
 
-  // The per-channel scan is the expensive half (every rumor of every channel,
-  // #general's thousands included) and depends on nothing about read state, so
-  // it is cached per channel on the inputs it does read: a markRead — every
-  // channel switch — then costs a comparison per channel instead of a rescan
-  // of the community. A scan that skipped a future-dated message is redone
-  // once that message's time comes.
+  // The per-channel scan is the expensive half and ignores read state, so it's
+  // cached per channel; a markRead then costs a comparison per channel. A scan
+  // that skipped a future-dated message is redone when its time comes.
   const scanDeps = useMemo(
     () => ({ pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev }),
     [pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev],
   );
   const scanCacheRef = useRef(new Map<string, ChannelScan>());
 
-  // Entries (and the record itself) keep their identity while unchanged, so a
-  // channel row handed `byChannel[id]` re-renders only when its own badge does.
+  // Stable identities while unchanged, so a channel row re-renders only with its own badge.
   const previousRef = useRef<Record<string, ConcordUnread>>({});
 
   const byChannel = useMemo<Record<string, ConcordUnread>>(() => {
@@ -206,37 +177,15 @@ function scanChannel(
   deps: ScanDeps,
 ): ChannelScan {
   const { pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex } = deps;
-  // A visual flood renders as ONE collapsed row, so counting its members
-  // here would badge a channel — and on a big enough wave, every channel in
-  // the community — for something the reader will see as a single line they
-  // did not ask for. The fold is the render-layer answer to a flood; a
-  // badge that still fires is the same interruption by another route.
-  //
-  // A community PAUSE (CORD-04 §8) is deliberately NOT mirrored here, even
-  // though it collapses rows the same way. Two reasons, and the second is
-  // the deciding one. The population is negligible: the pause drops the
-  // chat subscription outright, so the only messages that can reach this
-  // scan at/after the pause are the ones already in flight when it landed.
-  // And this path has no roster — it never resolves who is staff — so a
-  // suppression here could not honor the staff exemption the fold applies,
-  // and would silence exactly the moderator coordination a paused room
-  // exists to make room for. Under-badging staff is worse than
-  // over-badging a handful of stragglers.
-  // Memoized on the batch's identity, so a readState recompute of this
-  // memo (every markRead, every mounted instance) never re-runs the fold.
+  // A visual flood renders as ONE collapsed row, so its members don't badge.
+  // A community PAUSE is deliberately not mirrored: this path has no roster so it
+  // couldn't honor the staff exemption, and few messages arrive post-pause.
+  // Memoized on the batch's identity, so a readState recompute never re-runs the fold.
   const quarantined = quarantinedIn(rumors, pubkey);
   const remembered = communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
-  // A kind-5 self-delete removes its target from the render (foldTimeline,
-  // chat.ts) — but the store's NIP-09 pass only fires within one write
-  // batch, so a delete a relay delivered in a LATER batch than its target
-  // leaves that target physically in the store (chat.ts:302-308). This scan
-  // reads the raw store, so a self-deleted NEWEST message would otherwise
-  // pin `latest` above every rendered entry: a badge no open can clear,
-  // because clear-on-open stamps the newest RENDERED (undeleted) row. Fold
-  // deletes here so the count matches what the reader sees, exactly as the
-  // muted-author skip below does. Self-deletes only (delete author ==
-  // target author), which is all the store's own NIP-09 honors without a
-  // roster and cannot be abused to suppress a stranger's still-shown message.
+  // Fold self-deletes: the store's NIP-09 pass only fires within one write batch,
+  // so a later-batch delete leaves its target stored, and a deleted newest message
+  // would pin a badge no open can clear. Self-deletes only (no roster needed).
   const authorById = new Map<string, string>();
   for (const r of rumors) authorById.set(r.rumorId, r.author);
   const selfDeleted = new Set<string>();
@@ -248,23 +197,18 @@ function scanChannel(
   }
   let latest = 0;
   let latestMention = 0;
-  // One clock for the whole scan, so a message crossing the hold boundary
-  // mid-loop can't split it.
+  // One clock for the whole scan, so the hold boundary can't split mid-loop.
   const holdCeilingMs = Date.now() + FUTURE_HOLD_MS;
   let heldUntilMs = Infinity;
   for (const r of rumors) {
     if (r.kind !== KIND_MESSAGE) continue;
     if (r.author === pubkey) continue; // never unread from self
-    // ...nor a message dated ahead of the local clock: the timeline HOLDS
-    // it (foldTimeline / FUTURE_HOLD_MS) until its time comes, and a badge
-    // counting it would mark the channel unread for a message the reader
-    // can't yet see — cleared only once its timestamp catches up.
+    // ...nor a future-dated message the timeline holds (FUTURE_HOLD_MS).
     if (r.ms > holdCeilingMs) {
       heldUntilMs = Math.min(heldUntilMs, r.ms);
       continue;
     }
-    // ...nor from someone muted: the timeline won't render their message,
-    // so a badge counting it would be one the channel can never clear.
+    // ...nor from someone muted (the timeline won't render it).
     if (mutedPubkeys.has(r.author)) continue;
     // ...nor from a banned one: the fold drops their events entirely.
     if (banned.has(r.author)) continue;

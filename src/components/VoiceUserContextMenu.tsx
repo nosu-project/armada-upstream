@@ -30,10 +30,6 @@ import { MAX_PLAYBACK_VOLUME } from "@/lib/voiceDevices";
 
 export type PlaybackVolumeTarget = "user" | "screenShare";
 
-/**
- * The mute-toggle + 0–200% volume slider row shared by voice-user and
- * screen-share menus.
- */
 export function VolumeSliderRow({
   volume,
   apply,
@@ -73,14 +69,8 @@ export function VolumeSliderRow({
 }
 
 /**
- * The shared body of a voice user's menu — source-specific volume slider,
- * local mute toggle, and copy npub — rendered via whichever primitive the
- * caller passes (context menu on right-click, dropdown menu on tap/click).
- * Keeping one render fn means both surfaces stay in lockstep, exactly like
- * MemberList's member menu. Volume state lives in the shared per-pubkey store,
- * so the connected room applies changes live and every other control for the
- * same user stays in sync. Set `showVolume={false}` for the local user (there's
- * no local playback of your own audio to adjust).
+ * Shared voice-user menu body (volume, local mute, copy npub) for both
+ * context and dropdown menus. `showVolume={false}` for the local user.
  */
 function useVoiceMenuItems(
   pubkey: string,
@@ -130,8 +120,7 @@ function useVoiceMenuItems(
         </Label>
         {showVolume && (
           <>
-            {/* Not a menu Item: the slider needs pointer drags, which Radix
-                item semantics would swallow. */}
+            {/* Not a menu Item: Radix item semantics would swallow slider drags. */}
             <div className="px-2 pb-2 pt-1">
               <VolumeSliderRow
                 volume={volume}
@@ -150,11 +139,8 @@ function useVoiceMenuItems(
           <Copy className="size-4" />
           Copy npub
         </Item>
-        {/* The NIP-51 person mute, distinct from the local playback "Mute"
-            above — hence the wording, which matches the rest of the app. Only
-            offered for a VERIFIED pubkey: an unclaimed voice identity is a
-            name we haven't tied to a key, so muting it would write someone
-            else's pubkey to the user's list. */}
+        {/* NIP-51 mute, only for VERIFIED pubkeys: muting an unclaimed identity would
+            write someone else's pubkey to the list. */}
         {verified && mute.canMute && (
           <>
             <Separator />
@@ -175,13 +161,7 @@ function useVoiceMenuItems(
   };
 }
 
-/**
- * Right-click menu for a user in a voice call: per-user volume slider, local
- * mute toggle, and copy npub. Used on the call-stage tiles and the sidebar's
- * nested voice roster. On touch devices (where right-click / long-press is
- * unreliable and invisible), pair this with {@link VoiceUserMenuButton} so the
- * same actions are reachable by tapping a visible button.
- */
+/** Right-click voice user menu; pair with {@link VoiceUserMenuButton} for touch. */
 export function VoiceUserContextMenu({
   pubkey,
   displayName,
@@ -194,11 +174,7 @@ export function VoiceUserContextMenu({
   displayName: string;
   showVolume?: boolean;
   volumeTarget?: PlaybackVolumeTarget;
-  /**
-   * Whether `pubkey` is a claim we've verified — i.e. whether the name (and the
-   * custom emoji in it) are really theirs. Unverified claims render the name as
-   * plain text so an unclaimed identity can't borrow another profile's emoji.
-   */
+  /** Unverified claims render the name as plain text so they can't borrow another profile's emoji. */
   verified?: boolean;
   children: React.ReactNode;
 }) {
@@ -212,9 +188,7 @@ export function VoiceUserContextMenu({
 
   return (
     <ContextMenu>
-      {/* Stop propagation: in the channel sidebar the roster rows sit inside
-          the channel row's own right-click menu trigger, and Radix triggers
-          don't stop the event — without this both menus would open. */}
+      {/* Stop propagation, or the enclosing channel row's context menu opens too. */}
       <ContextMenuTrigger asChild onContextMenu={(e) => e.stopPropagation()}>
         {children}
       </ContextMenuTrigger>
@@ -230,12 +204,7 @@ export function VoiceUserContextMenu({
   );
 }
 
-/**
- * A tap/click-triggered version of the voice user menu, rendered as a small
- * "⋮" button — the discoverable, touch-friendly path to per-user volume and
- * actions (right-click / long-press is invisible and unreliable on mobile).
- * Shares its body with {@link VoiceUserContextMenu} so both stay in sync.
- */
+/** Tap-triggered "⋮" version of {@link VoiceUserContextMenu}. */
 export function VoiceUserMenuButton({
   pubkey,
   displayName,
@@ -248,7 +217,6 @@ export function VoiceUserMenuButton({
   displayName: string;
   showVolume?: boolean;
   volumeTarget?: PlaybackVolumeTarget;
-  /** See {@link VoiceUserContextMenu}. */
   verified?: boolean;
   className?: string;
 }) {
@@ -266,10 +234,7 @@ export function VoiceUserMenuButton({
         <button
           type="button"
           aria-label={`Actions for ${displayName}`}
-          // Stop propagation so opening the menu from a row nested in another
-          // right-click/click surface doesn't also trigger that surface —
-          // including the channel row's press-and-hold reorder, which would
-          // otherwise pick the channel up under a held press on this button.
+          // Stop propagation, including the channel row's press-and-hold reorder.
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.stopPropagation()}

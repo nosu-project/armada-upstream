@@ -25,15 +25,9 @@ import {
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * NIP-17 DM relay list kind. A user publishes the relays where they want to
- * receive direct messages here; other clients read it to know where to send.
- * The list is a plain (unencrypted) replaceable event whose `relay` tags hold
- * the URLs.
- */
+/** NIP-17 DM relay list: a plain replaceable event whose `relay` tags hold the URLs. */
 export const KIND_DM_RELAYS = 10050;
 
-/** Extract the relay URLs from a kind-10050 event's `relay` tags. */
 export function parseDmRelays(event: { tags: string[][] } | undefined): string[] {
   if (!event) return [];
   const seen = new Set<string>();
@@ -58,10 +52,8 @@ export interface DmRelayListQuery {
 type DmRelayQueryClient = Parameters<typeof queryExplicitRelays>[0];
 
 /**
- * Per-round discovery budget. The two rounds below are necessarily sequential
- * (the second needs the first's NIP-65 answer), so a single shared deadline
- * lets a slow or AUTH-gated app relay starve the round that exists precisely to
- * look BEYOND the app relays.
+ * Per-round budget: the rounds are sequential, and a shared deadline let a slow app relay
+ * starve the round that looks beyond the app relays.
  */
 const DISCOVERY_ROUND_MS = 6000;
 
@@ -73,18 +65,11 @@ function newestDmRelayList(events: NostrEvent[], peer: string): NostrEvent | und
 }
 
 /**
- * Discover a peer's NIP-17 inbox without assuming their kind-10050 event lives
- * on Armada's app relays. First query every configured account/DM discovery
- * relay independently (important for slow or NIP-42-authenticated relays), then
- * — only when `followPeerRelays` — follow the peer's NIP-65 WRITE relays and
- * choose the newest replaceable event across both rounds. A newer empty list
- * remains authoritative.
- *
- * `followPeerRelays` has no default because it is a disclosure decision, not a
- * tuning knob: the second round DIALS relays the PEER named, and every pool
- * connection answers NIP-42 by signing a kind-22242 with the viewer's key (see
- * `NostrProvider`), so it hands infrastructure of the peer's choosing the
- * viewer's IP bound to their pubkey. Callers must say who they are talking to.
+ * Discover a peer's NIP-17 inbox: query configured discovery relays independently, then
+ * (only when `followPeerRelays`) the peer's NIP-65 write relays; newest event wins, and a
+ * newer empty list is authoritative.
+ * `followPeerRelays` is a disclosure decision: dialing peer-named relays answers NIP-42 with
+ * the viewer's key, revealing IP + pubkey to them.
  */
 export async function discoverDmRelaysFor(
   nostr: DmRelayQueryClient,
@@ -123,14 +108,7 @@ export async function discoverDmRelaysFor(
   return parseDmRelays(newestDmRelayList([...discoveryEvents, ...peerEvents], peer));
 }
 
-/**
- * Read and write the user's NIP-17 DM relay list (kind 10050).
- *
- * Used by Settings: when the user opts into "use my own DM relays" we seed the
- * editor from their existing published list (if any) rather than from the app
- * relays, and edits write the list back so it stays the canonical, discoverable
- * source of where their DMs live.
- */
+/** The user's NIP-17 DM relay list (kind 10050), read and written by Settings. */
 export function useDmRelayList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -177,9 +155,7 @@ export function useDmRelayList() {
       return {
         event,
         relays: parseDmRelays(event ?? undefined),
-        // Stored/cached data remains useful for additive registration, but a
-        // missing relay may hold the newer replaceable event and therefore
-        // prevents this snapshot from authoritatively pruning anything.
+        // A missing relay may hold a newer event, so this snapshot can't authorize pruning.
         wireReady: selfRelays.length > 0
           && selfRelays.every((relay) => answered.has(relay)),
       };
@@ -251,9 +227,7 @@ export function useDmRelayList() {
           });
         },
       });
-      // A partial pre-publish read can update the additive view, but cannot
-      // remain fresh for 60 seconds as though it authorized pruning. Refetch
-      // immediately so recovered self-state relays can confirm the new LWW.
+      // A partial read must not stay fresh as though it authorized pruning; refetch now.
       if (!wireReady) {
         void queryClient.invalidateQueries({ queryKey });
       }
@@ -262,36 +236,23 @@ export function useDmRelayList() {
   });
 
   return {
-    /** The user's published DM relays (empty if they have none). */
     relays: query.data?.relays ?? [],
     event: query.data?.event ?? null,
     isLoading: query.isLoading,
     /**
-     * Whether the empty/non-empty relay set is an authoritative query result.
-     * `isLoading` becomes false after an error too; background controllers
-     * must not turn that failed read into an authoritative empty watch set.
+     * Whether the relay set is an authoritative result; `isLoading` is also false after an
+     * error, which must not become an authoritative empty set.
      */
     isReady: query.data?.wireReady === true,
-    /** Whether a 10050 list with at least one relay exists. */
     hasList: (query.data?.relays.length ?? 0) > 0,
     refetch: query.refetch,
-    /** Publish a new kind-10050 DM relay list. */
     publish: publish.mutateAsync,
   };
 }
 
 /**
- * Read another user's published kind-10050 DM relay list (NIP-17), so we can
- * deliver DMs to the relays where they actually read. Discovery always covers
- * the configured account/DM relays, and follows the peer's NIP-65 write relays
- * only for KNOWN peers (see below). Returns `[]` when no signed list is found;
- * callers fall back to their own DM relays for compatibility with clients that
- * never published kind 10050.
- *
- * This closes the cross-relay delivery gap: writing only to the *sender's*
- * relays silently fails when the peer doesn't read them. By unioning the peer's
- * published inbox relays into the write set, a message lands somewhere the
- * recipient is actually listening.
+ * Another user's kind-10050 inbox relays. Follows their NIP-65 write relays only for
+ * KNOWN peers. `[]` when none; callers fall back to their own DM relays.
  */
 export function useDmRelaysFor(peer: string | undefined): string[] {
   const peers = useMemo(() => (peer ? [peer] : []), [peer]);
@@ -299,23 +260,13 @@ export function useDmRelaysFor(peer: string | undefined): string[] {
   return byPeer.get(peer ?? "") ?? EMPTY_RELAYS;
 }
 
-/** Shared empty result, so a peerless render keeps a stable array identity. */
+/** Stable identity for peerless renders. */
 const EMPTY_RELAYS: string[] = [];
 
 /**
- * The multi-participant form of {@link useDmRelaysFor}: every recipient's
- * published NIP-17 inbox, keyed by pubkey.
- *
- * A group DM is delivered as one gift wrap PER participant, each to that
- * participant's own inbox, so the send path needs all of them resolved before
- * it can route anything. They are resolved concurrently rather than through N
- * hook instances (a hook per peer would be a conditional hook the moment the
- * participant set changes) and cached under one key.
- *
- * The `followPeerRelays` disclosure decision stays PER PEER — see
- * {@link discoverDmRelaysFor}. Reaching past our own relays hands the peer's
- * infrastructure our IP and pubkey, and being in a group with someone we
- * haven't accepted must not spend that on their behalf.
+ * Every recipient's NIP-17 inbox, keyed by pubkey (a group sends one wrap per inbox).
+ * Resolved concurrently under one key; `followPeerRelays` stays per peer — see
+ * {@link discoverDmRelaysFor}.
  */
 export function useDmRelaysForAll(peers: readonly string[]): Map<string, string[]> {
   const { nostr } = useNostr();
@@ -331,9 +282,8 @@ export function useDmRelaysForAll(peers: readonly string[]): Map<string, string[
   );
   const relayKey = discoveryRelays.join(",");
 
-  // Sorted so two orderings of the same set share one cache entry, and joined
-  // with the known-flags so a peer promoted out of the request tier re-runs
-  // discovery rather than keeping its gated `[]`.
+  // Sorted for one cache entry per set; known-flags included so a promoted peer re-runs
+  // discovery.
   const targets = useMemo(
     () => [...new Set(peers)].filter(Boolean).sort(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -345,12 +295,8 @@ export function useDmRelaysForAll(peers: readonly string[]): Map<string, string[
     queryKey: ["dm-relay-list", "peers", targets.join(","), relayKey, knownKey],
     enabled: targets.length > 0,
     staleTime: 5 * 60 * 1000,
-    // Deliberately NOT React Query's `signal`. Reading it opts the query into
-    // cancellation when its last observer unmounts, and a cancelled query
-    // keeps no result — so opening and leaving a conversation before both
-    // discovery rounds finished threw the answer away, and every later visit
-    // asked every discovery relay again. Each round is already bounded by
-    // DISCOVERY_ROUND_MS, so letting it finish costs little and fills the cache.
+    // Deliberately NOT React Query's `signal`: reading it cancels the query on unmount and
+    // discards the result. Rounds are already bounded by DISCOVERY_ROUND_MS.
     queryFn: async () => {
       const signal = new AbortController().signal;
       const settled = await Promise.all(

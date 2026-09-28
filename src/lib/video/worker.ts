@@ -1,14 +1,9 @@
 /// <reference lib="webworker" />
 
 /**
- * Video processing worker.
- *
- * Probes an attached video, decides what to do with it via the pure logic in
- * `./policy.ts`, and executes that decision with mediabunny (WebCodecs). Runs
- * off the main thread because a transcode is seconds-to-minutes of solid CPU.
- *
- * Also extracts the NIP-94 metadata we attach to the message `imeta`:
- * dimensions, duration, a blurhash placeholder, and a JPEG poster frame.
+ * Video processing worker: probes, decides via `./policy.ts`, executes with
+ * mediabunny (WebCodecs), and extracts NIP-94 `imeta` metadata (dim, duration,
+ * blurhash, poster).
  */
 
 import { encode as blurhashEncode } from "blurhash";
@@ -48,11 +43,7 @@ const POSTER_QUALITY = 0.75;
 /** Width used to sample pixels for the blurhash (matches the image path). */
 const BLURHASH_SAMPLE_WIDTH = 64;
 
-/**
- * Audio codecs that can ride along in an MP4 untouched. Copying beats
- * re-encoding on quality, speed, and encoder availability, and phone video is
- * essentially always AAC already.
- */
+/** Audio codecs MP4 can carry untouched (copying beats re-encoding). */
 const MP4_AUDIO_CODECS = new Set<AudioCodec>(["aac", "opus", "mp3", "flac", "ac3", "eac3"]);
 
 /** The in-flight conversion, so a cancel message can abort it. */
@@ -68,8 +59,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
   try {
     const result = await process(message.file);
-    // The output file and poster are Blobs; structured clone handles them
-    // without a copy of the underlying bytes.
     post({ type: "done", result });
   } catch (error) {
     post({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -87,15 +76,13 @@ async function process(file: File): Promise<ProcessedVideo> {
 
   const videoTrack = await input.getPrimaryVideoTrack();
   if (!videoTrack) {
-    // Audio-only or unparseable: nothing for us to do.
     return { file, action: "passthrough" };
   }
 
   const probe = await buildProbe(file, input, videoTrack);
   const action = decideVideoAction(probe);
 
-  // Poster and blurhash come from the source, not the output: visually
-  // equivalent, and it means we still get them on the passthrough paths.
+  // Preview from the source, so passthrough paths get one too.
   const preview = await extractPreview(videoTrack);
 
   const base = {
@@ -110,8 +97,7 @@ async function process(file: File): Promise<ProcessedVideo> {
 
   const converted = await convert(file, input, action);
   if (!converted) {
-    // Conversion turned out to be impossible (e.g. no encodable audio codec);
-    // sending the original beats failing the message.
+    // Conversion impossible (e.g. no audio encoder): send the original.
     return { ...base, file, dim: dimOf(probe.width, probe.height), action: "passthrough" };
   }
 
@@ -157,11 +143,7 @@ async function buildProbe(
   };
 }
 
-/**
- * Whether a file carries metadata worth stripping. Any populated tag counts —
- * `date` and the raw dictionary are where creation timestamps and GPS
- * coordinates live.
- */
+/** Any populated tag counts (`date` and `raw` hold timestamps and GPS). */
 function hasMeaningfulTags(tags: MetadataTags): boolean {
   for (const [key, value] of Object.entries(tags)) {
     if (value === undefined || value === null) continue;
@@ -175,12 +157,7 @@ function hasMeaningfulTags(tags: MetadataTags): boolean {
   return false;
 }
 
-/**
- * Grab a representative frame and derive a JPEG poster and a blurhash from it.
- *
- * Samples at 1 second rather than the first frame: videos very often open on
- * black, which makes for a useless preview.
- */
+/** JPEG poster + blurhash from a frame ~1s in (first frames are often black). */
 async function extractPreview(
   videoTrack: InputVideoTrack,
 ): Promise<{ poster: Blob; blurhash?: string } | undefined> {
@@ -189,7 +166,6 @@ async function extractPreview(
 
     const first = await videoTrack.getFirstTimestamp();
     const duration = await videoTrack.computeDuration();
-    // Prefer 1s in; for clips shorter than that, take the midpoint.
     const timestamp = duration > 2 ? first + 1 : first + Math.max(0, duration - first) / 2;
 
     const sink = new CanvasSink(videoTrack, { width: POSTER_WIDTH });
@@ -199,7 +175,6 @@ async function extractPreview(
     const poster = await toJpeg(wrapped.canvas);
     return { poster, blurhash: computeBlurhash(wrapped.canvas) };
   } catch {
-    // A missing preview costs us a placeholder, not the upload.
     return undefined;
   }
 }
@@ -236,19 +211,14 @@ function computeBlurhash(source: HTMLCanvasElement | OffscreenCanvas): string | 
   }
 }
 
-/**
- * Run the remux or transcode. Returns `null` when the conversion can't be
- * performed, leaving the caller to upload the original.
- */
+/** Run the remux or transcode; `null` means upload the original. */
 async function convert(
   file: File,
   input: Input,
   action: Extract<VideoAction, { kind: "remux" | "transcode" }>,
 ): Promise<File | null> {
   const output = new Output({
-    // Fast start puts `moov` before `mdat` so players can start without
-    // fetching the whole file — the difference between a video that plays on
-    // tap and one that must download in full first.
+    // Fast start: `moov` before `mdat` so playback starts before full download.
     format: new Mp4OutputFormat({ fastStart: "in-memory" }),
     target: new BufferTarget(),
   });
@@ -257,16 +227,14 @@ async function convert(
     input,
     output,
     tracks: "primary",
-    // Drop every metadata tag: creation date and GPS coordinates ride here.
+    // Drop all metadata tags (creation date, GPS).
     tags: {},
     ...(action.kind === "transcode"
       ? {
         video: {
           width: action.width,
           height: action.height,
-          // Dimensions were derived from the true aspect ratio and then
-          // rounded to a multiple of 16, so the residual distortion is under
-          // a percent — stretching to fill beats letterboxing it.
+          // Dims keep the true aspect within rounding to 16, so fill beats letterboxing.
           fit: "fill" as const,
           codec: "avc" as const,
           bitrate: action.videoBitrate,
@@ -279,7 +247,7 @@ async function convert(
 
   if (!conversion.isValid) return null;
 
-  // Silently dropping someone's audio is worse than sending a bigger file.
+  // Never silently drop audio.
   if (conversion.discardedTracks.some((t) => t.track.type === "audio")) return null;
 
   active = conversion;
@@ -293,10 +261,7 @@ async function convert(
   return new File([buffer], replaceExtension(file.name, ".mp4"), { type: "video/mp4" });
 }
 
-/**
- * Keep the audio track as-is whenever MP4 can hold it, so we depend on an
- * audio encoder only for genuinely foreign codecs (e.g. Vorbis out of a WebM).
- */
+/** Copy audio when MP4 can hold it; encode only foreign codecs (e.g. Vorbis). */
 async function audioOptions(track: { codec: AudioCodec | null }) {
   if (track.codec && MP4_AUDIO_CODECS.has(track.codec)) return {};
 

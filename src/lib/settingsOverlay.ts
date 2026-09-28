@@ -4,24 +4,11 @@ import type { ProfileBackgroundState } from "@/lib/profileOverlay";
 import type { Location, NavigateFunction } from "react-router-dom";
 
 /**
- * Settings, opened from inside the app, draws OVER the page it was opened
- * from instead of replacing it — the same arrangement as the profile overlay
- * (`lib/profileOverlay.ts`), for the same reason and one more.
- *
- * The same reason: `/settings` is a sibling of every chat route, so visiting
- * it plainly unmounts the open community and closing it rebuilds that page
- * from nothing. With a `backgroundLocation` the routes keep matching the page
- * underneath, and closing is a history step back to a page that never left.
- *
- * The one more: `navigate()` is a transition, and a transition is INTERRUPTIBLE
- * — every urgent update restarts it. In a busy community each arriving event
- * is one, so the more traffic there was, the longer Settings took to appear
- * and to go away. So visibility is not taken from the navigation at all. The
- * click sets it as an ordinary urgent update, which paints on its own; the
- * navigation follows only to keep the URL (and the back button) truthful.
- *
- * A `/settings` reached cold — a reload with no history state, a pasted link —
- * has no background and is routed as an ordinary page, exactly as before.
+ * Settings opened in-app draws OVER the page via `backgroundLocation` (like
+ * `lib/profileOverlay.ts`), so the page underneath stays mounted. Visibility
+ * comes from the click as an urgent update, not the navigation: `navigate()`
+ * is an interruptible transition that busy communities kept restarting.
+ * A cold `/settings` (reload, pasted link) routes as an ordinary page.
  */
 export interface SettingsOverlay {
   /** Settings is drawing over the page — from the click, not from the commit. */
@@ -44,10 +31,8 @@ export const SettingsOverlayContext = createContext<SettingsOverlay>({
 });
 
 /**
- * Whether Settings is drawing over the routed page. The page stays mounted
- * under it but is not on screen: it must not report its conversation as the
- * one being looked at (which silences that conversation's notifications) nor
- * advance its read markers until Settings closes again.
+ * Whether Settings covers the routed page. A covered page must not claim its
+ * conversation as viewed (silencing notifications) or advance read markers.
  */
 export function usePageCovered(): boolean {
   return useContext(SettingsOverlayContext).open;
@@ -59,10 +44,7 @@ interface Pending {
   section: string;
 }
 
-/**
- * The provider's state. Called by `AppRoutes`, the one place that sees the
- * REAL location (`<Routes location={background}>` rewrites it below).
- */
+/** Called by `AppRoutes`, the one place that sees the REAL location. */
 export function useSettingsOverlayController(
   location: Location,
   navigate: NavigateFunction,
@@ -72,34 +54,27 @@ export function useSettingsOverlayController(
 
   const [pending, setPending] = useState<Pending | null>(null);
 
-  // Read at call time so `show`/`close` keep one identity: they are handed to
-  // the always-mounted rail, and the context value is memoized on them.
+  // Read at call time so `show`/`close` keep a stable identity.
   const refs = useRef({ location, navigate, routed, pending });
   refs.current = { location, navigate, routed, pending };
 
-  // History moves this controller started that the rendered location hasn't
-  // caught up with. The history entry itself changes at once — only the render
-  // lags — so a second press before the first lands must build on the entry
-  // that is really there, not the one on screen: a second push would stack
-  // two `/settings` entries, and one step back would leave Settings open.
+  // History moves not yet rendered. A second press must build on the real
+  // history entry, or two `/settings` pushes would stack.
   const inFlight = useRef<"push" | "back" | null>(null);
 
   const push = useCallback((section: string, replace: boolean) => {
     const { location, navigate } = refs.current;
     const to = section ? `${SETTINGS_PATH}#${section}` : SETTINGS_PATH;
-    // Thread a profile's background through, so the page underneath stays the
-    // chat rather than becoming the profile being left.
+    // Thread a profile's background through so the chat stays underneath.
     const current = (location.state as ProfileBackgroundState | null)?.backgroundLocation;
     const state: ProfileBackgroundState = { backgroundLocation: current ?? location };
     navigate(to, { state, replace });
     if (!replace) inFlight.current = "push";
   }, []);
 
-  // Any landed navigation settles the click, unless it landed on the wrong
-  // side of it. A close that beat its own open: the open is a transition that
-  // lands regardless, so step back off it the moment it does. An open that
-  // beat its close's step back: the step can't be recalled either, so open
-  // again from where it lands.
+  // A landed navigation settles the click, unless it landed on the wrong side:
+  // a close that beat its open steps back once the open lands; an open that
+  // beat its close's step back re-opens from where it lands.
   useEffect(() => {
     const { pending, routed, navigate } = refs.current;
     const settled = inFlight.current;
@@ -118,25 +93,21 @@ export function useSettingsOverlayController(
 
   const show = useCallback((section = "") => {
     const { location, navigate, routed } = refs.current;
-    // Already ON the routed Settings page: there is nothing underneath to
-    // draw over, so just move to the section.
+    // On the routed Settings page itself: just move to the section.
     if (!routed && location.pathname === SETTINGS_PATH && !inFlight.current) {
       navigate(section ? `${SETTINGS_PATH}#${section}` : SETTINGS_PATH, { replace: true });
       return;
     }
     setPending({ open: true, section });
-    // Stepping back from a close: re-opened where that step lands (above).
     if (inFlight.current === "back") return;
-    // Already over a page, or about to be: move within Settings without
-    // another history entry, so one step back still closes it.
+    // Already over a page (or about to be): replace, so one step back still closes.
     push(section, routed || inFlight.current === "push");
   }, [push]);
 
   const close = useCallback(() => {
     const { routed, navigate } = refs.current;
     setPending({ open: false, section: "" });
-    // A step back already under way, or an open still landing (stepped back
-    // off once it has): either way there is no entry here to leave yet.
+    // A back step or an open is still landing; the effect above resolves it.
     if (inFlight.current) return;
     if (routed) {
       navigate(-1);

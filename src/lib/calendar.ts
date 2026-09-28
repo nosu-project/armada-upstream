@@ -1,13 +1,7 @@
 /**
- * Transport-agnostic NIP-52 calendar logic, shared by the NIP-29 relay path and
- * the Concord sealed-rumor path (CORD.md "Calendar Events").
- *
- * The pure NIP-52 primitives (parsing, kinds, types, when-formatting) live in
- * `nip29.ts` and are re-exported here so both transports import one surface.
- * Everything genuinely shared-but-not-yet-extracted — the group-independent tag
- * builder, the addressable dedup, the RSVP tally — is defined here, mirroring
- * `polls.ts`: only WHERE events/RSVPs come from (a relay query vs the sealed
- * chat fold) and how they're published differs; the math agrees bit-for-bit.
+ * Transport-agnostic NIP-52 calendar logic shared by NIP-29 and Concord
+ * (CORD.md "Calendar Events"), mirroring `polls.ts`: only event sourcing and
+ * publishing differ per transport; the math agrees bit-for-bit.
  */
 
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -35,9 +29,8 @@ export type { CalendarEvent, CalendarEventInput, CalendarParticipant, RsvpStatus
 const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
- * Build the NIP-52 tags for a calendar event (kind 31922/31923), WITHOUT any
- * transport binding — each transport prepends its own (NIP-29 an `h` group tag,
- * Concord the sealed `channel`/`epoch`). Mirrors `buildPollTags`.
+ * NIP-52 tags for a calendar event (kind 31922/31923) without transport binding;
+ * each transport adds its own (`h` or sealed `channel`/`epoch`).
  */
 export function buildCalendarTags(input: CalendarEventInput): string[][] {
   const tags: string[][] = [
@@ -104,13 +97,11 @@ export function parseCalendarEvents(events: NostrRumor[]): CalendarEvent[] {
   return parsed;
 }
 
-// ── RSVP tally ───────────────────────────────────────────────────────────────
-
 /** A single member's RSVP, normalized off the underlying event/rumor shape. */
 export interface RsvpVote {
   pubkey: string;
   status: RsvpStatus;
-  /** Ordering timestamp in epoch milliseconds — latest per pubkey wins. */
+  /** Epoch milliseconds; latest per pubkey wins. */
   ms: number;
 }
 
@@ -119,15 +110,10 @@ export interface RsvpTally {
   accepted: string[];
   declined: string[];
   tentative: string[];
-  /** The current user's latest status, if they've RSVP'd. */
   mine?: RsvpStatus;
 }
 
-/**
- * Tally a batch of RSVPs: the latest RSVP per pubkey wins (by ms), bucketed by
- * status, with the current user's own status surfaced. Pure and deterministic,
- * so every member folds the same attendee lists.
- */
+/** Tally RSVPs: latest per pubkey wins, bucketed by status. Deterministic across members. */
 export function tallyRsvps(votes: RsvpVote[], selfPubkey: string | undefined): RsvpTally {
   const latest = new Map<string, RsvpVote>();
   for (const vote of votes) {
@@ -142,24 +128,12 @@ export function tallyRsvps(votes: RsvpVote[], selfPubkey: string | undefined): R
   return out;
 }
 
-// ── Transport contract ───────────────────────────────────────────────────────
-
-/**
- * The capability surface the shared calendar UI (bar, detail dialog, RSVP
- * controls, create dialog) consumes — the calendar analog of `ChatTransport`.
- * NIP-29 relays and Concord's sealed streams each implement it, so both render
- * through exactly the same components.
- */
+/** The calendar analog of `ChatTransport`, implemented by NIP-29 and Concord. */
 export interface CalendarTransport {
-  /** The channel's events, soonest-first. */
   events: CalendarEvent[];
-  /** Whether the current user may create/delete events. */
   canModerate: boolean;
-  /** Whether the current user may RSVP (membership / write access). */
   canRsvp: boolean;
-  /** Whether a create/edit publish is in flight. */
   isSaving: boolean;
-  /** Whether an RSVP publish is in flight. */
   isSettingRsvp: boolean;
   /** Create a new event (or, for addressable transports, replace `prev`). */
   save: (input: CalendarEventInput, prev?: NostrRumor) => Promise<void>;
@@ -167,6 +141,5 @@ export interface CalendarTransport {
   remove: (event: CalendarEvent) => Promise<void>;
   /** The resolved RSVP tally for one event (precomputed; no I/O). */
   rsvpsFor: (event: CalendarEvent) => RsvpTally;
-  /** Set the current user's RSVP for an event. */
   setRsvp: (event: CalendarEvent, status: RsvpStatus) => void;
 }

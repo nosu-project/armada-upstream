@@ -10,22 +10,9 @@ import type {
 import { isNostrId } from '@/lib/nostrId';
 
 /**
- * Non-throwing wrappers around `nip19.*Encode` from `nostr-tools`.
- *
- * The underlying encoders call `@noble/hashes` `hexToBytes`, which throws
- * "padded hex string expected, got unpadded hex of length N" whenever a
- * pubkey or event id isn't a valid 64-char lowercase hex string. That
- * exception bubbles out of render code and crashes the entire React
- * subtree (caught only by the top-level `ErrorBoundary`).
- *
- * Use these wrappers when the input may have come from untrusted event
- * data — tag values, JSON content, URL params — rather than directly from
- * a Nostrify-validated `NostrEvent.pubkey`/`event.id`. They return
- * `undefined` instead of throwing, letting callers gracefully skip a row
- * or fall back to a safe link target.
- *
- * For the common "encode-from-NostrEvent" case (replaceable vs regular
- * kind routing), prefer `encodeEventAddress` from `@/lib/encodeEvent`.
+ * Non-throwing `nip19.*Encode` wrappers for untrusted input: the encoders throw
+ * on malformed hex and would crash the render subtree. For NostrEvent-based
+ * encoding prefer `encodeEventAddress` from `@/lib/encodeEvent`.
  */
 
 /** `nip19.npubEncode`, but returns `undefined` for non-hex input. */
@@ -34,22 +21,14 @@ export function tryNpubEncode(pubkey: string | null | undefined): NPub | undefin
   return nip19.npubEncode(pubkey);
 }
 
-/**
- * `nip19.neventEncode`, but returns `undefined` if `id` (or, when present,
- * `author`) isn't a valid 64-char hex string. A malformed `author` is
- * silently dropped rather than failing the whole encode, so callers still
- * get a usable nevent link.
- */
+/** `nip19.neventEncode`, `undefined` for a bad `id`; a malformed `author` is dropped. */
 export function tryNeventEncode(input: EventPointer): NEvent | undefined {
   if (!isNostrId(input.id)) return undefined;
   const author = isNostrId(input.author) ? input.author : undefined;
   return nip19.neventEncode({ ...input, author });
 }
 
-/**
- * `nip19.naddrEncode`, but returns `undefined` if `pubkey` isn't a valid
- * 64-char hex string. `identifier` may be any string (including empty).
- */
+/** `nip19.naddrEncode`, `undefined` for a bad `pubkey`. `identifier` may be any string. */
 export function tryNaddrEncode(input: AddressPointer): NAddr | undefined {
   if (!isNostrId(input.pubkey)) return undefined;
   return nip19.naddrEncode(input);

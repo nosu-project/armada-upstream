@@ -20,24 +20,14 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
 
 /**
- * NIP-51 mute list kind. A user's muted pubkeys, hashtags, words, and threads.
- * Items may be public (`tags`) and/or private (NIP-44 encrypted to self in
- * `.content` as a stringified tag array).
- *
- * Armada reads this list on every surface that renders another person — chat
- * timelines, member lists, reactions, notifications, search, profiles — and
- * appends to it from the mute action in each of those menus. New mutes are
- * always written to the private/encrypted portion, so the list of people you
- * chose not to see isn't itself public.
+ * NIP-51 mute list. Items may be public (`tags`) and/or private (NIP-44 to self in `.content`).
+ * New mutes are always written to the private portion.
  */
 export const KIND_MUTE_LIST = 10000;
 
 /**
- * Decode-once cache for the kind-10000 private-items decrypt, keyed by event id.
- * The mute list is read by several surfaces (DM list, future block checks);
- * decrypting the same immutable event on a remote/extension signer costs a
- * round-trip each time, so a single in-flight decrypt is shared per event id
- * (mirrors the kind-10009 memo in useUserGroupList).
+ * Decrypt results are memoized per event id (see `muteListDecryptMemo`) so remote signers
+ * aren't asked repeatedly (cf. the kind-10009 memo in useUserGroupList).
  */
 interface MutedPubkeyRead {
   pubkeys: Set<string>;
@@ -52,9 +42,8 @@ interface MuteListQueryData {
 }
 
 /**
- * The old folded value was a bare string array. New writes also retain the
- * replaceable-event version so a complete-but-stale relay cohort cannot roll
- * a last-good private mute list backwards.
+ * Legacy seeds were a bare string array. The version prevents a stale relay cohort from
+ * rolling a last-good private list backwards.
  */
 interface MuteListSeed {
   pubkeys: string[];
@@ -63,7 +52,6 @@ interface MuteListSeed {
 
 const muteListDecryptMemo = new Map<string, Promise<MutedPubkeyRead>>();
 
-/** Collect the pubkeys from a tag array's `p` tags into `out`. */
 function collectMutedPubkeys(tags: string[][], out: Set<string>): void {
   for (const [name, value] of tags) {
     if (name === "p" && value) out.add(value);
@@ -71,10 +59,8 @@ function collectMutedPubkeys(tags: string[][], out: Set<string>): void {
 }
 
 /**
- * Read every muted pubkey from a kind-10000 event: the public `p` tags plus the
- * NIP-44-decrypted private `p` tags in `.content`. Falls back to public-only
- * when there is no NIP-44 signer or decryption fails. Memoized by event id so
- * concurrent callers share one signer round-trip.
+ * Public `p` tags plus NIP-44-decrypted private ones; public-only when there's no signer or
+ * decryption fails. Memoized by event id.
  */
 async function readMutedPubkeys(
   event: NostrEvent | null,
@@ -86,8 +72,7 @@ async function readMutedPubkeys(
   collectMutedPubkeys(event.tags, publicPubkeys);
 
   if (!event.content) return { pubkeys: publicPubkeys, decryptFailed: false };
-  // Public tags remain additive data, but missing the private half can never
-  // authorize a persisted/background replacement.
+  // Missing the private half can never authorize a persisted/background replacement.
   if (!signer?.nip44) return { pubkeys: publicPubkeys, decryptFailed: true };
 
   const cached = muteListDecryptMemo.get(event.id);
@@ -116,21 +101,13 @@ async function readMutedPubkeys(
   return work;
 }
 
-/** Folded-cache key for the locally-persisted muted-pubkey list. */
 function muteFoldKey(pubkey: string): string {
   return `mute-pubkeys:${pubkey}`;
 }
 
 /**
- * Shared read of the persisted muted-pubkey seed, one promise per pubkey.
- *
- * `useMutedPubkeys` is called by nearly every component that renders another
- * person — every message row, every member row, every reaction pill. The
- * network read is deduplicated by React Query, but the local seed read is a
- * plain effect, so without this each of those mounts would open its own
- * ArmadaDB round-trip for the same key on every render pass. Kept in step by
- * the mutations below rather than invalidated, since they know the exact list
- * they just wrote.
+ * One seed read per pubkey: nearly every person-rendering component calls `useMutedPubkeys`.
+ * The mutations below keep it in step rather than invalidating it.
  */
 const muteSeedMemo = new Map<string, Promise<MuteListSeed>>();
 
@@ -165,7 +142,6 @@ function readMuteSeed(pubkey: string): Promise<MuteListSeed> {
   return work;
 }
 
-/** Persist a freshly-written list and keep the shared seed in step with it. */
 async function persistMuteList(
   pubkey: string,
   pubkeys: string[],
@@ -180,16 +156,9 @@ async function persistMuteList(
 }
 
 /**
- * Resolve the current user's muted pubkeys (NIP-51 kind 10000), combining
- * public and NIP-44-private `p` tags.
- *
- * Called ONCE, by `MutedPubkeysProvider` — every consumer reads the result
- * through {@link useMutedPubkeys}. To avoid a flash of muted content appearing
- * and then disappearing, the resolved list is persisted locally (folded cache)
- * and seeded on the next mount; the returned `ready` flag lets a consumer hold
- * rendering until the set is authoritative on a true cold start (no cache +
- * network in flight). This mirrors the plaintext-first pattern used for the
- * kind-10009 group list.
+ * Muted pubkeys (NIP-51 kind 10000), public + NIP-44-private. Called ONCE by
+ * `MutedPubkeysProvider`; consumers use {@link useMutedPubkeys}. Persisted and seeded on the next
+ * mount to avoid a flash of muted content; `ready` is false only on a true cold start.
  */
 export function useMutedPubkeysSource(): MutedPubkeysResult {
   const { nostr } = useNostr();
@@ -206,9 +175,7 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
     [user?.pubkey, relayKey],
   );
 
-  // Locally-cached muted pubkeys, read once on mount so a returning user has the
-  // set before the conversation list paints. `null` = not loaded yet, `[]` = no
-  // cache existed (distinguishes "still reading the cache" from "cache empty").
+  // `null` = cache not read yet, `[]` = no cache.
   const [cachedSeed, setCachedSeed] = useState<MuteListSeed | null>(null);
   useEffect(() => {
     if (!user?.pubkey) {
@@ -252,8 +219,7 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
       const allAnswered = relays.length > 0
         && relays.every((relay) => answered.has(relay));
 
-      // A partial cohort, or a ciphertext we could not open, is additive only.
-      // In particular it must not overwrite a last-good private list on disk.
+      // Partial cohorts or unopenable ciphertext are additive only; never overwrite the last-good list.
       if (!allAnswered || decoded.decryptFailed) {
         return {
           pubkeys: [...new Set([...seed.pubkeys, ...livePubkeys])],
@@ -262,28 +228,17 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
         };
       }
 
-      // An all-relay miss is an explicit empty wire snapshot, but an existing
-      // last-good list remains the conservative policy floor. Keeping extra
-      // mutes only suppresses notifications; it never exposes a muted sender.
+      // Keep a last-good list on an all-relay miss: extra mutes only suppress, never expose.
       if (!event) return { pubkeys: seed.pubkeys, wireReady: true, configReady: true };
 
-      // A signed local publish can be newer than every relay's answer while it
-      // propagates. Never roll that known version backwards.
+      // A signed local publish may be newer than every relay answer; never roll it back.
       if (seed.version && replaceableVersionIsNewer(seed.version, event)) {
         return { pubkeys: seed.pubkeys, wireReady: true, configReady: true };
       }
 
-      // Legacy seeds lack a version. Accept a complete relay winner only when
-      // it contains that seed; otherwise retain the union and withhold prune
-      // authority until a versioned local snapshot is established.
-      //
-      // The union IS trusted config data, though, and must say so. Nothing
-      // stamps a version onto a legacy seed, so `configReady: false` here
-      // never clears: it propagates to `dmConfigReady` and drops every DM push
-      // spec for as long as the seed stays a superset — an install that
-      // silently stops receiving DM push until the user happens to mute or
-      // unmute someone. The union is at least as suppressive as either input,
-      // so only PRUNE authority has to keep waiting.
+      // Legacy (unversioned) seeds: accept a complete relay winner only if it contains the seed;
+      // else keep the union. The union is still trusted config (`configReady`), otherwise DM push would stop
+      // indefinitely; only PRUNE authority waits.
       if (!seed.version
         && seed.pubkeys.some((muted) => !decoded.pubkeys.has(muted))) {
         return {
@@ -298,8 +253,7 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
     },
   });
 
-  // A complete network result replaces the seed. A public-only/decrypt-failed
-  // result is additive so a last-good private mute never disappears.
+  // A complete network result replaces the seed; a decrypt-failed one is additive.
   const mutedPubkeys = useMemo(
     () => new Set(query.data?.wireReady
       ? query.data.pubkeys
@@ -307,16 +261,13 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
     [query.data, cachedSeed],
   );
 
-  // Ready once we have a network result OR the local cache read finished (even
-  // if it was empty). Not ready only on a true cold start with the network
-  // still in flight — when there is genuinely nothing to filter with yet.
+  // Not ready only on a true cold start with the network still in flight.
   const ready = !user?.pubkey || query.data !== undefined || cachedSeed !== null;
   const wireReady = !user?.pubkey || query.data?.wireReady === true;
   const configReady = !user?.pubkey
     || query.data?.configReady === true
     || cachedSeed?.version !== undefined;
 
-  // Keep the query cache reusable across re-mounts without a refetch flash.
   useEffect(() => {
     if (query.data) queryClient.setQueryData(queryKey, query.data);
   }, [query.data, queryClient, queryKey]);
@@ -328,25 +279,16 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
 }
 
 /**
- * The current user's muted pubkeys — the single source of truth for "should
- * this person be rendered at all", read by every timeline, roster, tally,
- * notifier and search surface in the app.
- *
- * A context read, so adding the check to a new surface costs nothing and works
- * in a component tree that has no relay pool (see `MutedPubkeysContext` for
- * why the default is "nobody is muted").
+ * The single source of truth for "should this person be rendered". A context read, so it works
+ * without a relay pool (see `MutedPubkeysContext`).
  */
 export function useMutedPubkeys(): MutedPubkeysResult {
   return useContext(MutedPubkeysContext);
 }
 
 /**
- * Read a kind-10000 event's public tags and its NIP-44-decrypted private tags
- * separately, preserving every item (not just `p` tags). Used when editing the
- * mute list so we keep existing public/private hashtags, words, threads, and
- * people intact. Returns empty arrays for a missing event or when the private
- * content can't be decrypted (so the caller never destroys items it couldn't
- * read).
+ * Public and private items separately (all types) for editing. Empty on a missing event or
+ * unreadable private content, so callers never destroy items they couldn't read.
  */
 async function readMuteTags(
   event: NostrEvent | null,
@@ -354,8 +296,7 @@ async function readMuteTags(
 ): Promise<{ publicTags: string[][]; privateTags: string[][]; privateReadable: boolean }> {
   const publicTags = event ? event.tags.map((t) => [...t]) : [];
   if (!event?.content || !signer?.nip44) {
-    // No private content to merge (or no signer to read it). Treat the private
-    // portion as readable-but-empty so a fresh mute starts a private list.
+    // Readable-but-empty so a fresh mute starts a private list.
     return { publicTags, privateTags: [], privateReadable: true };
   }
   try {
@@ -373,34 +314,21 @@ async function readMuteTags(
 }
 
 /**
- * All kind-10000 writes run one at a time, process-wide.
- *
- * Every write is a read-modify-write spanning a network read, a signer
- * round-trip and a publish. Now that mute is offered from every message row,
- * member row and profile card, firing several in a row is ordinary use — and
- * fired concurrently they all read the SAME pre-edit list, each add only their
- * own pubkey, and the last publish to land overwrites the rest. Serializing
- * makes each write observe the previous one's result (mirrors the kind-10009
- * chain in useUserGroupList).
+ * All kind-10000 writes run one at a time, process-wide: concurrent read-modify-writes would
+ * read the same list and the last publish would drop the others (cf. useUserGroupList).
  */
 let muteListWriteChain: Promise<unknown> = Promise.resolve();
 
 function serializeMuteListWrite<T>(write: () => Promise<T>): Promise<T> {
   const run = muteListWriteChain.then(write, write);
-  // Swallow the result on the chain itself so one failed write neither wedges
-  // the queue nor surfaces as an unhandled rejection; the caller still gets it.
+  // Swallow on the chain so one failure doesn't wedge the queue; the caller still gets it.
   muteListWriteChain = run.then(() => undefined, () => undefined);
   return run;
 }
 
 /**
- * The created_at for the next version of a replaceable event.
- *
- * Replaceable events are ordered at SECOND granularity, and NIP-01 breaks a
- * created_at tie by lowest event id — so two writes within the same second
- * resolve arbitrarily and the later edit can lose to the earlier one. Muting
- * two people in consecutive clicks lands well inside one second, so force
- * strict monotonicity instead of trusting the wall clock.
+ * Replaceable events order by second and break ties by lowest id, so force strictly
+ * increasing created_at for rapid consecutive edits.
  */
 function nextCreatedAt(prev: NostrEvent | null): number {
   const now = Math.floor(Date.now() / 1000);
@@ -414,14 +342,7 @@ interface MuteEditContext {
   publish: ReturnType<typeof useNostrPublish>["mutateAsync"];
 }
 
-/**
- * Read-modify-write one pubkey into or out of the mute list.
- *
- * `edit` receives the existing public and private items and returns the next
- * private items (public items are passed through as-is, minus whatever `edit`
- * removes from them) — or `null` to skip the publish entirely because there is
- * nothing to change.
- */
+/** `edit` returns the next private items, or `null` to skip the publish. */
 async function editMuteList(
   ctx: MuteEditContext,
   edit: (tags: { publicTags: string[][]; privateTags: string[][] }) =>
@@ -430,24 +351,17 @@ async function editMuteList(
 ): Promise<{ pubkeys: string[]; event: NostrEvent } | null> {
   const { user, nostr, relays, publish } = ctx;
 
-  // Keep explicit user actions available through the established pooled RMW
-  // path. Notification prune authority is stricter (the read hook above), but
-  // making a mute click wait for every best-effort self-state relay would brick
-  // ordinary moderation whenever any one app relay is down.
+  // Pooled read: waiting on every self-state relay would block mutes whenever one is down.
   const events = await nostr.group(relays).query(
     [{ kinds: [KIND_MUTE_LIST], authors: [user.pubkey], limit: 1 }],
     { signal: AbortSignal.timeout(6000) },
   );
   const prev = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
 
-  // An empty read is indistinguishable from a failed one (cold pool, AUTH,
-  // wrong relay set). If this device has seen a non-empty mute list before,
-  // refuse to rebuild from nothing — publishing would replace the user's
-  // real list everywhere (kind 10000 is a replaceable event).
+  // An empty read may be a failure; if a non-empty list was seen before, refuse to rebuild from
+  // nothing (10000 is replaceable).
   if (!prev) {
-    // Read the persisted list directly rather than through `readMuteSeed`: the
-    // memo is a first-paint seed that another tab's write can leave stale, and
-    // this is the check that decides whether we are allowed to publish at all.
+    // Read persisted state directly: the memo may be stale from another tab's write.
     const cached = parseMuteSeed(await readFolded<unknown>(muteFoldKey(user.pubkey)));
     if (cached.pubkeys.length > 0) {
       throw new Error("Couldn't load your existing block list. Not saving, to avoid losing it.");
@@ -462,9 +376,7 @@ async function editMuteList(
   const next = edit({ publicTags, privateTags });
   if (!next) return null; // already in the requested state
 
-  // Private items stay private, and new ones start private. Only encrypt an
-  // empty private list when the previous event had one, so unmuting the last
-  // private entry doesn't leave a stray ciphertext on a list that never had one.
+  // Encrypt an empty private list only if the previous event had one.
   let content = "";
   if (next.privateTags.length > 0 || prev?.content) {
     if (!user.signer.nip44) {
@@ -489,16 +401,11 @@ async function editMuteList(
   return { pubkeys: [...muted], event: published };
 }
 
-/**
- * The mute-list query's relay key. Memoized on the config: every message row
- * mounts both mutation hooks (through {@link useMuteToggle}), and deriving it
- * normalizes every relay URL.
- */
+/** Memoized: every message row mounts both mutation hooks, and deriving normalizes every URL. */
 function useMuteRelayKey(config: AppConfig, pubkey: string | undefined): string {
   return useMemo(() => muteRelayKey(config, pubkey), [config, pubkey]);
 }
 
-/** Shared across instances too, so mounting a page of rows derives it once. */
 const muteRelayKeys = new WeakMap<AppConfig, Map<string, string>>();
 
 function muteRelayKey(config: AppConfig, pubkey: string | undefined): string {
@@ -512,14 +419,7 @@ function muteRelayKey(config: AppConfig, pubkey: string | undefined): string {
   return key;
 }
 
-/**
- * Mute a pubkey by appending it to the user's NIP-51 mute list (kind 10000).
- *
- * The new entry is written to the *private* (NIP-44-encrypted) portion of the
- * list, preserving any existing public and private items. Requires a NIP-44
- * capable signer. On success the mute-list query cache and the local folded
- * cache are updated so the person disappears from every surface immediately.
- */
+/** Appends to the *private* (NIP-44) portion, preserving existing items. Requires NIP-44. */
 export function useMuteUser(): UseMutationResult<void, Error, string> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -533,9 +433,7 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
     onMutate: async (pubkey: string) => {
       if (!user) return;
 
-      // Stop an in-flight read from replacing the optimistic mute with the
-      // relay's pre-publish list, then hide the peer before any network or
-      // signer round-trips begin.
+      // Cancel in-flight reads so they can't undo the optimistic mute.
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<MuteListQueryData>(queryKey);
       queryClient.setQueryData<MuteListQueryData>(queryKey, (current = {
@@ -567,10 +465,7 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
         },
       );
 
-      // Replace the optimistic entry with the complete list we just published
-      // and persist it for the next cold start. Do not immediately refetch: a
-      // relay may still echo the superseded replaceable event and undo the
-      // successful mute in the UI.
+      // Don't refetch: a relay may still echo the superseded event and undo the mute.
       if (next) {
         queryClient.setQueryData<MuteListQueryData>(queryKey, {
           pubkeys: next.pubkeys,
@@ -592,13 +487,8 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
 }
 
 /**
- * Unmute a pubkey by removing it from the user's NIP-51 mute list (kind 10000).
- *
- * Removes the `p` tag from whichever portion holds it — a mute published
- * publicly by another client is removed from the public tags, ours from the
- * encrypted content — while every other item, of every type, is preserved. The
- * same read-modify-write refusals as {@link useMuteUser} apply: a failed read
- * must never become a published empty list.
+ * Removes the `p` tag from whichever portion holds it, preserving everything else. Same
+ * read-modify-write refusals as {@link useMuteUser}.
  */
 export function useUnmuteUser(): UseMutationResult<void, Error, string> {
   const { nostr } = useNostr();
@@ -660,27 +550,16 @@ export function useUnmuteUser(): UseMutationResult<void, Error, string> {
 }
 
 export interface MuteToggle {
-  /** Whether this pubkey is currently muted. */
   muted: boolean;
-  /**
-   * Whether a mute action should be offered at all: there is a logged-in user,
-   * a target, and the target isn't the user themselves.
-   */
+  /** Logged in, a target, and not the user themselves. */
   canMute: boolean;
-  /** A write is in flight; the menu item should be disabled. */
   pending: boolean;
-  /** "Block" or "Unblock", for the menu label. */
   label: string;
-  /** Toggle the mute, reporting the outcome with a toast. Never throws. */
+  /** Reports the outcome with a toast. Never throws. */
   toggle: () => Promise<void>;
 }
 
-/**
- * Everything a menu needs to offer mute/unmute for one person, so that adding
- * the action to a new surface is a label and an `onSelect` rather than another
- * copy of the mutation wiring, the self-check and the error toast. Used by the
- * message action menus, the member list, the profile cards and the DM header.
- */
+/** Everything a menu needs to offer mute/unmute for one person. */
 export function useMuteToggle(pubkey: string | undefined): MuteToggle {
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();

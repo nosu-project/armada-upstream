@@ -1,11 +1,7 @@
 /**
- * Buzz relay invites.
- *
- * A Buzz invite is an HTTP flow, not a Nostr event: an owner/admin mints a
- * stateless HMAC'd code (`POST /api/invites`) shared as a landing-page URL
- * `https://<host>/invite/<code>`; the joiner claims it with a NIP-98-signed
- * `POST /api/invites/claim` (deliberately exempt from the relay-membership
- * gate). Deployments may additionally require accepting a join policy first
+ * Buzz relay invites: an HTTP flow, not a Nostr event. An admin mints an HMAC'd
+ * code (`POST /api/invites`); the joiner claims it with NIP-98-signed
+ * `POST /api/invites/claim`, optionally after accepting a join policy
  * (`GET /api/join-policy` → `POST /api/invites/accept-policy` → receipt).
  */
 
@@ -17,18 +13,12 @@ import type { NostrSigner } from "@nostrify/nostrify";
 export interface BuzzInvite {
   /** The tenant host (e.g. "team.communities.buzz.xyz"). */
   host: string;
-  /** The invite code (opaque token from the URL path). */
   code: string;
-  /** The relay websocket URL for this host. */
   relayUrl: string;
-  /** The https origin for the host's API endpoints. */
   origin: string;
 }
 
-/**
- * Build a BuzzInvite from a code + the relay it lives on. `relay` may be a
- * bare host (`team.communities.buzz.xyz`) or a full ws(s)/http(s) URL.
- */
+/** `relay` may be a bare host or a full ws(s)/http(s) URL. */
 export function buzzInviteFromRelay(code: string, relay: string): BuzzInvite | undefined {
   const asWs = /^wss?:\/\//i.test(relay)
     ? relay
@@ -42,11 +32,8 @@ export function buzzInviteFromRelay(code: string, relay: string): BuzzInvite | u
 }
 
 /**
- * Build a shareable Buzz invite URL on `base` — the Armada host (armada.buzz),
- * which is the app's verified App Links domain, so the link opens directly in
- * the app instead of the relay's own web page. The relay host rides along in
- * `?r=` because the code itself doesn't encode it; the claim needs it to find
- * the relay.
+ * Invite URL on the Armada host (a verified App Links domain, so it opens the
+ * app). `?r=` carries the relay host, which the code doesn't encode.
  */
 export function buildBuzzInviteUrl(base: string, relayUrl: string, code: string): string {
   const host = new URL(relayToHttpUrl(relayUrl)).host;
@@ -55,17 +42,9 @@ export function buildBuzzInviteUrl(base: string, relayUrl: string, code: string)
 }
 
 /**
- * Parse a Buzz invite landing URL (`https://<host>/invite/<code>`). Returns
- * undefined for anything else — including Armada's own `/invite/<naddr>`
- * Concord links, whose path segment is bech32 (`naddr1…`). The code is opaque:
- * Buzz mints dot-separated base64url HMAC tokens, but other NIP-29 relays that
- * serve the same HTTP claim API (e.g. newlay) mint plain hex, so the ONLY
- * shape we reject is a bech32 naddr — that is what keeps a Concord invite from
- * being read as a Buzz one.
- *
- * An Armada-hosted link (`https://armada.buzz/invite/<code>?r=<relay-host>`)
- * carries the true relay in `?r=` — its own host is only a deep-link façade.
- * A legacy relay-hosted link has no `?r=`; the landing host IS the relay.
+ * Parse `https://<host>/invite/<code>`. The code is opaque (Buzz: dotted HMAC;
+ * newlay: hex); only a bech32 naddr (a Concord invite) is rejected. `?r=` names
+ * the relay; legacy relay-hosted links have none and the host IS the relay.
  */
 export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   let url: URL;
@@ -78,9 +57,6 @@ export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   const match = url.pathname.match(/^\/invite\/([^/]+)$/);
   if (!match) return undefined;
   const code = decodeURIComponent(match[1]);
-  // A Concord invite path segment is a bech32 naddr; a Buzz-style claim code
-  // never is. That is the whole discriminator — the code is otherwise opaque
-  // (Buzz's dotted HMAC token, a bare hex token, or anything else).
   if (/^naddr1[023456789acdefghjklmnpqrstuvwxyz]+$/i.test(code)) return undefined;
   const relayParam = url.searchParams.get("r")?.trim();
   if (relayParam) return buzzInviteFromRelay(code, relayParam);
@@ -90,11 +66,7 @@ export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   return { host: url.host, code, relayUrl, origin: url.origin };
 }
 
-/**
- * Cheap boolean sibling of `parseBuzzInviteUrl` for classifiers that only need
- * to know whether a URL is a Buzz-style relay invite landing link (the chat
- * tokenizer's card discriminator, mirroring Concord's `isInviteUrl`).
- */
+/** Cheap boolean sibling of `parseBuzzInviteUrl`. */
 export function isBuzzInviteUrl(input: string): boolean {
   return parseBuzzInviteUrl(input) !== undefined;
 }
@@ -131,9 +103,8 @@ export async function fetchBuzzJoinPolicy(origin: string, signal?: AbortSignal):
 }
 
 /**
- * Claim a Buzz invite for the signed-in user: accept the join policy first
- * when one is configured (exchanging acceptance for a code-bound receipt),
- * then claim relay membership with the NIP-98-signed joining key.
+ * Accept the join policy if configured (for a code-bound receipt), then claim
+ * membership with the NIP-98-signed joining key.
  */
 export async function claimBuzzInvite(
   signer: NostrSigner,

@@ -20,19 +20,16 @@ import { onFoldedWrite } from "@/lib/foldedCache";
 import { logSync } from "@/lib/syncLog";
 
 /**
- * The stream keys the client must NIP-42-authenticate as to READ a community's
- * planes on an auth-gating relay (see {@link streamAuth}). These are derivable
- * without the Control fold — enough to unblock the very first control REQ:
+ * Stream keys to NIP-42-authenticate as for READING a community's planes on an
+ * auth-gating relay (see {@link streamAuth}), derivable without the Control fold:
  *
- *   - the Control Plane, every held root epoch (channels fold from here) —
- *     for a split epoch this is the held `control_pk`, an ADDRESS-ONLY
- *     registration for a non-staff member (there is no secret to sign a
- *     NIP-42 challenge with, and the relay must not gate reads on it);
- *   - the Guestbook Plane, every held epoch (the member list);
- *   - the dissolution tombstone address (id-derived);
- *   - the NEXT base-rekey address (the rekey watcher polls it).
+ *   - Control Plane, every held root epoch (for a split epoch, the held
+ *     `control_pk` — address-only for non-staff, who hold no secret);
+ *   - Guestbook Plane, every held epoch;
+ *   - the dissolution tombstone address;
+ *   - the NEXT base-rekey address.
  *
- * Channel stream keys are added separately once the fold names them.
+ * Channel keys are added once the fold names them.
  */
 function communityCoreKeys(community: Community): StreamKeyView[] {
   const keys: StreamKeyView[] = [...controlGroups(community)];
@@ -41,16 +38,12 @@ function communityCoreKeys(community: Community): StreamKeyView[] {
   }
   keys.push(dissolvedGroupKey(community.id));
   keys.push(baseRekeyGroupKey(community.root, community.id, community.rootEpoch + 1n));
-  // Each held Private Channel's NEXT-epoch rekey address, under every held
-  // root (a refound seals channel rekeys under the PRIOR root, CORD-06 §3).
-  // Without these, an auth-gating relay answers useChannelRekeyWatch's REQ
-  // with nothing — a member rotated AWAY from a channel would never see the
-  // rotation, so the removal (or a rekey adoption) never lands.
+  // Each held Private Channel's next-epoch rekey address under every held root
+  // (a refound seals channel rekeys under the PRIOR root, CORD-06 §3), so
+  // useChannelRekeyWatch can see a rotation on auth-gating relays.
   for (const r of community.heldRoots) {
     for (const ch of community.privateChannels) {
-      // The same WINDOW useChannelRekeyWatch polls: a member who missed a
-      // rotation must be able to authenticate for the later epochs too, or
-      // an auth-gating relay answers their catch-up with nothing.
+      // The same window useChannelRekeyWatch polls, for catching up missed rotations.
       for (let ahead = 1n; ahead <= BigInt(CHANNEL_REKEY_LOOKAHEAD); ahead++) {
         keys.push(channelRekeyGroupKey(r.key, ch.id, ch.epoch + ahead));
       }
@@ -65,20 +58,12 @@ function channelKeys(channels: Channel[]): GroupKey[] {
 }
 
 /**
- * Register the core stream keys for EVERY live community, so the connection
- * authenticates as their control/guestbook/dissolved/rekey addresses. Mounted
- * once high in the tree (the app shell): the control fold that drives the
- * sidebar can't even read until these are registered.
+ * Register core stream keys for EVERY live community; mounted in the app shell,
+ * since the control fold can't read until these are registered.
  *
- * Also registers EVERY community's per-channel stream keys derivable from its
- * persisted control-fold snapshot (a local IndexedDB read, no relay fan-out).
- * This isn't for NIP-42 (a late key authenticates fine on a live socket —
- * NostrProvider sends its AUTH on the stored challenge and the relay acks it);
- * it's for COVERAGE: WireSync's standing kind-1059 subscription filters on
- * `authors: [...streamPubkeys()]`, so a community's channels only receive live
- * wraps (messages, notifications) once their keys are in the registry. Re-runs
- * on a short poll so folds that land after launch (a community synced for the
- * first time) get their channel keys registered too.
+ * Also registers per-channel keys from each persisted fold — for COVERAGE, not
+ * auth: WireSync's kind-1059 sub filters on `authors: [...streamPubkeys()]`, so
+ * channels receive live wraps only once registered. Polls for folds landing later.
  */
 export function useRegisterAllStreamKeys(): void {
   const communities = useLiveCommunities();
@@ -88,29 +73,26 @@ export function useRegisterAllStreamKeys(): void {
     let cancelled = false;
 
     const register = async () => {
-      // Gather all keys first, then register in one burst — one AUTH wave per relay.
+      // Register in one burst: one AUTH wave per relay.
       const batches: Array<{ keys: StreamKeyView[]; relays: string[]; idHex: string }> = [];
       for (const entry of communities) {
         const community = rehydrateCommunity(entry);
         if (!community) continue;
         const keys: StreamKeyView[] = communityCoreKeys(community);
-        // Per-channel keys from the persisted fold (may be absent on a
-        // never-synced community — then only core keys register until it folds).
+        // Absent on a never-synced community; core keys alone until it folds.
         try {
           const folded = await readControlFold(community.idHex);
           for (const channel of channelsView(community, folded)) {
             keys.push(...channel.streams.map((s) => s.group));
           }
         } catch {
-          // No fold yet; core keys above still cover the control plane so the
-          // fold can be fetched, after which a later poll picks up its channels.
+          // No fold yet; a later poll picks up its channels.
         }
         batches.push({ keys, relays: community.relays, idHex: community.idHex });
       }
       if (cancelled) return;
       for (const batch of batches) {
-        // Scoped to the community's relays: a relay's NIP-42 challenge then
-        // signs only the keys it hosts (see streamAuth.ts).
+        // Scoped to the community's relays, so each relay's challenge signs only its keys.
         const changed = registerStreamKeys(batch.keys, batch.relays);
         if (changed.length > 0) {
           logSync(
@@ -122,14 +104,9 @@ export function useRegisterAllStreamKeys(): void {
     };
 
     void register();
-    // Folds arrive out-of-band (control-plane sync), and a fold WRITE is the
-    // exact signal that a community's channel keys just became derivable — so
-    // re-register on it (debounced: a sweep writes several folds in a burst)
-    // instead of leaving a fresh fold to wait out the poll. Measured on a real
-    // boot the fold landed at +5s and the next poll tick registered its
-    // channel keys at +15s; every auth-gated catch-up page on the community's
-    // relays was held for that gap. The 20s tick stays as the backstop for
-    // key material that changes without a fold write.
+    // A fold write means channel keys just became derivable: re-register on it
+    // (debounced) rather than waiting out the poll, which delayed auth-gated
+    // catch-up by ~10s. The 20s tick remains a backstop.
     const foldKeys = new Set(communities.map((c) => controlFoldKey(c.community_id)));
     let foldDebounce: ReturnType<typeof setTimeout> | undefined;
     const offFoldedWrite = onFoldedWrite((key) => {
@@ -147,11 +124,7 @@ export function useRegisterAllStreamKeys(): void {
   }, [communities]);
 }
 
-/**
- * Register the currently-open community's per-channel stream keys as the fold
- * names them (public channels + any held private ones). Mounted on the
- * community page so reading a channel's timeline passes the relay auth gate.
- */
+/** Register the open community's per-channel stream keys as the fold names them. */
 export function useRegisterChannelStreamKeys(communityId: string | undefined): void {
   const community = useCommunity(communityId);
   const channels = useChannels(community);

@@ -13,21 +13,13 @@ import type { NostrSigner } from "@nostrify/types";
 const KIND_HTTP_AUTH = 27235;
 
 interface LivekitTokenResponse {
-  /** LiveKit access JWT. */
   token: string;
-  /** LiveKit server websocket URL. */
   url: string;
 }
 
 /**
- * Check whether a relay supports the NIP-29 LiveKit extension
- * (HTTP 204 at /.well-known/nip29/livekit).
- *
- * STRICTLY 204, never a general `res.ok`: an origin that is really an SPA
- * answers every unknown path 200 with the HTML shell (that is exactly how
- * armada.buzz reads once the relay moved off it), and a 200-tolerant probe
- * then declares voice support on a host whose token endpoint can only ever
- * return HTML — a call button that always fails.
+ * NIP-29 LiveKit extension probe: STRICTLY 204 at /.well-known/nip29/livekit — an SPA
+ * catch-all answers 200 with HTML, which would advertise voice on a host that can't serve tokens.
  */
 export function useRelayLivekitSupport(relayUrl: string | undefined) {
   return useQuery({
@@ -48,20 +40,16 @@ export function useRelayLivekitSupport(relayUrl: string | undefined) {
 }
 
 /**
- * Fetch a LiveKit JWT from the relay's NIP-29 token endpoint using a
- * NIP-98 Authorization event signed by the user's signer. `roomId` is a
- * NIP-29 group id. (DM calls no longer use a relay token endpoint — they ride
- * the blind-broker path in `src/lib/dmCall.ts`.)
+ * LiveKit JWT from the relay's NIP-29 token endpoint via NIP-98 auth. `roomId` is a NIP-29
+ * group id (DM calls use `src/lib/dmCall.ts`).
  */
 async function fetchLivekitToken(
   relayUrl: string,
   roomId: string,
   signer: NostrSigner,
 ): Promise<LivekitTokenResponse> {
-  // Do NOT percent-encode the id: the relay reconstructs the expected NIP-98
-  // `u` URL from the decoded request path, so an encoded `u` tag would never
-  // match and auth would 401. Only escape characters that would break the
-  // path structure (`/`, `?`, `#`, whitespace).
+  // Don't percent-encode: the relay rebuilds the NIP-98 `u` URL from the decoded path, so an
+  // encoded `u` would 401. Escape only path-breaking characters.
   const safeId = roomId.replace(/[/?#\s]/g, (c) => encodeURIComponent(c));
   const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/livekit/${safeId}`;
 
@@ -85,8 +73,7 @@ async function fetchLivekitToken(
   if (!res.ok) {
     throw new Error(`LiveKit token request failed: HTTP ${res.status}`);
   }
-  // An SPA catch-all answers unknown paths 200 with the HTML shell; parsing
-  // that as JSON produced the old, cryptic "Unexpected token '<'" join error.
+  // An SPA catch-all returns HTML with 200; don't parse it as JSON.
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) {
     throw new Error("The relay did not return a voice token (no LiveKit support?)");
@@ -101,7 +88,6 @@ async function fetchLivekitToken(
   return { token, url };
 }
 
-/** Request a LiveKit token for a NIP-29 group voice room (only when `enabled`). */
 export function useLivekitToken(relayUrl: string, roomId: string, enabled: boolean) {
   const { user } = useCurrentUser();
 
@@ -112,11 +98,8 @@ export function useLivekitToken(relayUrl: string, roomId: string, enabled: boole
       return fetchLivekitToken(relayUrl, roomId, user.signer);
     },
     enabled: enabled && Boolean(user),
-    // The token must stay STABLE for the lifetime of a call. Each mint embeds a
-    // fresh random LiveKit identity (NIP-29 `pubkey-<rand>`), so a refetch would
-    // hand LiveKitRoom a new token+identity and force a disconnect/rejoin as a
-    // different participant (observed as CLIENT_REQUEST_LEAVE churn every few
-    // seconds). Never auto-refetch while mounted; the token is valid for 6h.
+    // The token must stay STABLE for a call: each mint embeds a fresh LiveKit identity, so a
+    // refetch forces a rejoin as a different participant. Valid for 6h.
     staleTime: Infinity,
     gcTime: Infinity,
     refetchOnMount: false,
@@ -126,10 +109,7 @@ export function useLivekitToken(relayUrl: string, roomId: string, enabled: boole
   });
 }
 
-/**
- * Live participants of a group's AV room (kind 39004, relay-signed),
- * with a live subscription for presence changes.
- */
+/** Live participants of a group's AV room (kind 39004, relay-signed). */
 export function useLivekitParticipants(relayUrl: string | undefined, groupId: string | undefined) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
@@ -149,7 +129,6 @@ export function useLivekitParticipants(relayUrl: string | undefined, groupId: st
     refetchInterval: 30_000,
   });
 
-  // Subscribe to presence updates.
   useEffect(() => {
     if (!relayUrl || !groupId) return;
     const controller = new AbortController();
@@ -179,7 +158,7 @@ export function useLivekitParticipants(relayUrl: string | undefined, groupId: st
   return query;
 }
 
-/** LiveKit identities start with the 64-char hex pubkey; extract it. */
+/** LiveKit identities start with the 64-char hex pubkey. */
 export function pubkeyFromLivekitIdentity(identity: string): string {
   const match = identity.match(/^[0-9a-f]{64}/);
   return match ? match[0] : identity;

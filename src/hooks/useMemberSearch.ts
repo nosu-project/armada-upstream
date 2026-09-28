@@ -11,12 +11,7 @@ import type { ServerProfile } from "@/lib/nip29";
 
 type AuthorEntry = { event?: NostrEvent; metadata?: NostrMetadata } | undefined;
 
-/**
- * Re-render whenever a profile the roster is matching against lands in the
- * cache, so results fill in as names resolve instead of freezing at whatever
- * was cached on the keystroke. Inert while no search is active — a roster that
- * isn't being filtered doesn't subscribe at all.
- */
+/** Re-render as matched profiles land in the cache; inert while no search is active. */
 function useProfileCacheVersion(active: boolean): number {
   const queryClient = useQueryClient();
   const version = useRef(0);
@@ -38,12 +33,7 @@ function useProfileCacheVersion(active: boolean): number {
   return useSyncExternalStore(subscribe, () => version.current);
 }
 
-/**
- * The text a member can be found by: their per-server nickname (what the row
- * actually renders in a server scope) plus their global profile fields. Read
- * straight from the shared query cache rather than re-fetching — every row on
- * screen has already resolved these through `useAuthor`/`useServerProfile`.
- */
+/** Per-server nickname plus global profile fields, read from the shared query cache. */
 function searchableText(
   queryClient: QueryClient,
   relayUrl: string | undefined,
@@ -61,7 +51,6 @@ function searchableText(
     metadata?.name,
     metadata?.display_name,
     metadata?.nip05,
-    // The fallback the row shows when there's no kind 0 at all.
     getDisplayName(metadata, pubkey),
   ]
     .filter(Boolean)
@@ -70,29 +59,18 @@ function searchableText(
 }
 
 /**
- * Filter a roster by a free-text query.
- *
- * Names match on tokens — every whitespace-separated word must appear
- * somewhere in the member's searchable text, so word order and which field a
- * word came from don't matter (matching `profileMatches` in
- * {@link useSearchProfiles}). A query that looks like a key instead matches on
- * an npub or hex *prefix*, so pasting an npub finds exactly one person while a
- * short name query isn't swallowed by every pubkey containing that letter.
- *
- * Returns `null` when no search is active, which callers should read as "show
- * everything" — distinct from an empty set, which means "nothing matched".
+ * Token match on names (every word anywhere, like `profileMatches` in
+ * {@link useSearchProfiles}); key-like queries match an npub/hex *prefix*.
+ * Returns `null` when no search is active ("show everything"), distinct from an empty set.
  */
 export function useMemberSearch(pubkeys: string[], query: string): Set<string> | null {
   const queryClient = useQueryClient();
   const relayUrl = useServerScope();
 
-  // A leading @ is how people type a name; it's never part of one.
   const normalized = query.trim().replace(/^@+/, "").toLowerCase();
   const active = normalized.length > 0;
   const version = useProfileCacheVersion(active);
 
-  // `pubkeys` is a fresh array most renders, so key the memo on its identity
-  // rather than the array itself.
   const rosterKey = pubkeys.join(",");
 
   return useMemo(() => {
@@ -112,8 +90,7 @@ export function useMemberSearch(pubkeys: string[], query: string): Set<string> |
       if (tokens.every((token) => haystack.includes(token))) matched.add(pubkey);
     }
     return matched;
-    // `version` is a cache-revision tripwire: it carries no value of its own,
-    // it just re-runs the match when a name it depends on has arrived.
+    // `version` is a cache-revision tripwire that re-runs the match as names arrive.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, normalized, rosterKey, relayUrl, queryClient, version]);
 }

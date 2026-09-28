@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-/**
- * Whether this browser can open a WebGL context at all. One throwaway context,
- * released straight away, so a browser without WebGL gives up the sea's space
- * before anyone scrolls to it rather than as they arrive.
- */
+/** One throwaway context, so a browser without WebGL gives up the sea's space early. */
 function canWebGL(): boolean {
   try {
     const canvas = document.createElement("canvas");
@@ -17,13 +13,11 @@ function canWebGL(): boolean {
   }
 }
 
-/** Only the small host is eager. Neither Three nor a GL context is needed by
- * the first screen. Without WebGL the host renders nothing and takes no space. */
+/** Only the small host is eager; without WebGL it renders nothing. */
 export function SailingSea() {
   const hostRef = useRef<HTMLDivElement>(null);
   const [supported, setSupported] = useState(() => typeof WebGLRenderingContext !== "undefined");
 
-  // The probe runs off the first paint, once the landing has settled.
   useEffect(() => {
     if (!supported) return;
     const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 200));
@@ -49,7 +43,7 @@ export function SailingSea() {
         if (teardown) cleanup = teardown;
         else setSupported(false);
       }).catch(() => {
-        // A later approach can retry a transient chunk download failure.
+        // Allow retrying a transient chunk failure.
         loading = false;
       });
     }, { rootMargin: "350px" });

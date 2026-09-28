@@ -25,9 +25,6 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 export type OnchainFeeSpeed = 'fastest' | 'halfHour' | 'hour' | 'economy';
 
-/**
- * Resolves the fee rate for a given speed preset from a FeeRates bundle.
- */
 function feeRateForSpeed(rates: FeeRates, speed: OnchainFeeSpeed): number {
   switch (speed) {
     case 'fastest': return rates.fastestFee;
@@ -38,36 +35,23 @@ function feeRateForSpeed(rates: FeeRates, speed: OnchainFeeSpeed): number {
 }
 
 interface OnchainZapArgs {
-  /** Amount to zap in satoshis. */
   amountSats: number;
-  /** Optional comment to include in the kind 8333 event content. */
   comment?: string;
-  /** Fee speed preset. Defaults to "halfHour". */
+  /** Defaults to "halfHour". */
   feeSpeed?: OnchainFeeSpeed;
 }
 
 interface OnchainZapResult {
-  /** The broadcast Bitcoin transaction ID. */
   txid: string;
-  /** Amount sent in satoshis. */
   amountSats: number;
-  /** Fee paid in satoshis. */
   fee: number;
-  /** The published kind 8333 event, when one was published (omitted for
-   *  silent-payment sends, which intentionally publish no Nostr event). */
+  /** Omitted for silent-payment sends, which intentionally publish no Nostr event. */
   event?: NostrEvent;
 }
 
 /**
- * Recipient override for a NIP-A3 Bitcoin payment target. When present, the
- * transaction pays this address/code instead of the recipient's derived
- * Taproot address.
- *
- * - `mode: 'onchain'` — a `bc1q…`/`bc1p…` address. A kind 8333 attribution
- *   event is still published (the payment is publicly traceable, like the
- *   derived-address default).
- * - `mode: 'sp'` — a BIP-352 `sp1…` silent-payment code. No kind 8333 event
- *   is published, preserving the unlinkability silent payments provide.
+ * NIP-A3 recipient override. `onchain`: a bc1 address, still attributed with kind 8333.
+ * `sp`: a BIP-352 silent-payment code; no kind 8333, preserving unlinkability.
  */
 export interface BitcoinRecipientOverride {
   value: string;
@@ -75,24 +59,14 @@ export interface BitcoinRecipientOverride {
 }
 
 /**
- * Hook for sending on-chain (Bitcoin L1) zaps to a Nostr event or profile.
- *
- * Flow:
- *   1. Build, sign, and broadcast a Bitcoin transaction paying the target
- *      author's derived Taproot address.
- *   2. Publish a kind 8333 "onchain zap" event referencing the txid, the
- *      target event (`e` or `a` tag), and the recipient's pubkey.
- *
- * Unlike NIP-57 Lightning zaps, this works for *any* Nostr user — there is
- * no LNURL dependency because every pubkey has a derived Taproot address.
+ * On-chain zaps: pay the target's derived Taproot address, then publish a kind 8333 event
+ * (txid + `e`/`a` + recipient). Works for any user — no LNURL.
  */
 export function useOnchainZap(
   target: NostrRumor,
   onSuccess?: (result: OnchainZapResult) => void,
   recipientOverride?: BitcoinRecipientOverride,
-  /** Private announcement publisher (Concord). When present, the kind 8333
-   *  attribution is sealed into the channel as a rumor instead of published
-   *  to public relays (which would leak community/channel context). */
+  /** Concord: seal the 8333 attribution into the channel instead of leaking context publicly. */
   sendOnchainZap?: (target: NostrRumor, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>,
 ) {
   const { user } = useCurrentUser();
@@ -121,10 +95,7 @@ export function useOnchainZap(
       setIsZapping(true);
       setProgress('building');
 
-      // Resolve the recipient. A NIP-A3 Bitcoin payment target (if present)
-      // overrides the derived Taproot address. A silent-payment (`sp1…`)
-      // override switches the send onto the BIP-375 SP rail and suppresses
-      // the kind 8333 attribution event.
+      // An `sp1…` override uses the BIP-375 SP rail and suppresses kind 8333.
       const useSilentPayment = recipientOverride?.mode === 'sp';
       const recipientAddress =
         recipientOverride?.value ?? nostrPubkeyToBitcoinAddress(target.pubkey);
@@ -133,14 +104,11 @@ export function useOnchainZap(
       if (!senderAddress || !recipientAddress) {
         throw new Error('Failed to derive Bitcoin address.');
       }
-      // Re-validate on-chain addresses (derived or override). SP codes have no
-      // client-side checksum we verify here — the SP PSBT builder fails on a
-      // malformed code.
+      // SP codes aren't checksummed here; the SP PSBT builder rejects malformed codes.
       if (!useSilentPayment && !validateBitcoinAddress(recipientAddress)) {
         throw new Error('Recipient Bitcoin address failed validation.');
       }
 
-      // Fetch UTXOs and fee rates
       const [utxos, rates] = await Promise.all([
         fetchUTXOs(senderAddress, esploraApis),
         getFeeRates(esploraApis),
@@ -159,7 +127,6 @@ export function useOnchainZap(
         );
       }
 
-      // Build unsigned PSBT (on-chain or silent-payment rail)
       let psbtHex: string;
       let fee: number;
       if (useSilentPayment) {
@@ -180,27 +147,21 @@ export function useOnchainZap(
         ));
       }
 
-      // Sign
       setProgress('signing');
       const signedHex = await signPsbt(psbtHex);
       const txHex = useSilentPayment
         ? extractTxFromSignedPsbtV2(signedHex)
         : finalizePsbt(signedHex);
 
-      // Broadcast
       setProgress('broadcasting');
       const txid = await broadcastTransaction(txHex, esploraApis);
 
-      // Silent-payment sends publish no Nostr event — doing so would defeat
-      // the unlinkability the rail provides.
+      // Publishing would defeat silent-payment unlinkability.
       if (useSilentPayment) {
         return { txid, amountSats, fee };
       }
 
-      // Publish the kind 8333 attribution. When a private announcement
-      // publisher is present (Concord), seal it into the channel as a
-      // rumor instead of publishing to public relays — the txid is already
-      // on a public ledger, but the Nostr event leaks community/channel context.
+      // With a private publisher (Concord), seal the attribution instead of publishing publicly.
       setProgress('publishing');
 
       if (sendOnchainZap) {
@@ -221,7 +182,7 @@ export function useOnchainZap(
         tags.push(['a', `${target.kind}:${target.pubkey}:${dTag}`]);
       }
 
-      // Always include `e` for a concrete event reference (even for addressable events)
+      // Always include `e`, even for addressable events.
       tags.push(['e', target.id]);
 
       tags.push(['alt', `Bitcoin zap: ${amountSats.toLocaleString()} sats`]);
@@ -236,15 +197,12 @@ export function useOnchainZap(
     },
     onSuccess: (result) => {
       notify("success");
-      // Invalidate caches that track zaps / balances
       queryClient.invalidateQueries({ queryKey: ['onchain-zaps'] });
       queryClient.invalidateQueries({ queryKey: ['event-interactions'] });
       queryClient.invalidateQueries({ queryKey: ['bitcoin-utxos'] });
       queryClient.invalidateQueries({ queryKey: ['bitcoin-balance'] });
       queryClient.invalidateQueries({ queryKey: ['bitcoin-txs'] });
-      // If the caller opted into handling success themselves (e.g. the
-      // ZapDialog shows a grand confirmation screen and owns the dismiss),
-      // skip the built-in toast — the screen is the feedback.
+      // The caller (e.g. ZapDialog's confirmation screen) owns the feedback.
       if (onSuccess) {
         onSuccess(result);
       } else {
@@ -255,11 +213,7 @@ export function useOnchainZap(
       }
     },
     onError: (err) => {
-      // If the signer turned out to not support PSBT signing (common for
-      // NIP-46 bunkers where capability can't be probed up front), mark the
-      // signer as unsupported for the rest of the session. The dialog UI
-      // watches this state and replaces itself with an "unsupported" panel
-      // instead of relying on this toast.
+      // NIP-46 bunkers can't be probed for PSBT support up front; mark unsupported for the session.
       if (isSignerCapabilityError(err) && user) {
         reportSignerUnsupported(user.pubkey);
         return;
@@ -282,7 +236,6 @@ export function useOnchainZap(
     isZapping,
     progress,
     canZap: !!user && user.pubkey !== target.pubkey && canSignPsbt,
-    /** Whether the logged-in user has a PSBT-capable signer. */
     canSignPsbt,
   };
 }

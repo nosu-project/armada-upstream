@@ -75,51 +75,31 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind — polls render inline in the group timeline. */
 const KIND_POLL = 1068;
-/** Kinds shown in a group timeline (mirrors useGroupMessages). */
+/** Mirrors useGroupMessages. */
 const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
-/** How many messages to catch up per channel (mirrors useGroupMessages PAGE_SIZE). */
+/** Mirrors useGroupMessages PAGE_SIZE. */
 const PAGE_SIZE = 50;
-/**
- * Time cap on catch-up history: only messages newer than this window are
- * eagerly synced at login. Anything older is reachable via normal scroll-up
- * pagination once a channel opens — the login gate shouldn't spend its budget
- * (or the caches) on ancient history.
- */
+/** Only messages in this window are synced at login; older history is reached by scrolling. */
 const CATCHUP_WINDOW_SECONDS = 7 * 24 * 60 * 60;
-/** Cap on channels we eagerly catch up, so a user in dozens of groups isn't blocked forever. */
 const MAX_CATCHUP_CHANNELS = 8;
 
 /**
- * Overall timeout for the whole sync so a dead relay never traps the user.
- * Sized so the Concord warm-up (plane sweeps + per-channel history) usually fits;
- * if it doesn't, the gate lifts anyway and the in-chat sync status bar
- * carries the remaining progress.
+ * Overall budget so a dead relay never traps the user; the in-chat status bar carries
+ * whatever remains.
  */
 const SYNC_TIMEOUT_MS = 30_000;
-/** Per-step network timeout. */
 const STEP_TIMEOUT_MS = 8_000;
 /**
- * Grace window for the fan-out reads this gate makes: once the first relay in a
- * batch answers, wait at most this long for the stragglers before moving on
- * with what we have. The step timeout above is the ceiling for a batch where
- * NOBODY answers; this is the ceiling for the far more common case where the
- * reachable relays reply in a few hundred ms and one dead relay would otherwise
- * hold the phase's "establishing …" line spinning until the full step timeout.
- * A relay still in flight is left neither answered nor failed, so the
- * absence-is-non-authoritative semantics the list reads rely on are preserved.
+ * Once the first relay in a batch answers, wait at most this long for stragglers. A relay
+ * still in flight counts as neither answered nor failed (absence stays non-authoritative).
  */
 const STEP_GRACE_MS = 1_500;
 /**
- * Extra time, past the overall budget, that the gate waits for the SETTINGS
- * branch alone to settle before lifting regardless. Settings decides theme and
- * relay config; lifting onto defaults and repainting when it arrives is the
- * visible regression this guards. Two step timeouts covers the branch's two
- * sequential reads; a settings branch that ignores its own abort past
- * `SYNC_TIMEOUT_MS + this` still cannot trap the user (the hard cap lifts).
+ * Extra wait past the budget for the SETTINGS branch alone (theme/relay config), so the gate
+ * doesn't lift onto defaults and repaint. Covers its two sequential reads.
  */
 const SETTINGS_PRIORITY_GRACE_MS = 2 * STEP_TIMEOUT_MS;
 
-/** A phase of the post-login sync. */
 export type SyncPhase =
   | "relays"
   | "settings"
@@ -129,7 +109,7 @@ export type SyncPhase =
   | "channels"
   | "done";
 
-/** One line in the boot-log terminal the SyncGate renders. */
+/** One line in the SyncGate's boot-log terminal. */
 export interface SyncLogLine {
   id: string;
   text: string;
@@ -139,13 +119,10 @@ export interface SyncLogLine {
 
 export interface SyncState {
   phase: SyncPhase;
-  /** Accumulating boot log, newest last. Drives the terminal feed. */
   log: SyncLogLine[];
-  /** True once the sync has finished (or timed out). */
   done: boolean;
 }
 
-/** The line shown (in-progress, no status) when a phase begins. */
 const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
   relays: "locating signed relay map",
   settings: "establishing secure channel",
@@ -156,28 +133,13 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
 };
 
 /**
- * Runs the one-time post-login sync for `pubkey` and reports live progress:
- *
- *   1. Discover the user's signed NIP-65 relay map from bounded public indexes
- *      and the configured app relays, then use its read relays for this sync.
- *   2. Pull encrypted settings (NIP-78, kind 30078, d="armada/metadata") and
- *      seed the `["encrypted-settings", pubkey]` cache so NostrSync applies
- *      theme/relay config without a second fetch.
- *   3. Pull the kind 10009 group list (joined channels + servers) and seed the
- *      `["nip29","user-groups",pubkey]` cache.
- *   4. Catch up on the newest page of messages for each joined channel (capped),
- *      priming the same caches useGroupMessages reads so timelines render
- *      instantly once the gate lifts.
- *   5. Fetch + decrypt the Concord Community List (kind 33302 fragments), seed the
- *      ["concord","list"] cache, then WARM the communities themselves:
- *      register stream keys, sweep the control/guestbook planes, persist the
- *      control folds, and decrypt the newest page of every channel into the
- *      rumor store (see warmupCommunities) — so the gate never lifts onto a
- *      wall of empty rooms.
- *
- * Every step is best-effort and bounded by a timeout — the gate must never trap
- * a user behind a slow or unreachable relay. Returns `{ phase, label, done }`.
- * Pass `pubkey === undefined` to stay idle (done immediately).
+ * One-time post-login sync for `pubkey`, with live progress:
+ * 1. Discover the signed NIP-65 relay map.
+ * 2. Encrypted settings (NIP-78 kind 30078), seeding their caches.
+ * 3. The kind 10009 group list.
+ * 4. Newest page per joined channel (capped).
+ * 5. Concord community list (kind 33302) plus community warm-up (see warmupCommunities).
+ * Every step is best-effort and timeout-bounded. `pubkey === undefined` stays idle.
  */
 export function useInitialSync(pubkey: string | undefined): SyncState {
   const { nostr } = useNostr();
@@ -187,23 +149,16 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
   const queryClient = useQueryClient();
   const { logins } = useNostrLogin();
 
-  // Read at warm-up time through a ref, so the login list neither re-runs nor
-  // re-keys the once-per-pubkey effect below.
+  // Via a ref so the login list doesn't re-run the once-per-pubkey effect.
   const soleAccountRef = useRef(true);
   soleAccountRef.current = logins.length <= 1;
 
-  // The sequence runs once per pubkey, but relay discovery changes config in
-  // the middle of that sequence. Read through a ref so later phases see the
-  // adopted map without making the once-only effect restart.
+  // Relay discovery changes config mid-sequence; read via ref so the effect doesn't restart.
   const configRef = useRef(config);
   configRef.current = config;
 
-  // AppProvider's localStorage setter is recreated when config changes. Relay
-  // discovery deliberately changes config in the middle of this sequence, so
-  // depending on that setter would clean up the active run immediately after
-  // `1 FOUND`; the once-per-pubkey guard would then refuse to restart it. Read
-  // the latest setter through a ref just like config so adoption cannot cancel
-  // the sync gate that is performing it.
+  // The setter is recreated when config changes; depending on it would cancel this run
+  // right after relay adoption, and the once-per-pubkey guard would never restart it.
   const updateConfigRef = useRef(updateConfig);
   updateConfigRef.current = updateConfig;
 
@@ -213,7 +168,6 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     done: pubkey === undefined,
   });
 
-  // Guard so we run the sequence exactly once per fresh pubkey.
   const ranForRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -221,8 +175,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       setState({ phase: "done", log: [], done: true });
       return;
     }
-    // Wait until the signer for this pubkey is the active user (settings + the
-    // group list need NIP-44 to decrypt). Until then, keep showing the spinner.
+    // Settings and the group list need this pubkey's signer (NIP-44).
     if (!user || user.pubkey !== pubkey) return;
     if (ranForRef.current === pubkey) return;
     ranForRef.current = pubkey;
@@ -242,25 +195,21 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     let cancelled = false;
     const overall = AbortSignal.timeout(SYNC_TIMEOUT_MS);
     const log: SyncLogLine[] = [];
-    /** The gate has been lifted (by completion, budget, or hard cap); idempotent. */
+    /** Lifted by completion, budget, or hard cap; idempotent. */
     let lifted = false;
-    /** The settings branch has settled — the gate's priority prerequisite. */
     let settingsSettled = false;
-    /** The overall budget has elapsed (it bounds only the non-settings work). */
+    /** Bounds only the non-settings work. */
     let budgetExpired = false;
 
-    /** Open a phase: push an in-progress line, return its id. */
     const begin = (phase: Exclude<SyncPhase, "done">): string => {
       const id = `${phase}`;
       logSync("gate", `phase "${phase}" started`);
       log.push({ id, text: PHASE_OPENING[phase] });
-      // Once the gate has lifted, a straggling branch opening a new phase must
-      // not flip `done` back to false and re-raise the overlay.
+      // After lifting, a straggling branch must not re-raise the overlay.
       if (!cancelled && !lifted) setState({ phase, log: [...log], done: false });
       return id;
     };
 
-    /** Resolve a phase line with a status chip. */
     const resolve = (id: string, status: string, tone: SyncLogLine["tone"] = "ok") => {
       logSync("gate", `phase "${id}" resolved: ${status}`);
       const line = log.find((l) => l.id === id);
@@ -272,16 +221,8 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     };
 
     /**
-     * Remove a phase line entirely.
-     *
-     * A phase that found nothing has nothing to report: "mounting channel
-     * directory — 0 channels" is not progress, it's noise, and it was
-     * permanent noise for the common case. The NIP-29 group list is empty for
-     * every Concord-only account (their channels are counted by the Concord
-     * phases, under their own lines), which also zeroed the message catch-up
-     * that reads from it — two dead zeros on every login. Drop the line at the
-     * moment we learn the count instead; it stays visible, with its spinner,
-     * for as long as the fetch is genuinely in flight.
+     * A phase that found nothing is noise (e.g. "0 channels" for every Concord-only account), so
+     * drop its line once the count is known.
      */
     const drop = (id: string) => {
       const i = log.findIndex((l) => l.id === id);
@@ -290,7 +231,6 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
     };
 
-    /** Update a phase line's status chip in place (live x/y progress). */
     const progress = (id: string, status: string) => {
       const line = log.find((l) => l.id === id);
       if (line && !line.tone) {
@@ -299,17 +239,12 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
     };
 
-    /** Append a standalone, already-resolved line. */
     const note = (id: string, text: string, status?: string, tone: SyncLogLine["tone"] = "info") => {
       log.push({ id, text, status, tone });
       if (!cancelled) setState((s) => ({ ...s, log: [...log] }));
     };
 
-    /**
-     * Lift the gate. Idempotent, and safe to call from the completion path, the
-     * budget timer or the hard cap — whichever wins. The branches keep running
-     * in the background afterwards, exactly as the warm-up already does.
-     */
+    /** Idempotent; branches keep running in the background afterwards. */
     const lift = () => {
       if (lifted || cancelled) return;
       lifted = true;
@@ -318,39 +253,27 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       note("ready", "all systems nominal", "READY", "ok");
       setState((s) => ({ ...s, phase: "done", done: true }));
     };
-    /**
-     * Lift once the budget has elapsed AND settings has settled. Settings is the
-     * priority: it decides theme and relay config, so the gate must not lift
-     * onto a pre-settings default and repaint when it arrives. The budget bounds
-     * only the slower branches (the Concord warm-up, the message catch-up),
-     * which keep running in the background after the lift.
-     */
+    /** Lift once the budget elapsed AND settings settled (settings decides theme/relay config). */
     const liftIfReady = () => {
       if (budgetExpired && settingsSettled) lift();
     };
-    // The budget bounds the non-settings work; when it elapses the gate lifts as
-    // soon as settings has settled (often already, so it lifts at once). A timer
-    // rather than `overall`'s abort event so fake timers can drive it in tests.
+    // A timer rather than `overall`'s abort event so fake timers can drive it in tests.
     const budget = setTimeout(() => {
       budgetExpired = true;
       liftIfReady();
     }, SYNC_TIMEOUT_MS);
-    // Absolute ceiling past the budget: even a settings branch that ignores its
-    // own abort cannot trap the user. Settings is priority, not unboundedly so.
+    // Absolute ceiling: even a settings branch ignoring its abort can't trap the user.
     const hardCap = setTimeout(lift, SYNC_TIMEOUT_MS + SETTINGS_PRIORITY_GRACE_MS);
 
     const stepSignal = () => AbortSignal.any([overall, AbortSignal.timeout(STEP_TIMEOUT_MS)]);
-    // Settings reads answer to their own step timeout ONLY, not the overall
-    // budget: when the budget elapses the in-flight settings read must be free
-    // to finish (yielding RESTORED, not DEFAULTS), since the gate is holding for
-    // it. Each read is still bounded, and the hard cap bounds the branch.
+    // Settings reads use only their step timeout, so an in-flight read can finish after the
+    // budget elapses (the gate is holding for it).
     const settingsStepSignal = () => AbortSignal.timeout(STEP_TIMEOUT_MS);
 
     void (async () => {
       const shortPk = `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
       note("auth", `authenticated ${shortPk}`, "OK", "ok");
 
-      // ── 1. Signed NIP-65 relay map ──────────────────────────────────────
       const rId = begin("relays");
       let accountRelays = accountDataRelays(configRef.current, pubkey);
       try {
@@ -374,10 +297,8 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             pointerSignal,
           ),
         ]);
-        // Android's background service can verify and persist a newer pointer
-        // while the WebView is stopped. Treat that local rumor as a first-class
-        // canonical source; otherwise one stale reachable discovery relay can
-        // switch this boot away from the relays that hold the newer state.
+        // Android's background service may have persisted a newer pointer; treat that local rumor as
+        // canonical so a stale discovery relay can't switch this boot away.
         const storedPointer = newestCanonicalSelfList(
           storedPointers.events.filter((event) => parseRelayList(event).length > 0),
           pubkey,
@@ -391,8 +312,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           : remoteDiscovery;
         if (discovery) {
           const current = configRef.current;
-          // A first discovery is the user's own signed declaration, so adopt
-          // it automatically. Preserve a deliberate later toggle-off.
+          // A first discovery is the user's own signed declaration: adopt it. Preserve a later toggle-off.
           const sameOwner = current.relayMetadata.pubkey === pubkey;
           const metadataIsNewer = !sameOwner
             || relayListIsNewerThanMetadata(discovery.event, current.relayMetadata);
@@ -428,9 +348,8 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               };
             });
           }
-          // Use the discovered write set for THIS bootstrap even if the user
-          // had deliberately disabled it for ongoing traffic. That lets us
-          // find the encrypted Armada preference that records that choice.
+          // Use the discovered write set for this bootstrap even if disabled for ongoing traffic, so we
+          // can find the preference recording that choice.
           accountRelays = uniqueRelayUrls([
             ...accountRelays,
             ...discovery.relays.filter((relay) => relay.write).map((relay) => relay.url),
@@ -444,22 +363,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
       if (cancelled) return;
 
-      // ── Steps 2–6 run concurrently ──────────────────────────────────────
-      // Given the relay map resolved above, these three branches share no
-      // data: the settings/service-list reads, the NIP-29 group catch-up and
-      // the Concord warm-up are independent (the Concord list reads
-      // selfStateRelays — fixed by step 1 — and settings folds only its own
-      // canonical lists). Run serially they SUMMED; run concurrently the gate
-      // waits on the longest branch, in practice the Concord warm-up, under
-      // which the others hide. Every ordering that matters (a phase feeding the
-      // next) stays intact WITHIN its branch, and `done` awaits all three, so
-      // the gate never lifts onto empty rooms or a pre-settings default theme.
+      // Steps 2–6 run as three independent concurrent branches (settings, NIP-29, Concord); ordering
+      // is kept within each branch, and `done` awaits all three.
 
-      // ── Branch A: portable service lists + encrypted settings ───────────
       const branchSettings = async () => {
-        // Hydrate the standard portable service lists from the same discovered
-        // account relays. Their normal queries may have already cached an empty
-        // read against app defaults before NIP-65 discovery completed.
+        // Their normal queries may have cached an empty read against app defaults before discovery.
         let canonicalSearch: SearchRelayListQuery | undefined;
         let canonicalDm: DmRelayListQuery | undefined;
         let canonicalBlossom: (BlossomServerListQuery & { event: NostrRumor }) | undefined;
@@ -552,7 +460,6 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           // Best-effort; the owning hooks retry after the pool adopts NIP-65.
         }
 
-        // ── 2. Encrypted settings ───────────────────────────────────────────
         const sId = begin("settings");
         const settingsStart = Date.now();
         const settingsStep = (what: string) =>
@@ -561,9 +468,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         const automaticSettingsSync = configRef.current.automaticSettingsSync !== false;
         try {
           if (user.signer.nip44 && automaticSettingsSync) {
-            // All six documents in one filter. No `limit`: it would cap the
-            // whole filter rather than each `d`, so five of the six could come
-            // back missing purely because the sixth answered first.
+            // No `limit`: it caps the whole filter, not each `d`.
             const settingsFilter = {
               kinds: [SETTINGS_KIND],
               authors: [pubkey],
@@ -574,10 +479,8 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               accountRelays,
               [
                 settingsFilter,
-                // Unlike ordinary settings reads, the DM index must never widen
-                // to queryExplicitRelays' general-pool fallback. With no explicit
-                // self-state destination, leave it local and retry after relay
-                // discovery rather than leaking the topic query to the pool.
+                // The DM index must never widen to the general-pool fallback; with no explicit destination,
+                // stay local and retry after discovery.
                 ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
               ],
               settingsStepSignal(),
@@ -592,10 +495,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               && settingsRead.failed.length === 0
               && settingsRead.answered.length === expectedSettingsRelays.length;
 
-            // Seed every split document straight into its own query cache. Their
-            // events are already in ArmadaDB — `queryExplicitRelays` reads
-            // through the batcher, which mirrors what it returns — so this is
-            // purely to spare each hook the store round-trip on first render.
+            // Seed each split document's cache to spare hooks the store round-trip on first render.
             const newestByDTag = new Map<string, NostrEvent>();
             for (const candidate of events) {
               const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
@@ -633,9 +533,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               }
               if (parsed && !cancelled) {
                 legacyNotificationsPresent = hasMigratedKeys(parsed.doc, "notifications");
-                // Fold this run's canonical relay reads (NIP-65 bootstrap, and
-                // the standard 10007/10050/10063 lists) over the NIP-78 blob so
-                // the seeded config already reflects them.
+                // Fold this run's canonical relay lists (NIP-65, 10007/10050/10063) over the NIP-78 blob.
                 const merged = {
                   ...parsed.doc,
                   ...(canonicalSearch && !canonicalSearch.decryptFailed
@@ -652,24 +550,15 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                       }
                     : {}),
                 };
-                // The event itself is already in ArmadaDB — `queryExplicitRelays`
-                // reads through the batcher, which mirrors what it returns — so
-                // the settings query would find it on its own. Seeding is for
-                // `merged`, which folds this run's canonical relay reads over the
-                // document and exists only in memory.
+                // Seeded for `merged`, which exists only in memory (the event itself is already in ArmadaDB).
                 queryClient.setQueryData<StoredSettingsDoc<"metadata">>(
                   settingsDocQueryKey("metadata", pubkey),
                   { event, doc: merged },
                 );
                 settingsFound = true;
 
-                // Migration: kinds 10007/10050/10063 are the canonical home for
-                // these lists as of this release, and they were dropped from the
-                // synced config keys so the NIP-78 document no longer applies them.
-                // Pre-migration clients stored them ONLY in that blob, so a fresh
-                // device with no canonical event yet would otherwise revert to
-                // defaults. Keep the blob's value alive locally; a later explicit
-                // publish promotes it to the real list. Nothing is published here.
+                // Migration: pre-migration clients stored 10007/10050/10063 only in the NIP-78 blob. Keep the
+                // blob's value locally until an explicit publish; nothing is published here.
                 const legacySearch = !canonicalSearch && Array.isArray(parsed.doc.searchRelays)
                   ? parsed.doc.searchRelays
                   : undefined;
@@ -690,10 +579,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               }
             }
 
-            // An empty notifications document is authoritative only after every
-            // declared self-state relay reached EOSE. If a split or legacy
-            // document exists, useConfigDocSync marks readiness only after that
-            // exact version has actually been folded into AppConfig.
+            // An empty notifications doc is authoritative only after every self-state relay reached EOSE.
             if (
               !cancelled
               && settingsAbsenceAuthoritative
@@ -703,13 +589,8 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               markNotificationSettingsReady(pubkey);
             }
 
-            // Hydrate the DM conversation index from the same read, but off the
-            // settings phase: it is one sequential signer decrypt per shard
-            // edition, and an account that has accumulated a few hundred shards
-            // held the documents that decide theme and relay config behind it
-            // past the gate's hard cap. The helper caches successful
-            // decryptions, so the standing owner will not prompt again for
-            // unchanged shard events.
+            // Off the settings phase: one sequential signer decrypt per shard could hold theme/relay
+            // config past the hard cap. Decryptions are cached.
             if (accountRelays.length > 0) {
               void decodeAndHydrateDmConversationIndex(events, user.signer, pubkey)
                 .then(() => settingsStep("DM conversation index hydrated"))
@@ -727,9 +608,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         );
       };
 
-      // ── Branch B: NIP-29 group list (kind 10009) + recent-message catch-up ─
       const branchGroups = async () => {
-        // ── 3. Group list (kind 10009) ──────────────────────────────────────
         const gId = begin("groups");
         let groups: GroupRef[] = [];
         try {
@@ -779,9 +658,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         }
         if (cancelled) return;
 
-        // ── 4. Warm the store with recent messages for joined channels ──────
-        // Skipped outright with no NIP-29 channels to catch up on — there is
-        // nothing to sync and nothing worth showing.
+        // Skipped outright with no NIP-29 channels.
         const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);
         if (channels.length > 0) {
           const mId = begin("messages");
@@ -796,9 +673,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 );
                 if (cancelled) return;
                 messageCount += events.length;
-                // The relay() wrapper mirrors these into the shared IndexedDB
-                // store — the single layer every timeline and unread scan
-                // hydrates from. No cache seeding: hooks read the store.
+                // The relay() wrapper mirrors these into the store every timeline reads from.
               } catch {
                 // Best-effort per channel.
               }
@@ -808,16 +683,13 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         }
       };
 
-      // ── Branch C: Concord community list + warm-up ──────────────────────
       const branchConcord = async () => {
-        // ── 5. Concord: seed the community list. ──────────────────────────
         let concordLive: ReturnType<typeof liveEntries> = [];
         if (user.signer.nip44) {
           const vId = begin("communities");
           try {
-            // The login gate is the natural seeding moment for an account
-            // migrating off the retired single-event list: pass the self-state
-            // write set so a confirmed-empty read can seed §8 from local state.
+            // Pass the self-state write set so a confirmed-empty read can seed §8 from local state
+            // (migration off the retired single-event list).
             const listData = await syncCommunityList(
               nostr,
               user,
@@ -845,18 +717,14 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         }
         if (cancelled) return;
 
-        // ── 6. Concord warm-up: planes, folds, newest channel pages. ──────
-        // This is what makes the gate honest — without it the app shows through
-        // with rail icons but hollow, empty rooms. Raced against the overall
-        // budget: if it can't finish in time the gate lifts anyway and the
-        // warm-up keeps running, visible in the in-chat sync status bar.
+        // Without warm-up the gate lifts onto empty rooms. Raced against the budget; it keeps running
+        // after a lift, visible in the sync status bar.
         if (concordLive.length > 0) {
           const hId = begin("channels");
           const warmup = warmupCommunities(nostr, concordLive, {
             signal: overall,
             onProgress: (done, total) => progress(hId, `${done}/${total}`),
-            // With a second account logged in, "retired epoch" cannot be judged
-            // from this account's list entry alone — see the opt's docstring.
+            // With a second account logged in, "retired epoch" can't be judged from this list alone.
             pruneSnapshots: soleAccountRef.current,
           });
           // The abandoned branch of the race must never surface as unhandled.
@@ -877,25 +745,16 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         if (cancelled) return;
       };
 
-      // Settings is the priority branch: flip its flag when it settles so the
-      // budget's deferred lift can fire. It is included in the all-settled await
-      // below, so its rejection is still handled there.
+      // Flip the flag when settings settles so the budget's deferred lift can fire.
       const settingsBranch = branchSettings().finally(() => {
         settingsSettled = true;
         liftIfReady();
       });
       const branches = Promise.all([settingsBranch, branchGroups(), branchConcord()]);
 
-      // The gate lifts on whichever comes first — every branch settling, or the
-      // budget timer once settings has settled (the hard cap is the backstop). A
-      // branch still running afterwards settles in the background, and its
-      // rejection is handled by the await below however late it comes.
-      //
-      // NOTE: we deliberately do NOT write the settings sync watermark here.
-      // NostrSync owns applying the fetched settings (theme/relay config) into
-      // AppConfig and only then records the watermark; writing it now would make
-      // NostrSync's timestamp guard skip the very settings we just primed. The
-      // "don't re-gate on reload" behavior is handled by useFreshLogin instead.
+      // Deliberately do NOT write the settings sync watermark: NostrSync records it after applying
+      // the settings, and writing it now would make NostrSync skip them. Reload re-gating is handled by
+      // useFreshLogin.
       try {
         await branches;
       } catch {

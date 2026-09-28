@@ -28,48 +28,26 @@ import { isGitContinuation, timelineEntryAuthor, type ChannelTimelineEntry } fro
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { ReactNode, RefObject } from "react";
 
-/**
- * Largest gap (seconds) between two same-author messages for the later one to
- * render as a compact continuation (no repeated avatar/name/timestamp).
- */
+/** Max gap (seconds) for a same-author message to render as a continuation. */
 const CONTINUATION_WINDOW_SECONDS = 5 * 60;
 
-/**
- * Shortest run of flood messages worth folding. The detector already needs a
- * denser run than this to mark anything, but interleaved ordinary chat can
- * split one flood into fragments, and a row reading "2 similar messages" costs
- * a click to save two lines.
- */
+/** Shortest flood run worth folding: interleaved chat can split floods into tiny fragments. */
 const FLOOD_ROW_MIN = 3;
 
-/**
- * Distance from the top (px) at which older history is requested from the
- * transport. Deliberately a screenful-plus so the round trip overlaps with the
- * reader still having loaded content above them.
- */
+/** Distance from the top (px) that requests older history; a screenful-plus so the fetch overlaps reading. */
 const BACKFILL_TRIGGER_PX = 1200;
 
-/** Distance from the top (px) at which already-loaded messages are revealed. */
 const REVEAL_TRIGGER_PX = 900;
 
-/** Distance from the bottom (px) still counted as "reading the newest". */
 const AT_BOTTOM_PX = 60;
 
-/** Distance from the bottom (px) at which the jump-to-present pill appears. */
 const JUMP_PILL_PX = 300;
 
-/** Messages revealed above a jump target so it doesn't land against the top. */
 const JUMP_CONTEXT = 15;
 
-/**
- * Rows rendered in each successive commit while a conversation opens, one per
- * frame. Mounting a row is expensive (author query, content tokenization, media
- * and embed subtrees), so the commit that the channel-switch click renders
- * synchronously contains none of them.
- */
+/** Rows per commit as a conversation opens, one step per frame; the switch click's commit mounts none. */
 const OPENING_RAMP = [0, FIRST_PAINT_WINDOW, INITIAL_WINDOW];
 
-/** Whether two unix-second timestamps fall on the same local calendar day. */
 export function isSameDay(a: number, b: number): boolean {
   const da = new Date(a * 1000);
   const db = new Date(b * 1000);
@@ -80,7 +58,6 @@ export function isSameDay(a: number, b: number): boolean {
   );
 }
 
-/** "Today" / "Yesterday" / a long local date, for the day separators. */
 function formatDayLabel(ts: number): string {
   const date = new Date(ts * 1000);
   const now = new Date();
@@ -91,17 +68,11 @@ function formatDayLabel(ts: number): string {
   return (date.getFullYear() === now.getFullYear() ? DAY_FORMAT : DAY_YEAR_FORMAT).format(date);
 }
 
-// Built once: `toLocaleDateString` with options constructs a fresh
-// Intl.DateTimeFormat on every call, and a long timeline formats one per day.
+// Built once: `toLocaleDateString` with options builds a new Intl.DateTimeFormat per call.
 const DAY_FORMAT = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" });
 const DAY_YEAR_FORMAT = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" });
 
-/**
- * Discord-style day boundary: a hairline with the date pinned in the middle.
- * Memoized: one sits between every day of history, and the timeline re-renders
- * its whole list whenever the page hands it a new render callback — which the
- * chat pages do on most of their own renders.
- */
+/** Discord-style day separator. Memoized: the list re-renders on most page renders. */
 export const DateSeparator = memo(function DateSeparator({ ts }: { ts: number }) {
   return (
     <div className="flex items-center gap-3 px-2 pt-3 pb-1 select-none" aria-hidden>
@@ -114,7 +85,6 @@ export const DateSeparator = memo(function DateSeparator({ ts }: { ts: number })
   );
 });
 
-/** Discord-style unread marker: a red hairline with a "NEW" tag. */
 function NewMessagesDivider() {
   return (
     <div className="flex items-center px-2 py-1 select-none" role="separator" aria-label="New messages">
@@ -127,10 +97,8 @@ function NewMessagesDivider() {
 }
 
 /**
- * Key-rotation boundary (Concord): everything ABOVE this line was sealed under
- * a previous key. The transport marks the first message of each newer epoch
- * (`rotationDividerIds`); the warning tone is deliberate — pre-rotation
- * history is readable, but it belongs to a key set the community moved off.
+ * Concord key-rotation boundary: everything above was sealed under a previous
+ * key. The warning tone is deliberate.
  */
 function KeyRotationDivider() {
   return (
@@ -153,19 +121,10 @@ function KeyRotationDivider() {
 }
 
 /**
- * A run of messages the transport marked as a visual flood
- * (`quarantinedIds`), folded into one row the reader can open.
- *
- * Deliberately a summary and not a removal. The heuristic behind it is allowed
- * to be wrong — a wave of real newcomers looks exactly like a bot swarm — so
- * the messages stay in the timeline, in order, one click away. Nothing here
- * reports anyone or informs a moderation decision.
- *
- * `paused` switches the copy for the other thing that collapses a run: a
- * community pause (CORD-04 §8). The suppression is identical and the reason is
- * not, and the flood wording is an accusation — near-identical messages from
- * many accounts — that about a paused room's ordinary traffic is false and
- * unearned.
+ * A run the transport marked as flood (`quarantinedIds`), folded into one
+ * openable row — a summary, not a removal, since the heuristic can be wrong.
+ * `paused` swaps the copy for a community pause (CORD-04 §8), where flood
+ * wording would be a false accusation.
  */
 function FloodNotice({
   count,
@@ -211,7 +170,6 @@ function FloodNotice({
   );
 }
 
-/** One rendered row: a message, a day separator, or the unread "NEW" divider. */
 type TimelineItem =
   | { type: "date"; ts: number; key: string }
   | { type: "unread"; key: string }
@@ -220,26 +178,18 @@ type TimelineItem =
   | { type: "flood"; msgs: readonly ChatMsg[]; authors: number; paused: boolean; key: string }
   | { type: "entry"; entry: NonChatEntry; related?: readonly NonChatEntry[]; key: string };
 
-/** A generalized timeline entry that isn't a plain chat message (e.g. Git activity). */
 type NonChatEntry = Exclude<ChannelTimelineEntry, { type: "chat" }>;
 
 /**
- * The run of Git entries a group-head row renders on behalf of: itself plus
- * every immediately-following same-day continuation. Those followers emit no
- * row of their own, so a burst of comments, status flapping or CI runs
- * collapses into one grouped block.
- *
- * `undefined` for a lone entry: a row that stands for only itself is told so,
- * rather than being handed a one-element group it would have to re-check.
- * Which kinds group is {@link isGitContinuation}'s business alone.
+ * A Git group head plus its same-day continuations (which emit no row).
+ * `undefined` for a lone entry. Grouping rules: {@link isGitContinuation}.
  */
 function relatedGitEntries(
   entries: readonly ChannelTimelineEntry[],
   index: number,
   entry: NonChatEntry,
 ): readonly NonChatEntry[] | undefined {
-  // Checked before allocating: most entries start no group, and this runs for
-  // every one of them on every window recompute.
+  // Checked before allocating: most entries start no group.
   if (!isGitContinuation(entry, entries[index + 1])) return undefined;
   const related: NonChatEntry[] = [entry];
   for (let cursor = index + 1; cursor < entries.length; cursor++) {
@@ -257,89 +207,50 @@ function relatedGitEntries(
   return related.length > 1 ? related : undefined;
 }
 
-/** Imperative handle a parent can use to jump the timeline to a message by id. */
 export interface MessageTimelineHandle {
   /**
-   * Reveal and center a loaded message. Returns false when the id is not part
-   * of this timeline (for example, a reply that belongs in a thread panel).
-   * `focus` marks the row as a permalink target: the highlight wash lasts
-   * longer and a primary-colored bar sits beside the row while it fades.
+   * Reveal and center a loaded message; false when not in this timeline (e.g. a
+   * thread reply). `focus` marks a permalink target (longer highlight + bar).
    */
   scrollToMessage: (id: string, focus?: boolean) => boolean;
-  /** Re-anchor to the bottom and resume auto-scroll (e.g. after sending). */
   pinToBottom: () => void;
   /**
-   * Keep the view at the bottom *only if the user was already there*. Layout
-   * changes around the timeline are handled automatically (a ResizeObserver
-   * watches the scroller and its content); this is for callers that change
-   * something the observer can't see.
+   * Stay at the bottom only if already there, for changes the internal
+   * ResizeObserver can't see.
    */
   maintainBottom: () => void;
 }
 
 interface MessageTimelineProps {
   transport: ChatTransport;
-  /**
-   * Render one message row. The parent (a transport-specific wrapper) resolves
-   * per-message data (reactions, reply context, send status) and returns a
-   * `ChatMessage`. `continuation` is precomputed here from the shared rule.
-   */
+  /** Render one message row; `continuation` is precomputed from the shared rule. */
   renderMessage: (event: ChatMsg, continuation: boolean) => ReactNode;
-  /**
-   * Optional generalized channel entries. Leaving this unset preserves the
-   * legacy chat-only timeline used by NIP-29, DMs, and mesh.
-   */
+  /** Generalized channel entries; unset keeps the chat-only timeline (NIP-29, DMs, mesh). */
   entries?: readonly ChannelTimelineEntry[];
-  /** Renderer for non-chat entries supplied through `entries`. */
   renderEntry?: (entry: NonChatEntry, relatedEntries?: readonly NonChatEntry[]) => ReactNode;
-  /**
-   * Empty-state node shown when there are no messages and nothing is loading.
-   */
   emptyState?: ReactNode;
-  /** Optional ref for imperative scroll control (pinned-message jumps, etc.). */
   handleRef?: RefObject<MessageTimelineHandle | null>;
-  /**
-   * When true, the timeline yields its content area to a caller-provided
-   * overlay (e.g. search results) — backfill on scroll is suppressed.
-   */
+  /** Yield to a caller overlay (e.g. search results); suppresses scroll backfill. */
   paused?: boolean;
-  /**
-   * Id of the first unread message: the red "NEW" divider renders directly
-   * above it (computed by the parent, e.g. {@link useNewMessagesDivider}).
-   */
+  /** First unread message id; the "NEW" divider renders above it (see {@link useNewMessagesDivider}). */
   newDividerId?: string;
   /**
-   * True while a background catch-up for THIS conversation is in flight (a
-   * sync-activity task scoped to it). An empty timeline then says so — "no
-   * messages" is a verdict, and it isn't in until the catch-up settles.
-   *
-   * Deliberately NOT part of the skeleton gate: the skeleton stands for the
-   * LOCAL read, which is over in milliseconds, while a relay round can take
-   * seconds. Dressing network latency up as a load left a fully-cached
-   * conversation behind a skeleton for as long as its backfill ran.
+   * A catch-up for this conversation is in flight, so an empty timeline isn't
+   * "no messages" yet. Not part of the skeleton gate: the skeleton is for the
+   * fast local read, not network latency.
    */
   syncing?: boolean;
   /**
-   * True when the conversation's catch-up keeps FAILING (its sync topic is in
-   * error/backoff). An all-empty relay read is deliberately inconclusive and
-   * takes this same retry path, so an empty timeline says only that no messages
-   * have loaded yet instead of claiming the relays are unreachable. The
-   * retries continue in the background either way.
+   * The catch-up keeps failing. Empty relay reads also land here, so the empty
+   * state says only that nothing has loaded yet, not that relays are unreachable.
    */
   syncFailed?: boolean;
   className?: string;
 }
 
 /**
- * A fixed pseudo-thread for the loading placeholder: alternating authors, runs
- * of same-author continuations, and bodies of one to three lines at varied
- * widths. Real conversations look like this; a column of identical
- * avatar-plus-one-line rows reads as a progress indicator, not as content.
- *
- * Fixed rather than random so the placeholder never reshuffles between renders,
- * and geometry matches {@link MessageRow} exactly (size-10 avatar, gap-3,
- * py-1.5 head rows / py-0.5 continuations, w-10 continuation gutter) so nothing
- * shifts when the real messages replace it.
+ * Fixed pseudo-thread for the loading placeholder (varied authors and line
+ * counts). Geometry matches {@link MessageRow} so nothing shifts on swap.
  */
 const SKELETON_ROWS: { continuation: boolean; name?: string; widths: string[] }[] = [
   { continuation: false, name: "5rem", widths: ["62%"] },
@@ -358,15 +269,7 @@ const SKELETON_ROWS: { continuation: boolean; name?: string; widths: string[] }[
   { continuation: false, name: "6.5rem", widths: ["71%", "50%"] },
 ];
 
-/**
- * Bottom-anchored loading placeholder for the timeline.
- *
- * `justify-end` plus `overflow-hidden` makes this behave like the real thread:
- * content sits on the bottom edge and the surplus is clipped at the top, so it
- * reads as history scrolled off-screen rather than a short list floating in an
- * empty pane. The pattern is repeated so it overflows tall viewports too — the
- * previous fixed eight rows left most of the screen blank.
- */
+/** Bottom-anchored placeholder, clipped at the top like scrolled-off history. */
 const TimelineSkeleton = memo(function TimelineSkeleton() {
   return (
     <div
@@ -401,39 +304,18 @@ const TimelineSkeleton = memo(function TimelineSkeleton() {
 });
 
 /**
- * The transport-agnostic message timeline: a bottom-anchored, auto-scrolling
- * scroll area with scroll-up backfill, same-author continuation collapsing, a
- * loading skeleton and an empty state. It owns only scroll mechanics and the
- * continuation rule; every message's content/actions come from `renderMessage`,
- * and all data/mutations come from the {@link ChatTransport}. Shared by NIP-29
- * group chat, Concord communities, DMs and the Bluetooth mesh.
+ * Transport-agnostic message timeline (NIP-29, Concord, DMs, mesh): owns scroll
+ * mechanics and the continuation rule; content comes from `renderMessage`.
  *
- * ## Why this is a plain scroller and not a virtualized list
- *
- * Rows here change height *after* they mount — images decode, link previews and
- * embeds resolve, reactions and thread badges arrive. A measuring virtualizer
- * positions rows from heights it sampled at mount, so every one of those
- * resizes invalidates its model and it has to guess how to re-anchor the
- * viewport; that guess is what the reader sees as a jump. It also
- * absolutely-positions rows, which switches off the browser's own scroll
- * anchoring (`overflow-anchor`) — the mechanism that solves exactly this
- * problem for free in normal flow.
- *
- * So the rows are real DOM in normal flow, and the *data* is bounded instead:
- *
- * - **Bounded window.** A conversation opens with {@link FIRST_PAINT_WINDOW}
- *   rows and fills out to {@link INITIAL_WINDOW} a frame later, which is what
- *   keeps a channel switch cheap (the switch cost is O(rows in the commit) of
- *   React mounting, not O(loaded history)). Nearing the top reveals
- *   {@link WINDOW_STEP} more already-loaded messages, then asks the transport
- *   for older ones. Returning to the bottom trims back down.
- * - **Anchored position.** The first row touching the viewport and its pixel
- *   offset are tracked while reading. Reveals, prepends and late row growth put
- *   that row back under the same pixel. This is explicit rather than delegated
- *   to CSS scroll anchoring, which WebKit does not implement.
- * - **Stick-to-bottom** restores the reader's *distance* from the bottom rather
- *   than snapping to it, so a reader who has just started scrolling up isn't
- *   yanked back when an image below them finishes decoding.
+ * Not virtualized: rows change height after mounting, which makes a measuring
+ * virtualizer jump, and absolute positioning disables native scroll anchoring.
+ * Instead the data is bounded:
+ * - **Bounded window**: opens with {@link FIRST_PAINT_WINDOW} rows, fills to
+ *   {@link INITIAL_WINDOW}, reveals {@link WINDOW_STEP} more near the top before
+ *   asking the transport, and trims back at the bottom.
+ * - **Anchored position**: the first visible row and its offset are restored
+ *   after reveals/prepends/growth (explicitly; WebKit lacks CSS scroll anchoring).
+ * - **Stick-to-bottom** preserves distance from the bottom rather than snapping.
  */
 export function MessageTimeline({
   transport,
@@ -451,11 +333,8 @@ export function MessageTimeline({
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds, quarantinedIds, pausedIds } =
     transport;
 
-  // Which flood rows the reader has opened, keyed by row key. Local, and reset
-  // by nothing: the key derives from the run's first message id, so a channel
-  // switch simply produces different keys rather than leaking an opened run
-  // into the next conversation. `floodRunOfRef` lets a jump (a pin, a
-  // permalink) open the run its target is hiding in before scrolling to it.
+  // Opened flood rows, keyed by the run's first message id (so they don't leak
+  // across channels). `floodRunOfRef` lets a jump open the run hiding its target.
   const [expandedFloods, setExpandedFloods] = useState<ReadonlySet<string>>(() => new Set());
   const floodRunOfRef = useRef<Map<string, string>>(new Map());
   const toggleFlood = useCallback((key: string) => {
@@ -466,20 +345,15 @@ export function MessageTimeline({
     });
   }, []);
 
-  // THE number the user is complaining about: when the skeleton came down. Every
-  // other milestone on the timeline is only interesting relative to this one.
+  // The key milestone: when the skeleton came down.
   const firstRowsPainted = !isLoading && messages.length > 0;
   usePerfMilestone("timeline.first rows", firstRowsPainted);
-  // The first painted rows are the boot gate's cue: background ingest may have
-  // the thread now. (An empty channel opens the gate via its timeout instead.)
+  // Cue for the boot gate. (An empty channel opens it via its timeout.)
   useEffect(() => {
     if (firstRowsPainted) markBootPainted();
   }, [firstRowsPainted]);
 
-  // The row stream, generalized: callers that pass `entries` interleave non-chat
-  // rows (Git activity) chronologically; everyone else gets the chat-only view.
-  // Memoized because the row model and the prepend anchor both compare by
-  // identity — a fresh array each render would look like a new conversation.
+  // Memoized: the row model and prepend anchor compare by identity.
   const allEntries = useMemo<readonly ChannelTimelineEntry[]>(
     () =>
       entries ??
@@ -492,15 +366,9 @@ export function MessageTimeline({
     [entries, messages],
   );
 
-  // Blocked people and individually hidden messages are dropped here rather
-  // than in each transport, because this is the one place every timeline
-  // surface — Concord, NIP-29, Buzz, DMs, mesh — funnels through, and because
-  // the row model below compares by identity: filtering upstream per-caller
-  // would mean five chances to forget. The mute filter is skipped while the
-  // mute set is still cold (`!ready`), so the common warm case pays one Set
-  // lookup per row and the cold case can't hide a row it has no basis to hide
-  // yet; the hidden-message set is synchronous local storage, so it has no
-  // cold state to wait out.
+  // Mutes and hidden messages are filtered here, where every surface funnels
+  // through. Mutes are skipped while cold (`!ready`) rather than hiding rows
+  // without basis.
   const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
   const { hiddenIds } = useHiddenMessages();
   const timelineEntries = useMemo<readonly ChannelTimelineEntry[]>(() => {
@@ -512,23 +380,13 @@ export function MessageTimeline({
       const author = timelineEntryAuthor(entry);
       return !author || !mutedPubkeys.has(author);
     });
-    // Preserve identity when nothing was removed: a fresh array on every mute
-    // set change would read as a new conversation to the prepend anchor.
+    // Preserve identity when nothing was removed (the prepend anchor compares it).
     return kept.length === allEntries.length ? allEntries : kept;
   }, [allEntries, mutedPubkeys, mutesReady, hiddenIds]);
 
-  // Remember that we've shown a populated timeline. If `messages` then briefly
-  // empties (a transient between a cache refresh and the merged result landing),
-  // we render the skeleton rather than flashing the empty state / a blank gap —
-  // the timeline never truly "loses" its history, so a momentary empty array is
-  // a render artifact, not an empty channel. Reset while a fresh load is in
-  // flight (channel switch) so a genuinely-empty channel still shows its empty
-  // state instead of a stale skeleton.
-  //
-  // Tracked against the UNFILTERED entries: a channel whose every visible row
-  // was muted away is not a source that briefly emptied, it is a channel with
-  // nothing left to show — and holding the skeleton over it would never come
-  // down, because no later poll will produce a row the filter admits.
+  // Once populated, a transient empty array shows the skeleton rather than the
+  // empty state; reset while a fresh load is in flight. Tracked on UNFILTERED
+  // entries, or a fully-muted channel would hold the skeleton forever.
   const hadMessagesRef = useRef(false);
   if (isLoading) hadMessagesRef.current = false;
   if (allEntries.length > 0) hadMessagesRef.current = true;
@@ -540,55 +398,34 @@ export function MessageTimeline({
   // Live mirrors, so scroll/observer callbacks never close over stale props.
   const entriesRef = useRef(timelineEntries);
   entriesRef.current = timelineEntries;
-  // Read by the scroll handler, which is not re-created per render.
   const quarantinedIdsRef = useRef(quarantinedIds);
   quarantinedIdsRef.current = quarantinedIds;
 
-  // How far the reader is from the newest message. Updated on every scroll and
-  // after every programmatic move; the single input to stick-to-bottom.
+  // Distance from the newest message; the single input to stick-to-bottom.
   const distanceRef = useRef(0);
   // A window extension is committed but not yet laid out — don't stack another.
   const extendLockRef = useRef(false);
-  // A transport backfill is in flight (independent of the transport's own,
-  // possibly lagging, `isLoadingOlder`).
+  // Independent of the transport's possibly lagging `isLoadingOlder`.
   const loadingOlderRef = useRef(false);
-  // A scroll-triggered transport page landed above the currently-rendered
-  // first row. The timeline reveals one step from that page automatically;
-  // otherwise a reader already at scrollTop=0 has no further upward scroll
-  // event with which to expose it (especially once Safari bounce is clamped).
+  // A scroll-triggered page landed above the first row: reveal a step
+  // automatically, since a reader at scrollTop=0 has no further upward scroll.
   const backfillRevealRef = useRef<{ boundaryId: string; count: number } | null>(null);
   const [backfillPulse, setBackfillPulse] = useState(0);
-  // The next layout should pin to the bottom (first paint, conversation switch).
   const pinBottomRef = useRef(true);
-  // A message to reveal-and-jump-to once it's in the rendered window.
   const pendingJumpRef = useRef<{ id: string; focus: boolean } | null>(null);
-  // The first stable row touching the viewport while the reader is away from
-  // the newest edge. Persistent (rather than tied to one render) so it survives
-  // React 19 interrupted renders and can also absorb asynchronous row resizes.
+  // Persistent so it survives React 19 interrupted renders and async row resizes.
   const readingAnchorRef = useRef<ScrollAnchor | null>(null);
-  // Previous scroll offset, to tell a reader moving up from this component's
-  // own downward scrolls (see `handleScroll`).
+  // Distinguishes the reader moving up from our own downward scrolls.
   const lastScrollTopRef = useRef(Number.POSITIVE_INFINITY);
-  // Re-check for another extension one frame after a slice-change commit that
-  // leaves the reader scrolled up. The scroll-driven trigger only fires while
-  // `scrollTop` is *decreasing*, so a reveal or backfill that lands the reader
-  // at the top (no downward delta left to emit) would otherwise dead-end a
-  // chain that isn't finished — the "scroll down a little and back up to
-  // unstick it" symptom. Holds the pending rAF id so a burst of commits
-  // schedules only one re-check. `maybeExtendRef` breaks the source-order cycle
-  // (this effect is declared above `maybeExtend`).
+  // A slice change that leaves the reader at the top emits no further upward
+  // scroll, so re-check next frame (one rAF per burst). `maybeExtendRef` breaks
+  // the declaration-order cycle.
   const continueRafRef = useRef<number | null>(null);
   const maybeExtendRef = useRef<() => void>(() => {});
 
-  // The scroller only exists once there's something to put in it; the skeleton
-  // replaces it outright.
   const listVisible = !isLoading && !transientEmpty && timelineEntries.length > 0;
-  // So while the skeleton is up there is no scroll position to preserve, and
-  // the scroller will remount at `scrollTop: 0`: the next layout has to pin.
-  // The opening pin is otherwise armed only at mount, and `messages` routinely
-  // arrives *before* `isLoading` clears (DMs merge two independently-loading
-  // planes), so the commits that fill the window can all land while the
-  // scroller is still unmounted and the pin has nothing to act on.
+  // The scroller remounts at `scrollTop: 0` after the skeleton, so the next
+  // layout must pin (`messages` often arrives before `isLoading` clears).
   if (!listVisible) pinBottomRef.current = true;
 
   const [showJumpPill, setShowJumpPill] = useState(false);
@@ -598,23 +435,15 @@ export function MessageTimeline({
   const windowStartIdRef = useRef<string | null>(null);
   windowStartIdRef.current = windowStartId;
 
-  /** Move the top of the rendered window, eagerly so callbacks see it at once. */
   const setWindowStart = useCallback((id: string | null) => {
     windowStartIdRef.current = id;
     setWindowStartId(id);
   }, []);
 
-  // Rows per commit as a conversation opens. The click that switches channels
-  // is what pays for the first commit, so it renders NO message rows: they
-  // arrive on the following frames, off the interaction's critical path.
   const [rampStep, setRampStep] = useState(0);
 
-  // The window is resolved over the ENTRY stream, not just chat: a channel
-  // whose recent history is mostly Git activity must still open with a full
-  // window, and the anchor id has to name a row that actually exists.
-  // Folded flood messages are counted as the ONE row they render as, so a wall
-  // of spam at the bottom of the history can't spend the whole window and push
-  // the conversation above the rendered slice.
+  // Resolved over the ENTRY stream (Git rows included); a folded flood counts
+  // as ONE row so spam can't spend the whole window.
   const { startIndex, anchorLost } = useMemo(
     () =>
       resolveWindowStart(timelineEntries, windowStartId, OPENING_RAMP[rampStep], (entry) =>
@@ -625,21 +454,14 @@ export function MessageTimeline({
   const startIndexRef = useRef(startIndex);
   startIndexRef.current = startIndex;
 
-  // Flatten the windowed slice + injected separators into rows, applying the
-  // shared continuation rule (same author, same day, small gap). Continuation
-  // is computed against the entry *before* the window so the topmost row
-  // doesn't change shape as the window grows.
+  // Continuation is computed against the entry before the window so the top row
+  // doesn't change shape as it grows.
   const items = useMemo<TimelineItem[]>(() => {
     const out: TimelineItem[] = [];
     const runOf = new Map<string, string>();
     /**
-     * Is this entry foldable into a flood run? The unread divider's target is
-     * deliberately excluded — the "NEW" line has to land on a row the reader
-     * can actually see, or their first unread message is behind a click they
-     * have no reason to make. A key-rotation boundary is excluded for the same
-     * reason and a stronger one: the divider is only emitted beside a rendered
-     * message row, so folding its target deletes the rotation line outright —
-     * including from the expanded run, which renders messages and nothing else.
+     * Foldable into a flood run? Not the "NEW" divider's target (must stay visible)
+     * nor a key-rotation boundary (folding would delete the rotation line).
      */
     const floodable = (entry: ChannelTimelineEntry | undefined) =>
       !!entry &&
@@ -653,10 +475,7 @@ export function MessageTimeline({
       const prev = timelineEntries[i - 1];
       const newDay = !!prev && !isSameDay(prev.createdAt, entry.createdAt);
 
-      // A run of flood messages collapses to one row. It breaks on anything
-      // else — an ordinary message between two of them means the reader's
-      // attention was broken too, same rule the Git grouping uses — and on a
-      // day boundary, so the date separator still introduces a visible row.
+      // A run breaks on any other message and on a day boundary.
       if (floodable(entry)) {
         const run: ChatMsg[] = [];
         let j = i;
@@ -666,8 +485,6 @@ export function MessageTimeline({
           if (j > i && !isSameDay(timelineEntries[j - 1].createdAt, at.createdAt)) break;
           run.push(at.message);
         }
-        // One or two stragglers are not a wall of noise; collapsing them would
-        // cost a click and save no space. Fall through and render them plainly.
         if (run.length >= FLOOD_ROW_MIN) {
           const headKey = run[0].renderKey ?? run[0].id;
           const key = `flood-${headKey}`;
@@ -677,9 +494,7 @@ export function MessageTimeline({
             type: "flood",
             msgs: run,
             authors: new Set(run.map((m) => m.pubkey)).size,
-            // Only when the WHOLE run is pause-collapsed: a run mixing in a
-            // genuine flood cluster keeps the flood copy, which is the safer
-            // of the two to be wrong about.
+            // Only when the WHOLE run is pause-collapsed; mixed runs keep the flood copy.
             paused: run.every((m) => pausedIds?.has(m.id) ?? false),
             key,
           });
@@ -687,15 +502,10 @@ export function MessageTimeline({
           continue;
         }
       }
-      // A Git entry continuing the previous one is absorbed into that row's
-      // group (see relatedGitEntries) and emits no row of its own — unless it
-      // opens the window, where its group head sits outside the rendered slice
-      // and absorbing it would drop the row entirely.
+      // Absorbed into the previous Git row's group, unless it opens the window
+      // (its head would be outside the slice).
       if (i > startIndex && !newDay && isGitContinuation(prev, entry)) continue;
-      // `renderKey` where the transport has one: an optimistic row's `id`
-      // changes when it adopts the signed event id, and keying on that would
-      // remount the row (and its date separator) mid-send. Git entries are
-      // never optimistic, so their own id is already stable.
+      // `renderKey` keeps optimistic rows from remounting when they adopt the signed id.
       const rowKey = entry.type === "chat" ? entry.message.renderKey ?? entry.message.id : entry.id;
       if (newDay) out.push({ type: "date", ts: entry.createdAt, key: `date-${rowKey}` });
       if (entry.type === "chat") {
@@ -720,14 +530,11 @@ export function MessageTimeline({
         });
       }
     }
-    // Message id → the flood row hiding it, so a jump can open that row first.
-    // Assigned during render like `startIndexRef` above: it describes the rows
-    // this pass produced, and must not lag them by a commit.
+    // Assigned during render so it never lags the rows by a commit.
     floodRunOfRef.current = runOf;
     return out;
   }, [timelineEntries, startIndex, newDividerId, rotationDividerIds, quarantinedIds, pausedIds]);
 
-  /** Refresh the live reading anchor against the DOM currently on screen. */
   const captureReadingAnchor = useCallback(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
@@ -735,14 +542,11 @@ export function MessageTimeline({
       readingAnchorRef.current = null;
       return;
     }
-    // WebKit exposes rubber-band positions outside the real scroll range. Keep
-    // the last valid anchor through that transient instead of recording an
-    // offset measured in the stretched/bounced coordinate system.
+    // Ignore WebKit rubber-band positions outside the real scroll range.
     if (scroller.scrollTop !== clampedScrollTop(scroller)) return;
     readingAnchorRef.current = captureScrollAnchor(scroller, content, readingAnchorRef.current);
   }, []);
 
-  /** Restore the live reading anchor and synchronize all scroll bookkeeping. */
   const restoreReadingAnchor = useCallback(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
@@ -757,7 +561,6 @@ export function MessageTimeline({
     return true;
   }, []);
 
-  /** Jump to the newest message and resume following it. */
   const pinToBottomNow = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -768,12 +571,7 @@ export function MessageTimeline({
     setShowJumpPill(false);
   }, []);
 
-  /**
-   * Hold the reader's distance from the newest message across a content-height
-   * change. At the bottom this pins; a few dozen pixels up it preserves those
-   * pixels instead of snapping — the difference between "the view stays put as
-   * an image loads" and "the view yanks me back down".
-   */
+  /** Hold the reader's distance from the bottom across height changes (pins only at the bottom). */
   const stickToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -783,7 +581,6 @@ export function MessageTimeline({
     readingAnchorRef.current = null;
   }, []);
 
-  /** Center a mounted row and flash a highlight over it. */
   const jumpToRow = useCallback((id: string, focus = false) => {
     const el = scrollRef.current;
     if (!el) return;
@@ -799,25 +596,22 @@ export function MessageTimeline({
       settle();
       return;
     }
-    // Not mounted. If a flood row is folded over it, open that row and jump on
-    // the next frame — a pin or a permalink must not silently do nothing just
-    // because a heuristic tidied its target away.
+    // Folded under a flood row: open it and jump next frame.
     const runKey = floodRunOfRef.current.get(id);
     if (!runKey) return;
     setExpandedFloods((prev) => (prev.has(runKey) ? prev : new Set(prev).add(runKey)));
     requestAnimationFrame(settle);
   }, [captureReadingAnchor]);
 
-  // The one place scroll position is adjusted for a rendered-slice change.
-  // Exactly one of these applies, in priority order.
+  // The one place scroll is adjusted for a rendered-slice change; exactly one
+  // branch applies, in priority order.
   useLayoutEffect(() => {
     extendLockRef.current = false;
     const el = scrollRef.current;
     if (!el || items.length === 0) return;
     if (anchorLost) {
-      // The window's anchor message is gone: different conversation (or the
-      // transport dropped the front of its history). Fall back to the newest
-      // messages, pinned to the bottom. Runs before paint, so no flash.
+      // The anchor message is gone (different conversation): fall back to the
+      // newest, pinned. Before paint, so no flash.
       readingAnchorRef.current = null;
       pinBottomRef.current = true;
       setRampStep(0);
@@ -834,20 +628,13 @@ export function MessageTimeline({
     }
     const backfill = backfillRevealRef.current;
     if (backfill) {
-      // The reveal is armed against the oldest entry on screen, and a page can
-      // land in the very commit that removes it: a disappearing message hitting
-      // its expiry, a delete folding in, a moderation drop. The rows above are
-      // real either way, so a grown entry list falls back to the top of the
-      // rendered slice — dropping the reveal would strand a reader at
-      // scrollTop 0 with no upward gesture left to ask for them, which is the
-      // whole reason this is automatic.
+      // The boundary entry can vanish in the same commit (expiry, delete); fall back
+      // to the slice top rather than stranding a reader at scrollTop 0.
       const found = timelineEntries.findIndex((entry) => entry.id === backfill.boundaryId);
       const boundaryIndex =
         found >= 0 ? found : timelineEntries.length > backfill.count ? startIndexRef.current : -1;
       if (boundaryIndex > 0) {
-        // The prop update may itself have changed the rendered tail (a short
-        // opening window). Restore the old viewport first, then capture it
-        // afresh for the commit that exposes rows from the new page.
+        // Restore the old viewport first, then capture afresh for the exposing commit.
         if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
         captureReadingAnchor();
         const nextIndex = stepBackRows(
@@ -863,8 +650,7 @@ export function MessageTimeline({
           return;
         }
       } else if (!loadingOlderRef.current) {
-        // Empty/duplicate/error page: release the pending reveal. The pulse in
-        // the promise's finally block guarantees this branch gets a render.
+        // Empty/duplicate/error page. The pulse in finally guarantees this render.
         backfillRevealRef.current = null;
       }
     }
@@ -875,13 +661,8 @@ export function MessageTimeline({
       return;
     }
     if (distanceRef.current > AT_BOTTOM_PX && restoreReadingAnchor()) {
-      // The reader is scrolled up and this commit changed the rendered slice
-      // (a reveal step, a landed backfill page, or an unrelated edit). If they
-      // are still near the top, `maybeExtend` has more to do but no upward
-      // gesture is coming to ask for it, so re-check next frame. It is cheaply
-      // guarded — a no-op unless within the trigger band — and self-limiting:
-      // each step restores the viewport further from the top until the band is
-      // cleared, `hasMore` runs out, or the reader reaches the bottom.
+      // Scrolled up near the top with no gesture coming: re-check next frame.
+      // Self-limiting (no-op outside the trigger band).
       if (continueRafRef.current == null) {
         continueRafRef.current = requestAnimationFrame(() => {
           continueRafRef.current = null;
@@ -891,17 +672,10 @@ export function MessageTimeline({
       return;
     }
     stickToBottom();
-    // `listVisible` is a dependency because the scroller is what this effect
-    // moves: every commit before it mounts returns at the `!el` guard above, so
-    // without this the pin would be missed entirely whenever the window is
-    // already full by the time the skeleton clears.
+    // `listVisible`: the scroller this effect moves may only just have mounted.
   }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
 
-  // Content that grows or shrinks without the message list changing (images,
-  // link previews, embeds, reactions) and container reflows (the thread panel
-  // animating its width, the composer swapping for a join prompt) both land
-  // here. Callers used to drive this by polling `maintainBottom` from a rAF
-  // loop for ~260ms; the observer sees every frame of it and nothing else.
+  // Content growth and container reflows (thread panel, composer swap) land here.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
@@ -917,12 +691,8 @@ export function MessageTimeline({
   }, [listVisible, restoreReadingAnchor, stickToBottom]);
 
   /**
-   * Near the top: reveal more already-loaded messages, or — once the window
-   * covers everything loaded — ask the transport for an older page.
-   *
-   * Only while the reader is actually away from the bottom, which is what keeps
-   * a freshly-opened conversation from walking its own history in: pinned at
-   * the bottom there is nothing above to read yet.
+   * Near the top: reveal loaded messages, else request an older page. Only when
+   * away from the bottom, so a fresh conversation doesn't walk its own history.
    */
   const maybeExtend = useCallback(() => {
     const el = scrollRef.current;
@@ -955,8 +725,7 @@ export function MessageTimeline({
       setBackfillPulse((pulse) => pulse + 1);
     });
   }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
-  // The layout effect's frame-later continuation calls through this ref, since
-  // it is declared above `maybeExtend`. Cancel any pending re-check on unmount.
+  // Called via ref from the earlier-declared layout effect. Cancel on unmount.
   maybeExtendRef.current = maybeExtend;
   useEffect(
     () => () => {
@@ -966,30 +735,16 @@ export function MessageTimeline({
   );
 
   /**
-   * Extend while the rendered slice does not even fill the scroller.
-   *
-   * Every other path into {@link maybeExtend} is driven by the reader
-   * scrolling up, which is impossible in a scroller with no overflow — and a
-   * folded flood produces exactly that: a wall of messages renders as a
-   * handful of one-line notices, so a full window of ROWS can be a third of a
-   * viewport of PIXELS with the rest of the conversation still above it and no
-   * gesture available to ask for it. Runs after every commit that changes the
-   * slice, one step at a time, and stops as soon as there is something to
-   * scroll.
+   * Extend while the slice doesn't fill the scroller (e.g. a folded flood), since
+   * there's no scroll gesture to trigger it. One step per commit.
    */
-  //
-  // Measured in the next animation frame rather than in the effect itself. A
-  // passive effect can run before paint with the layout still dirty from the
-  // commit's other effects (the composer sizing itself, rows settling), so
-  // reading `scrollHeight` here forced a layout of its own on every switch and
-  // page; in the frame, it is the layout the frame was going to do anyway.
+  // Measured in the next frame: reading `scrollHeight` in the effect forced an
+  // extra layout.
   useEffect(() => {
     if (!listVisible || paused) return;
     const frame = requestAnimationFrame(() => {
       const el = scrollRef.current;
-      // An unmeasured scroller (zero height: not laid out yet, or a test
-      // environment with no layout at all) is not an underfilled one — reading it
-      // as one would walk the whole history in before the first paint.
+      // Zero height (not laid out, or tests) isn't underfilled.
       if (!el || el.clientHeight === 0) return;
       if (el.scrollHeight > el.clientHeight + AT_BOTTOM_PX) return;
       if (startIndexRef.current > 0) {
@@ -1017,23 +772,13 @@ export function MessageTimeline({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // Only the reader moving up can push us away from the bottom. Every scroll
-    // this component performs itself — the opening pin, stick-to-bottom, an
-    // anchor restore after rows land above — records its own offset, so this
-    // one comparison keeps the timeline from reacting to its own scrolling and
-    // walking a channel's history in the moment it opens.
+    // Only the reader moving up leaves the bottom; our own scrolls record their
+    // offsets, so we don't react to ourselves.
     const top = clampedScrollTop(el);
     const movingUp = top < lastScrollTopRef.current;
     lastScrollTopRef.current = top;
-    // A row that grows *below* the fold — a DM decrypting out of its
-    // placeholder skeleton, an image decoding, a reply context resolving —
-    // raises the distance without touching `scrollTop`. Scroll events are
-    // delivered a frame after the move that caused them, so the pin's own event
-    // routinely arrives with that growth already in `scrollHeight`; banking it
-    // as the reader's distance would latch stick-to-bottom off (it gives up
-    // past AT_BOTTOM_PX) for the rest of the mount and strand a freshly-opened
-    // conversation short of its newest message. Shrinking distance is always
-    // safe to record; growth counts only when the reader is the one moving.
+    // Growth below the fold raises distance without a scroll; scroll events lag a
+    // frame, so only count growth when the reader moved, or stick-to-bottom latches off.
     const distance = distanceFromBottom(el);
     if (movingUp || distance <= distanceRef.current) distanceRef.current = distance;
     setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
@@ -1041,30 +786,24 @@ export function MessageTimeline({
     if (movingUp) maybeExtend();
   }, [captureReadingAnchor, maybeExtend]);
 
-  // Walk the opening ramp, a frame at a time. Rows land above a reader who is
-  // pinned to the bottom, so nothing moves as the window fills out.
+  // Rows land above a bottom-pinned reader, so nothing moves.
   useEffect(() => {
     if (rampStep >= OPENING_RAMP.length - 1 || timelineEntries.length === 0) return;
     const frame = requestAnimationFrame(() => setRampStep((step) => step + 1));
     return () => cancelAnimationFrame(frame);
   }, [rampStep, timelineEntries.length]);
 
-  // Back at the bottom with a long window behind us: drop it back to the newest
-  // messages. The rows removed are far above the viewport, so this is invisible
-  // — and it's the only thing bounding a long session's DOM.
+  // Back at the bottom: trim to the newest (bounds a long session's DOM).
   useEffect(() => {
     if (distanceRef.current > AT_BOTTOM_PX) return;
     if (timelineEntries.length - startIndex <= TRIM_ABOVE) return;
     setWindowStart(null);
   }, [timelineEntries, startIndex, setWindowStart]);
 
-  // Scroll a message into view and briefly highlight it. No-op if it isn't in
-  // the loaded history; if it's older than the rendered window, the window is
-  // extended to cover it first and the jump happens in the same commit.
+  // Extends the window first if the target is older than it.
   const scrollToMessage = useCallback(
     (id: string, focus = false) => {
-      // Indexes and the window anchor are entry-space; the row key stays the
-      // message id, which is what callers jump by.
+      // Entry-space indexes; callers jump by message id.
       const all = entriesRef.current;
       const index = all.findIndex((entry) => entry.type === "chat" && entry.message.id === id);
       if (index === -1) return false;
@@ -1098,16 +837,9 @@ export function MessageTimeline({
         <TimelineSkeleton />
       ) : timelineEntries.length === 0 ? (
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">
-          {/* An empty conversation with a catch-up still running hasn't been
-              judged yet, so it must not read as "no messages" — but it isn't
-              LOADING either (the local read is done and it was empty). Say
-              which of the two it is, rather than holding a skeleton that
-              claims history is about to appear from disk. A catch-up stuck in
-              its retry loop takes precedence over the spinner: the scheduler
-              alternates error/pending on every backoff, and flip-flopping
-              copy would read as progress that isn't happening. An all-empty
-              relay read deliberately follows this path too, so don't diagnose
-              a connection failure here. */}
+          {/* A running catch-up isn't "no messages" yet; persistent failure wins over
+              the spinner (backoff alternates states). Empty relay reads also come here,
+              so don't diagnose a connection failure. */}
           {syncFailed ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-center text-sm text-muted-foreground">
               <MessagesSquare className="size-4 shrink-0" aria-hidden />
@@ -1133,9 +865,7 @@ export function MessageTimeline({
             <div ref={contentRef} className="relative">
               <div className="h-4" aria-hidden />
               {items.map((item) => (
-                // `hover:z-10` lifts the hovered row above its siblings so the
-                // floating action toolbar (which overhangs the row's top edge)
-                // isn't painted under the row above.
+                // `hover:z-10` keeps the overhanging toolbar above the previous row.
                 <div
                   key={item.key}
                   data-scroll-anchor={item.key}
@@ -1173,10 +903,7 @@ export function MessageTimeline({
               <div className="h-4" aria-hidden />
             </div>
           </div>
-          {/* Backfill spinner, floating OVER the top edge rather than occupying
-              space in the scroll content: growing and shrinking the content at
-              the very edge the reader is anchored to jolts the view twice per
-              loaded page. */}
+          {/* Floats over the edge: resizing content at the anchored edge would jolt the view. */}
           {isLoadingOlder && (
             <div className="absolute top-1 inset-x-0 z-10 flex justify-center pointer-events-none">
               <span className="rounded-full bg-background/80 backdrop-blur p-1.5 shadow-sm">
@@ -1184,7 +911,6 @@ export function MessageTimeline({
               </span>
             </div>
           )}
-          {/* Jump-to-present pill, floating over the bottom edge of the list. */}
           {showJumpPill && (
             <div className="absolute bottom-3 inset-x-0 z-10 flex justify-center pointer-events-none">
               <button

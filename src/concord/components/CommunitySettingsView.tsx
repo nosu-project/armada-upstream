@@ -116,16 +116,9 @@ const SETTINGS_TABS: readonly PillTab<SettingsTab>[] = [
 ];
 
 /**
- * The community settings pane — the single "community" surface, rendered as a
- * full page in the main content column (like the audit log), one tab per
- * concern: Overview (identity, owner, disappearing messages), Channels,
- * Integrations (git repositories + Discord bridge), and Network (relay set,
- * voice servers + history export). The same view is shown to everyone; viewers with
- * MANAGE_METADATA can edit the name / description / icon / banner inline
- * (Signal-style — tap to change); viewers with MANAGE_CHANNELS can rename,
- * delete and add channels. Edits publish version-chained editions; every
- * member's fold re-checks the permission (CORD-02/04), so the UI gating is a
- * convenience, not the enforcement point.
+ * Community settings page (Overview, Channels, Integrations, Network), shown
+ * to everyone with inline editing per permission. Every fold re-checks
+ * permissions (CORD-02/04), so UI gating is a convenience, not enforcement.
  */
 export function CommunitySettingsView({
   community,
@@ -150,11 +143,8 @@ export function CommunitySettingsView({
   channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
   /** Convert a public channel to private (CORD-03 §2), naming its access role. */
   onPrivatiseChannel?: (channelIdHex: string, accessRoleName?: string) => Promise<void>;
-  /** Re-key a private channel to exactly its entitled members. */
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
-  /** Mint another Role scoped to a private channel, widening its access list. */
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
-  /** Open the invite-links pane, where public links and listings are managed. */
   onOpenInvites?: () => void;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions(community);
@@ -163,8 +153,7 @@ export function CommunitySettingsView({
   const name = metadata?.name || community.name;
   const description = metadata?.description?.trim();
   const relays = metadata?.relays ?? community.relays;
-  // No `community` fallback: unlike relays, brokers are not bootstrap material,
-  // so the fold is the only place they live (CORD-02 §6).
+  // No `community` fallback: brokers aren't bootstrap material, so they live only in the fold (CORD-02 §6).
   const avBrokers = useMemo(() => communityAvBrokers(metadata), [metadata]);
 
   const bannerUrl = useDecryptedImage(metadata?.banner);
@@ -253,7 +242,6 @@ export function CommunitySettingsView({
 
       {tab === "overview" && (
         <div className="space-y-5">
-          {/* Banner: shown when present, or as an add affordance for editors. */}
           {(bannerUrl || canManageMetadata) && (
             <div className="relative">
               {bannerUrl ? (
@@ -366,7 +354,6 @@ export function CommunitySettingsView({
             {iconUrl && iconZoom && <ImageLightbox src={iconUrl} onClose={() => setIconZoom(false)} />}
             {bannerUrl && bannerZoom && <ImageLightbox src={bannerUrl} onClose={() => setBannerZoom(false)} />}
 
-            {/* Description */}
             {editingField === "description" ? (
               <InlineEdit
                 initial={description ?? ""}
@@ -481,12 +468,7 @@ export function CommunitySettingsView({
   );
 }
 
-/**
- * "Verify & export history": navigates to the full-screen history route
- * (`HistoryAuditView`), which reads the community to its floor and exports a
- * self-contained HTML copy. Available to every member; it reads only what this
- * member can already decrypt.
- */
+/** Opens `HistoryAuditView`; reads only what this member can already decrypt. */
 function HistorySection({ community }: { community: Community }) {
   const navigate = useNavigate();
   return (
@@ -513,8 +495,7 @@ function HistorySection({ community }: { community: Community }) {
   );
 }
 
-/** Active NIP-34 attachments across this community's channels. Historical, detached
- * intervals remain in the control-plane metadata but intentionally aren't listed. */
+/** Active NIP-34 attachments; detached historical intervals aren't listed. */
 export function ConnectedRepositoriesSection({
   community,
   canManage,
@@ -536,13 +517,10 @@ export function ConnectedRepositoriesSection({
       : [];
   });
 
-  // Nothing connected and no right to connect anything: a community that never
-  // touches git shouldn't carry a permanently empty git section.
   if (repositories.length === 0 && !canManage) return null;
 
   const connectedCoordinates = new Set(repositories.map(({ attachment }) => attachment.address.coordinate));
-  // A channel already holding a repository is spoken for: a second one would
-  // blend two projects into one timeline. Shown, but not selectable.
+  // One repository per channel, or two projects blend into one timeline.
   const repositoryByChannel = new Map<string, { owner: string; name: string }>();
   for (const { channel, attachment } of repositories) {
     if (!repositoryByChannel.has(channel.idHex)) {
@@ -551,8 +529,7 @@ export function ConnectedRepositoriesSection({
   }
 
   const connect = async (channelIdHex: string, repository: PickedRepository) => {
-    // The announcement is authoritative for activity relays; any address the
-    // user pasted contributes only additional discovery hints.
+    // The announcement is authoritative for relays; pasted hints only add discovery.
     await attachRepository({ channelIdHex, address: repository.coordinate, relayHints: repository.relayHints });
     toast({ title: "Repository connected", description: repository.displayName });
   };
@@ -606,7 +583,6 @@ export function ConnectedRepositoriesSection({
   );
 }
 
-/** Pick a repository, then the channel it belongs to. Mirrors the create-channel wizard. */
 function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordinates, repositoryByChannel, onConnect }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -616,9 +592,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
   onConnect: (channelIdHex: string, repository: PickedRepository) => Promise<unknown>;
 }) {
   const [picked, setPicked] = useState<PickedRepository | null>(null);
-  // The channel a write is in flight for. The control plane folds our own
-  // attachment before the publish resolves, so this row must keep reading as
-  // pending rather than flipping to "already connected" under the cursor.
+  // The fold absorbs our attachment before the publish resolves; keep the row pending.
   const [pendingChannelId, setPendingChannelId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const connecting = pendingChannelId !== null;
@@ -672,7 +646,6 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
             <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
               {channels.map((channel) => {
                 const pending = pendingChannelId === channel.idHex;
-                // While our own write lands, the row stays "Connecting…".
                 const taken = pending ? undefined : repositoryByChannel.get(channel.idHex);
                 return (
                   <button
@@ -697,8 +670,7 @@ function ConnectRepositoryDialog({ open, onOpenChange, channels, connectedCoordi
                 );
               })}
             </div>
-            {/* Not while connecting: our own in-flight attachment would make
-                every channel look spoken for mid-write. */}
+            {/* Not while connecting: our in-flight attachment would make every channel look taken. */}
             {!connecting && channels.every((channel) => repositoryByChannel.has(channel.idHex)) && (
               <p className="text-xs text-muted-foreground">
                 Every channel already has a repository. Add a channel first, or create a repository channel from the channel list.
@@ -743,7 +715,6 @@ function ConnectedRepositoryRow({ channel, address, owner, relayHints, fallbackN
   </div>;
 }
 
-/** An inline text/textarea editor with save + cancel, used for name & description. */
 function InlineEdit({
   initial,
   saving,
@@ -813,12 +784,7 @@ function InlineEdit({
   );
 }
 
-/**
- * Public or private, and whether it is on Discover — the community's widest
- * doors, stated where its identity is, with a way to the pane that closes
- * them. Public means a live invite link exists (the registry fold); a Discover
- * listing is a public post of one of those links.
- */
+/** Public (a live invite link exists) / private and Discover status, with a link to manage them. */
 function VisibilityRow({ community, onOpenInvites }: { community: Community; onOpenInvites?: () => void }) {
   const { data: folded } = useControlFold(community);
   const isPublic = (folded?.liveInviteLinks.size ?? 0) > 0;
@@ -872,15 +838,10 @@ function OwnerRow({ pubkey }: { pubkey: string }) {
   );
 }
 
-/** The community's channels. Read-only for everyone; rename / delete / add and
- *  drag-to-reorder / categorize for viewers with MANAGE_CHANNELS.
- *
- *  The reorder gesture is the SAME press-and-hold drag the sidebar runs
- *  (`useChannelDrag`): drop a channel between two rows to position it, or onto
- *  a category heading to file it there, and the "New category" zone at the
- *  bottom (present only while dragging) prompts for a name. One optimistic
- *  arrangement overlay, dropped the moment the fold agrees — exactly as
- *  ConcordPage's sidebar does it, so the two surfaces cannot disagree. */
+/**
+ * The community's channels; MANAGE_CHANNELS can edit and drag to reorder or
+ * categorize with the same `useChannelDrag` and optimistic overlay as the sidebar.
+ */
 function ChannelsSection({
   community,
   canManage,
@@ -900,9 +861,7 @@ function ChannelsSection({
   const { renameChannel, isRenaming, setChannelCategory, isFiling, setChannelView, deleteChannel, createChannel, isAddingChannel, arrangeChannels } =
     useCommunityManagement(community);
 
-  // Optimistic arrangement, laid over the fold until the editions land — the
-  // same overlay the sidebar keeps, dropped the moment the fold agrees so a
-  // later change by anyone else is never masked (channelArrangement.ts).
+  // Dropped as soon as the fold agrees, so others' later changes aren't masked (channelArrangement.ts).
   const [pendingArrangement, setPendingArrangement] = useState<PendingArrangement | null>(null);
   const arrangedChannels = useMemo(
     () => applyArrangement(channels, pendingArrangement),
@@ -918,15 +877,13 @@ function ChannelsSection({
     () => groupChannelsByCategory(arrangedChannels, (c) => c.category),
     [arrangedChannels],
   );
-  // Existing category names, in sidebar order, offered when filing a channel
-  // so a moderator picks "Voice" rather than retyping it as "voice".
+  // Offer existing names so "Voice" isn't retyped as "voice".
   const categoryPicklist = useMemo(
     () => categoryNames(arrangedChannels, (c) => c.category),
     [arrangedChannels],
   );
 
-  // The rendered sequence, flattened exactly as drawn — a drop index is an
-  // index into THIS, so the drag reads a position straight off the screen.
+  // Drop indexes refer to THIS flattened order.
   const renderedChannels = useMemo(
     () => [...uncategorizedChannels, ...channelCategories.flatMap((group) => group.channels)],
     [uncategorizedChannels, channelCategories],
@@ -936,7 +893,6 @@ function ChannelsSection({
     [renderedChannels],
   );
 
-  // Ephemeral collapse, local to this organizer (the sidebar persists its own).
   const [collapsedCategories, setCollapsedCategories] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -949,8 +905,6 @@ function ChannelsSection({
     });
   }, []);
 
-  // Naming prompt for a brand-new category (from the drop zone or a heading
-  // rename) — the same dialog the sidebar raises.
   const [categoryPrompt, setCategoryPrompt] = useState<
     { channels: readonly Channel[]; initial: string } | null
   >(null);
@@ -993,12 +947,9 @@ function ChannelsSection({
     }
   };
 
-  // ── Drag to reorder / categorize — same machinery as the sidebar ──────────
   /** The scrolling list the drag pans by hand on touch (rows are touch-none). */
   const channelScrollRef = useRef<HTMLElement | null>(null);
 
-  /** Measure the drop points off the DOM at pickup: each row's top and bottom
-   *  edge, plus the trailing "new category" zone once it has mounted. */
   const measureDropSlots = useCallback((): ChannelDropSlot[] => {
     const root = channelScrollRef.current;
     if (!root) return [];
@@ -1028,7 +979,6 @@ function ChannelsSection({
     (sourceIdHex: string, drop: ChannelDrop) => {
       const source = renderedChannels.find((c) => c.idHex === sourceIdHex);
       if (!source) return;
-      // A brand-new category has no name yet, so the drop becomes the prompt.
       if (drop.newCategory) {
         setCategoryPrompt({ channels: [source], initial: "" });
         return;
@@ -1043,7 +993,7 @@ function ChannelsSection({
       if (changes.length === 0) return;
       setPendingArrangement(pendingFromPlan(plan));
       void arrangeChannels(changes).catch((e: unknown) => {
-        // Nothing published — the optimistic order is a claim that isn't true.
+        // Nothing published; drop the optimistic order.
         setPendingArrangement(null);
         toast({
           title: "Couldn't rearrange the channels",
@@ -1062,7 +1012,6 @@ function ChannelsSection({
     onDrop: commitDrop,
   });
 
-  /** What the floating ghost carries. */
   const draggedChannel = channelDrag.sourceIdHex
     ? (renderedChannels.find((c) => c.idHex === channelDrag.sourceIdHex) ?? null)
     : null;
@@ -1077,14 +1026,10 @@ function ChannelsSection({
         data-ch-index={index}
         data-ch-category={ch.category ?? ""}
         onPointerDown={channelDrag.onPointerDown(ch.idHex)}
-        // Unconditional `touch-none` while a manager can drag, as the sidebar's
-        // rows carry: Chrome's gesture arbitration otherwise claims a touch
-        // drag as a pan and kills it with pointercancel (usePressDrag.ts).
+        // Otherwise Chrome claims a touch drag as a pan and cancels it (usePressDrag.ts).
         className={cn("relative", canManage && "touch-none")}
       >
-        {/* The dragged row stays MOUNTED and merely invisible, with the dashed
-            placeholder over it — unmounting the node the finger is on cancels
-            the touch gesture. */}
+        {/* Dragged row stays MOUNTED (invisible): unmounting it cancels the touch gesture. */}
         <span className={cn("contents", dragged && "invisible")}>
           <ChannelRow
             channel={ch}
@@ -1175,9 +1120,7 @@ function ChannelsSection({
             </div>
           );
         })}
-        {/* The trailing drop zone: dragging here asks for a name and files the
-            channel under it. Only while dragging — a category with no channel
-            in it can't exist to be created. */}
+        {/* Only while dragging: an empty category can't exist. */}
         {canManage && channelDrag.dragging && (
           <div
             data-ch-newzone
@@ -1228,9 +1171,6 @@ function ChannelsSection({
         )}
       </div>
 
-      {/* Drag chrome, in the sidebar's channel shape: the pointer-following
-          ghost, the grabbing-cursor layer and the insertion line. All `fixed`,
-          so they read viewport coordinates and don't care where they mount. */}
       {channelDrag.pointer && draggedChannel && (
         <div
           className="pointer-events-none fixed z-[300] -translate-y-1/2 animate-in zoom-in-75 duration-150"
@@ -1286,30 +1226,24 @@ function ChannelRow({
   channel: Channel;
   canManage: boolean;
   disabled: boolean;
-  /** Category names already in use, offered so near-duplicates aren't retyped. */
   categories: string[];
   onRename: (name: string) => Promise<void>;
   onSetCategory: (name: string | undefined) => Promise<void>;
   /** Flip what the channel opens to — forum feed or chat (CORD-03 §2 `view`). */
   onSetView?: (view: ChannelView) => Promise<void>;
-  /** Raise the shared naming dialog to file this channel under a new category. */
   onNewCategory: () => void;
   onDelete?: () => void;
   /** The Roles scoped to this channel — who may read it (CORD-03/04 §2). */
   accessRoles?: Array<{ id: string; name: string }>;
-  /** Convert a public channel to private (CORD-03 §2), naming its access role. */
   onPrivatise?: (accessRoleName?: string) => Promise<void>;
   /** Re-key to exactly the currently-entitled members (drift/leak repair). */
   onRotateKey?: () => Promise<void>;
-  /** Mint another Role scoped to this channel, widening its access list. */
   onMintAccessRole?: (name: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(channel.name);
   const [accessOpen, setAccessOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Drafts for the access panel: the role a privatise mints (left empty it
-  // matches the channel), and an additional role for an already-private one.
   const [roleDraft, setRoleDraft] = useState("");
   const [addingRole, setAddingRole] = useState(false);
 
@@ -1330,7 +1264,6 @@ function ChannelRow({
     setValue(channel.name);
   }, [channel.name]);
 
-  // A closed access panel drops its drafts, so re-opening starts clean.
   useEffect(() => {
     if (accessOpen) return;
     setRoleDraft("");
@@ -1367,14 +1300,10 @@ function ChannelRow({
   };
 
   const isForum = channel.view === "forum";
-  // Offered on every channel a manager can edit: a private one shows who may
-  // read it, a public one offers the conversion that gives it a key.
   const showAccessButton = canManage && Boolean(onPrivatise || (channel.isPrivate && onRotateKey));
   const row = (
     <div className="px-1">
     <div className="flex items-center gap-2">
-      {/* Drag affordance — the whole row is the press-and-hold target, so this
-          grip only advertises it (press-and-hold to reorder / categorize). */}
       {canManage && !editing && (
         <GripVertical
           aria-hidden
@@ -1436,8 +1365,7 @@ function ChannelRow({
                   Rename
                 </DropdownMenuItem>
                 {onSetView && (
-                  // In place, same channel id: the history stays valid chat
-                  // either way, only the door changes.
+                  // Same channel id: history stays valid either way.
                   <DropdownMenuItem
                     disabled={busy}
                     onSelect={() =>
@@ -1520,10 +1448,7 @@ function ChannelRow({
       <div className="mb-1 ml-5 mt-1 space-y-1.5 rounded-lg bg-secondary/40 p-2.5">
         {channel.isPrivate ? (
           <>
-            {/* CORD-03: a Private Channel is "readable only by granted
-                role-holders", and CORD-04 §2's channel-scoped Role is what
-                names them. Access is edited by granting those Roles, in the
-                member list or the Roles dialog — not here. */}
+            {/* CORD-03/04 §2: access is edited by granting channel-scoped Roles, not here. */}
             <p className="text-xs text-muted-foreground">
               Readable by holders of {accessRoles?.length ? "these roles" : "no role yet"}:
             </p>
@@ -1672,8 +1597,7 @@ function ChannelRow({
   return row;
 }
 
-/** Canonical relay URL: default to wss://, require a websocket scheme, and
- *  drop a bare origin's trailing slash so equality checks are byte-stable. */
+/** Default to wss://, require a websocket scheme, drop a bare origin's trailing slash. */
 function normalizeRelayUrl(input: string): string | null {
   let raw = input.trim();
   if (!raw) return null;
@@ -1689,12 +1613,8 @@ function normalizeRelayUrl(input: string): string | null {
 }
 
 /**
- * Disappearing messages (CORD-08): the community-wide timer, shown to every
- * member and editable under MANAGE_METADATA. Saving publishes a metadata
- * edition (version-chained, like any staff edit) and then posts a kind-1740
- * notice into every channel the actor holds keys for, so the change is a line
- * in chat history. The timer applies at SEND time only — existing messages
- * keep the expiry they were sent under.
+ * Disappearing messages (CORD-08): publishes a metadata edition and a kind-1740
+ * notice into each keyed channel. Applies at SEND time only.
  */
 function DisappearingSection({
   community,
@@ -1718,8 +1638,7 @@ function DisappearingSection({
     setSaving(true);
     try {
       await updateMetadata({ message_expiration: seconds });
-      // The courtesy line in chat history (CORD-08 §4). Best-effort: the
-      // metadata fold is the authority, so a failed notice loses only the line.
+      // Best-effort (CORD-08 §4): the metadata fold is the authority.
       await publishTimerNotices(nostr, community, channels, user.signer, user.pubkey, seconds).catch(
         () => undefined,
       );
@@ -1763,7 +1682,6 @@ function DisappearingSection({
                     {p.label}
                   </SelectItem>
                 ))}
-                {/* A value another client set that isn't a preset here. */}
                 {current > 0 && !COMMUNITY_TIMER_PRESETS.some((p) => p.seconds === current) && (
                   <SelectItem value={String(current)}>{formatCommunityTimer(current)}</SelectItem>
                 )}
@@ -1785,20 +1703,9 @@ function DisappearingSection({
 }
 
 /**
- * The community's own voice servers — the AV brokers of CORD-02 §6, which
- * CORD-07 §5 draws from when a call's room is empty. Read-only for everyone;
- * editable for viewers with MANAGE_METADATA.
- *
- * An empty list is a valid, unremarkable state (and what every community
- * predating the field has): members then fall back to their own Settings →
- * Voice server. A non-empty one is EXCLUSIVE — members use these and nothing
- * else, neither their own server nor a broker another member's presence points
- * at — which is what makes it the community's decision rather than a
- * suggestion, and what makes an all-down list mean no calls, as an all-down
- * relay set means no chat. It buys no trust: a broker holds no community
- * secrets, cannot tell which community a room belongs to, and only ever
- * forwards end-to-end-encrypted media (CORD-07 §2–3), so the choice is whose
- * service sees members' IPs and call timing.
+ * Community voice servers (CORD-02 §6 / CORD-07 §5). Empty: members use their
+ * own. Non-empty is EXCLUSIVE, so all-down means no calls. Brokers hold no
+ * secrets and see only E2EE media; the choice is who sees IPs and call timing.
  */
 function VoiceServersSection({
   community,
@@ -1833,8 +1740,7 @@ function VoiceServersSection({
     setError(null);
     setWarning(null);
     const raw = addValue.trim();
-    // A bare host is the common way to type one; anything not https is refused
-    // outright, since the token grant is a bearer credential (CORD-07 §2).
+    // Non-https refused: the token grant is a bearer credential (CORD-07 §2).
     const origin = canonicalOrigin(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
     if (!origin) {
       setError("Enter an https address, like https://voice.example.com");
@@ -1845,8 +1751,7 @@ function VoiceServersSection({
       return;
     }
     if (draft.length >= MAX_COMMUNITY_AV_BROKERS) return;
-    // Probed, but never gating: a broker that is merely down today is still the
-    // one this community means to use, and the rendezvous already falls through.
+    // Probed but not gating: a broker down today is still the intended one.
     setChecking(true);
     const reachable = await probeAvBroker(origin).catch(() => false);
     setChecking(false);
@@ -2016,13 +1921,8 @@ function VoiceServersSection({
 }
 
 /**
- * The community's relay set. Read-only for everyone; editable for viewers with
- * MANAGE_METADATA. The list lives in the Metadata entity so it can evolve
- * (CORD-02 §6): saving publishes an edition to old ∪ new relays, and adding
- * relays first MIRRORS the community's control/guestbook/rekey history onto
- * them so a fresh joiner reading only the new set folds a complete community.
- * Hard-capped at 5: every member's fold truncates past that (capRelays), so a
- * sixth entry would be silently dropped network-wide.
+ * Community relay set (CORD-02 §6). Saving publishes to old ∪ new and first
+ * MIRRORS history onto added relays. Capped at 5 (capRelays drops extras network-wide).
  */
 function RelaysSection({
   community,
@@ -2104,11 +2004,8 @@ function RelaysSection({
       }
       setBusy({ phase: "edition" });
       await updateMetadata({ relays: draft });
-      // My own live invite links should vend the new set right away; other
-      // creators' links heal via useLinkRefreshWatch when they next fold.
-      // Fan the refreshed bundle out to old ∪ new: existing links' fragment
-      // hints point at the OLD relays, so the stale copy there must be
-      // overwritten too.
+      // Refresh my own links now (others heal via useLinkRefreshWatch), to old ∪ new:
+      // existing links' hints point at the old relays.
       if (user?.signer.nip44) {
         const bundleFanout = [...new Set([...community.relays, ...draft])];
         refreshInviteBundlesFor(nostr, user, { ...community, relays: draft }, metadata, bundleFanout).catch(

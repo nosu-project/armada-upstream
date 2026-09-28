@@ -3,17 +3,9 @@ import { APP_NAME } from "@/lib/platform";
 import type { ReactNode } from "react";
 
 /**
- * The Armada wordmark + terminal tagline, echoing the OG card
- * (`public/og.svg`): a lowercase monospace wordmark in gilt-cream and a cyan
- * `$` prompt leading a magenta tagline, ending in a blinking caret. Flat, no
- * glow.
- *
- * `lines` adds extra muted `$` follow-up lines (short, punchy) below the
- * tagline; the blinking caret moves to the last line.
- *
- * `tagline` swaps the default prompt line for a screen-specific one, keeping
- * the `$`/caret framing. It may be a node: the SyncGate passes its "jacking
- * in" wrapped in a CSS typewriter span, and the caret trails the typed edge.
+ * The Armada wordmark + terminal tagline, echoing `public/og.svg`. `lines` adds
+ * muted `$` follow-ups (the caret moves to the last); `tagline` may be a node
+ * (SyncGate's CSS typewriter).
  */
 export function BrandMark({
   align = "center",

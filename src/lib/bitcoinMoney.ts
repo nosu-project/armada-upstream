@@ -1,13 +1,6 @@
 /**
- * Lightweight Bitcoin money helpers — sats/BTC/USD conversions, display
- * formatting, and BTC price fetching.
- *
- * Deliberately free of `@scure/btc-signer` (and the rest of the heavy
- * signing stack in `@/lib/bitcoin`) so components on the initial-load path
- * (feed cards, zap amounts, notification rows) can format money without
- * pulling ~150 kB of transaction-signing code into the entry bundle.
- * `@/lib/bitcoin` re-exports everything here, so lazy-loaded wallet code
- * can keep importing from one place.
+ * Lightweight sats/BTC/USD helpers, kept free of the ~150 kB signing stack so
+ * initial-load components can format money. Re-exported by `@/lib/bitcoin`.
  */
 import { esploraFetch } from './esplora';
 
@@ -32,21 +25,12 @@ export function formatSats(sats: number): string {
 }
 
 /**
- * Fetch the current BTC price in USD from a mempool.space-compatible API.
- *
- * Note: the `/v1/prices` endpoint is a mempool.space extension to the
- * standard Esplora REST surface. Backends like Blockstream's Esplora do
- * not expose it — those endpoints return `404` and the failover client
- * silently advances to the next URL (without penalising the endpoint).
- *
- * @param baseUrls   Ordered list of Esplora REST roots tried with failover.
- * @param signal     Optional abort signal (e.g. from TanStack Query).
+ * Fetch the BTC/USD price from a mempool.space-compatible API with failover.
+ * `/v1/prices` isn't standard Esplora, so a 404 soft-fails to the next URL.
  */
 export async function fetchBtcPrice(baseUrls: string[], signal?: AbortSignal): Promise<number> {
   const response = await esploraFetch(baseUrls, `/v1/prices`, {
-    // /v1/prices is a mempool.space extension — 404 means "endpoint doesn't
-    // speak this path", not "the endpoint is dead". Soft-failover to the
-    // next URL without putting this one in cool-down.
+    // 404 = path unsupported, not a dead endpoint: skip without cool-down.
     skipStatuses: [404],
     signal,
   });
@@ -64,18 +48,10 @@ export function btcToSats(btc: number): number {
   return Math.round(btc * 100_000_000);
 }
 
-/**
- * USD threshold above which Bitcoin send/zap flows require explicit
- * confirmation (two-tap). Chosen to catch meaningful dollar amounts without
- * nagging on everyday $5–$25 zaps.
- */
+/** USD amount above which send/zap flows require a two-tap confirmation. */
 export const LARGE_AMOUNT_USD_THRESHOLD = 100;
 
-/**
- * Whether a given satoshi amount crosses the "large amount" threshold at the
- * current BTC/USD price. Returns false when `btcPrice` is unavailable, so the
- * UI does not arm confirmation without a known USD value.
- */
+/** Whether `sats` crosses the large-amount threshold; false without a known price. */
 export function isLargeAmount(sats: number, btcPrice: number | undefined): boolean {
   if (!btcPrice || !Number.isFinite(btcPrice) || btcPrice <= 0) return false;
   if (!Number.isFinite(sats) || sats <= 0) return false;
@@ -99,22 +75,12 @@ export function usdToSats(usd: number, btcPrice: number): number {
   return Math.round((usd / btcPrice) * 100_000_000);
 }
 
-/**
- * Format an exact satoshi amount with its unit — `"5,000 sats"`, `"1 sat"`.
- *
- * Unlike `formatSats` in `lib/zaps`, this never abbreviates. Payment surfaces
- * show the precise amount being spent, so `"21k sats"` would be the wrong
- * level of detail on a send button.
- */
+/** Exact satoshi amount with its unit (`"5,000 sats"`); never abbreviated, for payment surfaces. */
 export function formatSatsAmount(sats: number): string {
   return `${formatSats(sats)} ${sats === 1 ? 'sat' : 'sats'}`;
 }
 
-/**
- * Format a satoshi amount in the user's preferred display currency, exactly
- * (no abbreviation). Falls back to sats when USD is preferred but no BTC
- * price is available, so a dead price endpoint never blanks out an amount.
- */
+/** Exact amount in the preferred currency; falls back to sats when no price is known. */
 export function formatMoneyAmount(
   sats: number,
   currency: CurrencyDisplay,
@@ -127,13 +93,8 @@ export function formatMoneyAmount(
 }
 
 /**
- * Convert a raw amount-input value — a string while the user is typing, a
- * number once committed — into satoshis. The value is denominated in the
- * user's display currency, so USD needs a BTC price while sats is the
- * identity (rounded, since fractional sats aren't payable).
- *
- * Returns 0 for blank, negative, non-numeric, and (in USD mode) unpriced
- * input, which every caller already treats as "no amount entered".
+ * Convert an amount-input value (in the display currency) to sats. Returns 0
+ * for blank, invalid, negative, or unpriced USD input.
  */
 export function amountInputToSats(
   value: number | string,
@@ -148,10 +109,8 @@ export function amountInputToSats(
 }
 
 /**
- * Format a raw amount-input value in its own units, without needing a BTC
- * price. Used for the brief window in USD mode where the price hasn't loaded
- * and `amountInputToSats` still returns 0 — the send button can echo what the
- * user typed instead of going blank. Returns `""` for a blank or invalid value.
+ * Format an amount-input value in its own units without a price (for USD mode
+ * before the price loads). `""` for blank/invalid.
  */
 export function formatAmountInput(value: number | string, currency: CurrencyDisplay): string {
   const amount = typeof value === 'string' ? parseFloat(value) : value;
@@ -160,11 +119,7 @@ export function formatAmountInput(value: number | string, currency: CurrencyDisp
   return amount < 1 ? `$${amount.toFixed(2)}` : `$${amount}`;
 }
 
-/**
- * A pair of preset amount chips — one set per display currency. Sats presets
- * are hand-picked round numbers rather than conversions of the USD ones, so
- * sats users get `1,000` instead of `947`.
- */
+/** Preset amount chips per display currency; sats presets are round numbers, not conversions. */
 export interface AmountPresetSet {
   usd: number[];
   sats: number[];

@@ -15,14 +15,12 @@ function isOffline(): boolean {
   return typeof navigator !== "undefined" && navigator.onLine === false;
 }
 
-/** Retries signed events that were queued while offline or during relay errors. */
 export function PublishOutbox() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const flushingRef = useRef(false);
-  // The retry budget must absorb NIP-42 AUTH round-trips through a remote
-  // NIP-46 signer on lossy links (#51). Read via ref so the flush callback
-  // doesn't re-register the window listeners on every login change.
+  // Budget must absorb NIP-42 AUTH via a remote NIP-46 signer on lossy links (#51).
+  // A ref so login changes don't re-register listeners.
   const timeoutRef = useRef(publishTimeoutMs(user?.method));
   timeoutRef.current = publishTimeoutMs(user?.method);
 
@@ -44,10 +42,7 @@ export function PublishOutbox() {
               item.relays,
               timeoutRef.current,
             );
-            // Settle exactly the snapshot attempted above, even on full
-            // success. Another writer may have appended a relay while the
-            // network call was in flight; recordQueuedPublishAttempt preserves
-            // that unattempted target instead of deleting the whole entry.
+            // Settle exactly the attempted snapshot: relays appended mid-flight are preserved.
             await recordQueuedPublishAttempt(item.id, item.relays, result.rejected);
             if (result.rejected.length > 0) {
               throw new Error(

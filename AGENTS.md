@@ -739,6 +739,12 @@ to fail a run:
 
 ## Conventions
 
+- **Comments say why, briefly.** Keep invariants, ordering/race constraints,
+  security rationale, spec references (CORD-xx, NIP-xx) and named platform-bug
+  workarounds, in 1–3 lines. Don't restate the code, and don't narrate bug
+  history, earlier behavior or what a change removed — that belongs in the
+  commit message. Keep a lone comment in an intentionally empty block
+  (`catch { /* ignore */ }`) so `no-empty` stays quiet.
 - **Never publish a user's Nostr lists without an explicit user action.** This
   covers every user-owned replaceable/list event: kind 10050 DM relays, kind
   10009 servers/groups, follow/mute lists, NIP-65, Concord membership lists.

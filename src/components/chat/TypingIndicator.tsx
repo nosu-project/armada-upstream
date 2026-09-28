@@ -7,7 +7,6 @@ import { getAvatarShape } from "@/lib/avatarShape";
 /** Cap the avatar stack so an unbounded typer list doesn't resolve unbounded profiles. */
 const MAX_AVATARS = 3;
 
-/** One typer's avatar, resolved like message authors (scoped name for the tooltip/alt). */
 function TypingAvatar({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -22,16 +21,9 @@ function TypingAvatar({ pubkey }: { pubkey: string }) {
   );
 }
 
-/**
- * Signal-style typing indicator: an overlapping stack of the typers' avatars
- * next to a message-bubble pill containing three sequentially pulsing dots.
- * Beyond MAX_AVATARS typers the stack collapses into a "+N" chip.
- */
+/** Signal-style typing indicator: avatar stack (capped, then "+N") beside pulsing dots. */
 export function TypingIndicator({ pubkeys: allPubkeys }: { pubkeys: string[] }) {
-  // Filtered here rather than in each of the three producers (Concord, DM,
-  // Buzz typing hooks): this is the one component all of them render through,
-  // and a muted person's avatar bouncing at the bottom of the composer is
-  // exactly the presence the mute was meant to remove.
+  // Filtered here, the one component all three typing producers render through.
   const { mutedPubkeys } = useMutedPubkeys();
   const pubkeys = mutedPubkeys.size === 0
     ? allPubkeys

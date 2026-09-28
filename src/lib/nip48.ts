@@ -1,26 +1,22 @@
 /** Parsed NIP-48 `proxy` tag: where a bridged message originally came from. */
 export interface ProxyInfo {
-  /** The protocol marker, verbatim (`web`, `activitypub`, `atproto`, `rss`, …). */
+  /** Protocol marker, verbatim (`web`, `activitypub`, `atproto`, `rss`, …). */
   marker: string;
-  /** Badge label — a service name ("Discord", "ActivityPub") or a hostname. */
+  /** A service name ("Discord", "ActivityPub") or a hostname. */
   label: string;
-  /** The source id, when it's an http(s) URL we can open in a browser. */
+  /** The source id, when it's an http(s) URL. */
   url?: string;
-  /** Lowercased hostname of `url`, for picking brand styling. */
+  /** Lowercased hostname of `url`, for brand styling. */
   host?: string;
 }
 
-/** Display names for the protocol markers NIP-48 defines. */
 const PROTOCOL_LABELS: Record<string, string> = {
   activitypub: 'ActivityPub',
   atproto: 'ATProto',
   rss: 'RSS',
 };
 
-/**
- * Web bridges whose hostname we'd rather show as the service's own name than
- * as a bare domain. Anything unlisted falls back to the hostname.
- */
+/** Web bridges shown by service name instead of hostname. */
 const WEB_SERVICE_NAMES: Record<string, string> = {
   'discord.com': 'Discord',
   'discordapp.com': 'Discord',
@@ -37,12 +33,8 @@ function httpUrl(id: string): URL | null {
 }
 
 /**
- * Read the NIP-48 `proxy` tag off an event's tags: `["proxy", <id>, <marker>]`,
- * marking a message bridged in from another network.
- *
- * Returns the first usable tag, or null when there is none. Tags missing an id
- * or a marker are skipped, as are `web` proxies whose id isn't an http(s) URL —
- * the URL is the only thing naming the service, so there'd be nothing to show.
+ * First usable NIP-48 `["proxy", <id>, <marker>]` tag, or null. `web` proxies
+ * need an http(s) id, since the URL is all that names the service.
  */
 export function parseProxyTag(tags: readonly string[][]): ProxyInfo | null {
   for (const tag of tags) {
@@ -61,8 +53,7 @@ export function parseProxyTag(tags: readonly string[][]): ProxyInfo | null {
 
     return {
       marker,
-      // Unknown markers are shown as-is: better a raw protocol name than
-      // silently dropping the fact that the message was bridged at all.
+      // Unknown markers are shown raw rather than hiding that the message was bridged.
       label: PROTOCOL_LABELS[marker] ?? marker,
       url: url?.href,
       host,

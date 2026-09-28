@@ -2,12 +2,8 @@ import { useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 
 /**
- * Toast description content for the signer nudge toast (see signerWithNudge).
- *
- * On Android, includes an "Approve in signer" link that opens the signer via
- * the `nostrsigner:` URI scheme — Amber registers it, and following the link
- * task-switches without suspending the WebView (so the NIP-46 sockets stay
- * alive). Plus a Skip/Cancel button. On desktop, a Skip button only.
+ * Signer nudge toast body (see signerWithNudge). On Android, an "Approve in
+ * signer" `nostrsigner:` link task-switches without suspending the WebView (NIP-46 sockets survive).
  */
 export function NudgeToastContent({
   description,

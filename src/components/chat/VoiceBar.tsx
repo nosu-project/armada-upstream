@@ -59,8 +59,7 @@ function DeviceSelectGroup({
   label: string;
   icon: React.ReactNode;
 }) {
-  // `requestPermissions` enumerates labelled devices (needs an active mic grant,
-  // which we already have once in a call). Selecting persists the choice.
+  // `requestPermissions` needs an active mic grant, which we have once in a call.
   const { devices, activeDeviceId, setActiveMediaDevice } = useMediaDeviceSelect({
     kind,
     requestPermissions: true,
@@ -94,22 +93,13 @@ function DeviceSelectGroup({
   );
 }
 
-/**
- * The call/audio settings gear: mic/speaker/camera device pickers, audio
- * processing toggles, and per-participant volume controls. Shown on both the
- * desktop (stacked) bar and the compact mobile bar — the single call settings
- * entry point, à la Discord. `className` sizes the trigger to match the bar
- * it's placed in.
- */
+/** Call/audio settings gear: device pickers, audio processing and per-participant volume. */
 function DeviceMenu({ className }: { className?: string }) {
   const { localParticipant } = useLocalParticipant();
   const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
 
-  // Apply a processing change live: persist it, then make it take effect this
-  // call (not just the next one). The browser constraints (noise/echo/gain) only
-  // apply at track creation, so they need an explicit restartTrack to re-acquire
-  // the mic. RNNoise is a track processor, added/removed in place via
-  // syncRnnoise without re-acquiring the device.
+  // Browser constraints (noise/echo/gain) only apply at track creation, so they
+  // need restartTrack; RNNoise is a processor toggled in place via syncRnnoise.
   const update = useCallback(
     (patch: Partial<AudioProcessingPrefs>) => {
       setProcessing((prev) => {
@@ -121,8 +111,7 @@ function DeviceMenu({ className }: { className?: string }) {
           if ("rnnoise" in patch) {
             void syncRnnoise(track, next.rnnoise);
           } else {
-            // restartTrack re-acquires the mic and drops any active processor,
-            // so re-apply RNNoise afterwards if it's enabled.
+            // restartTrack drops any active processor, so re-apply RNNoise.
             void track
               .restartTrack({
                 noiseSuppression: next.noiseSuppression,
@@ -188,7 +177,6 @@ function DeviceMenu({ className }: { className?: string }) {
           <label
             key={key}
             className="flex items-center justify-between gap-3 px-2 py-1.5 touch:py-3 text-sm cursor-pointer"
-            // Keep the menu open while toggling.
             onPointerDown={(e) => e.preventDefault()}
           >
             <span>{label}</span>
@@ -204,13 +192,7 @@ function DeviceMenu({ className }: { className?: string }) {
   );
 }
 
-/**
- * One remote participant's microphone volume and, while present, independent
- * screen-share audio volume inside the Audio settings menu. Both controls use
- * the shared persisted stores and apply immediately through the room playback
- * applier. The local participant is skipped because their media is not played
- * back locally.
- */
+/** Remote participant's mic and screen-share volume. Local participant is skipped (not played back locally). */
 function ParticipantVolumeRow({ participant }: { participant: Participant }) {
   const resolveIdentity = useVoiceIdentity();
   const { pubkey, verified } = resolveIdentity(participant.identity);
@@ -225,7 +207,6 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
   );
 
   return (
-    // Keep the menu open while dragging the slider / toggling mute.
     <div className="px-2 py-1.5" onPointerDown={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-2 mb-1.5">
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
@@ -261,12 +242,7 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
   );
 }
 
-/**
- * The "Participants" section of the Audio settings menu: a per-user volume
- * control for every *remote* participant. Gives mobile (and desktop) a
- * discoverable path to per-participant volume from the one call/audio settings
- * button, à la Discord — no separate participants button needed.
- */
+/** Per-user volume controls for every remote participant. */
 function ParticipantVolumeGroup() {
   const participants = useParticipants();
   const remotes = participants.filter((p) => !p.isLocal && p.identity);
@@ -283,32 +259,17 @@ function ParticipantVolumeGroup() {
 }
 
 interface InCallViewProps {
-  /** Optional label (e.g. the channel name) shown before the participants. */
   label?: React.ReactNode;
-  /** When set, the label becomes a button (e.g. to jump to the channel). */
   onLabelClick?: () => void;
-  /** Stack the label above the controls (for narrow side-panel placement). */
   stacked?: boolean;
-  /**
-   * Compact single-row layout for the fixed mobile bar: header + controls on
-   * one line, no inline participant roster (the full roster/tiles live in the
-   * expandable call stage, toggled from the header). Keeps the bar from
-   * dominating the small screen.
-   */
+  /** Single-row layout for the fixed mobile bar, without inline roster. */
   compact?: boolean;
 }
 
-/**
- * In-call controls + connection/participant summary. Must be rendered inside a
- * LiveKitRoom context (uses room hooks). Intentionally shows NO participant
- * roster: who's in the call already lives in the sidebar's nested voice list
- * (and the expandable call stage, toggled from the header's Show/Hide button) —
- * a roster here would duplicate it right above.
- */
+/** In-call controls + summary. Must be rendered inside a LiveKitRoom context. */
 export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
-  // `stageVisible`, not `stageOpen`: this control follows the user across
-  // routes, and away from the call's channel the stage on screen is the
-  // floating window, which `stageOpen` does not describe.
+  // `stageVisible`, not `stageOpen`: away from the call's channel the visible
+  // stage is the floating window, which `stageOpen` doesn't describe.
   const { stageVisible, toggleStage } = useCall();
   const participants = useParticipants();
   const connectionState = useConnectionState();
@@ -367,18 +328,9 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     </div>
   );
 
-  // A stacked panel (à la Discord): header → control bar. `stacked` only
-  // widens the layout (desktop side-panel); the structure is the same on
-  // mobile so the controls are never crammed onto the activity row.
   if (compact) {
-    // Mobile: a single compact row. The roster/tiles live in the expandable
-    // call stage (toggled from the header's Show/Hide button), so the bar stays small.
-    // The control cluster is a single `shrink-0` group and the header is the
-    // only flexible child, so the header truncates instead of the controls
-    // overflowing — otherwise a long channel label pushes the rightmost
-    // controls (the audio-settings gear, hangup) past the `clip-corner-lg`
-    // clip edge and they vanish (intermittently, depending on label width and
-    // whether screenshare is available). min-w-0 lets the header shrink fully.
+    // Controls are a single `shrink-0` group and the header is the only flexible
+    // child, so a long label truncates instead of pushing controls past the clip edge.
     return (
       <div className="flex items-center gap-1.5 px-2 py-1.5 min-h-12">
         <div className="flex-1 min-w-0">{headerEl}</div>

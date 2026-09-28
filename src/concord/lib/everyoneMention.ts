@@ -5,14 +5,10 @@ import {
 } from "@/concord/lib/roles";
 
 /**
- * Concord reserves MENTION_EVERYONE as an authorization bit but does not
- * define a dedicated Chat Plane tag. Concord clients therefore use the
- * literal token in message content and authorize it against the channel's
- * current role fold.
- *
- * Do not match the middle of a word/email or a longer handle such as
- * `@everyone_else`. The spelling is deliberately lowercase to match the
- * interoperable token emitted by existing clients.
+ * Concord reserves MENTION_EVERYONE as a permission bit but defines no Chat Plane
+ * tag, so clients use the literal lowercase `@everyone` token (interop with
+ * existing clients), authorized against the channel's role fold. Never matches
+ * inside a word/email or a longer handle like `@everyone_else`.
  */
 export const EVERYONE_MENTION_PATTERN = /(^|[^\p{L}\p{N}_@])@everyone(?![\p{L}\p{N}_])/u;
 

@@ -1,30 +1,14 @@
 /**
- * The one place a chat route is spelled.
- *
- * Every chat surface — NIP-29 relay groups (and Buzz, which shares their
- * routes), Concord, DMs — names a location with the same four
- * things: the surface, the room, an optionally open thread, and an optionally
- * focused message. Before this module those paths were ~60 ad-hoc template
- * literals, the community id was recovered from notification paths by
- * `path.split("/")[2]`, and the analytics sanitizer kept a hand-ordered mirror
- * of the router that had to be remembered separately. A builder plus a parser
- * makes all three the same fact.
- *
- * The shapes, and what distinguishes them:
+ * The one place a chat route is spelled (NIP-29/Buzz, Concord, DMs): builder
+ * plus parser, shared with the analytics sanitizer.
  *
  *     /c/<community>/<channel>                    the channel
  *     /c/<community>/<channel>/m/<id>             a message in its timeline
  *     /c/<community>/<channel>/t/<root>           the thread opened at <root>
  *     /c/<community>/<channel>/t/<root>/m/<id>    a reply INSIDE that thread
  *
- * The `m`/`t` markers are what make "in a thread or not" legible rather than
- * positional: a thread root has a timeline identity (`/m/<root>`) and a thread
- * identity (`/t/<root>`), and they are different places to be.
- *
- * A message id is a durable part of the location, not a transient scroll hint
- * — arriving at one and refreshing returns to it. That is also why these ids
- * must never reach analytics raw: see `chatRouteTemplate`, which
- * `sanitizePlausibleUrl` is built on.
+ * Message ids are durable parts of the location and must never reach analytics
+ * raw — see `chatRouteTemplate`.
  */
 
 import { nip19 } from "nostr-tools";
@@ -52,13 +36,8 @@ export const CONCORD2_PANES = [
 export type Concord2Pane = (typeof CONCORD2_PANES)[number];
 
 /**
- * Non-channel panes of a NIP-29 server.
- *
- * These occupy the same path position as a group id. A NIP-29 group id is an
- * arbitrary relay-chosen string, so a group literally named `projects` is
- * unreachable — a pre-existing property of the router (static segments outrank
- * `:groupId`), reproduced here so the parser agrees with what actually renders.
- * Concord ids are hex and cannot collide with a pane word at all.
+ * Non-channel panes of a NIP-29 server, in the group-id position (static
+ * segments outrank `:groupId`, so a group named `projects` is unreachable).
  */
 export const NIP29_PANES = ["projects", "inbox"] as const;
 export type Nip29Pane = (typeof NIP29_PANES)[number];
@@ -86,11 +65,8 @@ export interface Concord2Route {
 export interface DmRoute {
   kind: "dm";
   /**
-   * The CONVERSATION KEY, not necessarily one pubkey — see `dmConvKey`. A 1:1
-   * (and Note to Self) is a bare pubkey, so this is unchanged from when DMs
-   * were only ever pairwise and every existing `/dm/<npub>` link still
-   * resolves; a group is its participants joined by {@link DM_PEER_SEP}.
-   *
+   * The conversation key (see `dmConvKey`): a bare pubkey for 1:1, so old
+   * `/dm/<npub>` links resolve; groups join participants with {@link DM_PEER_SEP}.
    * Absent ⇒ the conversation list.
    */
   peer?: string;
@@ -108,34 +84,10 @@ function isNip29Pane(value: string): value is Nip29Pane {
 }
 
 /**
- * Append the thread/message suffix shared by every room-bearing surface.
- *
- * A message id is only meaningful under a room, so a `messageId` with no room
- * is dropped rather than producing a path that names nothing.
- */
-/**
- * The `/dm/` segment for a conversation key: every participant as an npub.
- *
- * A DM route is spelled ONE way, and this is where that is enforced, because a
- * conversation key is hex and a route is not. Callers hold the key in whichever
- * form their layer speaks — the store and the wire folds carry hex pubkeys, the
- * DM page carries `dmRouteParam`'s npubs — and before this normalization both
- * reached the URL verbatim, so the same conversation had two path spellings
- * that no `===` could reconcile.
- *
- * That is not cosmetic. A route string is used as an IDENTITY in three places:
- * the share stash is keyed by the destination's path (`consumeShareFor`), a
- * Direct Share shortcut is published under one, and the sent-rooms ledger
- * records one per room. Two spellings meant a share picked in the picker
- * (`/dm/<hex>`) was never claimed by the composer that declared itself at
- * `/dm/<npub>`, so the conversation opened with the shared text dropped; and
- * one person accumulated two shortcuts and two ledger rows.
- *
- * Each participant is encoded ON ITS OWN so the separator survives as a
- * literal — it is a legal sub-delim in a path segment, and `/dm/<a>,<b>` reads
- * as what it is instead of `%2C`. A segment that is not a pubkey is passed
- * through URL-escaped and otherwise untouched, so it still round-trips through
- * {@link parseChatRoute} rather than being silently dropped or mangled.
+ * The `/dm/` segment for a conversation key: each participant as an npub,
+ * joined by a literal separator. Enforces ONE spelling, since route strings
+ * are identities (share stash, Direct Share shortcuts, sent-rooms ledger).
+ * Non-pubkey segments are URL-escaped and still round-trip.
  */
 function dmPathSegment(peer: string): string {
   return peer
@@ -179,15 +131,7 @@ export function chatRoute(route: ChatRoute): string {
   }
 }
 
-/**
- * The same location with the thread and message focus stripped — i.e. the room
- * the reader is in, independent of what they were pointed at inside it.
- *
- * Closing a thread, giving up on an unresolvable permalink, and sending a
- * message all navigate here: each means "I am no longer looking at that", and
- * leaving the segment behind would make the URL claim otherwise (and re-snap
- * the reader on the next remount).
- */
+/** The location with thread/message focus stripped (closing a thread, a dead permalink, sending). */
 export function roomRoute(route: ChatRoute): ChatRoute {
   switch (route.kind) {
     case "nip29":
@@ -209,26 +153,14 @@ export function roomPath(route: ChatRoute): string {
   return chatRoute(roomRoute(route));
 }
 
-/**
- * The same location with only the message focus dropped.
- *
- * Giving up on an unresolvable `/m/<id>` should close the permalink, not the
- * thread panel the reader is looking at — so the `/t/<root>` segment stays.
- */
+/** Drop only the message focus; an open `/t/<root>` thread panel stays. */
 export function withoutMessage(route: ChatRoute): ChatRoute {
   if (route.kind === "dm") return { kind: "dm", peer: route.peer };
   const { messageId: _dropped, ...rest } = route;
   return rest;
 }
 
-/**
- * Parse the `/t/<root>` + `/m/<id>` suffix that follows a room segment.
- *
- * Returns `null` for anything that isn't one of the four legal shapes, so an
- * unrecognized path is reported as unparseable rather than silently losing its
- * tail — which for the analytics sanitizer is the difference between a
- * template and a leaked event id.
- */
+/** Parse the `/t/<root>` + `/m/<id>` suffix; `null` for anything else so no id leaks to analytics. */
 function parseFocus(
   rest: readonly string[],
 ): { threadRoot?: string; messageId?: string } | null {
@@ -248,10 +180,7 @@ function parseFocus(
   return null;
 }
 
-/**
- * Parse a chat path back into its parts, or `null` when it names no chat
- * location (a static page, an unknown shape, an unusable relay param).
- */
+/** Parse a chat path, or `null` when it names no chat location. */
 export function parseChatRoute(pathname: string): ChatRoute | null {
   const seg = pathname.split("/").filter(Boolean);
   if (seg.length === 0) return null;
@@ -280,9 +209,7 @@ export function parseChatRoute(pathname: string): ChatRoute | null {
       if (!focus) return null;
       return { kind: "concord", communityId, channelId: room, ...focus };
     }
-    // The pre-rename DM path. Parsed (not just redirected) because a stale
-    // push subscription or a tray notification can still land on it, and the
-    // pageview may fire before AppRouter's redirect replaces it.
+    // Pre-rename DM path: stale push subscriptions and notifications can still land here.
     case "dm":
     case "dms": {
       if (seg.length === 1) return { kind: "dm" };
@@ -292,7 +219,6 @@ export function parseChatRoute(pathname: string): ChatRoute | null {
         .join(DM_PEER_SEP);
       if (seg.length === 2) return { kind: "dm", peer };
       const focus = parseFocus(seg.slice(2));
-      // DMs have no thread panel, so `/t/` there names nothing.
       if (!focus || focus.threadRoot) return null;
       return { kind: "dm", peer, messageId: focus.messageId };
     }
@@ -302,14 +228,8 @@ export function parseChatRoute(pathname: string): ChatRoute | null {
 }
 
 /**
- * The route *template* for a parsed location — identifiers replaced by their
- * param names.
- *
- * This is what analytics reports. It is derived from the same parse the app
- * navigates by, rather than from a hand-ordered list of patterns kept beside
- * it, because the two drifting apart does not break a screen: it silently
- * ships a community id, a DM counterparty's pubkey or an event id to a third
- * party.
+ * Route template for analytics, derived from the same parse the app navigates
+ * by, so drift can't leak ids to a third party.
  */
 export function chatRouteTemplate(route: ChatRoute): string {
   switch (route.kind) {
@@ -340,14 +260,7 @@ function focusTemplate(
   return template;
 }
 
-/**
- * An absolute, shareable URL for a chat location — what "Copy message link"
- * writes to the clipboard.
- *
- * `shareOrigin()` is the public web origin even on native, where the WebView's
- * own origin (`capacitor://localhost`, `https://localhost`) would be useless
- * to whoever receives the link.
- */
+/** Absolute shareable URL; `shareOrigin()` is the public web origin even on native. */
 export function chatUrl(route: ChatRoute): string {
   return `${shareOrigin()}${chatRoute(route)}`;
 }

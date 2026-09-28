@@ -76,26 +76,16 @@ function DmDestination({
 }
 
 /**
- * The share destination picker: where content shared INTO Armada lands when
- * the user didn't already pick a conversation in the OS share sheet.
- *
- * Reached two ways: the Android share target ("Armada" tapped in the share
- * sheet — the payload is staged in the share stash by `shareTarget.ts`), and
- * the Web Share Target API of the installed PWA (payload in `title`/`text`/
- * `url` query params). Either way the user picks a DM or a channel; the
- * payload is routed to it through the share stash, and the ChatComposer
- * mounted there consumes it (text into the draft, files into the attachment
- * pipeline).
- *
- * Destinations are the same transport-agnostic, local-cache-only model the
- * quick switcher uses ({@link buildSwitcherEntries}), plus the user's DM
- * conversations — pinned first, then by recency, mirroring the DM list.
+ * Share destination picker, for Android plain shares (payload staged by
+ * `shareTarget.ts`) and the PWA Web Share Target (`title`/`text`/`url`
+ * params). The pick routes the payload through the share stash to that
+ * conversation's ChatComposer. Destinations use the quick switcher's
+ * local-cache model ({@link buildSwitcherEntries}) plus DMs.
  */
 export function SharePage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  // Set when an in-app forward sent us here (the conversation it came from).
-  // An OS share has no origin to return to, hence the "/" fallback.
+  // Set by an in-app forward (the origin conversation); OS shares fall back to "/".
   const forwardFrom = (useLocation().state as { forwardFrom?: string } | null)?.forwardFrom;
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
@@ -106,13 +96,11 @@ export function SharePage() {
   const { conversations } = useDm17Conversations({ interactive: true });
   const { pinned } = usePinnedDms();
 
-  // The native payload (may land AFTER mount: a share's stream copies resolve
-  // in the background while navigation runs — see shareTarget.ts).
+  // May land after mount: stream copies resolve in the background.
   const [nativeShare, setNativeShare] = useState<SharePayload | null>(pendingSharePreview);
   useEffect(() => onShareStashChanged(() => setNativeShare(pendingSharePreview())), []);
 
-  // Web Share Target params, merged into one text blob, skipping parts already
-  // present in `text` (some apps put the URL in both).
+  // Merge Web Share Target params, skipping parts already in `text` (some apps duplicate the URL).
   const rawText = params.get("text") ?? "";
   const title = params.get("title") ?? "";
   const url = params.get("url") ?? "";
@@ -130,8 +118,7 @@ export function SharePage() {
   );
   const hasContent = payload.text.length > 0 || payload.files.length > 0;
 
-  // Channel destinations: the switcher's rail-ordered snapshot (see
-  // QuickSwitcher for the identical construction).
+  // Same rail-ordered construction as QuickSwitcher.
   const orderedKeys = useMemo(() => {
     const liveKeys = switcherLiveKeys(liveServers, communities);
     const live = new Set(liveKeys);
@@ -157,14 +144,10 @@ export function SharePage() {
     };
   }, [orderedKeys, ctx]);
 
-  // DM destinations: pinned conversations first (each block newest-first),
-  // matching the DM list's own ordering.
+  // Pinned first, each block newest-first (like the DM list).
   const dmPeers = useMemo(() => {
     const pinnedSet = new Set(pinned);
-    // 1:1 conversations only. Every destination below is rendered as a person
-    // (one avatar, one name), so adding groups here needs the composite row the
-    // DM list uses — deliberately left out of this pass rather than shipped as
-    // a group labelled with one member's face.
+    // 1:1 only: rows render as one person; groups would need the DM list's composite row.
     const byRecency = conversations.filter((c) => c.peers.length === 1).map((c) => c.peers[0]);
     const pinnedRanked = byRecency.filter((p) => pinnedSet.has(p));
     for (const p of pinned) if (!pinnedRanked.includes(p)) pinnedRanked.push(p);
@@ -173,7 +156,6 @@ export function SharePage() {
   }, [conversations, pinned]);
 
   const pick = (route: string) => {
-    // Route the payload to the chosen conversation; its composer consumes it.
     if (nativeShare) assignShareRoute(route);
     else stashShare(payload, route);
     navigate(route, { replace: true });
@@ -202,7 +184,6 @@ export function SharePage() {
           </Button>
         </div>
 
-        {/* What's being shared */}
         <div className="bg-chrome clip-corner-lg p-3 space-y-2">
           {payload.text && (
             <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm text-foreground/90 leading-relaxed">
@@ -223,7 +204,6 @@ export function SharePage() {
           )}
         </div>
 
-        {/* Destination picker */}
         <Command className="bg-chrome clip-corner-lg">
           <CommandInput placeholder="Search conversations…" autoFocus />
           <CommandList className="max-h-none">

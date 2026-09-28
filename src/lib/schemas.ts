@@ -5,11 +5,7 @@ import { PAYMENT_METHOD_LIST, type PaymentTargetType } from "@/lib/paymentTarget
 
 import type { RailLayoutNode } from "@/lib/railLayout";
 
-/**
- * Recognized zap payment-method types, derived from the payment-target
- * registry so the config enum never drifts from it. A stored value outside
- * this set falls back to the default (`.catch`).
- */
+/** Zap method types from the payment-target registry; unknown stored values fall back via `.catch`. */
 const PAYMENT_METHOD_TYPES = PAYMENT_METHOD_LIST.map((m) => m.type) as [
   PaymentTargetType,
   ...PaymentTargetType[],
@@ -58,10 +54,7 @@ export const PushPrefsSchema = z.object({
   dmRequests: z.enum(["off", "generic", "full"]),
 });
 
-/**
- * A node in the community rail's structured layout: a bare item (by stable
- * rail key) or a Discord-style folder of items. See lib/railLayout.ts.
- */
+/** A rail layout node: an item or a folder. See lib/railLayout.ts. */
 export const RailLayoutNodeSchema: z.ZodType<RailLayoutNode> = z.union([
   z.object({ type: z.literal("item"), key: z.string() }),
   z.object({
@@ -72,11 +65,7 @@ export const RailLayoutNodeSchema: z.ZodType<RailLayoutNode> = z.union([
   }),
 ]);
 
-/**
- * One entry in the user's quick-reaction frequency table (see
- * hooks/useFrequentReactions). `url` is set only for custom `:shortcode:`
- * emoji.
- */
+/** Quick-reaction frequency entry; `url` only for custom `:shortcode:` emoji. */
 export const FrequentReactionSchema = z.object({
   key: z.string(),
   url: z.string().optional(),
@@ -96,10 +85,7 @@ const SendOnEnterSchema = z.object({
   desktop: z.boolean().optional(),
 });
 
-/**
- * Validates the persisted AppConfig. Used field-by-field in AppProvider so a
- * single corrupt key never wipes the entire config.
- */
+/** Persisted AppConfig, validated field-by-field so one corrupt key never wipes the config. */
 export const AppConfigSchema = z.object({
   theme: z.enum(["light", "dark", "system", "custom"]).catch("dark"),
   customTheme: ThemeConfigSchema.optional().catch(undefined),
@@ -141,7 +127,6 @@ export const AppConfigSchema = z.object({
   discoverCuration: z.string().catch(defaultConfig.discoverCuration),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   mediaProxies: z.array(z.string()).catch(defaultConfig.mediaProxies),
-  // Keyed by device class; each unset means "auto" (see AppConfig.sendOnEnter).
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
@@ -151,95 +136,56 @@ export const AppConfigSchema = z.object({
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
 });
 
-// ─── Encrypted NIP-78 settings documents ─────────────────────────────────
-//
-// One kind-30078 document per domain, NIP-44-encrypted to self. See
-// `lib/settingsDocs.ts` for the catalogue that binds these to their `d` tags,
-// and `docs/settings-documents.md` for the whole design.
-//
-// Every document schema is LOOSE, for two reasons: a key this build doesn't
-// know is preserved on read-modify-write rather than dropped (so a newer
-// Armada on another device doesn't lose its settings every time this one
-// writes), and the split fields left behind in `armada/metadata` by older
-// builds stay readable during the migration window.
+// Encrypted NIP-78 settings documents: one kind-30078 per domain, NIP-44 to self
+// (see `lib/settingsDocs.ts`, `docs/settings-documents.md`). All schemas are
+// LOOSE so unknown keys from newer builds survive read-modify-write.
 
 /** Per-conversation notification level (all/mentions/nothing) — see AppConfig. */
 const NotifLevelsSchema = z.record(z.string(), z.enum(["all", "mentions", "nothing"]));
 /** Per-conversation last-read timestamps (unix seconds), keyed by conversation id. */
 const ReadStateMapSchema = z.record(z.string(), z.number());
 
-/**
- * `${APP_ID}/metadata` — the user's bounded preferences. Everything here is a
- * scalar or a short, human-sized list, written when the user changes a
- * setting. Anything that grows with use lives in its own document below.
- */
+/** `${APP_ID}/metadata`: bounded preferences. Anything that grows lives in its own document. */
 export const MetadataDocSchema = z.looseObject({
   theme: z.enum(["light", "dark", "system", "custom"]).optional(),
   customTheme: ThemeConfigSchema.optional(),
-  /** General-purpose app relays. */
   appRelays: z.array(z.string()).optional(),
-  /** Write-only relays: general pool publishes go here too, reads never do. */
+  /** Write-only relays for general pool publishes. */
   broadcastRelays: z.array(z.string()).optional(),
   /** Default home relays for newly created Concord communities. */
   communityRelays: z.array(z.string()).optional(),
-  /** Portable Concord/DM voice host preference. */
   preferredVoiceServer: z.string().optional(),
-  /** Whether the app relays are used in the general pool (foot-gun when off). */
+  /** Whether app relays are in the general pool (foot-gun when off). */
   useAppRelays: z.boolean().optional(),
-  /** Whether the user's own NIP-65 relays are folded into the general pool. */
   useUserRelays: z.boolean().optional(),
-  /** Whether DMs use the app's default DM relays. */
   useAppDmRelays: z.boolean().optional(),
   /** Complete app-provided DM relay set; replaces the build defaults. */
   appDmRelays: z.array(z.string()).optional(),
-  /** Whether DMs also use the user's own relays. */
   useOwnDmRelays: z.boolean().optional(),
-  /** Whether app default Blossom servers are used alongside the user's. */
   useAppBlossomServers: z.boolean().optional(),
   /** Complete app-provided Blossom server set; replaces the build defaults. */
   appBlossomServers: z.array(z.string()).optional(),
-  /** Whether typing indicators are sent and shown in DMs (see AppConfig). */
   dmTypingIndicators: z.boolean().optional(),
-  /** Whether direct messages are turned off entirely (see AppConfig). */
   dmsDisabled: z.boolean().optional(),
-  /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
   showDmRequests: z.boolean().optional(),
-  /** Whether the rail shows the automatic recent-unread DM strip (see AppConfig). */
   showRecentRailDms: z.boolean().optional(),
-  /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
   discoverAllContent: z.boolean().optional(),
-  /** Discover's curation source override; empty = build default (see AppConfig). */
   discoverCuration: z.string().optional(),
-  /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
   stripTrackingParams: z.boolean().optional(),
-  /** Media proxy templates; empty = off (see AppConfig.mediaProxies). */
+  /** Media proxy templates; empty = off. */
   mediaProxies: z.array(z.string()).optional(),
-  /** Enter-sends preference, keyed by device class (see AppConfig.sendOnEnter). */
   sendOnEnter: SendOnEnterSchema.optional(),
-  /** Unit money amounts are shown and entered in. */
   currencyDisplay: z.enum(["usd", "sats"]).optional(),
-  /** Default zap payment method. */
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).optional(),
-  /** Whether zap/wallet UI is shown at all. */
   zapsEnabled: z.boolean().optional(),
-  /** Whether Account Standing has been opened, retiring its nag (see AppConfig). */
   accountStandingSeen: z.boolean().optional(),
 
-  // ── Read-only legacy ──────────────────────────────────────────────────
-  //
-  // NOTE: `addedRelays` is gone. The NIP-29 server set is read from the kind
-  // 10009 list only. The schema is loose, so an `addedRelays` key left in an
-  // older device's blob passes through untouched and is simply ignored. Same
-  // for `themes` (a per-mode override of the builtin light/dark palettes that
-  // this client only ever read, never wrote) and `lastChannelByServer` (which
-  // stopped syncing when it turned out two open clients yank each other's
-  // channel selection around).
+  // Read-only legacy: `addedRelays`, `themes` and `lastChannelByServer` may remain
+  // in older blobs; the loose schema passes them through and they're ignored.
 
   /**
-   * Local mirrors of lists whose canonical home is a standard event — kinds
-   * 10007, 10050, 10002 and 10063 respectively. Pre-migration clients stored
-   * them ONLY here, so they are read exactly once, by `useInitialSync`, to
-   * rescue a user whose canonical event doesn't exist yet. Never written.
+   * Local mirrors of kinds 10007, 10050, 10002, 10063, written only by
+   * pre-migration clients; read once by `useInitialSync` as a rescue. Never written.
    */
   searchRelays: z.array(z.string()).optional(),
   dmRelays: z.array(z.string()).optional(),
@@ -247,12 +193,9 @@ export const MetadataDocSchema = z.looseObject({
   blossomServerMetadata: BlossomServerMetadataSchema.optional(),
 
   /**
-   * The fields that moved out into their own documents. A build predating the
-   * split wrote them here, so they are still READ — see `resolveLegacy` in
-   * `lib/settingsDocs.ts`, which prefers whichever of the two documents is
-   * newer. This build strips them on every metadata write, which is what makes
-   * that timestamp comparison mean anything: their presence proves an older
-   * build wrote this document.
+   * Fields moved to their own documents, still READ from older builds (see
+   * `resolveLegacy` in `lib/settingsDocs.ts`). Stripped on every write, so their
+   * presence proves an older build wrote this.
    */
   railOrder: z.array(z.string()).optional(),
   railLayout: z.array(RailLayoutNodeSchema).optional(),
@@ -267,51 +210,31 @@ export const MetadataDocSchema = z.looseObject({
   frequentReactions: z.array(FrequentReactionSchema).optional(),
   readState: ReadStateMapSchema.optional(),
 
-  /**
-   * ms timestamp of the last write. Nothing here reads it; it is emitted on
-   * THIS document only, because older Armada builds on the user's other
-   * devices order versions by it rather than by `created_at`. The split
-   * documents postdate those builds and carry no such field.
-   */
+  /** ms timestamp of the last write, emitted only here: older builds order versions by it, not `created_at`. */
   lastSync: z.number().optional(),
 });
 
 /**
- * `${APP_ID}/rail` — the community rail's arrangement. Grows with every
- * community joined and is rewritten by every drag, which is most of why the
- * split exists.
- *
- * `railLayout` is the whole document: the flat `railOrder` it superseded is
- * `flattenLayout(railLayout)` and nothing more, so it is read (from the legacy
- * metadata document) only to seed a layout that doesn't exist yet.
+ * `${APP_ID}/rail`: the rail arrangement. The superseded flat `railOrder` is
+ * read from legacy metadata only to seed a missing layout.
  */
 export const RailDocSchema = z.looseObject({
   railLayout: z.array(RailLayoutNodeSchema).optional(),
 });
 
 /**
- * `${APP_ID}/read-state` — per-conversation last-read timestamps, keyed by a
- * stable conversation id (e.g. `${relayUrl}::${groupId}` for channels,
- * `dm:${pubkey}` for direct messages). Drives unread/mention badges across
- * devices.
- *
- * The largest document by far and the only genuinely unbounded one: an entry
- * per channel, DM, thread and mention scope the user has ever opened, with no
- * pruning (dropping an entry reads back as `0`, i.e. the conversation returns
- * as entirely unread — worse than the growth). Merged per key, max wins.
+ * `${APP_ID}/read-state`: last-read timestamps by conversation id (e.g.
+ * `${relayUrl}::${groupId}`, `dm:${pubkey}`). Unbounded but never pruned (a
+ * dropped entry reads as all-unread). Merged per key, max wins.
  */
 export const ReadStateDocSchema = z.looseObject({
   readState: ReadStateMapSchema.optional(),
 });
 
 /**
- * `${APP_ID}/notifications` — per-conversation notification levels, one entry
- * per conversation the user has tuned.
- *
- * `mutedCommunities`/`mutedChannels` are the legacy boolean mutes, still
- * written in lockstep with `notifLevels` for older clients and for the relay
- * push gateway's `muted_groups` (see `useNotifLevels`). Replaced wholesale,
- * not merged: clearing a level has to propagate.
+ * `${APP_ID}/notifications`: per-conversation levels. Legacy `mutedCommunities`/
+ * `mutedChannels` are written in lockstep for older clients and the push
+ * gateway. Replaced wholesale so clearing propagates.
  */
 export const NotificationsDocSchema = z.looseObject({
   notifLevels: NotifLevelsSchema.optional(),
@@ -321,16 +244,10 @@ export const NotificationsDocSchema = z.looseObject({
 });
 
 /**
- * `${APP_ID}/dms` — per-peer direct-message state, keyed by peer pubkey.
- *
- * The document is one last-writer-wins blob, but its additive maps
- * (`closedDms`, `pinnedDms`, `acceptedDms`, `startedDms`) are UNIONED into
- * local state on apply rather than replaced — see `mergeDmMaps` in
- * `syncedConfig.ts`. Without that, a device editing any field here republishes
- * a stale whole map and wipes a hide/pin another device just made. The
- * trade-off is that a removal (reopen, unpin) is best-effort across devices;
- * `dmProtocol` alone is a mutable setting with no additive state and stays
- * wholesale.
+ * `${APP_ID}/dms`: per-peer DM state. Additive maps (`closedDms`, `pinnedDms`,
+ * `acceptedDms`, `startedDms`) are UNIONED on apply (`mergeDmMaps` in
+ * `syncedConfig.ts`) so a stale device can't wipe another's edits; removals are
+ * best-effort. `dmProtocol` is wholesale.
  */
 export const DmsDocSchema = z.looseObject({
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).optional(),
@@ -340,13 +257,7 @@ export const DmsDocSchema = z.looseObject({
   startedDms: z.array(z.string()).optional(),
 });
 
-/**
- * `${APP_ID}/reactions` — the quick-reaction frequency table. Capped at 32
- * entries, so bounded, but rewritten on every reaction the user taps; merged
- * per key on the way in (highest count / most recent use wins) rather than
- * replaced, so two devices reacting independently don't reset each other's
- * counts.
- */
+/** `${APP_ID}/reactions`: quick-reaction frequencies (≤32), merged per key so devices don't reset each other. */
 export const ReactionsDocSchema = z.looseObject({
   frequentReactions: z.array(FrequentReactionSchema).optional(),
 });

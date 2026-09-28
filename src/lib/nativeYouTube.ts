@@ -16,15 +16,9 @@ const ArmadaYouTube = registerPlugin<ArmadaYouTubePlugin>("ArmadaYouTube");
 const MAX_YOUTUBE_START_SECONDS = 2_147_483_647;
 
 /**
- * Whether this binary can present YouTube without error 153.
- *
- * This is intentionally iOS-specific. Its main WebView uses the fixed
- * `capacitor://localhost` origin, whose nested iframe cannot supply YouTube's
- * required HTTP Referer. Android's `https://localhost` WebView instead sends
- * a normal HTTPS Referer under the shared iframe policy; supported GMS
- * WebViews additionally supply an attested app identity through WebView Media
- * Integrity. Web and desktop each use their own request path and must retain
- * their real origin.
+ * Whether this binary can present YouTube without error 153. iOS only: its
+ * `capacitor://localhost` origin can't supply the Referer YouTube requires;
+ * Android, web and desktop send a real one.
  */
 export function hasNativeYouTubePlayer(): boolean {
   return Capacitor.getPlatform() === "ios" && Capacitor.isPluginAvailable("ArmadaYouTube");
@@ -36,11 +30,8 @@ export function needsNativeYouTubePlayer(): boolean {
 }
 
 /**
- * Last-resort path for an older iOS binary that predates the native player.
- *
- * Keep this synchronous when called from a click so WebKit retains the user's
- * activation. Capacitor hands the new browsing context to the system browser;
- * ordinary web/desktop call sites never reach this fallback.
+ * Fallback for older iOS binaries without the native player. Keep synchronous
+ * from a click so WebKit retains user activation.
  */
 export function openYouTubeWatchPage(videoId: string): boolean {
   return openYouTubeTargetPage({ videoId });
@@ -66,12 +57,7 @@ export function openYouTubeTargetPage(target: NativeYouTubeTarget): boolean {
   return true;
 }
 
-/**
- * Present one video in iOS's native-owned WKWebView.
- *
- * Returns false instead of throwing when the bridge is unavailable (including
- * an older app binary) so the caller can offer its ordinary external link.
- */
+/** Present one video natively; false (not throw) when the bridge is unavailable. */
 export async function openNativeYouTubeVideo(videoId: string): Promise<boolean> {
   return openNativeYouTube({ videoId });
 }

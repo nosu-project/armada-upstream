@@ -1,8 +1,4 @@
-/**
- * Per-account Esplora API endpoint config — local only, never synced (matches
- * the wallet-secrets pattern in {@link walletStorage}). A user's preferred
- * Bitcoin blockchain explorers are a device-level concern, not a synced pref.
- */
+/** Per-account Esplora endpoint config — device-local, never synced (like wallet secrets). */
 import { DEFAULT_ESPLORA_APIS } from "@/lib/esplora";
 
 const esploraKey = (pubkey: string) => `armada:esplora-apis:${pubkey}`;

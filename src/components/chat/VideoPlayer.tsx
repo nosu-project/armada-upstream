@@ -27,44 +27,32 @@ import type { MutableRefObject, Ref } from "react";
 
 interface VideoPlayerProps {
   src: string;
-  /** Poster image URL (from the imeta `thumb`/`image` field). */
+  /** From the imeta `thumb`/`image` field. */
   poster?: string;
   /** Sender-declared alternative sources (imeta `fallback`), same key and nonce. */
   fallbacks?: string[];
-  /** Pixel dimensions from the imeta `dim` field, e.g. "1280x720". */
+  /** imeta `dim`, e.g. "1280x720". */
   dim?: string;
-  /** Blurhash placeholder shown while an encrypted blob downloads/decrypts. */
   blurhash?: string;
-  /** MIME type of the video (used as the decrypted Blob's type). */
+  /** Used as the decrypted Blob's type. */
   mime?: string;
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
-  /** Video title shown in OS media controls. */
   title?: string;
-  /** Artist / author name shown in OS media controls. */
   artist?: string;
-  /** When true, the video auto-plays muted without requiring a click. */
   autoPlay?: boolean;
-  /**
-   * Present as a GIF: autoplay, muted, no controls, transparent chrome.
-   * Set for Tenor/Giphy-style `.mp4` renditions that are really animated GIFs.
-   */
+  /** Tenor/Giphy-style `.mp4` that is really a GIF: autoplay, muted, chromeless. */
   gif?: boolean;
-  /**
-   * Hide the in-player Download/Share (⋯) menu. Set when a host already offers
-   * those actions in its own chrome (the lightbox top bar) so they don't double.
-   */
+  /** Hide the ⋯ Download/Share menu when the host offers its own (lightbox). */
   hideActionsMenu?: boolean;
-  /** Handle on the underlying element, for callers that pause it themselves. */
   videoRef?: Ref<HTMLVideoElement>;
-  /** Covered until clicked (imeta `content-warning`). */
+  /** imeta `content-warning`. */
   spoiler?: boolean;
-  /** The sender's description (imeta `alt`). */
+  /** imeta `alt`. */
   alt?: string;
   className?: string;
 }
 
-/** Parses an imeta `dim` string like "1280x720" into `{ width, height }`. */
 function parseDim(dim: string | undefined): { width: number; height: number } | undefined {
   if (!dim) return undefined;
   const match = dim.match(/^(\d+)x(\d+)$/);
@@ -84,29 +72,16 @@ function fullscreenElement(): Element | null {
   return document.fullscreenElement ?? (document as WebkitDocument).webkitFullscreenElement ?? null;
 }
 
-/**
- * Whether the bare `<video>` is what's fullscreen — the UA's native controls,
- * not ours, are then on screen, and a tap on one of them reaches the page as a
- * click on the element.
- */
+/** The bare `<video>` is fullscreen (native controls; their taps arrive as element clicks). */
 function videoIsNativeFullscreen(video: HTMLVideoElement): boolean {
   return fullscreenElement() === video || !!(video as WebkitVideo).webkitDisplayingFullscreen;
 }
 
 /**
- * Inline chat video player — custom chrome ported from Ditto.
- *
- * A single real `<video>` sits under a stack of overlays: a blurhash / poster
- * placeholder (rendered as a plain `<img>` so it never triggers the WebView's
- * gray native placeholder — the element itself carries a transparent
- * {@link BLANK_POSTER}), a big centered play button before first play, and a
- * bottom control bar (play/pause, mute + reveal-on-hover volume, scrubber,
- * time, fullscreen) plus a device-agnostic Download/Share (⋯) menu.
- *
- * Encrypted (Concord/Vector) attachments are AES-GCM ciphertext on Blossom, so
- * the src is fetched + decrypted to an object URL — and the same object URL is
- * what the Download/Share menu hands to the OS, so a link to ciphertext (which
- * the recipient couldn't read) is never shared.
+ * Inline video with custom chrome ported from Ditto. Placeholders are plain
+ * `<img>`s (the element carries a transparent {@link BLANK_POSTER}) so the
+ * WebView never paints its gray placeholder. Encrypted media is decrypted to an
+ * object URL, which is also what Download/Share hands the OS (never ciphertext).
  */
 export function VideoPlayer({
   src,
@@ -132,8 +107,7 @@ export function VideoPlayer({
   const progressRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Merge our own ref with any forwarded one (the lightbox pauses the element
-  // itself when its slot stops being current).
+  // The lightbox pauses the element itself via a forwarded ref.
   const setVideoRef = useCallback(
     (node: HTMLVideoElement | null) => {
       videoRef.current = node;
@@ -147,10 +121,7 @@ export function VideoPlayer({
   const ready = resolved.status === "ready";
   const mediaSrc = ready ? resolved.src : "";
 
-  // An encrypted poster is ciphertext on Blossom, decrypted with the same key
-  // and nonce as its video (only the key/nonce carry over, not the `ox`). The
-  // poster is sender-named too, so it goes under the same media policy as the
-  // video — proxied where the video is.
+  // Encrypted posters share the video's key/nonce (not `ox`); same media policy.
   const posterEncryption = useMemo(() => companionEncryption(encryption), [encryption]);
   const posterRoute = useRoutedCandidates(poster || undefined);
   const posterCandidate = posterRoute.sources[0];
@@ -161,10 +132,8 @@ export function VideoPlayer({
   });
   const posterSrc = posterCandidate && resolvedPoster.status === "ready" ? resolvedPoster.src : undefined;
 
-  // No supplied poster → generate one from the first frame (mainly for Android
-  // WebView, which won't paint one on its own). Pointless before the source
-  // resolves, and skipped entirely in GIF mode. Cached under the pre-resolution
-  // `src`, since `mediaSrc` is a per-decrypt object URL for encrypted media.
+  // No poster: generate one from the first frame (Android WebView paints none).
+  // Cached under the pre-resolution `src` (object URLs are per-decrypt).
   const generatedPoster = useVideoThumbnail({
     src: gif ? "" : mediaSrc,
     identity: src,
@@ -175,13 +144,9 @@ export function VideoPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [hasStarted, setHasStarted] = useState(false);
-  // True once the video element has decoded its first frame.
   const [videoReady, setVideoReady] = useState(false);
-  // True once the poster <img> overlay has actually finished loading.
   const [posterLoaded, setPosterLoaded] = useState(false);
-  // Aspect ratio discovered at runtime when there's no `dim` tag — from the
-  // thumbnail's natural size, or the video's own metadata. Until something real
-  // is known we default to 16:9 so the player never renders as a square.
+  // Without `dim`: from the thumbnail or video metadata; 16:9 until known.
   const [discoveredAspect, setDiscoveredAspect] = useState<string | undefined>(undefined);
 
   const dimensions = parseDim(dim);
@@ -194,11 +159,8 @@ export function VideoPlayer({
   const { showControls, revealControls, scheduleHide, isMuted, volume, toggleMute, handleVolumeChange } =
     usePlayerControls({ mediaRef: videoRef, containerRef, isPlaying });
 
-  // Whether the player's container is the fullscreen element, for the
-  // Expand/Exit button and the fullscreen layout. Only this player's own
-  // button puts its container there, so the document listeners are attached
-  // from that press until it leaves fullscreen again — a timeline of videos
-  // otherwise holds two per mounted player, all woken by every toggle.
+  // Document listeners attach only from this player's own button press until it
+  // exits, rather than two per mounted player.
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [watchingFullscreen, setWatchingFullscreen] = useState(false);
   useEffect(() => {
@@ -216,12 +178,8 @@ export function VideoPlayer({
     };
   }, [watchingFullscreen]);
 
-  // Long-press (touch) / right-click (desktop) menu, mirroring how message
-  // images offer Save / Share. The ambient menu is null outside a chat message
-  // row — the lightbox clears it explicitly, since context crosses its portal
-  // and it carries its own top-bar actions — and there this wiring is inert
-  // and the native menu is left alone. It is inert in fullscreen too: the
-  // message's action sheet would open behind the fullscreen layer.
+  // Mirrors message-image Save/Share. Inert outside a message row (the lightbox
+  // clears it) and in fullscreen (the sheet would open behind it).
   const chatMenu = useChatImageMenu();
   const mediaActions = useMemo<MessageActionItem[]>(() => {
     if (gif || !mediaSrc) return [];
@@ -246,9 +204,7 @@ export function VideoPlayer({
       : undefined,
   );
 
-  // Desktop right-click: stage the video's actions and let the event bubble to
-  // the message row's context menu, which shows them above the message's. On
-  // touch our long-press sheet is the menu, so suppress the platform callout.
+  // Desktop: stage actions and bubble to the row's context menu. Touch: suppress the callout.
   const handleContextMenu = (e: React.MouseEvent) => {
     // A spoiler's cover is the only way to the video; no Save/Share around it.
     if (spoilerCover) return;
@@ -258,8 +214,6 @@ export function VideoPlayer({
     else if (chatMenu) chatMenu.stage(mediaActions);
   };
 
-  // Muted autoplay when requested. Uses `loadeddata` to ensure the element is
-  // ready before calling play().
   const autoplayAttempted = useRef(false);
   useEffect(() => {
     if (gif || !autoPlay || !mediaSrc) return;
@@ -318,13 +272,11 @@ export function VideoPlayer({
     };
   }, [gif, hasStarted, title, artist, posterSrc, generatedPoster]);
 
-  // Keep OS playback state in sync.
   useEffect(() => {
     if (gif || !("mediaSession" in navigator) || !hasStarted) return;
     navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
   }, [gif, isPlaying, hasStarted]);
 
-  // Keep OS position/scrubber in sync.
   useEffect(() => {
     if (gif || !("mediaSession" in navigator) || !hasStarted || duration <= 0) return;
     try {
@@ -346,11 +298,8 @@ export function VideoPlayer({
     else video.pause();
   };
 
-  // Fullscreen the whole player, not the bare <video>: the control bar is a
-  // sibling of the element, so fullscreening the element alone leaves our
-  // chrome behind and hands the screen to the UA's native controls, whose taps
-  // then also reach handleVideoClick. Where only a video can go fullscreen
-  // (iPhone Safari), its native player is the fallback.
+  // Fullscreen the whole player so our chrome comes along; iPhone Safari (video-only)
+  // falls back to the native player.
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation();
     const container = containerRef.current as WebkitElement | null;
@@ -364,7 +313,6 @@ export function VideoPlayer({
       return;
     }
     const nativeFallback = () => {
-      // The bare <video> is the native player's, never our container.
       setWatchingFullscreen(false);
       if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen();
       else void (video?.requestFullscreen?.() as Promise<void> | undefined)?.catch(() => {});
@@ -390,13 +338,11 @@ export function VideoPlayer({
   };
 
   const handleVideoClick = (e: React.MouseEvent) => {
-    // A long-press that just opened the action sheet swallows the click that
-    // follows the finger's release, so it doesn't also toggle playback.
+    // Swallow the click ending a long-press so it doesn't toggle playback.
     longPress.onClick(e);
     if (e.defaultPrevented) return;
     e.stopPropagation();
-    // The UA's native fullscreen controls act on the element themselves; a
-    // tap on one arrives here too, and toggling again would undo it.
+    // Native fullscreen controls act on the element themselves; don't double-toggle.
     if (videoRef.current && videoIsNativeFullscreen(videoRef.current)) return;
     if (!hasStarted) {
       videoRef.current?.play();
@@ -406,7 +352,6 @@ export function VideoPlayer({
     revealControls();
   };
 
-  // ── GIF mode: chromeless, autoplaying, looping — no custom controls. ──
   if (gif) {
     return (
       <div
@@ -454,8 +399,6 @@ export function VideoPlayer({
       className={cn(
         "relative my-1.5 rounded-xl overflow-hidden max-w-md border border-border bg-black group",
         className,
-        // Fullscreen fills the screen whatever the caller's sizing said; the
-        // video is contained in it below, letterboxed on black.
         isFullscreen && "m-0 w-full h-full max-w-none max-h-none rounded-none border-0 bg-black",
       )}
       style={isFullscreen ? undefined : { aspectRatio }}
@@ -472,30 +415,22 @@ export function VideoPlayer({
     >
       {spoilerCover}
 
-      {/* Blurhash placeholder — until a thumbnail or playback frame appears. */}
       {isValidBlurhash(blurhash) && !hasStarted && !(generatedPoster && posterLoaded) && (
         <BlurhashCanvas hash={blurhash} className="absolute inset-0 w-full h-full" />
       )}
 
       <video
         ref={setVideoRef}
-        // An empty string would resolve against the document URL and make the
-        // element try to load the page itself.
+        // An empty string would make the element load the page URL itself.
         src={mediaSrc || undefined}
         aria-label={spoilerCover ? undefined : alt}
-        // A transparent poster keeps the WebView from painting its own gray
-        // placeholder behind our overlays.
+        // Keeps the WebView from painting its own gray placeholder.
         poster={BLANK_POSTER}
         className={cn(
           "absolute inset-0 w-full h-full cursor-pointer",
-          // Fullscreen (the player's, or the element's own where only a video
-          // can go fullscreen) fills the screen, so object-cover would crop
-          // it — contain it and reset the layout constraints.
           isFullscreen ? "object-contain" : "object-cover",
           "fullscreen:object-contain fullscreen:static fullscreen:max-h-none fullscreen:h-full fullscreen:w-full",
-          // The element shows a transparent poster until playback, so keep it
-          // hidden while the thumbnail <img> covers it. Reveal on playback, or —
-          // with no thumbnail — as soon as it decodes a frame.
+          // Hidden while the thumbnail covers it; revealed on playback or first frame.
           "transition-opacity duration-150",
           hasStarted || (videoReady && !generatedPoster) ? "opacity-100" : "opacity-0",
         )}
@@ -524,15 +459,12 @@ export function VideoPlayer({
         onError={onError}
       />
 
-      {/* Still resolving (downloading / decrypting) — a spinner over the blur. */}
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <Loader2 className="size-6 animate-spin text-white/80" />
         </div>
       )}
 
-      {/* Poster/thumbnail overlay — a plain <img> so it never triggers the
-          WebView's native video placeholder. Visible until playback starts. */}
       {generatedPoster && !hasStarted && (
         <img
           src={generatedPoster}
@@ -553,8 +485,7 @@ export function VideoPlayer({
         />
       )}
 
-      {/* Download / Share (⋯) menu — reachable before playback too, so a video
-          can be saved without playing it. Hidden where a host offers its own. */}
+      {/* Available before playback, so a video can be saved without playing it. */}
       {ready && !hideActionsMenu && !spoilerCover && (
         <div
           className={cn(
@@ -566,8 +497,7 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Big centered play button before first play — held back until there's
-          something real behind it (a loaded poster or a decoded frame). */}
+      {/* Only once there's a loaded poster or decoded frame behind it. */}
       {ready && !hasStarted && (videoReady || posterLoaded) && (
         <div
           className="absolute inset-0 flex items-center justify-center bg-black/30 cursor-pointer"
@@ -579,20 +509,17 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Bottom control bar */}
       {hasStarted && (
         <div
           className={cn(
             "absolute bottom-0 left-0 right-0 transition-opacity duration-200",
             "bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-8 pb-2 px-3",
-            // Clear the home indicator and a landscape notch when the bar is
-            // at the physical screen's edge.
+            // Clear the home indicator and a landscape notch in fullscreen.
             isFullscreen &&
               "pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]",
             showControls ? "opacity-100" : "opacity-0 pointer-events-none",
           )}
         >
-          {/* Progress bar */}
           <div
             ref={progressRef}
             className="w-full h-1 bg-white/30 rounded-full cursor-pointer mb-2 group/progress"
@@ -603,9 +530,7 @@ export function VideoPlayer({
             </div>
           </div>
 
-          {/* Controls row */}
           <div className="flex items-center gap-3">
-            {/* Play/Pause */}
             <button
               type="button"
               onClick={togglePlay}
@@ -619,7 +544,6 @@ export function VideoPlayer({
               )}
             </button>
 
-            {/* Volume: icon toggles mute, slider sets level */}
             <div className="flex items-center gap-1.5 group/vol">
               <button
                 type="button"
@@ -651,14 +575,12 @@ export function VideoPlayer({
               />
             </div>
 
-            {/* Time */}
             <span className="text-white text-xs tabular-nums min-w-0">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
 
             <div className="flex-1" />
 
-            {/* Fullscreen / exit */}
             <button
               type="button"
               onClick={handleFullscreen}
@@ -675,11 +597,8 @@ export function VideoPlayer({
 }
 
 /**
- * Save a video to the device from its already-resolved (and, for encrypted
- * media, already-decrypted) source — the `blob:` URL for encrypted / Buzz
- * media, the original `https:` URL otherwise — mirroring the lightbox's own
- * download button so the two behave identically. A cross-origin host without
- * CORS can't be read, so {@link downloadUrl} falls back to opening the file.
+ * Save from the resolved (decrypted) source, mirroring the lightbox's download.
+ * Non-CORS hosts fall back to opening the file ({@link downloadUrl}).
  */
 async function saveVideo(src: string, ref: { url: string; mime?: string }): Promise<void> {
   try {
@@ -703,7 +622,7 @@ async function saveVideo(src: string, ref: { url: string; mime?: string }): Prom
   }
 }
 
-/** Hand a video to the system share sheet (the file, never the URL). */
+/** Share the file, never the URL. */
 async function shareVideo(src: string, ref: { url: string; mime?: string }): Promise<void> {
   const shared = await shareFile(src, { nameHint: ref.url, mime: ref.mime, dialogTitle: "Share video" });
   if (!shared) {
@@ -715,7 +634,6 @@ async function shareVideo(src: string, ref: { url: string; mime?: string }): Pro
   }
 }
 
-/** Device-agnostic corner Download button for the current video. */
 function VideoDownloadButton({ src, nameHint, mime }: { src: string; nameHint: string; mime?: string }) {
   const [busy, setBusy] = useState(false);
 

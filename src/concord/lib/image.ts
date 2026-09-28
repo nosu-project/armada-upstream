@@ -1,14 +1,8 @@
 /**
- * Encrypted community images (icon / banner) — CORD-02 §6.
- *
- * Images never touch a media server in plaintext: each is AES-256-GCM
- * encrypted under a fresh random key and uploaded as an ordinary blob; the
- * Control Plane entity carries only the pointer `{url, key, nonce, hash}`.
- * A member fetches the blob, decrypts, and verifies the plaintext SHA-256, so
- * the media server learns nothing and a swapped blob fails closed.
- *
- * The Concord pointer carries no extension/mime, so the
- * decrypted bytes are sniffed by magic numbers for display.
+ * Encrypted community images (icon / banner) — CORD-02 §6. Each is AES-256-GCM
+ * encrypted under a fresh key; the Control Plane carries only `{url, key, nonce, hash}`
+ * and the plaintext SHA-256 is verified on fetch, so a swapped blob fails closed.
+ * The pointer has no mime, so decrypted bytes are sniffed for display.
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -23,12 +17,11 @@ import type { ImagePointer } from "@/concord/lib/types";
 /** 16-byte (128-bit) nonce, matching Vector's AES-GCM parameters. */
 const NONCE_BYTES = 16;
 
-/** Ceiling on a community icon/banner read. Generous for an image, bounded. */
+/** Ceiling on a community icon/banner read. */
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 const CACHE_NAME = "concord-images";
 
-/** Copy into a fresh ArrayBuffer-backed view (WebCrypto wants BufferSource). */
 function buf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const ab = new ArrayBuffer(bytes.byteLength);
   const view = new Uint8Array(ab);
@@ -93,10 +86,8 @@ async function writeCached(hash: string, plaintext: Uint8Array, mime: string): P
 }
 
 /**
- * Fetch + decrypt an {@link ImagePointer} to an object URL. Verifies the
- * plaintext SHA-256 against `pointer.hash`; the caller revokes the URL on
- * unmount. Content-addressed disk cache (Cache Storage) skips re-fetch +
- * re-decrypt across reloads.
+ * Fetch + decrypt an {@link ImagePointer} to an object URL (caller revokes).
+ * Verifies SHA-256; content-addressed Cache Storage skips re-fetch across reloads.
  */
 export async function decryptImagePointer(
   pointer: ImagePointer,
@@ -111,24 +102,9 @@ export async function decryptImagePointer(
 }
 
 /**
- * The same fetch + decrypt + integrity check as {@link decryptImagePointer},
- * stopping at the plaintext bytes.
- *
- * Split out for the Web Push service worker, which needs a community's icon for
- * a notification but has no `URL.createObjectURL` — that is a Window-only API,
- * so a worker has to inline the image as a `data:` URL instead. Keeping the
- * crypto and the SHA-256 verification here means the worker cannot end up with
- * a laxer check than the app: a swapped blob still fails closed for both.
- *
- * The pointer names the one server that won the upload race; the ciphertext
- * was mirrored to the uploader's other servers (BUD-04), so the fetch walks
- * `servers` — the viewer's effective list, or the app defaults where there is
- * no config to read, as in the worker — before the icon is given up on.
- *
- * Under the viewer's media policy like any other fetch of a sender-named URL
- * (`lib/mediaPolicy.ts`): the pointer's host is whoever set the icon, so with
- * a proxy set the fetch goes through it. Ciphertext survives a proxy
- * unchanged, and the hash check below is what says so.
+ * {@link decryptImagePointer} stopping at plaintext bytes, for the push service
+ * worker (no `URL.createObjectURL` there). Walks `servers` since the ciphertext
+ * is mirrored (BUD-04), and honours the viewer's media policy/proxy.
  */
 export async function decryptImageBytes(
   pointer: ImagePointer,
@@ -142,10 +118,7 @@ export async function decryptImageBytes(
     return { bytes, mime: cached.type || sniffImageMime(bytes) };
   }
 
-  // An icon or banner is small by definition, and this runs unprompted the
-  // moment a community renders — including in the push service worker, where
-  // there is no user and no UI to report a stall. Cap the read rather than
-  // letting a pointer choose how much memory a community costs to display.
+  // Runs unprompted (incl. in the push worker), so cap the read.
   const { sources } = routeMediaCandidates(mediaCandidates(pointer.url, undefined, servers), policy);
   const ciphertext = await fetchCapped(sources, {
     signal,

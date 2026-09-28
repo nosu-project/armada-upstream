@@ -1,23 +1,11 @@
 /**
  * Relay mirror — seed newly-adopted relays with the community's history
- * (CORD-02 §6: "a client may optionally rebroadcast old events to a newly
- * adopted relay").
+ * (CORD-02 §6), BEFORE the relay-list edition publishes, so a joiner never folds
+ * a half-arrived Control Plane. Signed wraps are copied verbatim.
  *
- * A raw relay-to-relay copy of signed wraps, run BEFORE the relay-list edition
- * publishes, so a fresh joiner never lands on a new relay mid-epoch and folds
- * a half-arrived Control Plane. Verbatim events, no re-sealing: a wrap is
- * self-contained and every receiver verifies it exactly as before.
- *
- * What gets mirrored is the CORRECTNESS set — everything a fresh joiner or a
- * catching-up device needs, and nothing more:
- *   - Control Plane, every held epoch (a compaction already folded prior
- *     epochs into the current one, CORD-06);
- *   - Guestbook Plane, every held epoch (the member list);
- *   - rekey addresses between held epochs plus the pending next one, so a
- *     straggler can still walk the continuity chain forward (CORD-06 §2);
- *   - the dissolution address (the grave travels with the community).
- * Chat history stays where it was sent — messages are a property of their era
- * and every member's device holds its own copy.
+ * Mirrors the CORRECTNESS set only: Control and Guestbook for every held epoch,
+ * rekey addresses between held epochs plus the pending next (CORD-06 §2), and
+ * the dissolution address. Chat history stays where it was sent.
  */
 
 import { controlGroups } from "@/concord/lib/control";
@@ -73,23 +61,19 @@ const MAX_GROUPS = 600;
 const PUBLISH_CONCURRENCY = 10;
 
 /**
- * Every stream address whose history a new relay needs. Derivable entirely
- * from the member's own key material — no fold required.
- */
+/** Every stream address whose history a new relay needs, derived from held keys alone. */
 export function mirrorGroups(community: Community): StreamKeyView[] {
   const groups: StreamKeyView[] = [
     ...controlGroups(community),
     ...guestbookGroups(community),
     dissolvedGroupKey(community.id),
   ];
-  // Base rotations: each held epoch's NEXT-epoch address covers the rotation
-  // that led out of it (and the pending one out of the current epoch).
+  // Base rotations: each held epoch's NEXT-epoch address.
   for (const r of community.heldRoots) {
     groups.push(baseRekeyGroupKey(r.key, community.id, r.epoch + 1n));
   }
-  // Held private channels: every channel epoch up to the pending next, under
-  // every held root — a Refounding seals channel rekeys under the PRIOR root
-  // (CORD-06 §3), so a reader can't know which root keyed a given rotation.
+  // Private channels: every epoch up to the pending next, under every held root —
+  // a Refounding seals channel rekeys under the PRIOR root (CORD-06 §3).
   for (const ch of community.privateChannels) {
     const top = ch.epoch + 1n;
     for (let e = 1n; e <= top; e++) {
@@ -104,7 +88,6 @@ export function mirrorGroups(community: Community): StreamKeyView[] {
       break;
     }
   }
-  // Dedupe by address (held-root overlaps can re-derive the same key).
   const seen = new Set<string>();
   return groups.filter((g) => (seen.has(g.pk) ? false : (seen.add(g.pk), true)));
 }
@@ -120,11 +103,8 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
- * Walk one source relay's full history for `authors`, newest-down via `until`
- * pages. Dedup handles the inclusive-`until` boundary overlap; a page that
- * adds nothing new ends the walk (a whole same-second page past the wall is
- * accepted as done — control planes never write hundreds of events in one
- * second).
+ * Walk one source relay's history for `authors` via `until` pages; a page adding
+ * nothing new ends the walk (a same-second wall is accepted as done).
  */
 async function fetchAllWraps(
   nostr: MirrorNostr,
@@ -196,9 +176,8 @@ async function publishWraps(
 }
 
 /**
- * Copy the community's correctness-set history from its current relays onto
- * `targetRelays` (the newly-added ones). Idempotent and resumable: events are
- * keyed by id, so a re-run re-offers the same wraps and relays dedup.
+/**
+ * Copy the correctness-set history onto `targetRelays`. Idempotent: relays dedup by id.
  */
 export async function mirrorHistoryToRelays(
   nostr: MirrorNostr,
@@ -207,8 +186,7 @@ export async function mirrorHistoryToRelays(
   opts?: { onProgress?: (p: MirrorProgress) => void; signal?: AbortSignal },
 ): Promise<MirrorReport> {
   const groups = mirrorGroups(community);
-  // The new relays may NIP-42 auth-gate: scope our stream keys to them so the
-  // pool can answer their challenges before/while the EVENTs land.
+  // New relays may NIP-42 auth-gate; scope our stream keys to them.
   registerStreamKeys(groups, targetRelays);
 
   const sources = community.relays.filter((url) => !targetRelays.includes(url));
@@ -226,8 +204,7 @@ export async function mirrorHistoryToRelays(
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") throw err;
-      // A source that won't answer only narrows the copy; the union of the
-      // remaining sources still mirrors everything they hold.
+      // A dead source only narrows the copy.
       logSync("mirror", `${url} fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }

@@ -17,20 +17,13 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 export interface CustomEmoji {
   shortcode: string;
   url: string;
-  /**
-   * The `30030:pubkey:dtag` coordinate of the pack this emoji came from, when
-   * it came from one. Absent for emojis inlined directly on the kind-10030
-   * list. Drives the "which pack is this from?" affordances (per-pack picker
-   * categories, the reaction detail popover).
-   */
+  /** The source pack's `30030:pubkey:dtag`, absent for emojis inlined on the kind-10030 list. */
   packCoord?: string;
   /** The source pack's human name, resolved at read time for display. */
   packName?: string;
 }
 
-// The durable, per-user copy of the LAST resolved palette lives in
-// `@/lib/emojiPalette`, shared with `useEmojiPacks` rather than duplicated
-// key-by-key across the two.
+// The durable per-user palette lives in `@/lib/emojiPalette` (shared with `useEmojiPacks`).
 
 /** Newest event per addressable coordinate (`kind:pubkey:d`). */
 function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
@@ -45,10 +38,8 @@ function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
 }
 
 /**
- * Flatten a kind-10030 list plus its resolved kind-30030 packs into a deduped
- * palette. Inline `["emoji", …]` tags on the list and every pack's emoji tags
- * are merged; when the same shortcode maps to different URLs across packs it is
- * prefixed with the pack id so both stay reachable.
+ * Flatten a kind-10030 list and its kind-30030 packs into a deduped palette;
+ * conflicting shortcodes across packs get a pack-id prefix.
  */
 function paletteFrom(listEvent: NostrRumor, packEvents: NostrRumor[]): CustomEmoji[] {
   const raw: {
@@ -93,19 +84,13 @@ function paletteFrom(listEvent: NostrRumor, packEvents: NostrRumor[]): CustomEmo
 }
 
 /**
- * The current user's NIP-30 custom emoji palette (kind 10030 + referenced kind
- * 30030 packs), backed by a durable per-user localStorage copy.
- *
- * The read reconciles relay ∪ local store, but the rule is simple: a read only
- * REPLACES the stored palette when it produces something (or proves the list is
- * genuinely empty). Anything short — no list, or packs that didn't come back —
- * keeps the last durable palette instead of blanking the picker.
+ * The user's NIP-30 emoji palette (10030 + 30030 packs) with a durable local copy.
+ * A read replaces the copy only when it produces something (or the list is
+ * genuinely empty); short reads keep the last palette.
  */
 export function useCustomEmojis(): CustomEmojisResult {
   const shared = useContext(CustomEmojisContext);
-  // Whether a provider sits above a component is fixed for its lifetime (adding
-  // or removing one remounts everything beneath it), so this branch never
-  // changes the hook order of a mounted component.
+  // Provider presence is fixed per mount, so this never changes hook order.
   // eslint-disable-next-line react-hooks/rules-of-hooks
   return shared ?? useCustomEmojisSource();
 }
@@ -115,12 +100,7 @@ export interface CustomEmojisResult {
   isLoading: boolean;
 }
 
-/**
- * One palette read for a whole chat surface. Without it every message row's
- * content and reaction bar subscribed its own palette query, Buzz palette
- * query and relay-info query — three observers per row, re-run on every row
- * render — for a value that is the same for the whole surface.
- */
+/** One palette read per chat surface, instead of three query observers per row. */
 const CustomEmojisContext = createContext<CustomEmojisResult | null>(null);
 
 /** Provide {@link useCustomEmojis} to everything below, read once. Place it inside the chat scope. */
@@ -177,9 +157,7 @@ function useCustomEmojisSource(): CustomEmojisResult {
 
       const palette = paletteFrom(list, packEvents);
 
-      // An empty result is only real when the list itself is empty (no inline
-      // emojis, no pack refs). Empty DESPITE refs means the pack read came up
-      // short — keep the durable floor rather than blank the picker.
+      // Empty despite pack refs means a short read — keep the durable floor.
       const listIsEmpty =
         packRefs.length === 0 && !list.tags.some((t) => t[0] === "emoji" && t[1] && t[2]);
       if (palette.length === 0 && !listIsEmpty) return floor;
@@ -189,10 +167,7 @@ function useCustomEmojisSource(): CustomEmojisResult {
     },
   });
 
-  // Buzz workspaces share a community palette (the union of every member's
-  // `buzz:custom-emoji` kind-30030 set). When the surrounding chat scope is a
-  // channel on a Buzz relay, merge that palette in — the user's own emojis
-  // win shortcode collisions.
+  // Merge a Buzz relay's community palette; the user's own emojis win collisions.
   const scope = useChatScope();
   const scopeRelay = scope?.kind === "nip29" ? scope.relayUrl : undefined;
   const buzzPalette = useBuzzEmojiPalette(scopeRelay);

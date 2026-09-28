@@ -1,13 +1,6 @@
 /**
- * Drain of the pre-ArmadaDB decrypt cache into ArmadaDB's KV.
- *
- * Kept out of `AppSigner.ts` so the signer imports nothing but the KV it now
- * reads and writes; this module is reached only from the migration catalogue.
- *
- * The cache is "only" a cache, but losing it is not free: every entry it holds
- * is a decrypt that would otherwise be a fresh round-trip to a bunker or
- * extension signer, so a dropped cache means a prompt storm across every DM
- * the user already opened.
+ * Drain of the pre-ArmadaDB decrypt cache into KV (kept out of `AppSigner.ts`).
+ * Losing it means a signer prompt storm across every DM already opened.
  */
 import { openDB } from "idb";
 
@@ -21,15 +14,11 @@ const DONE_KEY = "decrypt:migrated";
 let drain: Promise<void> | undefined;
 
 /**
- * Copy every cached plaintext into KV. Idempotent; runs at most once.
- *
- * REJECTS when the copy fails, so the startup gate — which deletes the legacy
- * databases only once every drain resolved — doesn't take a swallowed error
- * for a finished copy.
+ * Copy every cached plaintext into KV, at most once. REJECTS on failure so the
+ * startup gate doesn't delete the legacy DB.
  */
 export function migrateLegacyDecryptCache(): Promise<void> {
   drain ??= drainLegacyDecryptCache().catch((err: unknown) => {
-    // Retry next launch rather than marking a partial copy done.
     drain = undefined;
     throw err;
   });

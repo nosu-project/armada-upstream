@@ -12,14 +12,7 @@ const AddDialog = lazy(() =>
   import("@/components/dialogs/AddDialog").then((m) => ({ default: m.AddDialog })),
 );
 
-/**
- * The first tile of the Discover grid: found your own community. Onboarding
- * exits onto this page, so the tile carries the wizard's visual language
- * (animated crest, mono lowercase heading, cut-corner chrome) — the signup
- * flow visually continues into the fleet instead of ending at a form. A
- * signed-in user gets the create/join dialog; a signed-out visitor is sent to
- * the welcome page to make an account first.
- */
+/** First Discover tile: found your own community. Signed-out visitors go to the welcome page. */
 export function CreateCommunityCard({ className }: { className?: string }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
@@ -37,8 +30,6 @@ export function CreateCommunityCard({ className }: { className?: string }) {
         className,
       )}
     >
-      {/* Crest strip, same 3:1 geometry as the listing cards' banners so the
-          grid keeps one rhythm. */}
       <div className="relative flex aspect-[3/1] w-full shrink-0 items-center justify-center overflow-hidden bg-chrome">
         <div
           aria-hidden
@@ -63,8 +54,6 @@ export function CreateCommunityCard({ className }: { className?: string }) {
           <Plus className="size-4" />
           Create community
         </Button>
-        {/* Second door for people arriving from Discord. Renders nothing when
-            the build names no bridge portal, leaving the tile as it was. */}
         <ImportFromDiscordButton size="sm" />
       </div>
 

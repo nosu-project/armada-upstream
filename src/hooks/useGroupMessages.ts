@@ -21,18 +21,15 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** NIP-09 deletion kind. */
 const KIND_DELETE = 5;
 
 /**
- * Largest gap (seconds) between the cursor message and the next-oldest before
- * we treat it as a stale-relay outlier and don't trust it as a cursor. Mirrors
- * Ditto's `getPaginationCursor` gap guard. 6 hours.
+ * Max gap (seconds, 6h) before the oldest message is treated as a stale-relay outlier rather
+ * than a cursor. Mirrors Ditto's `getPaginationCursor`.
  */
 const MAX_GAP_SECONDS = 6 * 60 * 60;
 
-// Optimistic send-status types/storage are shared with Concord; re-exported
-// here so existing importers (transport.ts) keep their path.
+// Re-exported so existing importers (transport.ts) keep their path.
 export type { SendStatus, SendStatusMap } from "@/hooks/useSendStatusMap";
 
 function messagesKey(relayUrl: string | undefined, groupId: string | undefined) {
@@ -43,20 +40,14 @@ function statusKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "msg-status", relayUrl, groupId] as const;
 }
 
-/** Exact route targets read independently of the newest room window. */
 export interface GroupMessageFocus {
   messageId?: string;
   threadRoot?: string;
 }
 
 /**
- * Sort ascending (oldest-first) and de-duplicate a message list by id.
- *
- * Later entries win, with one exception: a signed copy is never replaced by an
- * unsigned one. The local store drops `sig` (see `mainEventStore.ts`), and the
- * store copy is merged last, so without this the store's copy of an event we
- * just signed ourselves would overwrite the only republishable copy we hold —
- * and retrying a failed send would publish an empty signature.
+ * Sort ascending and dedupe by id; later wins, except a signed copy is never replaced by an
+ * unsigned one — the store drops `sig`, and retrying a send needs the signature.
  */
 function sortDedupe(events: NostrRumor[]): NostrRumor[] {
   const byId = new Map<string, NostrRumor>();
@@ -69,12 +60,8 @@ function sortDedupe(events: NostrRumor[]): NostrRumor[] {
 }
 
 /**
- * Pick a safe `until` cursor for backfilling older messages from a page of
- * events. Returns the oldest event's `created_at - 1`, unless the oldest event
- * is separated from the rest of the page by a suspiciously large time gap (a
- * stale relay returning an ancient straggler) — in which case we step in to the
- * second-oldest so the cursor doesn't leap past real history. Mirrors Ditto's
- * gap-aware cursor.
+ * `until` cursor: oldest `created_at - 1`, or the second-oldest when the oldest is a gap
+ * outlier (stale relay). Mirrors Ditto.
  */
 function paginationCursor(events: NostrRumor[]): number | undefined {
   if (events.length === 0) return undefined;
@@ -88,21 +75,10 @@ function paginationCursor(events: NostrRumor[]): number | undefined {
 }
 
 /**
- * Chat messages (kind 9) and polls (kind 1068) for a NIP-29 group, hydrated
- * from the shared IndexedDB event store.
- *
- * This hook holds NO sockets. The wire (WireSync) owns the standing per-relay
- * subscription and funnels every incoming event into the store; the wire bus
- * then announces `nip29:<groupId>` and this hook re-reads. The newest-page
- * top-up (first visit / deep gaps / dead-socket healing) is the sync
- * scheduler's `nip29:` topic (see `nip29Sync.ts`), wanted for the life of
- * this view; the only network the hook itself performs is explicit scroll-up
- * pagination, mirrored into the store by the relay pool's caching layer.
- *
- * Supports optimistic publishing: locally-signed messages are inserted
- * immediately with a `pending` status. Because we sign locally, the optimistic
- * event shares its id with the relay echo (which arrives via the wire), so
- * de-duplication is automatic.
+ * Chat messages (kind 9) and polls (kind 1068) for a NIP-29 group, read from the store.
+ * Holds NO sockets: the wire ingests and rings `nip29:<groupId>`; newest-page top-up is the sync
+ * scheduler's `nip29:` topic (`nip29Sync.ts`). The hook only paginates on scroll-up.
+ * Optimistic sends share the relay echo's id, so dedupe is automatic.
  */
 export function useGroupMessages(
   relayUrl: string | undefined,
@@ -118,16 +94,13 @@ export function useGroupMessages(
   );
   const focusSig = focusIds.join(",");
 
-  // Backfill state. `cursor` is the next `until` to request; `hasMore` is false
-  // once a page comes back short (the relay has no older history left).
+  // `hasMore` is false once a page comes back short.
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
 
-  // Last-known-good localStorage snapshot scope for this room: a pure READ
-  // CACHE for the first frame of a cold launch (Android IndexedDB cold-opens
-  // in seconds). Never an ingestion source — the store remains authoritative.
+  // localStorage snapshot: a read cache for the first cold-launch frame, never an ingest source.
   const snapshotScope = relayUrl && groupId ? nip29SnapshotScope(relayUrl, groupId) : undefined;
 
   useEffect(() => {
@@ -135,13 +108,8 @@ export function useGroupMessages(
     cursorRef.current = undefined;
   }, [relayUrl, groupId]);
 
-  // The newest-page top-up (first visit, offline gaps, dead-socket healing)
-  // is owned by the sync scheduler: this view registers the pool handle a
-  // `nip29:` round needs, then declares standing interest in the topic. The
-  // relay is part of the topic key — a group id means nothing without its
-  // relay — and freshness is a durable stamp, so a room revisited inside the
-  // fresh window is a pure store read. The context effect is declared BEFORE
-  // the want, so a round never starts without it.
+  // The scheduler owns newest-page top-up; the relay is part of the topic key. The context
+  // effect is declared BEFORE the want so a round never starts without it.
   const syncTopic = relayUrl && groupId ? nip29SyncTopic(relayUrl, groupId) : undefined;
   useEffect(() => {
     if (!syncTopic) return;
@@ -150,32 +118,22 @@ export function useGroupMessages(
   const sync = useSyncTopic(syncTopic);
 
   const query = useQuery<NostrRumor[]>({
-    // A pure store read now (see below): no offline pausing, no retry ladder
-    // held at `isPending` — this query's loading state is a skeleton gate.
+    // Pure store read: no retry ladder holding the skeleton.
     ...STORE_READ,
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
-      // Anything already painted (older pagination pages, optimistic sends).
-      // A queryFn return is an authoritative overwrite, so fold it in.
+      // A queryFn return overwrites, so fold in older pages and optimistic sends.
       const existing = queryClient.getQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId)) ?? [];
 
-      // The store is the source of truth: the wire writes every incoming
-      // event here before the bus asks us to re-read. Read the timeline and
-      // the group's deletions in parallel so the local paint isn't gated on
-      // two sequential IndexedDB round-trips.
-      // Scoped to THIS relay: a group id is only meaningful on the relay that
-      // hosts it, and the same id on another server is an unrelated channel, so
-      // the read is aimed at that relay's tenant rather than a shared cache.
+      // Scoped to THIS relay's tenant: the same group id elsewhere is an unrelated channel.
       const [cached, deletes] = await Promise.all([
         store.query(
           [{ kinds: NIP29_TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(NIP29_PAGE_SIZE, existing.length) }],
           { relay: relayUrl },
         ),
-        // Deletions: the store self-applies NIP-09 for same-author deletes, but
-        // NIP-29 moderators delete others' messages — hide anything referenced
-        // by a kind-5 in this group.
+        // The store self-applies same-author NIP-09; moderators delete others' messages too.
         store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }], { relay: relayUrl }),
       ]);
       const deletedIds = new Set(
@@ -184,17 +142,11 @@ export function useGroupMessages(
 
       const local = sortDedupe([...existing, ...cached]).filter((e) => !deletedIds.has(e.id));
 
-      // No network here: the scheduler owns the newest-page pull (the topic
-      // wanted above); its round mirrors results into the store and rings the
-      // bus back into this queryFn. `hasMore` reflects the last round's page
-      // fullness; a `loadOlder` probe refines it.
+      // No network here; `hasMore` reflects the last scheduler round's page fullness.
       const full = syncTopic ? nip29PullFull(syncTopic) : undefined;
       if (full !== undefined && !signal.aborted) setHasMore(full);
 
-      // Seed the cursor from local history so scroll-up backfill works even
-      // before any network pull lands. (The scheduler's pull is the NEWEST
-      // page, so once its rows are in this read, the local oldest is at least
-      // as deep a cursor as the pull could have offered.)
+      // Seed the cursor from local history so backfill works before any pull lands.
       if (cursorRef.current === undefined && local.length > 0) {
         cursorRef.current = paginationCursor(local);
       }
@@ -202,45 +154,25 @@ export function useGroupMessages(
     },
     enabled: Boolean(relayUrl && groupId),
     staleTime: 10_000,
-    // Seed with the last visit's screenful from the synchronous localStorage
-    // snapshot, so a cold launch paints the room instantly instead of behind
-    // the IndexedDB cold-open skeleton. `initialDataUpdatedAt: 0` marks the
-    // seed already-stale so the store-hydrating queryFn still runs immediately
-    // and merges on top (append-only, so the seed can never mask fresher data).
+    // Seed from the synchronous localStorage snapshot to skip the IndexedDB cold-open;
+    // `initialDataUpdatedAt: 0` keeps it stale so the store read still runs.
     initialData: () => {
       const snap = readTimelineSnapshot<NostrRumor>(snapshotScope);
-      // Only seed events that belong to THIS group (every timeline event
-      // carries its `h` tag).
+      // Only events carrying THIS group's `h` tag.
       const own = snap?.filter((e) => e.tags.some(([t, v]) => t === "h" && v === groupId));
       return own && own.length > 0 ? own : undefined;
     },
     initialDataUpdatedAt: 0,
-    // No refetch timer or focus/reconnect backstops here: the scheduler
-    // re-runs the topic's pull on its staleness interval and on focus/online
-    // nudges while this view holds its want, and every round rings the bus
-    // back into this query — dead-socket healing included.
-    // Keep the previous render's messages painted ONLY when they belong to
-    // THIS room (the previous query has the same key — e.g. a remount after
-    // cache eviction), so a same-room reload never flashes the skeleton. A
-    // channel switch means the previous query is a DIFFERENT room, so its
-    // messages are dropped — the new channel paints from its own synchronous
-    // snapshot (`initialData`) or a skeleton, never the outgoing channel's
-    // timeline. Decided from the previous query's own key (race-free), NOT a
-    // ref updated by an effect: this inline closure defeats TanStack's
-    // placeholder memoization, so it re-runs on EVERY render while the new
-    // room's first read is pending, and a ref would already point at the new
-    // room by the second render.
+    // No refetch timers: the scheduler re-runs the pull. Keep the previous data only when the
+    // previous query's key is THIS room (a ref would already point at the new room on re-render).
     placeholderData: (prev, prevQuery) =>
       prevQuery && hashKey(prevQuery.queryKey) === hashKey(messagesKey(relayUrl, groupId))
         ? prev
         : undefined,
   });
 
-  // Global message search can find a locally-persisted row far behind the
-  // newest page. Resolve the route's exact ids from that same relay tenant so
-  // the permalink does not need a network walk (and works offline). Keep this
-  // result outside the ordinary query cache: a lone old hit must not drag its
-  // pagination cursor across the unloaded gap.
+  // Resolve route ids from the relay tenant for far-back search hits, kept outside the query
+  // cache so a lone old hit can't drag the pagination cursor.
   const focusQuery = useQuery<NostrRumor[]>({
     ...STORE_READ,
     queryKey: ["nip29", "message-focus", relayUrl, groupId, focusSig],
@@ -260,19 +192,15 @@ export function useGroupMessages(
     [query.data, focusQuery.data],
   );
 
-  // Wire hydration: when this group's store changes, re-read it. (The queryFn
-  // is a cheap local read; its relay pull is independently throttled.)
   useWireScopes((scopes) => {
     if (groupId && scopes.has(`nip29:${groupId}`)) {
       void queryClient.invalidateQueries({ queryKey: messagesKey(relayUrl, groupId) });
     }
   });
 
-  // Send-status for optimistic messages (kept in its own cache entry, shared
-  // with Concord via useSendStatusMap).
+  // Shared with Concord via useSendStatusMap.
   const { status, setStatus } = useSendStatusMap(statusKey(relayUrl, groupId));
 
-  // Keep the localStorage snapshot fresh with the rendered timeline (debounced).
   useTimelineSnapshotWriter(snapshotScope, query.data, !query.isPlaceholderData);
 
   const upsertMessage = useCallback(
@@ -285,11 +213,7 @@ export function useGroupMessages(
     [queryClient, relayUrl, groupId],
   );
 
-  /**
-   * Fetch the next older page of history (scroll-up pagination). Resolves to
-   * the number of messages prepended (0 when there's nothing older), so the
-   * caller can preserve scroll position around the inserted rows.
-   */
+  /** Resolves to the number of prepended messages so the caller can preserve scroll. */
   const loadOlder = useCallback(async (): Promise<number> => {
     if (!relayUrl || !groupId) return 0;
     if (loadingRef.current || !hasMore) return 0;
@@ -304,14 +228,13 @@ export function useGroupMessages(
         { signal: AbortSignal.timeout(8000) },
       );
 
-      // Anything genuinely new to us (the cursor boundary can re-return events).
+      // The cursor boundary can re-return events.
       const existing = queryClient.getQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId)) ?? [];
       const existingIds = new Set(existing.map((e) => e.id));
       const fresh = older.filter((e) => !existingIds.has(e.id));
 
       if (older.length < NIP29_PAGE_SIZE) setHasMore(false);
-      // Advance the cursor from the raw page (pre-dedupe) so a page that's all
-      // boundary-overlap still moves us backwards in time.
+      // From the raw page (pre-dedupe) so an all-overlap page still moves back.
       cursorRef.current = paginationCursor(older) ?? until - 1;
 
       if (fresh.length === 0) return 0;
@@ -328,7 +251,6 @@ export function useGroupMessages(
     }
   }, [nostr, relayUrl, groupId, hasMore, queryClient]);
 
-  /** Insert a locally-signed message immediately with `pending` status. */
   const insertOptimistic = useCallback(
     (event: NostrEvent) => {
       upsertMessage(event);
@@ -337,13 +259,10 @@ export function useGroupMessages(
     [upsertMessage, setStatus],
   );
 
-  /** Confirm a message delivered (clears its pending/failed status). */
   const markSent = useCallback((id: string) => setStatus(id, undefined), [setStatus]);
 
-  /** Mark a message as failed to send (offers retry in the UI). */
   const markFailed = useCallback((id: string) => setStatus(id, "failed"), [setStatus]);
 
-  /** Remove an optimistic message entirely (e.g. discard a failed send). */
   const removeOptimistic = useCallback(
     (id: string) => {
       queryClient.setQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId), (old = []) =>
@@ -368,13 +287,8 @@ export function useGroupMessages(
     [status, insertOptimistic, markSent, markFailed, removeOptimistic, loadOlder, hasMore, isLoadingOlder],
   );
 
-  // Loading skeleton gate: the local store read, plus the sync topic on a
-  // cold first visit — an empty store is NOT authoritative for NIP-29 until
-  // the scheduler's newest-page pull settles (history arrives via that pull,
-  // not the wire's live `since` window). `pending` covers the whole span from
-  // this view declaring interest to the round settling; a settled, errored,
-  // or fresh-stamped topic releases the gate, so an empty room shows its
-  // empty state instead of a skeleton forever.
+  // An empty store isn't authoritative for NIP-29 until the first newest-page pull settles;
+  // settled/errored/fresh topics release the gate.
   const isLoading =
     query.isLoading ||
     (focusIds.length > 0 && focusQuery.isLoading) ||

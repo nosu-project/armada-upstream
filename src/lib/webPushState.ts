@@ -30,8 +30,7 @@ export async function markOwnWebPushEvent(eventId: string): Promise<void> {
   try {
     await cache.put(cacheUrl(`${OWN_EVENT_PREFIX}${encodeURIComponent(eventId)}`), new Response("1"));
 
-    // Keep this bounded for long-running installs. Cache.keys() preserves the
-    // cache's insertion order, so the oldest markers are discarded first.
+    // Bounded; Cache.keys() is insertion-ordered, so oldest go first.
     const prefix = cacheUrl(OWN_EVENT_PREFIX);
     const own = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
     if (own.length > MAX_OWN_EVENTS) {

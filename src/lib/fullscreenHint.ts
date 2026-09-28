@@ -1,20 +1,10 @@
 import { isDesktop } from "@/lib/desktop";
 
 /**
- * "Press Esc to exit full screen", over an embed that has taken the desktop
- * window full-screen.
- *
- * A browser shows this itself whenever a page goes full-screen; Electron shows
- * nothing. The frames that can go full-screen here include Mini Apps, whose
- * code is whatever the sender wrote, so without a hint one can fill the screen
- * with a convincing fake of Armada (or of the OS) and give no sign that Esc
- * leaves it. Only an IFRAME in full-screen gets the hint: that is the case the
- * app's own code did not choose.
- *
- * The hint is a `popover`, which sits in the top layer above the full-screen
- * frame — nothing the frame draws can cover it. Android shows its own hint
- * natively (`FullscreenChromeClient`), since there the full-screen view is not
- * part of this document at all.
+ * "Press Esc to exit full screen" for embeds (e.g. Mini Apps) taking the desktop
+ * window full-screen. Electron shows no hint, so an iframe could fake the app
+ * or OS. A `popover` sits in the top layer above the frame. Android shows its
+ * own hint natively.
  */
 
 const HINT_MS = 4000;

@@ -11,7 +11,6 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNpubEncode } from "@/lib/safeNip19";
 
-/** One muted person: avatar, name, npub, and the way back. */
 function MutedRow({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -34,7 +33,7 @@ function MutedRow({ pubkey }: { pubkey: string }) {
       });
       setBusy(false);
     }
-    // On success the row unmounts with the list, so `busy` is never cleared.
+    // On success the row unmounts, so `busy` is never cleared.
   };
 
   return (
@@ -64,18 +63,9 @@ function MutedRow({ pubkey }: { pubkey: string }) {
 }
 
 /**
- * The list of people the user has muted, and the only place to get them back.
- *
- * Mute is offered from every message, member row and profile card, and it is
- * deliberately quiet — no confirmation outside the DM thread, no trace left on
- * the surface it was used from. That is only fair if the decision is
- * reviewable somewhere, which is here: a mute made by a misclick is otherwise
- * invisible and permanent, since a muted person can't appear in any list to be
- * unmuted from.
- *
- * The list itself is private — new entries are NIP-44 encrypted to the user in
- * the kind-10000 `.content` — but entries another client published as public
- * tags are shown, and unmuted, just the same.
+ * The only place to review mutes: muting is quiet everywhere else, so a
+ * misclick would otherwise be invisible and permanent. Shows both NIP-44
+ * private and public kind-10000 entries.
  */
 export function MutedPeopleSettings() {
   const { mutedPubkeys, ready } = useMutedPubkeys();

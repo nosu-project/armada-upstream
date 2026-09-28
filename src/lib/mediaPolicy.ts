@@ -1,58 +1,27 @@
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
 
 /**
- * Where a piece of remote media is loaded FROM, decided in one place.
+ * Where remote media is loaded from. An `<img>` leaks the viewer's IP to the
+ * sender's host; the only fix is a proxy URI template (`{href}`, Ditto's
+ * convention). OFF by default. Loopback/private addresses are never loaded
+ * (unreachable by a proxy; trips Chrome's Local Network Access prompt).
  *
- * An `<img>` is a request from the viewer's own address to whichever host the
- * sender named, so a message containing an image is a message that learns the
- * IP of everyone who scrolls past it. Nothing about the bytes distinguishes a
- * picture from a logger, and no referrer policy or CSP touches the TCP
- * connection. The one control is a PROXY: a URI template (`{href}`, Ditto's
- * convention) that makes the proxy's address the one the sender's host sees.
- * This module owns that decision for chat attachments, avatars, custom emoji,
- * link-preview thumbnails and the encrypted Concord icons alike; the hooks and
- * the native ports apply it, they do not restate it.
+ * `proxies` is an optional rotation pool used by `routeMediaCandidates`;
+ * `proxy` is its first entry and what non-rotating callers use.
  *
- * OFF by default — the app config ships an empty template, so media loads
- * directly from the host the sender named until the user turns proxying on in
- * settings, which sets the public proxy Ditto ships (a byte-for-byte
- * pass-through so ciphertext, hash-verified blobs and range requests all
- * survive it), itself replaceable. An empty template is proxying off. A
- * loopback/private address is never proxied (a public proxy cannot reach it)
- * and never loaded directly (it trips Chrome's Local Network Access prompt), so
- * it resolves to nothing.
- *
- * A policy may instead carry a POOL of proxy templates (`proxies`), parsed from
- * the user's list of proxies entered in settings (one per line, see
- * `parseProxyList`). The web client's cross-server fallback
- * (`routeMediaCandidates`) then rotates a URL across the pool — spreading which
- * proxy sees a given image, and falling to the next when one fails to load.
- * `proxy` is still the single-value floor the single-image sites (`mediaSrc`)
- * and the background writers read (they do not rotate); it holds the pool's
- * first entry.
- *
- * Pure. The Kotlin and Swift ports (`MediaPolicy.java`, `MediaPolicy.swift`)
- * apply the same rule to the background avatar fetch; keep the three in step.
- * They do NOT rotate — they carry the primary proxy only — but the template
- * normalization (`normalizeProxy`) is shared and must stay identical.
+ * Kotlin/Swift ports (`MediaPolicy.java`, `MediaPolicy.swift`) must stay in
+ * step; `normalizeProxy` must stay identical across all three.
  */
 
-/**
- * Ditto's default CORS proxy: a byte-for-byte pass-through with a shared cache.
- * The value settings suggests when the user turns proxying on — never applied
- * without them doing so.
- */
+/** Ditto's byte-for-byte pass-through proxy; suggested by settings, never applied without opt-in. */
 export const DEFAULT_MEDIA_PROXY = "https://proxy.shakespeare.diy/?url={href}";
 
 export interface MediaPolicy {
   /** Proxy URI template (see {@link normalizeMediaProxy}); empty = no proxy. */
   proxy: string;
   /**
-   * The rotation pool for the web client's fallback path (see
-   * {@link routeMediaCandidates}). Set only when the user entered more than one
-   * proxy, where it is the whole list; absent or empty falls back to
-   * {@link proxy} alone. Never populated when {@link proxy} is empty (proxying
-   * off means direct loads). Not carried across the native bridge.
+   * Rotation pool for {@link routeMediaCandidates}; only set with multiple
+   * proxies and never when {@link proxy} is empty. Not sent over the native bridge.
    */
   proxies?: readonly string[];
 }
@@ -60,39 +29,25 @@ export interface MediaPolicy {
 /** How many templates a fetched rotation list may contribute, at most. */
 export const MAX_PROXY_POOL = 32;
 
-/**
- * The policy as it crosses a bridge — to the service worker's sealed config,
- * the Android service's preferences and the iOS extension's config file — so
- * the three background writers proxy a sender's avatar exactly as the page
- * does. Plain JSON: one string.
- */
+/** The policy as sent to the service worker, Android service and iOS extension (plain JSON). */
 export interface MediaPolicyConfig {
   proxy: string;
 }
 
 /**
- * The policy a reader with no config in reach applies: proxying OFF, the app's
- * own default (see `defaultConfig.mediaProxies`). A background writer whose
- * config is missing, or was sealed before this field existed, belongs to a user
- * who never turned a proxy on, so it loads directly exactly as the page would.
- * {@link DEFAULT_MEDIA_PROXY} is only what settings suggests when the user
- * turns proxying on.
+ * Proxying OFF — the default for readers with no config (e.g. background
+ * writers whose config predates this field).
  */
 export function defaultMediaPolicy(): MediaPolicy {
   return { proxy: "" };
 }
 
-/** A bridge config back into a policy; a missing or partial one is the default (off). */
 export function mediaPolicyFromConfig(config: Partial<MediaPolicyConfig> | undefined): MediaPolicy {
   if (!config || typeof config.proxy !== "string") return defaultMediaPolicy();
   return { proxy: normalizeMediaProxy(config.proxy) };
 }
 
-/**
- * Minimal RFC 6570 expansion, the subset Ditto's templates use: `{var}`
- * percent-encodes, `{+var}` keeps reserved characters. Unknown variables
- * expand to nothing.
- */
+/** Minimal RFC 6570: `{var}` percent-encodes, `{+var}` keeps reserved chars, unknown vars → "". */
 export function fillUriTemplate(template: string, vars: Record<string, string | undefined>): string {
   return template.replace(/\{(\+?)([A-Za-z0-9_]+)\}/g, (_m, plus: string, name: string) => {
     const value = vars[name];
@@ -102,17 +57,9 @@ export function fillUriTemplate(template: string, vars: Record<string, string | 
 }
 
 /**
- * The form a proxy template is stored in: trimmed, `http(s)` only, and with a
- * placeholder — appended when the user typed a bare prefix, so both spellings
- * work. Returns `""` for anything unusable, which the policy reads as "no
- * proxy".
- *
- * A bare prefix that ends in `=` is a query PARAMETER value
- * (`https://p.example/?url=`), which takes the percent-encoded `{href}`.
- * Anything else — a bare `?` (`https://proxy.corsfix.com/?`) or a path — takes
- * the target URL RAW via `{+href}`, which is what corsfix-style proxies want
- * and what percent-encoding was breaking. A template that already spells its
- * own placeholder is left exactly as typed.
+ * Normalize a proxy template: trimmed, http(s) only, `""` if unusable. A bare
+ * prefix ending in `=` gets `{href}` (encoded query value); other bare prefixes
+ * get `{+href}` (raw, as corsfix-style proxies expect). Explicit placeholders are kept.
  */
 export function normalizeMediaProxy(raw: string | undefined | null): string {
   const trimmed = (raw ?? "").trim();
@@ -128,11 +75,8 @@ export function normalizeMediaProxy(raw: string | undefined | null): string {
 }
 
 /**
- * The user's entered proxy list (see `AppConfig.mediaProxies`) parsed into
- * normalized templates: one per line, `,` also splitting, `#` comments and
- * blanks dropped, each run through {@link normalizeMediaProxy}, deduped, and
- * capped at {@link MAX_PROXY_POOL} so a long list cannot unbound the fallback
- * walk.
+ * Parse the user's proxy list: one per line (or `,`), `#` comments dropped,
+ * normalized, deduped, capped at {@link MAX_PROXY_POOL}.
  */
 export function parseProxyList(text: string): string[] {
   const out: string[] = [];
@@ -159,7 +103,6 @@ export function mediaHost(url: string): string | undefined {
   }
 }
 
-/** `blob:` and `data:` carry their own bytes; nothing is fetched. */
 function isInlineSource(url: string): boolean {
   return /^(?:blob|data):/i.test(url);
 }
@@ -168,12 +111,8 @@ function isInlineSource(url: string): boolean {
 const RELATIVE_BASE = "https://relative.invalid/";
 
 /**
- * `url` as a normalized remote http(s) URL, or undefined when it is not one
- * (another scheme, or a path relative to the app). Parsed rather than
- * prefix-matched, and the normalized form is what gets loaded, so the checks
- * below always see the host that is actually requested. Parsed without a base
- * first, so the answer does not depend on the page's own scheme; the base only
- * catches protocol-relative `//host` forms.
+ * `url` as a normalized remote http(s) URL, or undefined. The normalized form is
+ * what gets loaded, so host checks see the real host. Base only catches `//host`.
  */
 function remoteHref(url: string): string | undefined {
   let parsed: URL;
@@ -192,29 +131,22 @@ function remoteHref(url: string): string | undefined {
 }
 
 /**
- * The URL to load `url` through `proxy`, or `url` itself when proxying makes no
- * sense: inline sources, non-http schemes, an empty template, and a URL already
- * on the proxy's own origin (a stored proxied URL must not be wrapped twice).
+ * `url` through `proxy`, or `url` itself for inline sources, non-http schemes,
+ * an empty template, or a URL already on the proxy's origin (no double-wrapping).
  */
 export function proxyMediaUrl(url: string, proxy: string): string {
   if (!proxy || isInlineSource(url)) return url;
   const href = remoteHref(url);
   if (!href) return url;
-  // The template's braces are not URL characters, so the proxy's own host is
-  // read off a filled probe rather than the template itself.
+  // Template braces aren't URL chars, so read the proxy host off a filled probe.
   const proxyHost = mediaHost(fillUriTemplate(proxy, { href: "https://example.com/x" }));
   if (proxyHost && mediaHost(href) === proxyHost) return href;
   return fillUriTemplate(proxy, { href });
 }
 
 /**
- * The `src` to load `url` from under `policy`, or undefined when it must not be
- * loaded at all: a loopback/private address a public proxy cannot reach and a
- * direct load would leak. Inline sources pass through; an http(s) host is
- * proxied when a proxy is set and loaded directly when it is not.
- *
- * For the one-image sites (a notification icon, a CSS background, a banner)
- * that show nothing rather than a placeholder.
+ * `src` for `url` under `policy`, or undefined for loopback/private addresses.
+ * For single-image sites that show nothing rather than a placeholder.
  */
 export function mediaSrc(url: string | undefined, policy: MediaPolicy): string | undefined {
   if (!url) return undefined;
@@ -225,7 +157,6 @@ export function mediaSrc(url: string | undefined, policy: MediaPolicy): string |
   return policy.proxy ? proxyMediaUrl(href, policy.proxy) : href;
 }
 
-/** The rotation pool a policy resolves to: the explicit pool, or the primary alone. */
 function effectiveProxies(policy: MediaPolicy): readonly string[] {
   if (policy.proxies && policy.proxies.length > 0) return policy.proxies;
   return policy.proxy ? [policy.proxy] : [];
@@ -242,11 +173,8 @@ function hashString(s: string): number {
 }
 
 /**
- * The ordered proxied forms of `url` across `proxies`: every proxy, starting at
- * a per-URL rotation offset so which proxy is tried FIRST varies by image
- * (spreading load off any one host) while the rest follow as fallbacks. A URL
- * already on one of the pool's own hosts is a stored proxied URL and is
- * returned once, unwrapped — the same guard {@link proxyMediaUrl} applies.
+ * Proxied forms of `url` across `proxies`, starting at a per-URL offset to
+ * spread load. A URL already on a pool host is returned once, unwrapped.
  */
 function proxyRotation(url: string, proxies: readonly string[]): string[] {
   const urlHost = mediaHost(url);
@@ -261,13 +189,9 @@ function proxyRotation(url: string, proxies: readonly string[]): string[] {
 }
 
 /**
- * Route a whole candidate list (see `mediaCandidates`) under one policy: each
- * source in the form it should load in — proxied when a proxy is set, direct
- * otherwise — with local-network candidates dropped and duplicates collapsed.
- *
- * With a rotation pool set (`policy.proxies`), each http(s) candidate is
- * expanded to its proxied form through every proxy, rotated per URL, so the
- * `<img>` fallback walk (`useSourceWalk`) tries the next proxy when one fails.
+ * Route a candidate list under `policy`: proxied or direct, local-network
+ * dropped, deduped. With a pool, each candidate expands through every proxy so
+ * the `<img>` fallback walk tries the next one on failure.
  */
 export function routeMediaCandidates(
   candidates: readonly string[],

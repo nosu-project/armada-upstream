@@ -8,11 +8,7 @@ interface PaymentMethodIconProps {
   className?: string;
 }
 
-/**
- * Renders the icon for a NIP-A3 payment method. Native Bitcoin and Lightning
- * use their lucide glyphs; generic methods (Monero, Ethereum, …) render their
- * currency symbol character.
- */
+/** NIP-A3 payment method icon: lucide glyphs for Bitcoin/Lightning, currency symbol otherwise. */
 export function PaymentMethodIcon({ method, className }: PaymentMethodIconProps) {
   const cls = cn('size-4 shrink-0', className);
   if (!method || method.kind === 'bitcoin') return <Bitcoin className={cls} />;

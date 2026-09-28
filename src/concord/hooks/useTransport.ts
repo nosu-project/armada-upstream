@@ -27,20 +27,16 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { sameReactionTallies, stableZapsFor, toChatMsg } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar, MessagePoll, MessageReactions, OnchainZapAnnouncement, PollDraft, ReactInput, ReactionTally, ZapPayment } from "@/components/chat/transport";
 
-/** Shared empty tally array, so messages with no reactions keep a stable prop. */
+/** Stable empties, so memoized rows keep constant props. */
 const EMPTY_TALLIES: ReactionTally[] = [];
 
-/** Shared empty reply array, so a thread with no replies keeps a stable reference. */
 const EMPTY_REPLIES: ChatMsg[] = [];
 
-/** Shared empty vote array, so a poll with no votes keeps a stable reference. */
 const EMPTY_VOTES: PollVote[] = [];
 
 /**
- * The thread-root rumor id a message belongs to, or undefined for a top-level
- * message. Threaded replies are NIP-22 kind-1111 comments carrying an uppercase
- * `E` root tag. A kind-9 `q` tag is an INLINE reply (rendered in the timeline,
- * not a thread), so it is NOT a thread root here.
+ * The thread-root rumor id (NIP-22 kind-1111 with uppercase `E`), or undefined.
+ * A kind-9 `q` is an INLINE reply, not a thread.
  */
 function replyRootOf(m: ChatMsg): string | undefined {
   return m.kind === KIND_COMMENT ? m.tags.find((t) => t[0] === "E")?.[1] : undefined;
@@ -59,9 +55,8 @@ export function openedToChatMsg(m: OpenedChat): ChatMsg {
 }
 
 /**
- * Build a {@link ChatTransport} for one Concord channel — Concord's binding
- * to the SAME chat components NIP-29 and DMs render through. Only the
- * transport (CORD-01 streams vs relay kind-9) differs.
+ * A {@link ChatTransport} for one Concord channel, binding Concord to the same
+ * chat components NIP-29 and DMs use.
  */
 export function useTransport(
   community: Community | undefined,
@@ -80,15 +75,11 @@ export function useTransport(
   /** The channel's calendar events + RSVPs, for the shared events bar. */
   calendar: CalendarTransport;
   /**
-   * Disappearing-messages timer notices (CORD-08 §4) as ready-made timeline
-   * entries — the same centered-notice shape the DM feed renders. The page
-   * merges them into its `entries` via {@link mergeChannelTimeline}.
+   * Disappearing-messages timer notices (CORD-08 §4) as timeline entries; merged
+   * via {@link mergeChannelTimeline}.
    */
   timerEntries: DmTimerTimelineEntry[];
-  /**
-   * Opened rows by rumor id — the ONLY place the original seal survives.
-   * A pin proves a message from its seal, so a rendered ChatMsg cannot supply it.
-   */
+  /** Opened rows by rumor id — the ONLY place the original seal (needed for pins) survives. */
   openedById: Map<string, OpenedChat>;
 } {
   const { user } = useCurrentUser();
@@ -105,8 +96,7 @@ export function useTransport(
   const { retry, discard, deleteMessage } = useMessageActions(community, channel);
   const sendStatus = useSendStatus(channel);
 
-  // Identity-cached ChatMsg adaptation (unchanged rows keep their reference so
-  // React.memo skips them across polls).
+  // Unchanged rows keep their reference so React.memo skips them.
   const adaptCache = useRef(new Map<string, { sig: string; msg: ChatMsg }>());
   const messages = useMemo<ChatMsg[]>(() => {
     const cache = adaptCache.current;
@@ -122,19 +112,9 @@ export function useTransport(
     return out;
   }, [folded.messages]);
 
-  // Threading: a THREAD reply is a sealed NIP-22 kind-1111 comment carrying an
-  // uppercase `E` thread-root tag. Slack-style, thread replies are NOT shown
-  // top-level — they're nested under their root in the thread panel. An INLINE
-  // reply (kind-9 with a `q` tag) is NOT a thread reply: it renders as an
-  // ordinary timeline row with a "replying to …" line, so it's never bucketed
-  // here. Split the decoded list into top-level messages (the timeline) and
-  // thread replies bucketed by root id (the threads).
-  //
-  // ORPHAN replies (root not in the loaded window) are kept in repliesByRoot,
-  // NOT degraded to top-level. They're reachable from the Threads tab, which
-  // shows a tombstone for the missing root. When the root eventually loads
-  // (backfill / decode), the reply stays bucketed under it and the tombstone
-  // is replaced by the real root message.
+  // Thread replies (kind-1111 with `E`) are nested under their root, not shown
+  // top-level; inline replies (kind-9 `q`) stay in the timeline. Orphan replies
+  // stay bucketed (the Threads tab shows a tombstone root).
   const replyBucketCache = useRef(new Map<string, ChatMsg[]>());
   const { topLevel, repliesByRoot } = useMemo(() => {
     const topLevel: ChatMsg[] = [];
@@ -149,11 +129,8 @@ export function useTransport(
         topLevel.push(m);
       }
     }
-    // A bucket whose contents didn't change keeps its previous array identity:
-    // these go straight to memoized rows as the `replies` prop, and a fresh
-    // array per fold re-rendered every row that has a thread on every arriving
-    // message. Element-wise compare is sound because `messages` entries are
-    // themselves identity-cached above.
+    // Unchanged buckets keep their array identity: they're `replies` props on
+    // memoized rows.
     const cache = replyBucketCache.current;
     const repliesByRoot = new Map<string, ChatMsg[]>();
     for (const [root, list] of buckets) {
@@ -173,10 +150,8 @@ export function useTransport(
   );
   const sendThreadReply = useCallback(
     async (root: ChatMsg, content: string, tags: string[][]) => {
-      // Seal the reply as a NIP-22 kind-1111 comment; the thread pointers are
-      // derived from `root` inside `send` (via `replyTo`). Drop the composer's
-      // NIP-29 `h` and any `e`/`q` tags (a `q` here would be an inline quote, not
-      // the thread link), mirroring the page's `handleSend`.
+      // Sealed as NIP-22 kind-1111; `send` derives thread pointers from `root`. Drop
+      // `h`/`e`/`q` (a `q` would be an inline quote), as the page's `handleSend` does.
       const extraTags = tags.filter(([name]) => name !== "h" && name !== "e" && name !== "q");
       await send({
         content,
@@ -187,17 +162,14 @@ export function useTransport(
     [send],
   );
 
-  // Reaction tallies adapted to the shared shape.
   const talliesById = useMemo(() => {
     const out = new Map<string, ReactionTally[]>();
     for (const [targetId, byEmoji] of folded.reactions) {
       const tallies: ReactionTally[] = [];
       for (const [emoji, entry] of byEmoji) {
         const mine = Boolean(user && entry.reactors.has(user.pubkey));
-        // Concord folds its own reaction tallies rather than going through
-        // `tallyReactions`, so the mute filter has to be applied here too: a
-        // muted reactor must not contribute a count or a name to the hover
-        // list. A tally emptied by muting is dropped rather than shown as 0.
+        // Concord folds its own tallies, so apply the mute filter here; a tally emptied
+        // by muting is dropped.
         const reactors = [...entry.reactors.keys()].filter((pk) => !mutedPubkeys.has(pk));
         if (reactors.length === 0) continue;
         tallies.push({
@@ -217,21 +189,15 @@ export function useTransport(
 
   const channelIdHex = channel?.idHex ?? null;
 
-  // Author lookup by rumor id, so a reaction can carry a NIP-25 `p` tag for the
-  // reacted-to author (mirroring the NIP-29 path). Invisible to the relay: the
-  // tag lives on the NIP-44-encrypted rumor, never promoted to the wrap.
+  // For the NIP-25 `p` tag on reactions; it lives inside the encrypted rumor.
   const authorById = useMemo(() => {
     const out = new Map<string, string>();
     for (const m of messages) out.set(m.id, m.pubkey);
     return out;
   }, [messages]);
 
-  // Both caches outlive a recompute of `talliesById`, which rebuilds EVERY
-  // tally array on each fold (any reaction, any page of history). Rebuilding
-  // the per-row objects with it handed every memoized row a new `reactions`
-  // prop, so a scroll-back page re-rendered the whole loaded channel. The
-  // react fn reads its collaborators through a ref, so it keeps one identity
-  // per message.
+  // Both caches outlive a `talliesById` recompute (which rebuilds every array),
+  // so memoized rows keep their `reactions` prop. The react fn reads through a ref.
   const reactDeps = useRef({ send, queryClient, channelIdHex, authorById });
   reactDeps.current = { send, queryClient, channelIdHex, authorById };
   const reactCacheRef = useRef(new Map<string, (input: ReactInput) => void>());
@@ -244,16 +210,12 @@ export function useTransport(
         fn = (input: ReactInput) => {
           const { send, queryClient, channelIdHex, authorById } = reactDeps.current;
           if (input.mineEventId) {
-            // Removing: mark the reaction as deleted IMMEDIATELY so the fold
-            // skips it on the next render (before the kind-5 delete rumor is
-            // even sealed). Also strip it from the query cache so the fold
-            // doesn't see it at all.
+            // Optimistic removal: mark deleted now and strip from the query cache.
             markReactionDeleted(input.mineEventId);
             queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old = []) =>
               old.filter((m) => m.rumorId !== input.mineEventId),
             );
-            // Seal + publish the kind-5 delete rumor (the store's NIP-09
-            // removes it durably; the mark above handles the optimistic case).
+            // The kind-5 delete; the store's NIP-09 handling removes it durably.
             void send({
               content: "",
               kind: KIND_DELETE,
@@ -285,7 +247,7 @@ export function useTransport(
     };
   }, [talliesById]);
 
-  // CORD.md zap tallies from the fold (only VERIFIED zaps ever reach it).
+  // CORD.md zap tallies (only VERIFIED zaps reach the fold).
   const zapTalliesById = useMemo(() => {
     const out = new Map<string, ZapTally>();
     for (const [targetId, entries] of folded.zaps) {
@@ -303,9 +265,7 @@ export function useTransport(
 
   const zapsFor = useMemo(() => stableZapsFor((id) => zapTalliesById.get(id)), [zapTalliesById]);
 
-  // Seal the CORD.md zap announcement into the channel: a kind-9735 rumor
-  // carrying the payment proof, published through the ordinary send path (the
-  // `e` target rides `send`'s target param; binding tags are added there).
+  // CORD.md zap announcement: a kind-9735 rumor with the payment proof, via `send`.
   const sendZap = useCallback(
     async (target: ChatMsg, payment: ZapPayment) => {
       if (!payment.preimage) throw new Error("A private zap needs its payment proof.");
@@ -327,10 +287,8 @@ export function useTransport(
     [send],
   );
 
-  // Seal the on-chain Bitcoin zap attribution (kind 8333) into the channel as
-  // a rumor — publishing it publicly would leak the target event id and
-  // community context. The txid is on a public ledger already; the Nostr
-  // attribution is the part that must stay private.
+  // On-chain zap attribution (kind 8333) sealed in-channel: publishing it would
+  // leak the target and community context.
   const sendOnchainZap = useCallback(
     async (target: ChatMsg, announcement: OnchainZapAnnouncement) => {
       const isAddressable = target.kind >= 30000 && target.kind < 40000;
@@ -355,9 +313,7 @@ export function useTransport(
     [send],
   );
 
-  // Poll tallies from the fold: each poll message is tallied against its own
-  // declared options + endsAt (the pure {@link tallyPollVotes}, shared with the
-  // NIP-29 path), so every member folds the same result.
+  // Each poll tallied against its own options + endsAt via {@link tallyPollVotes}.
   const pollTalliesById = useMemo(() => {
     const out = new Map<string, PollTally>();
     for (const m of messages) {
@@ -369,9 +325,7 @@ export function useTransport(
     return out;
   }, [messages, folded.pollVotes, user]);
 
-  // Seal a vote as a kind-1018 rumor `e`-tagging the poll (a side event, like a
-  // reaction — invisible in the timeline, folded into the poll's tally). The
-  // latest vote per pubkey wins, so re-voting just supersedes the prior one.
+  // A vote is a kind-1018 side event `e`-tagging the poll; latest per pubkey wins.
   const sendPollVote = useCallback(
     (pollId: string, optionIds: string[]) => {
       void send({
@@ -403,9 +357,7 @@ export function useTransport(
     };
   }, [pollTalliesById, sendPollVote]);
 
-  // Seal a new poll as a kind-1068 timeline message. The option/type/endsAt tags
-  // are built by the shared {@link buildPollTags}; the channel binding is added
-  // by `send`. No `relay` routing tag (NIP-88) — votes ride the sealed plane.
+  // A new poll is a kind-1068 message; no NIP-88 `relay` tag (votes ride the sealed plane).
   const sendPoll = useCallback(
     async (draft: PollDraft) => {
       const question = draft.question.trim();
@@ -418,8 +370,7 @@ export function useTransport(
     [send],
   );
 
-  // Calendar events (CORD.md): folded calendar rumors adapted to the shared
-  // NostrEvent shape and parsed/deduped by the same helper the NIP-29 path uses.
+  // Calendar events (CORD.md), parsed/deduped by the helper NIP-29 uses.
   const calendarEvents = useMemo(
     () => parseCalendarEvents(folded.calendarEvents.map(openedToChatMsg)),
     [folded.calendarEvents],
@@ -428,8 +379,7 @@ export function useTransport(
     (event: CalendarEvent): RsvpTally => tallyRsvps(folded.rsvps.get(event.event.id) ?? [], user?.pubkey),
     [folded.rsvps, user?.pubkey],
   );
-  // Seal a new calendar event (kind 31922/31923). Not a timeline message — the
-  // binding is added by `send`; NIP-52 tags come from the shared builder.
+  // A calendar event (kind 31922/31923); not a timeline message.
   const saveCalendar = useCallback(
     async (input: CalendarEventInput) => {
       await send({ content: input.description ?? "", kind: input.kind, extraTags: buildCalendarTags(input) });
@@ -442,8 +392,7 @@ export function useTransport(
     },
     [send],
   );
-  // Seal an RSVP (kind 31925) `e`-tagging the event's rumor id — a side event
-  // folded into the event's tally, latest per pubkey winning.
+  // An RSVP (kind 31925) side event; latest per pubkey wins.
   const setRsvp = useCallback(
     (event: CalendarEvent, status: RsvpStatus) => {
       void send({
@@ -470,9 +419,7 @@ export function useTransport(
     [calendarEvents, canModerate, canWrite, saveCalendar, removeCalendar, rsvpsFor, setRsvp],
   );
 
-  // Calendar events ALSO render inline in the timeline (an event card), in
-  // addition to the events bar. Each deduped event's rumor is already a ChatMsg
-  // (adapted before parsing); slot them into the timeline by announcement time.
+  // Calendar events also render inline, slotted by announcement time.
   const calendarMsgs = useMemo<ChatMsg[]>(() => calendarEvents.map((c) => c.event as ChatMsg), [calendarEvents]);
   const timeline = useMemo<ChatMsg[]>(() => {
     if (calendarMsgs.length === 0) return topLevel;
@@ -481,11 +428,8 @@ export function useTransport(
     );
   }, [topLevel, calendarMsgs]);
 
-  // Key-rotation boundaries: the first timeline row of each epoch RUN gets a
-  // divider above it, so a rekey is a visible line in the conversation and
-  // everything above it reads as sealed under a previous key. Epochs come from
-  // the fold (the coordinate whose key decrypted each message), not the
-  // adapted ChatMsg, which deliberately doesn't carry them.
+  // The first row of each epoch run gets a key-rotation divider. Epochs come from
+  // the fold; ChatMsg deliberately doesn't carry them.
   const rotationDividerIds = useMemo<ReadonlySet<string> | undefined>(() => {
     const epochById = new Map<string, bigint>();
     for (const m of folded.messages) epochById.set(m.rumorId, m.epoch);
@@ -501,25 +445,19 @@ export function useTransport(
     return ids;
   }, [timeline, folded.messages, folded.calendarEvents]);
 
-  // Visual-flood membership, straight from the fold. Passed through rather than
-  // recomputed: the fold already saw the whole timeline, including the thread
-  // replies the transport splits out below. Those ids simply never match a row,
-  // which is why this is only ever asked `has()` and never counted.
-  // `undefined` when empty, so a quiet channel hands the timeline no set at all.
+  // From the fold, which saw thread replies too (so only ever `has()`, never
+  // counted). `undefined` when empty.
   const quarantinedIds = useMemo<ReadonlySet<string> | undefined>(
     () => (folded.quarantined.size > 0 ? folded.quarantined : undefined),
     [folded.quarantined],
   );
-  // Which of those were collapsed by a community pause rather than by the flood
-  // heuristic, so the row can say why (CORD-04 §8).
+  // Which of those a community pause collapsed, so the row can say why (CORD-04 §8).
   const pausedIds = useMemo<ReadonlySet<string> | undefined>(
     () => (folded.paused.size > 0 ? folded.paused : undefined),
     [folded.paused],
   );
 
-  // Per-event RSVP binding for the inline card, mirroring `pollFor`. Recomputed
-  // when the event set or RSVP fold changes; identity-stable in between so an
-  // unchanged calendar row keeps its `calendar` prop (React.memo).
+  // Identity-stable between changes so unchanged calendar rows keep their prop.
   const calendarMessages = useMemo(() => {
     const map = new Map<string, MessageCalendar>();
     for (const c of calendarEvents) {
@@ -535,9 +473,8 @@ export function useTransport(
   }, [calendarEvents, rsvpsFor, canWrite, setRsvp]);
   const calendarFor = useCallback((id: string) => calendarMessages.get(id), [calendarMessages]);
 
-  // Concord edit: a kind-3302 rumor targeting the original message's rumor
-  // id. The fold applies the latest author-matching edit (non-destructive —
-  // the original keeps its id, so reactions, replies, and quotes stay intact).
+  // A Concord edit is a kind-3302 rumor targeting the original's id; the fold
+  // applies the latest author-matching one non-destructively.
   const editMessage = useCallback(
     async (original: ChatMsg, content: string) => {
       const trimmed = content.trim();
@@ -547,19 +484,15 @@ export function useTransport(
         kind: KIND_EDIT,
         target: original.id,
         targetKind: original.kind,
-        // CORD-08 §2: preserve the ORIGINAL's signed NIP-40 deadline verbatim —
-        // its exact value, or `null` for "the original carried none". Letting
-        // `send` recompute from the edit's clock and the CURRENT timer would
-        // make the edit outlive the message it edits (or, if the timer flipped,
-        // gain/lose an expiration the original never had).
+        // CORD-08 §2: keep the ORIGINAL's NIP-40 deadline verbatim (`null` = none),
+        // or the edit could outlive or change the message's expiry.
         expiration: expirationOf(original.tags) ?? null,
       });
     },
     [send],
   );
 
-  // Timer-change notices (CORD-08 §4), already authority-gated by the fold,
-  // adapted to the DM timer entry shape the shared timeline renders.
+  // Timer-change notices (CORD-08 §4), authority-gated by the fold.
   const timerEntries = useMemo<DmTimerTimelineEntry[]>(
     () =>
       folded.timerNotices.map((n) => ({
@@ -572,22 +505,15 @@ export function useTransport(
     [folded.timerNotices],
   );
 
-  // Adapters from the id-keyed hooks to the event-keyed ChatTransport shape.
-  // Defined OUTSIDE the transport memo: inline in it they'd take a new identity
-  // every time `messages` changed, and they're handed straight to memoized
-  // message rows as props — which would re-render the whole mounted window on
-  // every arriving message and every backfilled page.
+  // Defined outside the transport memo so memoized rows get stable props.
   const sendStatusFor = useCallback((id: string) => sendStatus[id], [sendStatus]);
-  // Spends no token — `useSendMessage` does that — but a refusal here DOES
-  // count as a flooding attempt, so this runs once per send the user asked
-  // for, ahead of the composer's reset so a refusal keeps their draft.
+  // A refusal counts as a flooding attempt, so call once per user send, before
+  // the composer resets (so a refusal keeps the draft).
   const canSend = useCallback(
     () => (community ? sendRefusal(community.idHex) : null),
     [community],
   );
-  // Through a ref: `retry`/`deleteMessage` are rebuilt per channel, and a
-  // channel switch re-rendered every row of the channel being LEFT (they are
-  // still mounted for that render) just to hand them the new identities.
+  // Via a ref, so a channel switch doesn't re-render the leaving channel's rows.
   const actionsRef = useRef({ retry, deleteMessage });
   actionsRef.current = { retry, deleteMessage };
   const retryEvent = useCallback((event: ChatMsg) => actionsRef.current.retry(event.id), []);
@@ -639,8 +565,7 @@ export function useTransport(
     [timeline, isLoading, canWrite, canModerate, canMentionEveryone, mentionsEveryone, rotationDividerIds, quarantinedIds, pausedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
-  // Built from the RAW rows, not the folded ones: pinning needs the original
-  // seal, and proving a revision needs the Edit rumor the fold consumed.
+  // From RAW rows: pinning needs the original seal, and edit proofs the consumed Edit rumor.
   const openedById = useMemo(() => {
     const map = new Map<string, OpenedChat>();
     for (const m of raw ?? []) map.set(m.rumorId, m);

@@ -1,26 +1,11 @@
 /**
- * Invite discovery — the community announcement event.
+ * Invite discovery — the community announcement event (kind 3314).
  *
- * CORD-05 invites are private by construction: the unlock token lives only in a
- * URL `#fragment`, and the kind-33301 bundle is NIP-44-encrypted with a key
- * derived from it. Nothing an invite touches is searchable on its own.
- *
- * "Share to Discover" publishes a community announcement: a REGULAR kind-3314
- * event, signed by the sharer's real key, whose content is the full shareable
- * invite link (`https://…/invite/naddr1…#fragment`, secret included) and
- * nothing else — no tags, no metadata. Name, icon, banner and channels all
- * come from the invite bundle the link resolves to, which the creator
- * refreshes as the community changes — so a listing never goes stale, it just
- * tracks the bundle. Even the community's identity is learned only by
- * resolving the bundle: a tag would be an unverifiable claim (nothing binds
- * it to the link), whereas the bundle's `community_id` self-certifies. The
- * link carries the secret, so anyone who finds the announcement can join —
- * publishing one is always an explicit user action.
- *
- * This is an Armada client convention, not a CORD kind: the event is bare
- * (never wrapped) and carries no Concord key material beyond what the shared
- * link itself already discloses. It lives here, not in the frozen CORD-02
- * registry (which ends at 3313).
+ * An Armada convention, not a CORD kind: a bare regular event signed by the
+ * sharer whose content is the full invite link (secret included) and nothing
+ * else. Name/icon/channels come from the bundle the link resolves to, and the
+ * bundle's `community_id` self-certifies where a tag couldn't. Anyone who finds
+ * it can join, so publishing is always an explicit user action.
  */
 
 import { parseInviteLink } from "@/concord/lib/invite";
@@ -33,17 +18,12 @@ export const KIND_COMMUNITY_ANNOUNCEMENT = 3314;
 
 /** An invite link mined from a community announcement. */
 export interface DiscoveredInvite {
-  /** The full shareable invite URL (fragment included). */
   inviteUrl: string;
   /**
-   * The link-signer pubkey — the invite's coordinate author, and the
-   * de-duplication key across announcements. Which COMMUNITY the link leads
-   * to is only known after resolving its bundle (the `community_id` there
-   * self-certifies), so cross-link duplicates of one community are folded at
-   * the rendering layer, not here.
+   * The link-signer pubkey — the de-dup key. Cross-link duplicates of one
+   * community are folded at render time, once bundles resolve.
    */
   linkSigner: string;
-  /** The announcement event that carried the link. */
   source: NostrRumor;
 }
 
@@ -55,10 +35,7 @@ export interface DiscoveredInvite {
 const INVITE_URL_RE =
   /(?:https?:\/\/[^\s]+?\/invite\/naddr1[0-9a-z]+#[A-Za-z0-9_-]+)|(?:naddr1[0-9a-z]+#[A-Za-z0-9_-]+)/gi;
 
-/**
- * Extract every valid, secret-carrying invite link found in free text,
- * de-duplicated by link-signer (so one link mentioned twice yields one entry).
- */
+/** Every valid, secret-carrying invite link in free text, de-duplicated by link-signer. */
 export function extractInviteUrls(text: string): string[] {
   const matches = text.match(INVITE_URL_RE);
   if (!matches) return [];
@@ -73,11 +50,7 @@ export function extractInviteUrls(text: string): string[] {
   return out;
 }
 
-/**
- * Read one community announcement event into a {@link DiscoveredInvite}, or
- * null when it isn't usable: the content must carry a valid, secret-carrying
- * invite link.
- */
+/** Parse an announcement into a {@link DiscoveredInvite}, or null if it lacks a valid invite link. */
 export function announcementFromEvent(event: NostrRumor): DiscoveredInvite | null {
   const [url] = extractInviteUrls(event.content);
   if (!url) return null;
@@ -86,12 +59,7 @@ export function announcementFromEvent(event: NostrRumor): DiscoveredInvite | nul
   return { inviteUrl: url, linkSigner: parsed.linkSigner, source: event };
 }
 
-/**
- * Build the community announcement "share to Discover" publishes: the invite
- * URL as the content, nothing else — the community's identity and all display
- * metadata are resolved live from the link's bundle. Returns null if the URL
- * isn't a valid invite link.
- */
+/** Build the "share to Discover" announcement; null if the URL isn't a valid invite link. */
 export function buildCommunityAnnouncement(input: { inviteUrl: string }): EventTemplate | null {
   if (!parseInviteLink(input.inviteUrl)) return null;
   return {
@@ -102,9 +70,8 @@ export function buildCommunityAnnouncement(input: { inviteUrl: string }): EventT
 }
 
 /**
- * The NIP-09 un-listing of announcements. Always `k`-tagged: Discover reads
- * deletions by kind (`#k: ["3314"]`) in the same round trip as the listings,
- * so an untagged delete would never be seen by it.
+ * The NIP-09 un-listing. Always `k`-tagged: Discover reads deletions by
+ * `#k: ["3314"]`, so an untagged delete would never be seen.
  */
 export function buildAnnouncementDeletion(announcementIds: string[]): EventTemplate {
   return {
@@ -115,12 +82,9 @@ export function buildAnnouncementDeletion(announcementIds: string[]): EventTempl
 }
 
 /**
- * Every announcement in `events` still standing — not deleted by a kind 5 from
- * its OWN author (anyone else's delete is noise) — whose link is one of
- * `linkSigners`, as {@link DiscoveredInvite}s, newest first. Unlike the
- * directory fold this keeps EVERY copy of a link rather than the newest per
- * signer: un-listing has to delete all of them, or deleting the newest just
- * promotes an older copy of the same link back onto Discover.
+ * Standing announcements (not deleted by their own author) whose link is in
+ * `linkSigners`, newest first. Keeps EVERY copy, since un-listing must delete
+ * all of them or an older copy resurfaces.
  */
 export function announcementsForLinks(
   events: NostrRumor[],
@@ -145,9 +109,8 @@ export function announcementsForLinks(
 }
 
 /**
- * Convert a shareable invite URL into a local router path (`/invite/<naddr>#…`)
- * so "Join" navigates in-app rather than doing a full navigation to the hosted
- * origin baked into a native-built link. Falls back to the raw input.
+ * Convert an invite URL to a local route (`/invite/<naddr>#…`) so "Join" stays
+ * in-app instead of navigating to the origin baked into a native link.
  */
 export function inviteUrlToLocalRoute(url: string): string {
   const trimmed = url.trim();

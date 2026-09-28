@@ -2,29 +2,12 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 /**
- * The Web Notification `tag` the desktop shell may use for a room.
- *
- * Electron presents a renderer `new Notification()` on Windows through the
- * WinRT toast API and sets the toast's `Tag` to Chromium's INTERNAL
- * notification id — not the web `tag`, but the id Chromium derives from it:
- * `n#<origin>#<token>`, where the token IS the web tag whenever one is given
- * (Blink substitutes a random token only for an untagged notification). A
- * toast tag longer than 64 characters fails `put_Tag` with "The size of the
- * notification tag is too large", the toast is never shown, and nothing
- * reaches the Action Center; the renderer sees only an `error` event.
- *
- * Armada tags each notification with its room key so a busy conversation
- * collapses into one entry, and a room key is `c2:<64 hex>` or `dm:<64 hex>`:
- * under `n#app://armada#` that is 82 characters, so on Windows every
- * notification failed this way — silently, and independently of the
- * AppUserModelId the shell also had to set. Linux (libnotify) and macOS have
- * no such limit, which is why the same build notified there.
- *
- * So on desktop the tag is a fixed-width digest of the room key: still one
- * per room, so collapsing works, and short enough that the id Windows sees
- * stays under the limit with room to spare. The web keeps the raw room key —
- * browsers hash the id themselves before Windows sees it, and the service
- * worker matches page notifications by that same raw tag.
+ * The Web Notification `tag` for a room on desktop. On Windows, Electron sets
+ * the WinRT toast `Tag` to Chromium's internal id `n#<origin>#<tag>`, and
+ * toast tags over 64 chars fail silently (never shown). Room keys
+ * (`c2:<64 hex>`) exceed that, so desktop uses a fixed-width digest (still
+ * one per room). The web keeps the raw key (browsers hash it; the service
+ * worker matches on it).
  */
 
 /** Chromium's non-persistent id prefix for the desktop shell's origin. */
