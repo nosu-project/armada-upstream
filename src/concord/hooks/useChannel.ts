@@ -21,7 +21,9 @@ import { backfillStore, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/co
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import {
   clearChannelExhausted,
+  CHAT_ROW_KINDS,
   queryChannelFirstSeenCached,
+  queryChannelPageBefore,
   queryChannelRumors,
   queryChannelRumorsByIds,
   readChannelCursor,
@@ -106,6 +108,36 @@ export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: Opened
 
 /** Local shorthand. */
 const upsert = upsertOpenedChat;
+
+/**
+ * Where scrolling back resumes in a channel: the oldest loaded row's second,
+ * and the loaded rows AT that second (see `queryChannelPageBefore`). Kept per
+ * channel beside the query cache, which outlives a mount, rather than derived
+ * from the cache's oldest row — a permalinked row retained in the cache can be
+ * far older than the paged history, and resuming from it would skip the gap.
+ */
+interface PageCursor {
+  until: number;
+  ids: Set<string>;
+}
+const ROW_KINDS = new Set(CHAT_ROW_KINDS);
+const pageCursors = new Map<string, PageCursor>();
+
+/** Lower `cursor` to the oldest of `events`' rows; returns the (possibly new) cursor. */
+function lowerCursor(cursor: PageCursor | undefined, events: readonly OpenedChat[]): PageCursor | undefined {
+  let out = cursor;
+  for (const ev of events) {
+    if (!ROW_KINDS.has(ev.kind)) continue;
+    if (!out || ev.createdAt < out.until) out = { until: ev.createdAt, ids: new Set([ev.rumorId]) };
+    else if (ev.createdAt === out.until) out.ids.add(ev.rumorId);
+  }
+  return out;
+}
+
+/** A cursor still describes `data` only while a row it names is in it. */
+function cursorHolds(cursor: PageCursor | undefined, data: readonly OpenedChat[]): cursor is PageCursor {
+  return !!cursor && data.some((m) => cursor.ids.has(m.rumorId));
+}
 
 /**
  * The moderation context resolved from the community's control fold.
@@ -252,7 +284,9 @@ export function useChannelTimeline(
     if (community?.idHex) void sweepExpiredCommunityRumors(community.idHex).catch(() => undefined);
   }, [community?.idHex]);
 
-  const windowLimitRef = useRef(WINDOW_SIZE);
+  // Set once scrolling back has found neither stored nor relay history left,
+  // so a live re-read of the newest page doesn't turn `hasMore` back on.
+  const endReachedRef = useRef(false);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   // Bumped when a held future-dated message's time arrives, to re-run the fold
@@ -261,7 +295,7 @@ export function useChannelTimeline(
   const [revealTick, setRevealTick] = useState(0);
 
   useEffect(() => {
-    windowLimitRef.current = WINDOW_SIZE;
+    endReachedRef.current = false;
     setHasMore(true);
     setIsLoadingOlder(false);
   }, [channelIdHex]);
@@ -272,6 +306,7 @@ export function useChannelTimeline(
   useEffect(() => {
     if (!channelIdHex) return;
     forgetChatSkips();
+    endReachedRef.current = false;
     void clearChannelExhausted(channelIdHex);
     invalidateSyncTopic(`c2:${channelIdHex}`);
     queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
@@ -376,20 +411,31 @@ export function useChannelTimeline(
       };
 
       const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
-        // hasMore: the local rumor window is full OR relays may have more
-        // (the persisted cursor — the scheduler's round writes it — isn't
-        // exhausted). Read alongside the rumors, not serially.
+        // Only the NEWEST page, however far back the reader has scrolled:
+        // older pages are already in the cache (`upsert` keeps them) and were
+        // read once by `loadOlder`. Re-reading the whole scrolled window here
+        // made every live message cost a read of all of it.
+        //
+        // hasMore: the page is full OR relays may have more (the persisted
+        // cursor — the scheduler's round writes it — isn't exhausted). Read
+        // alongside the rumors, not serially.
         const [rumors, saved] = await Promise.all([
           queryChannelRumors(community!.idHex, channelIdHex!, {
-            limit: windowLimitRef.current,
+            limit: WINDOW_SIZE,
             signal,
           }),
           readChannelCursor(cursorKeyId),
         ]);
-        setHasMore(rumors.length >= windowLimitRef.current || !saved?.exhausted);
+        setHasMore(!endReachedRef.current && (rumors.length >= WINDOW_SIZE || !saved?.exhausted));
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
           (m) => m.channelIdHex === channelIdHex,
         );
+        // A cursor for a cache that has since been dropped would resume below
+        // rows nobody loaded; restart it from this page.
+        const held = pageCursors.get(cursorKeyId);
+        const cursor = lowerCursor(cursorHolds(held, prev) ? held : undefined, rumors);
+        if (cursor) pageCursors.set(cursorKeyId, cursor);
+        else pageCursors.delete(cursorKeyId);
         // Fold in freshly-decrypted events directly rather than racing the
         // fire-and-forget rumor write. The epoch-cutoff filter re-applies the
         // ingest rule to rows persisted before the rotation was known locally.
@@ -476,49 +522,67 @@ export function useChannelTimeline(
     const cursorKeyId = channelIdHex ?? "";
     setIsLoadingOlder(true);
     try {
-      // If the rumor cache still has more than the current window, just widen
-      // the window (a re-read, no network, no decrypt). Otherwise the cache is
-      // exhausted, so page deeper history from the relays directly.
-      const inCache = await queryChannelRumors(community!.idHex, channelIdHex!, {
-        limit: windowLimitRef.current + 1,
-      });
-      const localHasMore = inCache.length > windowLimitRef.current;
-
-      windowLimitRef.current += WINDOW_SIZE;
-
-      const saved = localHasMore ? undefined : await readChannelCursor(cursorKeyId);
-      if (!localHasMore && !saved?.exhausted) {
-        const controller = new AbortController();
-        const older = await backfillStore(nostr, community!.relays, channel!, controller.signal, {
-          until: saved?.oldest,
-          maxPages: LOAD_OLDER_MAX_PAGES,
+      // The next stored page below the cursor — one bounded read, however far
+      // back the reader already is. Only when the store runs short are the
+      // relays paged for deeper history.
+      const cached = queryClient.getQueryData<OpenedChat[]>(queryKey) ?? [];
+      const held = pageCursors.get(cursorKeyId);
+      const cursor = cursorHolds(held, cached) ? held : undefined;
+      let added: OpenedChat[] = [];
+      let localFull = false;
+      if (cursor) {
+        const page = await queryChannelPageBefore(community!.idHex, channelIdHex!, {
+          until: cursor.until,
+          skip: cursor.ids,
+          limit: WINDOW_SIZE,
         });
-        const opened = await openChatBatch(older.events, channel!);
-        writeRumors(community!.idHex, opened);
-
-        // Deep-history paging never touches `newest` (that's the scheduler
-        // round's bridge job); the persisted merge is monotonic (`oldest`
-        // only recedes, `exhausted` sticky) and serialized per scope inside
-        // `updateStreamCursor`, so a scheduler round writing the same cursor
-        // concurrently merges with this rather than reading around it.
-        void updateChannelCursor(cursorKeyId, {
-          oldest: older.oldest,
-          exhausted: older.exhausted ? true : undefined,
-        });
-
-        const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
-          (m) => m.channelIdHex === channelIdHex,
-        );
-        queryClient.setQueryData<OpenedChat[]>(queryKey, upsert(prev, opened));
+        added = page.events;
+        localFull = page.full;
       }
 
-      const result = await query.refetch();
-      const after = result.data?.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length ?? 0;
+      let exhausted = false;
+      if (!localFull) {
+        const saved = await readChannelCursor(cursorKeyId);
+        exhausted = !!saved?.exhausted;
+        if (!exhausted) {
+          const controller = new AbortController();
+          const older = await backfillStore(nostr, community!.relays, channel!, controller.signal, {
+            until: saved?.oldest,
+            maxPages: LOAD_OLDER_MAX_PAGES,
+          });
+          const opened = await openChatBatch(older.events, channel!);
+          writeRumors(community!.idHex, opened);
+          exhausted = older.exhausted;
+
+          // Deep-history paging never touches `newest` (that's the scheduler
+          // round's bridge job); the persisted merge is monotonic (`oldest`
+          // only recedes, `exhausted` sticky) and serialized per scope inside
+          // `updateStreamCursor`, so a scheduler round writing the same cursor
+          // concurrently merges with this rather than reading around it.
+          void updateChannelCursor(cursorKeyId, {
+            oldest: older.oldest,
+            exhausted: older.exhausted ? true : undefined,
+          });
+          added = upsert(added, opened);
+        }
+      }
+
+      const next = lowerCursor(cursor, added);
+      if (next) pageCursors.set(cursorKeyId, next);
+      endReachedRef.current = !localFull && exhausted;
+      setHasMore(!endReachedRef.current);
+
+      const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
+        (m) => m.channelIdHex === channelIdHex,
+      );
+      const merged = filterEpochCutoff(upsert(prev, added), channel!);
+      queryClient.setQueryData<OpenedChat[]>(queryKey, merged);
+      const after = merged.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length;
       return Math.max(0, after - before);
     } finally {
       setIsLoadingOlder(false);
     }
-  }, [hasMore, isLoadingOlder, raw, query, nostr, community, channel, channelIdHex, queryClient, queryKey]);
+  }, [hasMore, isLoadingOlder, raw, nostr, community, channel, channelIdHex, queryClient, queryKey]);
 
   // The folded view (moderation + edits + reaction tallies), plus the
   // optimistic-delete overlay.

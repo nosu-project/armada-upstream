@@ -19,6 +19,7 @@ import {
   peekPendingWraps,
   queryChannelFirstSeen,
   queryChannelFirstSeenCached,
+  queryChannelPageBefore,
   queryChannelRumors,
   queryChannelRumorsByIds,
   queryMentionRumors,
@@ -171,6 +172,47 @@ describe("concord rumor store", () => {
     // A different channel id matches nothing.
     const none = await queryChannelRumors(CID, "ff".repeat(32), { limit: 100 });
     expect(none.length).toBe(0);
+  });
+
+  it("pages rows below a cursor with the side-events that decorate them", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const m1 = chatRumor(idHex, alice, KIND_MESSAGE, "m1", 1_000_000);
+    const m2 = chatRumor(idHex, alice, KIND_MESSAGE, "m2", 2_000_000);
+    const m3 = chatRumor(idHex, bob, KIND_MESSAGE, "m3", 2_000_500);
+    const m4 = chatRumor(idHex, bob, KIND_MESSAGE, "m4", 3_000_000);
+    // A reaction added long after its row, and a moderator's delete of it.
+    const react = chatRumor(idHex, bob, KIND_REACTION, "🔥", 10_000_000, [["e", m1.id]]);
+    const unreact = chatRumor(idHex, alice, KIND_DELETE, "", 11_000_000, [["e", react.id], ["k", "7"]]);
+    const all = [m1, m2, m3, m4, react, unreact];
+    writeRumors(
+      CID,
+      await openChatBatch(
+        await Promise.all(all.map((r) => wrapChat(r, channel, r.pubkey === alice.pubkey ? alice : bob))),
+        channel,
+      ),
+    );
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === all.length);
+
+    // m3 shares m2's second and is already loaded: it is skipped, m2 is not.
+    const page = await queryChannelPageBefore(CID, idHex, {
+      until: m3.created_at,
+      skip: new Set([m3.id]),
+      limit: 10,
+    });
+    expect(page.events.map((e) => e.content).sort()).toEqual(["", "m1", "m2", "🔥"]);
+    expect(page.events.some((e) => e.rumorId === unreact.id)).toBe(true);
+    expect(page.full).toBe(false);
+
+    const short = await queryChannelPageBefore(CID, idHex, {
+      until: m4.created_at,
+      skip: new Set([m4.id]),
+      limit: 1,
+    });
+    expect(short.events.filter((e) => e.kind === KIND_MESSAGE)).toHaveLength(1);
+    expect(short.full).toBe(true);
   });
 
   it("delete=delete: a self kind-5 physically removes its target", async () => {
