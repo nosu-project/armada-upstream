@@ -5,6 +5,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { isNostrId } from "@/lib/nostrId";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
+import { VerifiedRelay } from "@/lib/verifiedRelay";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -60,7 +61,35 @@ type Pool = ReturnType<typeof useNostr>["nostr"];
 /** Most relays one fallback step will connect to. */
 const MAX_FALLBACK_RELAYS = 5;
 
-/** Query a group of relays; the first match, or null on a miss or failure. */
+/**
+ * Query one relay the pool is NOT connected to, over a connection of its own
+ * that answers no AUTH challenge and closes when done. The relays here come
+ * from hints, other people's outboxes and references, and answering AUTH
+ * would tell each of them who is looking. A relay that insists on AUTH to
+ * read is a miss.
+ */
+async function queryUnauthenticated(
+  url: string,
+  filter: NostrFilter[],
+  signal: AbortSignal,
+): Promise<NostrEvent | null> {
+  const relay = new VerifiedRelay(url);
+  try {
+    const events = await relay.query(filter, { signal });
+    return events[0] ?? null;
+  } catch {
+    return null;
+  } finally {
+    void relay.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Query a group of relays; the first match, or null on a miss or failure.
+ * Relays the pool already holds a connection to are asked through it; the
+ * rest through {@link queryUnauthenticated}, so a lookup never adds a relay to
+ * the pool, which answers AUTH.
+ */
 async function queryRelayGroup(
   nostr: Pool,
   urls: string[],
@@ -69,12 +98,16 @@ async function queryRelayGroup(
 ): Promise<NostrEvent | null> {
   const relays = [...new Set(sanitizeRelayHints(urls))].slice(0, MAX_FALLBACK_RELAYS);
   if (relays.length === 0) return null;
-  try {
-    const events = await nostr.group(relays).query(filter, { signal });
-    return events[0] ?? null;
-  } catch {
-    return null;
+  const pooled = relays.filter((url) => nostr.relays.has(url));
+  const attempts = relays
+    .filter((url) => !nostr.relays.has(url))
+    .map((url) => queryUnauthenticated(url, filter, signal));
+  if (pooled.length > 0) {
+    attempts.push(
+      nostr.group(pooled).query(filter, { signal }).then((events) => events[0] ?? null, () => null),
+    );
   }
+  return firstMatch(attempts);
 }
 
 /**
