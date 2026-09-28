@@ -804,10 +804,11 @@ to fail a run:
   whatever host the sender named, so an image in a message learns the IP of
   everyone who scrolls past it; no referrer policy or CSP touches the TCP
   connection. `src/lib/mediaPolicy.ts` is the ONE place the rule lives, and the
-  rule is a single PROXY: with `mediaProxy` set (Ditto's `{href}` template, ON
-  by default at the public proxy Ditto ships, user-clearable) every such load
-  goes through it, so the host sees the proxy's address; cleared, media loads
-  directly. A loopback/private address is never proxied and never loaded.
+  rule is a single PROXY: with `mediaProxies` set (Ditto's `{href}` template,
+  OFF by default, user-settable — turning it on in settings suggests the public
+  proxy Ditto ships, `DEFAULT_MEDIA_PROXY`) every such load goes through it, so
+  the host sees the proxy's address; unset, media loads directly. A
+  loopback/private address is never proxied and never loaded.
   Apply it by going through the hooks that already do (`useMediaWithFallback`,
   `useImageFallback`/`FallbackImage`, `useRoutedCandidates`, `useMediaSrc`,
   `AvatarImage`), never by putting a raw event URL into an element. The three
@@ -815,7 +816,9 @@ to fail a run:
   `MediaPolicy.java`, `ArmadaNotify`'s `MediaPolicy.swift` — carry the same
   proxy in their configs and must stay in step with the TS
   (`MediaPolicyTest.java`, `MediaPolicyTests.swift` mirror `mediaPolicy.test.ts`);
-  an absent proxy config there is the DEFAULT (proxy on), never "load directly".
+  an absent or unreadable proxy config there is the DEFAULT — proxying off,
+  loading directly — matching the web client, since it can only mean the user
+  never turned a proxy on. An explicit `""` is off too.
   Two bypasses load directly on purpose: a Buzz-hosted blob (its signed GET
   header would not survive a proxy, and its host is a relay the viewer joined),
   and a deliberate file download or Mini App open (`FileAttachment`, `Webxdc`),

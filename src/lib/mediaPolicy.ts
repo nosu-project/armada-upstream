@@ -37,7 +37,11 @@ import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
  * normalization (`normalizeProxy`) is shared and must stay identical.
  */
 
-/** Ditto's default CORS proxy: a byte-for-byte pass-through with a shared cache. */
+/**
+ * Ditto's default CORS proxy: a byte-for-byte pass-through with a shared cache.
+ * The value settings suggests when the user turns proxying on — never applied
+ * without them doing so.
+ */
 export const DEFAULT_MEDIA_PROXY = "https://proxy.shakespeare.diy/?url={href}";
 
 export interface MediaPolicy {
@@ -67,19 +71,18 @@ export interface MediaPolicyConfig {
 }
 
 /**
- * The protective fallback a reader with no config in reach AT ALL applies: the
- * default proxy on. This is NOT the app's own default (which is proxying OFF —
- * see `defaultConfig.mediaProxies`); it is the floor for a background writer whose
- * config is missing or was sealed before this field existed, so a legacy install
- * that had proxying on still proxies a stranger's avatar rather than leaking its
- * IP. A fresh install writes `{ proxy: "" }` through the bridge and never reaches
- * this.
+ * The policy a reader with no config in reach applies: proxying OFF, the app's
+ * own default (see `defaultConfig.mediaProxies`). A background writer whose
+ * config is missing, or was sealed before this field existed, belongs to a user
+ * who never turned a proxy on, so it loads directly exactly as the page would.
+ * {@link DEFAULT_MEDIA_PROXY} is only what settings suggests when the user
+ * turns proxying on.
  */
 export function defaultMediaPolicy(): MediaPolicy {
-  return { proxy: DEFAULT_MEDIA_PROXY };
+  return { proxy: "" };
 }
 
-/** A bridge config back into a policy, tolerating a missing or partial one. */
+/** A bridge config back into a policy; a missing or partial one is the default (off). */
 export function mediaPolicyFromConfig(config: Partial<MediaPolicyConfig> | undefined): MediaPolicy {
   if (!config || typeof config.proxy !== "string") return defaultMediaPolicy();
   return { proxy: normalizeMediaProxy(config.proxy) };

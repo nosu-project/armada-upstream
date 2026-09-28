@@ -13,12 +13,13 @@ import org.junit.Test;
  * exactly the address the WebView would have loaded the picture from.
  */
 public class MediaPolicyTest {
+    private static final String PROXY = "https://proxy.shakespeare.diy/?url={href}";
     private static final String IMG = "https://henk.example/ip/ip.png";
     private static final String PROXIED =
             "https://proxy.shakespeare.diy/?url=https%3A%2F%2Fhenk.example%2Fip%2Fip.png";
 
     @Test public void proxiesAHostWhenAProxyIsSet() {
-        assertEquals(PROXIED, new MediaPolicy(MediaPolicy.DEFAULT_PROXY).resolve(IMG));
+        assertEquals(PROXIED, new MediaPolicy(PROXY).resolve(IMG));
     }
 
     @Test public void loadsDirectlyWithNoProxy() {
@@ -26,7 +27,7 @@ public class MediaPolicyTest {
     }
 
     @Test public void localNetworkAddressesAreNeverFetchedOrProxied() {
-        assertNull(new MediaPolicy(MediaPolicy.DEFAULT_PROXY).resolve("http://192.168.1.1/x.png"));
+        assertNull(new MediaPolicy(PROXY).resolve("http://192.168.1.1/x.png"));
         assertNull(new MediaPolicy("").resolve("http://localhost:8080/x.png"));
         assertTrue(MediaPolicy.isLocalNetworkUrl("http://[::ffff:7f00:1]/x"));
         assertTrue(MediaPolicy.isLocalNetworkUrl("http://10.0.0.5/x"));
@@ -44,7 +45,7 @@ public class MediaPolicyTest {
     }
 
     @Test public void anAlreadyProxiedUrlIsNotWrappedTwice() {
-        assertEquals(PROXIED, new MediaPolicy(MediaPolicy.DEFAULT_PROXY).resolve(PROXIED));
+        assertEquals(PROXIED, new MediaPolicy(PROXY).resolve(PROXIED));
     }
 
     @Test public void proxyTemplateNormalizationMatchesTheWebView() {
@@ -68,16 +69,17 @@ public class MediaPolicyTest {
     @Test public void parseReadsTheWebViewShapeAndDefaultsTheRest() {
         assertEquals("https://p.example/?u={href}",
                 MediaPolicy.parse("{\"proxy\":\"https://p.example/?u=\"}").proxy);
-        // An explicitly EMPTY proxy is a choice; an absent one is the default.
+        // Empty and absent are both proxying off, the WebView's default.
         assertEquals("", MediaPolicy.parse("{\"proxy\":\"\"}").proxy);
-        assertEquals(MediaPolicy.DEFAULT_PROXY, MediaPolicy.parse("{}").proxy);
+        assertEquals("", MediaPolicy.parse("{}").proxy);
     }
 
-    @Test public void missingOrBrokenConfigIsTheDefaultPolicyNotDirect() {
+    @Test public void missingOrBrokenConfigIsTheDefaultPolicyProxyOff() {
+        assertEquals("", MediaPolicy.defaults().proxy);
         for (String json : new String[] {null, "", "{", "[]"}) {
             MediaPolicy p = MediaPolicy.parse(json);
-            assertEquals(MediaPolicy.DEFAULT_PROXY, p.proxy);
-            assertEquals(PROXIED, p.resolve(IMG));
+            assertEquals("", p.proxy);
+            assertEquals(IMG, p.resolve(IMG));
         }
     }
 }

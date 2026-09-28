@@ -226,8 +226,7 @@ function uniqueTag(tags: string[][], name: string): string | undefined {
 
 /**
  * The viewer's media policy, from the sealed config. A config sealed before
- * the field existed gets the defaults — a stranger's avatar through the
- * proxy — rather than a direct fetch.
+ * the field existed gets the default — proxying off, as on the page.
  */
 function policyOf(cfg: SwPushConfig | null): MediaPolicy {
   return mediaPolicyFromConfig(cfg?.mediaPolicy);

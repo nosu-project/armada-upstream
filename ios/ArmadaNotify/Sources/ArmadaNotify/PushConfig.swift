@@ -139,7 +139,7 @@ struct PushConfig {
     let concord: [ConcordStream]
     /// Where a sender's avatar may be fetched from — the app's media policy
     /// (`MediaPolicy`), applied to the one fetch the extension makes. A config
-    /// written before the field existed gets the defaults, never "everything".
+    /// written before the field existed gets the default: proxying off.
     let mediaPolicy: MediaPolicy
 
     init(

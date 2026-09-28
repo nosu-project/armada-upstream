@@ -361,7 +361,7 @@ public class NotificationRelayService extends Service {
     private String dmRequests = "generic";
     // Where a sender's avatar and a community's icon may be fetched FROM — the
     // WebView's media policy (see MediaPolicy), applied to the two fetches this
-    // service makes unprompted. Defaults, never "everything", when absent.
+    // service makes unprompted. Absent means the default: proxying off.
     private MediaPolicy mediaPolicy = MediaPolicy.defaults();
     // Relays carrying the user's OWN replaceable documents (see SelfState) —
     // the client's general pool: app relays + the user's NIP-65 read relays.

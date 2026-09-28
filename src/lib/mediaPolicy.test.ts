@@ -177,9 +177,11 @@ describe("parseProxyList", () => {
 });
 
 describe("mediaPolicyFromConfig", () => {
-  it("defaults to the public proxy for a missing config", () => {
+  it("defaults to proxying off for a missing or partial config", () => {
+    expect(defaultMediaPolicy()).toEqual({ proxy: "" });
     expect(mediaPolicyFromConfig(undefined)).toEqual(defaultMediaPolicy());
-    expect(defaultMediaPolicy().proxy).toBe(DEFAULT_MEDIA_PROXY);
+    expect(mediaPolicyFromConfig({})).toEqual(defaultMediaPolicy());
+    expect(mediaSrc(IMG, mediaPolicyFromConfig(undefined))).toBe(IMG);
   });
 
   it("normalizes and preserves an explicit proxy, including an empty one", () => {
