@@ -26,6 +26,7 @@
  */
 
 import { parseGitRepositoryAddress, type GitRepositoryAddress } from "@/lib/gitActivity";
+import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -133,7 +134,8 @@ export function parseCIJobResult(event: NostrRumor): CIJobResult | undefined {
     job,
     name: firstTagValue(event, "name")?.trim() || undefined,
     conclusion: asConclusion(firstTagValue(event, "conclusion")?.trim()),
-    logs: firstTagValue(event, "logs")?.trim() || undefined,
+    // Only an http(s) URL: it becomes a link and a fetch.
+    logs: sanitizeUrl(firstTagValue(event, "logs")?.trim()),
     createdAt: event.created_at,
   };
 }
