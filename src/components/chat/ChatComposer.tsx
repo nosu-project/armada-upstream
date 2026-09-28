@@ -186,7 +186,7 @@ const draftCache = new KvPrefixCache<Partial<Draft>>({ prefix: "draft:" });
 
 function readDraft(key: string): Draft {
   const stored = draftCache.get(key);
-  if (stored === undefined) return EMPTY_DRAFT;
+  if (typeof stored !== "object" || stored === null) return EMPTY_DRAFT;
   return {
     content: typeof stored.content === "string" ? stored.content : "",
     attachments: Array.isArray(stored.attachments) ? stored.attachments : [],

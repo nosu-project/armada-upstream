@@ -9,8 +9,8 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
  * the platform's.
  *
  * `android.database.sqlite` is whatever the OS image shipped — SQLite 3.9 on
- * minSdk 24 — and [ArmadaDbSchema] needs 3.43 for FTS5 `contentless_delete`
- * plus JSON1 for the search trigger's `json_extract`. Borrowing the platform
+ * minSdk 24 — and [ArmadaDbSchema] needs 3.43 for FTS5 `contentless_delete`.
+ * Borrowing the platform
  * engine would make the schema's availability a function of the device's
  * Android version; bundling makes it a constant (3.50.1, per ABI). The same
  * artifact resolves on the JVM, which is how the conformance suite runs the

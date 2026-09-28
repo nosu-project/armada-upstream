@@ -26,9 +26,11 @@ import {
 import {
   loadPushIntent,
   loadRegisteredPushIds,
+  pushInstallationId,
   savePushIntent,
   savePushPrefs,
-  saveRegisteredPushIds, pushInstallationId } from "@/lib/pushRegistry";
+  saveRegisteredPushIds,
+} from "@/lib/pushRegistry";
 import {
   scopePushSubscriptionId,
   standaloneNotification,

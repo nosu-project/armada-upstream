@@ -49,21 +49,6 @@ enum ArmadaDbSchema {
     /// migration.
     static let version: Int64 = 2
 
-    /// The development numbering of the CURRENT layout.
-    ///
-    /// The term index was built across two versions before release and
-    /// collapsed into one, so a file written by a development build carries 3
-    /// where a released one carries 2 — with byte-identical tables, since the
-    /// collapse renumbered and changed nothing else. Accepted rather than
-    /// refused as "a layout this build predates", and renumbered by the
-    /// `PRAGMA` at the end of `migrate`, because refusing it would take out a
-    /// database holding decrypted NIP-17 and Concord history that exists nowhere
-    /// else.
-    ///
-    /// No released build ever wrote it, so this can be deleted once no
-    /// development install remains.
-    static let preReleaseVersion: Int64 = 3
-
     /// The tables, indexes and triggers every ArmadaDB file has.
     static let base: [String] = [
         // `seq` is the rowid and encodes `created_at`, so the table is stored
@@ -189,34 +174,6 @@ enum ArmadaDbSchema {
             generation INTEGER NOT NULL
         ) WITHOUT ROWID
         """,
-    ]
-
-    /// Drop the term index, for the one file layout that no version comparison
-    /// can reach: a `rumor_term_tenants` with no `generation` column.
-    ///
-    /// That layout was never released. The index and its marker arrived together
-    /// in v2, and the marker has recorded a generation from the moment v2
-    /// existed publicly — but midway through this feature's development there
-    /// was an intermediate form recording only THAT a tenant had been indexed,
-    /// and a file that took it claims a version this build considers current or
-    /// newer. The schema above would leave that older table in place, and every
-    /// read and write of `generation` would then throw for the life of the file,
-    /// leaving the term index permanently unbuilt and the conversation list
-    /// silently empty.
-    ///
-    /// So it is detected by LAYOUT rather than by version, exactly as v0 is.
-    /// Dropping is both safe and sufficient: a term is a cache of a derivation,
-    /// the `CREATE IF NOT EXISTS` statements above recreate both tables, and the
-    /// per-tenant backfill refills them — so unlike a refusal, this costs the
-    /// file nothing it cannot rebuild. The trigger that references `rumor_terms`
-    /// survives the drop unfired — SQLite resolves a trigger body when it fires,
-    /// and the table is recreated in the same migration.
-    ///
-    /// Nothing but a development install can trigger this, so it can be deleted
-    /// once none remain.
-    static let dropTermIndex: [String] = [
-        "DROP TABLE IF EXISTS rumor_terms",
-        "DROP TABLE IF EXISTS rumor_term_tenants",
     ]
 
     /// The NIP-50 search index, installed on top of `base`.

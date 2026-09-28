@@ -27,6 +27,11 @@ export { compareVersions } from "./releases";
 
 const RELAY_TIMEOUT_MS = 12_000;
 
+/**
+ * Releases asked of each relay: a relay's newest N can be a run of
+ * prereleases, and a stable build must still find a stable one in it.
+ */
+const RELEASE_QUERY_LIMIT = 50;
 
 /**
  * Which installer each platform self-updates from; matches
@@ -82,6 +87,18 @@ export interface DesktopUpdate {
     sha256: string;
     size: number;
   };
+}
+
+export interface ResolveDesktopUpdateOptions {
+  target: DesktopTarget;
+  /** Whether a release candidate is an acceptable update. */
+  allowPrerelease?: boolean;
+  relays?: readonly string[];
+  authors?: readonly string[];
+  repoId?: string;
+  /** Injectable for tests; defaults to the runtime's global. */
+  webSocket?: typeof WebSocket;
+  signal?: AbortSignal;
 }
 
 /**
@@ -380,4 +397,44 @@ export async function resolveWebBundle({
     relays.map((relay) => queryRelay(relay, filter, WebSocketImpl, signal)),
   );
   return selectWebBundle(responses.flat(), { authors, siteId });
+}
+
+/**
+ * The newest installable release for this machine, or undefined if none has an
+ * artifact for it. Whether it is newer than the running build is
+ * electron-updater's call. Called only from `electron/nostrUpdateProvider.js`.
+ */
+export async function resolveDesktopUpdate({
+  target,
+  allowPrerelease = false,
+  relays = RELEASE_RELAYS,
+  authors = RELEASE_AUTHORS,
+  repoId = RELEASE_REPO_ID,
+  webSocket,
+  signal,
+}: ResolveDesktopUpdateOptions): Promise<DesktopUpdate | undefined> {
+  const WebSocketImpl =
+    webSocket ?? (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+  if (!WebSocketImpl) {
+    throw new Error("no WebSocket implementation available for the update check");
+  }
+  if (relays.length === 0) throw new Error("no release relays configured");
+  if (authors.length === 0) throw new Error("no release authors configured");
+
+  const filter = {
+    kinds: [RELEASE_KIND],
+    authors: [...authors],
+    "#D": [repoId],
+    limit: RELEASE_QUERY_LIMIT,
+  };
+  const responses = await Promise.all(
+    relays.map((relay) => queryRelay(relay, filter, WebSocketImpl, signal)),
+  );
+
+  return selectDesktopRelease(responses.flat(), {
+    target,
+    allowPrerelease,
+    authors,
+    repoId,
+  });
 }

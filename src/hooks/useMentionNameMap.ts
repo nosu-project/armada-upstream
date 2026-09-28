@@ -3,7 +3,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 
 import { authorQueryOptions } from '@/hooks/useAuthor';
-import type { AuthorResult } from "@/lib/authorCache";
+import type { AuthorResult } from '@/lib/authorCache';
 import { useEventStore } from '@/hooks/useEventStore';
 import { demandProfiles } from '@/sync/profileSync';
 

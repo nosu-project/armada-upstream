@@ -22,21 +22,14 @@ package buzz.armada.app.db
  * range FTS5 pushes down into its own backwards walk.
  *
  * REQUIREMENTS: FTS5 of at least 3.43 (2023), for contentless tables that
- * support deletion, and the JSON1 extension (the v0→v1 rebuild's
- * `json_extract`). Android's platform SQLite has neither on the versions Armada
+ * support deletion. Android's platform SQLite lacks it on the versions Armada
  * supports, which is why [BundledSqlDriver] brings its own engine.
  */
 internal object ArmadaDbSchema {
 
     /**
-     * The schema version, stored in `PRAGMA user_version`. A file below it is
-     * upgraded before the `CREATE IF NOT EXISTS` statements run.
+     * The schema version, stored in `PRAGMA user_version`.
      *
-     *   0  the pre-versioning layout: `rumors.tenant` / `rumor_coords.tenant`
-     *      were the tenant id TEXT, and `rumors.json` held the whole serialized
-     *      rumor — so the id, kind, pubkey and created_at columns were stored
-     *      twice, and the tenant id was repeated in every row of the table and
-     *      of its five indexes.
      *   1  the tenant-interned layout, without a term index.
      *   2  the current layout below: adds `rumor_terms`, the derived term index,
      *      and `rumor_term_tenants`, which records that a tenant has been
@@ -160,34 +153,6 @@ internal object ArmadaDbSchema {
     )
 
     /**
-     * Drop the term index, for the one file layout that no version comparison
-     * can reach: a `rumor_term_tenants` with no `generation` column.
-     *
-     * That layout was never released. The index and its marker arrived together
-     * in v2, and the marker has recorded a generation from the moment v2 existed
-     * publicly — but during this feature's development there was an intermediate
-     * form that recorded only THAT a tenant had been indexed, and a file that
-     * took it is already at the current version. The schema above would leave
-     * that older table in place, and every read and write of `generation` would
-     * then throw for the life of the file, leaving the term index permanently
-     * unbuilt and the conversation list silently empty.
-     *
-     * So it is detected by LAYOUT rather than by version, exactly as v0 is.
-     * Dropping is both safe and sufficient: a term is a cache of a derivation,
-     * the `CREATE IF NOT EXISTS` statements above recreate both tables, and the
-     * per-tenant backfill refills them. The trigger that references
-     * `rumor_terms` survives the drop unfired — SQLite resolves a trigger body
-     * when it fires, and the table is recreated in the same migration.
-     *
-     * Nothing but a pre-release install can trigger this, so it can be deleted
-     * once none remain.
-     */
-    val DROP_TERM_INDEX: List<String> = listOf(
-        "DROP TABLE IF EXISTS rumor_terms",
-        "DROP TABLE IF EXISTS rumor_term_tenants",
-    )
-
-    /**
      * The NIP-50 search index, installed on top of [BASE].
      *
      * Its content is a column of the rumor row, so it is maintained entirely by
@@ -212,57 +177,5 @@ internal object ArmadaDbSchema {
         """CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
             DELETE FROM rumors_fts WHERE rowid = old.seq;
         END""",
-    )
-
-    /**
-     * The v0 → v1 rebuild: split `json` into `tags` + `content` columns and
-     * turn the tenant TEXT into the interned `tenants.ord`, in `rumors` and
-     * `rumor_coords` both. Run inside one transaction, before the [BASE]
-     * statements recreate the indexes and triggers against the new tables.
-     *
-     * Rowids are preserved, which is what keeps the rebuild away from the FTS
-     * tables: their rows are keyed by `seq` and stay valid as-is. Dropping the
-     * old tables drops their triggers WITHOUT firing them — SQLite's implicit
-     * drop-time DELETE fires no triggers — so no index row is lost with them.
-     *
-     * The tenant interning inserts are belt and braces: every stored rumor's
-     * tenant was interned when it was written, so the joins below should never
-     * drop a row — but a row whose tenant somehow wasn't interned would
-     * otherwise vanish silently, and `INSERT OR IGNORE` makes that impossible
-     * instead.
-     */
-    val REBUILD_V1: List<String> = listOf(
-        "INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumors",
-        "INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumor_coords",
-        """CREATE TABLE rumors_v1 (
-            seq INTEGER PRIMARY KEY,
-            tenant INTEGER NOT NULL,
-            id TEXT NOT NULL,
-            kind INTEGER NOT NULL,
-            pubkey TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            tags TEXT NOT NULL,
-            content TEXT NOT NULL
-        )""",
-        """INSERT INTO rumors_v1 (seq, tenant, id, kind, pubkey, created_at, tags, content)
-            SELECT r.seq, t.ord, r.id, r.kind, r.pubkey, r.created_at,
-                COALESCE(json_extract(r.json, '${'$'}.tags'), '[]'),
-                COALESCE(json_extract(r.json, '${'$'}.content'), '')
-            FROM rumors r JOIN tenants t ON t.id = r.tenant""",
-        "DROP TABLE rumors",
-        "ALTER TABLE rumors_v1 RENAME TO rumors",
-        """CREATE TABLE rumor_coords_v1 (
-            tenant INTEGER NOT NULL,
-            coord TEXT NOT NULL,
-            id TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            created_at INTEGER NOT NULL,
-            PRIMARY KEY (tenant, coord)
-        ) WITHOUT ROWID""",
-        """INSERT INTO rumor_coords_v1 (tenant, coord, id, seq, created_at)
-            SELECT t.ord, c.coord, c.id, c.seq, c.created_at
-            FROM rumor_coords c JOIN tenants t ON t.id = c.tenant""",
-        "DROP TABLE rumor_coords",
-        "ALTER TABLE rumor_coords_v1 RENAME TO rumor_coords",
     )
 }

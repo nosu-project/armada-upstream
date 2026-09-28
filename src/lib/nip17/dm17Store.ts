@@ -21,7 +21,11 @@ import {
   DM_MESSAGE_KINDS,
   DM_MINE_TERM,
   DM_MSG_TERM,
-  dmConvTerm, dmConvKey, dmConvKeyOf, dmPeersOf } from "@/lib/nip17/conversation";
+  dmConvKey,
+  dmConvKeyOf,
+  dmConvTerm,
+  dmPeersOf,
+} from "@/lib/nip17/conversation";
 import {
   DM_RUMOR_KINDS,
   DM_THREAD_KINDS,
