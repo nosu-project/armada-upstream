@@ -14,17 +14,6 @@ export const IMAGE_URL_REGEX = new RegExp(
   `https?:\\/\\/[^\\s]+\\.(${IMAGE_EXTS})(\\?[^\\s]*)?`,
   'i',
 );
-
-export const VIDEO_URL_REGEX = new RegExp(
-  `https?:\\/\\/[^\\s]+\\.(${VIDEO_EXTS})(\\?[^\\s]*)?`,
-  'gi',
-);
-
-export const AUDIO_URL_REGEX = new RegExp(
-  `https?:\\/\\/[^\\s]+\\.(${AUDIO_EXTS})(\\?[^\\s]*)?`,
-  'gi',
-);
-
 /** Matches any media URL (video, audio, webxdc) that is rendered as an embed — not a link preview. */
 export const EMBED_MEDIA_URL_REGEX = new RegExp(
   `https?:\\/\\/[^\\s]+\\.(${VIDEO_EXTS}|${AUDIO_EXTS}|xdc)(\\?[^\\s]*)?`,

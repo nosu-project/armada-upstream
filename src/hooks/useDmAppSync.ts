@@ -26,13 +26,13 @@ import { queryDm17Webxdc } from "@/lib/nip17/dm17Store";
 import { logSync } from "@/lib/syncLog";
 import {
   buildDmRumor,
-  dmConvPeers,
   KIND_DM_PEER_SIGNAL,
   sealDmRumor,
   wrapDmSeal,
   type Dm17Signer,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmConvPeers } from "@/lib/nip17/conversation";
 import { dmThreadScope } from "@/wire/bus";
 import { useWireScopes } from "@/wire/useWireScopes";
 

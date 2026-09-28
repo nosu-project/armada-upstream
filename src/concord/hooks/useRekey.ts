@@ -35,7 +35,6 @@ import {
   mintOrReuseRotationKey,
   myLocator,
   parseRekey,
-  rekeyScopeId,
   rotationExcludesMe,
   rotationPublishedAtMs,
   type ParsedRekey,
@@ -53,7 +52,6 @@ import type { CommunityMetadata, Community, HeldRoot, PrivateChannelKey } from "
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
-
 
 /**
  * Re-post this user's live invite bundles for `rotated` at the CURRENT keys
@@ -1184,6 +1182,3 @@ export function useRefound(community: Community | undefined) {
     canRefound: Boolean(user?.signer.nip44),
   };
 }
-
-// Re-exported for the moderation hook's scope math.
-export { rekeyScopeId };

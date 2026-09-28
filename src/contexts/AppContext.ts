@@ -339,9 +339,6 @@ export const SYNCED_CONFIG_KEYS = [
   ...NOTIF_CONFIG_KEYS,
   ...DM_CONFIG_KEYS,
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
-
-export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
-
 /** Local mirrors whose standard signed list events are the portable source. */
 export const CANONICAL_LIST_CONFIG_KEYS = [
   "searchRelays",

@@ -2,8 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BotPill } from './BotPill';
-
-import type { AuthorResult } from '@/hooks/useAuthor';
+import type { AuthorResult } from "@/lib/authorCache";
 
 // Controllable stand-in for what useAuthor resolves for a given pubkey.
 const authorData = vi.hoisted(() => ({ current: undefined as AuthorResult | undefined }));

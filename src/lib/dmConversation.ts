@@ -7,7 +7,7 @@
 import { nip19 } from "nostr-tools";
 
 import { getDisplayName } from "@/lib/getDisplayName";
-import { DM_PEER_SEP, dmConvKey, dmConvPeers } from "@/lib/nip17/protocol";
+import { DM_PEER_SEP, dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
 import { resolvePubkey } from "@/lib/resolvePubkey";
 
 import type { NostrMetadata } from "@nostrify/nostrify";

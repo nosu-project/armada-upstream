@@ -9,7 +9,6 @@ import {
   ArmadaPush,
   clearIosPushConfig,
   hasIosPush,
-  pushInstallationId,
   writeIosPushConfig,
   recordPushStatus,
 } from "@/lib/nativePush";
@@ -29,8 +28,7 @@ import {
   loadRegisteredPushIds,
   savePushIntent,
   savePushPrefs,
-  saveRegisteredPushIds,
-} from "@/lib/pushRegistry";
+  saveRegisteredPushIds, pushInstallationId } from "@/lib/pushRegistry";
 import {
   scopePushSubscriptionId,
   standaloneNotification,

@@ -69,9 +69,6 @@ import { isHevcScreenShareParticipant } from "@/lib/hevcScreenShare";
 import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
 import { PortalContainerProvider, usePortalContainer } from "@/hooks/usePortalContainer";
 
-// Back-compat re-export; the slot lives in a LiveKit-free module.
-export { CallStageSlot } from "@/components/chat/CallStageSlot";
-
 const TILE_ASPECT = 16 / 9;
 
 /**
@@ -314,7 +311,6 @@ function usePrimaryFloatingKey(args: {
   if (!enabled) return null;
   return screenShareKey ?? focusKey ?? heldSpeaker ?? speakingKey ?? fallbackKey;
 }
-
 
 /**
  * Display name with Concord's verification race (CORD-07 §4): LiveKit and the

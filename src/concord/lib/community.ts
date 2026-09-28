@@ -17,7 +17,6 @@ import {
 import { channelCategory } from "@/concord/lib/channelCategory";
 import { channelPosition, compareChannelOrder } from "@/concord/lib/channelOrder";
 import { channelView } from "@/concord/lib/channelView";
-import { type ParsedInviteLink } from "@/concord/lib/invite";
 import type { FoldedControl } from "@/concord/lib/control";
 import { capRelays, type Channel, type Community, type VoiceKeys } from "@/concord/lib/types";
 
@@ -174,6 +173,3 @@ export function channelsView(community: Community, folded: FoldedControl | undef
   out.sort(compareChannelOrder);
   return out;
 }
-
-/** What a pasted "add" input classifies to, Concord-aware. */
-export type AddInput = { kind: "concord"; invite: ParsedInviteLink } | { kind: "other" };

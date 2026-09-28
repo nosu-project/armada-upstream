@@ -8,14 +8,13 @@
 
 import { channelsView } from "@/concord/lib/community";
 import { rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
-import { controlGroups, foldControlState, openControlEditions } from "@/concord/lib/control";
+import { controlGroups, foldControlState, openControlEditions, controlFoldKey } from "@/concord/lib/control";
 import { guestbookGroups } from "@/concord/lib/guestbook";
 import { KIND_WRAP } from "@/concord/lib/kinds";
 import { openChatBatch } from "@/concord/lib/chat";
 import { controlSweepTruncated, sweepControl, sweepGuestbook, whenAuthSettled } from "@/concord/lib/planeSync";
 import { pruneControlSnapshots, queryPlane, writeRumors } from "@/concord/lib/rumorStore";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
-import { controlFoldKey } from "@/concord/hooks/useControlPlane";
 import { writeFolded } from "@/lib/foldedCache";
 import { beginSyncTask } from "@/lib/syncActivity";
 import { logSync } from "@/lib/syncLog";

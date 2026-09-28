@@ -1,5 +1,6 @@
 import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
-import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute } from "@/lib/routes";
 
 /**

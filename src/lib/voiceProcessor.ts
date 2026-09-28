@@ -36,8 +36,6 @@ function getWasmBinary(): Promise<ArrayBuffer> {
   return wasmBinary;
 }
 
-/** Re-exported for existing importers. */
-export { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 
 class RnnoiseTrackProcessor implements AudioTrackProcessor {

@@ -20,15 +20,15 @@ import {
 import { backfillStore, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/concord/lib/channelSync";
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import {
-  clearChannelExhausted,
+  clearStreamExhausted,
   CHAT_ROW_KINDS,
   queryChannelFirstSeenCached,
   queryChannelPageBefore,
   queryChannelRumors,
   queryChannelRumorsByIds,
-  readChannelCursor,
+  readStreamCursor,
   sweepExpiredCommunityRumors,
-  updateChannelCursor,
+  updateStreamCursor,
   writeRumors,
   peekPendingWraps,
   ackPendingWraps,
@@ -231,7 +231,7 @@ export function useChannelTimeline(
     if (!channelIdHex) return;
     forgetChatSkips();
     endReachedRef.current = false;
-    void clearChannelExhausted(channelIdHex);
+    void clearStreamExhausted(channelIdHex);
     invalidateSyncTopic(`c2:${channelIdHex}`);
     queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,7 +303,7 @@ export function useChannelTimeline(
             limit: WINDOW_SIZE,
             signal,
           }),
-          readChannelCursor(cursorKeyId),
+          readStreamCursor(cursorKeyId),
         ]);
         setHasMore(!endReachedRef.current && (rumors.length >= WINDOW_SIZE || !saved?.exhausted));
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
@@ -391,7 +391,7 @@ export function useChannelTimeline(
 
       let exhausted = false;
       if (!localFull) {
-        const saved = await readChannelCursor(cursorKeyId);
+        const saved = await readStreamCursor(cursorKeyId);
         exhausted = !!saved?.exhausted;
         if (!exhausted) {
           const controller = new AbortController();
@@ -405,7 +405,7 @@ export function useChannelTimeline(
 
           // Never touches `newest` (the scheduler's job). The merge is monotonic and
           // serialized per scope in `updateStreamCursor`, so concurrent writers merge.
-          void updateChannelCursor(cursorKeyId, {
+          void updateStreamCursor(cursorKeyId, {
             oldest: older.oldest,
             exhausted: older.exhausted ? true : undefined,
           });

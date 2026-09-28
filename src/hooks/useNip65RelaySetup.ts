@@ -13,7 +13,7 @@ import {
   discoverRelayListWithStatus,
   KIND_RELAY_LIST,
   newestRelayList,
-  publishRelayListEvent,
+  publishSignedEventToRelays,
   queryExplicitRelaysWithStatus,
   relayListIsNewerThanMetadata,
   type RelayListDiscovery,
@@ -316,7 +316,7 @@ export function useNip65RelaySetup() {
     }
     // Must be durably queued first, or a partial delivery could strand old devices.
     await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
-    const result = await publishRelayListEvent(nostr, event, targets, timeout);
+    const result = await publishSignedEventToRelays(nostr, event, targets, timeout);
     await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
     if (result.accepted.length === 0) {
       throw new Error("No relay accepted your signed relay list");

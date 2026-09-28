@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { dmCounterparty } from "@/hooks/useDirectMessages";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
-import { dmConvKey } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface DmMessageMatch {

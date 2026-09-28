@@ -6,8 +6,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
-import { seedAuthorCache } from "@/hooks/useAuthor";
-import { metadataSchema } from "@/lib/authorCache";
+import { metadataSchema, seedAuthorCache } from "@/lib/authorCache";
 
 import type { NostrMetadata } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";

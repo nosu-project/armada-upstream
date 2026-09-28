@@ -2,7 +2,7 @@ import { nip19 } from "nostr-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dmRouteParam } from "@/lib/dmConversation";
-import { dmConvKey } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import { chatRoute } from "@/lib/routes";
 import {
   assignShareRoute,

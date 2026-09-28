@@ -34,9 +34,6 @@ import { onWireScopes } from "@/wire/bus";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
-/** Re-exported for the many call sites that reach it through this module. */
-export { controlFoldKey };
-
 /**
  * The community's Control Plane, read from the opened-event store (wraps are
  * decrypted once at ingest). Holds no sockets and runs no poll: live editions

@@ -16,8 +16,6 @@ import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import {
   buildDmRumor,
-  dmConvKey,
-  dmConvPeers,
   dmTypingTags,
   KIND_DM_TYPING,
   KIND_DM_WRAP_EPHEMERAL,
@@ -27,6 +25,7 @@ import {
   wrapDmSealEphemeral,
   type Dm17Signer,
 } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
 import { subscribeDmEphemeral } from "@/lib/nip17/ephemeralInbox";
 
 import type { NostrEvent } from "@nostrify/nostrify";

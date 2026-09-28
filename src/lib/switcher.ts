@@ -14,7 +14,7 @@ import { readControlFold } from "@/concord/lib/control";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { dmRouteParam } from "@/lib/dmConversation";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
-import { dmConvKey, dmConvPeers } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 

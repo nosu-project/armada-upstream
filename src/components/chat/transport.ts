@@ -5,7 +5,7 @@
  */
 
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
-import type { SendStatus } from "@/hooks/useGroupMessages";
+import type { SendStatus } from "@/hooks/useSendStatusMap";
 import type { CalendarEvent, RsvpStatus, RsvpTally } from "@/lib/calendar";
 import type { PollOption, PollTally, PollType } from "@/lib/polls";
 import type { ZapTally } from "@/lib/zaps";

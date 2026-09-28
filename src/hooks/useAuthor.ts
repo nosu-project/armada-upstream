@@ -6,10 +6,6 @@ import { useEventStore } from '@/hooks/useEventStore';
 import { authorQueryKey, parseAuthorEvent, type AuthorResult } from '@/lib/authorCache';
 import { demandProfiles } from '@/sync/profileSync';
 
-// Re-exported; implementations live in `lib/authorCache.ts`.
-export { authorQueryKey, parseAuthorEvent, seedAuthorCache } from '@/lib/authorCache';
-export type { AuthorResult } from '@/lib/authorCache';
-
 type EventStore = ReturnType<typeof useEventStore>;
 
 /**

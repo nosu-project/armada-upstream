@@ -6,14 +6,14 @@ import { useNavigate } from "react-router-dom";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useEventStore } from "@/hooks/useEventStore";
-import { useBlossomServers } from "@/hooks/useBlossomCandidates";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/hooks/useAuthor";
+import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/lib/authorCache";
 import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettings";
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
@@ -23,7 +23,7 @@ import { desktopNotificationTag } from "@/lib/desktopNotificationTag";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaSrc } from "@/lib/mediaPolicy";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
-import { dmConvPeers } from "@/lib/nip17/protocol";
+import { dmConvPeers } from "@/lib/nip17/conversation";
 import {
   attributedLine,
   mentionPubkeys,

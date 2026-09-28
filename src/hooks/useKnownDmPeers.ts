@@ -8,7 +8,7 @@ import {
 import { useFollowList } from "@/hooks/useFollowList";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
-import { dmConvPeers } from "@/lib/nip17/protocol";
+import { dmConvPeers } from "@/lib/nip17/conversation";
 
 const PUBKEY_RE = /^[0-9a-f]{64}$/;
 

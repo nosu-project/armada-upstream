@@ -263,8 +263,3 @@ export const ReactionsDocSchema = z.looseObject({
 });
 
 export type MetadataDoc = z.infer<typeof MetadataDocSchema>;
-export type RailDoc = z.infer<typeof RailDocSchema>;
-export type ReadStateDoc = z.infer<typeof ReadStateDocSchema>;
-export type NotificationsDoc = z.infer<typeof NotificationsDocSchema>;
-export type DmsDoc = z.infer<typeof DmsDocSchema>;
-export type ReactionsDoc = z.infer<typeof ReactionsDocSchema>;

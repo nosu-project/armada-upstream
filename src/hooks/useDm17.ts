@@ -34,8 +34,6 @@ import {
   buildDmRumor,
   DM_RUMOR_KINDS,
   dmChatTags,
-  dmConvKey,
-  dmConvPeers,
   dmDeleteTags,
   dmReactionTags,
   dmTimerTags,
@@ -58,6 +56,7 @@ import {
   type DmWebxdcMeta,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers } from "@/lib/nip17/conversation";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   DM17_SEEN_CAP,
@@ -86,8 +85,7 @@ import {
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
-
-import type { SendStatus } from "@/hooks/useGroupMessages";
+import type { SendStatus } from "@/hooks/useSendStatusMap";
 import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
 const SYNC_MIN_INTERVAL_MS = 30_000;

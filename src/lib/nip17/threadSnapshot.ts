@@ -10,7 +10,8 @@
  * dm17Store, so no new at-rest exposure; purged on logout with the KV.
  */
 import { readFolded, writeFolded, encode } from "@/lib/foldedCache";
-import { dmConvKey, isExpired } from "@/lib/nip17/protocol";
+import { isExpired } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import { perfMark } from "@/lib/perf";
 
 import type { OpenedDm } from "@/lib/nip17/protocol";

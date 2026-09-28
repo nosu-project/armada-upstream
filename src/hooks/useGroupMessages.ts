@@ -29,9 +29,6 @@ const KIND_DELETE = 5;
  */
 const MAX_GAP_SECONDS = 6 * 60 * 60;
 
-// Re-exported so existing importers (transport.ts) keep their path.
-export type { SendStatus, SendStatusMap } from "@/hooks/useSendStatusMap";
-
 function messagesKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "messages", relayUrl, groupId] as const;
 }

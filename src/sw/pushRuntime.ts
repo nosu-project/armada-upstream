@@ -27,7 +27,8 @@ import { appEventStore } from "@/lib/db/mainEventStore";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaPolicyFromConfig, mediaSrc, type MediaPolicy } from "@/lib/mediaPolicy";
 import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
-import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
+import { KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
+import { dmConvKey } from "@/lib/nip17/conversation";
 import {
   attributedLine,
   firstImetaMime,

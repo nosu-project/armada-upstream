@@ -7,7 +7,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { mediaSrc } from "@/lib/mediaPolicy";
-import { DM_PEER_SEP } from "@/lib/nip17/protocol";
+import { DM_PEER_SEP } from "@/lib/nip17/conversation";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import {
   hasShareTarget,

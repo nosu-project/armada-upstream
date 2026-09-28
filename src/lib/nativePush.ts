@@ -4,9 +4,6 @@ import { isRouterPath } from "@/lib/deepLinkUrl";
 
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 
-// Compatibility re-export.
-export { pushInstallationId } from "@/lib/pushRegistry";
-
 /**
  * Bridge to `ArmadaPushPlugin.swift` (iOS APNs). iOS can't run a background
  * relay listener, so the APNs token goes to the same content-blind nostr-push

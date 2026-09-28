@@ -5,9 +5,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import type {
   ProjectRepo,
-  ProjectRepoSummary,
   ProjectWorkItem,
-  ProjectWorkKind,
   ProjectWorkStatus,
 } from "@/components/projects/projectData";
 
@@ -19,11 +17,8 @@ export const KIND_ISSUE = 1621;
 export const STATUS_KINDS = [1630, 1631, 1632, 1633];
 
 export type BuzzRepo = ProjectRepo;
-export type BuzzWorkKind = ProjectWorkKind;
 export type BuzzWorkStatus = ProjectWorkStatus;
 export type BuzzWorkItem = ProjectWorkItem;
-export type BuzzRepoSummary = ProjectRepoSummary;
-
 export { activityByDay, dayKey, projectPeople, repoSummaries } from "@/components/projects/projectData";
 
 function parseRepo(event: NostrEvent): BuzzRepo | undefined {

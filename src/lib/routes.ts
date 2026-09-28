@@ -12,8 +12,7 @@
  */
 
 import { nip19 } from "nostr-tools";
-
-import { DM_PEER_SEP } from "@/lib/nip17/protocol";
+import { DM_PEER_SEP } from "@/lib/nip17/conversation";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { resolvePubkey } from "@/lib/resolvePubkey";
 import { shareOrigin } from "@/lib/shareOrigin";

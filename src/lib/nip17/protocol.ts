@@ -281,19 +281,6 @@ export function dmTimerSeconds(rumor: { tags: readonly string[][] }): number | u
   return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
 }
 
-// Conversation identity lives in the import-free `conversation.ts` (needed by the
-// Electron main process); re-exported here for existing callers.
-
-export {
-  DM_MESSAGE_KINDS,
-  DM_PEER_SEP,
-  dmConvKey,
-  dmConvKeyOf,
-  dmConvPeers,
-  dmPeersOf,
-  isDmGroupKey,
-} from "./conversation";
-
 /**
  * Seal a rumor to one recipient (kind 13, nip44, backdated) with the sender's
  * real identity. Self-copy passes the sender's own pubkey. NIP-40 `expiration`

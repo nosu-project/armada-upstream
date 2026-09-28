@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { decryptImagePointer } from "@/concord/lib/image";
 import type { ImagePointer } from "@/concord/lib/types";
-import { useBlossomServers } from "@/hooks/useBlossomCandidates";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
 
 import type { MediaPolicy } from "@/lib/mediaPolicy";

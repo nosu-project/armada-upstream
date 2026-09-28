@@ -10,11 +10,10 @@
  * (`src/test/fixtures/bip352_sender_vectors.json`).
  */
 import * as btc from '@scure/btc-signer';
-import { hash160, taprootTweakPrivKey } from '@scure/btc-signer/utils.js';
+import { taprootTweakPrivKey } from '@scure/btc-signer/utils.js';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha256';
 import {
-  isValidCompressedPoint,
   type SilentPaymentAddress,
 } from './silentPaymentsCore';
 
@@ -73,11 +72,6 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length - b.length;
 }
 
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
 
 function hexToBytes(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) throw new Error('hexToBytes: odd-length string.');
@@ -137,123 +131,6 @@ function privateNegate(privateKey: Uint8Array): Uint8Array {
     throw new Error('Silent payment: invalid input private key.');
   }
   return scalarToBytes(SECP_N - k);
-}
-
-/**
- * Eligible-input pubkey. `isTaproot` matters because Taproot private keys are
- * negated for odd Y before summing.
- */
-export interface EligibleInputPubKey {
-  /** 33-byte compressed pubkey (even parity for taproot). */
-  pubkey: Uint8Array;
-  isTaproot: boolean;
-}
-
-const NUMS_H_XONLY = hexToBytes(
-  '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0',
-);
-
-/**
- * The pubkey an input contributes to the BIP352 ECDH sum (must match what the
- * receiver recovers), or null. Supports P2TR (skipping NUMS-H script paths),
- * P2WPKH, P2SH-P2WPKH and P2PKH.
- */
-export function extractEligibleInputPubKey(
-  scriptPubKeyHex: string,
-  scriptSigHex: string,
-  witness: Uint8Array[] | undefined,
-): EligibleInputPubKey | null {
-  const spk = hexToBytes(scriptPubKeyHex);
-  const ss = scriptSigHex ? hexToBytes(scriptSigHex) : new Uint8Array(0);
-  const wit = witness ?? [];
-
-  // P2TR: OP_1 (0x51) + push32 (0x20) + 32-byte xonly key
-  if (spk.length === 34 && spk[0] === 0x51 && spk[1] === 0x20) {
-    const xonly = spk.subarray(2, 34);
-
-    // Script path with NUMS-H internal key → skip per BIP352.
-    if (wit.length >= 2) {
-      const controlBlock = wit[wit.length - 1];
-      // Skip the annex (last item starting with 0x50) if present.
-      let controlIdx = wit.length - 1;
-      if (controlBlock.length > 0 && controlBlock[0] === 0x50 && wit.length >= 3) {
-        controlIdx = wit.length - 2;
-      }
-      const ctrl = wit[controlIdx];
-      // Control block: 1 byte (leaf version + parity) || 32-byte internal pk || merkle path
-      if (ctrl.length >= 33 && (ctrl.length - 1) % 32 === 0) {
-        const internal = ctrl.subarray(1, 33);
-        if (equalBytes(internal, NUMS_H_XONLY)) {
-          return null;
-        }
-      }
-    }
-
-    return {
-      pubkey: xOnlyToEvenCompressed(xonly),
-      isTaproot: true,
-    };
-  }
-
-  // P2WPKH: OP_0 push20 <hash>; witness = [sig, 33-byte pubkey].
-  if (spk.length === 22 && spk[0] === 0x00 && spk[1] === 0x14) {
-    if (ss.length !== 0) return null;
-    if (wit.length < 2) return null;
-    const pk = wit[wit.length - 1];
-    if (pk.length === 33 && (pk[0] === 0x02 || pk[0] === 0x03)) {
-      return { pubkey: new Uint8Array(pk), isTaproot: false };
-    }
-    return null;
-  }
-
-  // P2SH-P2WPKH: scriptPubKey A9 14 <hash> 87; scriptSig 16 00 14 <hash>.
-  if (spk.length === 23 && spk[0] === 0xa9 && spk[1] === 0x14 && spk[22] === 0x87) {
-    if (ss.length !== 23) return null;
-    if (ss[0] !== 0x16 || ss[1] !== 0x00 || ss[2] !== 0x14) return null;
-    if (wit.length < 2) return null;
-    const pk = wit[wit.length - 1];
-    if (pk.length === 33 && (pk[0] === 0x02 || pk[0] === 0x03)) {
-      return { pubkey: new Uint8Array(pk), isTaproot: false };
-    }
-    return null;
-  }
-
-  // P2PKH: 76 a9 14 <hash> 88 ac
-  if (
-    spk.length === 25 &&
-    spk[0] === 0x76 &&
-    spk[1] === 0xa9 &&
-    spk[2] === 0x14 &&
-    spk[23] === 0x88 &&
-    spk[24] === 0xac
-  ) {
-    // BIP352 requires tolerating malleated scriptSigs, so (like the reference
-    // impl) slide a 33-byte window and take the one whose HASH160 matches.
-    const targetHash = spk.subarray(3, 23);
-    for (let i = ss.length; i >= 33; i--) {
-      const candidate = ss.subarray(i - 33, i);
-      if (candidate.length !== 33) continue;
-      if (candidate[0] !== 0x02 && candidate[0] !== 0x03) continue;
-      const h = hash160(candidate);
-      if (h.length === 20 && equalBytes(h, targetHash)) {
-        if (isValidCompressedPoint(candidate)) {
-          return { pubkey: new Uint8Array(candidate), isTaproot: false };
-        }
-      }
-    }
-    return null;
-  }
-
-  return null;
-}
-
-/** x-only (32 bytes) → 33-byte compressed with prefix 0x02 (even Y). */
-function xOnlyToEvenCompressed(xonly: Uint8Array): Uint8Array {
-  if (xonly.length !== 32) throw new Error('xonly key must be 32 bytes.');
-  const out = new Uint8Array(33);
-  out[0] = 0x02;
-  out.set(xonly, 1);
-  return out;
 }
 
 /**

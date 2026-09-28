@@ -25,9 +25,7 @@ import {
   DM_RUMOR_KINDS,
   DM_THREAD_KINDS,
   dmChatTags,
-  dmConvKey,
   dmDeleteTags,
-  dmPeersOf,
   dmReactionTags,
   dmTimerTags,
   dmWebxdcTags,
@@ -39,6 +37,7 @@ import {
   KIND_DM_WEBXDC,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmConvKey, dmPeersOf } from "@/lib/nip17/conversation";
 import { dmThreadScope, onWireScopes, resetWireBus } from "@/wire/bus";
 
 // A clean IndexedDB for the suite (the store singleton opens against it lazily).

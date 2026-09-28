@@ -39,7 +39,7 @@ import {
   parkPendingWraps,
   peekPendingWraps,
   queryChannelRumors,
-  updateChannelCursor,
+  updateStreamCursor,
   writeRumors,
 } from "@/concord/lib/rumorStore";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
@@ -230,7 +230,7 @@ describe("useChannelTimeline — issue #19 (notified but never rendered)", () =>
       const oldWraps: NostrEvent[] = [];
       for (let i = 0; i < 10; i++) oldWraps.push(await wrapChatAt(channel, alice, `old-${i}`, base + i));
       writeRumors(CID, await openChatBatch(oldWraps, channel));
-      await updateChannelCursor(idHex, { newest: base + 9, oldest: base });
+      await updateStreamCursor(idHex, { newest: base + 9, oldest: base });
       await waitFor(async () => {
         expect((await queryChannelRumors(CID, idHex, { limit: 200 })).length).toBe(10);
       });
@@ -299,7 +299,7 @@ describe("useChannelTimeline — issue #19 (notified but never rendered)", () =>
       const oldWraps: NostrEvent[] = [];
       for (let i = 0; i < 5; i++) oldWraps.push(await wrapChatAt(channel, alice, `old-${i}`, base + i));
       writeRumors(CID, await openChatBatch(oldWraps, channel));
-      await updateChannelCursor(idHex, { newest: base + 4, oldest: base });
+      await updateStreamCursor(idHex, { newest: base + 4, oldest: base });
       await waitFor(async () => {
         expect((await queryChannelRumors(CID, idHex, { limit: 200 })).length).toBe(5);
       });

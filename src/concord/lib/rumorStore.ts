@@ -1021,8 +1021,3 @@ export function clearStreamExhausted(scope: string): Promise<void> {
     if (prev?.exhausted) await writeFolded(cursorKey(scope), { ...prev, exhausted: false });
   });
 }
-
-// Back-compat aliases (chat call sites).
-export const readChannelCursor = readStreamCursor;
-export const updateChannelCursor = updateStreamCursor;
-export const clearChannelExhausted = clearStreamExhausted;

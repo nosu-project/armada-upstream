@@ -6,9 +6,6 @@ import { routeMediaCandidates } from "@/lib/mediaPolicy";
 import { useBlossomServers } from "./useBlossomServers";
 import { useMediaProxyRotation } from "./useMediaPolicy";
 
-// Re-exported for existing callers.
-export { useBlossomServers } from "./useBlossomServers";
-
 /**
  * Cross-server media fallback. Blossom URLs are content-addressed and mirrored
  * (BUD-04), so renderers try other hosts; ORDER is decided only in

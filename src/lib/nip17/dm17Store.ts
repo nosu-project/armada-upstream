@@ -21,14 +21,10 @@ import {
   DM_MESSAGE_KINDS,
   DM_MINE_TERM,
   DM_MSG_TERM,
-  dmConvTerm,
-} from "@/lib/nip17/conversation";
+  dmConvTerm, dmConvKey, dmConvKeyOf, dmPeersOf } from "@/lib/nip17/conversation";
 import {
   DM_RUMOR_KINDS,
   DM_THREAD_KINDS,
-  dmConvKey,
-  dmConvKeyOf,
-  dmPeersOf,
   isExpired,
   KIND_DM_CHAT,
   KIND_DM_FILE,

@@ -84,18 +84,6 @@ export interface DesktopUpdate {
   };
 }
 
-export interface ResolveDesktopUpdateOptions {
-  target: DesktopTarget;
-  /** Whether a release candidate is an acceptable update. */
-  allowPrerelease?: boolean;
-  relays?: readonly string[];
-  authors?: readonly string[];
-  repoId?: string;
-  /** Injectable for tests; defaults to the runtime's global. */
-  webSocket?: typeof WebSocket;
-  signal?: AbortSignal;
-}
-
 /**
  * The download URL with a Blossom URL's extension dropped (BUD-01 serves
  * `/<sha256>`). Otherwise electron-updater names the cached — and on Linux,

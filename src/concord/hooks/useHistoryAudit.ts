@@ -33,7 +33,7 @@ import {
   type ExportProfile,
 } from "@/concord/lib/historyExport";
 import { sniffImageMime } from "@/concord/lib/image";
-import { useBlossomServers } from "@/hooks/useBlossomCandidates";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { mediaCandidates } from "@/lib/blossom";
 import {
   controlSweepQuorum,

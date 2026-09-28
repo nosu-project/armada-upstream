@@ -12,9 +12,9 @@ import { openChatBatch } from "@/concord/lib/chat";
 import { KIND_WRAP } from "@/concord/lib/kinds";
 import { notePlaneWrapsSeen, unseenPlaneWraps, whenAuthSettled } from "@/concord/lib/planeSync";
 import {
-  clearChannelExhausted,
-  readChannelCursor,
-  updateChannelCursor,
+  clearStreamExhausted,
+  readStreamCursor,
+  updateStreamCursor,
   writeRumors,
 } from "@/concord/lib/rumorStore";
 import type { Channel, Community } from "@/concord/lib/types";
@@ -276,10 +276,10 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
   try {
     // Heal a POISONED cursor: `exhausted` with `oldest === 0` was sealed by an
     // all-empty run and never paged; clear it so history gets pulled.
-    let saved = await readChannelCursor(idHex);
+    let saved = await readStreamCursor(idHex);
     if (saved?.exhausted && !saved.oldest) {
       saved = { ...saved, exhausted: false };
-      void clearChannelExhausted(idHex);
+      void clearStreamExhausted(idHex);
     }
 
     // Retired-epoch freeze: once history reached bottom, retired stream addresses
@@ -356,7 +356,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
         beforeRelay: authGate,
         onPage: (events) => writePage(events, olderRing),
         onProgress: async (coveredDownTo) => {
-          if (!writeFailed) await updateChannelCursor(idHex, { oldest: coveredDownTo });
+          if (!writeFailed) await updateStreamCursor(idHex, { oldest: coveredDownTo });
         },
       });
     } finally {
@@ -368,7 +368,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // is verifiably complete (no pass-1 failures, bridge exhausted).
     const complete = !newest.failed && bridge.exhausted;
     const top = Math.max(newest.newest ?? 0, bridge.newest ?? 0);
-    await updateChannelCursor(idHex, {
+    await updateStreamCursor(idHex, {
       newest: complete && top > 0 ? top : undefined,
       oldest: older.oldest,
       exhausted: older.exhausted ? true : undefined,

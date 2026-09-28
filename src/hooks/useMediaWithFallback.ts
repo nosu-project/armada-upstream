@@ -9,9 +9,6 @@ import { useResolvedMediaSrc } from "./useResolvedMediaSrc";
 import type { MediaFallbackProps } from "@/components/chat/MediaFallback";
 import type { EncryptedRef } from "./useResolvedMediaSrc";
 
-// Re-exported so existing callers and tests keep their import.
-export { mediaCandidates } from "@/lib/blossom";
-
 type ResolvedState = ReturnType<typeof useResolvedMediaSrc>;
 
 export interface MediaWithFallback {

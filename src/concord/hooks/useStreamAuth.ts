@@ -11,11 +11,11 @@ import {
 import { CHANNEL_REKEY_LOOKAHEAD } from "@/concord/lib/rekey";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
 import type { Channel, Community } from "@/concord/lib/types";
-import { useChannels, controlFoldKey } from "@/concord/hooks/useControlPlane";
+import { useChannels } from "@/concord/hooks/useControlPlane";
 import { useCommunity, useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { rehydrateCommunity } from "@/concord/lib/communityList";
 import { channelsView } from "@/concord/lib/community";
-import { controlGroups, readControlFold } from "@/concord/lib/control";
+import { controlGroups, readControlFold, controlFoldKey } from "@/concord/lib/control";
 import { onFoldedWrite } from "@/lib/foldedCache";
 import { logSync } from "@/lib/syncLog";
 

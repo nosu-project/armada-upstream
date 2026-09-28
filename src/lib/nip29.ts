@@ -76,9 +76,6 @@ export const KIND_LEAVE_REQUEST = 9022;
 export const KIND_RELAY_JOIN = 28934;
 /** Relay-signed: an invite "claim" usable with KIND_RELAY_JOIN. */
 export const KIND_RELAY_INVITE = 28935;
-/** User: ephemeral request to leave the *relay*. */
-export const KIND_RELAY_LEAVE = 28936;
-
 /**
  * NIP-43 relay-level membership snapshot (Buzz community roster): relay-signed,
  * one per relay (no `d`). Distinct from per-group 39001/39002. Members are

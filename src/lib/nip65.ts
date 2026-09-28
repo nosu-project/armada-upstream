@@ -365,6 +365,3 @@ export async function publishSignedEventToRelays(
     rejected: targets.filter((_, index) => settled[index]?.status === "rejected"),
   };
 }
-
-/** Fan one already-signed relay-list event to every explicit destination. */
-export const publishRelayListEvent = publishSignedEventToRelays;

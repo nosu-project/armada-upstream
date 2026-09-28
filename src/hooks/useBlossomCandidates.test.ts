@@ -6,7 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { AppContext, type AppContextType } from "@/contexts/AppContext";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 
-import { useBlossomServers, useImageFallback, useSourceWalk } from "./useBlossomCandidates";
+import { useImageFallback, useSourceWalk } from "./useBlossomCandidates";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
 
 /** The hook reads the context object itself (so it survives without a provider), so the test supplies one. */
 function contextWith(config: Record<string, unknown>): AppContextType {

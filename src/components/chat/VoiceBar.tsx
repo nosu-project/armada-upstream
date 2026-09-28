@@ -47,7 +47,8 @@ import {
   supportsSpeakerSelection,
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
-import { rnnoiseSupported, syncRnnoise } from "@/lib/voiceProcessor";
+import { syncRnnoise } from "@/lib/voiceProcessor";
+import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import { cn } from "@/lib/utils";
 
 function DeviceSelectGroup({

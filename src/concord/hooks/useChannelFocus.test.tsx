@@ -66,7 +66,7 @@ vi.mock("@/wire/useWireScopes", () => ({ useWireScopes: () => {} }));
 vi.mock("@/concord/lib/rumorStore", () => ({
   ackPendingWraps: () => {},
   CHAT_ROW_KINDS: [9, 1068, 1111, 1740, 31922, 31923],
-  clearChannelExhausted: async () => undefined,
+  clearStreamExhausted: async () => undefined,
   peekPendingWraps: async () => [],
   queryChannelFirstSeen: async () => new Map(),
   queryChannelFirstSeenCached: async () => new Map(),
@@ -75,9 +75,9 @@ vi.mock("@/concord/lib/rumorStore", () => ({
       h.releaseWindow = () => resolve(h.window);
     }),
   queryChannelRumorsByIds: async () => h.focus,
-  readChannelCursor: async () => undefined,
+  readStreamCursor: async () => undefined,
   sweepExpiredCommunityRumors: async () => undefined,
-  updateChannelCursor: async () => undefined,
+  updateStreamCursor: async () => undefined,
   writeRumors: () => true,
 }));
 
