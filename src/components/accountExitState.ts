@@ -93,9 +93,3 @@ export function useAccountExit(): AccountExitState | null {
     () => null,
   );
 }
-
-/** Test helper: force the store back to its initial state. */
-export function _resetAccountExitStateForTests(): void {
-  state = null;
-  listeners.clear();
-}

@@ -50,7 +50,7 @@ import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure"
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-import { dmConvKey, dmPeersOf } from "./conversation";
+import { dmPeersOf } from "./conversation";
 
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
@@ -513,11 +513,6 @@ export interface OpenedDm {
   peers: string[];
   /** The wrap's id (the relay-addressable carrier). */
   wrapId: string;
-}
-
-/** The conversation key of an opened rumor. Shorthand for the common pair. */
-export function dmConvKeyOfOpened(opened: Pick<OpenedDm, "peers">): string {
-  return dmConvKey(opened.peers);
 }
 
 /** The NIP-40 deadline this opened rumor disappears at, if any. */

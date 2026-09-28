@@ -39,20 +39,6 @@ export function reportSignerUnsupported(pubkey: string): void {
 }
 
 /**
- * Clear the unsupported-bunker memo for a pubkey (or all pubkeys). Called
- * when the user logs out or switches accounts, so that a re-login with a
- * potentially-upgraded bunker doesn't inherit the previous rejection.
- */
-export function clearSignerUnsupported(pubkey?: string): void {
-  if (pubkey === undefined) {
-    knownUnsupportedBunkers.clear();
-  } else {
-    knownUnsupportedBunkers.delete(pubkey);
-  }
-  window.dispatchEvent(new CustomEvent('bitcoin-signer-cleared', { detail: pubkey ?? '*' }));
-}
-
-/**
  * Hook that exposes Bitcoin PSBT signing capability for the current login.
  *
  * Capability is probed eagerly for known login types so that the UI can

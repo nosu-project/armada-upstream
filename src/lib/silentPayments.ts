@@ -39,13 +39,8 @@ import { hash160, taprootTweakPrivKey } from '@scure/btc-signer/utils.js';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha256';
 import {
-  BECH32M_CONST,
-  CHARSET,
-  hrpExpand,
   isValidCompressedPoint,
-  polymod,
   type SilentPaymentAddress,
-  type SilentPaymentNetwork,
 } from './silentPaymentsCore';
 
 // Address decoding/validation lives in the dependency-light
@@ -619,73 +614,7 @@ export function p2trScriptPubKey(xonly: Uint8Array): Uint8Array {
 // bech32m encoding (BIP-352 silent payment address writer)
 // ---------------------------------------------------------------------------
 
-/** 8-bit → 5-bit conversion (used when encoding a payload into a bech32m address). */
-function convertBits8to5(data: Uint8Array): number[] {
-  let acc = 0;
-  let bits = 0;
-  const out: number[] = [];
-  for (const v of data) {
-    if (v < 0 || v > 255) throw new Error('convertBits8to5: byte out of range.');
-    acc = (acc << 8) | v;
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      out.push((acc >>> bits) & 0x1f);
-    }
-  }
-  if (bits > 0) {
-    out.push((acc << (5 - bits)) & 0x1f);
-  }
-  return out;
-}
 
-function bech32mChecksum(hrp: string, data: number[]): number[] {
-  const values = hrpExpand(hrp).concat(data).concat([0, 0, 0, 0, 0, 0]);
-  const mod = polymod(values) ^ BECH32M_CONST;
-  const out: number[] = [];
-  for (let i = 0; i < 6; i++) {
-    out.push((mod >>> (5 * (5 - i))) & 0x1f);
-  }
-  return out;
-}
-
-/**
- * Encode a silent payment address back from its components.
- *
- * Useful for the prompt UI: a BIP-375 PSBT carries the scan/spend pubkey
- * pair in `PSBT_OUT_SP_V0_INFO`, and we want to display the corresponding
- * `sp1…` / `tsp1…` string to the user before they approve the signature.
- */
-export function encodeSilentPaymentAddress(params: {
-  network: SilentPaymentNetwork;
-  /** Silent payment version (0 for `sp1q…`). */
-  version: number;
-  scanPubKey: Uint8Array;
-  spendPubKey: Uint8Array;
-}): string {
-  const { network, version, scanPubKey, spendPubKey } = params;
-  if (version < 0 || version > 30) {
-    throw new Error('Silent payment encode: invalid version.');
-  }
-  if (scanPubKey.length !== 33 || spendPubKey.length !== 33) {
-    throw new Error('Silent payment encode: pubkeys must be 33 bytes each.');
-  }
-  const hrp = network === 'mainnet' ? 'sp' : 'tsp';
-  const payload = new Uint8Array(66);
-  payload.set(scanPubKey, 0);
-  payload.set(spendPubKey, 33);
-  const data5 = [version, ...convertBits8to5(payload)];
-  const checksum = bech32mChecksum(hrp, data5);
-  const combined = data5.concat(checksum);
-  let out = hrp + '1';
-  for (const v of combined) {
-    if (v < 0 || v >= CHARSET.length) {
-      throw new Error('Silent payment encode: invalid 5-bit value.');
-    }
-    out += CHARSET[v];
-  }
-  return out;
-}
 
 // ---------------------------------------------------------------------------
 // BIP-375 / BIP-352 ECDH share computation (sender side)
@@ -801,44 +730,6 @@ export function computeBip375EcdhShare(
   }
   const scanPoint = Point.fromBytes(scanPubKey);
   return scanPoint.multiply(k).toBytes(true);
-}
-
-/**
- * Derive a single silent-payment P2TR output from a pre-computed BIP-375 ECDH
- * share, the recipient's spend pubkey, and a `k` counter.
- *
- * `C` is the per-scan-key ECDH share `a · B_scan`. We multiply it by
- * `input_hash` here to obtain the BIP-352 `ecdh_shared_secret`, then derive
- * `P_k = B_spend + hash(serP(ecdh) || ser32(k))·G` and return its x-only.
- */
-export function deriveSPOutputScriptFromShare(params: {
-  ecdhShare: Uint8Array;
-  inputHash: Uint8Array;
-  spendPubKey: Uint8Array;
-  k: number;
-}): Uint8Array {
-  const { ecdhShare, inputHash, spendPubKey, k } = params;
-  const sharePoint = Point.fromBytes(ecdhShare);
-  const inputHashScalar = bytesToScalar(inputHash);
-  if (inputHashScalar === 0n || inputHashScalar >= SECP_N) {
-    throw new Error('Silent payment: invalid input_hash.');
-  }
-  const ecdh = sharePoint.multiply(inputHashScalar).toBytes(true);
-  const tK = taggedHash(
-    'BIP0352/SharedSecret',
-    concatBytes(ecdh, u32be(k)),
-  );
-  const tScalar = bytesToScalar(tK);
-  if (tScalar === 0n || tScalar >= SECP_N) {
-    throw new Error('Silent payment: invalid t_k.');
-  }
-  const spendPoint = Point.fromBytes(spendPubKey);
-  const P = spendPoint.add(Point.BASE.multiply(tScalar));
-  const Paff = P.toAffine();
-  if (Paff.x === 0n && Paff.y === 0n) {
-    throw new Error('Silent payment: B_spend + t_k·G is point at infinity.');
-  }
-  return new Uint8Array(P.toBytes(true).subarray(1, 33));
 }
 
 // ---------------------------------------------------------------------------

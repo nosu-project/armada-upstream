@@ -63,13 +63,6 @@ export const KIND_PRESENCE = 20001;
 export const KIND_TYPING_INDICATOR = 20002;
 
 // ── Membership / notifications ───────────────────────────────────────────────
-/** Relay-signed member-added notification (p-gated: filter must carry #p=me). */
-export const KIND_MEMBER_ADDED = 44100;
-/** Relay-signed member-removed notification (p-gated). */
-export const KIND_MEMBER_REMOVED = 44101;
-/** Relay-signed replaceable relay-membership roster snapshot. */
-export const KIND_RELAY_ROSTER = 13534;
-
 // ── DMs (hidden NIP-29 channels) ────────────────────────────────────────────
 /** DM open/re-open command: 1–8 `p` tags → relay creates a hidden channel. */
 export const KIND_DM_OPEN = 41010;
@@ -81,10 +74,6 @@ export const KIND_DM_VISIBILITY = 30622;
 export const KIND_WORKFLOW_DEFINITION = 30620;
 /** Client-signed workflow trigger. */
 export const KIND_WORKFLOW_TRIGGER = 46020;
-/** Relay-emitted workflow execution events (46001–46012). */
-export const KIND_WORKFLOW_RUN_FIRST = 46001;
-export const KIND_WORKFLOW_RUN_LAST = 46012;
-
 /**
  * Content kinds a workflow channel's timeline additionally renders: the
  * workflow definitions themselves plus any relay-emitted run/approval events
@@ -98,19 +87,11 @@ export const BUZZ_WORKFLOW_EXTRA_KINDS = [
 ] as const;
 
 // ── Agents (display-only surface) ────────────────────────────────────────────
-/** Replaceable agent profile (content JSON: name, agent_type, status…). */
-export const KIND_AGENT_PROFILE = 10100;
-/** Persona definition (param-replaceable, public JSON content). */
-export const KIND_PERSONA = 30175;
-
 // ── Misc ────────────────────────────────────────────────────────────────────
 /** NIP-51 emoji set; Buzz custom-emoji palette uses `d = "buzz:custom-emoji"`. */
 export const KIND_EMOJI_SET = 30030;
 /** The `d` tag identifying a member's Buzz custom-emoji set. */
 export const BUZZ_EMOJI_SET_D = "buzz:custom-emoji";
-/** NIP-38 user status. */
-export const KIND_USER_STATUS = 30315;
-
 // ── Kind sets (mirror the Buzz desktop client's timeline semantics) ─────────
 
 /**

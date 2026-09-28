@@ -99,13 +99,6 @@ export function getContrastRatio(
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** Get contrast ratio between two HSL strings. */
-export function getContrastRatioHsl(hsl1: string, hsl2: string): number {
-  const c1 = parseHsl(hsl1);
-  const c2 = parseHsl(hsl2);
-  return getContrastRatio(hslToRgb(c1.h, c1.s, c1.l), hslToRgb(c2.h, c2.s, c2.l));
-}
-
 /** Determine if an HSL background string represents a "dark" theme. */
 export function isDarkTheme(backgroundHsl: string): boolean {
   const { h, s, l } = parseHsl(backgroundHsl);

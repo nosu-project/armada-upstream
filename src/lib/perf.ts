@@ -133,19 +133,6 @@ export function perfKvWrite(key: string, value: unknown): void {
   perfCount(`kv.set ${family}`, 0, size, "chars");
 }
 
-/** Time a synchronous operation into `label`'s aggregate. */
-export function perfTimeSync<T>(label: string, fn: () => T, units?: (result: T) => number, unitName = "rows"): T {
-  const start = now();
-  try {
-    const result = fn();
-    perfCount(label, now() - start, units?.(result), unitName);
-    return result;
-  } catch (error) {
-    perfCount(label, now() - start);
-    throw error;
-  }
-}
-
 /** The collected profile, for a report or a test. */
 export interface PerfReport {
   /** Milliseconds since page load at the time of the report. */

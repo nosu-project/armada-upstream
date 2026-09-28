@@ -28,11 +28,6 @@ export function setOnboardingActive(next: boolean): void {
   for (const l of listeners) l();
 }
 
-/** Non-reactive read (for headless call-time checks). */
-export function isOnboardingActive(): boolean {
-  return onboarding;
-}
-
 /** Whether the signup wizard is currently in progress. */
 export function useOnboardingActive(): boolean {
   return useSyncExternalStore(

@@ -34,14 +34,6 @@ import {
   type CommunityTombstone,
   type JoinMaterial,
 } from "@/concord/lib/communityList";
-
-/**
- * The relay ceiling the List actually has to fit — the refusal line. The binding
- * limit is the encoded EVENT, never the NIP-44 plaintext: content is base64
- * ciphertext at ~4/3, so a plaintext-only check mints events every relay refuses.
- */
-export const MAX_EVENT_BYTES = 65_536;
-
 /**
  * The pack target (CORD-02 §8 SHOULD): comfortably under the ceiling, because
  * 65,536 is itself a common relay cap and an event AT it is a `>` vs `>=`

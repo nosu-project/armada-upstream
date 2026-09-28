@@ -48,9 +48,3 @@ export function isRoomActive(key: string | undefined): boolean {
   }
   return active.has(key);
 }
-
-/** Subscribe to active-room-set changes. Returns an unsubscribe. */
-export function onActiveRoomsChange(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}

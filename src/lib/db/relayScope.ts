@@ -105,11 +105,6 @@ export function nip29Tenant(relayUrl: string): string | undefined {
   return normalized ? `nip29:${normalized}` : undefined;
 }
 
-/** Every `nip29:` tenant id among `ids` (the purge and the migration walk these). */
-export function nip29Tenants(ids: string[]): string[] {
-  return ids.filter((id) => id.startsWith("nip29:"));
-}
-
 /**
  * The tenant an event belongs in, or `undefined` to not store it at all.
  *

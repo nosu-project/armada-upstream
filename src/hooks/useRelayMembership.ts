@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_RELAY_INVITE, KIND_RELAY_JOIN, KIND_RELAY_LEAVE } from "@/lib/nip29";
+import { KIND_RELAY_INVITE, KIND_RELAY_JOIN } from "@/lib/nip29";
 
 /**
  * Relay-level membership for community relays (zooid / Coracle, which back
@@ -84,29 +84,6 @@ export function useJoinRelay() {
       } catch {
         // Best-effort: any failure (unsupported kind, timeout, h-tag policy,
         // bad claim) is non-fatal here. The group join reports the real outcome.
-      }
-    },
-  });
-}
-
-/** Publish an ephemeral relay-leave (best-effort; ignores unsupported relays). */
-export function useLeaveRelay() {
-  const { nostr } = useNostr();
-  const { user } = useCurrentUser();
-
-  return useMutation({
-    mutationFn: async (relayUrl: string) => {
-      if (!user) throw new Error("User is not logged in");
-      const event = await user.signer.signEvent({
-        kind: KIND_RELAY_LEAVE,
-        content: "",
-        tags: [],
-        created_at: Math.floor(Date.now() / 1000),
-      });
-      try {
-        await nostr.relay(relayUrl).event(event, { signal: AbortSignal.timeout(8000) });
-      } catch {
-        // best-effort
       }
     },
   });

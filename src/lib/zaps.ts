@@ -35,10 +35,6 @@ function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, cap = 4096): V {
 export const KIND_ZAP_RECEIPT = 9735;
 /** On-chain Bitcoin zap attribution (kind 8333). */
 export const KIND_ONCHAIN_ZAP = 8333;
-
-/** Preset amounts (sats) for the zap dialog. */
-export const ZAP_PRESETS = [21, 100, 500, 1000, 5000, 21000];
-
 /** How the sats were sent. */
 export type ZapRail = "lightning" | "onchain";
 

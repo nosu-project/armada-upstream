@@ -111,17 +111,3 @@ export function registerWebPushOptInOpener(open: () => void): () => void {
     if (opener === open) opener = null;
   };
 }
-
-/** Test seam: reset module state. */
-export function __resetWebPushPromptForTests(): void {
-  currentEnable = null;
-  currentMode = "push";
-  opener = null;
-  pendingRequest = false;
-  requestedThisSession = false;
-  try {
-    localStorage.removeItem(SHOWN_KEY);
-  } catch {
-    // ignore
-  }
-}

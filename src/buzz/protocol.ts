@@ -15,10 +15,7 @@
 import {
   KIND_BUZZ_DELETE_EVENT,
   KIND_DELETE,
-  KIND_FORUM_COMMENT,
-  KIND_FORUM_POST,
   KIND_FORUM_VOTE,
-  KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_SYSTEM_MESSAGE,
 } from "@/buzz/kinds";
@@ -340,14 +337,3 @@ export function tallyForumVotes(
 }
 
 // ── Kind helpers used by rows ───────────────────────────────────────────────
-
-/** Whether a kind renders through the standard chat-message row. */
-export function isChatLikeKind(kind: number): boolean {
-  return (
-    kind === KIND_STREAM_MESSAGE ||
-    kind === 40001 ||
-    kind === 40002 ||
-    kind === KIND_FORUM_POST ||
-    kind === KIND_FORUM_COMMENT
-  );
-}

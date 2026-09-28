@@ -226,11 +226,6 @@ export function isRecognizedPaymentType(type: string): type is PaymentTargetType
   return Object.prototype.hasOwnProperty.call(PAYMENT_METHODS, type);
 }
 
-/** Look up a recognized method definition, or `undefined`. */
-export function getPaymentMethod(type: string): PaymentMethodDef | undefined {
-  return isRecognizedPaymentType(type) ? PAYMENT_METHODS[type] : undefined;
-}
-
 /**
  * Parse a kind 10133 event's `payto` tags into validated payment targets.
  *

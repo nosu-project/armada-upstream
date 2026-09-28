@@ -7,8 +7,6 @@ import { normalizeRelayUrl } from "@/lib/platform";
 
 /** NIP-34 repository announcement. */
 export const GIT_REPOSITORY_ANNOUNCEMENT_KIND = 30617;
-/** NIP-34 repository state announcement. */
-export const GIT_REPOSITORY_STATE_KIND = 30618;
 /** NIP-34 pull request. */
 export const GIT_PULL_REQUEST_KIND = 1618;
 /** NIP-34 issue. */

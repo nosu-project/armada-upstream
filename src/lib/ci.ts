@@ -29,9 +29,6 @@ import { parseGitRepositoryAddress, type GitRepositoryAddress } from "@/lib/gitA
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
-
-/** Kind 9840 — maintainer-requested manual workflow trigger. */
-export const CI_MANUAL_TRIGGER_KIND = 9840;
 /** Kind 9841 — one job's result, signed by the compute provider. */
 export const CI_JOB_RESULT_KIND = 9841;
 /** Kind 9842 — a workflow run's combined outcome, signed by the coordinator. */

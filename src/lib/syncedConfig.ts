@@ -26,8 +26,6 @@ export const CONFIG_KEYS_BY_DOC = {
 /** A settings document that mirrors a slice of AppConfig. */
 export type ConfigDocName = keyof typeof CONFIG_KEYS_BY_DOC;
 
-export const CONFIG_DOC_NAMES = Object.keys(CONFIG_KEYS_BY_DOC) as ConfigDocName[];
-
 /**
  * Pick the fields one settings document carries out of AppConfig — the value
  * to publish, and the snapshot the publish watcher diffs against.

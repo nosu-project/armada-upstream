@@ -363,12 +363,6 @@ function wirePauseBus(): void {
   });
 }
 
-/** Drop the pause cache — for tests, and for a logout that swaps the store. */
-export function _forgetLivePauseCacheForTests(): void {
-  controlPlaneRev.clear();
-  livePauseCache.clear();
-}
-
 /**
  * The CURRENT pause (CORD-04 §8) for a community the user may not have open.
  *

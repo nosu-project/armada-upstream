@@ -1,5 +1,5 @@
 import { useSettingsDoc, type UseSettingsDocReturn } from "@/hooks/useSettingsDoc";
-import { SETTINGS_KIND, settingsDTag } from "@/lib/settingsDocs";
+import { SETTINGS_KIND } from "@/lib/settingsDocs";
 
 /**
  * The user's private preferences: the `${APP_ID}/metadata` NIP-78 document.
@@ -21,4 +21,3 @@ export function useEncryptedSettings(): UseSettingsDocReturn<"metadata"> {
 
 /** Kind and `d` tag of the metadata document. */
 export { SETTINGS_KIND };
-export const SETTINGS_D: string = settingsDTag("metadata");

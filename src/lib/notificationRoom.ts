@@ -101,11 +101,6 @@ function remember(key: string, identity: RoomIdentity): RoomIdentity {
   return identity;
 }
 
-/** Forget every memoized identity (a rename should show up promptly). */
-export function forgetRoomIdentities(): void {
-  memo.clear();
-}
-
 /**
  * A Concord channel's identity — "Community / #channel" plus the community's
  * encrypted icon pointer, matching the Java service's `community + " / #" +

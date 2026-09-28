@@ -267,8 +267,3 @@ export function parseInline(text: string): InlineNode[] {
 
   return out;
 }
-
-/** Whether a text run contains any inline formatting worth parsing. */
-export function hasInlineMarkdown(text: string): boolean {
-  return /\*|__|~~|\|\|/.test(text) || /(?<![\w])_[^_\n]+_(?![\w])/.test(text);
-}

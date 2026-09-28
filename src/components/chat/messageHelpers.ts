@@ -31,19 +31,6 @@ export function getQuoteReplyToId(event: ChatMsg): string | undefined {
 }
 
 /**
- * A one-line preview of a message's body for the reply-context line: URLs are
- * collapsed to 📎 (they'd blow out the line), and an all-URL/empty body falls
- * back to 📎. Shared so NIP-29 and Concord previews read identically.
- *
- * Prefer {@link ReplyPreview} (a node) where mentions should resolve to
- * `@name`; this plain-string form is the fallback for contexts that need a
- * bare string.
- */
-export function replyPreviewText(content: string): string {
-  return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
-}
-
-/**
  * The first image attachment of a message, as a media ref for a preview
  * thumbnail — or undefined if the message has no image. Prefers an imeta entry
  * declaring an image MIME (carries the decryption params for Concord's

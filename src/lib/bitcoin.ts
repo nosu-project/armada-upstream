@@ -16,12 +16,9 @@
  */
 import * as btc from '@scure/btc-signer';
 import { hex } from '@scure/base';
-import { nip19 } from 'nostr-tools';
 import {
   decodeSilentPaymentAddress,
-  isSilentPaymentAddress,
   validateSilentPaymentAddress,
-  type SilentPaymentAddress,
 } from './silentPayments';
 import { encodePsbtV2, type PsbtV2Input, type PsbtV2Output } from './psbtV2';
 
@@ -69,18 +66,6 @@ export function nostrPubkeyToBitcoinAddress(pubkeyHex: string): string {
     console.error('Error generating Bitcoin address:', error);
     return '';
   }
-}
-
-/**
- * Convert a bech32 `npub1...` identifier to a Bitcoin Taproot (P2TR) address.
- * Decodes the npub to a hex pubkey, then delegates to {@link nostrPubkeyToBitcoinAddress}.
- */
-export function npubToBitcoinAddress(npub: string): string {
-  const decoded = nip19.decode(npub);
-  if (decoded.type !== 'npub') {
-    throw new Error('Invalid npub format');
-  }
-  return nostrPubkeyToBitcoinAddress(decoded.data);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,37 +304,6 @@ export function finalizePsbt(psbtHex: string): string {
   return hex.encode(tx.extract());
 }
 
-/**
- * Create, sign, and return a raw Bitcoin Taproot transaction.
- *
- * Convenience wrapper that calls {@link buildUnsignedPsbt},
- * {@link signPsbtLocal}, and {@link finalizePsbt} in sequence.
- *
- * @param privateKeyHex 32-byte hex private key (from Nostr nsec).
- * @param toAddress     Recipient Bitcoin address.
- * @param amountSats    Amount to send in satoshis.
- * @param utxos         Available UTXOs (all will be consumed).
- * @param feeRate       Fee rate in sat/vB.
- * @returns The signed transaction hex and the fee paid.
- */
-export function createBitcoinTransaction(
-  privateKeyHex: string,
-  toAddress: string,
-  amountSats: number,
-  utxos: UTXO[],
-  feeRate: number,
-): { txHex: string; fee: number } {
-  // Derive the x-only pubkey from the private key for buildUnsignedPsbt
-  const internalPubkey = btc.utils.pubSchnorr(hexToBytes(privateKeyHex));
-  const senderPubkeyHex = hex.encode(internalPubkey);
-
-  const { psbtHex, fee } = buildUnsignedPsbt(senderPubkeyHex, toAddress, amountSats, utxos, feeRate);
-  const signedHex = signPsbtLocal(psbtHex, privateKeyHex);
-  const txHex = finalizePsbt(signedHex);
-
-  return { txHex, fee };
-}
-
 // ---------------------------------------------------------------------------
 // BIP-352 / BIP-375 silent payment sends (sp1… / tsp1…)
 // ---------------------------------------------------------------------------
@@ -371,33 +325,6 @@ export function createBitcoinTransaction(
 // flavour that any signer of the latter shape can consume. The local
 // `NSecSignerBtc.signPsbt` short-circuits this by detecting the BIP-375
 // fields in the PSBT v2 and resolving the SP output before signing.
-
-/**
- * Cheap routing predicate for the recipient picker.
- *
- * Returns `true` iff `s` looks like a silent payment address. A `true`
- * here only commits the UI to treating the input as an SP address; full
- * validation happens at coin-selection time.
- */
-export function looksLikeSilentPaymentAddress(s: string): boolean {
-  return isSilentPaymentAddress(s);
-}
-
-/**
- * Validate a silent payment address, returning the decoded scan/spend
- * pubkeys on success or `null` on failure.
- *
- * Use for inline form validation. The reason `null` (rather than throwing)
- * is that pickers may speculatively check half-typed addresses.
- */
-export function validateAndDecodeSilentPaymentAddress(addr: string): SilentPaymentAddress | null {
-  try {
-    return decodeSilentPaymentAddress(addr);
-  } catch {
-    return null;
-  }
-}
-
 /** Re-export the cheap check so callers don't have to reach into `silentPayments`. */
 export { validateSilentPaymentAddress };
 

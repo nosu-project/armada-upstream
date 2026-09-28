@@ -36,8 +36,6 @@ export const KIND_DELETE = 5;
 export const KIND_REACTION = 7;
 /** Chat message inside a group (requires `h` tag). */
 export const KIND_GROUP_CHAT = 9;
-/** Thread/forum post inside a group. */
-export const KIND_GROUP_THREAD = 11;
 /** NIP-22 comment — used here as a threaded reply to a chat message. */
 export const KIND_COMMENT = 1111;
 
@@ -808,12 +806,6 @@ export function buildGroupPinsTags(groupId: string, pinnedRefs: string[]): strin
   return tags;
 }
 
-/** Parse a kind 10009 user-groups list into group references (public tags only). */
-export function parseUserGroupList(event: NostrRumor): GroupRef[] {
-  if (event.kind !== KIND_USER_GROUPS) return [];
-  return parseGroupListTags(event.tags).groups;
-}
-
 /**
  * Parse a set of kind 10009 tags (public or decrypted-private) into the full
  * list of joined groups and servers. Per NIP-51, the "Simple groups" list
@@ -929,11 +921,6 @@ export function buildServerProfileTags(
   return tags;
 }
 
-/** Get the group id (`h` tag) of a group-scoped event. */
-export function getGroupId(event: NostrRumor): string | undefined {
-  return tag(event, "h")?.[1];
-}
-
 /**
  * Build the NIP-22 tags for a kind-1111 comment replying to `parent` inside a
  * NIP-29 group. The uppercase `K`/`E`/`P` tags pin the immutable *thread root*;
@@ -964,14 +951,4 @@ export function buildCommentTags(parent: NostrRumor, groupId: string): string[][
   tags.push(["p", parent.pubkey]);
 
   return tags;
-}
-
-/** The thread-root event id a comment belongs to (its uppercase `E` tag). */
-export function getCommentRootId(event: NostrRumor): string | undefined {
-  return tag(event, "E")?.[1];
-}
-
-/** The immediate parent event id a comment replies to (its lowercase `e` tag). */
-export function getCommentParentId(event: NostrRumor): string | undefined {
-  return tag(event, "e")?.[1];
 }

@@ -1,6 +1,5 @@
 import { Bell, BellOff, AtSign } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
@@ -8,13 +7,6 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
 import type { NotifLevel } from "@/hooks/useNotifLevels";
 
@@ -66,56 +58,5 @@ export function NotifLevelMenu(props: {
         </ContextMenuRadioGroup>
       </ContextMenuSubContent>
     </ContextMenuSub>
-  );
-}
-
-/**
- * Standalone dropdown-button variant of the level picker for surfaces that
- * aren't context menus (e.g. a conversation header). Renders its own bell
- * trigger reflecting the current level.
- */
-export function NotifLevelDropdown(props: {
-  level: NotifLevel;
-  onChange: (level: NotifLevel) => void;
-  /** Accessible label for the trigger, e.g. "Notification settings for Alice". */
-  ariaLabel?: string;
-  className?: string;
-}) {
-  const { level, onChange, ariaLabel = "Notifications", className } = props;
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={ariaLabel}
-          className={
-            className ??
-            "size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-foreground"
-          }
-        >
-          {level === "nothing" ? (
-            <BellOff className="size-4" />
-          ) : level === "mentions" ? (
-            <AtSign className="size-4" />
-          ) : (
-            <Bell className="size-4" />
-          )}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuRadioGroup value={level} onValueChange={(v) => onChange(v as NotifLevel)}>
-          <DropdownMenuRadioItem value="all">
-            <Bell className="mr-2 size-4" /> All messages
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="mentions">
-            <AtSign className="mr-2 size-4" /> Only @mentions
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="nothing">
-            <BellOff className="mr-2 size-4" /> Nothing
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

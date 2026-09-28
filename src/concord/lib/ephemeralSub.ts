@@ -143,12 +143,3 @@ function reopen(nostr: EphemeralNostr, relay: string): void {
     }
   })();
 }
-
-/** Test seam: tear down every line. */
-export function _resetEphemeralSubsForTests(): void {
-  for (const line of lines.values()) {
-    line.controller?.abort();
-    if (line.timer) clearTimeout(line.timer);
-  }
-  lines.clear();
-}

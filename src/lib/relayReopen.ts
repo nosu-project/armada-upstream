@@ -35,8 +35,3 @@ export function onRelayReopened(listener: ReopenListener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
-
-/** Test helper: drop all listeners. */
-export function resetRelayReopened(): void {
-  listeners.clear();
-}

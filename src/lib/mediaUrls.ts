@@ -42,20 +42,6 @@ export const IMETA_MEDIA_URL_REGEX = new RegExp(
   `https?:\\/\\/[^\\s]+\\.(${ALL_MEDIA_EXTS})(\\?[^\\s]*)?`,
   'gi',
 );
-
-/**
- * Non-global variant of IMETA_MEDIA_URL_REGEX, safe for `.test()` calls.
- *
- * IMPORTANT: Never use the global (`g`) IMETA_MEDIA_URL_REGEX with `.test()` —
- * the global flag makes `lastIndex` stateful, so repeated `.test()` calls
- * (e.g. inside `.find()` or `.filter()`) will alternate between matching and
- * not matching, causing every other URL to be misclassified.
- */
-export const IMETA_MEDIA_URL_TEST_REGEX = new RegExp(
-  IMETA_MEDIA_URL_REGEX.source,
-  'i',
-);
-
 /**
  * Hosts whose "video" files are really silent, looping GIF renditions. Other
  * clients' GIF pickers (Tenor/Giphy) share the `.mp4`/`.webm` rendition rather
@@ -148,15 +134,4 @@ export function mimeFromExt(ext: string): string {
     case 'xdc':  return WEBXDC_MIME;
     default:     return 'application/octet-stream';
   }
-}
-
-
-/** Extracts all video URLs from a string. */
-export function extractVideoUrls(content: string): string[] {
-  return content.match(new RegExp(VIDEO_URL_REGEX.source, 'gi')) ?? [];
-}
-
-/** Extracts all audio URLs from a string. */
-export function extractAudioUrls(content: string): string[] {
-  return content.match(new RegExp(AUDIO_URL_REGEX.source, 'gi')) ?? [];
 }

@@ -5,9 +5,6 @@ import type {
   NAddr,
   NEvent,
   NPub,
-  Note,
-  NProfile,
-  ProfilePointer,
 } from 'nostr-tools/nip19';
 
 import { isNostrId } from '@/lib/nostrId';
@@ -37,12 +34,6 @@ export function tryNpubEncode(pubkey: string | null | undefined): NPub | undefin
   return nip19.npubEncode(pubkey);
 }
 
-/** `nip19.noteEncode`, but returns `undefined` for non-hex input. */
-export function tryNoteEncode(id: string | null | undefined): Note | undefined {
-  if (!isNostrId(id)) return undefined;
-  return nip19.noteEncode(id);
-}
-
 /**
  * `nip19.neventEncode`, but returns `undefined` if `id` (or, when present,
  * `author`) isn't a valid 64-char hex string. A malformed `author` is
@@ -62,13 +53,4 @@ export function tryNeventEncode(input: EventPointer): NEvent | undefined {
 export function tryNaddrEncode(input: AddressPointer): NAddr | undefined {
   if (!isNostrId(input.pubkey)) return undefined;
   return nip19.naddrEncode(input);
-}
-
-/**
- * `nip19.nprofileEncode`, but returns `undefined` if `pubkey` isn't a
- * valid 64-char hex string.
- */
-export function tryNprofileEncode(input: ProfilePointer): NProfile | undefined {
-  if (!isNostrId(input.pubkey)) return undefined;
-  return nip19.nprofileEncode(input);
 }

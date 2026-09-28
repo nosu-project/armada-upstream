@@ -32,14 +32,6 @@ export function setSyncGateActive(next: boolean): void {
   for (const l of listeners) l();
 }
 
-/**
- * Non-reactive read, for use inside a stable callback/ref (e.g. a wire-bus
- * handler subscribed once) where re-subscribing on every change is undesirable.
- */
-export function getSyncGateActive(): boolean {
-  return gateActive;
-}
-
 /** Whether the full-screen post-login sync overlay is currently showing. */
 export function useSyncGateActive(): boolean {
   return useSyncExternalStore(

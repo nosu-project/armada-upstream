@@ -113,10 +113,3 @@ export function onActivation(listener: () => void): () => void {
     listeners.delete(listener);
   };
 }
-
-/** Test seam. */
-export function _resetActivationForTests(): void {
-  activated.clear();
-  activeByKind.clear();
-  listeners.clear();
-}
