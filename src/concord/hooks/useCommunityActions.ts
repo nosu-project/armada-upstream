@@ -12,7 +12,7 @@ import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
-import { channelKeysToWire, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord/lib/communityList";
+import { channelKeysToWire, isLive, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord/lib/communityList";
 import { mintCommunity } from "@/concord/lib/community";
 import { DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord/lib/disappearing";
 import { accessRolePosition, isAuthorized, MAX_ROLES_PER_COMMUNITY, Permissions } from "@/concord/lib/roles";
@@ -40,6 +40,7 @@ import {
   hasPendingJoin,
   hydratePendingJoins,
   pendingJoinEntriesFor,
+  pendingJoinEntry,
   persistPendingJoin,
   recordPendingJoinFailure,
   takeExpiredPendingJoins,
@@ -723,8 +724,16 @@ export function useCommunityActions() {
       if (community) await assertNotBanned(nostr, community, user.pubkey);
       const walkedAway = () => pendingId !== undefined && !hasPendingJoin(user.pubkey, pendingId);
       if (walkedAway()) return { communityId: bundle.community_id, name: bundle.name };
-      await updateList({ type: "add", entry });
+      // A pending join is dated by its CLICK, not by this run, which may be a
+      // resume launches later: the newest of `added_at`/`removed_at` decides
+      // liveness, so a replay stamped now would outrank a Leave taken since on
+      // another device, or a kick.
+      const clicked = pendingId !== undefined ? pendingJoinEntry(user.pubkey, pendingId)?.added_at : undefined;
+      if (clicked !== undefined) entry.added_at = clicked;
+      const list = await updateList({ type: "add", entry, replay: pendingId !== undefined });
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
+      // A replay a later removal superseded wrote nothing, and announces nothing.
+      if (!isLive(list, bundle.community_id)) return { communityId: bundle.community_id, name: bundle.name };
 
       // Best-effort self-signed Guestbook Join, echoing the link's attribution
       // (CORD-02 §5 / CORD-05 §1) — the coalesce self-heals if it never lands.
@@ -733,12 +742,13 @@ export function useCommunityActions() {
       // a Join after it would be the newest entry — joined, to everyone else.
       // The seal is awaited HERE, not in the background, because the pending
       // record is what tells a leave apart and it is forgotten once this
-      // returns.
+      // returns. Dated like the entry, so a resumed Join can't postdate a
+      // Leave or kick that came after the click.
       if (community && !walkedAway()) {
         const attribution = bundle.creator_npub
           ? { creator: bundle.creator_npub, label: bundle.label }
           : undefined;
-        const rumor = buildJoinRumor(user.pubkey, Date.now(), attribution);
+        const rumor = buildJoinRumor(user.pubkey, entry.added_at, attribution);
         const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer).catch(() => undefined);
         if (wrap && !walkedAway()) {
           void Promise.allSettled(

@@ -15,6 +15,7 @@ import {
   rehydrateCommunity,
   removeFromList,
   removedCommunityIds,
+  replayedAddStanding,
   toJoinMaterial,
   type CommunityListEntry,
   type JoinMaterial,
@@ -486,5 +487,29 @@ describe("channelKeysToWire (history survives a list write)", () => {
     });
     const community = rehydrateCommunity(entryOf(jm))!;
     expect(community.privateChannels[0].priors).toEqual([{ key: priorKey, epoch: 1n }]);
+  });
+});
+
+describe("replayedAddStanding (a pending join settled after its click)", () => {
+  const jm = makeJoinMaterial();
+  const clicked = entryOf(jm, 5000);
+
+  it("is superseded by a removal at or after the click", () => {
+    expect(replayedAddStanding(removeFromList(EMPTY_COMMUNITY_LIST, jm.community_id, 5000), clicked)).toBe("superseded");
+    expect(replayedAddStanding(removeFromList(EMPTY_COMMUNITY_LIST, jm.community_id, 9000), clicked)).toBe("superseded");
+  });
+
+  it("is still to be written over a removal that predates the click", () => {
+    expect(replayedAddStanding(removeFromList(EMPTY_COMMUNITY_LIST, jm.community_id, 4999), clicked)).toBeUndefined();
+  });
+
+  it("is held when the list is live under this add or a newer one", () => {
+    expect(replayedAddStanding(addToList(EMPTY_COMMUNITY_LIST, clicked), clicked)).toBe("held");
+    expect(replayedAddStanding(addToList(EMPTY_COMMUNITY_LIST, entryOf(jm, 6000)), clicked)).toBe("held");
+  });
+
+  it("is still to be written when only an older add is held", () => {
+    expect(replayedAddStanding(addToList(EMPTY_COMMUNITY_LIST, entryOf(jm, 4000)), clicked)).toBeUndefined();
+    expect(replayedAddStanding(EMPTY_COMMUNITY_LIST, clicked)).toBeUndefined();
   });
 });

@@ -28,6 +28,7 @@ import type { FoldedControl } from "@/concord/lib/control";
 import type { CoalescedMember } from "@/concord/lib/guestbook";
 import type { ListData } from "@/concord/hooks/useCommunityList";
 import type { Community } from "@/concord/lib/types";
+import { _resetPendingJoinsForTests, hasPendingJoin, persistPendingJoin } from "@/concord/lib/pendingJoins";
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
@@ -146,6 +147,7 @@ beforeEach(() => {
   h.guestbookRefetch = vi.fn(async () => {});
   h.controlRefetch = vi.fn(async () => {});
   h.toasts = [];
+  _resetPendingJoinsForTests();
 });
 
 afterEach(() => {
@@ -228,5 +230,29 @@ describe("useSelfRemove", () => {
     h.guestbookRefetch = vi.fn(async () => {});
     rerender();
     await waitFor(() => expect(h.updateList).toHaveBeenCalledTimes(2));
+  });
+
+  it("forgets a pending join for the community, so no later launch resumes it", async () => {
+    h.updateList.mockResolvedValue(undefined);
+    const material = jm();
+    await persistPendingJoin(self, {
+      community_id: bytesToHex(communityId),
+      seed: material,
+      current: material,
+      added_at: 1_000,
+    });
+    expect(hasPendingJoin(self, bytesToHex(communityId))).toBe(true);
+
+    const client = makeClient();
+    const onRemoved = vi.fn();
+    const { rerender } = renderHook(() => useSelfRemove(community(), onRemoved), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(h.guestbookRefetch).toHaveBeenCalledTimes(1));
+    h.guestbookRefetch = vi.fn(async () => {});
+    rerender();
+
+    await waitFor(() => expect(onRemoved).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hasPendingJoin(self, bytesToHex(communityId))).toBe(false));
   });
 });

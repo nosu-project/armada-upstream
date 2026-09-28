@@ -5,6 +5,7 @@ import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
 import { removeCommunityLocally, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { banlistLocator, bytesToHex } from "@/concord/lib/derive";
+import { forgetPendingJoin } from "@/concord/lib/pendingJoins";
 import { selfRemovalVerdict, type SelfRemovalVerdict } from "@/concord/lib/selfRemoval";
 import type { Community } from "@/concord/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -124,6 +125,9 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
     removeCommunityLocally(queryClient, user.pubkey, community.idHex, removedAt).catch((e) => {
       logSync("list2", `${key.slice(0, 8)} self-removal: folded write failed (${e instanceof Error ? e.message : String(e)})`);
     });
+    // A pending join for this community is walked away from too, or the next
+    // launch would resume it past the removal.
+    void forgetPendingJoin(user.pubkey, community.idHex);
     removeRailKey(`c2:${community.idHex}`);
     queryClient.removeQueries({ queryKey: ["concord", key] });
     toast(REMOVAL_TOAST[verdict]);

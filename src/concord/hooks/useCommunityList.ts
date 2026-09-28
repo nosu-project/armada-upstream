@@ -22,6 +22,7 @@ import {
   refreshRelays,
   rehydrateCommunity,
   removeFromList,
+  replayedAddStanding,
   setControlRoot,
   type CommunityList,
   type PersistedCommunityList,
@@ -1149,7 +1150,16 @@ export function useCommunityList() {
 
 /** A mutation against the list (read-modify-write, deterministic, serialized). */
 export type CommunityListAction =
-  | { type: "add"; entry: CommunityListEntry }
+  | {
+      type: "add";
+      entry: CommunityListEntry;
+      /**
+       * The add settles a pending join after its click (see
+       * {@link replayedAddStanding}): nothing is published when a later
+       * removal supersedes it or the wire already holds it.
+       */
+      replay?: boolean;
+    }
   | { type: "remove"; communityId: string; removedAt?: number }
   | { type: "exclude"; communityId: string; epoch: number }
   | { type: "refresh-current"; current: JoinMaterial }
@@ -1246,6 +1256,17 @@ export async function updateCommunityList(
   // Fold in the local optimistic cache (addressable propagation lags).
   const cached = queryClient.getQueryData<ListData>(listQueryKey(user.pubkey));
   const current = cached ? mergeCommunityLists(cached.list, relayList) : relayList;
+  if (action.type === "add" && action.replay) {
+    // A removal counts wherever it is held — a local one is published by the
+    // next reconcile — but "already written" only counts on the wire.
+    const standing = replayedAddStanding(current, action.entry) === "superseded"
+      ? "superseded"
+      : replayedAddStanding(relayList, action.entry);
+    if (standing) {
+      logSync("list2", `replayed add ${action.entry.community_id.slice(0, 8)} ${standing} — not publishing`);
+      return current;
+    }
+  }
   const next = applyAction(current, action);
 
   const newest = await publishFragments(

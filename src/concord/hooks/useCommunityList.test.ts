@@ -500,6 +500,58 @@ describe("syncCommunityList — reconcile", () => {
     expect(decoded.tombstones.map((item) => item.community_id)).toContain(b64of("aa".repeat(32)));
   });
 
+  describe("a replayed add (a pending join settled after its click)", () => {
+    const CLICK = 1_719_800_000_000;
+    const replay = async (wireList: CommunityList, cached?: CommunityList) => {
+      const { updateCommunityList, listQueryKey } = await import("./useCommunityList");
+      const { published, nostr } = fakeNostr(fragment(wireList).map((f, i) => fragEvent(f, i)));
+      const queryClient = new QueryClient();
+      if (cached) queryClient.setQueryData(listQueryKey(SELF), { event: null, list: cached });
+      const list = await updateCommunityList(
+        nostr,
+        user,
+        queryClient,
+        ["wss://self.example.com"],
+        { type: "add", entry: { ...entry("aa", "Clicked"), added_at: CLICK }, replay: true },
+      );
+      return { list, published };
+    };
+
+    it("publishes nothing over a Leave taken after the click", async () => {
+      const { list, published } = await replay({
+        entries: [entry("bb", "Other")],
+        tombstones: [{ community_id: "aa".repeat(32), removed_at: CLICK + 60_000 }],
+      });
+      expect(published).toHaveLength(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(false);
+    });
+
+    it("honors a removal held only locally (a kick not yet on the wire)", async () => {
+      const { list, published } = await replay(
+        { entries: [entry("bb", "Other")], tombstones: [] },
+        { entries: [], tombstones: [{ community_id: "aa".repeat(32), removed_at: CLICK + 1 }] },
+      );
+      expect(published).toHaveLength(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(false);
+    });
+
+    it("publishes nothing when the earlier run's write already landed", async () => {
+      const { list, published } = await replay({ entries: [{ ...entry("aa", "Clicked"), added_at: CLICK }], tombstones: [] });
+      expect(published).toHaveLength(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(true);
+    });
+
+    it("writes a join that predates the only removal, dated by its click", async () => {
+      const { list, published } = await replay({
+        entries: [entry("bb", "Other")],
+        tombstones: [{ community_id: "aa".repeat(32), removed_at: CLICK - 60_000 }],
+      });
+      expect(published.length).toBeGreaterThan(0);
+      expect(isLive(list, "aa".repeat(32))).toBe(true);
+      expect(list.entries.find((e) => e.community_id === "aa".repeat(32))?.added_at).toBe(CLICK);
+    });
+  });
+
   it("bases a mutation on a newer ArmadaDB fragment even when reachable wire is stale", async () => {
     const { updateCommunityList } = await import("./useCommunityList");
     const [staleFrag] = fragment({

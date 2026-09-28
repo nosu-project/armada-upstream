@@ -26,16 +26,22 @@ import {
   parseInviteLink,
   type InviteBundle,
 } from "@/concord/lib/invite";
-import { _resetPendingJoinsForTests, forgetPendingJoin, hasPendingJoin } from "@/concord/lib/pendingJoins";
+import {
+  _resetPendingJoinsForTests,
+  forgetPendingJoin,
+  hasPendingJoin,
+  persistPendingJoin,
+} from "@/concord/lib/pendingJoins";
 
-import { useCommunityActions } from "./useCommunityActions";
+import { bundleToEntry, inviteRefOf, useCommunityActions } from "./useCommunityActions";
 
 const h = vi.hoisted(() => ({
   user: undefined as unknown,
   nostr: undefined as unknown,
   published: 0,
   addStarted: undefined as undefined | (() => void),
-  releaseAdd: undefined as undefined | (() => void),
+  releaseAdd: undefined as undefined | ((list?: unknown) => void),
+  lastAdd: undefined as undefined | { entry: { added_at: number }; replay?: boolean },
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: h.nostr }) }));
@@ -57,10 +63,12 @@ vi.mock("@/concord/hooks/useCommunityList", () => ({
   useCommunityEntry: () => undefined,
   // The vault write: held open until the test lets it land.
   useUpdateCommunityList: () => ({
-    mutateAsync: (write: { type: string }) =>
+    mutateAsync: (write: { type: string; entry?: { added_at: number }; replay?: boolean }) =>
       write.type === "add"
-        ? new Promise<void>((resolve) => {
-          h.releaseAdd = resolve;
+        ? new Promise<unknown>((resolve) => {
+          h.lastAdd = write as typeof h.lastAdd;
+          // Resolves with the list the add produced, as the real write does.
+          h.releaseAdd = (list) => resolve(list ?? { entries: [write.entry], tombstones: [] });
           h.addStarted?.();
         })
         : Promise.resolve(),
@@ -121,6 +129,7 @@ beforeEach(() => {
   _resetPendingJoinsForTests();
   h.published = 0;
   h.releaseAdd = undefined;
+  h.lastAdd = undefined;
 });
 
 async function joinUntilVaultWrite(leaveMidway: boolean) {
@@ -151,5 +160,39 @@ describe("a pending join left while its vault write is in flight", () => {
   it("control: a join nobody left still announces itself", async () => {
     await joinUntilVaultWrite(false);
     await waitFor(() => expect(h.published).toBeGreaterThan(0));
+  });
+});
+
+describe("a pending join resumed after a restart", () => {
+  const CLICK = 1_719_800_000_000;
+
+  async function resume() {
+    const me = signer();
+    h.user = me;
+    const { invite, bundle } = liveInvite(signer().pubkey);
+    // The earlier launch recorded the click, then was closed mid-chain.
+    await persistPendingJoin(me.pubkey, { ...bundleToEntry(bundle, { inviteRef: inviteRefOf(invite) }), added_at: CLICK });
+    const addStarted = new Promise<void>((resolve) => (h.addStarted = resolve));
+    const { result } = renderHook(() => useCommunityActions(), { wrapper });
+    result.current.settleJoin(invite, bundle.community_id, bundle.name, true);
+    await addStarted;
+    return { me, bundle };
+  }
+
+  it("is written as a replay dated by its click, not by the resume", async () => {
+    await resume();
+    expect(h.lastAdd?.replay).toBe(true);
+    expect(h.lastAdd?.entry.added_at).toBe(CLICK);
+  });
+
+  it("announces nothing when a later removal superseded it", async () => {
+    const { me, bundle } = await resume();
+    h.releaseAdd!({
+      entries: [h.lastAdd!.entry],
+      tombstones: [{ community_id: bundle.community_id, removed_at: CLICK + 60_000 }],
+    });
+    await waitFor(() => expect(hasPendingJoin(me.pubkey, bundle.community_id)).toBe(false));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(h.published).toBe(0);
   });
 });

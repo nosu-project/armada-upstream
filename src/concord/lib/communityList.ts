@@ -419,6 +419,29 @@ export function isExcluded(entry: CommunityListEntry): boolean {
   );
 }
 
+/**
+ * Where a REPLAYED add — a pending join settled after the click that made it,
+ * possibly launches later — stands against `list`:
+ *
+ *   - `"superseded"`: a removal at or after the click (a Leave on another
+ *     device, a kick) — replaying it would undo a later decision;
+ *   - `"held"`: already live under this add or a newer one — the earlier run's
+ *     write landed, and there is nothing to publish;
+ *   - `undefined`: still to be written.
+ *
+ * Pure; the entry's `added_at` must be the click time, not the replay's.
+ */
+export function replayedAddStanding(
+  list: CommunityList,
+  entry: CommunityListEntry,
+): "superseded" | "held" | undefined {
+  const tomb = list.tombstones.find((t) => t.community_id === entry.community_id);
+  if (tomb && tomb.removed_at >= entry.added_at) return "superseded";
+  const held = list.entries.find((e) => e.community_id === entry.community_id);
+  if (held && held.added_at >= entry.added_at && isLive(list, entry.community_id)) return "held";
+  return undefined;
+}
+
 /** Add/refresh a membership. Pure. */
 export function addToList(list: CommunityList, entry: CommunityListEntry): CommunityList {
   return mergeCommunityLists(list, { entries: [entry], tombstones: [] });

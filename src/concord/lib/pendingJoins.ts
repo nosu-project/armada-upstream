@@ -125,6 +125,14 @@ export function hasPendingJoin(pubkey: string, communityId: string): boolean {
   return owner === pubkey && entries.has(communityId);
 }
 
+/**
+ * The pending entry for this community, as recorded at click time — its
+ * `added_at` is WHEN the user joined, however much later the chain runs.
+ */
+export function pendingJoinEntry(pubkey: string, communityId: string): CommunityListEntry | undefined {
+  return owner === pubkey ? entries.get(communityId) : undefined;
+}
+
 /** Subscribe to changes. Returns an unsubscribe. */
 export function subscribePendingJoins(listener: () => void): () => void {
   listeners.add(listener);
