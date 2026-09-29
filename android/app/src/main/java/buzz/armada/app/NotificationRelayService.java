@@ -42,6 +42,7 @@ import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
 import buzz.armada.app.relayfleet.CursorGate;
+import buzz.armada.app.relayfleet.GitRelayCover;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetDecision;
@@ -437,6 +438,8 @@ public class NotificationRelayService extends Service {
     // mildly skewed publishers. It applies only after this service has actually
     // observed an event, so a cold start still asks from now with no backlog.
     static final long RELAY_SINCE_OVERLAP_SEC = 30L;
+    /** Relays each Git repository is watched on beyond those held anyway. */
+    static final int GIT_RELAYS_PER_REPOSITORY = 2;
     // Self-state documents are written by OTHER devices, whose clocks we don't
     // control; a new version stamped up to this far behind our last EOSE is
     // still asked for.
@@ -1598,6 +1601,8 @@ public class NotificationRelayService extends Service {
         healthSignerStatus = nativeSigner != null
                 ? "ready" : (sealedSigner != null ? "unavailable" : "missing");
 
+        pruneGitRelays();
+
         // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord
         // relays ∪ the general relays carrying the user's own documents.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
@@ -1957,6 +1962,26 @@ public class NotificationRelayService extends Service {
                 }
             }
         } catch (JSONException e) { Log.w(TAG, "Failed to parse gitSubs", e); }
+    }
+
+    /**
+     * Watch each Git repository on a covering subset of its relays rather than
+     * all of them (see {@link GitRelayCover}). Runs after every other plane is
+     * parsed, since relays already held for those are free.
+     */
+    private void pruneGitRelays() {
+        Set<String> held = new HashSet<>(relayToGroupIds.keySet());
+        held.addAll(dmRelays);
+        held.addAll(selfRelays);
+        held.addAll(relayToPks2.keySet());
+        Map<String, List<String>> byRepository = new HashMap<>();
+        for (Map.Entry<String, Set<String>> e : gitRepositoriesByRelay.entrySet()) {
+            for (String address : e.getValue()) {
+                byRepository.computeIfAbsent(address, k -> new ArrayList<>()).add(e.getKey());
+            }
+        }
+        Set<String> extra = GitRelayCover.choose(byRepository, held, GIT_RELAYS_PER_REPOSITORY);
+        gitRepositoriesByRelay.keySet().removeIf(relay -> !held.contains(relay) && !extra.contains(relay));
     }
 
     private static boolean validHex(String value) { return value != null && value.matches("[0-9a-f]{64}"); }
