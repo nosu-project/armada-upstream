@@ -264,7 +264,10 @@ export function dissolveFolder(nodes: RailLayoutNode[], id: string): RailLayoutN
   return normalizeLayout(out);
 }
 
-/** A rendered rail slot, frozen at drag pickup. */
+/**
+ * A rendered rail slot, frozen at drag pickup. `top` and the plan's `indicatorY` share one
+ * coordinate space, which the caller picks (the rail uses its scroll container's content).
+ */
 export interface RailSlot {
   /** `item:<key>` or `folder:<id>`. */
   anchor: string;
@@ -277,7 +280,7 @@ export interface RailSlot {
 /** The computed landing spot for the pointer's current position. */
 export interface RailDropPlan {
   target: RailDropTarget;
-  /** Viewport Y for the insertion-indicator line (gap drops). */
+  /** Y for the insertion-indicator line (gap drops), in the slots' coordinates. */
   indicatorY?: number;
   /** Anchor of the node to highlight (combine / drop-into-folder). */
   highlightAnchor?: string;
@@ -290,7 +293,7 @@ export interface RailDropPlan {
 const ITEM_COMBINE_BAND = 0.7;
 
 /**
- * Where a drop at viewport `y` lands (Discord semantics): over a folder → into
+ * Where a drop at `y` lands (Discord semantics): over a folder → into
  * it; an item's middle band → combine into a new folder; otherwise insert
  * before the nearest slot below. Folders only reorder at the top level.
  */

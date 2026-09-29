@@ -57,6 +57,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useDragPointerDown, usePressDrag } from "@/hooks/usePressDrag";
+import { useFlipReorder } from "@/hooks/useFlipReorder";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
@@ -386,33 +387,40 @@ function DmDragGhost({ pubkey }: { pubkey: string }) {
   );
 }
 
+function ghostTransform(x: number, y: number): string {
+  return `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`;
+}
+
+function sameDropPlan(a: RailDropPlan | null, b: RailDropPlan | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Positioned by its owner writing `transform` (see `placeGhost`), never by a re-render. */
 function DragGhost({
+  ref,
   item,
   folderItems,
-  x,
-  y,
 }: {
+  ref: React.Ref<HTMLDivElement>;
   item?: RailItem;
   folderItems?: RailItem[];
-  x: number;
-  y: number;
 }) {
   return (
-    <div
-      className="pointer-events-none fixed z-[300] -translate-x-1/2 -translate-y-1/2 animate-in zoom-in-75 duration-150"
-      style={{ left: x, top: y }}
-    >
-      {folderItems ? (
-        <span className="block rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
-          <FolderMiniGrid items={folderItems} />
-        </span>
-      ) : item?.kind === "server" ? (
-        <ServerDragGhost url={item.url} />
-      ) : item?.kind === "dm" ? (
-        <DmDragGhost pubkey={item.pubkey} />
-      ) : item ? (
-        <Concord2DragGhost communityId={item.communityId} name={item.name} />
-      ) : null}
+    <div ref={ref} className="pointer-events-none fixed left-0 top-0 z-[300] will-change-transform">
+      {/* The entrance animates `transform` too, so it lives on an inner element. */}
+      <div className="animate-in zoom-in-75 duration-150">
+        {folderItems ? (
+          <span className="block rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+            <FolderMiniGrid items={folderItems} />
+          </span>
+        ) : item?.kind === "server" ? (
+          <ServerDragGhost url={item.url} />
+        ) : item?.kind === "dm" ? (
+          <DmDragGhost pubkey={item.pubkey} />
+        ) : item ? (
+          <Concord2DragGhost communityId={item.communityId} name={item.name} />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1450,58 +1458,95 @@ function ServerRailInner({
     [updateConfig, updateList, user],
   );
 
-  // Drag: press-and-hold (~300ms) picks up on every pointer type. On touch, early
-  // movement becomes a scroll. DOM order never changes mid-drag: slot geometry is
-  // frozen at pickup, `planDrop` previews, `applyDrop` applies on release.
-  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+  // Drag: a mouse picks up on movement; touch holds ~300ms, and early movement is a
+  // scroll. DOM order never changes mid-drag: slot geometry is frozen at pickup in the
+  // nav's CONTENT coordinates (so an edge auto-scroll doesn't stale it), `planDrop`
+  // previews, `applyDrop` applies on release and FLIP animates the settle.
+  // The ghost is moved by writing its transform, and state changes only when the
+  // plan does, so a drag doesn't re-render the rail per pointer event.
   const [dropPlan, setDropPlan] = useState<RailDropPlan | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
   const slotsRef = useRef<RailSlot[]>([]);
-  const navRectRef = useRef<{ left: number; width: number } | null>(null);
+  const navTopRef = useRef(0);
   const dropPlanRef = useRef<RailDropPlan | null>(null);
+  const pointerRef = useRef({ x: 0, y: 0 });
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  const flip = useFlipReorder(navRef, "data-rail-anchor");
 
-  const aim = useCallback((source: RailDragSource, x: number, y: number) => {
-    const plan = planDrop(y, slotsRef.current, source);
-    dropPlanRef.current = plan;
-    setDragPos({ x, y });
-    setDropPlan(plan);
+  const placeGhost = useCallback(() => {
+    const ghost = ghostRef.current;
+    if (ghost) ghost.style.transform = ghostTransform(pointerRef.current.x, pointerRef.current.y);
   }, []);
+  const attachGhost = useCallback(
+    (el: HTMLDivElement | null) => {
+      ghostRef.current = el;
+      placeGhost();
+    },
+    [placeGhost],
+  );
+
+  const aim = useCallback(
+    (source: RailDragSource, x: number, y: number) => {
+      pointerRef.current = { x, y };
+      placeGhost();
+      const nav = navRef.current;
+      const contentY = y - navTopRef.current + (nav?.scrollTop ?? 0);
+      const plan = planDrop(contentY, slotsRef.current, source);
+      if (sameDropPlan(plan, dropPlanRef.current)) return;
+      dropPlanRef.current = plan;
+      setDropPlan(plan);
+    },
+    [placeGhost],
+  );
+
+  const endDrag = () => {
+    dropPlanRef.current = null;
+    setDropPlan(null);
+  };
 
   const railDrag = usePressDrag<RailDragSource>({
     containerRef: navRef,
     onPickup: (source, x, y) => {
       const nav = navRef.current;
       if (nav) {
+        const navTop = nav.getBoundingClientRect().top;
+        navTopRef.current = navTop;
         const slots: RailSlot[] = [];
         nav.querySelectorAll<HTMLElement>("[data-rail-anchor]").forEach((el) => {
           const r = el.getBoundingClientRect();
           slots.push({
             anchor: el.dataset.railAnchor!,
             parentFolderId: el.dataset.railParent || undefined,
-            top: r.top,
+            top: r.top - navTop + nav.scrollTop,
             height: r.height,
           });
         });
         slotsRef.current = slots;
-        const navRect = nav.getBoundingClientRect();
-        navRectRef.current = { left: navRect.left, width: navRect.width };
       }
+      dropPlanRef.current = null;
       aim(source, x, y);
     },
     onAim: aim,
     onDrop: (source) => {
       const plan = dropPlanRef.current;
-      dropPlanRef.current = null;
-      setDragPos(null);
-      setDropPlan(null);
-      if (plan) persistLayout(applyDrop(layoutRef.current, source, plan.target));
+      const ghostRect = ghostRef.current?.getBoundingClientRect();
+      endDrag();
+      if (!plan) return;
+      const current = layoutRef.current;
+      const next = normalizeLayout(applyDrop(current, source, plan.target));
+      // Dropped back where it was: nothing to publish.
+      if (JSON.stringify(next) === JSON.stringify(normalizeLayout(current))) return;
+      const anchor = source.kind === "item" ? itemAnchor(source.key) : folderAnchor(source.id);
+      flip.capture({ [anchor]: ghostRect });
+      persistLayout(next);
     },
-    onAbort: () => {
-      dropPlanRef.current = null;
-      setDragPos(null);
-      setDropPlan(null);
-    },
+    onAbort: endDrag,
   });
+
+  const playFlip = flip.play;
+  useLayoutEffect(() => {
+    playFlip();
+  }, [renderNodes, playFlip]);
 
   const { dragging: reordering, shouldSuppressClick } = railDrag;
   const dragSource = railDrag.source;
@@ -1634,10 +1679,18 @@ function ServerRailInner({
           "flex flex-col items-center gap-4 sidebar:gap-5 w-full flex-1 min-h-0",
           "overflow-y-auto overflow-x-clip [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           "pt-[calc(0.75rem+var(--safe-area-inset-top,env(safe-area-inset-top,0px)))]",
-          "pb-2",
+          "relative pb-2",
           reordering && "overflow-hidden",
         )}
       >
+        {/* In content coordinates, so it scrolls with the entries under an edge auto-scroll. */}
+        {reordering && dropPlan?.indicatorY !== undefined && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)] transition-[top] duration-100 ease-out"
+            style={{ top: dropPlan.indicatorY - 1 }}
+          />
+        )}
         {user && servers.map((url) => (
           <ServerMentionProbe key={`mention:${url}`} url={url} onChange={reportMention} />
         ))}
@@ -2019,12 +2072,11 @@ function ServerRailInner({
         </DialogContent>
       </Dialog>
 
-      {dragSource && dragPos && (draggedItem || draggedFolder) && (
+      {dragSource && (draggedItem || draggedFolder) && (
         <DragGhost
+          ref={attachGhost}
           item={draggedItem ?? undefined}
           folderItems={draggedFolder?.items}
-          x={dragPos.x}
-          y={dragPos.y}
         />
       )}
 
@@ -2033,17 +2085,6 @@ function ServerRailInner({
           pointer-events-none (those don't contribute a cursor). */}
       {reordering && (
         <div data-rail-drag-overlay className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
-      )}
-
-      {reordering && dropPlan?.indicatorY !== undefined && navRectRef.current && (
-        <div
-          className="pointer-events-none fixed z-[299] h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)]"
-          style={{
-            left: navRectRef.current.left + 6,
-            width: navRectRef.current.width - 12,
-            top: dropPlan.indicatorY - 1,
-          }}
-        />
       )}
     </div>
   );

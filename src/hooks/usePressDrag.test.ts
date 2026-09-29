@@ -115,16 +115,57 @@ describe("usePressDrag", () => {
     expect(result.current.dragging).toBe(true);
   });
 
-  it("mouse movement during the hold neither picks up early nor cancels", () => {
+  it("a mouse picks up as soon as it moves, at the cursor, without waiting for the hold", () => {
     const { result, calls } = setup();
     act(() => {
       result.current.begin("row-a")(pointer("pointerdown", { clientY: 50 }));
-      window.dispatchEvent(pointer("pointermove", { clientY: 90 }));
+      window.dispatchEvent(pointer("pointermove", { clientY: 52 }));
     });
+    // Jitter within the slop is still a click.
     expect(calls.onPickup).not.toHaveBeenCalled();
+
+    act(() => void window.dispatchEvent(pointer("pointermove", { clientY: 58 })));
+    expect(calls.onPickup).toHaveBeenCalledWith("row-a", 0, 58);
+    expect(result.current.dragging).toBe(true);
+
+    // The pending hold must not pick up a second time.
     act(() => void vi.advanceTimersByTime(300));
-    // Picked up where the cursor IS, not where the press landed.
-    expect(calls.onPickup).toHaveBeenCalledWith("row-a", 0, 90);
+    expect(calls.onPickup).toHaveBeenCalledTimes(1);
+  });
+
+  it("a move-started drag released close by is a drop, not a click", () => {
+    const { result, calls } = setup();
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { clientY: 50 }));
+      window.dispatchEvent(pointer("pointermove", { clientY: 57 }));
+      window.dispatchEvent(pointer("pointerup", { clientY: 57 }));
+    });
+    expect(calls.onDrop).toHaveBeenCalledWith("row-a");
+    expect(result.current.shouldSuppressClick()).toBe(true);
+  });
+
+  it("a touch still scrolls on early movement by default", () => {
+    const { result, calls } = setup(document.createElement("div"));
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientY: 50 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: 58 }));
+      vi.advanceTimersByTime(300);
+    });
+    // 8px is inside the scroll slop, so the hold still decides it.
+    expect(calls.onPickup).toHaveBeenCalledTimes(1);
+  });
+
+  it("with pickupOnMove 'all', a touch on a handle picks up on movement instead of scrolling", () => {
+    const calls = { onPickup: vi.fn(), onAim: vi.fn(), onDrop: vi.fn(), onAbort: vi.fn() };
+    const containerRef = { current: null as HTMLElement | null };
+    const { result } = renderHook(() =>
+      usePressDrag<string>({ containerRef, pickupOnMove: "all", ...calls }),
+    );
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { pointerType: "touch", clientY: 50 }));
+      window.dispatchEvent(pointer("pointermove", { pointerType: "touch", clientY: 80 }));
+    });
+    expect(calls.onPickup).toHaveBeenCalledWith("row-a", 0, 80);
   });
 
   it("turns early touch movement into a hand-panned scroll, never a drag", () => {

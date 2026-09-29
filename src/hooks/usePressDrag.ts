@@ -4,6 +4,8 @@ import { impact } from "@/lib/haptics";
 
 /** How long a press rests before it becomes a drag, on every pointer type. */
 const PICKUP_MS = 300;
+/** Movement that picks up at once where moving picks up (mouse; every pointer on a handle). */
+const MOVE_PICKUP_PX = 5;
 /** Past this much movement, a touch that started on an entry is a scroll. */
 const SCROLL_SLOP_PX = 10;
 /**
@@ -39,6 +41,12 @@ export interface PressDragOptions<T> {
   onAbort: () => void;
   /** Called before the re-aim after an auto-scroll, so frozen geometry can be re-measured. */
   onContainerScroll?: () => void;
+  /**
+   * Which pointers pick up by moving rather than only by holding. `"mouse"` (default) keeps
+   * touch's long-press, where early movement is a scroll; `"all"` is for a dedicated drag
+   * handle, which has nothing else to do with a moving finger.
+   */
+  pickupOnMove?: "mouse" | "all";
 }
 
 /**
@@ -50,7 +58,7 @@ export interface PressDragOptions<T> {
  *   flung here by hand.
  * - Attach `begin` natively via {@link useDragPointerDown}: Radix `asChild` Slots don't reliably
  *   forward React pointer props.
- * Mouse movement during the hold doesn't cancel; early touch movement becomes a scroll.
+ * A mouse picks up as soon as it moves (or after the hold); early touch movement becomes a scroll.
  */
 export function usePressDrag<T>({
   containerRef,
@@ -59,6 +67,7 @@ export function usePressDrag<T>({
   onDrop,
   onAbort,
   onContainerScroll,
+  pickupOnMove = "mouse",
 }: PressDragOptions<T>) {
   const [source, setSource] = useState<T | null>(null);
   /** Read inside listeners where state would be stale. */
@@ -168,6 +177,7 @@ export function usePressDrag<T>({
       stopFling();
       const pointerId = e.pointerId;
       const isMouse = e.pointerType === "mouse";
+      const movePicks = isMouse || pickupOnMove === "all";
       const startX = e.clientX;
       const startY = e.clientY;
       // Pick up at the cursor rather than the press point.
@@ -249,7 +259,14 @@ export function usePressDrag<T>({
             scrollSamples = scrollSamples.filter((s) => t - s.t <= FLING_WINDOW_MS);
             return;
           }
-          if (isMouse) return;
+          if (movePicks) {
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > MOVE_PICKUP_PX) {
+              // A drag from its first pixels: releasing close by is still a drop, not a click.
+              everMovedFar = true;
+              pickup();
+            }
+            return;
+          }
           if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > SCROLL_SLOP_PX) {
             // Early touch movement is a scroll; hand the rest to the manual panner.
             if (timer.current) clearTimeout(timer.current);
@@ -314,8 +331,8 @@ export function usePressDrag<T>({
       window.addEventListener("pointercancel", onCancel);
       window.addEventListener("contextmenu", onContextMenu, true);
 
-      // The ONLY pickup trigger; a touch that became a scroll cleared the timer.
-      timer.current = setTimeout(() => {
+      function pickup() {
+        if (timer.current) clearTimeout(timer.current);
         timer.current = null;
         if (active.current !== null) return;
         active.current = from;
@@ -323,9 +340,12 @@ export function usePressDrag<T>({
         setSource(from);
         impact("medium");
         autoScrollTick();
-      }, PICKUP_MS);
+      }
+
+      // A touch that became a scroll cleared the timer.
+      timer.current = setTimeout(pickup, PICKUP_MS);
     },
-    [containerRef, fling, stopFling],
+    [containerRef, fling, stopFling, pickupOnMove],
   );
 
   /** A drag just finished, or the tap only caught a fling. */

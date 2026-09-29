@@ -1,5 +1,6 @@
-import { AlertTriangle, ImagePlus, Loader2, Smile, X } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { AlertTriangle, GripVertical, ImagePlus, Loader2, Smile, X } from "lucide-react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNostr } from "@nostrify/react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 
@@ -20,6 +21,8 @@ import {
   type MyEmojiPack,
 } from "@/hooks/useEmojiPacks";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useFlipReorder } from "@/hooks/useFlipReorder";
+import { usePressDrag } from "@/hooks/usePressDrag";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
@@ -57,6 +60,34 @@ function shortcodeFromFilename(name: string): string {
 function slugify(title: string): string {
   const base = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return base || "pack";
+}
+
+/** Where a dragged row lands: before `before` (null = last), with the indicator at `y`. */
+interface InsertPoint {
+  before: string | null;
+  y: number;
+}
+
+/** Half the rows' `space-y-1.5`, so the indicator sits in the gap. */
+const ROW_GAP_HALF = 3;
+
+/** Insert before the first row whose middle is below `y`, else at the end. */
+function planInsert(y: number, slots: { id: string; top: number; height: number }[]): InsertPoint {
+  for (const s of slots) {
+    if (y < s.top + s.height / 2) return { before: s.id, y: s.top - ROW_GAP_HALF };
+  }
+  const last = slots[slots.length - 1];
+  return { before: null, y: last ? last.top + last.height + ROW_GAP_HALF : 0 };
+}
+
+function moveEntry(entries: Entry[], id: string, before: string | null): Entry[] {
+  const moving = entries.find((e) => e.id === id);
+  if (!moving || before === id) return entries;
+  const rest = entries.filter((e) => e.id !== id);
+  const at = before === null ? rest.length : rest.findIndex((e) => e.id === before);
+  const out = [...rest];
+  out.splice(at < 0 ? rest.length : at, 0, moving);
+  return out.every((e, i) => e === entries[i]) ? entries : out;
 }
 
 function nextEntryId(): string {
@@ -215,6 +246,91 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
     );
 
   const removeEntry = (id: string) => setEntries((prev) => prev.filter((e) => e.id !== id));
+
+  // Reorder by the grip handle, on the server rail's machinery: geometry frozen at pickup
+  // in the list's content coordinates (so edge auto-scroll stays true), a ghost moved by
+  // writing its transform, state touched only when the insertion point changes, and a
+  // FLIP settle on drop. The emoji tags publish in this order.
+  const listRef = useRef<HTMLElement | null>(null);
+  const sortSlots = useRef<{ id: string; top: number; height: number }[]>([]);
+  const listTop = useRef(0);
+  const [ghostBox, setGhostBox] = useState<{ left: number; width: number } | null>(null);
+  const ghostEl = useRef<HTMLDivElement | null>(null);
+  const ghostY = useRef(0);
+  const [insertAt, setInsertAt] = useState<InsertPoint | null>(null);
+  const insertRef = useRef<InsertPoint | null>(null);
+  const flip = useFlipReorder(listRef, "data-emoji-row");
+
+  const placeGhost = () => {
+    const el = ghostEl.current;
+    if (el) el.style.transform = `translate3d(0, ${ghostY.current}px, 0) translateY(-50%)`;
+  };
+  const attachGhost = (el: HTMLDivElement | null) => {
+    ghostEl.current = el;
+    placeGhost();
+  };
+
+  const aimSort = (id: string, _x: number, y: number) => {
+    ghostY.current = y;
+    placeGhost();
+    const contentY = y - listTop.current + (listRef.current?.scrollTop ?? 0);
+    const next = planInsert(contentY, sortSlots.current.filter((s) => s.id !== id));
+    if (next.before === insertRef.current?.before && next.y === insertRef.current?.y) return;
+    insertRef.current = next;
+    setInsertAt(next);
+  };
+
+  const endSort = () => {
+    insertRef.current = null;
+    setInsertAt(null);
+    setGhostBox(null);
+  };
+
+  const sortDrag = usePressDrag<string>({
+    containerRef: listRef,
+    pickupOnMove: "all",
+    onPickup: (id, x, y) => {
+      const list = listRef.current;
+      if (!list) return;
+      const rect = list.getBoundingClientRect();
+      listTop.current = rect.top;
+      sortSlots.current = Array.from(list.querySelectorAll<HTMLElement>("[data-emoji-row]")).map((el) => {
+        const r = el.getBoundingClientRect();
+        return { id: el.dataset.emojiRow!, top: r.top - rect.top + list.scrollTop, height: r.height };
+      });
+      setGhostBox({ left: rect.left + 6, width: rect.width - 12 });
+      insertRef.current = null;
+      aimSort(id, x, y);
+    },
+    onAim: aimSort,
+    onDrop: (id) => {
+      const target = insertRef.current;
+      const ghostRect = ghostEl.current?.getBoundingClientRect();
+      endSort();
+      if (!target) return;
+      flip.capture({ [id]: ghostRect });
+      setEntries((prev) => moveEntry(prev, id, target.before));
+    },
+    onAbort: endSort,
+  });
+
+  const moveBy = (id: string, step: -1 | 1) => {
+    const i = entries.findIndex((e) => e.id === id);
+    const j = i + step;
+    if (i < 0 || j < 0 || j >= entries.length) return;
+    flip.capture();
+    // Before the entry after the destination, or last.
+    setEntries((prev) => moveEntry(prev, id, step < 0 ? prev[j].id : (prev[j + 1]?.id ?? null)));
+  };
+
+  const playFlip = flip.play;
+  useLayoutEffect(() => {
+    playFlip();
+  }, [entries, playFlip]);
+
+  const sortable = entries.length > 1 && !busy;
+  const sortingId = sortDrag.source;
+  const sortingEntry = sortingId ? entries.find((e) => e.id === sortingId) : undefined;
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -471,6 +587,7 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
           </button>
         ) : (
           <div
+            ref={sortDrag.attachContainer}
             onDragOver={(e) => {
               e.preventDefault();
               setDragging(true);
@@ -478,14 +595,46 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
             className={cn(
-              "max-h-56 space-y-1.5 overflow-y-auto scrollbar-stable clip-corner-lg p-1.5 transition-colors",
+              "relative max-h-56 space-y-1.5 overflow-y-auto scrollbar-stable clip-corner-lg p-1.5 transition-colors",
               dragging ? "bg-primary/10" : "bg-foreground/5",
             )}
           >
-            {entries.map((e) => {
+            {entries.map((e, i) => {
               const invalid = !e.uploading && (!finalShortcode(e.shortcode) || isDuplicate(e.shortcode));
               return (
-                <div key={e.id} className="flex items-center gap-2">
+                <div
+                  key={e.id}
+                  data-emoji-row={e.id}
+                  className={cn(
+                    "flex items-center gap-2 transition-opacity",
+                    sortingId === e.id && "opacity-30",
+                  )}
+                >
+                  <button
+                    type="button"
+                    aria-label={`Move ${e.shortcode || "emoji"}. Use the arrow keys, or drag.`}
+                    aria-disabled={!sortable}
+                    tabIndex={sortable ? 0 : -1}
+                    onPointerDown={(ev) => {
+                      if (sortable) sortDrag.begin(e.id)(ev.nativeEvent);
+                    }}
+                    onKeyDown={(ev) => {
+                      if (!sortable) return;
+                      if (ev.key === "ArrowUp" && i > 0) {
+                        ev.preventDefault();
+                        moveBy(e.id, -1);
+                      } else if (ev.key === "ArrowDown" && i < entries.length - 1) {
+                        ev.preventDefault();
+                        moveBy(e.id, 1);
+                      }
+                    }}
+                    className={cn(
+                      "-mr-1 flex h-9 w-5 touch:w-7 shrink-0 touch-none items-center justify-center rounded text-muted-foreground/50 outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                      sortable ? "cursor-grab hover:text-foreground" : "cursor-default opacity-40",
+                    )}
+                  >
+                    <GripVertical className="size-4" />
+                  </button>
                   <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background">
                     {e.uploading ? (
                       <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -531,9 +680,38 @@ function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: 
                 </div>
               );
             })}
+            {/* Last child: as the first, `space-y` would shift the rows mid-drag. */}
+            {insertAt && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-1.5 z-10 h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)] transition-[top] duration-100 ease-out"
+                style={{ top: insertAt.y - 1 }}
+              />
+            )}
           </div>
         )}
       </div>
+
+      {/* Portaled: the dialog is transformed, which would make `fixed` relative to it. */}
+      {sortingEntry && ghostBox && createPortal(
+        <div
+          ref={attachGhost}
+          aria-hidden
+          className="pointer-events-none fixed top-0 z-[300] will-change-transform"
+          style={{ left: ghostBox.left, width: ghostBox.width }}
+        >
+          <div className="flex items-center gap-2 rounded-md bg-popover px-1 py-0.5 shadow-lg ring-1 ring-primary/60 animate-in zoom-in-95 duration-100">
+            <GripVertical className="size-4 shrink-0 text-muted-foreground" />
+            <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background">
+              {sortingEntry.url && (
+                <CustomEmojiImg name={sortingEntry.shortcode} url={sortingEntry.url} className="size-7 object-contain" />
+              )}
+            </span>
+            <span className="truncate text-sm">:{sortingEntry.shortcode}:</span>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       <div className="space-y-2">
         {user && !isEditMode && (
