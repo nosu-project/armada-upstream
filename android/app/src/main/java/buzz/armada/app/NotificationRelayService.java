@@ -2076,6 +2076,10 @@ public class NotificationRelayService extends Service {
         // the same keys cannot change the outcome, and each round was a
         // Schnorr sign per Concord stream key here plus the same again in JS.
         final Set<String> answeredAuth = new HashSet<>();
+        // This session's latest NIP-42 challenge, and whether the relay walled
+        // the Concord sub — the only case that needs the stream keys' AUTHs.
+        String lastChallenge;
+        boolean concordWalled = false;
         final Set<String> bridgedChallenges = new HashSet<>();
         // Backoff for relay-initiated CLOSED resubscribes (#49): a relay that
         // drops a standing sub (restart, transient error, rate limit) earns a
@@ -2190,6 +2194,8 @@ public class NotificationRelayService extends Service {
             cursorGate.reset();
             answeredAuth.clear();
             bridgedChallenges.clear();
+            lastChallenge = null;
+            concordWalled = false;
             deliveredAnything = false;
             final Request request;
             try {
@@ -2750,6 +2756,61 @@ public class NotificationRelayService extends Service {
         return value.length() <= 24 ? value : value.substring(0, 24);
     }
 
+    /**
+     * The Concord STREAM auths, signed natively from the same group-key memo
+     * the quick reply signs wraps with — so an auth-gating relay's kind-1059
+     * subscription survives a reconnect with the WebView asleep, instead of
+     * waiting for it to wake and answer the bridge (which still signs too; a
+     * duplicate AUTH just re-authenticates).
+     */
+    /**
+     * Hand a challenge to the WebView for the signatures it should add: the
+     * user's ({@code user}) and/or the stream keys' ({@code streams}). Returns
+     * whether the WebView is there to answer (or already was).
+     */
+    private boolean bridgeAuth(String relayUrl, String challenge, RelayConnection session,
+                               boolean user, boolean streams) {
+        if (!user && !streams) return false;
+        String key = challenge + (streams ? "|s" : "") + (user ? "|u" : "");
+        if (session != null && session.bridgedChallenges.contains(key)) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip bridge repeat");
+            return true;
+        }
+        boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge, user, streams);
+        if (bridged && session != null) session.bridgedChallenges.add(key);
+        return bridged;
+    }
+
+    private void signStreamAuths(String relayUrl, String challenge, RelayConnection session) {
+        Set<String> streamPks = relayToPks2.get(relayUrl);
+        if (streamPks == null || streamPks.isEmpty()) return;
+        Map<String, String> secrets = ServiceStore.streamSecrets(this, new ArrayList<>(streamPks));
+        long nowSecs = System.currentTimeMillis() / 1000;
+        for (Map.Entry<String, String> entry : secrets.entrySet()) {
+            if (session != null && session.answeredAuth.contains(entry.getKey() + "|" + challenge)) {
+                if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip stream repeat");
+                continue;
+            }
+            byte[] sk = ConcordCrypto.hexToBytes(entry.getValue());
+            if (sk == null || sk.length != 32) continue;
+            try {
+                if (!entry.getKey().equals(NostrCrypto.pubkeyOf(sk))) continue;
+                JSONArray streamTags = new JSONArray()
+                        .put(new JSONArray().put("relay").put(relayUrl))
+                        .put(new JSONArray().put("challenge").put(challenge));
+                long t = ServiceProfiler.begin("auth.stream.sign");
+                try {
+                    deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
+                            22242, "", streamTags, nowSecs, sk).toString());
+                } finally {
+                    ServiceProfiler.end("auth.stream.sign", t);
+                }
+            } catch (Exception ignored) {
+                // A stream that can't sign simply isn't authed.
+            }
+        }
+    }
+
     private void onRelayMessage(String text, String relayUrl) {
         try {
             JSONArray msg = new JSONArray(text);
@@ -2768,17 +2829,14 @@ public class NotificationRelayService extends Service {
                 healthAuthStatus = "challenged";
                 if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
                 RelayConnection session = connectionFor(relayUrl);
-                // The WebView signs the stream auths too; hand it each
-                // challenge once per session, not on every repeat.
-                boolean bridged;
-                if (session != null && session.bridgedChallenges.contains(challenge)) {
-                    bridged = true;
-                    if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip bridge repeat");
-                } else {
-                    bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
-                    if (bridged && session != null) session.bridgedChallenges.add(challenge);
-                }
                 NativeSigner signer = nativeSigner;
+                if (session != null) session.lastChallenge = challenge;
+                // The WebView signs the user's AUTH when this process has no
+                // signer, and the stream keys' (it may hold keys the memo here
+                // lacks) only where the Concord sub was walled. Once per
+                // session per purpose, not on every repeat.
+                boolean needStreams = session == null || session.concordWalled;
+                boolean bridged = bridgeAuth(relayUrl, challenge, session, signer == null, needStreams);
                 if (signer != null && userPubkey != null && session != null
                         && session.answeredAuth.contains(userPubkey + "|" + challenge)) {
                     if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip user repeat");
@@ -2802,41 +2860,12 @@ public class NotificationRelayService extends Service {
                 } else if (!bridged) {
                     Log.w(TAG, "No bridge (WebView down) and no shared signer — can't AUTH " + relayUrl);
                 }
-                // The Concord STREAM auths, signed natively from the same
-                // group-key memo the quick reply signs wraps with — so an
-                // auth-gating relay's kind-1059 subscription survives a
-                // reconnect with the WebView asleep, instead of waiting for it
-                // to wake and answer the bridge (which still signs too; a
-                // duplicate AUTH just re-authenticates).
-                Set<String> streamPks = relayToPks2.get(relayUrl);
-                if (streamPks != null && !streamPks.isEmpty()) {
-                    Map<String, String> secrets =
-                            ServiceStore.streamSecrets(this, new ArrayList<>(streamPks));
-                    long nowSecs = System.currentTimeMillis() / 1000;
-                    for (Map.Entry<String, String> entry : secrets.entrySet()) {
-                        if (session != null && session.answeredAuth.contains(entry.getKey() + "|" + challenge)) {
-                            if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip stream repeat");
-                            continue;
-                        }
-                        byte[] sk = ConcordCrypto.hexToBytes(entry.getValue());
-                        if (sk == null || sk.length != 32) continue;
-                        try {
-                            if (!entry.getKey().equals(NostrCrypto.pubkeyOf(sk))) continue;
-                            JSONArray streamTags = new JSONArray()
-                                    .put(new JSONArray().put("relay").put(relayUrl))
-                                    .put(new JSONArray().put("challenge").put(challenge));
-                            long t = ServiceProfiler.begin("auth.stream.sign");
-                            try {
-                                deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
-                                        22242, "", streamTags, nowSecs, sk).toString());
-                            } finally {
-                                ServiceProfiler.end("auth.stream.sign", t);
-                            }
-                        } catch (Exception ignored) {
-                            // A stream that can't sign simply isn't authed.
-                        }
-                    }
-                }
+                // Stream keys authenticate only where the Concord subscription was
+                // actually walled: most relays serve it unauthenticated and
+                // challenge for the DM or self-state subs, and answering every
+                // challenge with every stream key was hundreds of signatures per
+                // reconnect. The wall may arrive before or after the challenge.
+                if (needStreams) signStreamAuths(relayUrl, challenge, session);
                 return;
             }
             if ("EOSE".equals(type)) {
@@ -2918,6 +2947,13 @@ public class NotificationRelayService extends Service {
                     if (walled != null) {
                         walled.walledSubs.add(sub);
                         walled.endBackfill(sub);
+                        if (sub.equals(walled.subConcord) && !walled.concordWalled) {
+                            walled.concordWalled = true;
+                            if (walled.lastChallenge != null) {
+                                signStreamAuths(relayUrl, walled.lastChallenge, walled);
+                                bridgeAuth(relayUrl, walled.lastChallenge, walled, false, true);
+                            }
+                        }
                     }
                     return;
                 }
