@@ -607,6 +607,16 @@ public class NotificationRelayService extends Service {
     private static final long PROFILE_PERSIST_DEBOUNCE_MS = 1_000;
     // SharedPreferences file holding the serialized ProfileStore.
     private static final String PROFILES_PREFS = "armada_notif_profiles";
+    /**
+     * Where each self-state relay's read had reached, kept across process
+     * restarts. Without it every new process re-read every document the account
+     * ever published there, and Ditto-family relays keep each edition: 377
+     * documents, 6.7 MB, on one restart. Keys are account-scoped; the file is
+     * cleared on disable/logout with the rest of the notification state.
+     */
+    static final String CURSOR_PREFS = "armada_notif_cursors";
+    /** An older persisted cursor is dropped for a full read. */
+    static final long SELF_SINCE_MAX_AGE_SEC = 30L * 24 * 3600;
     private static final String PROFILES_KEY = "profiles";
 
     /** Minimal author profile: display name + avatar URL + nip05 (any may be null). */
@@ -2482,11 +2492,12 @@ public class NotificationRelayService extends Service {
                 // shards leaks feature usage and can hydrate stale copies from
                 // a destination current writers do not maintain.
                 //
-                // No `since` on a relay's FIRST read in this process: a change
-                // made while this device was off must still be seen, which is
-                // the whole failure this subscription exists to fix. After that
-                // read completes (EOSE), every reconnect and re-REQ asks only
-                // from shortly before it (selfSinceByUrl). Unbounded every time
+                // The FIRST read of this account on a relay has no `since`: a
+                // change made while this device was off must still be seen,
+                // which is the whole failure this subscription exists to fix.
+                // After a read completes (EOSE), every later one — reconnects,
+                // re-REQs and new processes (CURSOR_PREFS) — asks only from
+                // shortly before it (selfSinceByUrl). Unbounded every time
                 // was not "a handful of events": the installation-sharded topic
                 // documents accumulate per install, and a full replay per
                 // re-REQ measured ~110 documents a relay, each Schnorr-verified
@@ -2533,6 +2544,12 @@ public class NotificationRelayService extends Service {
                 topicDocuments.put("#t", topics);
 
                 Long selfSince = selfSinceByUrl.get(relayUrl);
+                if (selfSince == null) {
+                    selfSince = persistedSelfSince(
+                            getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE)
+                                    .getLong(selfCursorKey(userPubkey, relayUrl), 0L),
+                            System.currentTimeMillis() / 1000);
+                }
                 if (selfSince != null) {
                     bare.put("since", selfSince);
                     documents.put("since", selfSince);
@@ -3060,7 +3077,12 @@ public class NotificationRelayService extends Service {
                     // REQs ask only for what changed since (see selfSinceByUrl).
                     if (sub.equals(accepted.subSelf)) {
                         accepted.selfLive = true;
-                        selfSinceByUrl.put(relayUrl, System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC);
+                        long since = System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC;
+                        selfSinceByUrl.put(relayUrl, since);
+                        if (userPubkey != null) {
+                            getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE).edit()
+                                    .putLong(selfCursorKey(userPubkey, relayUrl), since).apply();
+                        }
                     }
                 }
                 return;
@@ -3545,6 +3567,21 @@ public class NotificationRelayService extends Service {
     static long dm17CatchUpFloorSec(Long liveUntilMs, long nowMs) {
         if (liveUntilMs == null || nowMs - liveUntilMs <= DM17_CATCHUP_MIN_GAP_MS) return 0;
         return Math.max(1, liveUntilMs / 1000 - DM17_CATCHUP_SLACK_SEC);
+    }
+
+    static String selfCursorKey(String pubkey, String relayUrl) {
+        return "self|" + pubkey + "|" + relayUrl;
+    }
+
+    /** A persisted self-state cursor to resume from, or null for a full read. */
+    static Long persistedSelfSince(long savedSec, long nowSec) {
+        if (savedSec <= 0 || savedSec > nowSec || nowSec - savedSec > SELF_SINCE_MAX_AGE_SEC) return null;
+        return savedSec;
+    }
+
+    /** Disable/logout: no cursor may carry into another account's reads. */
+    static void clearPersistedCursors(Context ctx) {
+        ctx.getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
     }
 
     /** Pure cursor transition for JVM regression coverage. */
