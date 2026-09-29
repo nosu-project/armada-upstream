@@ -1,22 +1,32 @@
 import { AlertTriangle, ImagePlus, Loader2, Smile, X } from "lucide-react";
-import { useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMemo, useRef, useState } from "react";
+import { useNostr } from "@nostrify/react";
+import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_EMOJI_SET, useAddEmojiPack } from "@/hooks/useEmojiPacks";
+import {
+  emojiPackCoord,
+  KIND_EMOJI_SET,
+  readOwnEmojiPack,
+  useAddEmojiPack,
+  type MyEmojiPack,
+} from "@/hooks/useEmojiPacks";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { toast } from "@/hooks/useToast";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface Entry {
   id: string;
@@ -24,6 +34,9 @@ interface Entry {
   url: string;
   uploading: boolean;
 }
+
+/** Tags the form owns; an edit rewrites these and keeps every other tag. */
+const MANAGED_TAGS = new Set(["d", "name", "title", "about", "image", "picture", "emoji"]);
 
 /**
  * Sanitize a shortcode as typed. Doesn't trim underscores (that would eat a
@@ -46,41 +59,115 @@ function slugify(title: string): string {
   return base || "pack";
 }
 
-/** Create and publish a NIP-30 emoji pack (kind 30030). */
+function nextEntryId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Files from a drop, descending into dropped folders. */
+async function filesFromDrop(dataTransfer: DataTransfer): Promise<File[]> {
+  const items = Array.from(dataTransfer.items ?? []);
+  if (items.length === 0) return Array.from(dataTransfer.files);
+
+  // Entries must be taken synchronously: the DataTransfer is emptied once the handler returns.
+  const entries: FileSystemEntry[] = [];
+  const loose: File[] = [];
+  for (const item of items) {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) entries.push(entry);
+    else {
+      const file = item.getAsFile();
+      if (file) loose.push(file);
+    }
+  }
+  if (entries.length === 0) return loose.length ? loose : Array.from(dataTransfer.files);
+
+  const readEntry = (entry: FileSystemEntry, out: File[]): Promise<void> =>
+    new Promise((resolve) => {
+      if (entry.isFile) {
+        (entry as FileSystemFileEntry).file((file) => {
+          out.push(file);
+          resolve();
+        }, () => resolve());
+      } else if (entry.isDirectory) {
+        // readEntries returns at most ~100 entries per call; read until it returns none.
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const children: FileSystemEntry[] = [];
+        const next = () =>
+          reader.readEntries((batch) => {
+            if (batch.length === 0) {
+              void Promise.all(children.map((c) => readEntry(c, out))).then(() => resolve());
+            } else {
+              children.push(...batch);
+              next();
+            }
+          }, () => resolve());
+        next();
+      } else {
+        resolve();
+      }
+    });
+
+  const collected = [...loose];
+  await Promise.all(entries.map((entry) => readEntry(entry, collected)));
+  return collected;
+}
+
+/** Create a NIP-30 emoji pack (kind 30030), or edit one of the user's own with `editEvent`. */
 export function EmojiPackDialog({
   open,
   onOpenChange,
+  editEvent,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  editEvent?: NostrRumor;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Create emoji pack">
-        <EmojiPackForm onDone={() => onOpenChange(false)} />
+      <ChromeDialogContent title={editEvent ? "Edit emoji pack" : "Create emoji pack"}>
+        {open && <EmojiPackForm editEvent={editEvent} onDone={() => onOpenChange(false)} />}
       </ChromeDialogContent>
     </Dialog>
   );
 }
 
-function EmojiPackForm({ onDone }: { onDone: () => void }) {
+function EmojiPackForm({ editEvent, onDone }: { editEvent?: NostrRumor; onDone: () => void }) {
   const { user } = useCurrentUser();
+  const { nostr } = useNostr();
+  const eventStore = useEventStore();
   const { mutateAsync: uploadFile } = useUploadFile();
   const { mutateAsync: publishEvent, isPending: publishing } = useNostrPublish();
   const { mutateAsync: addPack } = useAddEmojiPack();
   const queryClient = useQueryClient();
+
+  const isEditMode = !!editEvent;
+  const initial = useMemo(() => {
+    if (!editEvent) return null;
+    const tag = (n: string) => editEvent.tags.find(([k]) => k === n)?.[1];
+    return {
+      identifier: tag("d") ?? "",
+      name: tag("title") || tag("name") || "",
+      about: tag("about") ?? "",
+      icon: tag("image") || tag("picture") || "",
+      entries: editEvent.tags
+        .filter((t) => t[0] === "emoji" && t[1] && t[2])
+        .map((t): Entry => ({ id: nextEntryId(), shortcode: t[1], url: t[2], uploading: false })),
+    };
+  }, [editEvent]);
+
   const fileInput = useRef<HTMLInputElement>(null);
   const iconInput = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState("");
-  const [about, setAbout] = useState("");
-  const [icon, setIcon] = useState("");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [about, setAbout] = useState(initial?.about ?? "");
+  const [icon, setIcon] = useState(initial?.icon ?? "");
   const [iconUploading, setIconUploading] = useState(false);
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const [entries, setEntries] = useState<Entry[]>(initial?.entries ?? []);
   const [dragging, setDragging] = useState(false);
-  const [addToMine, setAddToMine] = useState(true);
-  // Covers the whole handler, including `addPack`'s slow list read-modify-write
-  // after `publishing` (the event write) finishes.
+  const [addToMine, setAddToMine] = useState(!isEditMode);
+  // Covers the whole handler, including the fresh read before an edit and
+  // `addPack`'s slow list read-modify-write after `publishing` finishes.
   const [submitting, setSubmitting] = useState(false);
+  const busy = publishing || submitting;
 
   // Cover image (`picture`/`image` tags); other clients (Ditto) show nothing without it.
   const addIcon = async (file: File | null | undefined) => {
@@ -98,9 +185,13 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
 
   const addFiles = async (files: FileList | File[] | null) => {
     if (!files) return;
-    for (const file of Array.from(files)) {
-      if (!file.type.startsWith("image/")) continue;
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (images.length === 0) {
+      toast({ title: "No images found", variant: "destructive" });
+      return;
+    }
+    await Promise.all(images.map(async (file) => {
+      const id = nextEntryId();
       setEntries((prev) => [
         ...prev,
         { id, shortcode: shortcodeFromFilename(file.name), url: "", uploading: true },
@@ -115,7 +206,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         setEntries((prev) => prev.filter((e) => e.id !== id));
         toast({ title: "Upload failed", description: file.name, variant: "destructive" });
       }
-    }
+    }));
   };
 
   const setShortcode = (id: string, value: string) =>
@@ -128,7 +219,8 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    void addFiles(e.dataTransfer.files);
+    if (busy) return;
+    void filesFromDrop(e.dataTransfer).then(addFiles);
   };
 
   const uploading = entries.filter((e) => e.uploading).length;
@@ -144,9 +236,10 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
   const missing = uploaded.filter((e) => !finalShortcode(e.shortcode)).length;
   const named = name.trim().length > 0;
   const canPublish =
-    named && uploaded.length > 0 && !uploading && !iconUploading && !publishing && !submitting && duplicates === 0 && missing === 0;
+    !!user && named && uploaded.length > 0 && !uploading && !iconUploading && !busy &&
+    duplicates === 0 && missing === 0 && (!isEditMode || !!initial?.identifier);
 
-  const hint = publishing || submitting
+  const hint = busy
     ? "Publishing…"
     : uploading > 0 || iconUploading
       ? `Uploading ${uploading + (iconUploading ? 1 : 0)} image${uploading + (iconUploading ? 1 : 0) === 1 ? "" : "s"}…`
@@ -158,43 +251,51 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
             ? "Give the pack a name."
             : uploaded.length === 0
               ? "Add at least one image."
-              : "Anyone will be able to find and add this pack.";
+              : isEditMode
+                ? "Everyone who added this pack will get the changes."
+                : "Anyone will be able to find and add this pack.";
 
   const publish = async () => {
-    if (!canPublish) return;
+    if (!canPublish || !user) return;
     setSubmitting(true);
-    const identifier = `${slugify(name)}-${Math.random().toString(36).slice(2, 6)}`;
-    // Emit both `title` and `name` (Ditto reads `name`, else the `d` slug), and
-    // both `image` and `picture` for the cover.
-    const tags: string[][] = [
-      ["d", identifier],
-      ["title", name.trim()],
-      ["name", name.trim()],
-    ];
-    if (about.trim()) tags.push(["about", about.trim()]);
-    if (icon) {
-      tags.push(["image", icon], ["picture", icon]);
-    }
-    for (const e of uploaded) {
-      tags.push(["emoji", finalShortcode(e.shortcode), e.url]);
-    }
+    // A new pack gets a random suffix so two packs with the same name never replace each other.
+    const identifier = isEditMode
+      ? initial!.identifier
+      : `${slugify(name)}-${Math.random().toString(36).slice(2, 6)}`;
     try {
-      const event = await publishEvent({ kind: KIND_EMOJI_SET, content: "", tags });
+      let prev: NostrRumor | null = null;
+      if (isEditMode) {
+        const store = await eventStore;
+        prev = await readOwnEmojiPack(nostr, store, user.pubkey, identifier, AbortSignal.timeout(10_000));
+        prev ??= editEvent ?? null;
+      }
 
-      // Seed the cache instead of refetching: an immediate refetch races relay
-      // indexing and can return LESS than is on screen. Stale mark lets the next
-      // fetch reconcile.
-      queryClient.setQueriesData<NostrEvent[]>(
-        { queryKey: ["discover", "emoji-packs"], predicate: (q) => q.queryKey[3] === "" },
-        (prev) => (prev ? [event, ...prev.filter((e) => e.id !== event.id)] : prev),
-      );
-      void queryClient.invalidateQueries({
-        queryKey: ["discover", "emoji-packs"],
-        refetchType: "none",
+      // Emit both `title` and `name` (Ditto reads `name`, else the `d` slug), and
+      // both `image` and `picture` for the cover.
+      const tags: string[][] = [
+        ["d", identifier],
+        ["title", name.trim()],
+        ["name", name.trim()],
+      ];
+      if (about.trim()) tags.push(["about", about.trim()]);
+      if (icon) {
+        tags.push(["image", icon], ["picture", icon]);
+      }
+      if (prev) tags.push(...prev.tags.filter(([n]) => !MANAGED_TAGS.has(n)).map((t) => [...t]));
+      for (const e of uploaded) {
+        tags.push(["emoji", finalShortcode(e.shortcode), e.url]);
+      }
+
+      const event = await publishEvent({
+        kind: KIND_EMOJI_SET,
+        content: prev?.content ?? "",
+        tags,
+        prev: prev ?? undefined,
       });
+      seedCaches(queryClient, event, user.pubkey);
 
       // Explicit opt-in. A failure here must not read as a failed publish.
-      if (addToMine && user) {
+      if (addToMine && !isEditMode) {
         try {
           await addPack({ pubkey: user.pubkey, identifier });
           toast({ title: "Emoji pack published", description: `${name.trim()} — added to your emojis` });
@@ -206,12 +307,15 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
           });
         }
       } else {
-        toast({ title: "Emoji pack published", description: name.trim() });
+        toast({
+          title: isEditMode ? "Emoji pack updated" : "Emoji pack published",
+          description: name.trim(),
+        });
       }
       onDone();
     } catch (e) {
       toast({
-        title: "Couldn't publish pack",
+        title: isEditMode ? "Couldn't update pack" : "Couldn't publish pack",
         description: e instanceof Error ? e.message : "Publishing failed.",
         variant: "destructive",
       });
@@ -220,6 +324,9 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
     }
   };
 
+  const iconSrc = sanitizeImageSrc(icon);
+  const iconPlaceholder = <ImagePlus className="size-5" />;
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col items-center gap-2 text-center">
@@ -227,7 +334,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
           <Smile className="size-6" />
         </div>
         <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-          create emoji pack
+          {isEditMode ? "edit emoji pack" : "create emoji pack"}
         </h2>
         <p className="text-sm text-muted-foreground">
           Upload images, give each a shortcode, and publish a pack anyone can add.
@@ -249,6 +356,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         <button
           type="button"
           onClick={() => iconInput.current?.click()}
+          disabled={busy}
           aria-label="Pack icon"
           className={cn(
             "flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border transition-colors",
@@ -259,10 +367,10 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
         >
           {iconUploading ? (
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          ) : icon ? (
-            <img src={icon} alt="" className="size-full object-cover" />
+          ) : iconSrc ? (
+            <FallbackImage src={iconSrc} className="size-full object-cover" fallback={iconPlaceholder} />
           ) : (
-            <ImagePlus className="size-5" />
+            iconPlaceholder
           )}
         </button>
         <div className="flex-1 space-y-1.5">
@@ -278,6 +386,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
             onChange={(e) => setName(e.target.value)}
             placeholder="My emoji pack"
             maxLength={60}
+            disabled={busy}
             autoFocus
           />
         </div>
@@ -298,6 +407,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
           placeholder="What's in this pack?"
           maxLength={280}
           rows={2}
+          disabled={busy}
           className="resize-none"
         />
       </div>
@@ -329,6 +439,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
               size="sm"
               className="ml-auto h-7 touch:h-9 gap-1.5 text-xs text-muted-foreground"
               onClick={() => fileInput.current?.click()}
+              disabled={busy}
             >
               <ImagePlus className="size-3.5" />
               Add more
@@ -346,6 +457,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
+            disabled={busy}
             className={cn(
               "flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-8 text-center transition-colors",
               dragging
@@ -355,7 +467,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
           >
             <ImagePlus className="size-6" />
             <span className="text-sm font-medium text-foreground">Add emoji images</span>
-            <span className="text-xs">Drop them here, or click to browse. PNG, GIF or WebP.</span>
+            <span className="text-xs">Drop images or a folder here, or click to browse. PNG, GIF or WebP.</span>
           </button>
         ) : (
           <div
@@ -400,6 +512,7 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
                       placeholder="shortcode"
                       aria-label="Emoji shortcode"
                       aria-invalid={invalid}
+                      disabled={busy}
                       className="min-w-0 flex-1 bg-transparent py-1.5 touch:py-2.5 text-sm outline-none"
                     />
                     <span className="text-sm text-muted-foreground">:</span>
@@ -408,8 +521,9 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
                     type="button"
                     size="icon"
                     variant="ghost"
-                    className="size-8 touch:size-10 shrink-0 text-muted-foreground"
+                    className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-destructive"
                     onClick={() => removeEntry(e.id)}
+                    disabled={busy}
                     aria-label={`Remove ${e.shortcode || "emoji"}`}
                   >
                     <X className="size-4" />
@@ -422,19 +536,20 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
       </div>
 
       <div className="space-y-2">
-        {user && (
+        {user && !isEditMode && (
           <Label className="flex cursor-pointer items-center gap-2 py-1 text-sm font-normal text-muted-foreground">
             <Checkbox
               checked={addToMine}
               onCheckedChange={(v) => setAddToMine(v === true)}
+              disabled={busy}
               className="shrink-0"
             />
             Add to my emojis
           </Label>
         )}
         <Button className="w-full clip-corner-lg" onClick={publish} disabled={!canPublish}>
-          {(publishing || submitting) && <Loader2 className="size-4 animate-spin" />}
-          Publish pack
+          {busy && <Loader2 className="size-4 animate-spin" />}
+          {isEditMode ? "Update pack" : "Publish pack"}
         </Button>
         <p
           className={cn(
@@ -448,4 +563,51 @@ function EmojiPackForm({ onDone }: { onDone: () => void }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Put a just-published pack into the caches that show it. Seeded rather than refetched: an
+ * immediate refetch races relay indexing and can return LESS than is on screen. The stale
+ * mark lets the next fetch reconcile.
+ */
+function seedCaches(
+  queryClient: ReturnType<typeof useQueryClient>,
+  event: NostrRumor,
+  pubkey: string,
+) {
+  const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
+  const coord = emojiPackCoord(event.pubkey, d);
+  const sameCoord = (e: NostrRumor) =>
+    e.kind === event.kind && e.pubkey === event.pubkey && e.tags.find(([n]) => n === "d")?.[1] === d;
+
+  // Key: ["discover", "emoji-packs", relays, authorFilter, q]. An edited pack replaces its
+  // old version wherever it is listed; a new one joins only the unsearched feeds.
+  type Feed = InfiniteData<{ events: NostrRumor[] }>;
+  for (const [key, data] of queryClient.getQueriesData<Feed>({ queryKey: ["discover", "emoji-packs"] })) {
+    if (!data?.pages.length) continue;
+    let found = false;
+    const pages = data.pages.map((page) => ({
+      ...page,
+      events: page.events.map((e) => {
+        if (!sameCoord(e)) return e;
+        found = true;
+        return event;
+      }),
+    }));
+    if (!found) {
+      if (key[4] !== "") continue;
+      pages[0] = { ...pages[0], events: [event, ...pages[0].events] };
+    }
+    queryClient.setQueryData<Feed>(key, { ...data, pages });
+  }
+  void queryClient.invalidateQueries({ queryKey: ["discover", "emoji-packs"], refetchType: "none" });
+
+  queryClient.setQueryData<MyEmojiPack[]>(["my-published-packs", pubkey], (prev) =>
+    prev && [{ coord, event }, ...prev.filter((p) => p.coord !== coord)],
+  );
+  void queryClient.invalidateQueries({ queryKey: ["my-published-packs"], refetchType: "none" });
+
+  // The list and palette resolve packs from the local store, which already holds this event.
+  void queryClient.invalidateQueries({ queryKey: ["my-emoji-packs"] });
+  void queryClient.invalidateQueries({ queryKey: ["custom-emojis"] });
 }
