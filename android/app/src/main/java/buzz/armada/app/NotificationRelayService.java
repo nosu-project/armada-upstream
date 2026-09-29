@@ -2236,6 +2236,7 @@ public class NotificationRelayService extends Service {
                         // handler queue gets behind them (every frame is a post).
                         String family = ServiceProfiler.frameFamily(text);
                         ServiceProfiler.units("frame.in " + family, text.length());
+                        ServiceProfiler.units("frame.in " + family + " " + ServiceProfiler.host(relayUrl), text.length());
                         ServiceProfiler.units("frame.in bytes", text.length());
                         ServiceProfiler.peak("handler.queue", pendingFrames.incrementAndGet());
                         handler.post(() -> {
@@ -2294,6 +2295,7 @@ public class NotificationRelayService extends Service {
             standingSubs.add(subId);
             cursorGate.onReqSent(subId);
             if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())));
+            if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())) + " " + ServiceProfiler.host(relayUrl) + (filters.length > 0 && filters[0].has("since") ? " since" : " full"));
             webSocket.send(reqMessage(subId, filters));
         }
 
