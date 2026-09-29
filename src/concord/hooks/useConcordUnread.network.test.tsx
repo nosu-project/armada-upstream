@@ -47,6 +47,7 @@ vi.mock("@/hooks/useMuteList", () => ({ useMutedPubkeys: () => ({ mutedPubkeys: 
 vi.mock("@/concord/hooks/useCommunityRumors", () => ({
   useCommunityRumors: () => ({ byChannel: new Map([[CH, []]]), isLoading: false }),
 }));
+vi.mock("@/concord/hooks/useCommunityList", () => ({ useCommunityEntry: () => undefined }));
 vi.mock("@/concord/lib/floodCluster", () => ({ quarantinedIn: () => new Set<string>() }));
 vi.mock("@/concord/lib/quarantineMemory", () => ({
   quarantineMemoryRevision: () => 0,

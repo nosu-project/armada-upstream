@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   readState: {} as Record<string, number>,
   banned: new Set<string>(),
   everyoneAuthors: new Set<string>(),
+  joinedAtMs: undefined as number | undefined,
 }));
 
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: ME } }) }));
@@ -39,6 +40,9 @@ vi.mock("@/concord/hooks/useChannel", () => ({
     canDelete: () => false,
     canMentionEveryone: (author: string) => h.everyoneAuthors.has(author),
   }),
+}));
+vi.mock("@/concord/hooks/useCommunityList", () => ({
+  useCommunityEntry: () => (h.joinedAtMs === undefined ? undefined : { added_at: h.joinedAtMs }),
 }));
 vi.mock("@/concord/lib/floodCluster", () => ({ quarantinedIn: () => new Set<string>() }));
 vi.mock("@/concord/lib/quarantineMemory", () => ({
@@ -87,6 +91,7 @@ beforeEach(() => {
   h.readState = {};
   h.banned = new Set<string>();
   h.everyoneAuthors = new Set<string>();
+  h.joinedAtMs = undefined;
 });
 
 describe("useConcordUnread — @everyone", () => {
@@ -101,6 +106,20 @@ describe("useConcordUnread — @everyone", () => {
     h.rumors = [row("B", X, KIND_MESSAGE, 200, [], "Heads up @everyone")];
     h.readState[`c2:${CH}`] = 100;
     expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
+  });
+
+  it("does not ping for a mass mention sent before this membership began", () => {
+    h.everyoneAuthors = new Set([X]);
+    h.joinedAtMs = 300_000;
+    h.rumors = [row("B", X, KIND_MESSAGE, 200, [], "Heads up @everyone")];
+    expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
+  });
+
+  it("still pings for a mass mention sent after joining", () => {
+    h.everyoneAuthors = new Set([X]);
+    h.joinedAtMs = 150_000;
+    h.rumors = [row("B", X, KIND_MESSAGE, 200, [], "Heads up @everyone")];
+    expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: true });
   });
 });
 

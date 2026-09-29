@@ -45,6 +45,14 @@ export function isEveryoneMention(
 }
 
 /**
+ * A mass mention addresses the members of its moment, so one sent before this
+ * membership began (`joinedAtMs`, the vault entry's `added_at`) never pings.
+ */
+export function everyoneMentionReaches(sentAtMs: number, joinedAtMs: number | undefined): boolean {
+  return joinedAtMs === undefined || sentAtMs >= joinedAtMs;
+}
+
+/**
  * Authors worth scanning for literal mass mentions across these channels.
  * The owner is implicit in the role graph; everyone else comes from Grants.
  */
