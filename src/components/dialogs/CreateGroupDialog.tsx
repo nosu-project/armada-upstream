@@ -84,10 +84,12 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
       } else {
         await createGroup({ groupId: effectiveId });
         await editMetadata.mutateAsync({
-          name: name.trim(),
-          about: about.trim() || undefined,
-          isPrivate,
-          isClosed,
+          patch: {
+            name: name.trim(),
+            about: about.trim() || undefined,
+            isPrivate,
+            isClosed,
+          },
         });
       }
       // Best-effort; the list entry is what gives the new channel a rail icon.
