@@ -4,8 +4,8 @@
  *
  * Post-wire architecture: the hook holds NO sockets. The wire writes every
  * incoming event to the shared IndexedDB store and rings the bus; the hook
- * re-reads the store. Moderator deletions (kind-5 by another pubkey) are
- * honored on read.
+ * re-reads the store. Kind-5 deletions are honoured from the author or a group
+ * admin, never from another member.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -71,13 +71,16 @@ afterEach(() => resetWireBus());
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 let eventSeq = 0;
-function msg(group: string, opts: { kind?: number; created_at?: number; etag?: string } = {}): NostrEvent {
+function msg(
+  group: string,
+  opts: { kind?: number; created_at?: number; etag?: string; pubkey?: string } = {},
+): NostrEvent {
   const tags = [["h", group]];
   if (opts.etag) tags.push(["e", opts.etag]);
   return {
     id: `${eventSeq++}`.padStart(64, "2"),
     kind: opts.kind ?? 9,
-    pubkey: OTHER,
+    pubkey: opts.pubkey ?? OTHER,
     created_at: opts.created_at ?? Math.floor(Date.now() / 1000),
     content: "hello",
     tags,
@@ -149,7 +152,7 @@ describe("useGroupMessages (wire hydration)", () => {
     await waitFor(() => expect(result.current.data?.some((e) => e.id === incoming.id)).toBe(true));
   });
 
-  it("hides messages referenced by a kind-5 delete (moderator deletes included)", async () => {
+  it("hides a message its author deleted with a kind 5", async () => {
     const { wrapper } = setup();
     const victim = msg("g1", { created_at: 100 });
     const keeper = msg("g1", { created_at: 200 });
@@ -159,6 +162,29 @@ describe("useGroupMessages (wire hydration)", () => {
 
     await waitFor(() => expect(result.current.data?.length).toBe(1));
     expect(result.current.data?.[0].id).toBe(keeper.id);
+  });
+
+  it("ignores another member's kind 5 but honours a group admin's", async () => {
+    const { wrapper } = setup();
+    const MEMBER = "b".repeat(64);
+    const ADMIN = "c".repeat(64);
+    const spared = msg("g1", { created_at: 100 });
+    const removed = msg("g1", { created_at: 200 });
+    const admins: NostrEvent = {
+      id: "f".repeat(64), kind: 39001, pubkey: "d".repeat(64), created_at: 1,
+      content: "", tags: [["d", "g1"], ["p", ADMIN, "admin"]], sig: "",
+    };
+    h.store.events.push(
+      spared,
+      removed,
+      admins,
+      msg("g1", { kind: 5, etag: spared.id, pubkey: MEMBER }),
+      msg("g1", { kind: 5, etag: removed.id, pubkey: ADMIN }),
+    );
+
+    const { result } = renderHook(() => useGroupMessages(RELAY, "g1"), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.map((e) => e.id)).toEqual([spared.id]));
   });
 
   it("keeps optimistic sends painted across store re-reads", async () => {
