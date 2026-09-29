@@ -286,19 +286,73 @@ export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
         store.query(filters).catch(() => [] as NostrRumor[]),
       ]);
 
-      const byCoord = new Map<string, NostrRumor>();
-      for (const ev of [...relay, ...cached]) {
-        const d = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
-        const coord = emojiPackCoord(ev.pubkey, d);
-        const existing = byCoord.get(coord);
-        if (!existing || ev.created_at > existing.created_at) byCoord.set(coord, ev);
-      }
+      const byCoord = newestPerCoord([...relay, ...cached]);
 
       return refs.map((r) => ({
         coord: r.coord,
         relay: r.relay,
         event: byCoord.get(r.coord) ?? null,
       }));
+    },
+  });
+}
+
+/** Newest event per `kind:pubkey:d`. */
+function newestPerCoord(events: NostrRumor[]): Map<string, NostrRumor> {
+  const byCoord = new Map<string, NostrRumor>();
+  for (const ev of events) {
+    const d = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
+    const coord = emojiPackCoord(ev.pubkey, d);
+    const existing = byCoord.get(coord);
+    if (!existing || ev.created_at > existing.created_at) byCoord.set(coord, ev);
+  }
+  return byCoord;
+}
+
+/**
+ * The newest copy of one of the user's own packs, relays and local store merged. An edit
+ * builds on this rather than on whatever event opened the editor, so tags another client
+ * added since are preserved.
+ */
+export async function readOwnEmojiPack(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  store: Awaited<ReturnType<typeof useEventStore>>,
+  pubkey: string,
+  identifier: string,
+  signal?: AbortSignal,
+): Promise<NostrRumor | null> {
+  const filters = [{ kinds: [KIND_EMOJI_SET], authors: [pubkey], "#d": [identifier], limit: 1 }];
+  const [relay, cached] = await Promise.all([
+    nostr.query(filters, { signal }).catch(() => [] as NostrRumor[]),
+    store.query(filters).catch(() => [] as NostrRumor[]),
+  ]);
+  return [...relay, ...cached].sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+}
+
+/**
+ * Packs the user authored (kind 30030), newest first. Distinct from {@link useMyEmojiPacks}:
+ * a pack can be published, added to the 10030 list, or both.
+ */
+export function useMyPublishedPacks(): UseQueryResult<MyEmojiPack[]> {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const eventStore = useEventStore();
+
+  return useQuery({
+    queryKey: ["my-published-packs", user?.pubkey ?? ""],
+    enabled: !!user,
+    staleTime: 60_000,
+    queryFn: async ({ signal }): Promise<MyEmojiPack[]> => {
+      if (!user) return [];
+      const store = await eventStore;
+      const filters = [{ kinds: [KIND_EMOJI_SET], authors: [user.pubkey], limit: 100 }];
+      const [relay, cached] = await Promise.all([
+        nostr.query(filters, { signal }).catch(() => [] as NostrRumor[]),
+        store.query(filters).catch(() => [] as NostrRumor[]),
+      ]);
+      return [...newestPerCoord([...relay, ...cached]).entries()]
+        .map(([coord, event]) => ({ coord, event }))
+        .sort((a, b) => b.event.created_at - a.event.created_at);
     },
   });
 }

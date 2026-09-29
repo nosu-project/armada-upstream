@@ -21,6 +21,7 @@ import {
   emojiPackCoord,
   useAddEmojiPack,
   useHasEmojiPack,
+  useMyPublishedPacks,
   useRemoveEmojiPack,
 } from "@/hooks/useEmojiPacks";
 
@@ -36,13 +37,14 @@ type ReqMsg = [string, string, NostrEvent?] | [string, string, string];
 
 const h = vi.hoisted(() => ({
   req: vi.fn<(...args: unknown[]) => AsyncIterable<ReqMsg>>(),
+  query: vi.fn<(...args: unknown[]) => Promise<NostrEvent[]>>(),
   storeQuery: vi.fn<(...args: unknown[]) => Promise<NostrEvent[]>>(),
   publish: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   user: undefined as unknown,
 }));
 
 vi.mock("@nostrify/react", () => ({
-  useNostr: () => ({ nostr: { req: h.req } }),
+  useNostr: () => ({ nostr: { req: h.req, query: h.query } }),
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: h.user }),
@@ -118,6 +120,7 @@ function publishedTags(): string[][] {
 beforeEach(() => {
   localStorage.clear(); // the durable-palette guard reads armada:custom-emojis:<pk>
   h.req.mockReset();
+  h.query.mockReset().mockResolvedValue([]);
   h.storeQuery.mockReset().mockResolvedValue([]);
   h.publish.mockReset().mockResolvedValue({
     id: "c".repeat(64),
@@ -424,6 +427,27 @@ describe("useRemoveEmojiPack (kind 10030 read-modify-write)", () => {
 
     expect(h.publish).toHaveBeenCalledTimes(1);
     expect(publishedTags()).toEqual([]);
+  });
+});
+
+describe("useMyPublishedPacks", () => {
+  function packEvent(d: string, createdAt: number): NostrEvent {
+    return { ...listEvent({ createdAt, tags: [["d", d]] }), kind: 30030 };
+  }
+
+  it("returns the newest copy per pack across relays and the store, newest first", async () => {
+    const oldA = packEvent("a", 100);
+    const newA = packEvent("a", 300);
+    const b = packEvent("b", 200);
+    h.query.mockResolvedValue([oldA, b]);
+    h.storeQuery.mockResolvedValue([newA]);
+    const { wrapper } = makeWrapper();
+
+    const { result } = renderHook(() => useMyPublishedPacks(), { wrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+
+    expect(result.current.data!.map((p) => p.event)).toEqual([newA, b]);
+    expect(result.current.data![0].coord).toBe(emojiPackCoord(SELF, "a"));
   });
 });
 

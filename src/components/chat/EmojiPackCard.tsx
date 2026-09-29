@@ -1,5 +1,5 @@
-import { Check, Link2, Loader2, Plus, Smile, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Check, Link2, Loader2, Pencil, Plus, Smile, Trash2 } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -27,6 +27,10 @@ import { naddrPath } from "@/lib/naddrLink";
 import { cn } from "@/lib/utils";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+
+const EmojiPackDialog = lazy(() =>
+  import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
+);
 
 /** How many emojis to show in the preview grid before "+N more". */
 const PREVIEW_LIMIT = 16;
@@ -62,6 +66,8 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
   const { mutateAsync: removePack, isPending: isRemoving } = useRemoveEmojiPack();
   // Flip instantly on success rather than waiting for the list re-read.
   const [override, setOverride] = useState<"added" | "removed" | null>(null);
+  const [editing, setEditing] = useState(false);
+  const isOwn = !!user && user.pubkey === event.pubkey;
 
   const { naddr, copied, copy } = useNaddrLink(event);
 
@@ -234,6 +240,17 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
               )}
             </Button>
           )}
+          {isOwn && identifier && (
+            <Button
+              variant="secondary"
+              className="shrink-0 clip-corner-lg"
+              onClick={() => setEditing(true)}
+              aria-label="Edit emoji pack"
+              title="Edit emoji pack"
+            >
+              <Pencil className="size-4" />
+            </Button>
+          )}
           {naddr && (
             <Button
               variant="secondary"
@@ -247,6 +264,12 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
           )}
         </div>
       </div>
+
+      {editing && (
+        <Suspense fallback={null}>
+          <EmojiPackDialog open onOpenChange={setEditing} editEvent={event} />
+        </Suspense>
+      )}
     </div>
   );
 }

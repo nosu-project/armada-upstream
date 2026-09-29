@@ -31,6 +31,7 @@ import {
   DM_THREAD_KINDS,
   isExpired,
   KIND_DM_CHAT,
+  KIND_DM_DELETE,
   KIND_DM_FILE,
   KIND_DM_TIMER,
   KIND_DM_WEBXDC,
@@ -156,6 +157,41 @@ export async function queryDm17Rumor(
   if (!event || isExpired(event.tags)) return undefined;
   const opened = storedToDm17(event, self);
   return dmConvKey(opened.peers) === dmConvKey(peers) ? opened : undefined;
+}
+
+/**
+ * Chat/file rumors by id within one conversation, for inline-reply parents older
+ * than the loaded window. Author deletes are re-checked like the thread fold
+ * does: backfill runs newest-first, so a delete can be stored before its target.
+ */
+export async function queryDm17Messages(
+  self: string,
+  peers: readonly string[],
+  ids: readonly string[],
+  opts: { signal?: AbortSignal } = {},
+): Promise<OpenedDm[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return [];
+  const store = dm17Store(self);
+  const key = dmConvKey(peers);
+  const rows = (await store.query([{ ids: unique, kinds: [...DM_MESSAGE_KINDS] }], { signal: opts.signal }))
+    .filter((ev) => !isExpired(ev.tags))
+    .map((ev) => storedToDm17(ev, self))
+    .filter((opened) => dmConvKey(opened.peers) === key);
+  if (rows.length === 0) return [];
+  // Only the target's author may delete it, so the delete needs no conversation scope.
+  const deletes = await store.query(
+    [{ kinds: [KIND_DM_DELETE], "#e": rows.map((r) => r.rumorId) }],
+    { signal: opts.signal },
+  );
+  const deleted = new Set<string>();
+  const authorOf = new Map(rows.map((r) => [r.rumorId, r.author]));
+  for (const d of deletes) {
+    for (const [name, value] of d.tags) {
+      if (name === "e" && value && authorOf.get(value) === d.pubkey) deleted.add(value);
+    }
+  }
+  return rows.filter((r) => !deleted.has(r.rumorId));
 }
 
 /**

@@ -347,18 +347,11 @@ describe("ServerRail drag wiring", () => {
     ]);
   });
 
-  it("mouse movement alone never picks up, and doesn't cancel the hold", async () => {
+  it("a mouse picks up as soon as it moves, without waiting for the hold", () => {
     renderRail();
     const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
-    // Move well past any distance threshold before the long press fires…
     firePointer(window, "pointermove", { x: 36, y: slotCenter(2) });
-    expect(document.body.style.cursor).toBe(""); // …no pickup from movement…
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(350);
-    });
-    // …but the hold still completes, picking up at the cursor's position
-    // (over C, not at the press point over A).
     expect(document.body.style.cursor).toBe("grabbing");
     firePointer(window, "pointerup", { x: 36, y: slotCenter(2) });
     expect(config.railLayout).toEqual([
@@ -367,14 +360,13 @@ describe("ServerRail drag wiring", () => {
     ]);
   });
 
-  it("a quick mouse drag released before the long press changes nothing", () => {
+  it("a drag dropped back into its own place persists nothing", () => {
     renderRail();
     const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
-    firePointer(window, "pointermove", { x: 36, y: slotCenter(1) });
-    firePointer(window, "pointerup", { x: 36, y: slotCenter(1) });
-    expect(document.body.style.cursor).toBe("");
-    expect(config.railLayout).toEqual([]); // nothing persisted
+    firePointer(window, "pointermove", { x: 36, y: slotCenter(0) + 8 });
+    firePointer(window, "pointerup", { x: 36, y: slotCenter(0) + 8 });
+    expect(config.railLayout).toEqual([]);
   });
 
   it("mouse press-and-hold released in place aborts, so the tap still navigates", async () => {

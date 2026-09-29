@@ -85,6 +85,7 @@ import {
 } from "@/hooks/useDmConversationIndex";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
+import { useDmReplyParents } from "@/hooks/useDmReplyParents";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmTyping } from "@/hooks/useDmTyping";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -698,6 +699,8 @@ const Conversation = memo(function Conversation({
     for (const m of messages) map.set(m.id, m);
     return map;
   }, [messages]);
+  // Parents older than the loaded window come from the store.
+  const olderReplyParents = useDmReplyParents(conversation, peers, messages, messagesById, dmReplyToId);
 
   // Reuse reply-context elements per parent so replies don't re-render with the whole thread.
   const replyNodes = useRef(
@@ -707,10 +710,10 @@ const Conversation = memo(function Conversation({
   const replyContextFor = (msg: ChatMsg): ReactNode => {
     const replyId = dmReplyToId(msg);
     if (!replyId) return undefined;
-    const parent = messagesById.get(replyId);
+    const parent = messagesById.get(replyId) ?? olderReplyParents.get(replyId);
     const hit = replyNodes.current.get(msg.id);
     if (hit && hit.parent === parent && hit.onJump === jumpToMessage) return hit.node;
-    const node = <ReplyContext parent={parent} onJump={jumpToMessage} />;
+    const node = <ReplyContext parentId={replyId} parent={parent} onJump={jumpToMessage} />;
     replyNodes.current.set(msg.id, { parent, onJump: jumpToMessage, node });
     return node;
   };

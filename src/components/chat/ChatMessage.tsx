@@ -183,18 +183,40 @@ export function ReplyContextLine({
       {preview && <span className="line-clamp-1 break-words min-w-0 text-muted-foreground/70">{preview}</span>}
     </>
   );
-  const className =
-    "chat-reply group/reply relative flex items-center gap-1.5 min-w-0 max-w-full pl-[3.25rem] pr-2 pt-1.5 pb-1 mb-1 text-xs";
   if (!onClick) {
-    return <div className={className}>{content}</div>;
+    return <div className={REPLY_LINE_CLASS}>{content}</div>;
   }
   return (
     <button
       type="button"
       onClick={onClick}
-      className={cn(className, "text-left cursor-pointer")}
+      className={cn(REPLY_LINE_CLASS, "text-left cursor-pointer")}
     >
       {content}
+    </button>
+  );
+}
+
+const REPLY_LINE_CLASS =
+  "chat-reply group/reply relative flex items-center gap-1.5 min-w-0 max-w-full pl-[3.25rem] pr-2 pt-1.5 pb-1 mb-1 text-xs";
+
+/**
+ * {@link ReplyContextLine} for a parent that isn't loaded. Names no author: the
+ * reply's own `q`/`p` tags would let its sender attribute the parent to anyone.
+ */
+export function ReplyContextUnavailable({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Find the original message"
+      className={cn(REPLY_LINE_CLASS, "text-left cursor-pointer")}
+    >
+      <span aria-hidden className="chat-reply-connector" />
+      <Reply aria-hidden className="size-3.5 shrink-0 text-muted-foreground/70" />
+      <span className="line-clamp-1 min-w-0 italic text-muted-foreground/70 group-hover/reply:underline">
+        Original message not loaded
+      </span>
     </button>
   );
 }

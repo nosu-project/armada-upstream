@@ -8,6 +8,7 @@ import {
   dm17Store,
   dm17ToStored,
   queryDm17Conversations,
+  queryDm17Messages,
   queryDm17Rumor,
   queryDm17Thread,
   queryDm17Timer,
@@ -98,6 +99,39 @@ describe("dm17Store", () => {
       wrapId: "",
     });
     expect(await queryDm17Rumor(self, [bob], fromAlice.rumorId)).toBeUndefined();
+  });
+
+  it("reads reply parents by id within one conversation, minus author deletes", async () => {
+    // Its own viewer: the suite shares a store, and other tests list every conversation.
+    const viewer = getPublicKey(generateSecretKey());
+    const carol = getPublicKey(generateSecretKey());
+    const dave = getPublicKey(generateSecretKey());
+    const at = (o: OpenedDm): OpenedDm => ({ ...o, peers: [o.author === viewer ? o.peers[0] : o.author] });
+    const kept = at(opened({ author: carol, peer: carol, content: "kept", tags: dmChatTags([viewer]) }));
+    const deleted = at(opened({ author: carol, peer: carol, content: "deleted", tags: dmChatTags([viewer]) }));
+    const forged = at(opened({ author: viewer, peer: carol, content: "someone else's delete", tags: dmChatTags([carol]) }));
+    const elsewhere = at(opened({ author: dave, peer: dave, content: "other thread", tags: dmChatTags([viewer]) }));
+    // Deletes land BEFORE their targets, as a newest-first backfill writes them.
+    const ownDelete = opened({
+      author: carol,
+      peer: carol,
+      kind: KIND_DM_DELETE,
+      content: "",
+      tags: dmDeleteTags([viewer], deleted.rumorId, KIND_DM_CHAT),
+    });
+    const notTheAuthors = opened({
+      author: dave,
+      peer: dave,
+      kind: KIND_DM_DELETE,
+      content: "",
+      tags: dmDeleteTags([viewer], forged.rumorId, KIND_DM_CHAT),
+    });
+    await writeDm17Rumors(viewer, [ownDelete, notTheAuthors]);
+    await writeDm17Rumors(viewer, [kept, deleted, forged, elsewhere]);
+
+    const ids = [kept, deleted, forged, elsewhere].map((r) => r.rumorId);
+    const found = await queryDm17Messages(viewer, [carol], ids);
+    expect(found.map((r) => r.content).sort()).toEqual(["kept", "someone else's delete"]);
   });
 
   it("counts only incoming messages newer than a conversation's read stamp", async () => {
