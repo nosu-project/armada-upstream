@@ -1,6 +1,7 @@
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { IMAGE_URL_REGEX } from "@/lib/mediaUrls";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
+import { inlineReplyQuoteId } from "@/lib/quoteReply";
 
 import type { ChatMsg } from "@/components/chat/transport";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
@@ -22,7 +23,7 @@ export function getReplyToId(event: ChatMsg): string | undefined {
  * never in the timeline, so a `q` on a top-level row is an inline reply.
  */
 export function getQuoteReplyToId(event: ChatMsg): string | undefined {
-  return event.tags.find(([name]) => name === "q")?.[1];
+  return inlineReplyQuoteId(event);
 }
 
 /**
