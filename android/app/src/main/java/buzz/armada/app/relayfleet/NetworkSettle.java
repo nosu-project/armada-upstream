@@ -14,6 +14,14 @@ package buzz.armada.app.relayfleet;
 public final class NetworkSettle {
 
     public static final long SETTLE_MS = 10_000L;
+    /**
+     * How long to hold connects while Android has not validated the default
+     * network. A Wi-Fi that associates but passes no traffic can stay the
+     * default: measured, 121 failed connects in three minutes. Past the grace
+     * the fleet tries anyway, since some networks block the validation probe
+     * yet work, and its circuit breaker takes over.
+     */
+    public static final long UNVALIDATED_GRACE_MS = 30_000L;
 
     private NetworkSettle() {}
 
@@ -21,5 +29,11 @@ public final class NetworkSettle {
     public static long delayMs(long nowMs, long lastChangeAtMs, long settleMs) {
         if (lastChangeAtMs <= 0) return 0;
         return Math.max(0, lastChangeAtMs + settleMs - nowMs);
+    }
+
+    /** How long a connect must wait for the default network to validate, or 0. */
+    public static long unvalidatedDelayMs(boolean validated, long nowMs, long unvalidatedSinceMs, long graceMs) {
+        if (validated || unvalidatedSinceMs <= 0) return 0;
+        return Math.max(0, unvalidatedSinceMs + graceMs - nowMs);
     }
 }

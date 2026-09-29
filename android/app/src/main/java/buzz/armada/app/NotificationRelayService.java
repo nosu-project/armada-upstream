@@ -315,6 +315,8 @@ public class NotificationRelayService extends Service {
     // costs the fleet one reconnect instead of one per change.
     private long lastNetworkChangeAt = 0;
     private boolean sawNetworkLoss = false;
+    // When the default network was first seen unvalidated (elapsedRealtime), 0 when validated.
+    private long unvalidatedSince = 0;
     private SharedPreferences.OnSharedPreferenceChangeListener configListener;
     private final Runnable configReloadRunnable = this::loadConfigAndReconnect;
 
@@ -2225,6 +2227,7 @@ public class NotificationRelayService extends Service {
             boolean liveOnly = dmRelays.contains(relayUrl) && shouldWatchDm();
             long settle = liveOnly ? 0 : NetworkSettle.delayMs(
                     SystemClock.elapsedRealtime(), lastNetworkChangeAt, NetworkSettle.SETTLE_MS);
+            settle = Math.max(settle, unvalidatedDelayMs());
             if (settle > 0) {
                 handler.removeCallbacks(reconnectRunnable);
                 handler.postDelayed(reconnectRunnable, settle);
@@ -7272,6 +7275,17 @@ public class NotificationRelayService extends Service {
             }
 
             @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return;
+                handler.post(() -> {
+                    // The default network just validated: connects held for it go now.
+                    if (unvalidatedSince == 0) return;
+                    unvalidatedSince = 0;
+                    for (RelayConnection rc : connections) rc.onFleetEdge(FleetEdge.CONNECTIVITY_REGAINED);
+                });
+            }
+
+            @Override
             public void onLost(Network network) {
                 handler.post(() -> {
                     sawNetworkLoss = true;
@@ -7288,6 +7302,21 @@ public class NotificationRelayService extends Service {
         if (cm != null) {
             try { cm.unregisterNetworkCallback(networkCallback); } catch (Exception ignored) {}
         }
+    }
+
+    /** See {@link NetworkSettle#UNVALIDATED_GRACE_MS}; handler thread. */
+    private long unvalidatedDelayMs() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return 0;
+        NetworkCapabilities c = cm.getNetworkCapabilities(cm.getActiveNetwork());
+        boolean validated = c == null || c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        long now = SystemClock.elapsedRealtime();
+        if (validated) {
+            unvalidatedSince = 0;
+            return 0;
+        }
+        if (unvalidatedSince == 0) unvalidatedSince = now;
+        return NetworkSettle.unvalidatedDelayMs(false, now, unvalidatedSince, NetworkSettle.UNVALIDATED_GRACE_MS);
     }
 
     private boolean isNetworkAvailable() {

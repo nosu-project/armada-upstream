@@ -122,4 +122,12 @@ public class NetworkSettleBenchmarkTest {
         assertTrue(NetworkSettle.delayMs(12_000, 10_000, 10_000) == 8_000);
         assertTrue(NetworkSettle.delayMs(25_000, 10_000, 10_000) == 0);
     }
+
+    @Test
+    public void anUnvalidatedDefaultNetworkHoldsConnectsForTheGraceOnly() {
+        long grace = NetworkSettle.UNVALIDATED_GRACE_MS;
+        assertTrue(NetworkSettle.unvalidatedDelayMs(true, 5_000, 1_000, grace) == 0);
+        assertTrue(NetworkSettle.unvalidatedDelayMs(false, 5_000, 1_000, grace) == grace - 4_000);
+        assertTrue(NetworkSettle.unvalidatedDelayMs(false, 1_000 + grace, 1_000, grace) == 0);
+    }
 }
