@@ -660,6 +660,44 @@ export function buildGroupListTags(list: UserGroupList): string[][] {
   ];
 }
 
+function groupListItemKey(tag: string[]): string | undefined {
+  if (tag[0] === "group" && tag[1] && tag[2]) return `g\u0000${tag[1]}\u0000${tag[2]}`;
+  if (tag[0] === "r" && tag[1]) return `r\u0000${tag[1]}`;
+  return undefined;
+}
+
+/**
+ * Rebuild a kind 10009's public tags and private items for `next` (NIP-51). An item
+ * stays where it was, public or private, with its original tag (a group's optional
+ * name included); only new items take `newItemsPrivate`. Non-item tags stay in
+ * their own section untouched.
+ */
+export function buildGroupListSections(
+  prevPublic: string[][],
+  prevPrivate: string[][],
+  next: UserGroupList,
+  newItemsPrivate: boolean,
+): { publicTags: string[][]; privateTags: string[][] } {
+  const placed = new Map<string, { tag: string[]; isPrivate: boolean }>();
+  const others = { public: [] as string[][], private: [] as string[][] };
+  for (const [section, tags] of [["public", prevPublic], ["private", prevPrivate]] as const) {
+    for (const tag of tags) {
+      const key = groupListItemKey(tag);
+      if (!key) others[section].push(tag);
+      else if (!placed.has(key)) placed.set(key, { tag, isPrivate: section === "private" });
+    }
+  }
+
+  const publicTags = [...others.public];
+  const privateTags = [...others.private];
+  for (const tag of buildGroupListTags(next)) {
+    const prev = placed.get(groupListItemKey(tag)!);
+    const isPrivate = prev ? prev.isPrivate : newItemsPrivate;
+    (isPrivate ? privateTags : publicTags).push(prev?.tag ?? tag);
+  }
+  return { publicTags, privateTags };
+}
+
 /**
  * Parse a kind-1985 Armada per-server self-label by `pubkey` for `relay`, else undefined.
  * Shape: `["L","armada"]`, `["l",value,"armada/nickname"|"armada/label"|"armada/color"]`,

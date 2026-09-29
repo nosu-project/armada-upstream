@@ -601,7 +601,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     if (!supported || !signer) return;
     let handle: { remove: () => void } | undefined;
     let cancelled = false;
-    ArmadaNotification.addListener("authChallenge", async ({ relayUrl, challenge }) => {
+    ArmadaNotification.addListener("authChallenge", async ({ relayUrl, challenge, user: signUser, streams }) => {
       // Ignore challenges for unconfigured relays.
       const normalized = normalizeRelayUrl(relayUrl);
       if (!normalized || !knownRelays.has(normalized)) {
@@ -609,16 +609,20 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         return;
       }
       // Concord stream auth first (local derived keys, see streamAuth.ts), scoped to keys THIS relay
-      // hosts; signed in the EC worker pool in batches.
-      try {
-        for await (const chunk of signStreamAuthsChunked(challenge, relayUrl)) {
-          for (const event of chunk) {
-            await ArmadaNotification.submitAuth({ relayUrl, event });
+      // hosts; signed in the EC worker pool in batches. The service asks for them only where the
+      // relay walled the Concord sub (absent flags: an older service that always wanted both).
+      if (streams !== false) {
+        try {
+          for await (const chunk of signStreamAuthsChunked(challenge, relayUrl)) {
+            for (const event of chunk) {
+              await ArmadaNotification.submitAuth({ relayUrl, event });
+            }
           }
+        } catch (err) {
+          console.warn("[native-notif] stream AUTH signing failed:", err);
         }
-      } catch (err) {
-        console.warn("[native-notif] stream AUTH signing failed:", err);
       }
+      if (signUser === false) return;
       try {
         const event = await signer.signEvent({
           kind: 22242,

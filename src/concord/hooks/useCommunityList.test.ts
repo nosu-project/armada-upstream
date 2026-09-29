@@ -136,12 +136,85 @@ async function runSync(wire: NostrRumor[], localList: CommunityList | undefined)
   return { data, published };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  (await import("./useCommunityList"))._resetReconcilePublishClock();
   h.readFolded.mockReset();
   h.writeFolded.mockReset().mockResolvedValue(undefined);
 });
 
 describe("syncCommunityList — reconcile", () => {
+  /**
+   * Relays that each answer the list read with their own copy, and record what
+   * is published to them. `hideFuture`: Ditto-family relays leave events dated
+   * after now out of query results, while still accepting and broadcasting them.
+   */
+  function perRelayNostr(copies: Record<string, NostrRumor[]>, hideFuture: string[] = []) {
+    const published: Array<{ url: string; event: NostrRumor }> = [];
+    return {
+      published,
+      nostr: {
+        query: async () => [] as NostrRumor[],
+        group: () => ({ query: async () => [] as NostrRumor[] }),
+        relay: (url: string) => ({
+          query: async (filters: Array<{ kinds?: number[] }>) => {
+            const now = Math.floor(Date.now() / 1000);
+            const held = [...(copies[url] ?? []), ...published.filter((p) => p.url === url).map((p) => p.event)]
+              .filter((e) => filters.some((f) => !f.kinds || f.kinds.includes(e.kind)));
+            return hideFuture.includes(url) ? held.filter((e) => e.created_at <= now) : held;
+          },
+          event: async (event: NostrRumor) => { published.push({ url, event }); },
+        }),
+      },
+    };
+  }
+
+  it("does not chase an edition a relay hides for being dated ahead of the clock", async () => {
+    const { syncCommunityList } = await import("./useCommunityList");
+    const list: CommunityList = { entries: [entry("aa", "Joined")], tombstones: [] };
+    const [frag] = fragment(structuredClone(list));
+    const ahead = fragEvent(frag, 0, Math.floor(Date.now() / 1000) + 35);
+    h.readFolded.mockImplementation(async (key: string) =>
+      key.startsWith("concord2-list:") ? { event: null, list: structuredClone(list) } : undefined,
+    );
+    const self = "wss://self.example.com";
+    const copies: Record<string, NostrRumor[]> = { [self]: [ahead] };
+    for (const url of STOCK_RELAYS) copies[url] = [ahead];
+    const { nostr, published } = perRelayNostr(copies, [self]);
+
+    const data = await syncCommunityList(nostr, user, new QueryClient(), undefined, [self]);
+
+    expect(published).toEqual([]);
+    expect(data.repairPending).toBe(true);
+  });
+
+  it("publishes a reconcile at most once a minute however often it re-runs", async () => {
+    const { syncCommunityList } = await import("./useCommunityList");
+    const list: CommunityList = { entries: [entry("aa", "Joined")], tombstones: [] };
+    const [frag] = fragment(structuredClone(list));
+    const old = fragEvent(frag, 0, 1_722_000_000);
+    h.readFolded.mockImplementation(async (key: string) =>
+      key.startsWith("concord2-list:") ? { event: null, list: structuredClone(list) } : undefined,
+    );
+    const self = "wss://self.example.com";
+    const stale = "wss://stale.example.com";
+    const copies: Record<string, NostrRumor[]> = { [self]: [old] };
+    for (const url of STOCK_RELAYS) copies[url] = [old];
+    // A relay that answers but never shows what it was sent.
+    const { nostr, published } = perRelayNostr(copies, []);
+    const blind = {
+      ...nostr,
+      relay: (url: string) => url === stale
+        ? { query: async () => [] as NostrRumor[], event: async (event: NostrRumor) => { published.push({ url, event }); } }
+        : nostr.relay(url),
+    };
+
+    for (let i = 0; i < 5; i++) {
+      await syncCommunityList(blind, user, new QueryClient(), undefined, [self, stale]);
+    }
+
+    expect(published.filter((p) => p.url === stale)).toHaveLength(1);
+  });
+
   it("never signs an update when every explicit community-list source fails", async () => {
     const { updateCommunityList } = await import("./useCommunityList");
     const signEvent = vi.fn(user.signer.signEvent.bind(user.signer));

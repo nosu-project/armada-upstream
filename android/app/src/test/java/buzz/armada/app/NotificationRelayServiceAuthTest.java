@@ -73,6 +73,20 @@ public class NotificationRelayServiceAuthTest {
     }
 
     @Test
+    public void communityListFragmentsAndTopicDocsCoalesce() throws Exception {
+        JSONObject fragment = new JSONObject().put("kind", 33302)
+                .put("tags", new JSONArray().put(new JSONArray().put("d").put("0")));
+        assertTrue(NotificationRelayService.coalescesSelfDoc(fragment, 33302));
+        JSONObject index = new JSONObject().put("kind", 30078).put("tags", new JSONArray()
+                .put(new JSONArray().put("t").put("armada-dm-conversations")));
+        assertTrue(NotificationRelayService.coalescesSelfDoc(index, 30078));
+        JSONObject settings = new JSONObject().put("kind", 30078).put("tags", new JSONArray()
+                .put(new JSONArray().put("d").put("armada/read-state")));
+        assertFalse(NotificationRelayService.coalescesSelfDoc(settings, 30078));
+        assertFalse(NotificationRelayService.coalescesSelfDoc(new JSONObject().put("tags", new JSONArray()), 10002));
+    }
+
+    @Test
     public void newerReplaceableBreaksEqualSecondsByLowerId() throws Exception {
         JSONObject a = new JSONObject().put("created_at", 100).put("id", "bb");
         assertTrue(SelfTopicWindow.isNewerReplaceable(a,

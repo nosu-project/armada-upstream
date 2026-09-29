@@ -20,7 +20,7 @@ import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
-import { relayInfoCache, type RelayInfoDocument } from "@/hooks/useRelayInfo";
+import { relayInfoCache, type RelayInfoDocument, sanitizeRelayInfo } from "@/hooks/useRelayInfo";
 import type { Nip29Group } from "@/lib/nip29";
 
 /** A navigable space: a NIP-29 server or a Concord community. */
@@ -115,7 +115,7 @@ interface Transport {
 function serverName(queryClient: QueryClient, relayUrl: string): string {
   const cached = queryClient.getQueryData<RelayInfoDocument>(["relay-info", relayUrl]);
   if (cached?.name) return cached.name;
-  const persisted = relayInfoCache.get(relayUrl);
+  const persisted = sanitizeRelayInfo(relayInfoCache.get(relayUrl));
   if (persisted?.name) return persisted.name;
   return relayUrl.replace(/^wss?:\/\//, "").replace(/\/$/, "");
 }

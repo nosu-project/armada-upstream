@@ -46,6 +46,11 @@ export interface ConcordSub {
   /** Authors currently allowed to issue @everyone in this channel. */
   mentionEveryoneAuthors?: string[];
   /**
+   * When this membership began (ms, the vault entry's `added_at`). Background
+   * notifiers drop anything sent earlier: the viewer wasn't there.
+   */
+  joinedAtMs?: number;
+  /**
    * Encrypted icon pointer (CORD-02 §6) for the notification group summary;
    * AES-GCM with `key`/`nonce`, verified against `hash`.
    */
@@ -67,6 +72,7 @@ export interface ConcordSub {
 export function buildConcordSubs(
   community: Community,
   folded: FoldedControl | undefined,
+  joinedAtMs?: number,
 ): { subs: ConcordSub[]; streamKeys: GroupKey[] } {
   const subs: ConcordSub[] = [];
   const streamKeys: GroupKey[] = [];
@@ -103,6 +109,7 @@ export function buildConcordSubs(
       ],
       banned,
       mentionEveryoneAuthors,
+      ...(joinedAtMs !== undefined && { joinedAtMs }),
       communityImage,
       timerSecs,
       gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),

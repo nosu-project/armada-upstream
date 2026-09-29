@@ -20,6 +20,8 @@ import {
   everyoneMentionAuthors,
   isEveryoneMention,
 } from "@/concord/lib/everyoneMention";
+import { useCommunityEntry } from "@/concord/hooks/useCommunityList";
+import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { emptyRoles } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 
@@ -70,12 +72,13 @@ export function useConcordMentions(community: Community | undefined, channels: C
     [roles, ownerHex, channelIds],
   );
   const everyoneAuthorSig = everyoneAuthors.join(",");
+  const joinedAtMs = useCommunityEntry(communityIdHex)?.added_at;
 
   const { mutedPubkeys } = useMutedPubkeys();
 
   const { data: allMentions = NO_MENTIONS, isLoading } = useQuery<ChatMsg[]>({
     ...STORE_READ,
-    queryKey: ["concord-mentions", communityIdHex ?? null, pubkey, channelSig, everyoneAuthorSig],
+    queryKey: ["concord-mentions", communityIdHex ?? null, pubkey, channelSig, everyoneAuthorSig, joinedAtMs ?? null],
     queryFn: async ({ signal }) => {
       const rumors = await queryMentionRumors(communityIdHex!, channelIds, pubkey!, {
         limit: MENTION_LIMIT,
@@ -87,6 +90,7 @@ export function useConcordMentions(community: Community | undefined, channels: C
       return rumors
         .filter((r) => {
           if (r.author === pubkey) return false;
+          if (!sentDuringMembership(r.ms, joinedAtMs)) return false;
           if (r.tags.some(([name, value]) => name === "p" && value === pubkey)) return true;
           return isEveryoneMention(r.content, roles, ownerHex, r.author, r.channelIdHex);
         })

@@ -348,6 +348,11 @@ struct PushProcessor {
         // be checked.
         if stream.banned.contains(opened.author) { return .dropped }
 
+        // Sent before this membership began: stored above, never announced.
+        if !Self.sentDuringMembership(createdAt: opened.createdAt, joinedAtMs: stream.joinedAtMs) {
+            return .dropped
+        }
+
         let directMention = opened.tags.contains {
             $0.count > 1 && $0[0] == "p" && $0[1] == config.selfPubkey
         }
@@ -521,6 +526,12 @@ struct PushProcessor {
         value.addingPercentEncoding(
             withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.!~*'()"))
         ) ?? value
+    }
+
+    /// Mirrors membershipFloor.ts: compared at whole seconds; nil admits all.
+    static func sentDuringMembership(createdAt: Int, joinedAtMs: Int?) -> Bool {
+        guard let joinedAtMs, joinedAtMs > 0 else { return true }
+        return createdAt >= joinedAtMs / 1000
     }
 
     /// Match the interoperable lowercase token without treating an email or a

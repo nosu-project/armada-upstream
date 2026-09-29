@@ -12,6 +12,7 @@ import {
   nip29SyncTopic,
   setNip29SyncContext,
 } from "@/lib/nip29Sync";
+import { KIND_GROUP_ADMINS, parseGroupAdmins } from "@/lib/nip29";
 import { isSigned } from "@/lib/nostrRumor";
 import { STORE_READ } from "@/lib/storeQuery";
 import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
@@ -22,6 +23,41 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 const KIND_DELETE = 5;
+
+/** Pubkeys in the newest 39001 this relay served, as `useGroup` reads the roster. */
+function groupAdmins(lists: NostrRumor[]): Set<string> {
+  const newest = lists.reduce<NostrRumor | undefined>(
+    (a, b) => (!a || b.created_at > a.created_at ? b : a),
+    undefined,
+  );
+  return new Set(newest ? parseGroupAdmins(newest).map((a) => a.pubkey) : []);
+}
+
+/**
+ * NIP-09 honours a kind 5 only from the target's author. Group admins' kind-5s are
+ * honoured too (the NIP-29 way is a 9005, which the relay applies by dropping the
+ * event); any other member's kind 5 is ignored, or it would hide others' messages.
+ */
+export function withoutDeleted(
+  events: NostrRumor[],
+  deletes: NostrRumor[],
+  admins: ReadonlySet<string>,
+): NostrRumor[] {
+  const deleters = new Map<string, Set<string>>();
+  for (const d of deletes) {
+    for (const [n, v] of d.tags) {
+      if (n !== "e" || !v) continue;
+      let set = deleters.get(v);
+      if (!set) deleters.set(v, (set = new Set()));
+      set.add(d.pubkey);
+    }
+  }
+  if (deleters.size === 0) return events;
+  return events.filter((e) => {
+    const by = deleters.get(e.id);
+    return !by || !(by.has(e.pubkey) || [...by].some((pk) => admins.has(pk)));
+  });
+}
 
 /**
  * Max gap (seconds, 6h) before the oldest message is treated as a stale-relay outlier rather
@@ -125,19 +161,16 @@ export function useGroupMessages(
       const existing = queryClient.getQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId)) ?? [];
 
       // Scoped to THIS relay's tenant: the same group id elsewhere is an unrelated channel.
-      const [cached, deletes] = await Promise.all([
+      const [cached, deletes, adminLists] = await Promise.all([
         store.query(
           [{ kinds: NIP29_TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(NIP29_PAGE_SIZE, existing.length) }],
           { relay: relayUrl },
         ),
-        // The store self-applies same-author NIP-09; moderators delete others' messages too.
+        // The store self-applies same-author NIP-09; admins' kind-5s are applied here.
         store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }], { relay: relayUrl }),
+        store.query([{ kinds: [KIND_GROUP_ADMINS], "#d": [groupId!] }], { relay: relayUrl }),
       ]);
-      const deletedIds = new Set(
-        deletes.flatMap((d) => d.tags.filter(([n, v]) => n === "e" && v).map(([, v]) => v)),
-      );
-
-      const local = sortDedupe([...existing, ...cached]).filter((e) => !deletedIds.has(e.id));
+      const local = withoutDeleted(sortDedupe([...existing, ...cached]), deletes, groupAdmins(adminLists));
 
       // No network here; `hasMore` reflects the last scheduler round's page fullness.
       const full = syncTopic ? nip29PullFull(syncTopic) : undefined;

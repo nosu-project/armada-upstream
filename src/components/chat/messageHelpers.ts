@@ -8,10 +8,12 @@ import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ImetaEntry } from "@/lib/imeta";
 
 /**
- * Inline-reply target via NIP-10 marked `e` tags (NIP-29). Concord uses a
- * NIP-C7 `q` tag (see getQuoteReplyToId).
+ * NIP-29 inline-reply target: the NIP-C7 `q` tag, else the NIP-10 marked `e`
+ * tags Armada sent before it spoke NIP-C7 on NIP-29.
  */
 export function getReplyToId(event: ChatMsg): string | undefined {
+  const quoted = inlineReplyQuoteId(event);
+  if (quoted) return quoted;
   const replyTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "reply");
   if (replyTag) return replyTag[1];
   const rootTag = event.tags.find(([name, , , marker]) => name === "e" && marker === "root");

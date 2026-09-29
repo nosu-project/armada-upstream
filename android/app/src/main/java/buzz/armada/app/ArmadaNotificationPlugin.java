@@ -97,12 +97,14 @@ public class ArmadaNotificationPlugin extends Plugin {
      * the user's signer (nsec/bunker/extension — all handled in the WebView).
      * Returns false if the bridge isn't available (WebView not running).
      */
-    static boolean emitAuthChallenge(String relayUrl, String challenge) {
+    static boolean emitAuthChallenge(String relayUrl, String challenge, boolean user, boolean streams) {
         ArmadaNotificationPlugin p = instance;
         if (p == null) return false;
         JSObject data = new JSObject();
         data.put("relayUrl", relayUrl);
         data.put("challenge", challenge);
+        data.put("user", user);
+        data.put("streams", streams);
         p.notifyListeners("authChallenge", data);
         return true;
     }

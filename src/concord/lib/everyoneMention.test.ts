@@ -54,4 +54,5 @@ describe("Concord @everyone", () => {
     expect(everyoneMentionAuthors(roles, OWNER, [CHANNEL])).toEqual([OWNER, MOD]);
     expect(everyoneMentionAuthors(roles, OWNER, [OTHER_CHANNEL])).toEqual([OWNER]);
   });
+
 });

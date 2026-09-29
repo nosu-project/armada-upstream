@@ -101,6 +101,19 @@ const FRAGMENT_QUERY_CHUNK = 64;
 const LIST_IO_TIMEOUT_MS = 8_000;
 const LIST_REPAIR_REFETCH_MS = 60_000;
 
+/**
+ * When each account's reconcile last published. The reconcile re-runs whenever
+ * its own publish echoes back on the self-sync stream, so a relay that keeps
+ * reading as stale would otherwise drive it at network speed (measured: ~85
+ * full-list editions a minute, for as long as the tab stayed open).
+ */
+const lastReconcilePublishAt = new Map<string, number>();
+
+/** Test seam. */
+export function _resetReconcilePublishClock(): void {
+  lastReconcilePublishAt.clear();
+}
+
 /** Shared by the mutation and the reconcile's am-I-racing-a-mutation check. */
 const LIST_MUTATION_KEY = ["concord-list"] as const;
 
@@ -912,9 +925,24 @@ export async function syncCommunityList(
     && queryClient.isMutating({ mutationKey: LIST_MUTATION_KEY }) === 0) {
     try {
       const rebuilt = fragment(merged);
-      if (relayWireDiffers(rebuilt, read.readFragsByRelay, read.answered)) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const newestEdition = Math.max(0, ...set.createdAt.values());
+      const lastPublish = lastReconcilePublishAt.get(user.pubkey) ?? 0;
+      const stale = relayWireDiffers(rebuilt, read.readFragsByRelay, read.answered);
+      if (stale && newestEdition >= nowSec) {
+        // An edition dated now or later is already out. Ditto-family relays hide
+        // future-dated events from queries, so one reads as missing there, and
+        // each republish (created_at = previous + 1) would date the next further
+        // ahead: a loop that feeds itself. Wait for the clock instead.
+        next.repairPending = true;
+        logSync("list2", `reconcile: newest edition is ${newestEdition - nowSec}s ahead of the clock — not republishing yet`);
+      } else if (stale && Date.now() - lastPublish < LIST_REPAIR_REFETCH_MS) {
+        next.repairPending = true;
+        logSync("list2", "reconcile: published under a minute ago — waiting for the next repair poll");
+      } else if (stale) {
         // EVENT acceptance doesn't prove the head is query-visible yet; keep polling.
         next.repairPending = true;
+        lastReconcilePublishAt.set(user.pubkey, Date.now());
         logSync("list2", "reconcile: the union or a relay-local copy is stale — publishing it");
         const newest = await publishFragments(
           nostr,

@@ -52,6 +52,7 @@ import {
 import type { CachingReqOpts } from "@/lib/NostrBatcher";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
+import { KeyedThrottle } from "@/lib/keyedThrottle";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -61,6 +62,13 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 const FREQUENT_REACTIONS_DEBOUNCE_MS = 10_000;
 
 const SELF_SYNC_FLUSH_MS = 60;
+
+/**
+ * A query invalidated by a self-sync edition refetches at most this often. Each
+ * community-list edition re-read every fragment from every self-state relay, so
+ * another client republishing it once a second drove a full list sync a second.
+ */
+const SELF_SYNC_KEY_MIN_GAP_MS = 15_000;
 
 /**
  * Coalescing window (ms) for live DM index editions, merged once per piece at
@@ -187,15 +195,23 @@ function NostrSyncInner() {
     // re-invalidate already-handled versions.
     const seen = seenSelfVersions.current;
 
-    let pendingKeys = new Map<string, readonly string[]>();
+    const pendingKeys = new KeyedThrottle<readonly string[]>(SELF_SYNC_FLUSH_MS, SELF_SYNC_KEY_MIN_GAP_MS);
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    let flushAt = Infinity;
+    const armFlush = () => {
+      const delay = pendingKeys.nextDelay(Date.now());
+      if (delay === undefined || Date.now() + delay >= flushAt) return;
+      if (flushTimer !== undefined) clearTimeout(flushTimer);
+      flushAt = Date.now() + delay;
+      flushTimer = setTimeout(flush, delay);
+    };
     const flush = () => {
       flushTimer = undefined;
-      const batch = pendingKeys;
-      pendingKeys = new Map();
-      for (const queryKey of batch.values()) {
+      flushAt = Infinity;
+      for (const queryKey of pendingKeys.takeDue(Date.now())) {
         queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
+      armFlush();
     };
     // Live DM-index editions: only the newest per piece per window is stored and
     // merged (add-only union, so skipping intermediates just delays). Verified
@@ -229,10 +245,8 @@ function NostrSyncInner() {
       indexTimer ??= setTimeout(flushIndexMerge, DM_INDEX_MERGE_MS);
     };
     const scheduleInvalidate = (keys: readonly (readonly string[])[]) => {
-      for (const key of keys) pendingKeys.set(key.join("\u0000"), key);
-      if (pendingKeys.size > 0 && flushTimer === undefined) {
-        flushTimer = setTimeout(flush, SELF_SYNC_FLUSH_MS);
-      }
+      for (const key of keys) pendingKeys.add(key.join("\u0000"), key);
+      armFlush();
     };
 
     const onEvent = (event: NostrEvent) => {

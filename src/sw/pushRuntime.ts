@@ -19,6 +19,7 @@ import { KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/
 import { decryptImageBytes } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
+import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { presetIndexedDBArmadaDB } from "@/lib/db/armadaDB";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { appEventStore } from "@/lib/db/mainEventStore";
@@ -433,6 +434,9 @@ async function prepareConcord(
 
   // Banned (CORD-04): stored, never announced.
   if (stream.banned?.includes(opened.author)) return DROP;
+
+  // Sent before this membership began: the viewer wasn't there.
+  if (!sentDuringMembership(opened.ms, stream.joinedAtMs)) return DROP;
 
   const mention = Boolean(cfg?.self) && (
     opened.tags.some(([n, v]) => n === "p" && v === cfg?.self)

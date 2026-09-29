@@ -28,6 +28,7 @@ import android.graphics.RectF;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -41,6 +42,10 @@ import androidx.core.graphics.drawable.IconCompat;
 import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
+import buzz.armada.app.relayfleet.CursorGate;
+import buzz.armada.app.relayfleet.FloodBreaker;
+import buzz.armada.app.relayfleet.GitRelayCover;
+import buzz.armada.app.relayfleet.NetworkSettle;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetDecision;
@@ -305,6 +310,13 @@ public class NotificationRelayService extends Service {
     }
 
     private ConnectivityManager.NetworkCallback networkCallback;
+    // When the network last changed (elapsedRealtime; handler thread): connects
+    // wait for NetworkSettle.SETTLE_MS of quiet after it, so a burst of changes
+    // costs the fleet one reconnect instead of one per change.
+    private long lastNetworkChangeAt = 0;
+    private boolean sawNetworkLoss = false;
+    // When the default network was first seen unvalidated (elapsedRealtime), 0 when validated.
+    private long unvalidatedSince = 0;
     private SharedPreferences.OnSharedPreferenceChangeListener configListener;
     private final Runnable configReloadRunnable = this::loadConfigAndReconnect;
 
@@ -412,6 +424,15 @@ public class NotificationRelayService extends Service {
     // catch-up; every reconnect and re-REQ after that asks only for what
     // changed. In-memory for the same reason as relaySinceByUrl.
     private final Map<String, Long> selfSinceByUrl = new HashMap<>();
+    // Per relay, kept across reconnects so a flood's pause outlives the socket.
+    // Concurrent: sendReqs also runs on the socket thread from onOpen.
+    // When each DM inbox's live NIP-17 sub last dropped (wall ms; handler thread).
+    private final Map<String, Long> dm17LiveUntilByUrl = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, FloodBreaker> selfFloodByUrl = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private FloodBreaker selfFlood(String relayUrl) {
+        return selfFloodByUrl.computeIfAbsent(relayUrl, k -> new FloodBreaker());
+    }
     // Self-state event ids already verified and filed, so the same document
     // arriving from every self relay (and on every re-REQ) is dropped before
     // the Schnorr verify and the store write instead of after.
@@ -436,6 +457,10 @@ public class NotificationRelayService extends Service {
     // mildly skewed publishers. It applies only after this service has actually
     // observed an event, so a cold start still asks from now with no backlog.
     static final long RELAY_SINCE_OVERLAP_SEC = 30L;
+    /** Relays each Git repository is watched on beyond those held anyway. */
+    static final int GIT_RELAYS_PER_REPOSITORY = 2;
+    /** CORD-02 §8 community-list fragment (addressable, `d` = index). */
+    static final int KIND_COMMUNITY_LIST_FRAG = 33302;
     // Self-state documents are written by OTHER devices, whose clocks we don't
     // control; a new version stamped up to this far behind our last EOSE is
     // still asked for.
@@ -477,6 +502,10 @@ public class NotificationRelayService extends Service {
     // notifiedIds dedupes within the service lifetime and the shared-DB
     // `storedBefore` check suppresses wraps either side already stored.
     private static final long DM17_SINCE_REWIND_SEC = 2 * 24 * 3600 + 3600;
+    /** A gap shorter than this is not replayed: reconnects are frequent and a page costs ~300 KB. */
+    static final long DM17_CATCHUP_MIN_GAP_MS = 2 * 60_000L;
+    static final int DM17_CATCHUP_LIMIT = 200;
+    private static final long DM17_CATCHUP_SLACK_SEC = 60;
 
     // roomKey → the accumulating per-room notification (Signal/Discord style).
     // The roomKey is a stable identifier for the conversation (NIP-29 groupId,
@@ -628,9 +657,13 @@ public class NotificationRelayService extends Service {
         // Authors currently authorized to issue a literal @everyone in this
         // channel. The WebView derives this from the channel-scoped role fold.
         final Set<String> mentionEveryoneAuthors;
+        // When this membership began (ms, the vault entry's `added_at`; 0 =
+        // unknown). Nothing sent earlier notifies: the viewer wasn't there.
+        final long joinedAtMs;
         ConcordStream(byte[] convKey, String communityId, String channelId, String epoch,
                        String name, String url, CommunityRef community, long timerSecs,
-                       boolean mentionOnly, Set<String> banned, Set<String> mentionEveryoneAuthors) {
+                       boolean mentionOnly, Set<String> banned, Set<String> mentionEveryoneAuthors,
+                       long joinedAtMs) {
             this.convKey = convKey;
             this.communityId = communityId;
             this.channelId = channelId;
@@ -642,6 +675,7 @@ public class NotificationRelayService extends Service {
             this.mentionOnly = mentionOnly;
             this.banned = banned;
             this.mentionEveryoneAuthors = mentionEveryoneAuthors;
+            this.joinedAtMs = joinedAtMs;
         }
     }
 
@@ -1517,6 +1551,7 @@ public class NotificationRelayService extends Service {
             // relay position (or any other native last-good state).
             relaySinceByUrl.clear();
             selfSinceByUrl.clear();
+            selfFloodByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
             selfTopicWindow.clear();
@@ -1596,6 +1631,8 @@ public class NotificationRelayService extends Service {
         }
         healthSignerStatus = nativeSigner != null
                 ? "ready" : (sealedSigner != null ? "unavailable" : "missing");
+
+        pruneGitRelays();
 
         // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord
         // relays ∪ the general relays carrying the user's own documents.
@@ -1893,7 +1930,8 @@ public class NotificationRelayService extends Service {
                     pkToStream2.put(pk, new ConcordStream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
                             name, url, ref, Math.max(0, sub.optLong("timerSecs", 0)),
-                            mentionOnly, banned, mentionEveryoneAuthors));
+                            mentionOnly, banned, mentionEveryoneAuthors,
+                            Math.max(0, sub.optLong("joinedAtMs", 0))));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -1958,6 +1996,26 @@ public class NotificationRelayService extends Service {
         } catch (JSONException e) { Log.w(TAG, "Failed to parse gitSubs", e); }
     }
 
+    /**
+     * Watch each Git repository on a covering subset of its relays rather than
+     * all of them (see {@link GitRelayCover}). Runs after every other plane is
+     * parsed, since relays already held for those are free.
+     */
+    private void pruneGitRelays() {
+        Set<String> held = new HashSet<>(relayToGroupIds.keySet());
+        held.addAll(dmRelays);
+        held.addAll(selfRelays);
+        held.addAll(relayToPks2.keySet());
+        Map<String, List<String>> byRepository = new HashMap<>();
+        for (Map.Entry<String, Set<String>> e : gitRepositoriesByRelay.entrySet()) {
+            for (String address : e.getValue()) {
+                byRepository.computeIfAbsent(address, k -> new ArrayList<>()).add(e.getKey());
+            }
+        }
+        Set<String> extra = GitRelayCover.choose(byRepository, held, GIT_RELAYS_PER_REPOSITORY);
+        gitRepositoriesByRelay.keySet().removeIf(relay -> !held.contains(relay) && !extra.contains(relay));
+    }
+
     private static boolean validHex(String value) { return value != null && value.matches("[0-9a-f]{64}"); }
     private static boolean validRepositoryAddress(String value) {
         return value != null && value.matches("30617:[0-9a-f]{64}:.+");
@@ -1998,6 +2056,9 @@ public class NotificationRelayService extends Service {
         final Set<String> standingSubs = java.util.concurrent.ConcurrentHashMap.newKeySet();
         final Set<String> walledSubs = java.util.concurrent.ConcurrentHashMap.newKeySet();
         volatile boolean deliveredAnything = false;
+        // Holds this relay's `since` cursor while the session's REQs replay
+        // (newest first), so a drop mid-replay can't skip the older half.
+        final CursorGate cursorGate = new CursorGate();
 
         // Single pending reconnect, cancellable — prevents a queued reconnect
         // and the network callback from racing to open duplicate sockets.
@@ -2047,6 +2108,18 @@ public class NotificationRelayService extends Service {
         // the same keys cannot change the outcome, and each round was a
         // Schnorr sign per Concord stream key here plus the same again in JS.
         final Set<String> answeredAuth = new HashSet<>();
+        // This session's latest NIP-42 challenge, and whether the relay walled
+        // the Concord sub — the only case that needs the stream keys' AUTHs.
+        String lastChallenge;
+        boolean concordWalled = false;
+        // The self-state sub has replayed (EOSE) and is streaming live, so a new
+        // edition counts toward the flood breaker.
+        volatile boolean selfLive = false;
+        // NIP-17: the sub reached EOSE (live), and whether this session's REQ
+        // is a catch-up replay whose rumors notify only from the gap onward.
+        volatile boolean dm17Live = false;
+        volatile boolean dm17CatchingUp = false;
+        volatile long dm17NotifyFloorSec = 0;
         final Set<String> bridgedChallenges = new HashSet<>();
         // Backoff for relay-initiated CLOSED resubscribes (#49): a relay that
         // drops a standing sub (restart, transient error, rate limit) earns a
@@ -2090,6 +2163,7 @@ public class NotificationRelayService extends Service {
                     sentFilters.remove(sub);
                     standingSubs.remove(sub);
                     walledSubs.remove(sub);
+                    endBackfill(sub);
                     try {
                         ws.send(new JSONArray().put("CLOSE").put(sub).toString());
                     } catch (Exception ignored) {
@@ -2116,6 +2190,12 @@ public class NotificationRelayService extends Service {
             }
         };
 
+        /** A standing sub stopped replaying (EOSE, CLOSED, or closed by us). */
+        void endBackfill(String sub) {
+            long commit = cursorGate.onBackfillEnded(sub);
+            if (commit >= 0) commitRelaySince(relayUrl, commit);
+        }
+
         /** Re-send REQs shortly, collapsing a burst of AUTH OKs into one round. */
         void scheduleAuthResend() {
             if (authResendPending) return;
@@ -2141,7 +2221,21 @@ public class NotificationRelayService extends Service {
             // already reconnected would open a second socket and orphan the
             // first — leaked sockets keep pinging and re-failing forever.
             if (closed || ws != null || !isNetworkAvailable()) return;
+            // A DM inbox reconnects at once: its NIP-17 and call subscriptions
+            // are live-only, so time spent settling there is lost, not delayed.
+            // Every other plane resumes from its cursor.
+            boolean liveOnly = dmRelays.contains(relayUrl) && shouldWatchDm();
+            long settle = liveOnly ? 0 : NetworkSettle.delayMs(
+                    SystemClock.elapsedRealtime(), lastNetworkChangeAt, NetworkSettle.SETTLE_MS);
+            settle = Math.max(settle, unvalidatedDelayMs());
+            if (settle > 0) {
+                handler.removeCallbacks(reconnectRunnable);
+                handler.postDelayed(reconnectRunnable, settle);
+                retryPending = true;
+                return;
+            }
             if (!fleetPolicy.shouldConnect(fleetState, fleetInfo, System.currentTimeMillis())) return;
+            quarantined = false;
             connectAttemptAt = System.currentTimeMillis();
             if (ServiceProfiler.ON) {
                 ServiceProfiler.count("socket.connect");
@@ -2150,8 +2244,14 @@ public class NotificationRelayService extends Service {
             standingSubs.clear();
             walledSubs.clear();
             sentFilters.clear();
+            cursorGate.reset();
             answeredAuth.clear();
             bridgedChallenges.clear();
+            lastChallenge = null;
+            concordWalled = false;
+            selfLive = false;
+            dm17Live = false;
+            dm17CatchingUp = false;
             deliveredAnything = false;
             final Request request;
             try {
@@ -2192,6 +2292,7 @@ public class NotificationRelayService extends Service {
                         // handler queue gets behind them (every frame is a post).
                         String family = ServiceProfiler.frameFamily(text);
                         ServiceProfiler.units("frame.in " + family, text.length());
+                        ServiceProfiler.units("frame.in " + family + " " + ServiceProfiler.host(relayUrl), text.length());
                         ServiceProfiler.units("frame.in bytes", text.length());
                         ServiceProfiler.peak("handler.queue", pendingFrames.incrementAndGet());
                         handler.post(() -> {
@@ -2248,7 +2349,9 @@ public class NotificationRelayService extends Service {
             }
             sentFilters.put(subId, signature);
             standingSubs.add(subId);
+            cursorGate.onReqSent(subId);
             if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())));
+            if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())) + " " + ServiceProfiler.host(relayUrl) + (filters.length > 0 && filters[0].has("since") ? " since" : " full"));
             webSocket.send(reqMessage(subId, filters));
         }
 
@@ -2314,7 +2417,15 @@ public class NotificationRelayService extends Service {
                     f6.put("kinds", new JSONArray().put(1059));
                     f6.put("#p", new JSONArray().put(userPubkey));
                     f6.put("since", Math.max(0, requestSince - DM17_SINCE_REWIND_SEC));
-                    f6.put("limit", 0);
+                    // After a real gap, replay a bounded page instead: wraps sent
+                    // while the socket was down would otherwise never notify.
+                    // Only rumors dated after the gap notify (see handleDm17Wrap);
+                    // the store's dedupe absorbs the rest.
+                    long floor = dm17CatchUpFloorSec(
+                            dm17LiveUntilByUrl.get(relayUrl), System.currentTimeMillis());
+                    dm17CatchingUp = floor > 0;
+                    dm17NotifyFloorSec = floor;
+                    f6.put("limit", floor > 0 ? DM17_CATCHUP_LIMIT : 0);
                     sendReq(webSocket, subDm17, f6);
 
                     // Ephemeral gift wraps (kind 21059) addressed to me: the
@@ -2380,46 +2491,89 @@ public class NotificationRelayService extends Service {
                 // documents accumulate per install, and a full replay per
                 // re-REQ measured ~110 documents a relay, each Schnorr-verified
                 // and written, on every AUTH round and reconnect.
-                if (userPubkey != null && !userPubkey.isEmpty()
-                        && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
-                    JSONArray me = new JSONArray().put(userPubkey);
-
-                    JSONArray selfKinds = new JSONArray();
-                    for (int kind : SelfState.KINDS) selfKinds.put(kind);
-                    JSONObject bare = new JSONObject();
-                    bare.put("kinds", selfKinds);
-                    bare.put("authors", me);
-
-                    // Kind 30078 is shared with every other NIP-78 client on
-                    // this identity, so it is asked for by `d` rather than
-                    // wholesale.
-                    JSONArray dTags = new JSONArray();
-                    for (String d : selfDTags) dTags.put(d);
-                    JSONObject documents = new JSONObject();
-                    documents.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
-                    documents.put("authors", me);
-                    documents.put("#d", dTags);
-
-                    // Installation-sharded private documents are named by topic,
-                    // not by `d` (GIF favorites and the DM conversation index).
-                    JSONArray topics = new JSONArray();
-                    for (String topic : SelfState.TOPICS) topics.put(topic);
-                    JSONObject topicDocuments = new JSONObject();
-                    topicDocuments.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
-                    topicDocuments.put("authors", me);
-                    topicDocuments.put("#t", topics);
-
-                    Long selfSince = selfSinceByUrl.get(relayUrl);
-                    if (selfSince != null) {
-                        bare.put("since", selfSince);
-                        documents.put("since", selfSince);
-                        topicDocuments.put("since", selfSince);
-                    }
-                    sendReq(webSocket, subSelf, bare, documents, topicDocuments);
-                }
+                if (!selfFlood(relayUrl).paused(SystemClock.elapsedRealtime())) sendSelfReq(webSocket, false);
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
             }
+        }
+
+        /**
+         * The self-state REQ. {@code resuming}: re-opened after a flood pause,
+         * so each filter is capped (newest first) instead of replaying every
+         * edition published in between.
+         */
+        void sendSelfReq(WebSocket webSocket, boolean resuming) throws JSONException {
+            if (userPubkey != null && !userPubkey.isEmpty()
+                    && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
+                JSONArray me = new JSONArray().put(userPubkey);
+
+                JSONArray selfKinds = new JSONArray();
+                for (int kind : SelfState.KINDS) selfKinds.put(kind);
+                JSONObject bare = new JSONObject();
+                bare.put("kinds", selfKinds);
+                bare.put("authors", me);
+
+                // Kind 30078 is shared with every other NIP-78 client on
+                // this identity, so it is asked for by `d` rather than
+                // wholesale.
+                JSONArray dTags = new JSONArray();
+                for (String d : selfDTags) dTags.put(d);
+                JSONObject documents = new JSONObject();
+                documents.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                documents.put("authors", me);
+                documents.put("#d", dTags);
+
+                // Installation-sharded private documents are named by topic,
+                // not by `d` (GIF favorites and the DM conversation index).
+                JSONArray topics = new JSONArray();
+                for (String topic : SelfState.TOPICS) topics.put(topic);
+                JSONObject topicDocuments = new JSONObject();
+                topicDocuments.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                topicDocuments.put("authors", me);
+                topicDocuments.put("#t", topics);
+
+                Long selfSince = selfSinceByUrl.get(relayUrl);
+                if (selfSince != null) {
+                    bare.put("since", selfSince);
+                    documents.put("since", selfSince);
+                    topicDocuments.put("since", selfSince);
+                }
+                if (resuming) {
+                    bare.put("limit", FloodBreaker.RESUME_LIMIT);
+                    documents.put("limit", FloodBreaker.RESUME_LIMIT);
+                    topicDocuments.put("limit", FloodBreaker.RESUME_LIMIT);
+                }
+                selfLive = false;
+                sendReq(webSocket, subSelf, bare, documents, topicDocuments);
+            }
+        }
+
+        /** Close the self-state sub for a flood pause; it re-opens when the pause ends. */
+        void pauseSelf(long pauseMs) {
+            if (closed || ws == null || !standingSubs.contains(subSelf)) return;
+            Log.w(TAG, "Self-document flood on " + relayUrl + "; pausing that subscription for "
+                    + (pauseMs / 60_000) + " min");
+            if (ServiceProfiler.ON) ServiceProfiler.count("self.flood pause " + ServiceProfiler.host(relayUrl));
+            try {
+                ws.send(new JSONArray().put("CLOSE").put(subSelf).toString());
+            } catch (Exception ignored) {
+                // A failed CLOSE leaves a stale sub; the next session drops it.
+            }
+            sentFilters.remove(subSelf);
+            standingSubs.remove(subSelf);
+            walledSubs.remove(subSelf);
+            endBackfill(subSelf);
+            selfLive = false;
+            handler.postDelayed(() -> {
+                RelayConnection now = connectionFor(relayUrl);
+                if (now == null || now.ws == null) return;
+                if (ServiceProfiler.ON) ServiceProfiler.count("self.flood resume " + ServiceProfiler.host(relayUrl));
+                try {
+                    now.sendSelfReq(now.ws, true);
+                } catch (JSONException e) {
+                    Log.w(TAG, "Failed to build REQ", e);
+                }
+            }, pauseMs);
         }
 
         /**
@@ -2585,6 +2739,8 @@ public class NotificationRelayService extends Service {
          */
         void endSession(Outcome failureOutcome) {
             if (closed) return;
+            if (dm17Live) dm17LiveUntilByUrl.put(relayUrl, System.currentTimeMillis());
+            dm17Live = false;
             boolean wasOpen = socketOpen;
             socketOpen = false;
             ws = null;
@@ -2651,15 +2807,22 @@ public class NotificationRelayService extends Service {
          * An external change that could alter the outcome: connectivity
          * returned, or the app came forward (which can wake a signer). The
          * policy clears any quarantine and backoff, and an idle relay
-         * reconnects now. A config change needs no edge — it rebuilds every
-         * connection with fresh policy state.
+         * reconnects now — or, for a quarantined relay on a flapping network,
+         * once the policy's re-arm spacing ends. A config change needs no
+         * edge — it rebuilds every connection with fresh policy state.
          */
         void onFleetEdge(FleetEdge edge) {
             if (closed) return;
-            fleetPolicy.onEdge(fleetState, fleetInfo, edge, System.currentTimeMillis());
-            quarantined = false;
+            long delayMs = fleetPolicy.onEdge(fleetState, fleetInfo, edge, System.currentTimeMillis());
+            if (ws != null) return;
             handler.removeCallbacks(reconnectRunnable);
-            if (ws == null) connect();
+            retryPending = false;
+            if (delayMs <= 0) {
+                connect();
+            } else {
+                handler.postDelayed(reconnectRunnable, delayMs);
+                retryPending = true;
+            }
         }
     }
 
@@ -2704,7 +2867,102 @@ public class NotificationRelayService extends Service {
         return value.length() <= 24 ? value : value.substring(0, 24);
     }
 
+    /**
+     * The Concord STREAM auths, signed natively from the same group-key memo
+     * the quick reply signs wraps with — so an auth-gating relay's kind-1059
+     * subscription survives a reconnect with the WebView asleep, instead of
+     * waiting for it to wake and answer the bridge (which still signs too; a
+     * duplicate AUTH just re-authenticates).
+     */
+    /**
+     * A standing sub re-delivering an event this process already handled is
+     * dropped before its frame is parsed. Relays re-send the account's own
+     * documents on every reconnect and re-publish, and a 38 KB community-list
+     * fragment cost more to parse than everything else done with it. The
+     * session bookkeeping a delivery implies still happens.
+     */
+    private boolean dropSeenEventFrame(String text, String relayUrl) {
+        String[] head = eventFrameHead(text);
+        if (head == null) return false;
+        String sub = head[0], id = head[1];
+        if (!selfSeenIds.contains(id) && !notifiedIds.contains(id)) return false;
+        RelayConnection delivering = connectionFor(relayUrl);
+        if (delivering == null || !delivering.standingSubs.contains(sub)) return false;
+        delivering.walledSubs.remove(sub);
+        delivering.deliveredAnything = true;
+        if (ServiceProfiler.ON) ServiceProfiler.count("event.drop seen before parse");
+        return true;
+    }
+
+    /**
+     * The subscription id and event id of an {@code ["EVENT", sub, {…}]} frame,
+     * read without parsing it; null for any other frame or anything unexpected.
+     * The event's own {@code "id":"} is the first occurrence of that sequence:
+     * a quote inside any JSON string is escaped, so none can spell it.
+     */
+    static String[] eventFrameHead(String text) {
+        if (!text.startsWith("[\"EVENT\"")) return null;
+        int s0 = text.indexOf('"', 8);
+        if (s0 < 0) return null;
+        int s1 = text.indexOf('"', s0 + 1);
+        if (s1 < 0) return null;
+        int at = text.indexOf("\"id\":\"", s1 + 1);
+        if (at < 0 || at + 70 >= text.length()) return null;
+        String id = text.substring(at + 6, at + 70);
+        if (text.charAt(at + 70) != '"' || !id.matches("[0-9a-f]{64}")) return null;
+        return new String[] { text.substring(s0 + 1, s1), id };
+    }
+
+    /**
+     * Hand a challenge to the WebView for the signatures it should add: the
+     * user's ({@code user}) and/or the stream keys' ({@code streams}). Returns
+     * whether the WebView is there to answer (or already was).
+     */
+    private boolean bridgeAuth(String relayUrl, String challenge, RelayConnection session,
+                               boolean user, boolean streams) {
+        if (!user && !streams) return false;
+        String key = challenge + (streams ? "|s" : "") + (user ? "|u" : "");
+        if (session != null && session.bridgedChallenges.contains(key)) {
+            if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip bridge repeat");
+            return true;
+        }
+        boolean bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge, user, streams);
+        if (bridged && session != null) session.bridgedChallenges.add(key);
+        return bridged;
+    }
+
+    private void signStreamAuths(String relayUrl, String challenge, RelayConnection session) {
+        Set<String> streamPks = relayToPks2.get(relayUrl);
+        if (streamPks == null || streamPks.isEmpty()) return;
+        Map<String, String> secrets = ServiceStore.streamSecrets(this, new ArrayList<>(streamPks));
+        long nowSecs = System.currentTimeMillis() / 1000;
+        for (Map.Entry<String, String> entry : secrets.entrySet()) {
+            if (session != null && session.answeredAuth.contains(entry.getKey() + "|" + challenge)) {
+                if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip stream repeat");
+                continue;
+            }
+            byte[] sk = ConcordCrypto.hexToBytes(entry.getValue());
+            if (sk == null || sk.length != 32) continue;
+            try {
+                if (!entry.getKey().equals(NostrCrypto.pubkeyOf(sk))) continue;
+                JSONArray streamTags = new JSONArray()
+                        .put(new JSONArray().put("relay").put(relayUrl))
+                        .put(new JSONArray().put("challenge").put(challenge));
+                long t = ServiceProfiler.begin("auth.stream.sign");
+                try {
+                    deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
+                            22242, "", streamTags, nowSecs, sk).toString());
+                } finally {
+                    ServiceProfiler.end("auth.stream.sign", t);
+                }
+            } catch (Exception ignored) {
+                // A stream that can't sign simply isn't authed.
+            }
+        }
+    }
+
     private void onRelayMessage(String text, String relayUrl) {
+        if (dropSeenEventFrame(text, relayUrl)) return;
         try {
             JSONArray msg = new JSONArray(text);
             String type = msg.optString(0);
@@ -2722,17 +2980,14 @@ public class NotificationRelayService extends Service {
                 healthAuthStatus = "challenged";
                 if (BuildConfig.DEBUG) Log.d(TAG, "AUTH challenge from " + relayUrl);
                 RelayConnection session = connectionFor(relayUrl);
-                // The WebView signs the stream auths too; hand it each
-                // challenge once per session, not on every repeat.
-                boolean bridged;
-                if (session != null && session.bridgedChallenges.contains(challenge)) {
-                    bridged = true;
-                    if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip bridge repeat");
-                } else {
-                    bridged = ArmadaNotificationPlugin.emitAuthChallenge(relayUrl, challenge);
-                    if (bridged && session != null) session.bridgedChallenges.add(challenge);
-                }
                 NativeSigner signer = nativeSigner;
+                if (session != null) session.lastChallenge = challenge;
+                // The WebView signs the user's AUTH when this process has no
+                // signer, and the stream keys' (it may hold keys the memo here
+                // lacks) only where the Concord sub was walled. Once per
+                // session per purpose, not on every repeat.
+                boolean needStreams = session == null || session.concordWalled;
+                boolean bridged = bridgeAuth(relayUrl, challenge, session, signer == null, needStreams);
                 if (signer != null && userPubkey != null && session != null
                         && session.answeredAuth.contains(userPubkey + "|" + challenge)) {
                     if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip user repeat");
@@ -2756,41 +3011,12 @@ public class NotificationRelayService extends Service {
                 } else if (!bridged) {
                     Log.w(TAG, "No bridge (WebView down) and no shared signer — can't AUTH " + relayUrl);
                 }
-                // The Concord STREAM auths, signed natively from the same
-                // group-key memo the quick reply signs wraps with — so an
-                // auth-gating relay's kind-1059 subscription survives a
-                // reconnect with the WebView asleep, instead of waiting for it
-                // to wake and answer the bridge (which still signs too; a
-                // duplicate AUTH just re-authenticates).
-                Set<String> streamPks = relayToPks2.get(relayUrl);
-                if (streamPks != null && !streamPks.isEmpty()) {
-                    Map<String, String> secrets =
-                            ServiceStore.streamSecrets(this, new ArrayList<>(streamPks));
-                    long nowSecs = System.currentTimeMillis() / 1000;
-                    for (Map.Entry<String, String> entry : secrets.entrySet()) {
-                        if (session != null && session.answeredAuth.contains(entry.getKey() + "|" + challenge)) {
-                            if (ServiceProfiler.ON) ServiceProfiler.count("auth.skip stream repeat");
-                            continue;
-                        }
-                        byte[] sk = ConcordCrypto.hexToBytes(entry.getValue());
-                        if (sk == null || sk.length != 32) continue;
-                        try {
-                            if (!entry.getKey().equals(NostrCrypto.pubkeyOf(sk))) continue;
-                            JSONArray streamTags = new JSONArray()
-                                    .put(new JSONArray().put("relay").put(relayUrl))
-                                    .put(new JSONArray().put("challenge").put(challenge));
-                            long t = ServiceProfiler.begin("auth.stream.sign");
-                            try {
-                                deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
-                                        22242, "", streamTags, nowSecs, sk).toString());
-                            } finally {
-                                ServiceProfiler.end("auth.stream.sign", t);
-                            }
-                        } catch (Exception ignored) {
-                            // A stream that can't sign simply isn't authed.
-                        }
-                    }
-                }
+                // Stream keys authenticate only where the Concord subscription was
+                // actually walled: most relays serve it unauthenticated and
+                // challenge for the DM or self-state subs, and answering every
+                // challenge with every stream key was hundreds of signatures per
+                // reconnect. The wall may arrive before or after the challenge.
+                if (needStreams) signStreamAuths(relayUrl, challenge, session);
                 return;
             }
             if ("EOSE".equals(type)) {
@@ -2824,9 +3050,16 @@ public class NotificationRelayService extends Service {
                 RelayConnection accepted = connectionFor(relayUrl);
                 if (accepted != null) {
                     accepted.walledSubs.remove(sub);
+                    accepted.endBackfill(sub);
+                    if (sub.equals(accepted.subDm17)) {
+                        accepted.dm17Live = true;
+                        accepted.dm17CatchingUp = false;
+                        dm17LiveUntilByUrl.remove(relayUrl);
+                    }
                     // The self-state read is complete on this relay: later
                     // REQs ask only for what changed since (see selfSinceByUrl).
                     if (sub.equals(accepted.subSelf)) {
+                        accepted.selfLive = true;
                         selfSinceByUrl.put(relayUrl, System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC);
                     }
                 }
@@ -2868,12 +3101,23 @@ public class NotificationRelayService extends Service {
                     // that ends with every standing sub still walled is
                     // classified AUTH_UNSATISFIABLE in endSession.
                     RelayConnection walled = connectionFor(relayUrl);
-                    if (walled != null) walled.walledSubs.add(sub);
+                    if (walled != null) {
+                        walled.walledSubs.add(sub);
+                        walled.endBackfill(sub);
+                        if (sub.equals(walled.subConcord) && !walled.concordWalled) {
+                            walled.concordWalled = true;
+                            if (walled.lastChallenge != null) {
+                                signStreamAuths(relayUrl, walled.lastChallenge, walled);
+                                bridgeAuth(relayUrl, walled.lastChallenge, walled, false, true);
+                            }
+                        }
+                    }
                     return;
                 }
                 recordHealthError("subscription_closed");
                 for (RelayConnection rc : connections) {
                     if (rc.relayUrl.equals(relayUrl)) {
+                        rc.endBackfill(sub);
                         rc.scheduleResubscribe();
                         break;
                     }
@@ -3274,6 +3518,12 @@ public class NotificationRelayService extends Service {
      * later same-second and out-of-order delivery; notifiedIds absorbs overlap.
      */
     private void advanceRelaySince(String relayUrl, long eventCreatedAtSec) {
+        RelayConnection rc = connectionFor(relayUrl);
+        long commit = rc != null ? rc.cursorGate.onEvent(eventCreatedAtSec) : eventCreatedAtSec;
+        if (commit >= 0) commitRelaySince(relayUrl, commit);
+    }
+
+    private void commitRelaySince(String relayUrl, long eventCreatedAtSec) {
         long nowSec = System.currentTimeMillis() / 1000;
         Long saved = relaySinceByUrl.get(relayUrl);
         long current = saved != null ? saved : nowSec;
@@ -3286,6 +3536,15 @@ public class NotificationRelayService extends Service {
                 rc.cursorHasEvent = true;
             }
         }
+    }
+
+    /**
+     * The NIP-17 notify floor for a reconnect: the second the live sub dropped
+     * (less slack) when the gap was long enough to replay, else 0 (live-only).
+     */
+    static long dm17CatchUpFloorSec(Long liveUntilMs, long nowMs) {
+        if (liveUntilMs == null || nowMs - liveUntilMs <= DM17_CATCHUP_MIN_GAP_MS) return 0;
+        return Math.max(1, liveUntilMs / 1000 - DM17_CATCHUP_SLACK_SEC);
     }
 
     /** Pure cursor transition for JVM regression coverage. */
@@ -3572,6 +3831,8 @@ public class NotificationRelayService extends Service {
      * `since` window on reconnect.
      */
     private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl, boolean storedBefore) {
+        RelayConnection via = connectionFor(relayUrl);
+        final long notifyFloorSec = via != null && via.dm17CatchingUp ? via.dm17NotifyFloorSec : 0;
         // Only wraps addressed to me are DMs — the Concord authors-scoped
         // subscription also delivers kind 1059, with no `p` tag at us.
         if (!isMentioned(wrap, userPubkey)) return;
@@ -3587,7 +3848,7 @@ public class NotificationRelayService extends Service {
         if (signer == null) {
             // An opaque wrap cannot be attributed to an exact override. Only
             // the global fallback may authorize an unattributed lock-screen ping.
-            if (prefBool("directMessages", true)) notifyOpaqueDm17();
+            if (notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
             return;
         }
         // Open the wrap with the user's signer (async — Amber/bunker are RPC).
@@ -3599,7 +3860,7 @@ public class NotificationRelayService extends Service {
                 // Crypto says no → not a readable DM (foreign protocol,
                 // garbage): silent. Signer unreachable → still tell the user
                 // SOMETHING arrived.
-                if (unavailable && prefBool("directMessages", true)) notifyOpaqueDm17();
+                if (unavailable && notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
                 return;
             }
             try {
@@ -3616,7 +3877,7 @@ public class NotificationRelayService extends Service {
                 if (peer.equals(userPubkey)) return; // our own sent copy
                 signer.decrypt44(peer, seal.optString("content", ""), (rumorJson, unavailable2) -> {
                     if (rumorJson == null) {
-                        if (unavailable2 && prefBool("directMessages", true)) notifyOpaqueDm17();
+                        if (unavailable2 && notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
                         return;
                     }
                     try {
@@ -3668,6 +3929,8 @@ public class NotificationRelayService extends Service {
                         // toggle in both directions. `mentions` equals `all` for
                         // a DM; every message is directed at the recipient.
                         if (!dmNotificationEnabled(room)) return;
+                        // A catch-up replay notifies only what the gap hid.
+                        if (notifyFloorSec > 0 && rumor.optLong("created_at", 0) < notifyFloorSec) return;
 
                         // Unknown conversation — neither this exact participant
                         // set nor every one of its peers is established. A
@@ -4337,6 +4600,16 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Self documents that wait out {@link SelfTopicWindow} so only the newest
+     * version is verified and filed: the installation-sharded topic documents,
+     * and the Concord community-list fragments (38 KB each), which a client
+     * stuck republishing sent at ~85 editions a minute.
+     */
+    static boolean coalescesSelfDoc(JSONObject event, int kind) {
+        return kind == KIND_COMMUNITY_LIST_FRAG || isSelfTopicDoc(event, kind);
+    }
+
     /** A kind-30078 document carrying one of {@link SelfState#TOPICS}. */
     static boolean isSelfTopicDoc(JSONObject event, int kind) {
         if (kind != SelfState.KIND_APP_SPECIFIC) return false;
@@ -4404,6 +4677,13 @@ public class NotificationRelayService extends Service {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state seen");
             return;
         }
+        if (SelfState.isSelfKind(kind)) {
+            RelayConnection live = connectionFor(relayUrl);
+            if (live != null && live.selfLive) {
+                long pause = selfFlood(relayUrl).onEdition(SystemClock.elapsedRealtime());
+                if (pause > 0) live.pauseSelf(pause);
+            }
+        }
         String selfCoordinate = SelfState.isSelfKind(kind) ? selfCoordinateOf(event, kind) : null;
         if (selfCoordinate != null) {
             Long newest = selfNewestByCoordinate.get(selfCoordinate);
@@ -4413,11 +4693,11 @@ public class NotificationRelayService extends Service {
                 if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state superseded");
                 return;
             }
-            // Installation-sharded topic documents wait out a window, and only
+            // Topic documents and community-list fragments wait out a window, and only
             // the newest version of each is verified and filed.
             if (!windowClosed && userPubkey != null
                     && userPubkey.equals(event.optString("pubkey"))
-                    && isSelfTopicDoc(event, kind)) {
+                    && coalescesSelfDoc(event, kind)) {
                 stageSelfTopicDoc(event, relayUrl, selfCoordinate);
                 return;
             }
@@ -4439,6 +4719,7 @@ public class NotificationRelayService extends Service {
             // from the store rather than refetching it; the service handles the
             // notification itself, so there is nothing for wire ingest to route.
             ServiceStore.cache(this, event);
+            advanceRelaySince(relayUrl, event.optLong("created_at", 0));
             handleGitActivity(event, relayUrl, id, kind);
             return;
         }
@@ -4611,6 +4892,8 @@ public class NotificationRelayService extends Service {
                     && rumorCreatedAt * 1000L > System.currentTimeMillis() + FUTURE_HOLD_MS) {
                 return;
             }
+            // Sent before this membership began: stored, never announced.
+            if (!sentDuringMembership(rumorCreatedAt, st.joinedAtMs)) return;
 
             // Reaction to your own message: mirror the NIP-29 path with a
             // "Reacted 👍 to your message" line, gated on the reactions pref.
@@ -4688,6 +4971,12 @@ public class NotificationRelayService extends Service {
             return;
         }
 
+        // Every verified event the relay delivered moves its cursor, whether or
+        // not it notifies: otherwise a reconnect replays a busy room's silent
+        // traffic back to the last notified message, verified and stored again.
+        long ts = event.optLong("created_at", 0);
+        advanceRelaySince(relayUrl, ts);
+
         String author = event.optString("pubkey");
         if (author.equals(userPubkey)) {
             return;
@@ -4706,12 +4995,8 @@ public class NotificationRelayService extends Service {
             return;
         }
 
-        // Claim the event now so the async profile fetch can't double-fire, and
-        // advance this relay's inclusive cursor so reconnects overlap the last
-        // second instead of dropping another event with the same timestamp.
+        // Claim the event now so the async profile fetch can't double-fire.
         rememberNotificationId(id);
-        long ts = event.optLong("created_at", 0);
-        advanceRelaySince(relayUrl, ts);
 
         final boolean mention = mentionsMe;
         final long fTs = (ts > 0 ? ts * 1000L : System.currentTimeMillis());
@@ -6982,7 +7267,29 @@ public class NotificationRelayService extends Service {
             @Override
             public void onAvailable(Network network) {
                 handler.post(() -> {
+                    // The callbacks registration replays for networks already up
+                    // are not a change; one after a loss is.
+                    if (sawNetworkLoss) lastNetworkChangeAt = SystemClock.elapsedRealtime();
                     for (RelayConnection rc : connections) rc.onFleetEdge(FleetEdge.CONNECTIVITY_REGAINED);
+                });
+            }
+
+            @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return;
+                handler.post(() -> {
+                    // The default network just validated: connects held for it go now.
+                    if (unvalidatedSince == 0) return;
+                    unvalidatedSince = 0;
+                    for (RelayConnection rc : connections) rc.onFleetEdge(FleetEdge.CONNECTIVITY_REGAINED);
+                });
+            }
+
+            @Override
+            public void onLost(Network network) {
+                handler.post(() -> {
+                    sawNetworkLoss = true;
+                    lastNetworkChangeAt = SystemClock.elapsedRealtime();
                 });
             }
         };
@@ -6995,6 +7302,21 @@ public class NotificationRelayService extends Service {
         if (cm != null) {
             try { cm.unregisterNetworkCallback(networkCallback); } catch (Exception ignored) {}
         }
+    }
+
+    /** See {@link NetworkSettle#UNVALIDATED_GRACE_MS}; handler thread. */
+    private long unvalidatedDelayMs() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm == null) return 0;
+        NetworkCapabilities c = cm.getNetworkCapabilities(cm.getActiveNetwork());
+        boolean validated = c == null || c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        long now = SystemClock.elapsedRealtime();
+        if (validated) {
+            unvalidatedSince = 0;
+            return 0;
+        }
+        if (unvalidatedSince == 0) unvalidatedSince = now;
+        return NetworkSettle.unvalidatedDelayMs(false, now, unvalidatedSince, NetworkSettle.UNVALIDATED_GRACE_MS);
     }
 
     private boolean isNetworkAvailable() {
@@ -7161,6 +7483,14 @@ public class NotificationRelayService extends Service {
 
     private static final Pattern EVERYONE_MENTION = Pattern.compile(
             "(^|[^\\p{L}\\p{N}_@])@everyone(?![\\p{L}\\p{N}_])");
+
+    /**
+     * Mirrors membershipFloor.ts: a rumor from before the join never notifies.
+     * Compared at whole seconds; {@code joinedAtMs <= 0} is unknown and admits all.
+     */
+    static boolean sentDuringMembership(long createdAtSec, long joinedAtMs) {
+        return joinedAtMs <= 0 || createdAtSec >= joinedAtMs / 1000L;
+    }
 
     static boolean hasEveryoneMention(String content) {
         return content != null && EVERYONE_MENTION.matcher(content).find();

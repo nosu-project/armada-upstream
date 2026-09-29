@@ -108,12 +108,13 @@ export interface ArmadaNotificationPlugin {
    */
   getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
   /**
-   * NIP-42 AUTH challenge: JS signs Concord stream auths and the user's 22242.
-   * The service also signs 22242 itself when given a signer credential.
+   * NIP-42 AUTH challenge: JS signs the user's 22242 when `user` (the service
+   * has no signer credential) and Concord stream auths when `streams` (the
+   * relay walled the Concord sub).
    */
   addListener(
     eventName: "authChallenge",
-    listener: (data: { relayUrl: string; challenge: string }) => void,
+    listener: (data: { relayUrl: string; challenge: string; user?: boolean; streams?: boolean }) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * A raw outer event the service received while the WebView is up, for

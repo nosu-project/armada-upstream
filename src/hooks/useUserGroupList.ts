@@ -9,7 +9,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
 import {
-  buildGroupListTags,
+  buildGroupListSections,
   KIND_USER_GROUPS,
   parseGroupListTags,
   type GroupRef,
@@ -85,11 +85,42 @@ export async function resolveGroupListRead(
   return { event: latest, ...decoded };
 }
 
+/** A kind 10009's decrypted private items, or `undefined` if they couldn't be read. */
+type PrivateItems = string[][] | undefined;
+
 /**
  * Decode-once cache for the 10009 private-items decrypt, keyed by event id.
  * Several always-on surfaces mount this hook, and a remote signer decrypt costs seconds.
  */
-const groupListDecryptMemo = new Map<string, Promise<ReadGroupListResult>>();
+const groupListDecryptMemo = new Map<string, Promise<PrivateItems>>();
+
+/** The NIP-44 private items of a kind 10009 (NIP-51); `[]` when it has none. */
+async function readGroupListPrivate(
+  event: NostrRumor,
+  signer: NUser["signer"] | undefined,
+): Promise<PrivateItems> {
+  if (!event.content) return [];
+  if (!signer?.nip44) return undefined;
+
+  const cached = groupListDecryptMemo.get(event.id);
+  if (cached) return cached;
+
+  const nip44 = signer.nip44;
+  const work = (async (): Promise<PrivateItems> => {
+    try {
+      const decrypted = JSON.parse(await nip44.decrypt(event.pubkey, event.content));
+      return Array.isArray(decrypted)
+        ? decrypted.filter((tag): tag is string[] => Array.isArray(tag))
+        : [];
+    } catch (err) {
+      console.warn("Failed to decrypt group list private items:", err);
+      groupListDecryptMemo.delete(event.id); // don't memoize a transient failure
+      return undefined;
+    }
+  })();
+  groupListDecryptMemo.set(event.id, work);
+  return work;
+}
 
 /**
  * Decrypt the NIP-44 private items of a kind 10009 event (NIP-51) and merge
@@ -100,32 +131,11 @@ export async function readGroupListEvent(
   signer: NUser["signer"] | undefined,
 ): Promise<ReadGroupListResult> {
   if (!event) return { ...EMPTY_LIST, decryptFailed: false };
-  if (!event.content) return { ...parseGroupListTags([...event.tags]), decryptFailed: false };
-  if (!signer?.nip44) return { ...parseGroupListTags([...event.tags]), decryptFailed: true };
-
-  const cached = groupListDecryptMemo.get(event.id);
-  if (cached) return cached;
-
-  const nip44 = signer.nip44;
-  const work = (async (): Promise<ReadGroupListResult> => {
-    const tags = [...event.tags];
-    try {
-      const decrypted = await nip44.decrypt(event.pubkey, event.content);
-      const privateTags = JSON.parse(decrypted);
-      if (Array.isArray(privateTags)) {
-        for (const tag of privateTags) {
-          if (Array.isArray(tag)) tags.push(tag as string[]);
-        }
-      }
-      return { ...parseGroupListTags(tags), decryptFailed: false };
-    } catch (err) {
-      console.warn("Failed to decrypt group list private items:", err);
-      groupListDecryptMemo.delete(event.id); // don't memoize a transient failure
-      return { ...parseGroupListTags(tags), decryptFailed: true };
-    }
-  })();
-  groupListDecryptMemo.set(event.id, work);
-  return work;
+  const privateItems = await readGroupListPrivate(event, signer);
+  return {
+    ...parseGroupListTags([...event.tags, ...(privateItems ?? [])]),
+    decryptFailed: privateItems === undefined,
+  };
 }
 
 /**
@@ -404,32 +414,32 @@ export function useUpdateUserGroupList() {
       }
       const next = applyAction(current, action);
 
-      // Preserve unrelated tags (title, etc.).
-      const otherTags =
-        prev?.tags.filter(([name]) => name !== "group" && name !== "r") ?? [];
-
-      // Preserve the existing format: re-encrypting a public list (Flotilla/Coracle)
-      // blanks it for other clients; downgrading encrypted would leak. New lists encrypt.
-      const writePrivate = prev ? Boolean(prev.content) : true;
-      const itemTags = buildGroupListTags(next);
+      // Each item keeps its section (a public list from Flotilla/Coracle must stay
+      // readable to them; a private item must not leak), and so does every other tag.
+      const prevPrivate = prev ? await readGroupListPrivate(prev, user.signer) : [];
+      if (prevPrivate === undefined) {
+        throw new Error("Couldn't read your existing list (decryption failed); not saving to avoid data loss.");
+      }
+      // New lists encrypt; an existing one adds new items in the form it already uses.
+      const newItemsPrivate = prev ? Boolean(prev.content) : true;
+      const { publicTags, privateTags } = buildGroupListSections(
+        prev?.tags ?? [],
+        prevPrivate,
+        next,
+        newItemsPrivate,
+      );
       let content = "";
-      let tags = otherTags;
-      if (writePrivate) {
+      if (privateTags.length > 0 || prev?.content) {
         if (!user.signer.nip44) {
           throw new Error("NIP-44 encryption not supported by this signer");
         }
-        content = await user.signer.nip44.encrypt(
-          user.pubkey,
-          JSON.stringify(itemTags),
-        );
-      } else {
-        tags = [...otherTags, ...itemTags];
+        content = await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(privateTags));
       }
 
       const published = await publishEvent({
         kind: KIND_USER_GROUPS,
         content,
-        tags,
+        tags: publicTags,
         created_at: nextCreatedAt(prev),
         prev: prev ?? undefined,
         relays: response.answered,

@@ -547,6 +547,19 @@ final class SenderIdentityTests: XCTestCase {
         XCTAssertFalse(PushProcessor.hasEveryoneMention("@Everyone"))
     }
 
+    func testConcordPresentsOnlyWhatWasSentDuringTheMembership() {
+        let parsed = PushConfig.parse(json: """
+        {"policy":"generic","self":"\(self_)","knownPeers":[],
+         "concord":[{"pk":"\(peer)","convKey":"\(peer)","epoch":"1",
+         "communityId":"cc","channelId":"dd","joinedAtMs":2700}]}
+        """)
+        XCTAssertEqual(parsed?.concord.first?.joinedAtMs, 2700)
+        XCTAssertFalse(PushProcessor.sentDuringMembership(createdAt: 1, joinedAtMs: 2000))
+        XCTAssertTrue(PushProcessor.sentDuringMembership(createdAt: 2, joinedAtMs: 2700))
+        XCTAssertTrue(PushProcessor.sentDuringMembership(createdAt: 3, joinedAtMs: 2000))
+        XCTAssertTrue(PushProcessor.sentDuringMembership(createdAt: 1, joinedAtMs: nil))
+    }
+
     func testExactDmLevelOverridesGlobalFallbackWithoutWideningGroupKeys() {
         let other = String(repeating: "c", count: 64)
         let group = [peer, other].sorted()

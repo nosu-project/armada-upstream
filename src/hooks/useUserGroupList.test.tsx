@@ -352,6 +352,30 @@ describe("useUpdateUserGroupList (kind 10009 read-modify-write)", () => {
     expect(decodePublished()).toContainEqual(["r", S2]);
   });
 
+  it("keeps each item of a mixed list in its own section, with names and other private tags", async () => {
+    h.query.mockResolvedValue([
+      listEvent({
+        createdAt: 100,
+        tags: [["r", S1], ["group", "pub", S1, "Public room"], ["title", "my groups"]],
+        content: `enc:${JSON.stringify([["r", S2], ["group", "secret", S2, "Secret room"], ["x", "other"]])}`,
+      }),
+    ]);
+
+    const result = renderUpdate();
+    await act(async () => {
+      await result.current.mutateAsync({ type: "add-server", url: S3 });
+    });
+
+    const arg = h.publish.mock.calls[0][0] as { content: string; tags: string[][] };
+    expect(arg.tags).toEqual([["title", "my groups"], ["r", S1], ["group", "pub", S1, "Public room"]]);
+    expect(decodePublished()).toEqual([
+      ["x", "other"],
+      ["r", S2],
+      ["r", S3],
+      ["group", "secret", S2, "Secret room"],
+    ]);
+  });
+
   it("refuses when the existing private items cannot be decrypted", async () => {
     h.query.mockResolvedValue([
       listEvent({ createdAt: 100, content: "garbage-not-ours" }),

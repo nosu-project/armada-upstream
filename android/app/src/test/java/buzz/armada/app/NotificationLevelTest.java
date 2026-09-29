@@ -87,6 +87,13 @@ public class NotificationLevelTest {
         assertFalse(NotificationRelayService.hasEveryoneMention("@Everyone"));
     }
 
+    @Test public void concordNotifiesOnlyWhatWasSentDuringTheMembership() {
+        assertFalse(NotificationRelayService.sentDuringMembership(1, 2_000));
+        assertTrue(NotificationRelayService.sentDuringMembership(2, 2_700));
+        assertTrue(NotificationRelayService.sentDuringMembership(3, 2_000));
+        assertTrue(NotificationRelayService.sentDuringMembership(1, 0));
+    }
+
     @Test public void opaqueConcordOnlyAllowsResolvedAll() {
         assertTrue(NotificationRelayService.wantsOpaqueResolvedGroupMessage(false));
         assertFalse(NotificationRelayService.wantsOpaqueResolvedGroupMessage(true));

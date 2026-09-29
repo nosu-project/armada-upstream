@@ -119,7 +119,7 @@ export function useConcordSubsState(): ConcordSubsState {
         // may be hours stale). The control plane stays subscribed so the lift lands;
         // the missed window is caught up via the same IOU WireSync uses.
         if (await readLivePause(community, Math.floor(Date.now() / 1000))) continue;
-        const built = buildConcordSubs(community, folded);
+        const built = buildConcordSubs(community, folded, entry.added_at);
         subs.push(...built.subs);
         // NIP-42, scoped per relay: the native service bridges AUTH challenges to the
         // WebView, which signs a kind-22242 per stream key (see useNativeNotifications).

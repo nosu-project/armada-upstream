@@ -766,6 +766,56 @@ describe("preparePush — showing nothing on purpose", () => {
     expect(rows.map((r) => r.content)).toContain("message from a banned member");
   });
 
+  it("drops a Concord message sent before this membership began", async () => {
+    const CHANNEL = "9a".repeat(32);
+    const COMMUNITY = "9b".repeat(32);
+    const streamSk = generateSecretKey();
+    const streamPk = getPublicKey(streamSk);
+    const convKey = getConversationKey(streamSk, streamPk);
+    const authorSk = generateSecretKey();
+    const self = getPublicKey(generateSecretKey());
+    const sentAt = now() - 3600;
+    const rumor = {
+      pubkey: getPublicKey(authorSk),
+      kind: 9,
+      content: "from before you joined",
+      tags: [["channel", CHANNEL], ["epoch", "1"], ["p", self]],
+      created_at: sentAt,
+    };
+    const withId = { ...rumor, id: getEventHash(rumor as Parameters<typeof getEventHash>[0]) };
+    const sealed = finalizeEvent(
+      { kind: 20013, content: nip44Encrypt(JSON.stringify(withId), convKey), tags: [], created_at: sentAt },
+      authorSk,
+    );
+    const streamed = finalizeEvent(
+      {
+        kind: 1059,
+        content: nip44Encrypt(JSON.stringify(sealed), convKey),
+        tags: [["p", getPublicKey(generateSecretKey())]],
+        created_at: now(),
+      },
+      streamSk,
+    );
+    const config = (joinedAtMs: number): SwPushConfig => ({
+      policy: "generic",
+      self,
+      knownPeers: [],
+      concord: [{
+        pk: streamPk,
+        convKey: bytesToHex(convKey),
+        epoch: "1",
+        communityId: COMMUNITY,
+        channelId: CHANNEL,
+        joinedAtMs,
+      }],
+    });
+
+    expect((await preparePush({ scope: "c2", event: streamed as never }, config((sentAt + 60) * 1000)))?.drop)
+      .toBe(true);
+    expect((await preparePush({ scope: "c2", event: streamed as never }, config((sentAt - 60) * 1000)))?.drop)
+      .not.toBe(true);
+  });
+
   it("drops a muted Concord channel's message that still wakes the worker", async () => {
     // Reporter's scenario: a community (and a channel inside it) muted to
     // `nothing`, plus "All channel messages" off — yet notifications keep

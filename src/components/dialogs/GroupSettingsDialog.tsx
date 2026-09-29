@@ -62,11 +62,14 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
   const handleSave = async () => {
     try {
       await editMetadata.mutateAsync({
-        name: name.trim() || group.id,
-        about: about.trim(),
-        banner: banner.trim(),
-        isPrivate,
-        isClosed,
+        patch: {
+          name: name.trim() || group.id,
+          about: about.trim(),
+          banner: banner.trim(),
+          isPrivate,
+          isClosed,
+        },
+        current: group.event,
       });
       toast({ title: "Channel updated" });
       onOpenChange(false);

@@ -18,6 +18,8 @@ import { useChatModeration } from "@/concord/hooks/useChannel";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
+import { sentDuringMembership } from "@/concord/lib/membershipFloor";
+import { useCommunityEntry } from "@/concord/hooks/useCommunityList";
 
 const NO_GIT: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map();
 
@@ -54,6 +56,7 @@ export function useConcordUnread(
   // Passive by DEFAULT: ambient callers are mounted per joined community, and an
   // active resolve fans out a control sweep for each. The page opts in explicitly.
   const { banned, canMentionEveryone } = useChatModeration(community, active);
+  const joinedAtMs = useCommunityEntry(communityIdHex)?.added_at;
   const {
     readState,
     getLastRead: sharedGetLastRead,
@@ -93,8 +96,8 @@ export function useConcordUnread(
   // cached per channel; a markRead then costs a comparison per channel. A scan
   // that skipped a future-dated message is redone when its time comes.
   const scanDeps = useMemo(
-    () => ({ pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev }),
-    [pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex, memoryRev],
+    () => ({ pubkey, mutedPubkeys, banned, canMentionEveryone, joinedAtMs, communityIdHex, memoryRev }),
+    [pubkey, mutedPubkeys, banned, canMentionEveryone, joinedAtMs, communityIdHex, memoryRev],
   );
   const scanCacheRef = useRef(new Map<string, ChannelScan>());
 
@@ -153,6 +156,8 @@ interface ScanDeps {
   mutedPubkeys: ReadonlySet<string>;
   banned: ReadonlySet<string>;
   canMentionEveryone: ((author: string, channelIdHex: string) => boolean) | undefined;
+  /** When this membership began (ms); nothing earlier is a mention. */
+  joinedAtMs: number | undefined;
   communityIdHex: string | undefined;
   memoryRev: number;
 }
@@ -176,7 +181,7 @@ function scanChannel(
   git: readonly GitTimelineActivity[] | undefined,
   deps: ScanDeps,
 ): ChannelScan {
-  const { pubkey, mutedPubkeys, banned, canMentionEveryone, communityIdHex } = deps;
+  const { pubkey, mutedPubkeys, banned, canMentionEveryone, joinedAtMs, communityIdHex } = deps;
   // A visual flood renders as ONE collapsed row, so its members don't badge.
   // A community PAUSE is deliberately not mirrored: this path has no roster so it
   // couldn't honor the staff exemption, and few messages arrive post-pause.
@@ -217,8 +222,10 @@ function scanChannel(
     if (quarantined.has(r.rumorId)) continue;
     if (remembered?.has(r.rumorId)) continue;
     if (r.createdAt > latest) latest = r.createdAt;
-    const mentionsViewer = r.tags.some(([n, v]) => n === "p" && v === pubkey)
-      || (hasEveryoneMention(r.content) && Boolean(canMentionEveryone?.(r.author, idHex)));
+    const mentionsViewer = sentDuringMembership(r.ms, joinedAtMs) && (
+      r.tags.some(([n, v]) => n === "p" && v === pubkey)
+      || (hasEveryoneMention(r.content) && Boolean(canMentionEveryone?.(r.author, idHex)))
+    );
     if (r.createdAt > latestMention && mentionsViewer) {
       latestMention = r.createdAt;
     }
