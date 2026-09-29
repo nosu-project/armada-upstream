@@ -43,6 +43,7 @@ import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
 import buzz.armada.app.relayfleet.CursorGate;
+import buzz.armada.app.relayfleet.FloodBreaker;
 import buzz.armada.app.relayfleet.GitRelayCover;
 import buzz.armada.app.relayfleet.NetworkSettle;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
@@ -421,6 +422,13 @@ public class NotificationRelayService extends Service {
     // catch-up; every reconnect and re-REQ after that asks only for what
     // changed. In-memory for the same reason as relaySinceByUrl.
     private final Map<String, Long> selfSinceByUrl = new HashMap<>();
+    // Per relay, kept across reconnects so a flood's pause outlives the socket.
+    // Concurrent: sendReqs also runs on the socket thread from onOpen.
+    private final Map<String, FloodBreaker> selfFloodByUrl = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private FloodBreaker selfFlood(String relayUrl) {
+        return selfFloodByUrl.computeIfAbsent(relayUrl, k -> new FloodBreaker());
+    }
     // Self-state event ids already verified and filed, so the same document
     // arriving from every self relay (and on every re-REQ) is dropped before
     // the Schnorr verify and the store write instead of after.
@@ -1535,6 +1543,7 @@ public class NotificationRelayService extends Service {
             // relay position (or any other native last-good state).
             relaySinceByUrl.clear();
             selfSinceByUrl.clear();
+            selfFloodByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
             selfTopicWindow.clear();
@@ -2095,6 +2104,9 @@ public class NotificationRelayService extends Service {
         // the Concord sub — the only case that needs the stream keys' AUTHs.
         String lastChallenge;
         boolean concordWalled = false;
+        // The self-state sub has replayed (EOSE) and is streaming live, so a new
+        // edition counts toward the flood breaker.
+        volatile boolean selfLive = false;
         final Set<String> bridgedChallenges = new HashSet<>();
         // Backoff for relay-initiated CLOSED resubscribes (#49): a relay that
         // drops a standing sub (restart, transient error, rate limit) earns a
@@ -2223,6 +2235,7 @@ public class NotificationRelayService extends Service {
             bridgedChallenges.clear();
             lastChallenge = null;
             concordWalled = false;
+            selfLive = false;
             deliveredAnything = false;
             final Request request;
             try {
@@ -2454,46 +2467,89 @@ public class NotificationRelayService extends Service {
                 // documents accumulate per install, and a full replay per
                 // re-REQ measured ~110 documents a relay, each Schnorr-verified
                 // and written, on every AUTH round and reconnect.
-                if (userPubkey != null && !userPubkey.isEmpty()
-                        && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
-                    JSONArray me = new JSONArray().put(userPubkey);
-
-                    JSONArray selfKinds = new JSONArray();
-                    for (int kind : SelfState.KINDS) selfKinds.put(kind);
-                    JSONObject bare = new JSONObject();
-                    bare.put("kinds", selfKinds);
-                    bare.put("authors", me);
-
-                    // Kind 30078 is shared with every other NIP-78 client on
-                    // this identity, so it is asked for by `d` rather than
-                    // wholesale.
-                    JSONArray dTags = new JSONArray();
-                    for (String d : selfDTags) dTags.put(d);
-                    JSONObject documents = new JSONObject();
-                    documents.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
-                    documents.put("authors", me);
-                    documents.put("#d", dTags);
-
-                    // Installation-sharded private documents are named by topic,
-                    // not by `d` (GIF favorites and the DM conversation index).
-                    JSONArray topics = new JSONArray();
-                    for (String topic : SelfState.TOPICS) topics.put(topic);
-                    JSONObject topicDocuments = new JSONObject();
-                    topicDocuments.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
-                    topicDocuments.put("authors", me);
-                    topicDocuments.put("#t", topics);
-
-                    Long selfSince = selfSinceByUrl.get(relayUrl);
-                    if (selfSince != null) {
-                        bare.put("since", selfSince);
-                        documents.put("since", selfSince);
-                        topicDocuments.put("since", selfSince);
-                    }
-                    sendReq(webSocket, subSelf, bare, documents, topicDocuments);
-                }
+                if (!selfFlood(relayUrl).paused(SystemClock.elapsedRealtime())) sendSelfReq(webSocket, false);
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
             }
+        }
+
+        /**
+         * The self-state REQ. {@code resuming}: re-opened after a flood pause,
+         * so each filter is capped (newest first) instead of replaying every
+         * edition published in between.
+         */
+        void sendSelfReq(WebSocket webSocket, boolean resuming) throws JSONException {
+            if (userPubkey != null && !userPubkey.isEmpty()
+                    && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
+                JSONArray me = new JSONArray().put(userPubkey);
+
+                JSONArray selfKinds = new JSONArray();
+                for (int kind : SelfState.KINDS) selfKinds.put(kind);
+                JSONObject bare = new JSONObject();
+                bare.put("kinds", selfKinds);
+                bare.put("authors", me);
+
+                // Kind 30078 is shared with every other NIP-78 client on
+                // this identity, so it is asked for by `d` rather than
+                // wholesale.
+                JSONArray dTags = new JSONArray();
+                for (String d : selfDTags) dTags.put(d);
+                JSONObject documents = new JSONObject();
+                documents.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                documents.put("authors", me);
+                documents.put("#d", dTags);
+
+                // Installation-sharded private documents are named by topic,
+                // not by `d` (GIF favorites and the DM conversation index).
+                JSONArray topics = new JSONArray();
+                for (String topic : SelfState.TOPICS) topics.put(topic);
+                JSONObject topicDocuments = new JSONObject();
+                topicDocuments.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                topicDocuments.put("authors", me);
+                topicDocuments.put("#t", topics);
+
+                Long selfSince = selfSinceByUrl.get(relayUrl);
+                if (selfSince != null) {
+                    bare.put("since", selfSince);
+                    documents.put("since", selfSince);
+                    topicDocuments.put("since", selfSince);
+                }
+                if (resuming) {
+                    bare.put("limit", FloodBreaker.RESUME_LIMIT);
+                    documents.put("limit", FloodBreaker.RESUME_LIMIT);
+                    topicDocuments.put("limit", FloodBreaker.RESUME_LIMIT);
+                }
+                selfLive = false;
+                sendReq(webSocket, subSelf, bare, documents, topicDocuments);
+            }
+        }
+
+        /** Close the self-state sub for a flood pause; it re-opens when the pause ends. */
+        void pauseSelf(long pauseMs) {
+            if (closed || ws == null || !standingSubs.contains(subSelf)) return;
+            Log.w(TAG, "Self-document flood on " + relayUrl + "; pausing that subscription for "
+                    + (pauseMs / 60_000) + " min");
+            if (ServiceProfiler.ON) ServiceProfiler.count("self.flood pause " + ServiceProfiler.host(relayUrl));
+            try {
+                ws.send(new JSONArray().put("CLOSE").put(subSelf).toString());
+            } catch (Exception ignored) {
+                // A failed CLOSE leaves a stale sub; the next session drops it.
+            }
+            sentFilters.remove(subSelf);
+            standingSubs.remove(subSelf);
+            walledSubs.remove(subSelf);
+            endBackfill(subSelf);
+            selfLive = false;
+            handler.postDelayed(() -> {
+                RelayConnection now = connectionFor(relayUrl);
+                if (now == null || now.ws == null) return;
+                if (ServiceProfiler.ON) ServiceProfiler.count("self.flood resume " + ServiceProfiler.host(relayUrl));
+                try {
+                    now.sendSelfReq(now.ws, true);
+                } catch (JSONException e) {
+                    Log.w(TAG, "Failed to build REQ", e);
+                }
+            }, pauseMs);
         }
 
         /**
@@ -2972,6 +3028,7 @@ public class NotificationRelayService extends Service {
                     // The self-state read is complete on this relay: later
                     // REQs ask only for what changed since (see selfSinceByUrl).
                     if (sub.equals(accepted.subSelf)) {
+                        accepted.selfLive = true;
                         selfSinceByUrl.put(relayUrl, System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC);
                     }
                 }
@@ -4575,6 +4632,13 @@ public class NotificationRelayService extends Service {
         if (SelfState.isSelfKind(kind) && selfSeenIds.contains(id)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state seen");
             return;
+        }
+        if (SelfState.isSelfKind(kind)) {
+            RelayConnection live = connectionFor(relayUrl);
+            if (live != null && live.selfLive) {
+                long pause = selfFlood(relayUrl).onEdition(SystemClock.elapsedRealtime());
+                if (pause > 0) live.pauseSelf(pause);
+            }
         }
         String selfCoordinate = SelfState.isSelfKind(kind) ? selfCoordinateOf(event, kind) : null;
         if (selfCoordinate != null) {
