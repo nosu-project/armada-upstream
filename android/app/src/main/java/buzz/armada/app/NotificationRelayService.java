@@ -639,9 +639,13 @@ public class NotificationRelayService extends Service {
         // Authors currently authorized to issue a literal @everyone in this
         // channel. The WebView derives this from the channel-scoped role fold.
         final Set<String> mentionEveryoneAuthors;
+        // When this membership began (ms, the vault entry's `added_at`; 0 =
+        // unknown). Nothing sent earlier notifies: the viewer wasn't there.
+        final long joinedAtMs;
         ConcordStream(byte[] convKey, String communityId, String channelId, String epoch,
                        String name, String url, CommunityRef community, long timerSecs,
-                       boolean mentionOnly, Set<String> banned, Set<String> mentionEveryoneAuthors) {
+                       boolean mentionOnly, Set<String> banned, Set<String> mentionEveryoneAuthors,
+                       long joinedAtMs) {
             this.convKey = convKey;
             this.communityId = communityId;
             this.channelId = channelId;
@@ -653,6 +657,7 @@ public class NotificationRelayService extends Service {
             this.mentionOnly = mentionOnly;
             this.banned = banned;
             this.mentionEveryoneAuthors = mentionEveryoneAuthors;
+            this.joinedAtMs = joinedAtMs;
         }
     }
 
@@ -1906,7 +1911,8 @@ public class NotificationRelayService extends Service {
                     pkToStream2.put(pk, new ConcordStream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
                             name, url, ref, Math.max(0, sub.optLong("timerSecs", 0)),
-                            mentionOnly, banned, mentionEveryoneAuthors));
+                            mentionOnly, banned, mentionEveryoneAuthors,
+                            Math.max(0, sub.optLong("joinedAtMs", 0))));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -4766,6 +4772,8 @@ public class NotificationRelayService extends Service {
                     && rumorCreatedAt * 1000L > System.currentTimeMillis() + FUTURE_HOLD_MS) {
                 return;
             }
+            // Sent before this membership began: stored, never announced.
+            if (!sentDuringMembership(rumorCreatedAt, st.joinedAtMs)) return;
 
             // Reaction to your own message: mirror the NIP-29 path with a
             // "Reacted 👍 to your message" line, gated on the reactions pref.
@@ -7329,6 +7337,14 @@ public class NotificationRelayService extends Service {
 
     private static final Pattern EVERYONE_MENTION = Pattern.compile(
             "(^|[^\\p{L}\\p{N}_@])@everyone(?![\\p{L}\\p{N}_])");
+
+    /**
+     * Mirrors membershipFloor.ts: a rumor from before the join never notifies.
+     * Compared at whole seconds; {@code joinedAtMs <= 0} is unknown and admits all.
+     */
+    static boolean sentDuringMembership(long createdAtSec, long joinedAtMs) {
+        return joinedAtMs <= 0 || createdAtSec >= joinedAtMs / 1000L;
+    }
 
     static boolean hasEveryoneMention(String content) {
         return content != null && EVERYONE_MENTION.matcher(content).find();

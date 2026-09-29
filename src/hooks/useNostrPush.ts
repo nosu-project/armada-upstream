@@ -406,6 +406,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
             channelId: sub.channelId,
             banned: sub.banned,
             mentionEveryoneAuthors: sub.mentionEveryoneAuthors,
+            joinedAtMs: sub.joinedAtMs,
             mentionOnly: sub.mentionOnly,
             muted: sub.muted,
           }))

@@ -37,6 +37,8 @@ export interface SwConcordStream {
   banned?: string[];
   /** Authors allowed to issue a literal @everyone in this channel. */
   mentionEveryoneAuthors?: string[];
+  /** Membership start (ms); anything sent earlier never notifies. */
+  joinedAtMs?: number;
   /** Drop non-mention messages after decrypting this encrypted stream. */
   mentionOnly?: boolean;
   /**

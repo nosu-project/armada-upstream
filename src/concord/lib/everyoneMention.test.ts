@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   canMentionEveryone,
   everyoneMentionAuthors,
-  everyoneMentionReaches,
   hasEveryoneMention,
   isEveryoneMention,
 } from "@/concord/lib/everyoneMention";
@@ -56,10 +55,4 @@ describe("Concord @everyone", () => {
     expect(everyoneMentionAuthors(roles, OWNER, [OTHER_CHANNEL])).toEqual([OWNER]);
   });
 
-  it("reaches only members who had joined when it was sent", () => {
-    expect(everyoneMentionReaches(1_000, 2_000)).toBe(false);
-    expect(everyoneMentionReaches(2_000, 2_000)).toBe(true);
-    expect(everyoneMentionReaches(3_000, 2_000)).toBe(true);
-    expect(everyoneMentionReaches(1_000, undefined)).toBe(true);
-  });
 });

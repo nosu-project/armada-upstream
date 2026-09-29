@@ -17,7 +17,8 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
-import { everyoneMentionReaches, hasEveryoneMention } from "@/concord/lib/everyoneMention";
+import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
+import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { useCommunityEntry } from "@/concord/hooks/useCommunityList";
 
 const NO_GIT: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map();
@@ -155,7 +156,7 @@ interface ScanDeps {
   mutedPubkeys: ReadonlySet<string>;
   banned: ReadonlySet<string>;
   canMentionEveryone: ((author: string, channelIdHex: string) => boolean) | undefined;
-  /** When this membership began (ms); earlier @everyone never pings. */
+  /** When this membership began (ms); nothing earlier is a mention. */
   joinedAtMs: number | undefined;
   communityIdHex: string | undefined;
   memoryRev: number;
@@ -221,10 +222,10 @@ function scanChannel(
     if (quarantined.has(r.rumorId)) continue;
     if (remembered?.has(r.rumorId)) continue;
     if (r.createdAt > latest) latest = r.createdAt;
-    const mentionsViewer = r.tags.some(([n, v]) => n === "p" && v === pubkey)
-      || (everyoneMentionReaches(r.ms, joinedAtMs)
-        && hasEveryoneMention(r.content)
-        && Boolean(canMentionEveryone?.(r.author, idHex)));
+    const mentionsViewer = sentDuringMembership(r.ms, joinedAtMs) && (
+      r.tags.some(([n, v]) => n === "p" && v === pubkey)
+      || (hasEveryoneMention(r.content) && Boolean(canMentionEveryone?.(r.author, idHex)))
+    );
     if (r.createdAt > latestMention && mentionsViewer) {
       latestMention = r.createdAt;
     }

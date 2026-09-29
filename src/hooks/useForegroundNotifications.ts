@@ -15,7 +15,9 @@ import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/lib/authorCache";
 import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettings";
+import { useCommunityList } from "@/concord/hooks/useCommunityList";
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
 import { isRoomActive } from "@/lib/activeRooms";
 import { isDesktop, requestDesktopAttention } from "@/lib/desktop";
@@ -298,6 +300,12 @@ export function useForegroundNotifications(): void {
     return m;
   }, [groupList, wireGroups]);
 
+  const { data: communityList } = useCommunityList();
+  const joinedAtByCommunity = useMemo(
+    () => new Map((communityList?.list.entries ?? []).map((e) => [e.community_id, e.added_at])),
+    [communityList],
+  );
+
   // Refs so the stable sink reads current values; re-registering drops the wire's reference.
   const ctx = useRef({
     readState,
@@ -313,6 +321,7 @@ export function useForegroundNotifications(): void {
     dmRequestPolicy: config.pushPrefs.dmRequests,
     mediaPolicy,
     blossomServers,
+    joinedAtByCommunity,
   });
   ctx.current = {
     readState,
@@ -328,6 +337,7 @@ export function useForegroundNotifications(): void {
     dmRequestPolicy: config.pushPrefs.dmRequests,
     mediaPolicy,
     blossomServers,
+    joinedAtByCommunity,
   };
 
   // Session floor: a fresh login backfilling history must stay silent.
@@ -686,6 +696,11 @@ export function useForegroundNotifications(): void {
           // Parsed (not split): the route may carry `/m/<id>`; git candidates carry `?ticket=`.
           const parsed = parseChatRoute(path.split("?")[0]);
           communityId = parsed?.kind === "concord" ? parsed.communityId : "";
+          // Nothing from before this membership began: the viewer wasn't there.
+          if (communityId && !sentDuringMembership(cand.createdAt * 1000, c.joinedAtByCommunity.get(communityId))) {
+            suppress(roomKey);
+            continue;
+          }
           level =
             communityId && cand.channelIdHex
               ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)

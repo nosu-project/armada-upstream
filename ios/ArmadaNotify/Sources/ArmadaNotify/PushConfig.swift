@@ -30,6 +30,9 @@ struct ConcordStream {
     /// is kept in the config with its key so `prepareConcord` OPENS the wrap and
     /// drops it, rather than presenting the gateway's static fallback text.
     let muted: Bool
+    /// When this membership began (ms, the vault entry's `added_at`; nil =
+    /// unknown). Nothing sent earlier is presented: the viewer wasn't there.
+    let joinedAtMs: Int?
 
     init(
         pubkey: String,
@@ -40,7 +43,8 @@ struct ConcordStream {
         banned: Set<String>,
         mentionEveryoneAuthors: Set<String> = [],
         mentionOnly: Bool = false,
-        muted: Bool = false
+        muted: Bool = false,
+        joinedAtMs: Int? = nil
     ) {
         self.pubkey = pubkey
         self.conversationKey = conversationKey
@@ -51,6 +55,7 @@ struct ConcordStream {
         self.mentionEveryoneAuthors = mentionEveryoneAuthors
         self.mentionOnly = mentionOnly
         self.muted = muted
+        self.joinedAtMs = joinedAtMs
     }
 }
 
@@ -223,7 +228,8 @@ struct PushConfig {
                 banned: Set((entry["banned"] as? [String]) ?? []),
                 mentionEveryoneAuthors: Set((entry["mentionEveryoneAuthors"] as? [String]) ?? []),
                 mentionOnly: (entry["mentionOnly"] as? Bool) ?? false,
-                muted: (entry["muted"] as? Bool) ?? false
+                muted: (entry["muted"] as? Bool) ?? false,
+                joinedAtMs: (entry["joinedAtMs"] as? NSNumber).map { Int($0.doubleValue) }
             ))
         }
 

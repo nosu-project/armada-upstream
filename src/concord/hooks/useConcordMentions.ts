@@ -18,10 +18,10 @@ import { concordMentionReadKey, useReadState } from "@/hooks/useReadState";
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import {
   everyoneMentionAuthors,
-  everyoneMentionReaches,
   isEveryoneMention,
 } from "@/concord/lib/everyoneMention";
 import { useCommunityEntry } from "@/concord/hooks/useCommunityList";
+import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { emptyRoles } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 
@@ -90,9 +90,9 @@ export function useConcordMentions(community: Community | undefined, channels: C
       return rumors
         .filter((r) => {
           if (r.author === pubkey) return false;
+          if (!sentDuringMembership(r.ms, joinedAtMs)) return false;
           if (r.tags.some(([name, value]) => name === "p" && value === pubkey)) return true;
-          return everyoneMentionReaches(r.ms, joinedAtMs)
-            && isEveryoneMention(r.content, roles, ownerHex, r.author, r.channelIdHex);
+          return isEveryoneMention(r.content, roles, ownerHex, r.author, r.channelIdHex);
         })
         .sort((a, b) => b.ms - a.ms)
         .slice(0, MENTION_LIMIT)

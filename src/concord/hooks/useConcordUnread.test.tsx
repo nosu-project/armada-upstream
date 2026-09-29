@@ -115,6 +115,12 @@ describe("useConcordUnread — @everyone", () => {
     expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
   });
 
+  it("does not ping for a direct mention sent before this membership began", () => {
+    h.joinedAtMs = 300_000;
+    h.rumors = [row("B", X, KIND_MESSAGE, 200, [["p", ME]], "hi")];
+    expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
+  });
+
   it("still pings for a mass mention sent after joining", () => {
     h.everyoneAuthors = new Set([X]);
     h.joinedAtMs = 150_000;
