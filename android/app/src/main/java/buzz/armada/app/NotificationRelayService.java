@@ -447,6 +447,8 @@ public class NotificationRelayService extends Service {
     static final long RELAY_SINCE_OVERLAP_SEC = 30L;
     /** Relays each Git repository is watched on beyond those held anyway. */
     static final int GIT_RELAYS_PER_REPOSITORY = 2;
+    /** CORD-02 §8 community-list fragment (addressable, `d` = index). */
+    static final int KIND_COMMUNITY_LIST_FRAG = 33302;
     // Self-state documents are written by OTHER devices, whose clocks we don't
     // control; a new version stamped up to this far behind our last EOSE is
     // still asked for.
@@ -4497,6 +4499,16 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * Self documents that wait out {@link SelfTopicWindow} so only the newest
+     * version is verified and filed: the installation-sharded topic documents,
+     * and the Concord community-list fragments (38 KB each), which a client
+     * stuck republishing sent at ~85 editions a minute.
+     */
+    static boolean coalescesSelfDoc(JSONObject event, int kind) {
+        return kind == KIND_COMMUNITY_LIST_FRAG || isSelfTopicDoc(event, kind);
+    }
+
     /** A kind-30078 document carrying one of {@link SelfState#TOPICS}. */
     static boolean isSelfTopicDoc(JSONObject event, int kind) {
         if (kind != SelfState.KIND_APP_SPECIFIC) return false;
@@ -4573,11 +4585,11 @@ public class NotificationRelayService extends Service {
                 if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state superseded");
                 return;
             }
-            // Installation-sharded topic documents wait out a window, and only
+            // Topic documents and community-list fragments wait out a window, and only
             // the newest version of each is verified and filed.
             if (!windowClosed && userPubkey != null
                     && userPubkey.equals(event.optString("pubkey"))
-                    && isSelfTopicDoc(event, kind)) {
+                    && coalescesSelfDoc(event, kind)) {
                 stageSelfTopicDoc(event, relayUrl, selfCoordinate);
                 return;
             }
