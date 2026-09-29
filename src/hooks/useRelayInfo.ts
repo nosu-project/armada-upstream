@@ -55,7 +55,57 @@ function relayToHttpUrl(relayUrl: string): string | null {
 export const relayInfoCache = new KvPrefixCache<RelayInfoDocument>({ prefix: 'relay-info:' });
 
 function readCachedInfo(relayUrl: string | undefined): RelayInfoDocument | undefined {
-  return relayUrl ? relayInfoCache.get(relayUrl) : undefined;
+  const cached = relayUrl ? relayInfoCache.get(relayUrl) : undefined;
+  // Docs cached before sanitizing existed may still carry malformed fields.
+  return cached ? sanitizeRelayInfo(cached) : undefined;
+}
+
+const STRING_FIELDS = [
+  'name', 'description', 'icon', 'banner', 'pubkey', 'self', 'contact', 'software', 'version',
+  'pairing_relay_url',
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * NIP-11 is operator-written JSON; keep only fields of the declared type so consumers can
+ * trust `RelayInfoDocument` (a string `supported_nips` would otherwise crash `.filter`).
+ */
+export function sanitizeRelayInfo(payload: unknown): RelayInfoDocument {
+  if (!isRecord(payload)) return {};
+  const info: RelayInfoDocument = {};
+  for (const field of STRING_FIELDS) {
+    const value = payload[field];
+    if (typeof value === 'string') info[field] = value;
+  }
+  if (Array.isArray(payload.supported_nips)) {
+    info.supported_nips = payload.supported_nips.filter((n): n is number => typeof n === 'number');
+  }
+  if (Array.isArray(payload.supported_extensions)) {
+    info.supported_extensions = payload.supported_extensions.filter((e): e is string => typeof e === 'string');
+  }
+  if (typeof payload.auth_required === 'boolean') info.auth_required = payload.auth_required;
+  if (typeof payload.payment_required === 'boolean') info.payment_required = payload.payment_required;
+  if (isRecord(payload.limitation)) {
+    const { auth_required, payment_required, restricted_writes } = payload.limitation;
+    info.limitation = {
+      ...(typeof auth_required === 'boolean' && { auth_required }),
+      ...(typeof payment_required === 'boolean' && { payment_required }),
+      ...(typeof restricted_writes === 'boolean' && { restricted_writes }),
+    };
+  }
+  if (isRecord(payload.fees)) {
+    const { admission, subscription } = payload.fees;
+    const isFee = (f: unknown): f is { amount: number; unit: string; period?: number } =>
+      isRecord(f) && typeof f.amount === 'number' && typeof f.unit === 'string';
+    info.fees = {
+      ...(Array.isArray(admission) && { admission: admission.filter(isFee) }),
+      ...(Array.isArray(subscription) && { subscription: subscription.filter(isFee) }),
+    };
+  }
+  return info;
 }
 
 function writeCachedInfo(relayUrl: string, info: RelayInfoDocument): void {
@@ -90,7 +140,7 @@ export async function fetchRelayInfoDoc(
     throw new Error('Invalid NIP-11 response');
   }
 
-  const info = payload as RelayInfoDocument;
+  const info = sanitizeRelayInfo(payload);
   writeCachedInfo(relayUrl, info);
   return info;
 }
