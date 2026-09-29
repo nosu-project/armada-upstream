@@ -65,4 +65,13 @@ public class NotificationRelayServiceDmRouteTest {
         // `,` is a legal sub-delim in a path segment, so it survives as itself.
         assertFalse(route.contains("%2C"));
     }
+
+    @Test
+    public void aShortGapStaysLiveOnlyAndALongOneReplaysFromTheGap() {
+        long drop = 1_790_700_000_000L;
+        org.junit.Assert.assertEquals(0, NotificationRelayService.dm17CatchUpFloorSec(null, drop));
+        org.junit.Assert.assertEquals(0, NotificationRelayService.dm17CatchUpFloorSec(drop, drop + 30_000));
+        org.junit.Assert.assertEquals(drop / 1000 - 60,
+                NotificationRelayService.dm17CatchUpFloorSec(drop, drop + 10 * 60_000));
+    }
 }

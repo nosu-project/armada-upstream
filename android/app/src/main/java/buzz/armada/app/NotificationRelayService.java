@@ -424,6 +424,8 @@ public class NotificationRelayService extends Service {
     private final Map<String, Long> selfSinceByUrl = new HashMap<>();
     // Per relay, kept across reconnects so a flood's pause outlives the socket.
     // Concurrent: sendReqs also runs on the socket thread from onOpen.
+    // When each DM inbox's live NIP-17 sub last dropped (wall ms; handler thread).
+    private final Map<String, Long> dm17LiveUntilByUrl = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, FloodBreaker> selfFloodByUrl = new java.util.concurrent.ConcurrentHashMap<>();
 
     private FloodBreaker selfFlood(String relayUrl) {
@@ -498,6 +500,10 @@ public class NotificationRelayService extends Service {
     // notifiedIds dedupes within the service lifetime and the shared-DB
     // `storedBefore` check suppresses wraps either side already stored.
     private static final long DM17_SINCE_REWIND_SEC = 2 * 24 * 3600 + 3600;
+    /** A gap shorter than this is not replayed: reconnects are frequent and a page costs ~300 KB. */
+    static final long DM17_CATCHUP_MIN_GAP_MS = 2 * 60_000L;
+    static final int DM17_CATCHUP_LIMIT = 200;
+    private static final long DM17_CATCHUP_SLACK_SEC = 60;
 
     // roomKey → the accumulating per-room notification (Signal/Discord style).
     // The roomKey is a stable identifier for the conversation (NIP-29 groupId,
@@ -2107,6 +2113,11 @@ public class NotificationRelayService extends Service {
         // The self-state sub has replayed (EOSE) and is streaming live, so a new
         // edition counts toward the flood breaker.
         volatile boolean selfLive = false;
+        // NIP-17: the sub reached EOSE (live), and whether this session's REQ
+        // is a catch-up replay whose rumors notify only from the gap onward.
+        volatile boolean dm17Live = false;
+        volatile boolean dm17CatchingUp = false;
+        volatile long dm17NotifyFloorSec = 0;
         final Set<String> bridgedChallenges = new HashSet<>();
         // Backoff for relay-initiated CLOSED resubscribes (#49): a relay that
         // drops a standing sub (restart, transient error, rate limit) earns a
@@ -2236,6 +2247,8 @@ public class NotificationRelayService extends Service {
             lastChallenge = null;
             concordWalled = false;
             selfLive = false;
+            dm17Live = false;
+            dm17CatchingUp = false;
             deliveredAnything = false;
             final Request request;
             try {
@@ -2401,7 +2414,15 @@ public class NotificationRelayService extends Service {
                     f6.put("kinds", new JSONArray().put(1059));
                     f6.put("#p", new JSONArray().put(userPubkey));
                     f6.put("since", Math.max(0, requestSince - DM17_SINCE_REWIND_SEC));
-                    f6.put("limit", 0);
+                    // After a real gap, replay a bounded page instead: wraps sent
+                    // while the socket was down would otherwise never notify.
+                    // Only rumors dated after the gap notify (see handleDm17Wrap);
+                    // the store's dedupe absorbs the rest.
+                    long floor = dm17CatchUpFloorSec(
+                            dm17LiveUntilByUrl.get(relayUrl), System.currentTimeMillis());
+                    dm17CatchingUp = floor > 0;
+                    dm17NotifyFloorSec = floor;
+                    f6.put("limit", floor > 0 ? DM17_CATCHUP_LIMIT : 0);
                     sendReq(webSocket, subDm17, f6);
 
                     // Ephemeral gift wraps (kind 21059) addressed to me: the
@@ -2715,6 +2736,8 @@ public class NotificationRelayService extends Service {
          */
         void endSession(Outcome failureOutcome) {
             if (closed) return;
+            if (dm17Live) dm17LiveUntilByUrl.put(relayUrl, System.currentTimeMillis());
+            dm17Live = false;
             boolean wasOpen = socketOpen;
             socketOpen = false;
             ws = null;
@@ -3025,6 +3048,11 @@ public class NotificationRelayService extends Service {
                 if (accepted != null) {
                     accepted.walledSubs.remove(sub);
                     accepted.endBackfill(sub);
+                    if (sub.equals(accepted.subDm17)) {
+                        accepted.dm17Live = true;
+                        accepted.dm17CatchingUp = false;
+                        dm17LiveUntilByUrl.remove(relayUrl);
+                    }
                     // The self-state read is complete on this relay: later
                     // REQs ask only for what changed since (see selfSinceByUrl).
                     if (sub.equals(accepted.subSelf)) {
@@ -3507,6 +3535,15 @@ public class NotificationRelayService extends Service {
         }
     }
 
+    /**
+     * The NIP-17 notify floor for a reconnect: the second the live sub dropped
+     * (less slack) when the gap was long enough to replay, else 0 (live-only).
+     */
+    static long dm17CatchUpFloorSec(Long liveUntilMs, long nowMs) {
+        if (liveUntilMs == null || nowMs - liveUntilMs <= DM17_CATCHUP_MIN_GAP_MS) return 0;
+        return Math.max(1, liveUntilMs / 1000 - DM17_CATCHUP_SLACK_SEC);
+    }
+
     /** Pure cursor transition for JVM regression coverage. */
     static long advanceInclusiveSince(
             long currentSinceSec, long eventCreatedAtSec, long nowSec) {
@@ -3791,6 +3828,8 @@ public class NotificationRelayService extends Service {
      * `since` window on reconnect.
      */
     private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl, boolean storedBefore) {
+        RelayConnection via = connectionFor(relayUrl);
+        final long notifyFloorSec = via != null && via.dm17CatchingUp ? via.dm17NotifyFloorSec : 0;
         // Only wraps addressed to me are DMs — the Concord authors-scoped
         // subscription also delivers kind 1059, with no `p` tag at us.
         if (!isMentioned(wrap, userPubkey)) return;
@@ -3806,7 +3845,7 @@ public class NotificationRelayService extends Service {
         if (signer == null) {
             // An opaque wrap cannot be attributed to an exact override. Only
             // the global fallback may authorize an unattributed lock-screen ping.
-            if (prefBool("directMessages", true)) notifyOpaqueDm17();
+            if (notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
             return;
         }
         // Open the wrap with the user's signer (async — Amber/bunker are RPC).
@@ -3818,7 +3857,7 @@ public class NotificationRelayService extends Service {
                 // Crypto says no → not a readable DM (foreign protocol,
                 // garbage): silent. Signer unreachable → still tell the user
                 // SOMETHING arrived.
-                if (unavailable && prefBool("directMessages", true)) notifyOpaqueDm17();
+                if (unavailable && notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
                 return;
             }
             try {
@@ -3835,7 +3874,7 @@ public class NotificationRelayService extends Service {
                 if (peer.equals(userPubkey)) return; // our own sent copy
                 signer.decrypt44(peer, seal.optString("content", ""), (rumorJson, unavailable2) -> {
                     if (rumorJson == null) {
-                        if (unavailable2 && prefBool("directMessages", true)) notifyOpaqueDm17();
+                        if (unavailable2 && notifyFloorSec == 0 && prefBool("directMessages", true)) notifyOpaqueDm17();
                         return;
                     }
                     try {
@@ -3887,6 +3926,8 @@ public class NotificationRelayService extends Service {
                         // toggle in both directions. `mentions` equals `all` for
                         // a DM; every message is directed at the recipient.
                         if (!dmNotificationEnabled(room)) return;
+                        // A catch-up replay notifies only what the gap hid.
+                        if (notifyFloorSec > 0 && rumor.optLong("created_at", 0) < notifyFloorSec) return;
 
                         // Unknown conversation — neither this exact participant
                         // set nor every one of its peers is established. A
