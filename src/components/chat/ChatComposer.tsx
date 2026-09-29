@@ -1338,7 +1338,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
     }
 
-    for (const embed of visibleEmbeds) {
+    // NIP-18 embed `q`s only on public planes: a sealed rumor is never indexed, and
+    // there `q` is the NIP-C7 reply marker.
+    for (const embed of replyMarker === "nipc7" ? [] : visibleEmbeds) {
       if (embed.type === "naddr" && embed.addr) {
         tags.push(["q", `${embed.addr.kind}:${embed.addr.pubkey}:${embed.addr.identifier}`]);
       } else if (embed.eventId) {

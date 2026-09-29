@@ -7,6 +7,7 @@
  */
 
 import { perfCount } from "@/lib/perf";
+import { inlineReplyQuoteId } from "@/lib/quoteReply";
 import { verifyEventsOnce } from "@/lib/verifyCache";
 import { ecVerifyBatch } from "@/lib/verifyPool";
 
@@ -277,8 +278,8 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
  * The rumor a kind-9 message inline-replies to via its NIP-C7 `q` tag (not the
  * thread root; see `replyTargetOf`). Only kind-9 has a timeline-level parent.
  */
-function inlineReplyParentOf(ev: { kind: number; tags: string[][] }): string | undefined {
-  return ev.kind === KIND_MESSAGE ? ev.tags.find((t) => t[0] === "q")?.[1] : undefined;
+function inlineReplyParentOf(ev: { kind: number; content: string; tags: string[][] }): string | undefined {
+  return ev.kind === KIND_MESSAGE ? inlineReplyQuoteId(ev) : undefined;
 }
 
 /**
