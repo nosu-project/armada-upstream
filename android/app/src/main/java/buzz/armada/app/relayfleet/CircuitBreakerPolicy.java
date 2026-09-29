@@ -40,11 +40,33 @@ public final class CircuitBreakerPolicy implements RelayFleetPolicy {
     static final long MAX_BACKOFF_MS = 5 * 60 * 1_000L;
     static final long STABLE_CONNECTION_MS = 60_000L;
     static final int PERMANENT_FAILURE_THRESHOLD = 3;
+    /**
+     * Minimum spacing between connectivity-driven re-arms of a quarantined
+     * relay. A flapping network fires an edge every few seconds, and each
+     * re-arm is another round of doomed handshakes; an edge inside the spacing
+     * defers the re-arm to its end rather than dropping it, so the network
+     * settling still earns the relay a fresh look within the spacing.
+     */
+    public static final long CONNECTIVITY_REARM_SPACING_MS = 2 * 60 * 1_000L;
 
     static final class State {
         long backoffMs = INITIAL_BACKOFF_MS;
         int consecutivePermanent = 0;
         boolean quarantined = false;
+        /** Earliest time a connectivity edge may re-arm this relay again. */
+        long nextRearmAt = 0;
+        boolean rearmPending = false;
+    }
+
+    private final long rearmSpacingMs;
+
+    public CircuitBreakerPolicy() {
+        this(CONNECTIVITY_REARM_SPACING_MS);
+    }
+
+    /** {@code rearmSpacingMs} 0 re-arms on every connectivity edge. */
+    public CircuitBreakerPolicy(long rearmSpacingMs) {
+        this.rearmSpacingMs = rearmSpacingMs;
     }
 
     private static boolean isPermanent(Outcome outcome) {
@@ -60,7 +82,17 @@ public final class CircuitBreakerPolicy implements RelayFleetPolicy {
     @Override
     public boolean shouldConnect(Object state, RelayInfo relay, long nowMs) {
         if (!relay.deliverable()) return false;
-        return !((State) state).quarantined;
+        State st = (State) state;
+        if (st.quarantined && st.rearmPending && nowMs >= st.nextRearmAt) rearm(st, nowMs);
+        return !st.quarantined;
+    }
+
+    private void rearm(State st, long nowMs) {
+        st.quarantined = false;
+        st.rearmPending = false;
+        st.backoffMs = INITIAL_BACKOFF_MS;
+        st.consecutivePermanent = 0;
+        st.nextRearmAt = nowMs + rearmSpacingMs;
     }
 
     @Override
@@ -91,13 +123,17 @@ public final class CircuitBreakerPolicy implements RelayFleetPolicy {
     }
 
     @Override
-    public void onEdge(Object state, RelayInfo relay, FleetEdge edge, long nowMs) {
+    public long onEdge(Object state, RelayInfo relay, FleetEdge edge, long nowMs) {
         // Any edge that could change the outcome re-arms: a quarantined relay
         // is worth one fresh look when the network returns, the relay set
-        // changes, or the app comes forward (which can wake a signer).
+        // changes, or the app comes forward (which can wake a signer). Only
+        // connectivity is spaced; the other edges are rare and user-driven.
         State st = (State) state;
-        st.quarantined = false;
-        st.backoffMs = INITIAL_BACKOFF_MS;
-        st.consecutivePermanent = 0;
+        if (st.quarantined && edge == FleetEdge.CONNECTIVITY_REGAINED && nowMs < st.nextRearmAt) {
+            st.rearmPending = true;
+            return st.nextRearmAt - nowMs;
+        }
+        rearm(st, nowMs);
+        return 0;
     }
 }

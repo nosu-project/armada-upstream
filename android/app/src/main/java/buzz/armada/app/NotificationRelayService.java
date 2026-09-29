@@ -41,6 +41,7 @@ import androidx.core.graphics.drawable.IconCompat;
 import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
+import buzz.armada.app.relayfleet.CursorGate;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetDecision;
@@ -1998,6 +1999,9 @@ public class NotificationRelayService extends Service {
         final Set<String> standingSubs = java.util.concurrent.ConcurrentHashMap.newKeySet();
         final Set<String> walledSubs = java.util.concurrent.ConcurrentHashMap.newKeySet();
         volatile boolean deliveredAnything = false;
+        // Holds this relay's `since` cursor while the session's REQs replay
+        // (newest first), so a drop mid-replay can't skip the older half.
+        final CursorGate cursorGate = new CursorGate();
 
         // Single pending reconnect, cancellable — prevents a queued reconnect
         // and the network callback from racing to open duplicate sockets.
@@ -2090,6 +2094,7 @@ public class NotificationRelayService extends Service {
                     sentFilters.remove(sub);
                     standingSubs.remove(sub);
                     walledSubs.remove(sub);
+                    endBackfill(sub);
                     try {
                         ws.send(new JSONArray().put("CLOSE").put(sub).toString());
                     } catch (Exception ignored) {
@@ -2115,6 +2120,12 @@ public class NotificationRelayService extends Service {
                 walledOnly = false;
             }
         };
+
+        /** A standing sub stopped replaying (EOSE, CLOSED, or closed by us). */
+        void endBackfill(String sub) {
+            long commit = cursorGate.onBackfillEnded(sub);
+            if (commit >= 0) commitRelaySince(relayUrl, commit);
+        }
 
         /** Re-send REQs shortly, collapsing a burst of AUTH OKs into one round. */
         void scheduleAuthResend() {
@@ -2142,6 +2153,7 @@ public class NotificationRelayService extends Service {
             // first — leaked sockets keep pinging and re-failing forever.
             if (closed || ws != null || !isNetworkAvailable()) return;
             if (!fleetPolicy.shouldConnect(fleetState, fleetInfo, System.currentTimeMillis())) return;
+            quarantined = false;
             connectAttemptAt = System.currentTimeMillis();
             if (ServiceProfiler.ON) {
                 ServiceProfiler.count("socket.connect");
@@ -2150,6 +2162,7 @@ public class NotificationRelayService extends Service {
             standingSubs.clear();
             walledSubs.clear();
             sentFilters.clear();
+            cursorGate.reset();
             answeredAuth.clear();
             bridgedChallenges.clear();
             deliveredAnything = false;
@@ -2248,6 +2261,7 @@ public class NotificationRelayService extends Service {
             }
             sentFilters.put(subId, signature);
             standingSubs.add(subId);
+            cursorGate.onReqSent(subId);
             if (ServiceProfiler.ON) ServiceProfiler.count("frame.out REQ " + subId.substring(0, Math.min(2, subId.length())));
             webSocket.send(reqMessage(subId, filters));
         }
@@ -2651,15 +2665,22 @@ public class NotificationRelayService extends Service {
          * An external change that could alter the outcome: connectivity
          * returned, or the app came forward (which can wake a signer). The
          * policy clears any quarantine and backoff, and an idle relay
-         * reconnects now. A config change needs no edge — it rebuilds every
-         * connection with fresh policy state.
+         * reconnects now — or, for a quarantined relay on a flapping network,
+         * once the policy's re-arm spacing ends. A config change needs no
+         * edge — it rebuilds every connection with fresh policy state.
          */
         void onFleetEdge(FleetEdge edge) {
             if (closed) return;
-            fleetPolicy.onEdge(fleetState, fleetInfo, edge, System.currentTimeMillis());
-            quarantined = false;
+            long delayMs = fleetPolicy.onEdge(fleetState, fleetInfo, edge, System.currentTimeMillis());
+            if (ws != null) return;
             handler.removeCallbacks(reconnectRunnable);
-            if (ws == null) connect();
+            retryPending = false;
+            if (delayMs <= 0) {
+                connect();
+            } else {
+                handler.postDelayed(reconnectRunnable, delayMs);
+                retryPending = true;
+            }
         }
     }
 
@@ -2824,6 +2845,7 @@ public class NotificationRelayService extends Service {
                 RelayConnection accepted = connectionFor(relayUrl);
                 if (accepted != null) {
                     accepted.walledSubs.remove(sub);
+                    accepted.endBackfill(sub);
                     // The self-state read is complete on this relay: later
                     // REQs ask only for what changed since (see selfSinceByUrl).
                     if (sub.equals(accepted.subSelf)) {
@@ -2868,12 +2890,16 @@ public class NotificationRelayService extends Service {
                     // that ends with every standing sub still walled is
                     // classified AUTH_UNSATISFIABLE in endSession.
                     RelayConnection walled = connectionFor(relayUrl);
-                    if (walled != null) walled.walledSubs.add(sub);
+                    if (walled != null) {
+                        walled.walledSubs.add(sub);
+                        walled.endBackfill(sub);
+                    }
                     return;
                 }
                 recordHealthError("subscription_closed");
                 for (RelayConnection rc : connections) {
                     if (rc.relayUrl.equals(relayUrl)) {
+                        rc.endBackfill(sub);
                         rc.scheduleResubscribe();
                         break;
                     }
@@ -3274,6 +3300,12 @@ public class NotificationRelayService extends Service {
      * later same-second and out-of-order delivery; notifiedIds absorbs overlap.
      */
     private void advanceRelaySince(String relayUrl, long eventCreatedAtSec) {
+        RelayConnection rc = connectionFor(relayUrl);
+        long commit = rc != null ? rc.cursorGate.onEvent(eventCreatedAtSec) : eventCreatedAtSec;
+        if (commit >= 0) commitRelaySince(relayUrl, commit);
+    }
+
+    private void commitRelaySince(String relayUrl, long eventCreatedAtSec) {
         long nowSec = System.currentTimeMillis() / 1000;
         Long saved = relaySinceByUrl.get(relayUrl);
         long current = saved != null ? saved : nowSec;
@@ -4439,6 +4471,7 @@ public class NotificationRelayService extends Service {
             // from the store rather than refetching it; the service handles the
             // notification itself, so there is nothing for wire ingest to route.
             ServiceStore.cache(this, event);
+            advanceRelaySince(relayUrl, event.optLong("created_at", 0));
             handleGitActivity(event, relayUrl, id, kind);
             return;
         }
@@ -4688,6 +4721,12 @@ public class NotificationRelayService extends Service {
             return;
         }
 
+        // Every verified event the relay delivered moves its cursor, whether or
+        // not it notifies: otherwise a reconnect replays a busy room's silent
+        // traffic back to the last notified message, verified and stored again.
+        long ts = event.optLong("created_at", 0);
+        advanceRelaySince(relayUrl, ts);
+
         String author = event.optString("pubkey");
         if (author.equals(userPubkey)) {
             return;
@@ -4706,12 +4745,8 @@ public class NotificationRelayService extends Service {
             return;
         }
 
-        // Claim the event now so the async profile fetch can't double-fire, and
-        // advance this relay's inclusive cursor so reconnects overlap the last
-        // second instead of dropping another event with the same timestamp.
+        // Claim the event now so the async profile fetch can't double-fire.
         rememberNotificationId(id);
-        long ts = event.optLong("created_at", 0);
-        advanceRelaySince(relayUrl, ts);
 
         final boolean mention = mentionsMe;
         final long fTs = (ts > 0 ? ts * 1000L : System.currentTimeMillis());

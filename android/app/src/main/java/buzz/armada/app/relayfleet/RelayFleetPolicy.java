@@ -87,6 +87,12 @@ public interface RelayFleetPolicy {
     /** A connection attempt just ended; decide what happens next for it. */
     FleetDecision onConnectionEnded(Object state, RelayInfo relay, ConnectionResult result, long nowMs);
 
-    /** An external edge fired; the policy may clear a quarantine / reset backoff. */
-    void onEdge(Object state, RelayInfo relay, FleetEdge edge, long nowMs);
+    /**
+     * An external edge fired; the policy may clear a quarantine / reset backoff.
+     *
+     * @return how long from now before an idle relay may attempt again: 0 to
+     *         reconnect at once, more to defer the re-arm (the transport
+     *         schedules one attempt then, which {@link #shouldConnect} admits)
+     */
+    long onEdge(Object state, RelayInfo relay, FleetEdge edge, long nowMs);
 }

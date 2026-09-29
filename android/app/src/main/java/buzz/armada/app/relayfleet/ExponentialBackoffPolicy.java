@@ -52,10 +52,11 @@ public final class ExponentialBackoffPolicy implements RelayFleetPolicy {
     }
 
     @Override
-    public void onEdge(Object state, RelayInfo relay, FleetEdge edge, long nowMs) {
+    public long onEdge(Object state, RelayInfo relay, FleetEdge edge, long nowMs) {
         // "Network-aware: reconnects immediately when connectivity returns."
         if (edge == FleetEdge.CONNECTIVITY_REGAINED) {
             ((State) state).backoffMs = INITIAL_BACKOFF_MS;
         }
+        return 0;
     }
 }

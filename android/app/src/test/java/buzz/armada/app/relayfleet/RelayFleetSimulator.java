@@ -146,6 +146,7 @@ public final class RelayFleetSimulator {
                     if (ev.gen() != gen[i]) continue; // cancelled by a later edge
                     RelayInfo info = scenarios.get(i).relay();
                     if (!policy.shouldConnect(state[i], info, ev.timeMs())) continue;
+                    quarantined[i] = false;
                     attempts.get(i).add(ev.timeMs());
                     RelayScenario.Attempt a = scenarios.get(i).attempt(ev.timeMs());
                     if (a.endsAfterMs() >= RelayScenario.NEVER) {
@@ -180,16 +181,16 @@ public final class RelayFleetSimulator {
                 case EDGE -> {
                     for (int i = 0; i < n; i++) {
                         RelayInfo info = scenarios.get(i).relay();
-                        policy.onEdge(state[i], info, ev.edge(), ev.timeMs());
-                        // Reconnect an idle relay immediately (as the service
-                        // does on connectivity return). A relay currently
-                        // holding a socket is left alone. Bumping the generation
-                        // cancels any pending backoff attempt so it comes
-                        // forward to now rather than firing twice.
-                        if (!socketOpen[i] && policy.shouldConnect(state[i], info, ev.timeMs())) {
-                            quarantined[i] = false;
+                        long delay = policy.onEdge(state[i], info, ev.edge(), ev.timeMs());
+                        // Reconnect an idle relay when the policy allows (as
+                        // the service does on connectivity return). A relay
+                        // currently holding a socket is left alone. Bumping the
+                        // generation cancels any pending backoff attempt so it
+                        // moves to the policy's time rather than firing twice.
+                        if (socketOpen[i]) continue;
+                        if (delay > 0 || policy.shouldConnect(state[i], info, ev.timeMs())) {
                             gen[i]++;
-                            pq.add(new Event(ev.timeMs(), seq[0]++, Kind.ATTEMPT, i, gen[i], null, null));
+                            pq.add(new Event(ev.timeMs() + delay, seq[0]++, Kind.ATTEMPT, i, gen[i], null, null));
                         }
                     }
                 }
