@@ -3631,7 +3631,7 @@ export function ConcordPage() {
                           canSend={composerCanSend}
                           onPollSubmit={transport.sendPoll}
                           replyTo={replyTo}
-                          replyMarker="nipc7"
+                          sealed
                           onCancelReply={() => setReplyTo(undefined)}
                           onTyping={publishTyping}
                           encryptAttachments

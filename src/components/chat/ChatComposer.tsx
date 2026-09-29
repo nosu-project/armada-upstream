@@ -281,10 +281,11 @@ interface ChatComposerProps {
   replyTo?: NostrRumor;
   onCancelReply?: () => void;
   /**
-   * Inline reply tagging: `"nip10"` marked `e`/`p` tags (NIP-29), or `"nipc7"` a
-   * `q` tag (Concord, CORD-03 §3). Buzz never sets `replyTo` (replying is threading).
+   * An encrypted plane (Concord, DMs): no NIP-18 embed `q`s and no relay hint on
+   * the reply `q`. Inline replies are a NIP-C7 `q` everywhere (CORD-03 §3);
+   * Buzz never sets `replyTo` (replying is threading).
    */
-  replyMarker?: "nip10" | "nipc7";
+  sealed?: boolean;
   onSent?: () => void;
   /**
    * Android Direct Share name/avatar for this room (see `lib/shareTargets`). Only
@@ -386,7 +387,7 @@ interface ChatComposerProps {
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -1320,27 +1321,16 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       tags.push(["p", pk]);
     }
 
-    // Concord: NIP-C7 `q`; NIP-29: NIP-10 marked `e`. Always `p`-tag the author.
+    // NIP-C7 `q` on every plane, ahead of any embed `q`. Always `p`-tag the author.
     if (replyTo) {
-      if (replyMarker === "nipc7") {
-        tags.push(["q", replyTo.id, "", replyTo.pubkey]);
-      } else {
-        const rootTag = replyTo.tags.find(([name, , , marker]) => name === "e" && marker === "root");
-        if (rootTag) {
-          tags.push(["e", rootTag[1], rootTag[2] || relayUrl, "root", ...(rootTag[4] ? [rootTag[4]] : [])]);
-          tags.push(["e", replyTo.id, relayUrl, "reply", replyTo.pubkey]);
-        } else {
-          tags.push(["e", replyTo.id, relayUrl, "root", replyTo.pubkey]);
-        }
-      }
+      tags.push(["q", replyTo.id, sealed ? "" : relayUrl, replyTo.pubkey]);
       if (replyTo.pubkey !== user?.pubkey && !mentionedPubkeys.has(replyTo.pubkey)) {
         tags.push(["p", replyTo.pubkey]);
       }
     }
 
-    // NIP-18 embed `q`s only on public planes: a sealed rumor is never indexed, and
-    // there `q` is the NIP-C7 reply marker.
-    for (const embed of replyMarker === "nipc7" ? [] : visibleEmbeds) {
+    // NIP-18 embed `q`s only on public planes: a sealed rumor is never indexed.
+    for (const embed of sealed ? [] : visibleEmbeds) {
       if (embed.type === "naddr" && embed.addr) {
         tags.push(["q", `${embed.addr.kind}:${embed.addr.pubkey}:${embed.addr.identifier}`]);
       } else if (embed.eventId) {
@@ -1397,7 +1387,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     return tags;
-  }, [groupId, user, replyTo, replyMarker, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
+  }, [groupId, user, replyTo, sealed, relayUrl, visibleEmbeds, customEmojis, uploadedFileGroups]);
 
   /**
    * Record this room in the Direct Share ledger. Room from the LOCATION

@@ -1296,7 +1296,7 @@ const Conversation = memo(function Conversation({
           botDmPeer={group ? undefined : peer}
           placeholder={noteToSelf ? "Add a note…" : `Message ${name}…`}
           replyTo={replyTo}
-          replyMarker="nipc7"
+          sealed
           onCancelReply={() => setReplyTo(undefined)}
           // Client-side AES-256-GCM attachments on NIP-17 only (kind 4 can't carry the key).
           encryptAttachments={dm17Enabled}
