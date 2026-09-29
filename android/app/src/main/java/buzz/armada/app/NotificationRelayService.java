@@ -416,19 +416,34 @@ public class NotificationRelayService extends Service {
     // backlog); a reconnect in this service lifetime resumes inclusively from
     // only THAT relay's last accepted timestamp. It is deliberately in-memory:
     // durable history belongs to ArmadaDB/WebView sync, not notification replay.
-    private final Map<String, Long> relaySinceByUrl = new HashMap<>();
-    private final Set<String> relayCursorsWithEvents = new HashSet<>();
-    // Per-relay self-state cursor: when THIS process last saw the self-state
-    // subscription reach EOSE on a relay (minus SELF_SINCE_SLACK_SEC). Absent
-    // until the first full read, so a cold service start still takes the whole
-    // catch-up; every reconnect and re-REQ after that asks only for what
-    // changed. In-memory for the same reason as relaySinceByUrl.
-    private final Map<String, Long> selfSinceByUrl = new HashMap<>();
+    private final AccountCursors cursors = new AccountCursors();
+    private final Map<String, Long> relaySinceByUrl = cursors.relaySince;
+    private final Set<String> relayCursorsWithEvents = cursors.relaysWithEvents;
+    // Per-relay self-state cursor: when the self-state subscription last
+    // reached EOSE on a relay (minus SELF_SINCE_SLACK_SEC).
+    private final Map<String, Long> selfSinceByUrl = cursors.selfSince;
+    // When each DM inbox's live NIP-17 sub last dropped (wall ms). Concurrent:
+    // sendReqs reads it on the socket thread from onOpen.
+    private final Map<String, Long> dm17LiveUntilByUrl = cursors.dm17LiveUntil;
     // Per relay, kept across reconnects so a flood's pause outlives the socket.
     // Concurrent: sendReqs also runs on the socket thread from onOpen.
-    // When each DM inbox's live NIP-17 sub last dropped (wall ms; handler thread).
-    private final Map<String, Long> dm17LiveUntilByUrl = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, FloodBreaker> selfFloodByUrl = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Per-relay positions that belong to the signed-in account. */
+    static final class AccountCursors {
+        final Map<String, Long> relaySince = new HashMap<>();
+        final Set<String> relaysWithEvents = new HashSet<>();
+        final Map<String, Long> selfSince = new HashMap<>();
+        final Map<String, Long> dm17LiveUntil = new java.util.concurrent.ConcurrentHashMap<>();
+
+        /** An account change: no position may carry into the next account's reads. */
+        void clear() {
+            relaySince.clear();
+            relaysWithEvents.clear();
+            selfSince.clear();
+            dm17LiveUntil.clear();
+        }
+    }
 
     private FloodBreaker selfFlood(String relayUrl) {
         return selfFloodByUrl.computeIfAbsent(relayUrl, k -> new FloodBreaker());
@@ -1559,15 +1574,13 @@ public class NotificationRelayService extends Service {
             // Cursor continuity is account-scoped just like the config itself.
             // A hot account replacement must not inherit the outgoing user's
             // relay position (or any other native last-good state).
-            relaySinceByUrl.clear();
-            selfSinceByUrl.clear();
+            cursors.clear();
             selfFloodByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
             selfTopicWindow.clear();
             handler.removeCallbacks(flushSelfTopicDocsRunnable);
             selfTopicFlushPosted = false;
-            relayCursorsWithEvents.clear();
         }
         userPubkey = nextUserPubkey;
         relayUrls.clear();
@@ -2581,9 +2594,12 @@ public class NotificationRelayService extends Service {
             walledSubs.remove(subSelf);
             endBackfill(subSelf);
             selfLive = false;
+            long pausedUntil = selfFlood(relayUrl).pausedUntil();
             handler.postDelayed(() -> {
                 RelayConnection now = connectionFor(relayUrl);
-                if (now == null || now.ws == null) return;
+                if (!resumesSelfAfterPause(now != null && now.ws != null,
+                        now != null && now.standingSubs.contains(now.subSelf),
+                        pausedUntil, selfFlood(relayUrl).pausedUntil())) return;
                 if (ServiceProfiler.ON) ServiceProfiler.count("self.flood resume " + ServiceProfiler.host(relayUrl));
                 try {
                     now.sendSelfReq(now.ws, true);
@@ -3567,6 +3583,30 @@ public class NotificationRelayService extends Service {
     static long dm17CatchUpFloorSec(Long liveUntilMs, long nowMs) {
         if (liveUntilMs == null || nowMs - liveUntilMs <= DM17_CATCHUP_MIN_GAP_MS) return 0;
         return Math.max(1, liveUntilMs / 1000 - DM17_CATCHUP_SLACK_SEC);
+    }
+
+    /**
+     * Whether an arriving self document counts toward its relay's flood breaker.
+     * One the window replays ({@code windowClosed}) was counted when staged.
+     */
+    static boolean countsTowardSelfFlood(boolean selfLive, boolean windowClosed) {
+        return selfLive && !windowClosed;
+    }
+
+    /**
+     * Whether a flood pause's resume timer, firing now, re-opens the self sub.
+     * {@code scheduledUntil} is the breaker's pause end when the timer was set;
+     * a different one now means an account switch reset the breaker or a later
+     * pause owns the resume. An open sub was already re-sent by a reconnect.
+     */
+    static boolean resumesSelfAfterPause(
+            boolean socketUp, boolean selfSubOpen, long scheduledUntil, long breakerPausedUntil) {
+        return socketUp && !selfSubOpen && scheduledUntil == breakerPausedUntil;
+    }
+
+    /** Whether a network callback concerns the default network. */
+    static boolean isDefaultNetwork(Object network, Object defaultNetwork) {
+        return network != null && network.equals(defaultNetwork);
     }
 
     static String selfCursorKey(String pubkey, String relayUrl) {
@@ -4716,7 +4756,7 @@ public class NotificationRelayService extends Service {
         }
         if (SelfState.isSelfKind(kind)) {
             RelayConnection live = connectionFor(relayUrl);
-            if (live != null && live.selfLive) {
+            if (live != null && countsTowardSelfFlood(live.selfLive, windowClosed)) {
                 long pause = selfFlood(relayUrl).onEdition(SystemClock.elapsedRealtime());
                 if (pause > 0) live.pauseSelf(pause);
             }
@@ -7314,6 +7354,7 @@ public class NotificationRelayService extends Service {
             @Override
             public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
                 if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return;
+                if (!isDefaultNetwork(network, cm.getActiveNetwork())) return;
                 handler.post(() -> {
                     // The default network just validated: connects held for it go now.
                     if (unvalidatedSince == 0) return;
