@@ -28,6 +28,7 @@ import android.graphics.RectF;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -43,6 +44,7 @@ import buzz.armada.app.db.ServiceStore;
 import buzz.armada.app.relayfleet.CircuitBreakerPolicy;
 import buzz.armada.app.relayfleet.CursorGate;
 import buzz.armada.app.relayfleet.GitRelayCover;
+import buzz.armada.app.relayfleet.NetworkSettle;
 import buzz.armada.app.relayfleet.RelayFleetPolicy;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.ConnectionResult;
 import buzz.armada.app.relayfleet.RelayFleetPolicy.FleetDecision;
@@ -307,6 +309,11 @@ public class NotificationRelayService extends Service {
     }
 
     private ConnectivityManager.NetworkCallback networkCallback;
+    // When the network last changed (elapsedRealtime; handler thread): connects
+    // wait for NetworkSettle.SETTLE_MS of quiet after it, so a burst of changes
+    // costs the fleet one reconnect instead of one per change.
+    private long lastNetworkChangeAt = 0;
+    private boolean sawNetworkLoss = false;
     private SharedPreferences.OnSharedPreferenceChangeListener configListener;
     private final Runnable configReloadRunnable = this::loadConfigAndReconnect;
 
@@ -2181,6 +2188,18 @@ public class NotificationRelayService extends Service {
             // already reconnected would open a second socket and orphan the
             // first — leaked sockets keep pinging and re-failing forever.
             if (closed || ws != null || !isNetworkAvailable()) return;
+            // A DM inbox reconnects at once: its NIP-17 and call subscriptions
+            // are live-only, so time spent settling there is lost, not delayed.
+            // Every other plane resumes from its cursor.
+            boolean liveOnly = dmRelays.contains(relayUrl) && shouldWatchDm();
+            long settle = liveOnly ? 0 : NetworkSettle.delayMs(
+                    SystemClock.elapsedRealtime(), lastNetworkChangeAt, NetworkSettle.SETTLE_MS);
+            if (settle > 0) {
+                handler.removeCallbacks(reconnectRunnable);
+                handler.postDelayed(reconnectRunnable, settle);
+                retryPending = true;
+                return;
+            }
             if (!fleetPolicy.shouldConnect(fleetState, fleetInfo, System.currentTimeMillis())) return;
             quarantined = false;
             connectAttemptAt = System.currentTimeMillis();
@@ -2766,6 +2785,45 @@ public class NotificationRelayService extends Service {
      * duplicate AUTH just re-authenticates).
      */
     /**
+     * A standing sub re-delivering an event this process already handled is
+     * dropped before its frame is parsed. Relays re-send the account's own
+     * documents on every reconnect and re-publish, and a 38 KB community-list
+     * fragment cost more to parse than everything else done with it. The
+     * session bookkeeping a delivery implies still happens.
+     */
+    private boolean dropSeenEventFrame(String text, String relayUrl) {
+        String[] head = eventFrameHead(text);
+        if (head == null) return false;
+        String sub = head[0], id = head[1];
+        if (!selfSeenIds.contains(id) && !notifiedIds.contains(id)) return false;
+        RelayConnection delivering = connectionFor(relayUrl);
+        if (delivering == null || !delivering.standingSubs.contains(sub)) return false;
+        delivering.walledSubs.remove(sub);
+        delivering.deliveredAnything = true;
+        if (ServiceProfiler.ON) ServiceProfiler.count("event.drop seen before parse");
+        return true;
+    }
+
+    /**
+     * The subscription id and event id of an {@code ["EVENT", sub, {…}]} frame,
+     * read without parsing it; null for any other frame or anything unexpected.
+     * The event's own {@code "id":"} is the first occurrence of that sequence:
+     * a quote inside any JSON string is escaped, so none can spell it.
+     */
+    static String[] eventFrameHead(String text) {
+        if (!text.startsWith("[\"EVENT\"")) return null;
+        int s0 = text.indexOf('"', 8);
+        if (s0 < 0) return null;
+        int s1 = text.indexOf('"', s0 + 1);
+        if (s1 < 0) return null;
+        int at = text.indexOf("\"id\":\"", s1 + 1);
+        if (at < 0 || at + 70 >= text.length()) return null;
+        String id = text.substring(at + 6, at + 70);
+        if (text.charAt(at + 70) != '"' || !id.matches("[0-9a-f]{64}")) return null;
+        return new String[] { text.substring(s0 + 1, s1), id };
+    }
+
+    /**
      * Hand a challenge to the WebView for the signatures it should add: the
      * user's ({@code user}) and/or the stream keys' ({@code streams}). Returns
      * whether the WebView is there to answer (or already was).
@@ -2814,6 +2872,7 @@ public class NotificationRelayService extends Service {
     }
 
     private void onRelayMessage(String text, String relayUrl) {
+        if (dropSeenEventFrame(text, relayUrl)) return;
         try {
             JSONArray msg = new JSONArray(text);
             String type = msg.optString(0);
@@ -7080,7 +7139,18 @@ public class NotificationRelayService extends Service {
             @Override
             public void onAvailable(Network network) {
                 handler.post(() -> {
+                    // The callbacks registration replays for networks already up
+                    // are not a change; one after a loss is.
+                    if (sawNetworkLoss) lastNetworkChangeAt = SystemClock.elapsedRealtime();
                     for (RelayConnection rc : connections) rc.onFleetEdge(FleetEdge.CONNECTIVITY_REGAINED);
+                });
+            }
+
+            @Override
+            public void onLost(Network network) {
+                handler.post(() -> {
+                    sawNetworkLoss = true;
+                    lastNetworkChangeAt = SystemClock.elapsedRealtime();
                 });
             }
         };
