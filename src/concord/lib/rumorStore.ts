@@ -290,6 +290,35 @@ export async function queryChannelRumorsByIds(
 }
 
 /**
+ * Inline-reply parents older than the loaded window, plus the edits and deletes
+ * that name them, so a {@link foldTimeline} over the result renders each parent
+ * as the timeline would. Channel-scoped like {@link queryChannelRumorsByIds}.
+ */
+export async function queryReplyParents(
+  communityIdHex: string,
+  channelIdHex: string,
+  ids: string[],
+  opts?: { signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return [];
+  const store = rumorStore(communityIdHex);
+  const rows = await store.query(
+    [{ ids: unique, kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex] }],
+    { signal: opts?.signal },
+  );
+  const found = rows.map((ev) => ev.id);
+  const amendments = found.length
+    ? await store.query(
+        // Newest-first under the side-event budget; a delete also removed its target at write time.
+        [{ kinds: [KIND_EDIT, KIND_DELETE], "#channel": [channelIdHex], "#e": found, limit: found.length * SIDE_EVENT_FACTOR }],
+        { signal: opts?.signal },
+      )
+    : [];
+  return notExpired([...rows, ...amendments]).map((ev) => storedToOpenedChat(ev, channelIdHex));
+}
+
+/**
  * When each author was first heard in this channel — the flood detector's
  * {@link FloodOptions.firstSeen}. Can't come from the rendered window: a big
  * flood fills it and nobody reads as established (measured: 99% vs 0% folded).

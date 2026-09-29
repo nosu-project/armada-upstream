@@ -9,6 +9,7 @@ import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { ReplyContext } from "@/components/chat/ReplyContext";
+import { useConcordReplyParents } from "@/concord/hooks/useReplyParents";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
@@ -338,7 +339,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   // Memoized: props of the memoized ChatMessage below.
   const threadInfo = useMemo(() => threadSummary(replies), [replies]);
   const replyContext = useMemo(
-    () => (replyToId ? <ReplyContext parent={replyParent} onJump={onJumpToReply} /> : undefined),
+    () => (replyToId ? <ReplyContext parentId={replyToId} parent={replyParent} onJump={onJumpToReply} /> : undefined),
     [replyToId, replyParent, onJumpToReply],
   );
   // Concord messages are unsigned rumors with no relay-addressable id, so the
@@ -2068,6 +2069,8 @@ export function ConcordPage() {
     for (const msg of allMessages) m.set(msg.id, msg);
     return m;
   }, [allMessages]);
+  // Parents older than the loaded window come from the store.
+  const olderReplyParents = useConcordReplyParents(community, channel?.idHex, allMessages, messagesById);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -3513,7 +3516,7 @@ export function ConcordPage() {
                         onOpenThread={onOpenThreadCb}
                         onReply={canWrite ? setReplyTo : undefined}
                         replyToId={replyId}
-                        replyParent={replyId ? messagesById.get(replyId) : undefined}
+                        replyParent={replyId ? (messagesById.get(replyId) ?? olderReplyParents.get(replyId)) : undefined}
                         onJumpToReply={jumpWithinChannel}
                         onDelete={transport.deleteMessage}
                         onKick={canKickAny ? setKickTarget : undefined}

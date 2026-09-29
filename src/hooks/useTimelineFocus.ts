@@ -1,6 +1,9 @@
 import { useCallback, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
+import { useStableNavigate } from "@/hooks/useStableNavigate";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 import type { MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import type { RefObject } from "react";
@@ -37,9 +40,25 @@ export function useTimelineFocus(opts: {
   const { messages, isLoading, hasMore, loadOlder, enabled, resetKey } = opts;
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
+  // Read at call time so `jumpToMessage` keeps one identity for memoized rows.
+  const location = useLocation();
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const navigate = useStableNavigate();
+
   const jumpToMessage = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
+    if (timelineRef.current?.scrollToMessage(id) !== false) return;
+    // Not loaded: hand it to the permalink hunt, which pages back for it (and
+    // replaces the segment away if it never turns up). A thread route's `/m/`
+    // belongs to the thread panel, so it can't carry a timeline target.
+    if (enabledRef.current === false) return;
+    const { pathname, search, hash } = locationRef.current;
+    const route = parseChatRoute(pathname);
+    if (!route || (route.kind !== "dm" && route.threadRoot)) return;
+    navigate(`${chatRoute({ ...route, messageId: id })}${search}${hash}`, { replace: true });
+  }, [navigate]);
 
   const permalinkScroll = useCallback(
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,

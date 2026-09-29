@@ -4,9 +4,9 @@ import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it, vi } from "vitest";
 
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord/lib/derive";
-import { openChatBatch, type OpenedChat } from "@/concord/lib/chat";
+import { foldTimeline, openChatBatch, type OpenedChat } from "@/concord/lib/chat";
 import { decryptWithDisclosedKeys, discloseKeysFor } from "@/concord/lib/nip44keys";
-import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
+import { KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
 import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { Channel } from "@/concord/lib/types";
@@ -24,6 +24,7 @@ import {
   queryChannelRumorsByIds,
   queryMentionRumors,
   queryPlane,
+  queryReplyParents,
   queryRumorsByChannel,
   queryWebxdcRumors,
   readControlSnapshot,
@@ -213,6 +214,33 @@ describe("concord rumor store", () => {
     });
     expect(short.events.filter((e) => e.kind === KIND_MESSAGE)).toHaveLength(1);
     expect(short.full).toBe(true);
+  });
+
+  it("reads reply parents by id with the edits that fold over them", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    const parent = chatRumor(idHex, alice, KIND_MESSAGE, "original", 1_000_000);
+    const edit = chatRumor(idHex, alice, KIND_EDIT, "edited", 5_000_000, [["e", parent.id]]);
+    const hijack = chatRumor(idHex, bob, KIND_EDIT, "not yours", 6_000_000, [["e", parent.id]]);
+    const reaction = chatRumor(idHex, bob, KIND_REACTION, "🔥", 7_000_000, [["e", parent.id]]);
+    const all = [parent, edit, hijack, reaction];
+    writeRumors(
+      CID,
+      await openChatBatch(
+        await Promise.all(all.map((r) => wrapChat(r, channel, r.pubkey === alice.pubkey ? alice : bob))),
+        channel,
+      ),
+    );
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length === all.length);
+
+    const got = await queryReplyParents(CID, idHex, [parent.id, "00".repeat(32)]);
+    // Rows plus their edits; decoration like reactions is not a parent's concern.
+    expect(got.map((e) => e.rumorId).sort()).toEqual([parent.id, edit.id, hijack.id].sort());
+    expect(foldTimeline(got).messages.map((m) => m.content)).toEqual(["edited"]);
+    // Channel-scoped: another room's id space can't reach this row.
+    expect(await queryReplyParents(CID, "ff".repeat(32), [parent.id])).toEqual([]);
   });
 
   it("delete=delete: a self kind-5 physically removes its target", async () => {
