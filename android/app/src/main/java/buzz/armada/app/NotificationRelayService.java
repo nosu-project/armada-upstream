@@ -4751,18 +4751,21 @@ public class NotificationRelayService extends Service {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop filter");
             return;
         }
+        // Before the seen check: a copy another relay already delivered was
+        // still downloaded from this one, and the breaker budgets bytes.
+        if (SelfState.isSelfKind(kind)) {
+            RelayConnection live = connectionFor(relayUrl);
+            if (live != null && countsTowardSelfFlood(live.selfLive, windowClosed)) {
+                long pause = selfFlood(relayUrl).onEdition(
+                        SystemClock.elapsedRealtime(), event.optString("content").length());
+                if (pause > 0) live.pauseSelf(pause);
+            }
+        }
         // A self-state document already verified and filed (another self
         // relay, or a re-REQ) is a no-op for the store; skip the verify too.
         if (SelfState.isSelfKind(kind) && selfSeenIds.contains(id)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state seen");
             return;
-        }
-        if (SelfState.isSelfKind(kind)) {
-            RelayConnection live = connectionFor(relayUrl);
-            if (live != null && countsTowardSelfFlood(live.selfLive, windowClosed)) {
-                long pause = selfFlood(relayUrl).onEdition(SystemClock.elapsedRealtime());
-                if (pause > 0) live.pauseSelf(pause);
-            }
         }
         String selfCoordinate = SelfState.isSelfKind(kind) ? selfCoordinateOf(event, kind) : null;
         if (selfCoordinate != null) {
