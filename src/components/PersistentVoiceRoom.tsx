@@ -83,11 +83,13 @@ import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
 import {
   getAudioProcessing,
   getPreferredCameraId,
+  getPreferredSpeakerId,
   getScreenShareVolume,
   getUserVolume,
   micCaptureConstraints,
   preferredAudioOutput,
   subscribeUserVolumes,
+  supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
@@ -279,6 +281,39 @@ function PlaybackVolumeApplier() {
     apply();
     return subscribeUserVolumes(apply);
   }, [participants, resolveIdentity]);
+
+  return null;
+}
+
+/**
+ * Reapplies the remembered speaker on join. Mic and camera reach their
+ * preference through capture constraints; output has no such hook and
+ * otherwise stays on whatever the browser picked as default (see
+ * DeviceSelectGroup in VoiceBar.tsx for the in-call picker that writes it).
+ *
+ * rejoinRoom (voiceRejoin.ts) reconnects the same Room instance after a
+ * dropped connection rather than remounting this component, so the apply is
+ * tied to RoomEvent.Connected (fired on every connect, initial or rejoin)
+ * rather than a one-shot mount effect.
+ */
+function SpeakerDeviceApplier() {
+  const room = useRoomContext();
+
+  useEffect(() => {
+    const apply = () => {
+      if (!supportsSpeakerSelection()) return;
+      const speakerId = getPreferredSpeakerId();
+      if (!speakerId) return;
+      void room.switchActiveDevice("audiooutput", speakerId).catch(() => {
+        // Device may be gone since it was remembered — fall back silently.
+      });
+    };
+    if (room.state === ConnectionState.Connected) apply();
+    room.on(RoomEvent.Connected, apply);
+    return () => {
+      room.off(RoomEvent.Connected, apply);
+    };
+  }, [room]);
 
   return null;
 }
@@ -728,6 +763,7 @@ function VoiceRoomShell({
       <CallAudioKeeper />
       <CallSoundEffects />
       <MicNoiseProcessor />
+      <SpeakerDeviceApplier />
       <DesktopPushToTalk />
       <MutedReporter />
       <StreamingReporter />
