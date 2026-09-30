@@ -1212,15 +1212,18 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Whether {@code event} is the user's read-state settings document. Matched
-     * by the {@code d}-tag suffix rather than a compiled-in constant: the tag is
-     * structurally {@code ${APP_ID}/read-state}, so a fork that renames
-     * {@code VITE_APP_ID} is covered without threading another config value
-     * through the plugin. Caller has already checked the kind is 30078.
+     * Whether {@code event} is one of the user's read-state settings documents:
+     * the full map or the small recent-entries delta a read publishes. Both
+     * carry {@code readState} and dismiss the same way, since the WebView merges
+     * them max-per-key. Matched by the {@code d}-tag suffix rather than a
+     * compiled-in constant: the tag is structurally {@code ${APP_ID}/read-state},
+     * so a fork that renames {@code VITE_APP_ID} is covered without threading
+     * another config value through the plugin. Caller has already checked the
+     * kind is 30078.
      */
-    private static boolean isReadStateDoc(JSONObject event) {
+    static boolean isReadStateDoc(JSONObject event) {
         String d = tagValue(event, "d");
-        return d != null && d.endsWith("/read-state");
+        return d != null && (d.endsWith("/read-state") || d.endsWith("/read-state-recent"));
     }
 
     /**

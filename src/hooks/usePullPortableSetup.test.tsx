@@ -237,11 +237,11 @@ describe("usePullPortableSetup", () => {
     expect(h.queryExplicitRelays.mock.calls[0]?.[1]).toEqual([OLD_RELAY, NEW_RELAY]);
 
     // Every settings document in one filter, with no `limit` — which caps the
-    // filter rather than each `d`, so five of six could come back missing.
+    // filter rather than each `d`, so all but one could come back missing.
     const settingsFilter = (h.queryExplicitRelays.mock.calls[0]?.[2] as NostrFilter[])
       .find((filter) => filter.kinds?.includes(30078));
     expect(settingsFilter?.["#d"]).toEqual([
-      "metadata", "rail", "read-state", "notifications", "dms", "reactions",
+      "metadata", "rail", "read-state", "read-state-recent", "notifications", "dms", "reactions",
     ].map((name) => settingsDTag(name as never)));
     expect(settingsFilter?.limit).toBeUndefined();
 

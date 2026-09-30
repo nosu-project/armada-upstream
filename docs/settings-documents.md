@@ -1,13 +1,14 @@
 # Settings documents (NIP-78)
 
-Armada's private, cross-device settings live in **six** NIP-78 documents —
+Armada's private, cross-device settings live in **seven** NIP-78 documents —
 kind 30078, NIP-44-encrypted to self, named `${APP_ID}/<name>`.
 
 | `d` tag | Contents | Written when | Merge |
 |---|---|---|---|
 | `armada/metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, replaceable app DM/media endpoints, voice-server preference, DM typing indicators, DM requests, Discover scope/curated list/relays, zap defaults, Account Standing nag | a preference changes | wholesale |
 | `armada/rail` | `railLayout` | every rail drag | wholesale |
-| `armada/read-state` | `readState` | every channel view (4 s debounce) | max per key |
+| `armada/read-state` | `readState`, the whole map | when `read-state-recent` passes 8 KB | max per key |
+| `armada/read-state-recent` | `readState`, only entries newer than `read-state`'s | every channel view (4 s debounce) | max per key |
 | `armada/notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |
 | `armada/dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | additive peer maps; `dmProtocol` wholesale |
 | `armada/reactions` | `frequentReactions` | every reaction (10 s debounce) | max count / most recent |
@@ -23,7 +24,7 @@ The first **Start sync** / **Sync now** action is deliberately explicit. It
 refreshes the user's existing replaceable records; copies their signed NIP-29,
 search, DM-relay and Blossom lists; mirrors the complete encrypted Concord
 community vault (kind 33302), creator invite authority (kind 13303), and dynamic
-topic shards; and creates or refreshes the six encrypted documents on every
+topic shards; and creates or refreshes the seven encrypted documents on every
 NIP-65 write relay. A relay-set change performs the same state seeding before
 publishing the new kind-10002 pointer. This ordering prevents a new device from
 following the pointer to an empty account relay.
@@ -59,7 +60,7 @@ do not have public Armada addresses unioned back in after restore. Public
 NIP-65 discovery indexes and CORD's versioned stock-relay dictionary are
 protocol discovery/interoperability floors, not runtime account settings.
 
-## Why six and not one
+## Why several and not one
 
 A kind-30078 event is **replaceable**. Everything sharing one `d` tag is
 re-serialized, re-encrypted, re-signed and re-published every time any single
@@ -79,8 +80,17 @@ because a drag rewrites it, not because it is conceptually separate. Anything
 that grows without bound or is written on a hot path gets its own; bounded
 preferences that change when a human clicks something stay in `metadata`.
 
-The cost is bounded: the standing REQ is still **one** filter with six `#d`
-values (`NostrSync.tsx`), so there are no extra subscriptions — six decrypts on
+Read-state is split once more, into the whole map and a delta. An open channel
+stamps a read for every incoming message, and every other device downloads what
+that publishes: the whole map was ~76 KB per message, measured as most of the
+Android service's idle traffic. A read now writes only `read-state-recent`, the
+entries newer than `read-state`; the base is rewritten when the delta passes
+8 KB. Both merge max-per-key, so the delta is self-contained and arrival order
+does not matter. A build that predates the split reads only the base, and sees
+another device's reads at the next rollover.
+
+The cost is bounded: the standing REQ is still **one** filter with seven `#d`
+values (`NostrSync.tsx`), so there are no extra subscriptions — seven decrypts on
 boot instead of one.
 
 ## `APP_ID`

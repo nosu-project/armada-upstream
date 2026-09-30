@@ -8,6 +8,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useSettingsDoc } from "@/hooks/useSettingsDoc";
+import { planReadStatePublish } from "@/lib/readStateSync";
 
 const EMPTY: ReadStateMap = {};
 
@@ -43,15 +44,25 @@ function mergeReadState(a: ReadStateMap, b: ReadStateMap): ReadStateMap {
 const SYNC_DEBOUNCE_MS = 4000;
 
 /**
- * Per-conversation last-read timestamps: localStorage cache plus the debounced
- * `${APP_ID}/read-state` NIP-78 document for cross-device sync. Its own
- * document because it's unbounded (never pruned).
+ * Per-conversation last-read timestamps: localStorage cache plus two debounced
+ * NIP-78 documents for cross-device sync. `${APP_ID}/read-state` holds the
+ * whole map, which is unbounded (never pruned); `${APP_ID}/read-state-recent`
+ * holds only the entries newer than it. A read publishes the small one, so an
+ * open channel stamping every incoming message no longer makes every other
+ * device download the whole map per message; the base is rewritten only when
+ * the delta passes `READ_STATE_ROLLOVER_BYTES` (lib/readStateSync.ts).
  */
 export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const automaticSettingsSync = config.automaticSettingsSync !== false;
-  const { doc, isFetched, update, hasNip44Support } = useSettingsDoc("read-state");
+  const { doc, isFetched: baseFetched, update, hasNip44Support } = useSettingsDoc("read-state");
+  const {
+    doc: recentDoc,
+    isFetched: recentFetched,
+    update: updateRecent,
+  } = useSettingsDoc("read-state-recent");
+  const isFetched = baseFetched && recentFetched;
   // Legacy home of this map, merged in as a second source (max-per-key is commutative).
   const { doc: metadata } = useEncryptedSettings();
   const pubkey = user?.pubkey;
@@ -60,6 +71,14 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     isFetchedRef.current = isFetched;
   }, [isFetched]);
+
+  // The documents as last read, for the flush's delta (see planReadStatePublish).
+  const baseRef = useRef<ReadStateMap>({});
+  const recentRef = useRef<ReadStateMap>({});
+  useEffect(() => {
+    baseRef.current = doc?.readState ?? {};
+    recentRef.current = recentDoc?.readState ?? {};
+  }, [doc?.readState, recentDoc?.readState]);
 
   const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pendingSync = useRef<ReadStateMap | null>(null);
@@ -83,16 +102,21 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
       flushTimer.current = setTimeout(() => {
         const next = pendingSync.current;
         if (!next) return;
-        // Never publish before the stored doc is read: this map replaces it wholesale,
-        // which is only safe once hydration has folded it in.
+        // Never publish before both stored docs are read: each is replaced wholesale,
+        // which is only safe once hydration has folded them in.
         if (!isFetchedRef.current) return;
         pendingSync.current = null;
-        update({ readState: next }).catch((err) =>
-          console.warn("Read-state sync failed:", err),
-        );
+        const plan = planReadStatePublish(next, baseRef.current, recentRef.current);
+        const publish = plan.kind === "recent"
+          ? updateRecent({ readState: plan.readState })
+          : plan.kind === "rollover"
+            // Base first: clearing the delta before the base lands would lose its entries.
+            ? update({ readState: next }).then(() => updateRecent({ readState: {} }))
+            : undefined;
+        publish?.catch((err) => console.warn("Read-state sync failed:", err));
       }, SYNC_DEBOUNCE_MS);
     },
-    [automaticSettingsSync, hasNip44Support, update],
+    [automaticSettingsSync, hasNip44Support, update, updateRecent],
   );
 
   // Opt-out stops the debounce but keeps the local map for later re-enable.
@@ -156,11 +180,13 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
       hydrate(incoming);
     };
     if (doc?.readState) absorb(doc.readState);
+    if (recentDoc?.readState) absorb(recentDoc.readState);
     if (metadata?.readState) absorb(metadata.readState);
   }, [
     automaticSettingsSync,
     pubkey,
     doc?.readState,
+    recentDoc?.readState,
     metadata?.readState,
     hydrate,
   ]);
