@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { Copy, Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
@@ -19,7 +19,7 @@ import { MediaSpoilerCover } from "@/components/chat/MediaSpoiler";
 import { CodeBlock, InlineCode } from "@/components/chat/Markdown";
 import { ChatRouteEmbed } from "@/components/chat/ChatRouteEmbed";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
-import { renderInlineMarkdown } from "@/components/chat/markdownRender";
+import { renderInlineMarkdown, renderInlineNodes } from "@/components/chat/markdownRender";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { DisplayName } from "@/components/DisplayName";
@@ -40,7 +40,7 @@ import { isInviteUrl } from "@/concord/lib/invite";
 import { EVERYONE_MENTION_PATTERN } from "@/concord/lib/everyoneMention";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
-import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
+import { parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { filenameFromUrl } from "@/lib/fileBytes";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
@@ -62,6 +62,7 @@ import type { AddrCoords } from "@/hooks/useEvent";
 import type { ChatRoute } from "@/lib/routes";
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
+import type { MdBlock } from "@/lib/markdown";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -167,6 +168,51 @@ type ContentToken =
   | { type: "heading"; level: number; tokens: ContentToken[] }
   | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] }
   | { type: "rule" };
+
+/**
+ * Collapse whitespace around block tokens, in place. Not `link-embed`: it can
+ * render inline, and stripping would glue the URL to adjacent text.
+ */
+function collapseAroundBlocks(tokens: ContentToken[]): ContentToken[] {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const isBlock = token.type === "image-embed" || token.type === "media-embed"
+      || token.type === "file-embed"
+      || token.type === "nevent-embed"
+      || (token.type === "naddr-embed" && (!token.url || token.addr.kind === 30030))
+      || token.type === "lightning-invoice"
+      || token.type === "cashu-token"
+      || token.type === "code-block" || token.type === "quote"
+      || token.type === "invite-embed"
+      || token.type === "buzz-invite-embed";
+    if (!isBlock) continue;
+    const prev = tokens[i - 1];
+    if (prev?.type === "text") prev.value = prev.value.replace(/\s+$/, "");
+    const next = tokens[i + 1];
+    if (next?.type === "text") next.value = next.value.replace(/^\s+/, "");
+  }
+  return tokens;
+}
+
+/** Tokens inline formatting may span, so `**see https://…**` bolds the link too. */
+function isSpannable(token: ContentToken): boolean {
+  switch (token.type) {
+    case "text":
+    case "inline-code":
+    case "mention":
+    case "text-mention":
+    case "everyone-mention":
+    case "nostr-link":
+    case "hashtag":
+    case "relay-link":
+    case "inline-link":
+    case "self-link":
+    case "md-link":
+      return true;
+    default:
+      return false;
+  }
+}
 
 /**
  * Split known `@name` aliases (Buzz/legacy mentions, pubkey in a `p` tag) out
@@ -672,22 +718,26 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     };
 
     // Markdown block pass first; media inside quotes demotes to plain links.
-    const result: ContentToken[] = [];
-    for (const block of splitMarkdownBlocks(text, documentMarkdown)) {
-      if (block.type === "code") {
-        result.push({ type: "code-block", code: block.code, lang: block.lang });
-      } else if (block.type === "quote") {
-        result.push({ type: "quote", tokens: tokenizeRun(block.text) });
-      } else if (block.type === "heading") {
-        result.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
-      } else if (block.type === "list") {
-        result.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
-      } else if (block.type === "rule") {
-        result.push({ type: "rule" });
-      } else {
-        result.push(...tokenizeRun(block.text));
+    const blockTokens = (blocks: MdBlock[]): ContentToken[] => {
+      const out: ContentToken[] = [];
+      for (const block of blocks) {
+        if (block.type === "code") {
+          out.push({ type: "code-block", code: block.code, lang: block.lang });
+        } else if (block.type === "quote") {
+          out.push({ type: "quote", tokens: collapseAroundBlocks(blockTokens(block.blocks)) });
+        } else if (block.type === "heading") {
+          out.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
+        } else if (block.type === "list") {
+          out.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
+        } else if (block.type === "rule") {
+          out.push({ type: "rule" });
+        } else {
+          out.push(...tokenizeRun(block.text));
+        }
       }
-    }
+      return out;
+    };
+    const result = blockTokens(splitMarkdownBlocks(text, documentMarkdown));
 
     const qTagMap = new Map<string, { relay?: string; author?: string }>();
     for (const tag of event.tags) {
@@ -753,35 +803,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
     }
 
-    // Collapse whitespace around block tokens. Not `link-embed`: it can render
-    // inline, and stripping would glue the URL to adjacent text.
-    for (let i = 0; i < result.length; i++) {
-      const token = result[i];
-      const isBlock = token.type === "image-embed" || token.type === "media-embed"
-        || token.type === "file-embed"
-        || token.type === "nevent-embed"
-        || (token.type === "naddr-embed" && (!token.url || token.addr.kind === 30030))
-        || token.type === "lightning-invoice"
-        || token.type === "cashu-token"
-        || token.type === "code-block" || token.type === "quote"
-        || token.type === "invite-embed"
-        || token.type === "buzz-invite-embed";
-
-      if (isBlock) {
-        if (i > 0) {
-          const prev = result[i - 1];
-          if (prev.type === "text") {
-            prev.value = prev.value.replace(/\s+$/, "");
-          }
-        }
-        if (i < result.length - 1) {
-          const next = result[i + 1];
-          if (next.type === "text") {
-            next.value = next.value.replace(/^\s+/, "");
-          }
-        }
-      }
-    }
+    collapseAroundBlocks(result);
 
     if (result.length > 0) {
       const first = result[0];
@@ -943,23 +965,55 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     </Link>
   );
 
+  const emojiImgClass = isEmojiOnly
+    ? cn("inline object-contain align-text-bottom", isSingleEmoji ? "h-12 w-12" : "h-10 w-10")
+    : undefined;
+  const renderLeaf = (leaf: string) => highlightText(leaf, highlight, emojiMap, emojiImgClass, event.pubkey);
+
+  /**
+   * Render a token list. Runs of spannable tokens are parsed for inline
+   * markdown as one, with the non-text tokens as atoms. `top` keys lightbox
+   * indexing by position (only the top-level list has one).
+   */
+  const renderTokens = (tokens: ContentToken[], keyPrefix: string, top: boolean, inQuote = false): ReactNode[] => {
+    const out: ReactNode[] = [];
+    let i = 0;
+    while (i < tokens.length) {
+      let j = i;
+      while (j < tokens.length && isSpannable(tokens[j])) j++;
+      if (j === i) {
+        out.push(renderToken(tokens[i], `${keyPrefix}${i}`, top ? i : null, inQuote));
+        i++;
+      } else if (j === i + 1 && tokens[i].type === "text") {
+        out.push(renderToken(tokens[i], `${keyPrefix}${i}`, null, inQuote));
+        i = j;
+      } else {
+        const parts = tokens.slice(i, j).map((t) => (t.type === "text" ? t.value : { atom: t }));
+        out.push(
+          <Fragment key={`${keyPrefix}${i}`}>
+            {renderInlineNodes(
+              parseInlineRun(parts),
+              renderLeaf,
+              `${keyPrefix}${i}-`,
+              (atom: ContentToken, key) => renderToken(atom, key, null, inQuote),
+            )}
+          </Fragment>,
+        );
+        i = j;
+      }
+    }
+    return out;
+  };
+
   /** `topIndex` drives lightbox indexing (null in quotes, where block tokens demote to links). */
   const renderToken = (token: ContentToken, key: React.Key, topIndex: number | null, inQuote = false): ReactNode => {
     switch (token.type) {
-      case "text": {
-        const imgClass = isEmojiOnly
-          ? cn("inline object-contain align-text-bottom", isSingleEmoji ? "h-12 w-12" : "h-10 w-10")
-          : undefined;
+      case "text":
         return (
           <span key={key}>
-            {renderInlineMarkdown(
-              token.value,
-              (leaf) => highlightText(leaf, highlight, emojiMap, imgClass, event.pubkey),
-              `${key}-`,
-            )}
+            {renderInlineMarkdown(token.value, renderLeaf, `${key}-`)}
           </span>
         );
-      }
       case "everyone-mention":
         return (
           <span
@@ -979,7 +1033,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             key={key}
             className="my-0.5 border-l-[3px] border-border/80 pl-2.5 text-foreground/90"
           >
-            {token.tokens.map((t, j) => renderToken(t, `${key}-q${j}`, null, true))}
+            {renderTokens(token.tokens, `${key}-q`, false, true)}
           </blockquote>
         );
       case "md-link": {
@@ -1012,12 +1066,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               token.level === 1 ? "text-lg" : token.level === 2 ? "text-base" : "text-sm",
             )}
           >
-            {token.tokens.map((t, j) => renderToken(t, `${key}-h${j}`, null, true))}
+            {renderTokens(token.tokens, `${key}-h`, false, true)}
           </div>
         );
       case "list": {
         const items = token.items.map((item, j) => (
-          <li key={`${key}-li${j}`}>{item.map((t, k) => renderToken(t, `${key}-li${j}-${k}`, null, true))}</li>
+          <li key={`${key}-li${j}`}>{renderTokens(item, `${key}-li${j}-`, false, true)}</li>
         ));
         // whitespace-normal: pre-wrap would render markup line breaks between <li>s.
         return token.ordered
@@ -1258,7 +1312,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
   const body = (
     <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && (isSingleEmoji ? "text-5xl leading-normal" : "text-4xl leading-tight"))}>
-      {groupedTokens.map((token, i) => renderToken(token, i, i))}
+      {renderTokens(groupedTokens, "", true)}
 
       {lightboxIndex !== null && (
         <Lightbox

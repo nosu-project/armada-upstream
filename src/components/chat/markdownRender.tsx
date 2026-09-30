@@ -6,18 +6,25 @@ import { parseInline } from "@/lib/markdown";
 import type { InlineNode } from "@/lib/markdown";
 import type { ReactNode } from "react";
 
-/** Render an inline-markdown AST; leaf text goes through `renderLeaf` (emoji, highlighting). */
-export function renderInlineNodes(
-  nodes: InlineNode[],
+/**
+ * Render an inline-markdown AST; leaf text goes through `renderLeaf` (emoji,
+ * highlighting) and atoms from `parseInlineRun` through `renderAtom`.
+ */
+export function renderInlineNodes<A = never>(
+  nodes: InlineNode<A>[],
   renderLeaf: (text: string) => ReactNode,
   keyPrefix = "",
+  renderAtom?: (atom: A, key: string) => ReactNode,
 ): ReactNode[] {
-  return nodes.map((node, i) => {
+  return nodes.map((node: InlineNode<A>, i) => {
     const key = `${keyPrefix}md-${i}`;
     if (node.type === "text") {
       return <Fragment key={key}>{renderLeaf(node.value)}</Fragment>;
     }
-    const children = renderInlineNodes(node.children, renderLeaf, `${key}-`);
+    if (node.type === "atom") {
+      return renderAtom ? renderAtom(node.atom, key) : null;
+    }
+    const children = renderInlineNodes(node.children, renderLeaf, `${key}-`, renderAtom);
     switch (node.type) {
       case "strong":
         return <strong key={key} className="font-semibold">{children}</strong>;

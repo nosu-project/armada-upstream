@@ -105,4 +105,27 @@ describe("ChatContent chat markdown", () => {
     expect(unauthorized.container.querySelector(".bg-primary\\/15")).toBeNull();
     expect(unauthorized.container.textContent).toContain("@everyone");
   });
+
+  it("formats across a link and inline code", () => {
+    const { container } = renderContent("**see https://example.com/page and `x`** after");
+    const strong = container.querySelector("strong");
+    expect(strong?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/page");
+    expect(strong?.querySelector("code")?.textContent).toBe("x");
+    expect(container.textContent).not.toContain("**");
+  });
+
+  it("renders blocks inside a quote, nested quotes, and a divider", () => {
+    const { container } = renderContent("> ## Inside\n> - item\n>> deeper\n\n---\nafter");
+    const quote = container.querySelector("blockquote");
+    expect(quote?.querySelector('[role="heading"]')?.textContent).toBe("Inside");
+    expect(quote?.querySelector("li")?.textContent).toBe("item");
+    expect(quote?.querySelector("blockquote")?.textContent).toBe("deeper");
+    expect(container.querySelector("hr")).not.toBeNull();
+  });
+
+  it("drops the backslash of an escape", () => {
+    const { container } = renderContent("\\*not italic\\*");
+    expect(container.querySelector("em")).toBeNull();
+    expect(container.textContent).toBe("*not italic*");
+  });
 });

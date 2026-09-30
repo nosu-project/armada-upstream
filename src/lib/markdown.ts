@@ -7,7 +7,7 @@
 /** A top-level block of message content. */
 export type MdBlock =
   | { type: "code"; lang?: string; code: string }
-  | { type: "quote"; text: string }
+  | { type: "quote"; blocks: MdBlock[] }
   | { type: "heading"; level: number; text: string }
   | { type: "list"; ordered: boolean; start: number; items: string[] }
   | { type: "rule" }
@@ -15,41 +15,69 @@ export type MdBlock =
 
 export type InlineCodeSegment = { code: boolean; value: string };
 
-export type InlineNode =
-  | { type: "text"; value: string }
-  | { type: "strong" | "em" | "u" | "s" | "spoiler"; children: InlineNode[] };
+export type InlineFormat = "strong" | "em" | "u" | "s" | "spoiler";
 
-/** Fenced code block: ```lang\n … ``` (closing fence required). */
-const FENCE_RE = /```([\w+-]*)\n?([\s\S]*?)```/g;
+/** Inline AST; `A` is the opaque atom type of `parseInlineRun` (none for plain text). */
+export type InlineNode<A = never> =
+  | { type: "text"; value: string }
+  | ([A] extends [never] ? never : { type: "atom"; atom: A })
+  | { type: InlineFormat; children: InlineNode<A>[] };
+
+/**
+ * Fenced code block (closing fence required): ```lang\n … ``` anywhere, or a
+ * `~~~` fence on lines of its own, so inline `~~strike~~` can't open one.
+ */
+const FENCE_RE = /```([\w+-]*)\n?([\s\S]*?)```|(?<![^\n])~~~([\w+-]*)\n((?:[\s\S]*?\n)?)~~~(?![^\n])/g;
 
 /** A quote line: `> text` (or a bare `>`), Discord-style. */
 const QUOTE_LINE_RE = /^>\s?/;
+/** Discord's `>>> `: everything from this line to the end of the message is quoted. */
+const REST_QUOTE_RE = /(?<![^\n])>>>(?:[ \t]|$|(?=\n))[ \t]*/g;
+/** Deeper `>` nesting stays literal, bounding the recursion. */
+const MAX_QUOTE_DEPTH = 8;
 
 /**
- * Split text into top-level blocks: fenced code, merged quote runs, ATX headings,
- * flat lists, thematic breaks, and plain text. Chat headings stop at level 3; `document` allows 4–6.
+ * Split text into top-level blocks: fenced code, quotes (whose content is itself
+ * split into blocks), headings, flat lists, thematic breaks, and plain text.
+ * Chat headings stop at level 3; `document` allows 4–6.
  */
 export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
+  return splitBlocks(src, document, 0);
+}
+
+function splitBlocks(src: string, document: boolean, depth: number): MdBlock[] {
+  if (depth === 0) {
+    const fences = [...src.matchAll(FENCE_RE)].map((m) => [m.index, m.index + m[0].length]);
+    for (const m of src.matchAll(REST_QUOTE_RE)) {
+      const at = m.index;
+      if (fences.some(([s, e]) => at >= s && at < e)) continue;
+      const before = at > 0 ? splitFencedBlocks(src.slice(0, at), document, depth) : [];
+      return [...before, { type: "quote", blocks: splitBlocks(src.slice(at + m[0].length), document, 1) }];
+    }
+  }
+  return splitFencedBlocks(src, document, depth);
+}
+
+function splitFencedBlocks(src: string, document: boolean, depth: number): MdBlock[] {
   const blocks: MdBlock[] = [];
   let last = 0;
-  FENCE_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = FENCE_RE.exec(src)) !== null) {
-    if (m.index > last) blocks.push(...splitQuoteBlocks(src.slice(last, m.index), document));
-    const code = m[2].replace(/\n$/, "");
+  for (const m of src.matchAll(FENCE_RE)) {
+    if (m.index > last) blocks.push(...splitQuoteBlocks(src.slice(last, m.index), document, depth));
+    const lang = m[1] ?? m[3];
+    const code = (m[2] ?? m[4]).replace(/\n$/, "");
     if (code.trim() !== "") {
-      blocks.push({ type: "code", lang: m[1] || undefined, code });
+      blocks.push({ type: "code", lang: lang || undefined, code });
     } else {
       // An empty fence is almost certainly not intentional code — keep it literal.
       blocks.push({ type: "text", text: m[0] });
     }
     last = m.index + m[0].length;
   }
-  if (last < src.length) blocks.push(...splitQuoteBlocks(src.slice(last), document));
+  if (last < src.length) blocks.push(...splitQuoteBlocks(src.slice(last), document, depth));
   return blocks;
 }
 
-function splitQuoteBlocks(src: string, document = false): MdBlock[] {
+function splitQuoteBlocks(src: string, document: boolean, depth: number): MdBlock[] {
   const blocks: MdBlock[] = [];
   const lines = src.split("\n");
   let textLines: string[] = [];
@@ -64,7 +92,11 @@ function splitQuoteBlocks(src: string, document = false): MdBlock[] {
   };
   const flushQuote = () => {
     if (quoteLines) {
-      blocks.push({ type: "quote", text: quoteLines.join("\n") });
+      const text = quoteLines.join("\n");
+      blocks.push({
+        type: "quote",
+        blocks: depth < MAX_QUOTE_DEPTH ? splitBlocks(text, document, depth + 1) : [{ type: "text", text }],
+      });
       quoteLines = null;
     }
   };
@@ -85,6 +117,10 @@ function splitQuoteBlocks(src: string, document = false): MdBlock[] {
 
 /** ATX heading: `## text` (1-6 hashes, space required so `#hashtag` stays literal). */
 const HEADING_RE = /^(#{1,6})\s+(.+)$/;
+/** Optional closing sequence of an ATX heading: `## Title ##`. */
+const HEADING_CLOSE_RE = /\s+#+\s*$/;
+/** Setext underline (3+ so a stray `=`/`-` stays literal): `=` is level 1, `-` level 2. */
+const SETEXT_RE = /^ {0,3}(={3,}|-{3,})[ \t]*$/;
 /** Deepest heading level chat recognizes (`# `, `## `, `### `, as in Discord). */
 const CHAT_HEADING_MAX_LEVEL = 3;
 /** Thematic break: 3+ of one of `-`, `*`, `_`, optionally spaced (CommonMark). */
@@ -119,6 +155,18 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
   };
 
   for (const line of src.split("\n")) {
+    // Before the rule check: `---` under a paragraph underlines it (CommonMark).
+    const setext = SETEXT_RE.exec(line);
+    if (setext) {
+      let start = textLines.length;
+      while (start > 0 && textLines[start - 1].trim() !== "") start--;
+      if (start < textLines.length) {
+        const text = textLines.splice(start).map((l) => l.trim()).join("\n");
+        flushText();
+        blocks.push({ type: "heading", level: setext[1][0] === "=" ? 1 : 2, text });
+        continue;
+      }
+    }
     // Before lists, so `- - -` / `* * *` are a rule rather than an item.
     if (RULE_RE.test(line)) {
       flushText();
@@ -130,7 +178,7 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
     if (heading && heading[1].length <= maxHeading) {
       flushText();
       flushList();
-      blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() });
+      blocks.push({ type: "heading", level: heading[1].length, text: heading[2].replace(HEADING_CLOSE_RE, "").trim() });
       continue;
     }
     const ordered = ORDERED_ITEM_RE.exec(line);
@@ -177,7 +225,8 @@ export function splitMarkdownLinks(src: string): MdLinkSegment[] {
   return out;
 }
 
-const INLINE_CODE_RE = /`([^`\n]+)`/g;
+/** Inline code; an opening backtick after an odd run of backslashes is escaped. */
+const INLINE_CODE_RE = /(?<=(?:^|[^\\])(?:\\\\)*)`([^`\n]+)`/g;
 
 /** Split out `` `inline code` `` so the URL/nostr tokenizer can skip it. */
 export function splitInlineCode(src: string): InlineCodeSegment[] {
@@ -196,7 +245,7 @@ export function splitInlineCode(src: string): InlineCodeSegment[] {
 
 /** Inline patterns in tie-break priority order (longer delimiters first). */
 const INLINE_PATTERNS: ReadonlyArray<{
-  type: Exclude<InlineNode["type"], "text">;
+  type: InlineFormat;
   re: RegExp;
 }> = [
   // Negative lookahead so `**bold *and italic***` closes at the LAST `**`.
@@ -204,18 +253,86 @@ const INLINE_PATTERNS: ReadonlyArray<{
   { type: "u", re: /__([\s\S]+?)__(?!_)/ },
   { type: "s", re: /~~([\s\S]+?)~~(?!~)/ },
   { type: "spoiler", re: /\|\|([\s\S]+?)\|\|(?!\|)/ },
-  { type: "em", re: /\*([^*\n]+)\*(?!\*)/ },
-  // `_italic_` only at word boundaries so snake_case stays literal.
+  // Single `*`/`_` only at word boundaries, so `2*3*4` and snake_case stay literal.
+  { type: "em", re: /(?<!\w)\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])/ },
   { type: "em", re: /(?<![\w])_([^_\n]+)_(?![\w])/ },
 ];
 
+/**
+ * Stands in for one atom (an opaque token, or an escaped character) while
+ * delimiters are matched: neither a word character nor whitespace.
+ */
+const ATOM = "\uE000";
+/** `\*` etc.: the markdown punctuation a backslash makes literal. */
+const ESCAPE_RE = /\\([\\`*_~|#>\-+=.!()[\]])|\uE000/g;
+
+export type InlineAtom<A> = { atom: A };
+
+/**
+ * Parse inline formatting across a run of text and opaque atoms (links,
+ * mentions), so `**see https://…**` spans the link. Backslash escapes are
+ * resolved into literal text.
+ */
+export function parseInlineRun<A>(parts: ReadonlyArray<string | InlineAtom<A>>): InlineNode<A>[] {
+  // Slots are consumed in document order; a literal ATOM in the input is itself a slot.
+  const slots: Array<{ text: string } | InlineAtom<A>> = [];
+  let src = "";
+  for (const part of parts) {
+    if (typeof part !== "string") {
+      slots.push(part);
+      src += ATOM;
+      continue;
+    }
+    src += part.replace(ESCAPE_RE, (m: string, ch: string | undefined) => {
+      slots.push({ text: ch ?? m });
+      return ATOM;
+    });
+  }
+  if (slots.length === 0) return parseEncoded(src) as InlineNode<A>[];
+  return resolveAtoms(parseEncoded(src), slots, { next: 0 });
+}
+
 /** Parse inline formatting into an AST; degenerate delimiters stay literal. */
 export function parseInline(text: string): InlineNode[] {
+  return parseInlineRun<never>([text]);
+}
+
+function resolveAtoms<A>(
+  nodes: InlineNode[],
+  slots: ReadonlyArray<{ text: string } | InlineAtom<A>>,
+  cursor: { next: number },
+): InlineNode<A>[] {
+  const out: InlineNode<A>[] = [];
+  const pushText = (value: string) => {
+    if (value === "") return;
+    const prev = out[out.length - 1];
+    if (prev?.type === "text") prev.value += value;
+    else out.push({ type: "text", value });
+  };
+  for (const node of nodes) {
+    if (node.type !== "text") {
+      out.push({ type: node.type, children: resolveAtoms(node.children, slots, cursor) });
+      continue;
+    }
+    const pieces = node.value.split(ATOM);
+    pieces.forEach((piece, i) => {
+      if (i > 0) {
+        const slot = slots[cursor.next++];
+        if ("text" in slot) pushText(slot.text);
+        else out.push({ type: "atom", atom: slot.atom } as InlineNode<A>);
+      }
+      pushText(piece);
+    });
+  }
+  return out;
+}
+
+function parseEncoded(text: string): InlineNode[] {
   const out: InlineNode[] = [];
   let rest = text;
 
   while (rest.length > 0) {
-    let best: { index: number; length: number; content: string; type: Exclude<InlineNode["type"], "text"> } | null = null;
+    let best: { index: number; length: number; content: string; type: InlineFormat } | null = null;
     for (const { type, re } of INLINE_PATTERNS) {
       const m = re.exec(rest);
       if (!m) continue;
@@ -229,7 +346,7 @@ export function parseInline(text: string): InlineNode[] {
       break;
     }
     if (best.index > 0) out.push({ type: "text", value: rest.slice(0, best.index) });
-    out.push({ type: best.type, children: parseInline(best.content) });
+    out.push({ type: best.type, children: parseEncoded(best.content) });
     rest = rest.slice(best.index + best.length);
   }
 

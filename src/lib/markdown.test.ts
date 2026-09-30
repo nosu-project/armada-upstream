@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseInline, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "./markdown";
+import { parseInline, parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "./markdown";
 
 describe("splitMarkdownBlocks", () => {
   it("passes plain text through as one block", () => {
@@ -35,7 +35,7 @@ describe("splitMarkdownBlocks", () => {
   it("merges consecutive quote lines into one quote block", () => {
     const blocks = splitMarkdownBlocks("> first\n> second\nreply");
     expect(blocks).toEqual([
-      { type: "quote", text: "first\nsecond" },
+      { type: "quote", blocks: [{ type: "text", text: "first\nsecond" }] },
       { type: "text", text: "reply" },
     ]);
   });
@@ -43,6 +43,96 @@ describe("splitMarkdownBlocks", () => {
   it("keeps quote markers inside code blocks literal", () => {
     const blocks = splitMarkdownBlocks("```\n> not a quote\n```");
     expect(blocks).toEqual([{ type: "code", lang: undefined, code: "> not a quote" }]);
+  });
+
+  it("extracts ~~~ fences on lines of their own", () => {
+    expect(splitMarkdownBlocks("~~~py\nx = 1\n~~~")).toEqual([{ type: "code", lang: "py", code: "x = 1" }]);
+    expect(splitMarkdownBlocks("a ~~~not a fence~~~ b")).toEqual([{ type: "text", text: "a ~~~not a fence~~~ b" }]);
+  });
+
+  it("splits a quote's content into blocks, nesting on >>", () => {
+    expect(splitMarkdownBlocks("> # H\n> - a\n> - b\n>> deep")).toEqual([
+      {
+        type: "quote",
+        blocks: [
+          { type: "heading", level: 1, text: "H" },
+          { type: "list", ordered: false, start: 1, items: ["a", "b"] },
+          { type: "quote", blocks: [{ type: "text", text: "deep" }] },
+        ],
+      },
+    ]);
+  });
+
+  it("stops nesting quotes at a fixed depth", () => {
+    const deep = splitMarkdownBlocks(">".repeat(50) + " x");
+    let depth = 0;
+    let block = deep[0];
+    while (block?.type === "quote") {
+      depth++;
+      block = block.blocks[0];
+    }
+    expect(depth).toBeLessThanOrEqual(9);
+    expect(block).toMatchObject({ type: "text" });
+  });
+
+  it("quotes the rest of the message after >>> ", () => {
+    expect(splitMarkdownBlocks("intro\n>>> one\n\n- two\nthree")).toEqual([
+      { type: "text", text: "intro\n" },
+      {
+        type: "quote",
+        blocks: [
+          { type: "text", text: "one" },
+          { type: "list", ordered: false, start: 1, items: ["two"] },
+          { type: "text", text: "three" },
+        ],
+      },
+    ]);
+  });
+
+  it("ignores >>> inside a fence", () => {
+    expect(splitMarkdownBlocks("```\n>>> x\n```")).toEqual([{ type: "code", lang: undefined, code: ">>> x" }]);
+  });
+});
+
+describe("parseInline escapes and emphasis guards", () => {
+  it("makes escaped punctuation literal and drops the backslash", () => {
+    expect(parseInline("\\*not italic\\*")).toEqual([{ type: "text", value: "*not italic*" }]);
+    expect(parseInline("a \\\\ b")).toEqual([{ type: "text", value: "a \\ b" }]);
+    expect(parseInline("C:\\Users")).toEqual([{ type: "text", value: "C:\\Users" }]);
+  });
+
+  it("keeps escaped characters inside formatting", () => {
+    expect(parseInline("**a\\*b**")).toEqual([{ type: "strong", children: [{ type: "text", value: "a*b" }] }]);
+  });
+
+  it("round-trips a literal private-use placeholder character", () => {
+    expect(parseInline("x\uE000*y*")).toEqual([
+      { type: "text", value: "x\uE000" },
+      { type: "em", children: [{ type: "text", value: "y" }] },
+    ]);
+  });
+
+  it("does not italicize intraword or spaced asterisks", () => {
+    expect(parseInline("2*3*4")).toEqual([{ type: "text", value: "2*3*4" }]);
+    expect(parseInline("a * b * c")).toEqual([{ type: "text", value: "a * b * c" }]);
+  });
+
+  it("spans formatting across atoms", () => {
+    expect(parseInlineRun(["**see ", { atom: 1 }, "** and ||", { atom: 2 }, "||"])).toEqual([
+      { type: "strong", children: [{ type: "text", value: "see " }, { type: "atom", atom: 1 }] },
+      { type: "text", value: " and " },
+      { type: "spoiler", children: [{ type: "atom", atom: 2 }] },
+    ]);
+  });
+});
+
+describe("splitInlineCode escapes", () => {
+  it("leaves an escaped backtick for the inline pass", () => {
+    expect(splitInlineCode("\\`not code\\`")).toEqual([{ code: false, value: "\\`not code\\`" }]);
+    expect(splitInlineCode("\\\\`code`")).toEqual([
+      { code: false, value: "\\\\" },
+      { code: true, value: "code" },
+    ]);
   });
 });
 
@@ -178,13 +268,29 @@ describe("splitMarkdownBlocks (chat headings and lists)", () => {
     }
   });
 
+  it("strips an ATX heading's closing hashes", () => {
+    expect(splitMarkdownBlocks("## Title ##\n## C#")).toEqual([
+      { type: "heading", level: 2, text: "Title" },
+      { type: "heading", level: 2, text: "C#" },
+    ]);
+  });
+
+  it("reads setext underlines as headings, and --- after a blank line as a rule", () => {
+    expect(splitMarkdownBlocks("intro\n\nTitle\n=====\nSub\n---\n\n---")).toEqual([
+      { type: "text", text: "intro" },
+      { type: "heading", level: 1, text: "Title" },
+      { type: "heading", level: 2, text: "Sub" },
+      { type: "rule" },
+    ]);
+  });
+
   it("keeps short or mixed runs literal", () => {
     expect(splitMarkdownBlocks("--\n-*-\n__x__")).toEqual([{ type: "text", text: "--\n-*-\n__x__" }]);
   });
 
   it("splits headings alongside quotes and fences", () => {
     expect(splitMarkdownBlocks("> quoted\n## After quote\n```\ncode\n```")).toEqual([
-      { type: "quote", text: "quoted" },
+      { type: "quote", blocks: [{ type: "text", text: "quoted" }] },
       { type: "heading", level: 2, text: "After quote" },
       { type: "code", lang: undefined, code: "code" },
     ]);
@@ -229,7 +335,7 @@ describe("splitMarkdownBlocks (document mode)", () => {
   it("still extracts fences and quotes alongside document blocks", () => {
     expect(splitMarkdownBlocks("# Title\n> quoted\n```\ncode\n```", true)).toEqual([
       { type: "heading", level: 1, text: "Title" },
-      { type: "quote", text: "quoted" },
+      { type: "quote", blocks: [{ type: "text", text: "quoted" }] },
       { type: "code", lang: undefined, code: "code" },
     ]);
   });
