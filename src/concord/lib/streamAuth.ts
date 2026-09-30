@@ -115,15 +115,38 @@ export function streamPubkeysForRelay(relayUrl: string): string[] {
 }
 
 /**
- * Keys a re-auth of `relayUrl` must send: scoped, holding a secret, not yet acked.
- * Re-signing already-acked keys on each stale wave cost hundreds of signatures.
+ * Keys a re-auth of `relayUrl` must send: scoped, holding a secret, neither acked
+ * nor definitively rejected. Re-signing already-acked keys on each stale wave cost
+ * hundreds of signatures; re-sending rejected ones looped every wave for the
+ * socket's lifetime (a relay that can't verify AUTH answers every one `OK false`).
  */
 export function unackedStreamPubkeys(relayUrl: string): string[] {
   const state = relayAuth.get(normalizeRelayUrl(relayUrl) ?? relayUrl);
   return streamPubkeysForRelay(relayUrl).filter((pk) => {
     if (registry.get(pk)?.sk === undefined) return false;
-    return !state?.acked.has(pk);
+    return !state?.acked.has(pk) && !state?.rejected.has(pk);
   });
+}
+
+/**
+ * Claim the keys `relayUrl` has not been sent an AUTH for on this challenge
+ * (optionally within `pubkeys`), marking them in flight so a concurrent caller
+ * doesn't sign them again. NRelay1 invokes the challenge callback once per walled
+ * sub, and answering each with every key re-sent the whole registry per sub.
+ * A frame lost after the claim is the stale wave's job ({@link unackedStreamPubkeys}).
+ */
+export function claimStreamAuths(relayUrl: string, pubkeys?: Iterable<string>): string[] {
+  const state = relayAuthState(relayUrl);
+  const sending = new Set(state.pending.values());
+  const scoped = new Set(streamPubkeysForRelay(relayUrl));
+  const out: string[] = [];
+  for (const pk of pubkeys ?? scoped) {
+    if (!scoped.has(pk) || registry.get(pk)?.sk === undefined) continue;
+    if (state.acked.has(pk) || state.rejected.has(pk) || state.inFlight.has(pk) || sending.has(pk)) continue;
+    state.inFlight.add(pk);
+    out.push(pk);
+  }
+  return out;
 }
 
 /**
@@ -221,10 +244,16 @@ interface RelayAuthState {
   challenged: boolean;
   /** When the current challenge was recorded (ms) — for the stale self-heal. */
   challengedAt: number;
+  /** The challenge the claims, pending AUTHs and rejections below answered. */
+  challenge?: string;
   /** Stream pubkeys the relay has acked (OK true) on the live socket. */
   acked: Set<string>;
   /** Sent-but-unacked AUTH event ids → the stream pubkey they authenticate. */
   pending: Map<string, string>;
+  /** Claimed by {@link claimStreamAuths}, not yet sent (signing in the pool). */
+  inFlight: Set<string>;
+  /** Refused with a non-transient `OK false` on this challenge; not re-sent. */
+  rejected: Set<string>;
 }
 
 /** normalized relay url → live-socket auth state. */
@@ -255,15 +284,34 @@ function relayAuthState(url: string): RelayAuthState {
   const key = normalizeRelayUrl(url) ?? url;
   let state = relayAuth.get(key);
   if (!state) {
-    state = { challenged: false, challengedAt: 0, acked: new Set(), pending: new Map() };
+    state = {
+      challenged: false,
+      challengedAt: 0,
+      acked: new Set(),
+      pending: new Map(),
+      inFlight: new Set(),
+      rejected: new Set(),
+    };
     relayAuth.set(key, state);
   }
   return state;
 }
 
-/** Record that `url` issued a NIP-42 challenge on its live socket. */
-export function noteRelayChallenged(url: string): void {
+/**
+ * Record that `url` issued a NIP-42 challenge on its live socket. A NEW nonce
+ * voids what answered the old one (its AUTHs and refusals) but not the acks:
+ * NIP-42 authentication holds for the connection.
+ */
+export function noteRelayChallenged(url: string, challenge?: string): void {
   const state = relayAuthState(url);
+  if (challenge !== undefined && challenge !== state.challenge) {
+    if (state.challenge !== undefined) {
+      state.pending.clear();
+      state.inFlight.clear();
+      state.rejected.clear();
+    }
+    state.challenge = challenge;
+  }
   state.challenged = true;
   state.challengedAt = Date.now();
 }
@@ -275,16 +323,23 @@ export function resetRelayAuth(url: string): void {
 
 /** Record a stream AUTH frame sent to `url`, so its OK ack can be matched. */
 export function noteStreamAuthSent(url: string, eventId: string, pubkey: string): void {
-  relayAuthState(url).pending.set(eventId, pubkey);
+  const state = relayAuthState(url);
+  state.inFlight.delete(pubkey);
+  state.pending.set(eventId, pubkey);
 }
 
-/** Feed an `["OK", id, ok]` from `url`; ignores ids that aren't pending stream AUTHs. */
-export function noteAuthResult(url: string, eventId: string, ok: boolean): void {
+/**
+ * Feed an `["OK", id, ok, message]` from `url`; ignores ids that aren't pending
+ * stream AUTHs. Only a NIP-01 `rate-limited:` refusal is worth re-sending on the
+ * same challenge; any other is the relay's answer for this socket.
+ */
+export function noteAuthResult(url: string, eventId: string, ok: boolean, message?: string): void {
   const state = relayAuth.get(normalizeRelayUrl(url) ?? url);
   const pk = state?.pending.get(eventId);
   if (!state || pk === undefined) return;
   state.pending.delete(eventId);
   if (ok) state.acked.add(pk);
+  else if (!message?.startsWith("rate-limited:")) state.rejected.add(pk);
 }
 
 /**

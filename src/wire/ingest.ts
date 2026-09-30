@@ -318,6 +318,10 @@ export async function ingestWireEvents(
     for (const ev of fresh) {
       const scope = scopeOf(ev, spec);
       if (scope) scopes.add(scope);
+      // Root discovery re-reads the relays, so it wakes on new tickets only.
+      if (scope?.startsWith("git:") && (ev.kind === 1618 || ev.kind === 1621)) {
+        scopes.add(`gitroot:${scope.slice(4)}`);
+      }
       // Also name the peer so other open threads don't re-read on every DM.
       if (ev.kind === KIND_DM && self) {
         const peer = ev.pubkey === self ? tagValue(ev, "p") : ev.pubkey;

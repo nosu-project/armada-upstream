@@ -23,6 +23,7 @@ import { emitRelayReopened } from "@/lib/relayReopen";
 import { onDesktopResume } from "@/lib/desktop";
 import { logSync } from "@/lib/syncLog";
 import {
+  claimStreamAuths,
   noteAuthResult,
   noteRelayChallenged,
   noteStreamAuthSent,
@@ -273,8 +274,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         .find((d): d is string => typeof d === "string");
       if (!data?.startsWith('["OK"')) return;
       try {
-        const [, id, ok] = JSON.parse(data) as [string, string, boolean];
-        if (typeof id === "string") noteAuthResult(url, id, ok === true);
+        const [, id, ok, message] = JSON.parse(data) as [string, string, boolean, unknown];
+        if (typeof id === "string") {
+          noteAuthResult(url, id, ok === true, typeof message === "string" ? message : undefined);
+        }
       } catch { /* ignore */ }
     };
     const attach = (socket: NRelay1["socket"]) => {
@@ -342,13 +345,14 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
             const entry = openRelaysRef.current.get(url) ?? { relay };
             entry.challenge = challenge;
             openRelaysRef.current.set(url, entry);
-            noteRelayChallenged(url);
+            noteRelayChallenged(url, challenge);
             const streamPks = streamPubkeysForRelay(url);
+            const unsent = claimStreamAuths(url);
             logSync(
               "auth",
-              `NIP-42 challenge from ${url} — signing user + ${streamPks.length} stream key(s)`,
+              `NIP-42 challenge from ${url} — signing user + ${unsent.length}/${streamPks.length} stream key(s)`,
             );
-            void sendStreamAuths(entry, url);
+            void sendStreamAuths(entry, url, unsent);
 
             /**
              * Sign the user's kind-22242, guarded for slow bunkers: reuse on an identical
@@ -552,8 +556,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     return onStreamKeysAdded((added) => {
       for (const [url, entry] of openRelaysRef.current) {
         if (!entry.challenge) continue;
-        const scoped = new Set(streamPubkeysForRelay(url));
-        const pks = added.filter((pk) => scoped.has(pk));
+        const pks = claimStreamAuths(url, added);
         if (pks.length === 0) continue;
         logSync("auth", `authenticating ${pks.length} late stream key(s) on ${url}`);
         void sendStreamAuths(entry, url, pks);
