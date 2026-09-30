@@ -835,6 +835,7 @@ public class ArmadaNotificationPlugin extends Plugin {
                 // boundary: a missed/failed JS exit barrier cannot leave the
                 // outgoing account's tray, read actions or call ticket behind.
                 clearReadMarkers(getContext());
+                NotificationRelayService.clearPersistedCursors(getContext());
                 clearCallAnswer(getContext(), null);
                 NotificationRelayService.clearAccountNotifications(getContext());
             }
@@ -957,6 +958,7 @@ public class ArmadaNotificationPlugin extends Plugin {
             // Drop any un-drained read markers too, so they can't apply to a
             // different account after a logout/switch.
             clearReadMarkers(getContext());
+            NotificationRelayService.clearPersistedCursors(getContext());
             // And any ring's parameters, which name a peer of the account that
             // just went away.
             clearCallAnswer(getContext(), null);

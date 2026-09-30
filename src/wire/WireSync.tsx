@@ -45,6 +45,7 @@ import { perfCount, perfMark } from "@/lib/perf";
 import { emitWireScopes, onWireScopes } from "@/wire/bus";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import { ingestWireEvents } from "@/wire/ingest";
+import { bootLedgers, isLedgerFilter, partitionByLedger, recordLedger, type BootLedger } from "@/wire/bootLedger";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 
@@ -675,6 +676,8 @@ function WireSyncInner() {
   // Explicit-`since` filters (git child / CI bootstraps) whose replay reached
   // EOSE this session; later rounds resume from the cursor.
   const bootstrappedRef = useRef(new Set<string>());
+  // This session's bootLedger marks, ahead of the throttled KV copy.
+  const sessionLedgersRef = useRef(new Map<string, BootLedger>());
 
   useEffect(() => {
     const loops = loopsRef.current;
@@ -703,7 +706,7 @@ function WireSyncInner() {
             controller.signal.addEventListener("abort", finish);
           });
         // Wait for KV cursors, or every launch re-ingests the backlog.
-        await cursors.ready();
+        await Promise.all([cursors.ready(), bootLedgers.ready()]);
         // Only the first round and anomalies are logged.
         let firstRound = true;
         // Once a round reached EOSE, the DM wrap and Git child filters shrink
@@ -748,10 +751,16 @@ function WireSyncInner() {
             logSync("wire", `${relay}: round open (since=${since}, ${filters.length} filter(s))`);
             firstRound = false;
           }
-          // Explicit-`since` filters awaiting bootstrap keep their deep timestamp this round.
+          // Explicit-`since` filters awaiting bootstrap keep their deep timestamp this round;
+          // git/CI ones resume per unit from the persisted ledger instead.
           const bootKey = (f: NostrFilter) => `${relay}\u0000${JSON.stringify(f)}`;
-          const pending = filters.filter((f) => f.since !== undefined && !bootstrappedRef.current.has(bootKey(f)));
-          const settled = pending.length === 0 ? filters : filters.filter((f) => !pending.includes(f));
+          const ledgered = filters.filter(isLedgerFilter);
+          const ledgerNow = () => sessionLedgersRef.current.get(relay) ?? bootLedgers.get(relay);
+          const pending = [
+            ...partitionByLedger(ledgered, ledgerNow(), CURSOR_OVERLAP_SECONDS),
+            ...filters.filter((f) => f.since !== undefined && !isLedgerFilter(f) && !bootstrappedRef.current.has(bootKey(f))),
+          ];
+          const settled = filters.filter((f) => !ledgered.includes(f) && !pending.includes(f));
           // Pre-EOSE replay is batched (REPLAY_BATCH_MAX); live events ingest one by one.
           let replay: NostrEvent[] = [];
           const flushReplay = async () => {
@@ -776,6 +785,12 @@ function WireSyncInner() {
                   replayDone = true;
                   // Marked only at EOSE, so a torn-down replay retries.
                   for (const f of pending) bootstrappedRef.current.add(bootKey(f));
+                  // Every EOSE advances this session's marks; KV only on a real step.
+                  const at = Math.floor(Date.now() / 1000);
+                  const session = recordLedger(ledgerNow(), ledgered, now, at, 0);
+                  if (session) sessionLedgersRef.current.set(relay, session);
+                  const durable = recordLedger(bootLedgers.get(relay), ledgered, now, at);
+                  if (durable) bootLedgers.set(relay, durable);
                 }
                 if (msg[0] === "EVENT") {
                   backoff = 1_000;
@@ -824,6 +839,7 @@ function WireSyncInner() {
     if (loopsOwnerRef.current?.nostr !== nostr || loopsOwnerRef.current?.pubkey !== user?.pubkey) {
       for (const loop of loops.values()) loop.stop();
       loops.clear();
+      sessionLedgersRef.current.clear();
       loopsOwnerRef.current = { nostr, pubkey: user?.pubkey };
     }
     // Android background with the native service watching: no loops; resume

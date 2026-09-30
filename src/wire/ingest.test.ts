@@ -171,7 +171,7 @@ describe("ingestWireEvents", () => {
     const unrelated = plainEvent(1621, [["a", `30617:${"c".repeat(64)}:other`]]);
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [issue, unrelated]));
     expect(store.events.map((event) => event.id)).toEqual([issue.id]);
-    expect(scopes).toEqual(new Set([`git:${address}`]));
+    expect(scopes).toEqual(new Set([`git:${address}`, `gitroot:${address}`]));
   });
 
   it("stores only comments and statuses rooted in known tickets under the repository scope", async () => {
@@ -183,6 +183,7 @@ describe("ingestWireEvents", () => {
     const unrelated = plainEvent(1111, [["E", "3".repeat(64), "", "b".repeat(64)], ["K", "1621"]]);
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [comment, status, unrelated]));
     expect(store.events.map((event) => event.id)).toEqual([comment.id, status.id]);
+    // Children never wake root discovery (`gitroot:`), which re-reads every relay.
     expect(scopes).toEqual(new Set([`git:${address}`]));
   });
 

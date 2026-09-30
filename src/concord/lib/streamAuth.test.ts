@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { controlGroupKey, random32, type StreamKeyView } from "@/concord/lib/derive";
 import {
   _resetStreamAuthRegistry,
+  claimStreamAuths,
   isStreamPubkey,
   noteAuthResult,
   noteRelayChallenged,
@@ -18,6 +19,7 @@ import {
   streamAuthsSettled,
   streamPubkeys,
   streamPubkeysForRelay,
+  unackedStreamPubkeys,
 } from "@/concord/lib/streamAuth";
 
 const RELAY = "wss://relay.example.com";
@@ -263,6 +265,53 @@ describe("streamAuth per-relay ack state", () => {
     // …after which the old acks must NOT count.
     noteRelayChallenged(RELAY);
     expect(streamAuthsSettled(RELAY, [a.pk])).toBe(false);
+  });
+
+  it("a refused key leaves the re-auth set; a rate-limited one stays in it", () => {
+    const a = makeKey();
+    const b = makeKey();
+    registerStreamKeys([a, b], [RELAY]);
+    noteRelayChallenged(RELAY, "nonce");
+    noteStreamAuthSent(RELAY, "ev-a", a.pk);
+    noteStreamAuthSent(RELAY, "ev-b", b.pk);
+    noteAuthResult(RELAY, "ev-a", false, "error: relay needs serviceUrl to be configured");
+    noteAuthResult(RELAY, "ev-b", false, "rate-limited: slow down");
+    expect(unackedStreamPubkeys(RELAY)).toEqual([b.pk]);
+    expect(claimStreamAuths(RELAY)).toEqual([b.pk]);
+  });
+
+  it("claims each key once per challenge, so repeated callbacks sign nothing new", () => {
+    const a = makeKey();
+    const b = makeKey();
+    registerStreamKeys([a, b], [RELAY]);
+    noteRelayChallenged(RELAY, "nonce");
+    expect(claimStreamAuths(RELAY).sort()).toEqual([a.pk, b.pk].sort());
+    // A second walled sub re-invokes the callback before the first batch is signed.
+    expect(claimStreamAuths(RELAY)).toEqual([]);
+    noteStreamAuthSent(RELAY, "ev-a", a.pk);
+    noteAuthResult(RELAY, "ev-a", true);
+    noteStreamAuthSent(RELAY, "ev-b", b.pk);
+    noteRelayChallenged(RELAY, "nonce");
+    expect(claimStreamAuths(RELAY), "acked and pending keys are not re-claimed").toEqual([]);
+    const c = makeKey();
+    registerStreamKeys([c], [RELAY]);
+    expect(claimStreamAuths(RELAY, [a.pk, c.pk]), "only the late key").toEqual([c.pk]);
+  });
+
+  it("a new nonce voids pending AUTHs and refusals but keeps acks", () => {
+    const a = makeKey();
+    const b = makeKey();
+    const c = makeKey();
+    registerStreamKeys([a, b, c], [RELAY]);
+    noteRelayChallenged(RELAY, "first");
+    noteStreamAuthSent(RELAY, "ev-a", a.pk);
+    noteStreamAuthSent(RELAY, "ev-b", b.pk);
+    noteStreamAuthSent(RELAY, "ev-c", c.pk);
+    noteAuthResult(RELAY, "ev-a", true);
+    noteAuthResult(RELAY, "ev-b", false, "invalid: bad challenge");
+    noteRelayChallenged(RELAY, "second");
+    expect(claimStreamAuths(RELAY).sort()).toEqual([b.pk, c.pk].sort());
+    expect(streamAuthsSettled(RELAY, [a.pk])).toBe(true);
   });
 
   it("ack state normalizes relay URLs", () => {

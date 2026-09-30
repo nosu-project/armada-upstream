@@ -4,6 +4,33 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.63.1] - 2026-09-29
+
+Emoji packs can now be edited in place, with folder drop to add images and drag
+reordering, and dragging servers in the rail feels smoother. Replies show their
+original message even when it is far back in history. On Android, background
+notifications reconnect more gently on flaky networks and catch up correctly
+after long disconnects, and several server list and group settings edits no
+longer drop existing data.
+
+### Added
+- Edit emoji packs in place: drop a folder of images to add them, drag rows to reorder, and see your published packs in settings
+
+### Changed
+- Dragging servers in the rail picks up immediately with a mouse, scrolls at the edges more accurately, and animates into place
+- Replies to older messages show the original even when it isn't loaded, and jumping to it scrolls back to find it
+- Replies in relay-hosted server chats are compatible with other clients
+- Android background notifications use less data and battery when another device syncs a lot of changes, and wait for the network to settle before reconnecting
+
+### Fixed
+- Android background notifications catch up on direct messages after a long disconnect without re-alerting for old ones
+- Joining a community no longer shows mentions and notifications from before you joined
+- Editing a relay-hosted group's details keeps the fields you didn't change
+- Saving your server list keeps private entries private and public entries public
+- Message deletions in relay-hosted groups are only honoured from the author or a group admin
+- Malformed relay information no longer breaks server details
+- Git repositories are watched on fewer relays without missing updates
+
 ## [0.63.0] - 2026-09-28
 
 Browser notifications while Armada is closed now go through a new push service

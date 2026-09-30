@@ -180,7 +180,8 @@ describe("NostrSync self-state relay boundary", () => {
 
   it("never widens private self-state filters to the general pool", () => {
     expect(source).toContain('if (relayUrls.length === 0) return;');
-    expect(source).toContain("const source = nostr.group(relayUrls);");
+    expect(source).toContain("for (const url of relayUrls) {");
+    expect(source).toContain("nostr.relay(url).req(relayFilters, reqOpts)");
     expect(source).not.toMatch(/nostr\.group\(relayUrls\)\s*:\s*nostr/);
   });
 });

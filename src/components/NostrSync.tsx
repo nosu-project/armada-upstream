@@ -82,6 +82,13 @@ const DM_INDEX_MERGE_MAX_PIECES = 512;
 /** Background time before the self-state REQ is rebuilt on return (half-open sockets never reconnect). */
 const SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS = 30_000;
 
+/**
+ * How far behind a relay's last complete read a resumed self-state REQ asks:
+ * other devices stamp these documents with their own clocks. Matches the
+ * notification service's `SELF_SINCE_SLACK_SEC`.
+ */
+const SELF_SYNC_RESUME_SLACK_SECS = 600;
+
 function dTagOf(event: NostrEvent): string | undefined {
   for (const t of event.tags) if (t[0] === "d") return t[1];
   return undefined;
@@ -144,6 +151,8 @@ function NostrSyncInner() {
   // NIP-01: the LOWER id wins when two replaceables share a second.
   const relayListSeenVersion = useRef<NostrEvent | undefined>(undefined);
   const seenSelfVersions = useRef<Map<string, SelfSyncEventVersion>>(new Map());
+  // `pubkey \0 relay` → the REQ time of that relay's last self-state read to reach EOSE.
+  const selfReadCompleteAt = useRef<Map<string, number>>(new Map());
   // Ref so a debounced callback can read it without rebuilding the subscription.
   const reactionsFetched = useRef(false);
   useEffect(() => {
@@ -178,8 +187,10 @@ function NostrSyncInner() {
   signerRef.current = user?.signer;
 
   // A. Standing self-state subscription. Echoes suppressed by created_at;
-  // invalidations coalesced. NO `since`: every kind is replaceable, so a full
-  // read is cheap, and a lookback window missed changes made while away.
+  // invalidations coalesced. The first REQ per relay in a process is a full
+  // read (a fixed lookback missed changes made while away); a rebuild resumes
+  // from that relay's last complete read, which is ~1 MB less per resume on an
+  // account with a large read-state and many DM-index shards.
   useEffect(() => {
     const pubkey = user?.pubkey;
     if (!pubkey) return;
@@ -340,18 +351,27 @@ function NostrSyncInner() {
         : []),
     ];
 
-    void (async () => {
-      try {
-        const source = nostr.group(relayUrls);
-        // `onEvent` stores each version it admits itself; see CachingReqOpts.
-        const reqOpts: CachingReqOpts = { signal: controller.signal, cache: false };
-        for await (const msg of source.req(filters, reqOpts)) {
-          if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
+    // `onEvent` stores each version it admits itself; see CachingReqOpts.
+    const reqOpts: CachingReqOpts = { signal: controller.signal, cache: false };
+    for (const url of relayUrls) {
+      const readKey = `${pubkey}\u0000${url}`;
+      const completeAt = selfReadCompleteAt.current.get(readKey);
+      const relayFilters = completeAt === undefined
+        ? filters
+        : filters.map((f) => ({ ...f, since: completeAt - SELF_SYNC_RESUME_SLACK_SECS }));
+      const requestedAt = Math.floor(Date.now() / 1000);
+      void (async () => {
+        try {
+          for await (const msg of nostr.relay(url).req(relayFilters, reqOpts)) {
+            if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
+            // Everything stamped before this REQ has now been read from `url`.
+            else if (msg[0] === "EOSE") selfReadCompleteAt.current.set(readKey, requestedAt);
+          }
+        } catch {
+          // Subscription ended; NRelay1 reconnects, account change re-runs this.
         }
-      } catch {
-        // Subscription ended; NRelay1 reconnects, account change re-runs this.
-      }
-    })();
+      })();
+    }
 
     return () => {
       controller.abort();

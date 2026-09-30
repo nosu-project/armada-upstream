@@ -416,19 +416,34 @@ public class NotificationRelayService extends Service {
     // backlog); a reconnect in this service lifetime resumes inclusively from
     // only THAT relay's last accepted timestamp. It is deliberately in-memory:
     // durable history belongs to ArmadaDB/WebView sync, not notification replay.
-    private final Map<String, Long> relaySinceByUrl = new HashMap<>();
-    private final Set<String> relayCursorsWithEvents = new HashSet<>();
-    // Per-relay self-state cursor: when THIS process last saw the self-state
-    // subscription reach EOSE on a relay (minus SELF_SINCE_SLACK_SEC). Absent
-    // until the first full read, so a cold service start still takes the whole
-    // catch-up; every reconnect and re-REQ after that asks only for what
-    // changed. In-memory for the same reason as relaySinceByUrl.
-    private final Map<String, Long> selfSinceByUrl = new HashMap<>();
+    private final AccountCursors cursors = new AccountCursors();
+    private final Map<String, Long> relaySinceByUrl = cursors.relaySince;
+    private final Set<String> relayCursorsWithEvents = cursors.relaysWithEvents;
+    // Per-relay self-state cursor: when the self-state subscription last
+    // reached EOSE on a relay (minus SELF_SINCE_SLACK_SEC).
+    private final Map<String, Long> selfSinceByUrl = cursors.selfSince;
+    // When each DM inbox's live NIP-17 sub last dropped (wall ms). Concurrent:
+    // sendReqs reads it on the socket thread from onOpen.
+    private final Map<String, Long> dm17LiveUntilByUrl = cursors.dm17LiveUntil;
     // Per relay, kept across reconnects so a flood's pause outlives the socket.
     // Concurrent: sendReqs also runs on the socket thread from onOpen.
-    // When each DM inbox's live NIP-17 sub last dropped (wall ms; handler thread).
-    private final Map<String, Long> dm17LiveUntilByUrl = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, FloodBreaker> selfFloodByUrl = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Per-relay positions that belong to the signed-in account. */
+    static final class AccountCursors {
+        final Map<String, Long> relaySince = new HashMap<>();
+        final Set<String> relaysWithEvents = new HashSet<>();
+        final Map<String, Long> selfSince = new HashMap<>();
+        final Map<String, Long> dm17LiveUntil = new java.util.concurrent.ConcurrentHashMap<>();
+
+        /** An account change: no position may carry into the next account's reads. */
+        void clear() {
+            relaySince.clear();
+            relaysWithEvents.clear();
+            selfSince.clear();
+            dm17LiveUntil.clear();
+        }
+    }
 
     private FloodBreaker selfFlood(String relayUrl) {
         return selfFloodByUrl.computeIfAbsent(relayUrl, k -> new FloodBreaker());
@@ -607,6 +622,16 @@ public class NotificationRelayService extends Service {
     private static final long PROFILE_PERSIST_DEBOUNCE_MS = 1_000;
     // SharedPreferences file holding the serialized ProfileStore.
     private static final String PROFILES_PREFS = "armada_notif_profiles";
+    /**
+     * Where each self-state relay's read had reached, kept across process
+     * restarts. Without it every new process re-read every document the account
+     * ever published there, and Ditto-family relays keep each edition: 377
+     * documents, 6.7 MB, on one restart. Keys are account-scoped; the file is
+     * cleared on disable/logout with the rest of the notification state.
+     */
+    static final String CURSOR_PREFS = "armada_notif_cursors";
+    /** An older persisted cursor is dropped for a full read. */
+    static final long SELF_SINCE_MAX_AGE_SEC = 30L * 24 * 3600;
     private static final String PROFILES_KEY = "profiles";
 
     /** Minimal author profile: display name + avatar URL + nip05 (any may be null). */
@@ -1549,15 +1574,13 @@ public class NotificationRelayService extends Service {
             // Cursor continuity is account-scoped just like the config itself.
             // A hot account replacement must not inherit the outgoing user's
             // relay position (or any other native last-good state).
-            relaySinceByUrl.clear();
-            selfSinceByUrl.clear();
+            cursors.clear();
             selfFloodByUrl.clear();
             selfSeenIds.clear();
             selfNewestByCoordinate.clear();
             selfTopicWindow.clear();
             handler.removeCallbacks(flushSelfTopicDocsRunnable);
             selfTopicFlushPosted = false;
-            relayCursorsWithEvents.clear();
         }
         userPubkey = nextUserPubkey;
         relayUrls.clear();
@@ -2482,11 +2505,12 @@ public class NotificationRelayService extends Service {
                 // shards leaks feature usage and can hydrate stale copies from
                 // a destination current writers do not maintain.
                 //
-                // No `since` on a relay's FIRST read in this process: a change
-                // made while this device was off must still be seen, which is
-                // the whole failure this subscription exists to fix. After that
-                // read completes (EOSE), every reconnect and re-REQ asks only
-                // from shortly before it (selfSinceByUrl). Unbounded every time
+                // The FIRST read of this account on a relay has no `since`: a
+                // change made while this device was off must still be seen,
+                // which is the whole failure this subscription exists to fix.
+                // After a read completes (EOSE), every later one — reconnects,
+                // re-REQs and new processes (CURSOR_PREFS) — asks only from
+                // shortly before it (selfSinceByUrl). Unbounded every time
                 // was not "a handful of events": the installation-sharded topic
                 // documents accumulate per install, and a full replay per
                 // re-REQ measured ~110 documents a relay, each Schnorr-verified
@@ -2533,6 +2557,12 @@ public class NotificationRelayService extends Service {
                 topicDocuments.put("#t", topics);
 
                 Long selfSince = selfSinceByUrl.get(relayUrl);
+                if (selfSince == null) {
+                    selfSince = persistedSelfSince(
+                            getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE)
+                                    .getLong(selfCursorKey(userPubkey, relayUrl), 0L),
+                            System.currentTimeMillis() / 1000);
+                }
                 if (selfSince != null) {
                     bare.put("since", selfSince);
                     documents.put("since", selfSince);
@@ -2564,9 +2594,12 @@ public class NotificationRelayService extends Service {
             walledSubs.remove(subSelf);
             endBackfill(subSelf);
             selfLive = false;
+            long pausedUntil = selfFlood(relayUrl).pausedUntil();
             handler.postDelayed(() -> {
                 RelayConnection now = connectionFor(relayUrl);
-                if (now == null || now.ws == null) return;
+                if (!resumesSelfAfterPause(now != null && now.ws != null,
+                        now != null && now.standingSubs.contains(now.subSelf),
+                        pausedUntil, selfFlood(relayUrl).pausedUntil())) return;
                 if (ServiceProfiler.ON) ServiceProfiler.count("self.flood resume " + ServiceProfiler.host(relayUrl));
                 try {
                     now.sendSelfReq(now.ws, true);
@@ -3060,7 +3093,12 @@ public class NotificationRelayService extends Service {
                     // REQs ask only for what changed since (see selfSinceByUrl).
                     if (sub.equals(accepted.subSelf)) {
                         accepted.selfLive = true;
-                        selfSinceByUrl.put(relayUrl, System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC);
+                        long since = System.currentTimeMillis() / 1000 - SELF_SINCE_SLACK_SEC;
+                        selfSinceByUrl.put(relayUrl, since);
+                        if (userPubkey != null) {
+                            getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE).edit()
+                                    .putLong(selfCursorKey(userPubkey, relayUrl), since).apply();
+                        }
                     }
                 }
                 return;
@@ -3545,6 +3583,45 @@ public class NotificationRelayService extends Service {
     static long dm17CatchUpFloorSec(Long liveUntilMs, long nowMs) {
         if (liveUntilMs == null || nowMs - liveUntilMs <= DM17_CATCHUP_MIN_GAP_MS) return 0;
         return Math.max(1, liveUntilMs / 1000 - DM17_CATCHUP_SLACK_SEC);
+    }
+
+    /**
+     * Whether an arriving self document counts toward its relay's flood breaker.
+     * One the window replays ({@code windowClosed}) was counted when staged.
+     */
+    static boolean countsTowardSelfFlood(boolean selfLive, boolean windowClosed) {
+        return selfLive && !windowClosed;
+    }
+
+    /**
+     * Whether a flood pause's resume timer, firing now, re-opens the self sub.
+     * {@code scheduledUntil} is the breaker's pause end when the timer was set;
+     * a different one now means an account switch reset the breaker or a later
+     * pause owns the resume. An open sub was already re-sent by a reconnect.
+     */
+    static boolean resumesSelfAfterPause(
+            boolean socketUp, boolean selfSubOpen, long scheduledUntil, long breakerPausedUntil) {
+        return socketUp && !selfSubOpen && scheduledUntil == breakerPausedUntil;
+    }
+
+    /** Whether a network callback concerns the default network. */
+    static boolean isDefaultNetwork(Object network, Object defaultNetwork) {
+        return network != null && network.equals(defaultNetwork);
+    }
+
+    static String selfCursorKey(String pubkey, String relayUrl) {
+        return "self|" + pubkey + "|" + relayUrl;
+    }
+
+    /** A persisted self-state cursor to resume from, or null for a full read. */
+    static Long persistedSelfSince(long savedSec, long nowSec) {
+        if (savedSec <= 0 || savedSec > nowSec || nowSec - savedSec > SELF_SINCE_MAX_AGE_SEC) return null;
+        return savedSec;
+    }
+
+    /** Disable/logout: no cursor may carry into another account's reads. */
+    static void clearPersistedCursors(Context ctx) {
+        ctx.getSharedPreferences(CURSOR_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
     }
 
     /** Pure cursor transition for JVM regression coverage. */
@@ -4679,7 +4756,7 @@ public class NotificationRelayService extends Service {
         }
         if (SelfState.isSelfKind(kind)) {
             RelayConnection live = connectionFor(relayUrl);
-            if (live != null && live.selfLive) {
+            if (live != null && countsTowardSelfFlood(live.selfLive, windowClosed)) {
                 long pause = selfFlood(relayUrl).onEdition(SystemClock.elapsedRealtime());
                 if (pause > 0) live.pauseSelf(pause);
             }
@@ -7277,6 +7354,7 @@ public class NotificationRelayService extends Service {
             @Override
             public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
                 if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return;
+                if (!isDefaultNetwork(network, cm.getActiveNetwork())) return;
                 handler.post(() -> {
                     // The default network just validated: connects held for it go now.
                     if (unvalidatedSince == 0) return;
