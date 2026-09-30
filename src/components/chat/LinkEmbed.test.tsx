@@ -16,10 +16,13 @@ vi.mock("@capacitor/core", () => ({
   registerPlugin: () => ({ open: native.open }),
 }));
 
-const preview = vi.hoisted(() => ({ embed: null as RichEmbed | null }));
+const preview = vi.hoisted(() => ({
+  embed: null as RichEmbed | null,
+  oembed: null as { title?: string; thumbnail_url?: string; thumbnail_width?: number; thumbnail_height?: number } | null,
+}));
 
 vi.mock("@/hooks/useLinkPreview", () => ({
-  useLinkPreview: () => ({ data: null, isLoading: false }),
+  useLinkPreview: () => ({ data: preview.oembed, isLoading: false }),
   useRichEmbed: () => ({ data: preview.embed, isLoading: false }),
 }));
 
@@ -238,5 +241,23 @@ describe("YouTubeEmbed", () => {
       "noopener,noreferrer",
     );
     expect(screen.queryByTitle("YouTube video")).not.toBeInTheDocument();
+  });
+});
+
+describe("GIF page links", () => {
+  it("plays a Tenor page's GIF instead of a page card", () => {
+    preview.oembed = {
+      title: "Mbison Street Fighter GIF",
+      thumbnail_url: "https://api.ditto.pub/link-preview-image/https%3A%2F%2Fmedia.tenor.com%2FNSnx2uRkjAEAAAAN%2Fmbison-bison.png",
+      thumbnail_width: 220,
+      thumbnail_height: 124,
+    };
+    const { container } = render(
+      <LinkEmbed url="https://tenor.com/view/mbison-bison-street-fighter-yes-anime-gif-3830858880492276737" />,
+    );
+    preview.oembed = null;
+    const video = container.querySelector("video");
+    expect(video?.getAttribute("src")).toBe("https://media.tenor.com/NSnx2uRkjAEAAAPo/mbison-bison.mp4");
+    expect(video?.hasAttribute("loop")).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InstagramEmbed } from "@/components/chat/InstagramEmbed";
 import { Lightbox, type LightboxItem } from "@/components/chat/Lightbox";
 import { TweetEmbed } from "@/components/chat/TweetEmbed";
+import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { toast } from "@/hooks/useToast";
 import { useLinkPreview, useRichEmbed } from "@/hooks/useLinkPreview";
 import { useMediaSrc } from "@/hooks/useMediaPolicy";
@@ -16,6 +17,9 @@ import {
   extractStreamableId,
   extractTweetId,
   extractYouTubeId,
+  giphyMp4FromPageUrl,
+  isTenorPageUrl,
+  tenorMp4FromThumbnail,
 } from "@/lib/linkEmbed";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { fullDateTime } from "@/lib/formatTime";
@@ -41,8 +45,17 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const tweetId = extractTweetId(url);
   const instagramShortcode = extractInstagramShortcode(url);
   const streamableId = extractStreamableId(url);
+  const giphyMp4 = giphyMp4FromPageUrl(url);
   // Remounting the provider iframe is the only way to stop its playback.
   const pauseEpoch = useEmbedPauseEpoch();
+
+  if (giphyMp4) {
+    return <VideoPlayer src={giphyMp4} gif className={className} />;
+  }
+
+  if (isTenorPageUrl(url)) {
+    return <TenorEmbed url={url} className={className} />;
+  }
 
   if (youtubeId) {
     return (
@@ -104,6 +117,20 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
   }
 
   return <LinkPreview url={url} className={className} />;
+}
+
+/** A Tenor page link plays its GIF, as Discord shows it; the page card is the fallback. */
+function TenorEmbed({ url, className }: { url: string; className?: string }) {
+  const { data, isLoading } = useLinkPreview(url);
+  const mp4 = tenorMp4FromThumbnail(data?.thumbnail_url);
+  if (isLoading) {
+    return <Skeleton className={cn("h-32 w-48 rounded-xl", className)} />;
+  }
+  if (!mp4) return <LinkPreview url={url} className={className} />;
+  const dim = data?.thumbnail_width && data.thumbnail_height
+    ? `${data.thumbnail_width}x${data.thumbnail_height}`
+    : undefined;
+  return <VideoPlayer src={mp4} dim={dim} gif alt={data?.title} className={className} />;
 }
 
 function EmbedInfoBar({ url }: { url: string }) {
