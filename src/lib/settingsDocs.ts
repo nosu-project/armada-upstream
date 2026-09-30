@@ -1,5 +1,5 @@
 /**
- * The user's six encrypted NIP-78 settings documents (kind 30078, NIP-44 to
+ * The user's seven encrypted NIP-78 settings documents (kind 30078, NIP-44 to
  * self, `d` = `${APP_ID}/<name>`). Split by write pattern, not topic, because
  * a replaceable event is rewritten whole on every field change. See
  * `docs/settings-documents.md`.
@@ -34,6 +34,7 @@ export const SETTINGS_DOC_NAMES = [
   "metadata",
   "rail",
   "read-state",
+  "read-state-recent",
   "notifications",
   "dms",
   "reactions",
@@ -59,6 +60,8 @@ export const SETTINGS_DOC_SCHEMAS = {
   "metadata": MetadataDocSchema,
   "rail": RailDocSchema,
   "read-state": ReadStateDocSchema,
+  // Only the entries newer than `read-state`'s; see ReadStateProvider.
+  "read-state-recent": ReadStateDocSchema,
   "notifications": NotificationsDocSchema,
   "dms": DmsDocSchema,
   "reactions": ReactionsDocSchema,
@@ -104,6 +107,7 @@ export function parseSettingsDoc<N extends SettingsDocName>(
 export const MIGRATED_KEYS = {
   "rail": ["railLayout", "railOrder"],
   "read-state": ["readState"],
+  "read-state-recent": [],
   "notifications": ["notifLevels", "mutedCommunities", "mutedChannels"],
   "dms": ["dmProtocol", "pinnedDms", "closedDms", "acceptedDms", "startedDms"],
   "reactions": ["frequentReactions"],

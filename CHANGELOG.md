@@ -4,6 +4,24 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.63.2] - 2026-09-30
+
+Message formatting understands more markdown, including horizontal rules,
+multi-line quotes, quotes containing lists and code, and formatting that spans
+links and mentions. Tenor and Giphy links play as GIFs. Marking conversations
+read syncs to your other devices with far less data, and reconnecting uses
+less bandwidth and battery.
+
+### Added
+- Horizontal rules (`---`, `***`, `___`), `~~~` code fences, `>>>` multi-line quotes, underlined headings and backslash escapes in messages
+- Tenor and Giphy page links play as GIFs instead of showing a link preview
+
+### Changed
+- Quotes in messages can contain lists, code blocks and other formatting, and bold, italics and strikethrough can span links and mentions
+- Marking conversations read syncs to your other devices using much less data
+- Reconnecting to relays re-downloads less, signs in to each relay once, and resumes repository updates where it left off
+- Android background notifications pause syncing from a relay that floods them with large settings updates
+
 ## [0.63.1] - 2026-09-29
 
 Emoji packs can now be edited in place, with folder drop to add images and drag

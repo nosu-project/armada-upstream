@@ -12,6 +12,19 @@ import org.junit.Test;
 import buzz.armada.app.relayfleet.FloodBreaker;
 
 public class NotificationRelayServiceSelfStateTest {
+    private static org.json.JSONObject withD(String d) throws org.json.JSONException {
+        return new org.json.JSONObject().put("tags",
+                new org.json.JSONArray().put(new org.json.JSONArray().put("d").put(d)));
+    }
+
+    @Test
+    public void bothReadStateDocumentsDismissTrayRooms() throws Exception {
+        assertTrue(NotificationRelayService.isReadStateDoc(withD("armada/read-state")));
+        assertTrue(NotificationRelayService.isReadStateDoc(withD("armada/read-state-recent")));
+        assertTrue(NotificationRelayService.isReadStateDoc(withD("fork/read-state-recent")));
+        assertFalse(NotificationRelayService.isReadStateDoc(withD("armada/reactions")));
+    }
+
     @Test
     public void selfStateUsesOnlyTheAccountRelaySet() {
         Set<String> accountRelays = new LinkedHashSet<>();

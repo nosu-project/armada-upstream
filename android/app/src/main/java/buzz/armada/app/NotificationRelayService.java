@@ -1212,15 +1212,18 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Whether {@code event} is the user's read-state settings document. Matched
-     * by the {@code d}-tag suffix rather than a compiled-in constant: the tag is
-     * structurally {@code ${APP_ID}/read-state}, so a fork that renames
-     * {@code VITE_APP_ID} is covered without threading another config value
-     * through the plugin. Caller has already checked the kind is 30078.
+     * Whether {@code event} is one of the user's read-state settings documents:
+     * the full map or the small recent-entries delta a read publishes. Both
+     * carry {@code readState} and dismiss the same way, since the WebView merges
+     * them max-per-key. Matched by the {@code d}-tag suffix rather than a
+     * compiled-in constant: the tag is structurally {@code ${APP_ID}/read-state},
+     * so a fork that renames {@code VITE_APP_ID} is covered without threading
+     * another config value through the plugin. Caller has already checked the
+     * kind is 30078.
      */
-    private static boolean isReadStateDoc(JSONObject event) {
+    static boolean isReadStateDoc(JSONObject event) {
         String d = tagValue(event, "d");
-        return d != null && d.endsWith("/read-state");
+        return d != null && (d.endsWith("/read-state") || d.endsWith("/read-state-recent"));
     }
 
     /**
@@ -4748,18 +4751,21 @@ public class NotificationRelayService extends Service {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop filter");
             return;
         }
+        // Before the seen check: a copy another relay already delivered was
+        // still downloaded from this one, and the breaker budgets bytes.
+        if (SelfState.isSelfKind(kind)) {
+            RelayConnection live = connectionFor(relayUrl);
+            if (live != null && countsTowardSelfFlood(live.selfLive, windowClosed)) {
+                long pause = selfFlood(relayUrl).onEdition(
+                        SystemClock.elapsedRealtime(), event.optString("content").length());
+                if (pause > 0) live.pauseSelf(pause);
+            }
+        }
         // A self-state document already verified and filed (another self
         // relay, or a re-REQ) is a no-op for the store; skip the verify too.
         if (SelfState.isSelfKind(kind) && selfSeenIds.contains(id)) {
             if (ServiceProfiler.ON) ServiceProfiler.count("event.drop self-state seen");
             return;
-        }
-        if (SelfState.isSelfKind(kind)) {
-            RelayConnection live = connectionFor(relayUrl);
-            if (live != null && countsTowardSelfFlood(live.selfLive, windowClosed)) {
-                long pause = selfFlood(relayUrl).onEdition(SystemClock.elapsedRealtime());
-                if (pause > 0) live.pauseSelf(pause);
-            }
         }
         String selfCoordinate = SelfState.isSelfKind(kind) ? selfCoordinateOf(event, kind) : null;
         if (selfCoordinate != null) {

@@ -125,6 +125,54 @@ export function extractStreamableId(url: string): string | null {
   }
 }
 
+/** A Tenor GIF page (`tenor.com/view/…`, optionally `/<lang>/view/…`), shared from Discord by URL. */
+export function isTenorPageUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.hostname.replace(/^www\./, "") !== "tenor.com") return false;
+    return /^\/(?:[a-z]{2}(?:-[A-Z]{2})?\/)?view\/[^/]+/.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The MP4 rendition of a Tenor GIF, from its page preview's thumbnail
+ * (`media.tenor.com/<id>/<slug>.png`, possibly wrapped by the preview proxy).
+ * A media id is a 12-char base plus a 4-char format code; `AAPo` is MP4.
+ */
+export function tenorMp4FromThumbnail(thumbnail: string | undefined): string | null {
+  if (!thumbnail) return null;
+  const candidates = [thumbnail];
+  try {
+    const inner = decodeURIComponent(new URL(thumbnail).pathname).match(/https?:\/\/\S+$/);
+    if (inner) candidates.push(inner[0]);
+  } catch {
+    return null;
+  }
+  for (const candidate of candidates) {
+    try {
+      const u = new URL(candidate);
+      if (!/^(?:c|media\d*)\.tenor\.com$/.test(u.hostname)) continue;
+      const m = u.pathname.match(/^\/(?:m\/)?([A-Za-z0-9_-]{12})[A-Za-z0-9_-]{4}\/([^/]+)\.[a-z0-9]+$/i);
+      if (m) return `https://media.tenor.com/${m[1]}AAPo/${m[2]}.mp4`;
+    } catch { /* not a URL */ }
+  }
+  return null;
+}
+
+/** The MP4 rendition of a Giphy GIF page (`giphy.com/gifs/<slug>-<id>`), derived from its id. */
+export function giphyMp4FromPageUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname.replace(/^www\./, "") !== "giphy.com") return null;
+    const m = u.pathname.match(/^\/(?:gifs|stickers)\/(?:[^/]*-)?([A-Za-z0-9]+)\/?$/);
+    return m ? `https://media.giphy.com/media/${m[1]}/giphy.mp4` : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Instagram shortcode from post/reel/IGTV URLs (incl. profile-prefixed forms
  * and ddinstagram/instagramez front-ends), or null if not embeddable.

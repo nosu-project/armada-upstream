@@ -41,6 +41,7 @@ class SelfStateTest {
                 "armada/metadata",
                 "armada/rail",
                 "armada/read-state",
+                "armada/read-state-recent",
                 "armada/notifications",
                 "armada/dms",
                 "armada/reactions",
