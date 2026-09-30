@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useEventStore } from "@/hooks/useEventStore";
+import { config } from "@/lib/env";
 import { tryNpubEncode } from "@/lib/safeNip19";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -10,7 +11,7 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 const NSITE_ROOT_KIND = 15128;
 
 /** Root sites live at `https://<npub>.<gateway>`. Default matches Ditto. */
-const NSITE_GATEWAY: string = import.meta.env.VITE_NSITE_GATEWAY || "nsite.lol";
+const NSITE_GATEWAY: string = config("NSITE_GATEWAY") || "nsite.lol";
 
 export interface NsiteResult {
   url: string;

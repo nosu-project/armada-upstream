@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   restartForWebUpdate: () => ipcRenderer.send("armada:web-update-restart"),
 
   /**
-   * Report the App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname) at boot, so
+   * Report the App Links host (PUBLIC_WEB_ORIGIN's hostname) at boot, so
    * the shell can recognize a link to our own public host — a copied message or
    * invite link clicked inside the app — and route it inward instead of out to
    * the system browser. The main process has no other way to know it: the build

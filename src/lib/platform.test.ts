@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
- * `LINK_PREVIEW_ENDPOINT` is read from the environment at module load, so each
- * case stubs the env and re-imports the module rather than calling a setter.
+ * `LINK_PREVIEW_ENDPOINT` is read from `window.ENV` at module load, so each
+ * case stubs it and re-imports the module rather than calling a setter.
  */
 async function loadLinkPreviewUrl(endpoint?: string) {
   if (endpoint === undefined) {
-    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   } else {
-    vi.stubEnv("VITE_LINK_PREVIEW_ENDPOINT", endpoint);
+    vi.stubGlobal("window", { ENV: { LINK_PREVIEW_ENDPOINT: endpoint } });
   }
   vi.resetModules();
   const { linkPreviewUrl } = await import("./platform");
@@ -17,7 +17,7 @@ async function loadLinkPreviewUrl(endpoint?: string) {
 
 describe("linkPreviewUrl", () => {
   afterEach(() => {
-    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.resetModules();
   });
 

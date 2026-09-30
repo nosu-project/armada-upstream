@@ -1,13 +1,15 @@
 /**
  * Build-time platform configuration.
- * - `VITE_APP_RELAYS` — default app relays (non-NIP-29 traffic). User-overridable.
- * - `VITE_BROADCAST_RELAYS` — write-only relays pool traffic is also published to. User-overridable.
- * - `VITE_APP_NAME` — display name of the deployment.
- * - `VITE_APP_ID` — fork identifier namespacing the app's own NIP-78 `d` tags.
+ * - `APP_RELAYS` — default app relays (non-NIP-29 traffic). User-overridable.
+ * - `BROADCAST_RELAYS` — write-only relays pool traffic is also published to. User-overridable.
+ * - `APP_NAME` — display name of the deployment.
+ * - `APP_ID` — fork identifier namespacing the app's own NIP-78 `d` tags.
  */
 
 import { Capacitor } from "@capacitor/core";
 import { nip19 } from "nostr-tools";
+
+import { config } from "@/lib/env";
 
 /**
  * True only inside the Capacitor native runtime (APK or iOS app). Kept in this
@@ -73,7 +75,7 @@ export function routeParamToRelay(param: string): string | undefined {
   return normalizeRelayUrl(decoded);
 }
 
-export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
+export const APP_NAME: string = config("APP_NAME") || "Armada";
 
 /**
  * Fork identifier namespacing the NIP-78 settings `d` tags (see
@@ -81,7 +83,7 @@ export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
  * the documents. Must match Android's `SelfState.DEFAULT_D_TAGS`
  * (asserted by `settingsDocs.test.ts`).
  */
-export const APP_ID: string = import.meta.env.VITE_APP_ID || "armada";
+export const APP_ID: string = config("APP_ID") || "armada";
 
 /**
  * iOS/iPadOS (iPadOS 13+ has a Mac UA, so Mac + touch counts). On iOS, Web Push
@@ -109,7 +111,7 @@ export function isStandalonePwa(): boolean {
  * Default app relays (Ditto's concept) for non-NIP-29 traffic: profiles, 10009
  * lists, etc. Group events go directly to their host. Seeds `AppConfig.appRelays`.
  */
-export const APP_RELAYS: string[] = (import.meta.env.VITE_APP_RELAYS || "wss://relay.ditto.pub,wss://relay.dreamith.to")
+export const APP_RELAYS: string[] = (config("APP_RELAYS") || "wss://relay.ditto.pub,wss://relay.dreamith.to")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
@@ -121,7 +123,7 @@ export const APP_RELAYS: string[] = (import.meta.env.VITE_APP_RELAYS || "wss://r
  * goes here. Seeds `AppConfig.broadcastRelays`.
  */
 export const BROADCAST_RELAYS: string[] = (
-  import.meta.env.VITE_BROADCAST_RELAYS ?? "wss://relay.primal.net"
+  config("BROADCAST_RELAYS") ?? "wss://relay.primal.net"
 )
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
@@ -129,7 +131,7 @@ export const BROADCAST_RELAYS: string[] = (
 
 /** Public NIP-65 indexes used only for a bounded kind-10002 lookup at login. May be empty. */
 export const RELAY_LIST_DISCOVERY_RELAYS: string[] = (
-  import.meta.env.VITE_NIP65_DISCOVERY_RELAYS
+  config("NIP65_DISCOVERY_RELAYS")
   ?? "wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social"
 )
   .split(",")
@@ -137,7 +139,7 @@ export const RELAY_LIST_DISCOVERY_RELAYS: string[] = (
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /** Default NIP-50 search relays. Seeds `AppConfig.searchRelays`. */
-export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "wss://relay.ditto.pub,wss://relay.dreamith.to")
+export const SEARCH_RELAYS: string[] = (config("SEARCH_RELAYS") || "wss://relay.ditto.pub,wss://relay.dreamith.to")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
@@ -147,7 +149,7 @@ export const SEARCH_RELAYS: string[] = (import.meta.env.VITE_SEARCH_RELAYS || "w
  * lookups only — never subscribed or persisted. Empty disables directory search.
  */
 export const GIT_ANNOUNCEMENT_DISCOVERY_RELAY: string =
-  normalizeRelayUrl(import.meta.env.VITE_GIT_DISCOVERY_RELAY ?? "wss://index.ngit.dev") ?? "";
+  normalizeRelayUrl(config("GIT_DISCOVERY_RELAY") ?? "wss://index.ngit.dev") ?? "";
 
 /** Whether a relay is the discovery index, compared as normalized URLs rather than by substring. */
 export function isGitAnnouncementDiscoveryRelay(url: string): boolean {
@@ -156,12 +158,12 @@ export function isGitAnnouncementDiscoveryRelay(url: string): boolean {
 
 /**
  * Default Concord AV brokers (CORD-07 §2): blind LiveKit token brokers used to
- * start a call in an empty channel. Override with `VITE_CONCORD_AV_SERVERS`
+ * start a call in an empty channel. Override with `CONCORD_AV_SERVERS`
  * (https origins) or set empty to disable Concord voice.
  */
 const DEFAULT_PUBLIC_AV_SERVER = "https://armada.buzz";
 export const CONCORD_AV_SERVERS: string[] = (
-  import.meta.env.VITE_CONCORD_AV_SERVERS ?? DEFAULT_PUBLIC_AV_SERVER
+  config("CONCORD_AV_SERVERS") ?? DEFAULT_PUBLIC_AV_SERVER
 )
   .split(",")
   .map((s: string) => s.trim())
@@ -169,9 +171,9 @@ export const CONCORD_AV_SERVERS: string[] = (
 
 /**
  * Fallback DM relays when the user has no kind-10050 inbox (added to app relays
- * in `effectiveDmRelays`). Empty unless `VITE_DM_RELAYS` is set.
+ * in `effectiveDmRelays`). Empty unless `DM_RELAYS` is set.
  */
-export const DM_RELAYS: string[] = (import.meta.env.VITE_DM_RELAYS ?? "")
+export const DM_RELAYS: string[] = (config("DM_RELAYS") ?? "")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
@@ -186,27 +188,27 @@ function envBool(value: string | undefined, dflt: boolean): boolean {
 
 /** Default mic processing toggles, seeding per-user voice preferences (`voiceDevices.ts`). */
 export const DEFAULT_NOISE_SUPPRESSION: boolean = envBool(
-  import.meta.env.VITE_DEFAULT_NOISE_SUPPRESSION,
+  config("DEFAULT_NOISE_SUPPRESSION"),
   true,
 );
 export const DEFAULT_ECHO_CANCELLATION: boolean = envBool(
-  import.meta.env.VITE_DEFAULT_ECHO_CANCELLATION,
+  config("DEFAULT_ECHO_CANCELLATION"),
   true,
 );
 export const DEFAULT_AUTO_GAIN_CONTROL: boolean = envBool(
-  import.meta.env.VITE_DEFAULT_AUTO_GAIN_CONTROL,
+  config("DEFAULT_AUTO_GAIN_CONTROL"),
   true,
 );
 
 /** Default for RNNoise ML noise cancellation (AudioWorklet + WASM). Users can toggle per device. */
-export const DEFAULT_RNNOISE: boolean = envBool(import.meta.env.VITE_DEFAULT_RNNOISE, true);
+export const DEFAULT_RNNOISE: boolean = envBool(config("DEFAULT_RNNOISE"), true);
 
 /**
  * Cross-origin sandbox domain for in-chat apps (webxdc, YouTube). Each app runs
  * on a per-app HMAC-derived subdomain whose Service Worker proxies fetches to
  * the parent (see `SandboxFrame`). Operators may self-host.
  */
-export const SANDBOX_DOMAIN: string = import.meta.env.VITE_SANDBOX_DOMAIN || "iframe.diy";
+export const SANDBOX_DOMAIN: string = config("SANDBOX_DOMAIN") || "iframe.diy";
 
 /**
  * Generic link-preview proxy for hosts without their own OEmbed; it sees every
@@ -214,7 +216,7 @@ export const SANDBOX_DOMAIN: string = import.meta.env.VITE_SANDBOX_DOMAIN || "if
  * `{url}` is replaced with the encoded URL, otherwise it's appended.
  */
 export const LINK_PREVIEW_ENDPOINT: string = (
-  import.meta.env.VITE_LINK_PREVIEW_ENDPOINT ?? "https://ditto.pub/api/link-preview/{url}"
+  config("LINK_PREVIEW_ENDPOINT") ?? "https://ditto.pub/api/link-preview/{url}"
 ).trim();
 
 /** Build the proxy request URL for a link preview, or null if no proxy is configured. */
@@ -245,7 +247,7 @@ function parseBridgePortalUrl(raw: string): string {
  * gated on it. Only used as a link target; nothing is dialed or sent.
  */
 export const BRIDGE_PORTAL_URL: string = parseBridgePortalUrl(
-  import.meta.env.VITE_BRIDGE_PORTAL_URL ?? "",
+  config("BRIDGE_PORTAL_URL") ?? "",
 );
 
 /** URL into the bridge portal (`/import` wizard or `/` dashboard), or `null` without a portal. */
@@ -256,15 +258,15 @@ export function bridgePortalUrl(path: "/" | "/import" = "/"): string | null {
 
 /**
  * Plausible analytics domain. OFF by default; set only by hosted deployments,
- * and build-time so it can't be toggled or synced. `VITE_PLAUSIBLE_ENDPOINT`
+ * and build-time so it can't be toggled or synced. `PLAUSIBLE_ENDPOINT`
  * optionally points at a self-hosted instance or proxy.
  */
-export const PLAUSIBLE_DOMAIN: string = (import.meta.env.VITE_PLAUSIBLE_DOMAIN ?? "").trim();
-export const PLAUSIBLE_ENDPOINT: string = (import.meta.env.VITE_PLAUSIBLE_ENDPOINT ?? "").trim();
+export const PLAUSIBLE_DOMAIN: string = (config("PLAUSIBLE_DOMAIN") ?? "").trim();
+export const PLAUSIBLE_ENDPOINT: string = (config("PLAUSIBLE_ENDPOINT") ?? "").trim();
 
 /**
- * nostr-push gateway: `VITE_NOSTR_PUSH_PUBKEY` (npub or hex, `#p`-tagged on
- * kind-25742 RPCs) and `VITE_NOSTR_PUSH_RELAYS` (rendezvous relays). Both empty
+ * nostr-push gateway: `NOSTR_PUSH_PUBKEY` (npub or hex, `#p`-tagged on
+ * kind-25742 RPCs) and `NOSTR_PUSH_RELAYS` (rendezvous relays). Both empty
  * ⇒ no web push.
  */
 function decodePushPubkey(raw: string): string | undefined {
@@ -281,10 +283,10 @@ function decodePushPubkey(raw: string): string | undefined {
 }
 
 export const NOSTR_PUSH_PUBKEY: string | undefined = decodePushPubkey(
-  import.meta.env.VITE_NOSTR_PUSH_PUBKEY ?? "",
+  config("NOSTR_PUSH_PUBKEY") ?? "",
 );
 
-export const NOSTR_PUSH_RELAYS: string[] = (import.meta.env.VITE_NOSTR_PUSH_RELAYS ?? "")
+export const NOSTR_PUSH_RELAYS: string[] = (config("NOSTR_PUSH_RELAYS") ?? "")
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
@@ -296,14 +298,14 @@ export function nostrPushConfigured(): boolean {
 
 /**
  * nostr-push2, the gateway browser Web Push goes through (`nostrPush2.ts`).
- * The legacy `VITE_NOSTR_PUSH_*` pair above now serves only the iOS app's APNs
+ * The legacy `NOSTR_PUSH_*` pair above now serves only the iOS app's APNs
  * path, which still speaks the older protocol.
  *
  * Neither value is a secret — both end up in the bundle either way — so the
  * public service is the default, and a build variable only overrides it:
  *
- * - `VITE_NOSTR_PUSH2_PUBKEY` — the service's pubkey (npub or hex).
- * - `VITE_NOSTR_PUSH2_RELAYS` — relays its kind-25742 RPC is carried over
+ * - `NOSTR_PUSH2_PUBKEY` — the service's pubkey (npub or hex).
+ * - `NOSTR_PUSH2_RELAYS` — relays its kind-25742 RPC is carried over
  *   (comma-separated). They must be relays the service itself reads.
  *
  * An empty variable counts as unset, since CI passes an unprovisioned secret
@@ -313,11 +315,11 @@ const DEFAULT_NOSTR_PUSH2_PUBKEY = "4c812266b5b8039b4bd98cf2e6c77dcbcae5ea9d9f7d
 const DEFAULT_NOSTR_PUSH2_RELAYS = "wss://relay.ditto.pub,wss://relay.dreamith.to";
 
 export const NOSTR_PUSH2_PUBKEY: string | undefined = decodePushPubkey(
-  import.meta.env.VITE_NOSTR_PUSH2_PUBKEY?.trim() || DEFAULT_NOSTR_PUSH2_PUBKEY,
+  config("NOSTR_PUSH2_PUBKEY")?.trim() || DEFAULT_NOSTR_PUSH2_PUBKEY,
 );
 
 export const NOSTR_PUSH2_RELAYS: string[] = (
-  import.meta.env.VITE_NOSTR_PUSH2_RELAYS?.trim() || DEFAULT_NOSTR_PUSH2_RELAYS
+  config("NOSTR_PUSH2_RELAYS")?.trim() || DEFAULT_NOSTR_PUSH2_RELAYS
 )
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))

@@ -55,7 +55,7 @@ function isExternallyOpenableUrl(value) {
  * navigation handlers ask this whether a link is really one of ours and, if so,
  * route it through the renderer's router instead of shell.openExternal.
  *
- * `host` is the renderer's build-time App Links host (`VITE_PUBLIC_WEB_ORIGIN`),
+ * `host` is the renderer's build-time App Links host (`PUBLIC_WEB_ORIGIN`),
  * registered over IPC — it is not known to the main process otherwise. This
  * mirrors `pathFromDeepLinkUrl`'s https branch (lib/deepLinkUrl.ts) exactly:
  * https only, exact host, a real router path (a leading `//` is a

@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const PORTAL = 'https://bridge.example.com';
 
-/** platform.ts reads the env once at load, so every case re-imports the graph. */
+/** platform.ts reads `window.ENV` once at load, so every case re-imports the graph. */
 async function load(portalUrl = PORTAL) {
   vi.resetModules();
-  vi.stubEnv('VITE_BRIDGE_PORTAL_URL', portalUrl);
+  window.ENV = { BRIDGE_PORTAL_URL: portalUrl };
   return await import('./bridgeApi');
 }
 
@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unstubAllEnvs();
+  delete window.ENV;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

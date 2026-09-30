@@ -72,13 +72,13 @@ export interface AppConfig {
   memberListVisible?: boolean;
   /**
    * App relays for non-NIP-29 traffic (profiles, lists…). Seeded from
-   * VITE_APP_RELAYS; user-editable. Group-scoped events never route here.
+   * APP_RELAYS; user-editable. Group-scoped events never route here.
    */
   appRelays: string[];
   /**
    * Write-only relays: everything `eventRouter` publishes also goes here, but
    * nothing is read from them (absent from every read set). Seeded from
-   * VITE_BROADCAST_RELAYS; gated with the app relays by `useAppRelays`. Group and
+   * BROADCAST_RELAYS; gated with the app relays by `useAppRelays`. Group and
    * Concord traffic never route here.
    */
   broadcastRelays: string[];
@@ -89,7 +89,7 @@ export interface AppConfig {
    * `STOCK_RELAYS` (fragment codec, vault rescue floor, invite fallbacks).
    */
   communityRelays: string[];
-  /** NIP-50 search relays (seeded from VITE_SEARCH_RELAYS); empty falls back to app relays. */
+  /** NIP-50 search relays (seeded from SEARCH_RELAYS); empty falls back to app relays. */
   searchRelays: string[];
   /** Host for starting empty Concord/DM voice calls; an account preference synced via NIP-78. */
   preferredVoiceServer: string;
@@ -114,7 +114,7 @@ export interface AppConfig {
   /** Whether app DM relays are in the DM set (default on); combines with `useOwnDmRelays` — see `effectiveDmRelays`. */
   useAppDmRelays: boolean;
   /**
-   * Additional app DM relays, seeded from `VITE_DM_RELAYS`; kept in settings so a
+   * Additional app DM relays, seeded from `DM_RELAYS`; kept in settings so a
    * restored setup replaces the seed. `appRelays` stay in the set for NIP-04.
    */
   appDmRelays: string[];

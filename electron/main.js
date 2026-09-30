@@ -192,7 +192,7 @@ function installBundleIpc() {
     app.exit(0);
   });
 
-  // The renderer reports its App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname)
+  // The renderer reports its App Links host (PUBLIC_WEB_ORIGIN's hostname)
   // at boot, so the navigation handlers can recognize a link to our own public
   // host and route it inward instead of out to the browser. Only the main
   // window may set it — a subframe (a WebXDC sandbox, a link embed) must not
@@ -276,7 +276,7 @@ async function openExternalUrl(url) {
   }
 }
 
-// The renderer's App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname), registered
+// The renderer's App Links host (PUBLIC_WEB_ORIGIN's hostname), registered
 // over IPC once the web bundle boots. The main process has no other way to know
 // it — the build compiles with empty platform relays and no baked-in origin —
 // so until the renderer reports it, an https link to our own host is treated

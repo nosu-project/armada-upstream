@@ -7,6 +7,7 @@ import react from "@vitejs/plugin-react";
 import { build, defineConfig, type InlineConfig, type Plugin } from "vite";
 import { configDefaults } from "vitest/config";
 
+import { buildConfigPlugin, loadBuildConfig } from "./src/build/buildConfig";
 import { manualChunks } from "./src/build/manualChunks";
 
 /**
@@ -108,9 +109,12 @@ function serveChangelog(): Plugin {
  */
 function buildStamp(): Plugin {
   const stamp = new Date().toISOString().slice(0, 19).replace("T", " ") + "Z";
-  const origin = (process.env.VITE_PUBLIC_WEB_ORIGIN || "https://armada.buzz").replace(/\/$/, "");
+  let origin = "https://armada.buzz";
   return {
     name: "armada-build-stamp",
+    configResolved(config) {
+      origin = (loadBuildConfig(config.mode, config.root).PUBLIC_WEB_ORIGIN || origin).replace(/\/$/, "");
+    },
     transformIndexHtml(html) {
       return html.replaceAll("__BUILD_STAMP__", stamp).replaceAll("__PUBLIC_ORIGIN__", origin);
     },
@@ -140,6 +144,7 @@ function serviceWorker(): Plugin {
     mode,
     logLevel,
     publicDir: false,
+    plugins: [buildConfigPlugin()],
     resolve: {
       alias: { "@": path.resolve(import.meta.dirname, "./src") },
     },
@@ -317,7 +322,7 @@ export default defineConfig({
       ignored: [...BUILD_ARTIFACT_EXCLUDES, "**/electron/.dev-profile/**"],
     },
   },
-  plugins: [react(), buildStamp(), serveChangelog(), serviceWorker()],
+  plugins: [react(), buildConfigPlugin(), buildStamp(), serveChangelog(), serviceWorker()],
   optimizeDeps: {
     // Pin the dep-scanner's entry points to the real HTML entries. Left to its
     // default the scanner GLOBS `**/*.html` from the project root, and that

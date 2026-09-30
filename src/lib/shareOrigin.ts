@@ -2,16 +2,17 @@
  * The origin shareable links are built on (#44). Capacitor (`https://localhost`)
  * and Electron (`app://armada`) origins are unreachable to recipients, so those
  * builds use the public web deployment, which is also the verified App Links
- * domain. Override with `VITE_PUBLIC_WEB_ORIGIN`.
+ * domain. Override with `PUBLIC_WEB_ORIGIN`.
  */
 
 import { Capacitor } from "@capacitor/core";
 
 import { isDesktop } from "@/lib/desktop";
+import { config } from "@/lib/env";
 
 /** The hosted web client's origin, used as the base for native-built links. */
 export const PUBLIC_WEB_ORIGIN: string =
-  import.meta.env.VITE_PUBLIC_WEB_ORIGIN || "https://armada.buzz";
+  config("PUBLIC_WEB_ORIGIN") || "https://armada.buzz";
 
 /** Page origin on the web; the public deployment on native and desktop. */
 export function shareOrigin(): string {

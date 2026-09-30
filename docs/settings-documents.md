@@ -98,7 +98,7 @@ boot instead of one.
 `src/lib/platform.ts`:
 
 ```ts
-export const APP_ID: string = import.meta.env.VITE_APP_ID || "armada";
+export const APP_ID: string = config("APP_ID") || "armada";
 ```
 
 `${APP_ID}/<name>` is what lets a fork or a custom build own its own documents
@@ -113,7 +113,7 @@ strand every existing install's settings.
 `APP_ID` is deliberately separate from `APP_NAME`, which is cosmetic: renaming a
 deployment must not move the documents its users already read.
 
-A fork that changes `VITE_APP_ID` must also change
+A fork that changes `APP_ID` must also change
 `SelfState.DEFAULT_D_TAGS` in the Android service — see below.
 
 ## Rules a writer must keep

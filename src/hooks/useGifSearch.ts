@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { config } from '@/lib/env';
+
 const RESULTS_LIMIT = 30;
 
 export interface GifPreviewSource {
@@ -24,11 +26,11 @@ export interface GifResult {
 type GifFetch = { results: GifResult[] };
 
 /**
- * GIFverse is the keyless default. KLIPY is used only when `VITE_KLIPY_API_KEY` is built in
+ * GIFverse is the keyless default. KLIPY is used only when `KLIPY_API_KEY` is built in
  * (it needs a per-install `customer_id` and injects sponsored results).
  */
 function klipyConfigured(): boolean {
-  return Boolean(import.meta.env.VITE_KLIPY_API_KEY?.trim());
+  return Boolean(config('KLIPY_API_KEY')?.trim());
 }
 
 const GIFVERSE_BASE_URL = 'https://gifverse.net/api/v1';
@@ -138,7 +140,7 @@ interface KlipyResponse {
 }
 
 function apiKey(): string {
-  const key = import.meta.env.VITE_KLIPY_API_KEY?.trim();
+  const key = config('KLIPY_API_KEY')?.trim();
   if (!key) throw new Error('KLIPY API key is not configured');
   return key;
 }

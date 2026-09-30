@@ -66,7 +66,7 @@ class SelfStateTest {
 
     @Test
     fun `uses the configured tag set when the WebView supplies one`() {
-        // A fork changes VITE_APP_ID and every document is renamed with it.
+        // A fork changes APP_ID and every document is renamed with it.
         val forked = setOf("fork/metadata", "fork/rail")
         assertTrue(
             SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "fork/rail"))), forked),

@@ -84,7 +84,7 @@ signalDesktopWebReady();
 try {
   registerDesktopDeepLinkHost(new URL(PUBLIC_WEB_ORIGIN).hostname);
 } catch {
-  // unparseable VITE_PUBLIC_WEB_ORIGIN: links open in the browser
+  // unparseable PUBLIC_WEB_ORIGIN: links open in the browser
 }
 
 perfMark("react mounted");
