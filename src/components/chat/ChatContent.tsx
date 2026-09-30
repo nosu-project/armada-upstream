@@ -165,7 +165,8 @@ type ContentToken =
   | { type: "quote"; tokens: ContentToken[] }
   | { type: "md-link"; text: string; url: string }
   | { type: "heading"; level: number; tokens: ContentToken[] }
-  | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] };
+  | { type: "list"; ordered: boolean; start: number; items: ContentToken[][] }
+  | { type: "rule" };
 
 /**
  * Split known `@name` aliases (Buzz/legacy mentions, pubkey in a `p` tag) out
@@ -681,6 +682,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         result.push({ type: "heading", level: block.level, tokens: tokenizeRun(block.text) });
       } else if (block.type === "list") {
         result.push({ type: "list", ordered: block.ordered, start: block.start, items: block.items.map(tokenizeRun) });
+      } else if (block.type === "rule") {
+        result.push({ type: "rule" });
       } else {
         result.push(...tokenizeRun(block.text));
       }
@@ -1021,6 +1024,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           ? <ol key={key} start={token.start} className="my-1 list-decimal space-y-0.5 whitespace-normal pl-5">{items}</ol>
           : <ul key={key} className="my-1 list-disc space-y-0.5 whitespace-normal pl-5">{items}</ul>;
       }
+      case "rule":
+        return <hr key={key} className="my-2 border-border" />;
       case "image-embed": {
         if (inQuote) return inlineLink(key, token.url);
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;

@@ -167,6 +167,21 @@ describe("splitMarkdownBlocks (chat headings and lists)", () => {
     ]);
   });
 
+  it("extracts thematic breaks of -, * and _", () => {
+    expect(splitMarkdownBlocks("above\n_____\nTest")).toEqual([
+      { type: "text", text: "above" },
+      { type: "rule" },
+      { type: "text", text: "Test" },
+    ]);
+    for (const rule of ["---", "***", "- - -", " * * * ", "___"]) {
+      expect(splitMarkdownBlocks(rule)).toEqual([{ type: "rule" }]);
+    }
+  });
+
+  it("keeps short or mixed runs literal", () => {
+    expect(splitMarkdownBlocks("--\n-*-\n__x__")).toEqual([{ type: "text", text: "--\n-*-\n__x__" }]);
+  });
+
   it("splits headings alongside quotes and fences", () => {
     expect(splitMarkdownBlocks("> quoted\n## After quote\n```\ncode\n```")).toEqual([
       { type: "quote", text: "quoted" },

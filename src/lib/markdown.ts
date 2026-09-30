@@ -10,6 +10,7 @@ export type MdBlock =
   | { type: "quote"; text: string }
   | { type: "heading"; level: number; text: string }
   | { type: "list"; ordered: boolean; start: number; items: string[] }
+  | { type: "rule" }
   | { type: "text"; text: string };
 
 export type InlineCodeSegment = { code: boolean; value: string };
@@ -26,7 +27,7 @@ const QUOTE_LINE_RE = /^>\s?/;
 
 /**
  * Split text into top-level blocks: fenced code, merged quote runs, ATX headings,
- * flat lists, and plain text. Chat headings stop at level 3; `document` allows 4–6.
+ * flat lists, thematic breaks, and plain text. Chat headings stop at level 3; `document` allows 4–6.
  */
 export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
   const blocks: MdBlock[] = [];
@@ -86,6 +87,8 @@ function splitQuoteBlocks(src: string, document = false): MdBlock[] {
 const HEADING_RE = /^(#{1,6})\s+(.+)$/;
 /** Deepest heading level chat recognizes (`# `, `## `, `### `, as in Discord). */
 const CHAT_HEADING_MAX_LEVEL = 3;
+/** Thematic break: 3+ of one of `-`, `*`, `_`, optionally spaced (CommonMark). */
+const RULE_RE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 /** Unordered list item: `- text` (space required so `*italic*` stays literal). */
 const UNORDERED_ITEM_RE = /^\s{0,3}[-*+]\s+(.+)$/;
 /** Ordered list item: `1. text` / `1) text`. */
@@ -116,6 +119,13 @@ function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
   };
 
   for (const line of src.split("\n")) {
+    // Before lists, so `- - -` / `* * *` are a rule rather than an item.
+    if (RULE_RE.test(line)) {
+      flushText();
+      flushList();
+      blocks.push({ type: "rule" });
+      continue;
+    }
     const heading = HEADING_RE.exec(line);
     if (heading && heading[1].length <= maxHeading) {
       flushText();
