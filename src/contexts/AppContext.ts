@@ -238,6 +238,11 @@ export interface AppConfig {
    */
   communityMediaAutoload: MediaAutoload;
   /**
+   * In `trusted` mode, also hold media hosted anywhere but the viewer's Blossom
+   * servers and the built-in Nostr hosts (`lib/knownMediaHosts.ts`). Default on. Synced.
+   */
+  communityMediaKnownHostsOnly: boolean;
+  /**
    * Whether Enter sends (Shift+Enter = newline) versus Ctrl/Cmd+Enter. Keyed by
    * device CLASS and synced; unset = auto (sends on keyboards, newline on touch).
    * Resolve with `sendsOnEnter()`. Document editing always uses Ctrl/Cmd+Enter.
@@ -313,6 +318,7 @@ export const METADATA_CONFIG_KEYS = [
   "stripTrackingParams",
   "mediaProxies",
   "communityMediaAutoload",
+  "communityMediaKnownHostsOnly",
   "sendOnEnter",
   "currencyDisplay",
   "defaultZapMethod",
@@ -407,6 +413,7 @@ export const defaultConfig: AppConfig = {
   stripTrackingParams: true,
   mediaProxies: [],
   communityMediaAutoload: "trusted",
+  communityMediaKnownHostsOnly: true,
   meshIncognito: true,
   meshEnabled: false,
   currencyDisplay: "usd",

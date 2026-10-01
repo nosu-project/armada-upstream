@@ -44,7 +44,7 @@ export function ConcordMediaHold({
   trusted: ReadonlySet<string> | undefined;
   children: ReactNode;
 }) {
-  const mode = useAppContext().config.communityMediaAutoload;
+  const { communityMediaAutoload: mode, communityMediaKnownHostsOnly: hostsOnly } = useAppContext().config;
   const { user } = useCurrentUser();
   const { isStaff } = useChatModeration(community);
   const followPubkeys = useFollowList().data?.pubkeys;
@@ -77,9 +77,9 @@ export function ConcordMediaHold({
     return {
       media: (author) => holdsMedia(author, inputs()),
       avatar: (author) => holdsAvatar(author, inputs()),
-      host: (author, url) => holdsMediaUrl(author, url, { mode, self }, knownHosts),
+      host: (author, url) => hostsOnly && holdsMediaUrl(author, url, { mode, self }, knownHosts),
     };
-  }, [mode, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);
+  }, [mode, hostsOnly, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);
 
   return <MediaHoldContext.Provider value={holds}>{children}</MediaHoldContext.Provider>;
 }

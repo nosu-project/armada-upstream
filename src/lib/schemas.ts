@@ -128,6 +128,7 @@ export const AppConfigSchema = z.object({
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   mediaProxies: z.array(z.string()).catch(defaultConfig.mediaProxies),
   communityMediaAutoload: z.enum(["always", "trusted", "never"]).catch(defaultConfig.communityMediaAutoload),
+  communityMediaKnownHostsOnly: z.boolean().catch(defaultConfig.communityMediaKnownHostsOnly),
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
@@ -177,6 +178,8 @@ export const MetadataDocSchema = z.looseObject({
   mediaProxies: z.array(z.string()).optional(),
   /** Whose media loads without a click in Concord communities. */
   communityMediaAutoload: z.enum(["always", "trusted", "never"]).optional(),
+  /** Also hold media from hosts outside the viewer's Blossom servers and known Nostr hosts. */
+  communityMediaKnownHostsOnly: z.boolean().optional(),
   sendOnEnter: SendOnEnterSchema.optional(),
   currencyDisplay: z.enum(["usd", "sats"]).optional(),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).optional(),

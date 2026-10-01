@@ -34,9 +34,7 @@ export function MediaPrivacySettings() {
           "Images, videos and link previews from anyone else wait for you to tap Load, and "
           + "nothing is fetched until you do. People you trust: yourself, moderators, people you "
           + "follow, people in your conversations, and members this device has seen for a day. "
-          + "Profile pictures from people you don't trust show initials for their first hour. "
-          + "Media hosted anywhere but your media servers and the common Nostr hosts waits too, "
-          + "whoever sent it."
+          + "Profile pictures from people you don't trust show initials for their first hour."
         }
       >
         <Select
@@ -53,6 +51,20 @@ export function MediaPrivacySettings() {
           </SelectContent>
         </Select>
       </SettingsRow>
+      {config.communityMediaAutoload === "trusted" && (
+        <SettingsRow
+          label="Only load from known hosts"
+          description={
+            "Also wait for Load on media hosted anywhere but your media servers and the common "
+            + "Nostr hosts, whoever sent it."
+          }
+        >
+          <Switch
+            checked={config.communityMediaKnownHostsOnly}
+            onCheckedChange={(on) => updateConfig((current) => ({ ...current, communityMediaKnownHostsOnly: on }))}
+          />
+        </SettingsRow>
+      )}
       <SettingsRow
         label="Load images through a proxy"
         description={
