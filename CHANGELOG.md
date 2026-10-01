@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.63.4] - 2026-10-01
+
+Communities now hold images, videos, previews and avatars from people you
+don't know yet until you choose to load them, so a stranger's message can't
+reveal your address to an outside server. Admins can promote and demote
+members straight from the profile card and member list, banned members no
+longer flash up while a community loads, and the Android download is smaller.
+
+### Added
+- Media from community members you have no history with waits behind a Load button; a new setting chooses between trusted senders only, always, or never
+- New members' avatars and banners in communities stay hidden for their first hour
+- Media hosted outside your own media servers and well-known Nostr hosts waits for Load, with a setting to turn this off
+- Make someone an admin or moderator, or remove their role, from their profile card or the member list
+
+### Changed
+- Reactions, audio, embeds and notification avatars in communities follow the same media hold
+- The member list toggle and the empty-calendar button moved into the channel menu, and member search shows inline
+- Community notification icons are sent smaller, and new community icons and banners are stored at a smaller size
+- The Android app download is smaller
+- Silent "messages synced" entries appear for every suppressed push notification in browsers that require one
+
+### Fixed
+- Messages, threads, feeds and search in a community no longer briefly show banned members while moderation is still loading
+
 ## [0.63.3] - 2026-09-30
 
 Links to relay-hosted groups shown in chat now appear as join cards, and older
