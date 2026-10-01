@@ -310,8 +310,10 @@ export function ForumPostPage({
                   ref={topComposerRef}
                   inert={!commentOpen}
                   aria-hidden={!commentOpen}
+                  // `minmax(0,1fr)`: an auto column grows to the attachment tray's
+                  // min-content and pushes the submit button off-screen.
                   className={cn(
-                    "grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+                    "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
                     commentOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
                   )}
                 >
