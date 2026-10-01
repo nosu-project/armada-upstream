@@ -12,11 +12,11 @@ export function HeldMedia({
   count = 1,
   onLoad,
 }: {
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   count?: number;
   onLoad: () => void;
 }) {
-  const noun = kind === "video" ? "Video" : count > 1 ? `${count} images` : "Image";
+  const noun = kind === "video" ? "Video" : kind === "audio" ? "Audio" : count > 1 ? `${count} images` : "Image";
   return (
     <div className="my-1.5 flex max-w-sm items-center gap-3 rounded-lg bg-muted/60 px-3 py-2.5 whitespace-normal">
       <ShieldAlert className="size-5 shrink-0 text-muted-foreground" aria-hidden />
@@ -41,5 +41,23 @@ export function HeldMedia({
         Load
       </Button>
     </div>
+  );
+}
+
+/** Trailing Load for a held message whose only held content is previews and embeds. */
+export function HeldPreviews({ onLoad }: { onLoad: () => void }) {
+  return (
+    <button
+      type="button"
+      className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground touch:min-h-11"
+      onClick={(e) => {
+        e.stopPropagation();
+        onLoad();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <ShieldAlert className="size-3.5" aria-hidden />
+      Previews not loaded · Load
+    </button>
   );
 }

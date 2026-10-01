@@ -16,10 +16,13 @@ export function XdcAttachment({
   url,
   imeta,
   messageId,
+  hideIcon = false,
 }: {
   url: string;
   imeta?: ImetaEntry;
   messageId?: string;
+  /** The sender's icon is held (`mediaHold.ts`); the app still opens on request. */
+  hideIcon?: boolean;
 }) {
   const scope = useChatScope();
   const { activeApp, launchApp } = useApps();
@@ -28,7 +31,7 @@ export function XdcAttachment({
   // the URL and message id; otherwise each client gets a solo session.
   const sessionId = imeta?.webxdc ?? (messageId ? deriveUrlTopicId(url, messageId) : undefined);
   // An encrypted attachment's thumb is ciphertext; only show plaintext icons.
-  const icon = imeta?.encryption ? undefined : sanitizeImageSrc(imeta?.thumbnail);
+  const icon = imeta?.encryption || hideIcon ? undefined : sanitizeImageSrc(imeta?.thumbnail);
 
   const openHere = Boolean(
     activeApp &&

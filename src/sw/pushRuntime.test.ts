@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { queryChannelRumors } from "@/concord/lib/rumorStore";
 import { queryDm17Thread } from "@/lib/nip17/dm17Store";
 
-import { openConcord, openDm, preparePush, pushScope } from "./pushRuntime";
+import { communityAvatarShown, openConcord, openDm, preparePush, pushScope } from "./pushRuntime";
 
 import type { SwConcordStream, SwPushConfig } from "@/lib/swPushConfig";
 
@@ -1012,5 +1012,15 @@ describe("napp.push.payload: the plane read off the event", () => {
     const forged = { ...JSON.parse(JSON.stringify(event(9, [["h", "general"]]))), content: "not what was signed" };
     const prepared = await preparePush({ event: forged, relays: ["wss://relay-a.example"] }, cfg());
     expect(prepared?.drop).toBe(true);
+  });
+});
+
+describe("communityAvatarShown", () => {
+  it("shows a community sender's avatar only for a known peer", () => {
+    const known = "a".repeat(64);
+    const cfg = { policy: "generic", self: "c".repeat(64), knownPeers: [known] } as SwPushConfig;
+    expect(communityAvatarShown(known, cfg)).toBe(true);
+    expect(communityAvatarShown("f".repeat(64), cfg)).toBe(false);
+    expect(communityAvatarShown(known, null)).toBe(false);
   });
 });

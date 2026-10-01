@@ -259,6 +259,8 @@ async function present(
   room: { title?: string; image?: string },
   route: { tag: string; url: string; timestamp: number; roomKey?: string; eventId?: string },
   policy: MediaPolicy,
+  /** Show the sender's avatar; false = the room icon or the app's. */
+  showAvatar = true,
 ): Promise<PreparedPush> {
   const [{ name, avatar }, mentionNames] = await Promise.all([
     profileFor(author, policy),
@@ -267,7 +269,7 @@ async function present(
   const full: NotificationMessage = {
     ...msg,
     authorName: name,
-    authorAvatar: avatar,
+    authorAvatar: showAvatar ? avatar : undefined,
     roomTitle: room.title,
     roomImage: room.image,
     mentionNames,
@@ -486,7 +488,17 @@ async function prepareConcord(
       timestamp: opened.createdAt * 1000,
     },
     policy,
+    communityAvatarShown(opened.author, cfg),
   );
+}
+
+/**
+ * Whether a community sender's avatar may be the notification icon. Anyone with
+ * the key can post (CORD-04 §1), so only a known peer's face reaches the lock
+ * screen — the worker has no view of the in-app trust graph (`mediaTrust.ts`).
+ */
+export function communityAvatarShown(author: string, cfg: SwPushConfig | null): boolean {
+  return Boolean(cfg?.knownPeers?.includes(author));
 }
 
 /**

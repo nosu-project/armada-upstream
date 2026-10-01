@@ -1,8 +1,9 @@
 import { SmilePlus } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { CustomEmojiImg } from "@/components/chat/CustomEmoji";
 import { EmojiSourceFooter } from "@/components/chat/EmojiSourceFooter";
+import { MediaHoldContext } from "@/components/chat/mediaHold";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,24 @@ export function ReactionGlyph({
   return glyphText;
 }
 
+/**
+ * The custom-emoji image to show for a tally, and whose reaction named it. Under a
+ * media hold (`mediaHold.ts`) only an unheld reactor's image counts, so a stranger
+ * can't paint a shortcode regulars use; none left = the `:shortcode:` text.
+ */
+function useShownEmoji(tally: ReactionTally): { url?: string; source?: string } {
+  const hold = useContext(MediaHoldContext);
+  if (!hold) return { url: tally.url, source: tally.pubkeys[0] };
+  if (!tally.urls) {
+    return tally.url && tally.pubkeys.some((pk) => !hold.media(pk)) ? { url: tally.url, source: tally.pubkeys[0] } : {};
+  }
+  for (let i = 0; i < tally.pubkeys.length; i++) {
+    const url = tally.urls[i];
+    if (url && !hold.media(tally.pubkeys[i])) return { url, source: tally.pubkeys[i] };
+  }
+  return {};
+}
+
 function ReactorRow({ pubkey }: { pubkey: string }) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -109,10 +128,11 @@ function ReactorRow({ pubkey }: { pubkey: string }) {
 }
 
 function ReactionDetail({ tally }: { tally: ReactionTally }) {
+  const shown = useShownEmoji(tally);
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-        <ReactionGlyph emojiKey={tally.key} url={tally.url} className="h-6 w-6 text-xl" />
+        <ReactionGlyph emojiKey={tally.key} url={shown.url} className="h-6 w-6 text-xl" />
         <span className="text-xs text-muted-foreground">
           {tally.count} {tally.count === 1 ? "reaction" : "reactions"}
         </span>
@@ -122,7 +142,7 @@ function ReactionDetail({ tally }: { tally: ReactionTally }) {
           <ReactorRow key={pubkey} pubkey={pubkey} />
         ))}
       </div>
-      {tally.url && <EmojiSourceFooter url={tally.url} authorPubkey={tally.pubkeys[0]} />}
+      {shown.url && <EmojiSourceFooter url={shown.url} authorPubkey={shown.source} />}
     </>
   );
 }
@@ -143,6 +163,7 @@ function ReactionPill({
   const { user } = useCurrentUser();
   const isTouch = useIsTouch();
   const [open, setOpen] = useState(false);
+  const shown = useShownEmoji(tally);
 
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -186,7 +207,8 @@ function ReactionPill({
 
   const toggle = () => {
     if (!canReact) return;
-    const input = toggleInput(tally.key, tally.url, [tally]);
+    // The shown image, so joining a pill never re-signs a held reactor's URL.
+    const input = { ...toggleInput(tally.key, shown.url, [tally]), emojiUrl: shown.url };
     if (!input.mineEventId) recordReaction(user?.pubkey, input.key, input.emojiUrl);
     onReact(input);
   };
@@ -270,7 +292,7 @@ function ReactionPill({
           }}
           ref={pillRef}
         >
-          <ReactionGlyph emojiKey={tally.key} url={tally.url} className="h-5 w-5 text-base" />
+          <ReactionGlyph emojiKey={tally.key} url={shown.url} className="h-5 w-5 text-base" />
           <span className="tabular-nums font-medium">{tally.count}</span>
         </button>
       </PopoverAnchor>

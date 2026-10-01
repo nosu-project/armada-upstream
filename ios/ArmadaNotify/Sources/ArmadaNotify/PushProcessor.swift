@@ -143,6 +143,13 @@ struct PushProcessor {
 
     // MARK: - DM
 
+    /// Whether a Concord sender's avatar may appear on the notification. Anyone
+    /// with the key can post (CORD-04 §1), so only a known peer's face reaches
+    /// the lock screen; mirrors `communityAvatarShown` in `pushRuntime.ts`.
+    static func communityAvatarShown(author: String, config: PushConfig) -> Bool {
+        config.knownPeers.contains(author)
+    }
+
     static func dmConversationKey(peers: [String]) -> String {
         peers.joined(separator: ",")
     }
@@ -409,7 +416,8 @@ struct PushProcessor {
             sender: PreparedPush.Sender(
                 id: opened.author,
                 name: profile?.name ?? "Anonymous",
-                avatarUrl: config.mediaPolicy.resolve(profile?.picture),
+                avatarUrl: Self.communityAvatarShown(author: opened.author, config: config)
+                    ? config.mediaPolicy.resolve(profile?.picture) : nil,
                 groupName: message.roomTitle
             )
         )

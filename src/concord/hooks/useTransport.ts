@@ -179,6 +179,7 @@ export function useTransport(
           url: entry.url,
           count: reactors.length,
           pubkeys: reactors,
+          ...(entry.urls ? { urls: reactors.map((pk) => entry.urls!.get(pk)) } : {}),
           mine,
           mineEventId: mine ? entry.reactors.get(user!.pubkey) : undefined,
         });

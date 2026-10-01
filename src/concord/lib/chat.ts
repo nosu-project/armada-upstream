@@ -356,6 +356,8 @@ export interface ChatModeration {
 export interface ReactionEntry {
   reactors: Map<string, string>;
   url?: string;
+  /** reactor → the emoji image THEIR reaction named, so a held reactor's can be skipped. */
+  urls?: Map<string, string>;
 }
 
 export interface FoldedTimeline {
@@ -518,7 +520,10 @@ export function foldTimeline(
       let entry = byEmoji.get(key);
       if (!entry) byEmoji.set(key, (entry = { reactors: new Map() }));
       entry.reactors.set(ev.author, ev.rumorId);
-      if (url && !entry.url) entry.url = url;
+      if (url) {
+        if (!entry.url) entry.url = url;
+        (entry.urls ??= new Map()).set(ev.author, url);
+      }
       continue;
     }
     if (ev.kind === KIND_ZAP) {

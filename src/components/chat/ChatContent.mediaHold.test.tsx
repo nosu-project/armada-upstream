@@ -36,28 +36,28 @@ const STRANGER = "f".repeat(64);
 const IMAGE = "https://blossom.example.com/x.jpg";
 const EMOJI = "https://emoji.example.com/e.png";
 
-function message(): NostrEvent {
+function message(content?: string, tags?: string[][]): NostrEvent {
   return {
     id: "6".repeat(64),
     pubkey: STRANGER,
     created_at: 1700000000,
     kind: 9,
-    tags: [
+    tags: tags ?? [
       ["imeta", `url ${IMAGE}`, "m image/jpeg", "blurhash LEHV6nWB2yk8pyo0adR*.7kCMdnj"],
       ["emoji", "wave", EMOJI],
     ],
-    content: `:wave: ${IMAGE}`,
+    content: content ?? `:wave: ${IMAGE}`,
     sig: "0".repeat(128),
   };
 }
 
-function renderWith(holds: ((pubkey: string) => boolean) | null) {
+function renderWith(holds: ((pubkey: string) => boolean) | null, event = message()) {
   const hold = holds && { media: holds, avatar: holds };
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
         <MediaHoldContext.Provider value={hold}>
-          <ChatContent event={message()} />
+          <ChatContent event={event} />
         </MediaHoldContext.Provider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -80,5 +80,19 @@ describe("ChatContent media hold", () => {
   it("is a no-op without a provider", () => {
     renderWith(null);
     expect(screen.queryByText("Image not loaded")).toBeNull();
+  });
+
+  it("holds audio behind Load", () => {
+    const audio = "https://blossom.example.com/v.ogg";
+    const { container } = renderWith((pk) => pk === STRANGER, message(audio, [["imeta", `url ${audio}`, "m audio/ogg"]]));
+    expect(screen.getByText("Audio not loaded")).toBeInTheDocument();
+    expect(container.querySelector("audio")).toBeNull();
+  });
+
+  it("demotes a held link preview to a link, with a trailing Load", () => {
+    const link = "https://news.example.com/story";
+    renderWith((pk) => pk === STRANGER, message(`look ${link}`, []));
+    expect(screen.getByRole("link", { name: link })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Previews not loaded/ })).toBeInTheDocument();
   });
 });

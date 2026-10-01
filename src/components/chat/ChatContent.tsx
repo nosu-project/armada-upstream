@@ -10,7 +10,7 @@ import { CashuToken } from "@/components/chat/CashuToken";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
-import { HeldMedia } from "@/components/chat/HeldMedia";
+import { HeldMedia, HeldPreviews } from "@/components/chat/HeldMedia";
 import { useMediaHeld } from "@/components/chat/mediaHold";
 import { BuzzInviteEmbed } from "@/components/chat/BuzzInviteEmbed";
 import { Nip29GroupInviteEmbed } from "@/components/chat/Nip29GroupInviteEmbed";
@@ -954,6 +954,15 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     return map;
   }, [groupedTokens]);
 
+  // A held message whose only holdable content is previews/embeds has no HeldMedia
+  // card to carry Load, so it gets a trailing one.
+  const heldPreviewsOnly = useMemo(
+    () =>
+      !groupedTokens.some((t) => HELD_CARD_TOKENS.has(t.type))
+      && groupedTokens.some((t) => HELD_PREVIEW_TOKENS.has(t.type)),
+    [groupedTokens],
+  );
+
   const isEmojiOnly = groupedTokens.length === 1
     && groupedTokens[0].type === "text"
     && isOnlyEmojisOrCustom(groupedTokens[0].value, emojiMap);
@@ -1149,13 +1158,13 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <LinkEmbed key={key} url={token.url} className="my-1.5" />;
       case "invite-embed":
-        if (inQuote) return inlineLink(key, token.url);
+        if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <InviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "buzz-invite-embed":
-        if (inQuote) return inlineLink(key, token.url);
+        if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <BuzzInviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "group-invite-embed":
-        if (disableNoteEmbeds || inQuote) return selfLink(key, token.url, nip29GroupPath(token.group));
+        if (disableNoteEmbeds || inQuote || holdMedia) return selfLink(key, token.url, nip29GroupPath(token.group));
         return <Nip29GroupInviteEmbed key={key} group={token.group} className="my-1.5" />;
       case "self-chat-embed":
         // Demoted in quotes and embedded cards (the preview renders ChatContent: recursion).
@@ -1187,10 +1196,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const isXdc = isWebxdcMime(mime)
           || /\.xdc([?#][^\s]*)?$/i.test(token.url);
         if (isXdc) {
-          return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} />;
+          return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} hideIcon={holdMedia} />;
         }
         const isAudio = mime.startsWith("audio/") || AUDIO_EXT_URL_REGEX.test(token.url);
         if (isAudio) {
+          if (holdMedia) return <HeldMedia key={key} kind="audio" onLoad={loadMedia} />;
           const waveform = imeta ? getImetaField(event.tags, token.url, "waveform") : undefined;
           const duration = imeta ? getImetaField(event.tags, token.url, "duration") : undefined;
           return (
@@ -1251,7 +1261,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "nevent-embed": {
-        if (disableNoteEmbeds || inQuote) {
+        if (disableNoteEmbeds || inQuote || holdMedia) {
           return <TruncatedNostrLink key={key} encode={() =>
             nip19.neventEncode({
               id: token.eventId,
@@ -1272,7 +1282,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "naddr-embed": {
-        if (disableNoteEmbeds || inQuote) {
+        if (disableNoteEmbeds || inQuote || holdMedia) {
           return <TruncatedNostrLink key={key} encode={() => nip19.naddrEncode(token.addr)} />;
         }
         // The emoji-pack card is self-contained, so hide the raw URL.
@@ -1361,6 +1371,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   const body = (
     <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && (isSingleEmoji ? "text-5xl leading-normal" : "text-4xl leading-tight"))}>
       {renderTokens(groupedTokens, "", true)}
+      {holdMedia && heldPreviewsOnly && <HeldPreviews onLoad={loadMedia} />}
 
       {lightboxIndex !== null && (
         <Lightbox
@@ -1386,6 +1397,18 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
 /** Memoized: rows re-render for reasons unrelated to the body. */
 export const ChatContent = memo(ChatContentInner);
+
+/** Top-level tokens a held message replaces with a {@link HeldMedia} card. */
+const HELD_CARD_TOKENS: ReadonlySet<ContentToken["type"]> = new Set(["image-embed", "image-gallery", "media-embed"]);
+/** Top-level tokens a held message demotes to a plain link. */
+const HELD_PREVIEW_TOKENS: ReadonlySet<ContentToken["type"]> = new Set([
+  "link-embed",
+  "invite-embed",
+  "buzz-invite-embed",
+  "group-invite-embed",
+  "nevent-embed",
+  "naddr-embed",
+]);
 
 /**
  * Clamp with fade + "Read more" when the rendered height overflows (measured,
