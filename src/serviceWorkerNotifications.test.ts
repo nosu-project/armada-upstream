@@ -34,6 +34,9 @@ interface PushEventStub {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+/** A runtime that lets a push show nothing: Tenna on Android (NAPP.md). */
+const SILENCE_ALLOWED = { pushEndpoint: "napp:push", userVisibleOnly: false } as const;
+
 function loadWorker(options: {
   clients?: WindowClientStub[];
   ownEventId?: string;
@@ -48,6 +51,10 @@ function loadWorker(options: {
   runtime?: { preparePush?: (...args: unknown[]) => unknown; pushScope?: (...args: unknown[]) => unknown };
   pushConfig?: Record<string, unknown>;
   pushEndpoint?: string;
+  /** The subscription's `options.userVisibleOnly`; `false` is Tenna on Android. */
+  userVisibleOnly?: boolean;
+  /** A runtime with no Push API at all (Tenna before its shim). */
+  noPushManager?: boolean;
   pushDisabled?: boolean;
   priorNotifications?: Array<{ tag: string; data: Record<string, unknown>; close?: () => void }>;
   /**
@@ -140,9 +147,15 @@ function loadWorker(options: {
     navigator: options.badging ? { setAppBadge, clearAppBadge: vi.fn() } : undefined,
     registration: {
       showNotification,
-      pushManager: {
+      pushManager: options.noPushManager ? undefined : {
         getSubscription: async () =>
-          options.pushEndpoint ? { endpoint: options.pushEndpoint, unsubscribe } : null,
+          options.pushEndpoint
+            ? {
+              endpoint: options.pushEndpoint,
+              options: { userVisibleOnly: options.userVisibleOnly ?? true },
+              unsubscribe,
+            }
+            : null,
         subscribe,
       },
       ...(options.priorNotifications
@@ -509,7 +522,7 @@ describe("page / service-worker presentation ownership", () => {
 
 describe("Web Push suppression", () => {
   it("suppresses an outgoing event marked by this device", async () => {
-    const worker = loadWorker({ ownEventId: "own-wrap" });
+    const worker = loadWorker({ ownEventId: "own-wrap", ...SILENCE_ALLOWED });
     await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
@@ -517,7 +530,7 @@ describe("Web Push suppression", () => {
   it.each(["group", "group-mention", "c2"])(
     "suppresses a locally-authored %s community event",
     async (scope) => {
-      const worker = loadWorker({ ownEventId: "own-community-event" });
+      const worker = loadWorker({ ownEventId: "own-community-event", ...SILENCE_ALLOWED });
       await worker.push({ scope, event_id: "own-community-event", url: "/s/relay/community" });
       expect(worker.showNotification).not.toHaveBeenCalled();
     },
@@ -548,7 +561,7 @@ describe("Web Push suppression", () => {
     // A gateway restart replays stored relay matches as fresh pushes; without
     // an event ledger each replay re-alerts (`renotify: true`) for a message
     // the user has read, on whatever period the restart happens.
-    const worker = loadWorker();
+    const worker = loadWorker(SILENCE_ALLOWED);
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
@@ -612,11 +625,29 @@ describe("Web Push suppression", () => {
     }
   });
 
-  it("keeps full suppression on non-Apple endpoints", async () => {
+  it("shows the quiet sync on non-Apple endpoints too", async () => {
+    // Chrome and Firefox punish a silent push as well (a generic banner, a
+    // quota), and report `userVisibleOnly: true` like Safari.
     const worker = loadWorker({
       ownEventId: "own-wrap",
       pushEndpoint: "https://fcm.googleapis.com/fcm/send/abc",
     });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(opts).toMatchObject({ body: "Messages synced", silent: true, renotify: false });
+  });
+
+  it("shows the quiet sync when the runtime has no pushManager", async () => {
+    const worker = loadWorker({ ownEventId: "own-wrap", noPushManager: true });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(opts.body).toBe("Messages synced");
+  });
+
+  it("stays silent where the subscription reports userVisibleOnly: false", async () => {
+    const worker = loadWorker({ ownEventId: "own-wrap", ...SILENCE_ALLOWED });
     await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
@@ -725,7 +756,7 @@ describe("Web Push suppression", () => {
   it("atomically claims concurrent deliveries of the same event", async () => {
     let release!: () => void;
     const wait = new Promise<void>((resolve) => { release = resolve; });
-    const worker = loadWorker({ showNotificationWait: wait });
+    const worker = loadWorker({ showNotificationWait: wait, ...SILENCE_ALLOWED });
     const data = { scope: "dm", event_id: "concurrent-wrap", url: "/dm" };
 
     const first = worker.push(data);
@@ -735,7 +766,7 @@ describe("Web Push suppression", () => {
     await Promise.all([first, duplicate]);
 
     // The duplicate waits on the in-flight claim and never creates a second
-    // message alert on non-Apple push services.
+    // message alert where silence is allowed.
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
   });
 });
@@ -788,6 +819,7 @@ describe("Web Push inline presentation", () => {
 
   it("suppresses only after a page acknowledges the exact opened event and room", async () => {
     const worker = withRuntime(prepared(), {
+      ...SILENCE_ALLOWED,
       clients: [{
         url: "https://armada.buzz/c/comm/chan",
         visibilityState: "visible",
@@ -806,6 +838,7 @@ describe("Web Push inline presentation", () => {
       roomKey: undefined,
       eventId: "nip29-event",
     }), {
+      ...SILENCE_ALLOWED,
       clients: [{
         url: "https://armada.buzz/s/relay/general",
         visibilityState: "visible",
@@ -966,9 +999,9 @@ describe("Web Push inline presentation", () => {
     }
   });
 
-  it("does not add a worker notification after a non-Apple page presentation", async () => {
+  it("does not add a worker notification after a page presentation where silence is allowed", async () => {
     const worker = withRuntime(prepared(), {
-      pushEndpoint: "https://fcm.googleapis.com/fcm/send/abc",
+      ...SILENCE_ALLOWED,
       clients: [{
         url: "https://armada.buzz/c/comm/chan",
         visibilityState: "visible",
@@ -1047,7 +1080,7 @@ describe("Web Push inline presentation", () => {
   it("shows nothing at all for a `drop`, rather than the static wake-up", async () => {
     // The fallback is itself a visible notification, so "I opened it and you
     // must not see this" has to be distinguishable from "I couldn't decide".
-    const worker = withRuntime(prepared({ drop: true }), { badging: true });
+    const worker = withRuntime(prepared({ drop: true }), { badging: true, ...SILENCE_ALLOWED });
     await worker.push({ scope: "c2", event_id: "w", event: wrapEvent });
     expect(worker.showNotification).not.toHaveBeenCalled();
     expect(worker.setAppBadge).not.toHaveBeenCalled();
@@ -1101,6 +1134,7 @@ describe("Web Push inline presentation", () => {
 
   it("suppresses a non-inlined static DM before fetch while its plane is unready", async () => {
     const worker = loadWorker({
+      ...SILENCE_ALLOWED,
       pushConfig: {
         policy: "generic",
         self: "me",
@@ -1481,6 +1515,31 @@ describe("napp.push.payload", () => {
     // One notification: the real one, not a wake-up and then an update.
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     expect(worker.showNotification.mock.calls[0][0]).toBe("Armada / #general");
+  });
+
+  it("shows the quiet sync for a dropped event where the runtime requires a notification", async () => {
+    // Tenna on iOS: the push is already an alert, so showing nothing leaves
+    // the push server's placeholder on screen.
+    const worker = loadWorker({
+      runtime: { preparePush: async () => ({ drop: true }), pushScope: () => "c2" },
+      pushConfig: { self: "me" },
+      pushEndpoint: "napp:push",
+      userVisibleOnly: true,
+    });
+    await worker.pushPayload(payload({ event: wrapEvent }));
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(opts).toMatchObject({ body: "Messages synced", silent: true });
+  });
+
+  it("shows nothing for a dropped event where the runtime allows silence", async () => {
+    const worker = loadWorker({
+      runtime: { preparePush: async () => ({ drop: true }), pushScope: () => "c2" },
+      pushConfig: { self: "me" },
+      ...SILENCE_ALLOWED,
+    });
+    await worker.pushPayload(payload({ event: wrapEvent }));
+    expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
   it("ignores an inlined event whose id is not the one announced", async () => {

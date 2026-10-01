@@ -71,8 +71,8 @@ export interface PushRuntime {
 // the static wake-up first to satisfy userVisibleOnly, then fetches by id and
 // updates the SAME stable tag silently: plaintext and decryptable messages
 // gain their preview without a second alert; a decrypted drop becomes a fixed,
-// non-leaking sync entry on Apple (and is withdrawn on push services that
-// allow true silence).
+// non-leaking sync entry (and is withdrawn where the runtime allows true
+// silence).
 
 /** The routing half of a push, whichever payload shape it arrived in. */
 interface WorkerPushData extends PushData {
@@ -285,13 +285,12 @@ async function markSeen(
 }
 
 /**
- * Apple requires every PushEvent to produce a visible notification. A locally
- * authored event, replay, policy drop, or exact foreground-page acknowledgement
- * therefore updates one silent collapsed sync entry instead of going dark.
- * Other push services retain true silence.
+ * A locally authored event, replay, policy drop, or exact foreground-page
+ * acknowledgement updates one silent collapsed sync entry instead of going
+ * dark, unless the runtime says a push may show nothing ({@link mustShowNotification}).
  */
-async function quietSync(tag = "armada-quiet-sync"): Promise<void> {
-  if (!(await isApplePushEndpoint())) return;
+async function quietSync(mustShow: () => Promise<boolean>, tag = "armada-quiet-sync"): Promise<void> {
+  if (!(await mustShow())) return;
   await self.registration.showNotification("Armada", {
     // Deliberately fixed, not inherited from the gateway payload: suppression
     // covers own/replayed/policy-hidden events, so no sender-controlled title,
@@ -548,17 +547,24 @@ async function existingRoomLines(tag: string): Promise<string[] | undefined> {
 }
 
 /**
- * Whether this install's push endpoint is Apple's. WebKit requires every
- * PushEvent to display something, so a suppressed Apple push becomes a silent
- * collapsed sync entry. Other push services retain true suppression.
+ * Whether this push must display something. Only a runtime that reports
+ * `userVisibleOnly: false` (Tenna on Android, NAPP.md) allows silence; every
+ * browser punishes a silent push (revocation, a generic banner, a quota), and
+ * a runtime that says nothing is assumed to as well.
  */
-async function isApplePushEndpoint(): Promise<boolean> {
+async function mustShowNotification(): Promise<boolean> {
   try {
-    const sub = await self.registration.pushManager.getSubscription();
-    return Boolean(sub && new URL(sub.endpoint).hostname.endsWith("push.apple.com"));
+    const sub = await self.registration.pushManager?.getSubscription();
+    return sub?.options?.userVisibleOnly !== false;
   } catch {
-    return false;
+    return true;
   }
+}
+
+/** {@link mustShowNotification}, asked at most once per push. */
+function mustShowOnce(): () => Promise<boolean> {
+  let answer: Promise<boolean> | undefined;
+  return () => (answer ??= mustShowNotification());
 }
 
 /**
@@ -631,6 +637,8 @@ async function handlePush(
   data: WorkerPushData,
   base: NotificationBase,
 ): Promise<void> {
+  const mustShow = mustShowOnce();
+
   // The user turned push off. Showing nothing is intentional here: dropping
   // the endpoint is the requested outcome, even if WebKit also revokes it.
   if (await pushDisabled()) {
@@ -639,13 +647,13 @@ async function handlePush(
   }
 
   if (await pushPlaneUnready(runtime, data)) {
-    await quietSync();
+    await quietSync(mustShow);
     await markSeen(data, { outcome: "suppressed" });
     return;
   }
 
   if (await isOwnPush(data)) {
-    await quietSync();
+    await quietSync(mustShow);
     await markSeen(data, { outcome: "suppressed" });
     return;
   }
@@ -654,7 +662,7 @@ async function handlePush(
     if (
       seen.outcome === "page-presented"
       && typeof seen.roomKey === "string"
-      && await isApplePushEndpoint()
+      && await mustShow()
     ) {
       const replay = await prepareNotification(runtime, data);
       if (replay && !replay.drop && replay.roomKey === seen.roomKey) {
@@ -666,7 +674,7 @@ async function handlePush(
         return;
       }
     }
-    await quietSync();
+    await quietSync(mustShow);
     return;
   }
 
@@ -676,7 +684,7 @@ async function handlePush(
   const prepared = await prepareNotification(runtime, data);
   if (prepared) {
     if (prepared.drop) {
-      await quietSync();
+      await quietSync(mustShow);
       await markSeen(data, { outcome: "suppressed" });
       return;
     }
@@ -684,11 +692,11 @@ async function handlePush(
     const pageOutcome = await pagePresentationOutcome(prepared);
     if (pageOutcome?.outcome === "presented" || pageOutcome?.outcome === "presenting") {
       const pageRoomKey = pageOutcome.roomKey || prepared.roomKey || prepared.tag;
-      // A visible page already used this exact room tag. Apple still requires
-      // a showNotification call for its PushEvent, so silently update that same
-      // real entry (never add a generic banner or re-alert). A still-pending
-      // page call gets the same update on every endpoint as a delivery fallback.
-      if (pageOutcome.outcome === "presenting" || await isApplePushEndpoint()) {
+      // A visible page already used this exact room tag. A runtime that still
+      // requires a showNotification call for this PushEvent gets a silent
+      // update of that same real entry (never a generic banner or re-alert). A
+      // still-pending page call gets the same update everywhere as a fallback.
+      if (pageOutcome.outcome === "presenting" || await mustShow()) {
         await showPreparedNotification(base, data, prepared, {
           tag: pageRoomKey,
           silent: true,
@@ -703,8 +711,8 @@ async function handlePush(
     }
     if (pageOutcome?.outcome === "suppressed") {
       // Active-room/read/policy suppression uses only the fixed non-leaking
-      // Apple sync entry. Other push services may remain truly silent.
-      await quietSync();
+      // sync entry, or nothing where the runtime allows it.
+      await quietSync(mustShow);
       await markSeen(data, { outcome: "suppressed" });
       return;
     }
@@ -763,8 +771,8 @@ async function handlePush(
     const enriched = await prepareNotification(runtime, { ...data, event: ev });
     if (!enriched) return;
     if (enriched.drop) {
-      if (await isApplePushEndpoint()) {
-        await quietSync(tag);
+      if (await mustShow()) {
+        await quietSync(mustShow, tag);
       } else {
         await withdrawNotifications(tag);
       }
@@ -809,7 +817,7 @@ function pushRunner(runtime: PushRuntime) {
           // push is the retry, not a duplicate to suppress.
         }
         // Re-enter through the committed seen metadata. In particular, an
-        // Apple event first presented by the page must silently update that
+        // event first presented by the page must silently update that
         // same room entry, not create a second generic sync notification.
         return handlePush(runtime, payload, data, base);
       })();
