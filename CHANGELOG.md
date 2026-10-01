@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.63.3] - 2026-09-30
+
+Links to relay-hosted groups shown in chat now appear as join cards, and older
+group address formats can be added. Emoji display everywhere, even on systems
+without an emoji font. Forum comments send on Enter when that setting is on,
+and web push notifications are quieter and better labelled.
+
+### Added
+- Links to relay-hosted groups in chat show as a card you can join from
+- Emoji render on systems that have no emoji font installed
+
+### Changed
+- Forum comment and reply boxes follow the send-on-Enter setting
+- Web push notifications fire only for messages, thread replies and reactions, and name the room even when a community message can't be opened
+- Older `host'group` group addresses are accepted when adding a group
+
+### Fixed
+- A wide attachment tray in the forum comment box scrolls instead of stretching the box
+- Messages and quotes that point to a specific relay are found there more reliably
+
 ## [0.63.2] - 2026-09-30
 
 Message formatting understands more markdown, including horizontal rules,

@@ -2,6 +2,7 @@ import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { nip19 } from "nostr-tools";
 
+import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { tryNaddrEncode } from "@/lib/safeNip19";
 
 /** NIP-29 (Relay-based Groups) constants and event parsing. */
@@ -456,6 +457,50 @@ export function parseGroupNaddr(input: string): ParsedGroupNaddr | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** A group named by relay + id, with an optional invite code. */
+export interface GroupAddress {
+  /** Normalized relay URL. */
+  relay: string;
+  groupId: string;
+  inviteCode?: string;
+}
+
+/**
+ * The `<host>'<group-id>` address from earlier NIP-29 drafts, still emitted by
+ * other clients, with or without a `ws(s)://` scheme. The invite code may ride as
+ * the spec's `?invite=` or as `?code=` (the kind-9021 tag name some clients use).
+ */
+export function parseGroupAddress(input: string): GroupAddress | undefined {
+  let value = input.trim();
+  let query = "";
+  const q = value.indexOf("?");
+  if (q !== -1) {
+    query = value.slice(q + 1);
+    value = value.slice(0, q);
+  }
+  const apostrophe = value.lastIndexOf("'");
+  if (apostrophe <= 0) return undefined;
+  const rawId = value.slice(apostrophe + 1);
+  if (!rawId || /[\s/#']/.test(rawId)) return undefined;
+  let groupId: string;
+  try {
+    groupId = decodeURIComponent(rawId);
+  } catch {
+    return undefined;
+  }
+  const relay = normalizeRelayUrl(value.slice(0, apostrophe));
+  if (!relay) return undefined;
+  const params = new URLSearchParams(query.split("#")[0]);
+  const inviteCode = params.get("invite") || params.get("code") || undefined;
+  return { relay, groupId, inviteCode };
+}
+
+/** In-app path of a NIP-29 group; the group page pre-fills `?invite=` into its join. */
+export function nip29GroupPath({ relay, groupId, inviteCode }: GroupAddress): string {
+  const query = inviteCode ? `?invite=${encodeURIComponent(inviteCode)}` : "";
+  return `/s/${relayToRouteParam(relay)}/${encodeURIComponent(groupId)}${query}`;
 }
 
 /**

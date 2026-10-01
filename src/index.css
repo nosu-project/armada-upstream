@@ -63,7 +63,20 @@
      * max(0.25rem, inset) keeps the tight desktop look while clearing the bar on
      * a landscape phone. */
     --safe-area-pad-bottom-tight: max(0.25rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    /* System emoji first; the bundled Twemoji only fills what they lack. Read
+     * by Tailwind's `font-sans`/`font-emoji` and the emoji picker's shadow DOM. */
+    --emoji-fonts: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", "Android Emoji", "Armada Twemoji";
   }
+}
+
+/* Fallback for systems with no (or an outdated) emoji font. The unicode-range
+ * keeps it from downloading for anything but emoji; ASCII and ©®™ are left
+ * out so keycap bases and text symbols never trigger it. */
+@font-face {
+  font-family: "Armada Twemoji";
+  src: url("twemoji-colr-font/twemoji.woff2") format("woff2");
+  font-display: swap;
+  unicode-range: U+200D, U+203C, U+2049, U+20E3, U+2139, U+2194-21AA, U+231A-23FA, U+24C2, U+25AA-27BF, U+2934-2935, U+2B05-2B55, U+3030, U+303D, U+3297, U+3299, U+FE0F, U+1F000-1FAFF, U+E0020-E007F;
 }
 
 @layer base {

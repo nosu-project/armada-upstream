@@ -277,9 +277,66 @@ describe("openConcord", () => {
     expect(openConcord(streamWrap(spoofed), [stream])).toBeUndefined();
   });
 
-  it("ignores non-chat kinds carried on the chat plane", () => {
+  it("refuses another plane's kinds carried on the chat plane", () => {
     // A control edition re-sealed onto a chat stream must not become a message.
-    expect(openConcord(streamWrap(chatRumor({ kind: 20000 })), [stream])).toBeUndefined();
+    expect(openConcord(streamWrap(chatRumor({ kind: 3308 })), [stream])).toBeUndefined();
+  });
+
+  const cfg = (): SwPushConfig => ({
+    policy: "generic",
+    self: getPublicKey(generateSecretKey()),
+    knownPeers: [],
+    concord: [stream],
+  });
+
+  it("stores an edit silently rather than announcing it", async () => {
+    const edit = chatRumor({ kind: 3302, content: "shipped it (edited)" });
+    const prepared = await preparePush({ scope: "c2", event: streamWrap(edit) }, cfg());
+    expect(prepared?.drop).toBe(true);
+  });
+
+  it("stores a delete silently rather than announcing it", async () => {
+    const del = chatRumor({ kind: 5, content: "", tags: [["channel", CHANNEL], ["epoch", EPOCH], ["e", "ab".repeat(32)]] });
+    const prepared = await preparePush({ scope: "c2", event: streamWrap(del) }, cfg());
+    expect(prepared?.drop).toBe(true);
+  });
+
+  it("announces a thread reply and links to its thread", async () => {
+    const root = "cd".repeat(32);
+    const reply = chatRumor({
+      kind: 1111,
+      content: "replying in the thread",
+      tags: [["channel", CHANNEL], ["epoch", EPOCH], ["E", root], ["e", root]],
+    });
+    const prepared = await preparePush({ scope: "c2", event: streamWrap(reply) }, cfg());
+    expect(prepared?.drop).not.toBe(true);
+    expect(prepared?.line).toContain("replying in the thread");
+    expect(prepared?.url).toBe(`/c/${stream.communityId}/${CHANNEL}/t/${root}`);
+  });
+
+  /** Signed by our stream address, but under a key we don't hold (another epoch's). */
+  function unopenable() {
+    const otherKey = getConversationKey(generateSecretKey(), streamPk);
+    return finalizeEvent(
+      { kind: 1059, content: nip44Encrypt("{}", otherKey), tags: [], created_at: now() },
+      streamSk,
+    );
+  }
+
+  it("names the room for a wrap from our stream that will not open", async () => {
+    const prepared = await preparePush({ scope: "c2", event: unopenable() }, cfg());
+    expect(prepared?.drop).not.toBe(true);
+    expect(prepared?.tag).toBe(`c2:${CHANNEL}`);
+    expect(prepared?.url).toBe(`/c/${stream.communityId}/${CHANNEL}`);
+    expect(prepared?.line).toBe("New message");
+  });
+
+  it("keeps an unopenable wrap silent in a mentions-only channel", async () => {
+    const prepared = await preparePush(
+      { scope: "c2", event: unopenable() },
+      { ...cfg(), concord: [{ ...stream, mentionOnly: true }] },
+    );
+    expect(prepared?.drop).toBe(true);
   });
 
   it("returns undefined for garbage rather than throwing", () => {

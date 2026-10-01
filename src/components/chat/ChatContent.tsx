@@ -11,6 +11,7 @@ import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
 import { BuzzInviteEmbed } from "@/components/chat/BuzzInviteEmbed";
+import { Nip29GroupInviteEmbed } from "@/components/chat/Nip29GroupInviteEmbed";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
@@ -43,7 +44,8 @@ import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { filenameFromUrl } from "@/lib/fileBytes";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
-import { relayToRouteParam } from "@/lib/platform";
+import { KIND_GROUP_METADATA, nip29GroupPath, parseGroupAddress, type GroupAddress } from "@/lib/nip29";
+import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
@@ -131,6 +133,13 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
   return null;
 }
 
+/** A NIP-29 group reference as a join card, or an in-app link mid-sentence. */
+function groupRouteToken(url: string, group: GroupAddress, card: boolean): ContentToken {
+  return card
+    ? { type: "group-invite-embed", url, group }
+    : { type: "self-link", url, path: nip29GroupPath(group) };
+}
+
 type ImageRef = EncryptedRef & { alt?: string; spoiler?: boolean };
 
 function imageRefOf(t: Extract<ContentToken, { type: "image-embed" }>): ImageRef {
@@ -146,6 +155,7 @@ type ContentToken =
   | { type: "link-embed"; url: string }
   | { type: "invite-embed"; url: string }
   | { type: "buzz-invite-embed"; url: string }
+  | { type: "group-invite-embed"; url: string; group: GroupAddress }
   | { type: "inline-link"; url: string }
   /** An own-origin chat link alone on its line — the in-app preview card. */
   | { type: "self-chat-embed"; url: string; route: ChatRoute; path: string }
@@ -184,7 +194,8 @@ function collapseAroundBlocks(tokens: ContentToken[]): ContentToken[] {
       || token.type === "cashu-token"
       || token.type === "code-block" || token.type === "quote"
       || token.type === "invite-embed"
-      || token.type === "buzz-invite-embed";
+      || token.type === "buzz-invite-embed"
+      || token.type === "group-invite-embed";
     if (!isBlock) continue;
     const prev = tokens[i - 1];
     if (prev?.type === "text") prev.value = prev.value.replace(/\s+$/, "");
@@ -528,7 +539,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           if (!imetaByUrl.has(url)) url = cleanUrl(url);
 
           if (/^wss?:\/\//i.test(url)) {
-            out.push({ type: "relay-link", url });
+            const group = parseGroupAddress(url);
+            const isEndOfLine = !/^[^\n]*\S/.test(segment.substring(index + fullMatch.length));
+            out.push(group ? groupRouteToken(url, group, isEndOfLine) : { type: "relay-link", url });
             lastIndex = index + fullMatch.length;
             continue;
           }
@@ -674,7 +687,27 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
                 author: decoded.data.author,
               });
             } else if (decoded.type === "naddr") {
-              out.push({ type: "naddr-embed", ...splitAddr(decoded.data) });
+              const relay = decoded.data.kind === KIND_GROUP_METADATA
+                ? normalizeRelayUrl(decoded.data.relays?.[0] ?? "")
+                : undefined;
+              if (relay) {
+                // NIP-29's `?invite=` suffix sits outside the bech32 match.
+                const suffix = segment.substring(index + fullMatch.length).match(/^\?invite=([^\s]*?)[.,;:!?)\]]*(?=\s|$)/);
+                let inviteCode: string | undefined;
+                if (suffix) {
+                  try {
+                    inviteCode = decodeURIComponent(suffix[1]) || undefined;
+                  } catch {
+                    inviteCode = suffix[1];
+                  }
+                  fullMatch += suffix[0].slice(0, "?invite=".length + suffix[1].length);
+                  regex.lastIndex = index + fullMatch.length;
+                }
+                const group = { relay, groupId: decoded.data.identifier, inviteCode };
+                out.push(groupRouteToken(fullMatch, group, true));
+              } else {
+                out.push({ type: "naddr-embed", ...splitAddr(decoded.data) });
+              }
             } else {
               out.push({ type: "nostr-link", id: nostrId, raw: fullMatch });
             }
@@ -1110,6 +1143,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       case "buzz-invite-embed":
         if (inQuote) return inlineLink(key, token.url);
         return <BuzzInviteEmbed key={key} url={token.url} className="my-1.5" />;
+      case "group-invite-embed":
+        if (disableNoteEmbeds || inQuote) return selfLink(key, token.url, nip29GroupPath(token.group));
+        return <Nip29GroupInviteEmbed key={key} group={token.group} className="my-1.5" />;
       case "self-chat-embed":
         // Demoted in quotes and embedded cards (the preview renders ChatContent: recursion).
         if (disableNoteEmbeds || inQuote) return selfLink(key, token.url, token.path);

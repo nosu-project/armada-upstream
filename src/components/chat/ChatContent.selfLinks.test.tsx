@@ -1,7 +1,10 @@
 import { cleanup, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { nip19 } from "nostr-tools";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { relayToRouteParam } from "@/lib/platform";
 
 import type { ReactNode } from "react";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -30,6 +33,16 @@ vi.mock("@/hooks/useCustomEmojis", () => ({
 // Nostr pool on mount. Only the chip itself is under test here.
 vi.mock("@/components/chat/ProfilePreviewCard", () => ({
   ProfilePreviewCard: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
+// The group join card's network-facing hooks; only which card renders is under test.
+vi.mock("@/hooks/useRelayInfo", () => ({ useRelayInfo: () => ({ data: undefined }) }));
+vi.mock("@/hooks/useGroupMembership", () => ({
+  useJoinGroup: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+vi.mock("@/hooks/useUserGroupList", () => ({
+  useUserGroupList: () => ({ data: { groups: [{ id: "joined", relay: "wss://groups.example" }], servers: [] } }),
+  useUpdateUserGroupList: () => ({ mutateAsync: vi.fn() }),
 }));
 
 const MEMBER_COMMUNITY = "abc123";
@@ -174,5 +187,46 @@ describe("ChatContent own-origin links", () => {
   it("leaves an own-origin path that names no chat location external", () => {
     const { container } = renderContent("see https://armada.buzz/settings here");
     expect(anchors(container)).toEqual([["https://armada.buzz/settings", "_blank"]]);
+  });
+});
+
+describe("ChatContent NIP-29 group references", () => {
+  const GROUP_NADDR = nip19.naddrEncode({
+    kind: 39000,
+    pubkey: "c".repeat(64),
+    identifier: "pizza",
+    relays: ["wss://groups.example"],
+  });
+
+  it("renders a group naddr as a join card", () => {
+    const { container, getByRole } = renderContent(`You've been added.\nnostr:${GROUP_NADDR}`);
+    expect(container.textContent).toContain("pizza");
+    expect(container.textContent).toContain("groups.example");
+    expect(getByRole("button", { name: "Join" })).toBeInTheDocument();
+    expect(container.textContent).not.toContain("naddr1");
+  });
+
+  it("folds the naddr's ?invite= suffix into the card as an invite", () => {
+    const { container } = renderContent(`nostr:${GROUP_NADDR}?invite=abc123.`);
+    expect(container.textContent).toContain("You've been invited to join a channel");
+    expect(container.textContent).not.toContain("?invite=");
+  });
+
+  it("offers Open for a group already in the user's list", () => {
+    const naddr = nip19.naddrEncode({
+      kind: 39000,
+      pubkey: "c".repeat(64),
+      identifier: "joined",
+      relays: ["wss://groups.example"],
+    });
+    const { getByRole } = renderContent(`nostr:${naddr}`);
+    expect(getByRole("button", { name: "Open" })).toBeInTheDocument();
+  });
+
+  it("routes a legacy host'group link to the group, keeping its code", () => {
+    const { container } = renderContent("join wss://groups.example'pizza?code=abc123 today");
+    expect(anchors(container)).toEqual([
+      [`/s/${relayToRouteParam("wss://groups.example")}/pizza?invite=abc123`, ""],
+    ]);
   });
 });

@@ -377,6 +377,8 @@ interface ChatComposerProps {
    * above its toolbar, Enter is a newline, Ctrl/Cmd+Enter sends, labelled button.
    */
   layout?: "bar" | "document";
+  /** Document layout only: Enter follows the send-on-Enter setting, as in chat. */
+  documentEnterSends?: boolean;
   submitLabel?: string;
   /** Document layout only: a Cancel button (and Escape from an empty box). */
   onCancel?: () => void;
@@ -387,7 +389,7 @@ interface ChatComposerProps {
  * voice, NIP-88 polls, replies, NIP-18 quotes, drafts. With `sendOverride` it
  * doubles as a generic composer (DMs, Concord).
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", submitLabel = "Post", onCancel }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, sealed = false, onSent, shareLabel, shareIconUrl, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, shareRoute, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, messageKind = KIND_GROUP_CHAT, onEditLast, layout = "bar", documentEnterSends = false, submitLabel = "Post", onCancel }: ChatComposerProps) {
   const isDocument = layout === "document";
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
@@ -1770,9 +1772,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   }, [voiceRecorder, toast]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Ignore Enter confirming an IME composition. Documents (and send-on-Enter
-    // off) use Ctrl/Cmd+Enter to send.
-    const sendKey = isDocument || !enterSends
+    // Ignore Enter confirming an IME composition. Documents (unless opted in)
+    // and send-on-Enter off use Ctrl/Cmd+Enter to send.
+    const sendKey = (isDocument && !documentEnterSends) || !enterSends
       ? e.key === "Enter" && (e.ctrlKey || e.metaKey)
       : e.key === "Enter" && !e.shiftKey;
     if (sendKey && !e.nativeEvent.isComposing) {
