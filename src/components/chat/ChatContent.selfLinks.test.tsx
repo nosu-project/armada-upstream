@@ -1,7 +1,10 @@
 import { cleanup, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { nip19 } from "nostr-tools";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { relayToRouteParam } from "@/lib/platform";
 
 import type { ReactNode } from "react";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -174,5 +177,36 @@ describe("ChatContent own-origin links", () => {
   it("leaves an own-origin path that names no chat location external", () => {
     const { container } = renderContent("see https://armada.buzz/settings here");
     expect(anchors(container)).toEqual([["https://armada.buzz/settings", "_blank"]]);
+  });
+});
+
+describe("ChatContent NIP-29 group references", () => {
+  const GROUP_NADDR = nip19.naddrEncode({
+    kind: 39000,
+    pubkey: "c".repeat(64),
+    identifier: "pizza",
+    relays: ["wss://groups.example"],
+  });
+
+  it("renders a group naddr as an in-app group card", () => {
+    const { container } = renderContent(`You've been added.\nnostr:${GROUP_NADDR}`);
+    expect(container.textContent).toContain("Group · groups.example");
+    expect(container.textContent).toContain("pizza");
+    expect(container.textContent).not.toContain("naddr1");
+  });
+
+  it("folds the naddr's ?invite= suffix into the card", () => {
+    const { container } = renderContent(`nostr:${GROUP_NADDR}?invite=abc123.`);
+    expect(container.querySelector('[role="link"]')?.getAttribute("title")).toBe(
+      `nostr:${GROUP_NADDR}?invite=abc123`,
+    );
+    expect(container.textContent).not.toContain("?invite=");
+  });
+
+  it("routes a legacy host'group link to the group, keeping its code", () => {
+    const { container } = renderContent("join wss://groups.example'pizza?code=abc123 today");
+    expect(anchors(container)).toEqual([
+      [`/s/${relayToRouteParam("wss://groups.example")}/pizza?invite=abc123`, ""],
+    ]);
   });
 });

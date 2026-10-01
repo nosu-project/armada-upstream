@@ -43,7 +43,8 @@ import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { parseInlineRun, splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
 import { filenameFromUrl } from "@/lib/fileBytes";
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, isUnplayableVideo, mimeFromExt } from "@/lib/mediaUrls";
-import { relayToRouteParam } from "@/lib/platform";
+import { KIND_GROUP_METADATA, nip29GroupPath, parseGroupAddress, type GroupAddress } from "@/lib/nip29";
+import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { parseSelfLink } from "@/lib/selfLink";
 import { stripTrackingParams } from "@/lib/trackingParams";
@@ -129,6 +130,18 @@ function extractNostrFromUrl(url: string): NostrInUrl | null {
     // invalid identifier — fall through to a plain link
   }
   return null;
+}
+
+/**
+ * A NIP-29 group reference as an in-app card, or a link mid-sentence. The card
+ * reads the relay's local tenant only: a hidden group's metadata needs AUTH,
+ * which an unsolicited embed fetch must not answer.
+ */
+function groupRouteToken(url: string, group: GroupAddress, card: boolean): ContentToken {
+  const path = nip29GroupPath(group);
+  return card
+    ? { type: "self-chat-embed", url, route: { kind: "nip29", relayUrl: group.relay, groupId: group.groupId }, path }
+    : { type: "self-link", url, path };
 }
 
 type ImageRef = EncryptedRef & { alt?: string; spoiler?: boolean };
@@ -528,7 +541,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           if (!imetaByUrl.has(url)) url = cleanUrl(url);
 
           if (/^wss?:\/\//i.test(url)) {
-            out.push({ type: "relay-link", url });
+            const group = parseGroupAddress(url);
+            const isEndOfLine = !/^[^\n]*\S/.test(segment.substring(index + fullMatch.length));
+            out.push(group ? groupRouteToken(url, group, isEndOfLine) : { type: "relay-link", url });
             lastIndex = index + fullMatch.length;
             continue;
           }
@@ -674,7 +689,27 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
                 author: decoded.data.author,
               });
             } else if (decoded.type === "naddr") {
-              out.push({ type: "naddr-embed", ...splitAddr(decoded.data) });
+              const relay = decoded.data.kind === KIND_GROUP_METADATA
+                ? normalizeRelayUrl(decoded.data.relays?.[0] ?? "")
+                : undefined;
+              if (relay) {
+                // NIP-29's `?invite=` suffix sits outside the bech32 match.
+                const suffix = segment.substring(index + fullMatch.length).match(/^\?invite=([^\s]*?)[.,;:!?)\]]*(?=\s|$)/);
+                let inviteCode: string | undefined;
+                if (suffix) {
+                  try {
+                    inviteCode = decodeURIComponent(suffix[1]) || undefined;
+                  } catch {
+                    inviteCode = suffix[1];
+                  }
+                  fullMatch += suffix[0].slice(0, "?invite=".length + suffix[1].length);
+                  regex.lastIndex = index + fullMatch.length;
+                }
+                const group = { relay, groupId: decoded.data.identifier, inviteCode };
+                out.push(groupRouteToken(fullMatch, group, true));
+              } else {
+                out.push({ type: "naddr-embed", ...splitAddr(decoded.data) });
+              }
             } else {
               out.push({ type: "nostr-link", id: nostrId, raw: fullMatch });
             }
