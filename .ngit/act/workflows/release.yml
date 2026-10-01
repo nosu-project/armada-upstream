@@ -54,8 +54,9 @@ name: Release
 # ── Runner image ─────────────────────────────────────────────────────────────
 # Jobs run in the coordinator's armada-ci image (NGIT_CI_ACT_PLATFORMS maps
 # ubuntu-latest to it), which pre-bakes the JDK/node/go toolcaches, the
-# Android SDK, ruby+fastlane, the zsp binary, and warm ~/.gradle + ~/.npm
-# dependency caches — see .ngit/ci-image/Dockerfile. Without it every run
+# Android SDK, ruby+fastlane and the zsp binary, and the coordinator mounts
+# persistent ~/.gradle + ~/.npm cache volumes into every job — see
+# .ngit/ci-image. Without them every run
 # re-downloaded ~700 MB of toolchain+deps and blew the coordinator's 30-min
 # default job timeout (NGIT_CI_JOB_TIMEOUT_SECS).
 #
@@ -149,9 +150,9 @@ jobs:
           # prebuild hook that `npm run build` would, so build the transport
           # explicitly. WEBXDC_RT_REQUIRED=1 makes a missing toolchain or a
           # failed compile fail the release rather than silently ship the
-          # desktop app with multiplayer off. The Rust toolchain and the warm
-          # iroh dependency tree are baked into the armada-ci runner image
-          # (.ngit/ci-image/Dockerfile).
+          # desktop app with multiplayer off. The Rust toolchain is baked into
+          # the armada-ci runner image and iroh's compiled dependency tree
+          # persists in the coordinator's cargo volumes (.ngit/ci-image).
           WEBXDC_RT_REQUIRED=1 npm run build:wasm
           # No `-l error`: act's log capture drops suppressed output, so a
           # failing/empty build looked like a silent success and only surfaced
@@ -275,8 +276,8 @@ jobs:
       # step above. See electron/scripts/package-mac.mjs.
       #
       # Pulls the darwin Electron release (~90 MB per arch) into ~/.cache/
-      # electron, which the runner image warms for the platforms it has already
-      # built — the first run after this landed pays the download.
+      # electron, a persistent cache volume on the coordinator — only the first
+      # run after a version bump pays the download.
       - name: Cross-build macOS app bundles
         run: node electron/scripts/package-mac.mjs
 
@@ -522,9 +523,9 @@ jobs:
           # prebuild hook that `npm run build` would, so build the transport
           # explicitly. WEBXDC_RT_REQUIRED=1 makes a missing toolchain or a
           # failed compile fail the release rather than silently ship the APK
-          # with multiplayer off. The Rust toolchain and the warm iroh
-          # dependency tree are baked into the armada-ci runner image
-          # (.ngit/ci-image/Dockerfile).
+          # with multiplayer off. The Rust toolchain is baked into the armada-ci
+          # runner image and iroh's compiled dependency tree persists in the
+          # coordinator's cargo volumes (.ngit/ci-image).
           WEBXDC_RT_REQUIRED=1 npm run build:wasm
           npx vite build
           test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
