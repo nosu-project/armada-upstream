@@ -15,7 +15,13 @@ import { verifyEvent } from "nostr-tools/pure";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { checkChannelBinding, FUTURE_HOLD_MS, openWrap } from "@/concord/lib/stream";
-import { KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
+import {
+  KIND_COMMENT,
+  KIND_MESSAGE,
+  KIND_REACTION,
+  KIND_SEAL_ENCRYPTED,
+  PLANE_KINDS,
+} from "@/concord/lib/kinds";
 import { decryptImageBytes } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
@@ -144,7 +150,8 @@ export function openConcord(
     if (ev.sealKind !== KIND_SEAL_ENCRYPTED) return undefined;
     const epoch = BigInt(stream.epoch);
     checkChannelBinding(ev, stream.channelId, epoch);
-    if (ev.kind !== KIND_MESSAGE && ev.kind !== KIND_REACTION) return undefined;
+    // Another plane's kind re-sealed onto a chat stream is not chat (CORD-02 §5).
+    if (PLANE_KINDS.has(ev.kind)) return undefined;
     return { opened: { ...ev, channelIdHex: stream.channelId, epoch }, stream };
   } catch {
     // not ours, spliced, or malformed
@@ -417,7 +424,10 @@ async function prepareConcord(
   const streams = cfg?.concord;
   if (!streams || streams.length === 0) return undefined;
   const result = openConcord(wrap, streams);
-  if (!result) return undefined;
+  if (!result) {
+    const addressed = streams.find((s) => s.pk === wrap.pubkey);
+    return addressed ? opaqueConcord(addressed, policyOf(cfg)) : undefined;
+  }
   const { opened, stream } = result;
 
   // Store it regardless: the timeline has no other copy.
@@ -438,6 +448,11 @@ async function prepareConcord(
   // Sent before this membership began: the viewer wasn't there.
   if (!sentDuringMembership(opened.ms, stream.joinedAtMs)) return DROP;
 
+  // Edits, deletes, votes and the rest ride the same wraps; stored, never announced.
+  if (opened.kind !== KIND_MESSAGE && opened.kind !== KIND_COMMENT && opened.kind !== KIND_REACTION) {
+    return DROP;
+  }
+
   const mention = Boolean(cfg?.self) && (
     opened.tags.some(([n, v]) => n === "p" && v === cfg?.self)
     || (
@@ -457,6 +472,8 @@ async function prepareConcord(
   const image = room.iconPointer ? await imageDataUrl(room.iconPointer, policy) : undefined;
 
   const base = `/c/${stream.communityId}/${stream.channelId}`;
+  // A thread reply opens its thread (routes.ts `/t/<root>`), as the native service does.
+  const threadRoot = opened.kind === KIND_COMMENT ? uniqueTag(opened.tags, "E") : undefined;
   return present(
     {
       plane: "c2",
@@ -474,11 +491,36 @@ async function prepareConcord(
       roomKey: `c2:${stream.channelId}`,
       eventId: opened.rumorId,
       // Link to the reacted-to message.
-      url: `${base}/m/${encodeURIComponent(uniqueTag(opened.tags, "e") ?? opened.rumorId)}`,
+      url: threadRoot
+        ? `${base}/t/${encodeURIComponent(threadRoot)}`
+        : `${base}/m/${encodeURIComponent(uniqueTag(opened.tags, "e") ?? opened.rumorId)}`,
       timestamp: opened.createdAt * 1000,
     },
     policy,
   );
+}
+
+/**
+ * A wrap from one of our streams that would not open (an epoch whose key we
+ * lack, a splice). Nothing inside is known, but the room is, as on native.
+ */
+async function opaqueConcord(stream: SwConcordStream, policy: MediaPolicy): Promise<PreparedPush> {
+  // Muted, or mentions-only with no readable mention to go on.
+  if (stream.muted || stream.mentionOnly) return DROP;
+
+  const room = await concordRoomIdentity(stream.communityId, stream.channelId);
+  const image = room.iconPointer ? await imageDataUrl(room.iconPointer, policy) : undefined;
+  return {
+    tag: `c2:${stream.channelId}`,
+    roomKey: `c2:${stream.channelId}`,
+    url: `/c/${stream.communityId}/${stream.channelId}`,
+    title: room.title || "New message in a community",
+    line: "New message",
+    icon: image ?? NOTIFICATION_FALLBACK_ICON,
+    badge: NOTIFICATION_BADGE_ICON,
+    timestamp: Date.now(),
+    accumulate: true,
+  };
 }
 
 /**
