@@ -39,6 +39,7 @@ import {
   rememberQuarantined,
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
+import { recordSightings, sightingsRevision, subscribeSightings } from "@/concord/lib/mediaTrust";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
 import { useActivePause } from "@/concord/hooks/usePause";
@@ -530,6 +531,17 @@ export function useChannelTimeline(
     }
     if (entries.length > 0) rememberQuarantined(community.idHex, channelIdHex, entries);
   }, [folded.quarantined, folded.paused, raw, community?.idHex, channelIdHex]);
+
+  // Who this client has seen speak, and since when — the media hold's probation
+  // clock (mediaTrust.ts). After the local read, so a channel isn't seeded empty.
+  const sightingsRev = useSyncExternalStore(subscribeSightings, sightingsRevision);
+  const localReadDone = !query.isPending;
+  useEffect(() => {
+    if (!community?.idHex || !channelIdHex || !localReadDone) return;
+    const observed: Array<[string, number]> = folded.messages.map((m) => [m.author, m.ms]);
+    if (firstSeen) observed.push(...firstSeen);
+    recordSightings(community.idHex, channelIdHex, observed);
+  }, [folded.messages, firstSeen, localReadDone, community?.idHex, channelIdHex, sightingsRev]);
 
   return {
     folded,

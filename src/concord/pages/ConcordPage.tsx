@@ -96,6 +96,7 @@ import { MemberActionsContext, type MemberActionItem, type MemberActionsValue } 
 import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
+import { ConcordMediaHold } from "@/concord/components/ConcordMediaHold";
 import { useAppContext } from "@/hooks/useAppContext";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
@@ -1389,7 +1390,7 @@ export function ConcordPage() {
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById } = useTransport(
+  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
     community,
     channel,
     canWrite,
@@ -2953,6 +2954,7 @@ export function ConcordPage() {
       <ProfileRelayHints relays={community?.relays} />
       <MemberRolesContext.Provider value={memberRolesValue}>
       <MemberActionsContext.Provider value={memberActionsValue}>
+      <ConcordMediaHold community={community} trusted={trustedAuthors}>
       <ChatShell
         scope={appScope}
         reveal={{
@@ -3799,6 +3801,7 @@ export function ConcordPage() {
           onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
         />
       </MountWhenOpened>
+      </ConcordMediaHold>
     </MemberActionsContext.Provider>
     </MemberRolesContext.Provider>
     </ChannelNavContext.Provider>

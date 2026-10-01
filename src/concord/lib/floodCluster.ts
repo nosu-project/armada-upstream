@@ -286,13 +286,26 @@ function normalize(ev: OpenedChat): { shape: string; words: string[]; gibberish:
  * no store read or roster.
  */
 export function floodClusters(messages: readonly OpenedChat[], opts: FloodOptions = {}): Set<string> {
+  return floodVerdict(messages, opts).flagged;
+}
+
+/**
+ * {@link floodClusters} plus the earned-trust set it judged by
+ * ({@link computeTrusted}), which the media hold reuses (`mediaTrust.ts`).
+ */
+export function floodVerdict(
+  messages: readonly OpenedChat[],
+  opts: FloodOptions = {},
+): { flagged: Set<string>; trusted: Set<string> } {
   const minMessages = opts.minMessages ?? FLOOD_MIN_MESSAGES;
   const windowMs = opts.windowMs ?? FLOOD_WINDOW_MS;
   const echoMin = opts.echoMin ?? FLOOD_ECHO_MIN;
   const echoWindowMs = opts.echoWindowMs ?? FLOOD_ECHO_WINDOW_MS;
 
   const flagged = new Set<string>();
-  if (messages.length < Math.min(minMessages, echoMin)) return flagged;
+  // Trust is computed once: the drown rule reads it and the immunity pass applies it.
+  const trusted = computeTrusted(messages, opts.self, opts.staff);
+  if (messages.length < Math.min(minMessages, echoMin)) return { flagged, trusted };
 
   // First-seen spans every message, the reader's included.
   const firstSeen = new Map<string, number>();
@@ -363,9 +376,6 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
       markEcho(messages, idx, echoMin, echoWindowMs, flagged);
     }
   }
-  // Trust is computed once: the drown rule reads it and the immunity pass applies it.
-  const trusted = computeTrusted(messages, opts.self, opts.staff);
-
   markArrivalBurst(messages, firstSeen, flagged, opts.self);
   markCohortFlood(messages, firstSeen, flagged, opts.self);
   markUntrustedDrown(messages, firstSeen, trusted, flagged, opts.self, opts.establishedSinceMs);
@@ -377,7 +387,7 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   if (trusted.size > 0) {
     for (const ev of messages) if (trusted.has(ev.author)) flagged.delete(ev.rumorId);
   }
-  return flagged;
+  return { flagged, trusted };
 }
 
 /** One batch's quarantine, keyed on the batch itself (see {@link quarantinedIn}). */

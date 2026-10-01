@@ -127,6 +127,7 @@ export const AppConfigSchema = z.object({
   discoverCuration: z.string().catch(defaultConfig.discoverCuration),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   mediaProxies: z.array(z.string()).catch(defaultConfig.mediaProxies),
+  communityMediaAutoload: z.enum(["always", "trusted", "never"]).catch(defaultConfig.communityMediaAutoload),
   sendOnEnter: SendOnEnterSchema.optional().catch(undefined),
   currencyDisplay: z.enum(["usd", "sats"]).catch(defaultConfig.currencyDisplay),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).catch(defaultConfig.defaultZapMethod),
@@ -174,6 +175,8 @@ export const MetadataDocSchema = z.looseObject({
   stripTrackingParams: z.boolean().optional(),
   /** Media proxy templates; empty = off. */
   mediaProxies: z.array(z.string()).optional(),
+  /** Whose media loads without a click in Concord communities. */
+  communityMediaAutoload: z.enum(["always", "trusted", "never"]).optional(),
   sendOnEnter: SendOnEnterSchema.optional(),
   currencyDisplay: z.enum(["usd", "sats"]).optional(),
   defaultZapMethod: z.enum(PAYMENT_METHOD_TYPES).optional(),

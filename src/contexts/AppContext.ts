@@ -6,6 +6,7 @@ import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELA
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
+import type { MediaAutoload } from "@/concord/lib/mediaTrust";
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { PaymentTargetType } from "@/lib/paymentTargets";
 import type { RailLayoutNode } from "@/lib/railLayout";
@@ -231,6 +232,12 @@ export interface AppConfig {
    */
   mediaProxies: string[];
   /**
+   * Whose images, videos and link previews load without a click in Concord
+   * communities (`concord/lib/mediaTrust.ts`): `trusted` (default) holds media from
+   * authors the reader has no reason to trust yet; held media is never fetched. Synced.
+   */
+  communityMediaAutoload: MediaAutoload;
+  /**
    * Whether Enter sends (Shift+Enter = newline) versus Ctrl/Cmd+Enter. Keyed by
    * device CLASS and synced; unset = auto (sends on keyboards, newline on touch).
    * Resolve with `sendsOnEnter()`. Document editing always uses Ctrl/Cmd+Enter.
@@ -305,6 +312,7 @@ export const METADATA_CONFIG_KEYS = [
   "discoverCuration",
   "stripTrackingParams",
   "mediaProxies",
+  "communityMediaAutoload",
   "sendOnEnter",
   "currencyDisplay",
   "defaultZapMethod",
@@ -398,6 +406,7 @@ export const defaultConfig: AppConfig = {
   discoverCuration: "",
   stripTrackingParams: true,
   mediaProxies: [],
+  communityMediaAutoload: "trusted",
   meshIncognito: true,
   meshEnabled: false,
   currencyDisplay: "usd",

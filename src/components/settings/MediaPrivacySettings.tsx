@@ -5,10 +5,13 @@ import { SettingsRow } from "@/components/settings/SettingsSection";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { toast } from "@/hooks/useToast";
 import { DEFAULT_MEDIA_PROXY, fillUriTemplate, mediaHost, normalizeMediaProxy } from "@/lib/mediaPolicy";
+
+import type { MediaAutoload } from "@/concord/lib/mediaTrust";
 
 /**
  * Media proxy settings (`lib/mediaPolicy.ts`), OFF by default. The first
@@ -24,6 +27,29 @@ export function MediaPrivacySettings() {
 
   return (
     <>
+      <SettingsRow
+        stack
+        label="Load media in communities from"
+        description={
+          "Images, videos and link previews from anyone else wait for you to tap Load, and "
+          + "nothing is fetched until you do. People you trust: yourself, moderators, people you "
+          + "follow, people in your conversations, and members this device has seen for a day."
+        }
+      >
+        <Select
+          value={config.communityMediaAutoload}
+          onValueChange={(v) => updateConfig((current) => ({ ...current, communityMediaAutoload: v as MediaAutoload }))}
+        >
+          <SelectTrigger className="w-44 shrink-0" aria-label="Load media in communities from">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="trusted">People you trust</SelectItem>
+            <SelectItem value="always">Everyone</SelectItem>
+            <SelectItem value="never">Nobody</SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingsRow>
       <SettingsRow
         label="Load images through a proxy"
         description={

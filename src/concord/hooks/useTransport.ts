@@ -81,6 +81,8 @@ export function useTransport(
   timerEntries: DmTimerTimelineEntry[];
   /** Opened rows by rumor id — the ONLY place the original seal (needed for pins) survives. */
   openedById: Map<string, OpenedChat>;
+  /** The fold's earned-trust set (`FoldedTimeline.trusted`), for the media hold. */
+  trustedAuthors: ReadonlySet<string>;
 } {
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();
@@ -572,5 +574,5 @@ export function useTransport(
     return map;
   }, [raw]);
 
-  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries, openedById };
+  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries, openedById, trustedAuthors: folded.trusted };
 }
