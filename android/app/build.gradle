@@ -43,10 +43,28 @@ android {
             // install screenshots and icons (manifest.webmanifest), the OG card,
             // the iOS home-screen icon, and the Web Push worker (main.tsx
             // unregisters service workers on native) — and the Twemoji fallback
-            // font, since Android ships Noto Color Emoji.
+            // font, since Android ships Noto Color Emoji, and the landing page's
+            // three.js sea, which SailingSea.tsx doesn't render on Android.
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~' +
                 ':!<dir>screenshots:!og.png:!og.svg:!apple-touch-icon.png:!logo-512.png:!maskable-192.png:!maskable-512.png' +
-                ':!sw.js:!twemoji-*'
+                ':!sw.js:!twemoji-*:!sailingScene-*'
+        }
+    }
+    packaging {
+        resources {
+            // Library metadata nothing reads at runtime: Kotlin builtins (for
+            // kotlin-reflect, which isn't a dependency), the coroutines debug
+            // agent's probes, BouncyCastle's X.509 path-review messages (Bitchat
+            // uses only Ed25519), Cordova's allowlist docs, and version stamps.
+            excludes += [
+                '**/*.kotlin_builtins',
+                'DebugProbesKt.bin',
+                'kotlin-tooling-metadata.json',
+                'org/bouncycastle/x509/*.properties',
+                'org/apache/cordova/allowlist/*.html',
+                'META-INF/*.version',
+                'META-INF/androidx/**/LICENSE.txt',
+            ]
         }
     }
     signingConfigs {
