@@ -11,7 +11,8 @@ import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
 import { HeldMedia, HeldPreviews } from "@/components/chat/HeldMedia";
-import { useMediaHeld } from "@/components/chat/mediaHold";
+import { useMediaHeld, useMediaUrlHold } from "@/components/chat/mediaHold";
+import { mediaHost } from "@/lib/mediaPolicy";
 import { BuzzInviteEmbed } from "@/components/chat/BuzzInviteEmbed";
 import { Nip29GroupInviteEmbed } from "@/components/chat/Nip29GroupInviteEmbed";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
@@ -879,6 +880,13 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   const [mediaLoaded, setMediaLoaded] = useState(false);
   const holdMedia = mediaHeld && !mediaLoaded;
   const loadMedia = useCallback(() => setMediaLoaded(true), []);
+  // Per URL: the sender's hold, or a host the viewer doesn't know. Undefined = loads;
+  // otherwise the host to name on the card (empty when the SENDER is why).
+  const urlHold = useMediaUrlHold(event.pubkey);
+  const heldReason = (url: string): string | undefined => {
+    if (mediaLoaded || !urlHold(url)) return undefined;
+    return mediaHeld ? "" : mediaHost(url) ?? url;
+  };
 
   const emojiMap = useMemo(() => {
     const map = holdMedia ? new Map<string, string>() : buildEmojiMap(event.tags);
@@ -1133,7 +1141,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return <hr key={key} className="my-2 border-border" />;
       case "image-embed": {
         if (inQuote) return inlineLink(key, token.url);
-        if (holdMedia) return <HeldMedia key={key} kind="image" onLoad={loadMedia} />;
+        const held = heldReason(token.url);
+        if (held !== undefined) return <HeldMedia key={key} kind="image" host={held || undefined} onLoad={loadMedia} />;
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
         return (
           <InlineImage
@@ -1144,7 +1153,10 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "image-gallery": {
-        if (holdMedia) return <HeldMedia key={key} kind="image" count={token.urls.length} onLoad={loadMedia} />;
+        const held = token.urls.map((u) => heldReason(u.url)).find((r) => r !== undefined);
+        if (held !== undefined) {
+          return <HeldMedia key={key} kind="image" count={token.urls.length} host={held || undefined} onLoad={loadMedia} />;
+        }
         const galleryStartIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
         return (
           <ImageGrid
@@ -1200,7 +1212,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         }
         const isAudio = mime.startsWith("audio/") || AUDIO_EXT_URL_REGEX.test(token.url);
         if (isAudio) {
-          if (holdMedia) return <HeldMedia key={key} kind="audio" onLoad={loadMedia} />;
+          const held = heldReason(token.url);
+          if (held !== undefined) return <HeldMedia key={key} kind="audio" host={held || undefined} onLoad={loadMedia} />;
           const waveform = imeta ? getImetaField(event.tags, token.url, "waveform") : undefined;
           const duration = imeta ? getImetaField(event.tags, token.url, "duration") : undefined;
           return (
@@ -1229,7 +1242,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             />
           );
         }
-        if (holdMedia) return <HeldMedia key={key} kind="video" onLoad={loadMedia} />;
+        const heldVideo = heldReason(token.url);
+        if (heldVideo !== undefined) return <HeldMedia key={key} kind="video" host={heldVideo || undefined} onLoad={loadMedia} />;
         return (
           <VideoPlayer
             key={key}

@@ -5,14 +5,17 @@ import { useChatModeration } from "@/concord/hooks/useChannel";
 import {
   holdsAvatar,
   holdsMedia,
+  holdsMediaUrl,
   nextEstablishedAt,
   readSightings,
   sightingsRevision,
   subscribeSightings,
 } from "@/concord/lib/mediaTrust";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowList } from "@/hooks/useFollowList";
+import { knownHostSet } from "@/lib/knownMediaHosts";
 
 import type { Community } from "@/concord/lib/types";
 import type { ReactNode } from "react";
@@ -47,6 +50,8 @@ export function ConcordMediaHold({
   const followPubkeys = useFollowList().data?.pubkeys;
   const follows = useMemo(() => new Set(followPubkeys ?? []), [followPubkeys]);
   const stableTrusted = useStableSet(trusted);
+  const blossomServers = useBlossomServers();
+  const knownHosts = useMemo(() => knownHostSet(blossomServers), [blossomServers]);
 
   const revision = useSyncExternalStore(subscribeSightings, sightingsRevision);
   const communityIdHex = community?.idHex;
@@ -72,8 +77,9 @@ export function ConcordMediaHold({
     return {
       media: (author) => holdsMedia(author, inputs()),
       avatar: (author) => holdsAvatar(author, inputs()),
+      host: (author, url) => holdsMediaUrl(author, url, { mode, self }, knownHosts),
     };
-  }, [mode, self, isStaff, stableTrusted, follows, sightings, now]);
+  }, [mode, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);
 
   return <MediaHoldContext.Provider value={holds}>{children}</MediaHoldContext.Provider>;
 }

@@ -6,6 +6,9 @@
  * no blurhash, no unfurl — until the reader asks for it. A render rule only;
  * nothing is dropped.
  *
+ * In `trusted` mode a URL on a host the viewer doesn't know is held too, whoever
+ * sent it (`holdsMediaUrl`, `lib/knownMediaHosts.ts`).
+ *
  * An author's media loads when they are the reader, staff, followed by the reader,
  * reached by the fold's earned-trust graph (`floodVerdict`), or ESTABLISHED: first
  * observed by THIS client at least {@link MEDIA_PROBATION_MS} ago. Observation time
@@ -14,6 +17,7 @@
  * its existing history is all there is to go on.
  */
 import { KvPrefixCache } from "@/lib/db/kvCache";
+import { isKnownMediaHost } from "@/lib/knownMediaHosts";
 
 /** How long a newly observed author's media stays held. */
 export const MEDIA_PROBATION_MS = 24 * 3_600_000;
@@ -106,6 +110,20 @@ export function holdsMedia(author: string, i: MediaHoldInputs): boolean {
 export function holdsAvatar(author: string, i: MediaHoldInputs): boolean {
   if (author === i.self || i.mode === "always") return false;
   return untrusted(author, i, AVATAR_PROBATION_MS);
+}
+
+/**
+ * Whether one media URL waits for "Load" because of where it is hosted, however
+ * trusted its sender: only `trusted` mode applies it, and never to the reader.
+ */
+export function holdsMediaUrl(
+  author: string,
+  url: string,
+  i: Pick<MediaHoldInputs, "mode" | "self">,
+  known: ReadonlySet<string>,
+): boolean {
+  if (author === i.self || i.mode !== "trusted") return false;
+  return !isKnownMediaHost(url, known);
 }
 
 /** When the next observed author leaves either probation, or undefined. */

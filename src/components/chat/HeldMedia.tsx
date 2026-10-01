@@ -10,10 +10,13 @@ import { Button } from "@/components/ui/button";
 export function HeldMedia({
   kind,
   count = 1,
+  host,
   onLoad,
 }: {
   kind: "image" | "video" | "audio";
   count?: number;
+  /** Held for where it is hosted rather than who sent it. */
+  host?: string;
   onLoad: () => void;
 }) {
   const noun = kind === "video" ? "Video" : kind === "audio" ? "Audio" : count > 1 ? `${count} images` : "Image";
@@ -23,7 +26,9 @@ export function HeldMedia({
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium leading-tight">{noun} not loaded</div>
         <div className="text-xs leading-snug text-muted-foreground">
-          From someone you don't know yet. Load only if you trust it.
+          {host
+            ? `From ${host}, a site you haven't added. Load only if you trust it.`
+            : "From someone you don't know yet. Load only if you trust it."}
         </div>
       </div>
       <Button

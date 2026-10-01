@@ -51,8 +51,12 @@ function message(content?: string, tags?: string[][]): NostrEvent {
   };
 }
 
-function renderWith(holds: ((pubkey: string) => boolean) | null, event = message()) {
-  const hold = holds && { media: holds, avatar: holds };
+function renderWith(
+  holds: ((pubkey: string) => boolean) | null,
+  event = message(),
+  host: (pubkey: string, url: string) => boolean = () => false,
+) {
+  const hold = holds && { media: holds, avatar: holds, host };
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
@@ -94,5 +98,17 @@ describe("ChatContent media hold", () => {
     renderWith((pk) => pk === STRANGER, message(`look ${link}`, []));
     expect(screen.getByRole("link", { name: link })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Previews not loaded/ })).toBeInTheDocument();
+  });
+
+  it("holds a trusted sender's image on an unknown host, naming the host", () => {
+    const { container } = renderWith(
+      () => false,
+      message(),
+      (_pk, url) => !url.startsWith("https://emoji.example.com/"),
+    );
+    expect(container.querySelector("img[src*='x.jpg']")).toBeNull();
+    expect(screen.getByText(/From blossom\.example\.com, a site you haven't added/)).toBeInTheDocument();
+    // The sender isn't held, so their emoji still render.
+    expect(container.querySelector(`img[src="${EMOJI}"]`)).not.toBeNull();
   });
 });
