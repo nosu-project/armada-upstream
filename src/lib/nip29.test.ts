@@ -8,13 +8,16 @@ import {
   KIND_GROUP_PINS,
   KIND_RELAY_MEMBERS,
   KIND_UPDATE_PIN_LIST,
+  nip29GroupPath,
   parseAddrPinRef,
+  parseGroupAddress,
   parseGroupMetadata,
   parseGroupNaddr,
   parseGroupPins,
   parseRelayMemberRoles,
   reconcileRelayGroups,
 } from "@/lib/nip29";
+import { normalizeRelayUrl } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -166,6 +169,42 @@ describe("group naddr identifiers", () => {
     expect(parseGroupNaddr(nip19.npubEncode(PK_A))).toBeUndefined();
     expect(parseGroupNaddr("not an naddr")).toBeUndefined();
     expect(parseGroupNaddr("")).toBeUndefined();
+  });
+});
+
+describe("parseGroupAddress", () => {
+  it("reads the legacy host'group form, scheme or not", () => {
+    expect(parseGroupAddress("groups.example'pizza")).toEqual({
+      relay: "wss://groups.example",
+      groupId: "pizza",
+      inviteCode: undefined,
+    });
+    expect(parseGroupAddress("wss://groups.example'pizza")?.relay).toBe("wss://groups.example");
+  });
+
+  it("takes the invite from ?invite= or ?code=", () => {
+    expect(parseGroupAddress("wss://groups.example'pizza?code=abc")?.inviteCode).toBe("abc");
+    expect(parseGroupAddress("groups.example'pizza?invite=a%20b")?.inviteCode).toBe("a b");
+  });
+
+  it("refuses anything without both a relay and an id", () => {
+    expect(parseGroupAddress("wss://groups.example")).toBeUndefined();
+    expect(parseGroupAddress("'pizza")).toBeUndefined();
+    expect(parseGroupAddress("groups.example'")).toBeUndefined();
+    expect(parseGroupAddress("https://groups.example'pizza")).toBeUndefined();
+  });
+
+  it("builds the in-app path the group page reads", () => {
+    const group = parseGroupAddress("groups.example'pizza?code=abc")!;
+    expect(nip29GroupPath(group)).toMatch(/^\/s\/[^/]+\/pizza\?invite=abc$/);
+  });
+});
+
+describe("normalizeRelayUrl", () => {
+  it("refuses a host no relay could be at", () => {
+    expect(normalizeRelayUrl("wss://groups.example'pizza?code=abc")).toBeUndefined();
+    expect(normalizeRelayUrl("wss://[::1]:7777")).toBe("wss://[::1]:7777");
+    expect(normalizeRelayUrl("relay_1.example")).toBe("wss://relay_1.example");
   });
 });
 

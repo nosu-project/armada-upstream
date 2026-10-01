@@ -844,6 +844,11 @@ export class NostrBatcher {
     })();
   }
 
+  /** The pool's open connections, keyed by URL. */
+  get relays(): ReadonlyMap<string, unknown> {
+    return this.pool.relays;
+  }
+
   relay(url: string) {
     return this.wrapCaching(this.pool.relay(url), url);
   }
@@ -1196,6 +1201,10 @@ export function detachableClient<T extends object>(client: T): T {
     const method = source[name];
     if (typeof method !== 'function') continue;
     bound[name] = (method as (...args: unknown[]) => unknown).bind(client);
+  }
+  // A live view, not a snapshot: `useEvent` routes a hinted relay through the pool when it's open.
+  if ('relays' in client) {
+    Object.defineProperty(bound, 'relays', { enumerable: true, get: () => source.relays });
   }
   return bound as T;
 }

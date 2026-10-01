@@ -493,6 +493,17 @@ describe("detachableClient — the shared client survives being taken apart", ()
     expect(seen).toEqual(["query", "event", "req", "relay", "group", "close"]);
   });
 
+  it("exposes the pool's open relays live, which useEvent routes hinted lookups by", () => {
+    const { pool } = makeFullPool();
+    const open = new Map<string, unknown>();
+    (pool as unknown as { relays: Map<string, unknown> }).relays = open;
+    const client = detachableClient(new NostrBatcher(pool));
+
+    expect(client.relays.has("wss://group.example")).toBe(false);
+    open.set("wss://group.example", {});
+    expect(client.relays.has("wss://group.example")).toBe(true);
+  });
+
   it("supplies a guarantee the bare instance does not", () => {
     const { pool } = makeFullPool();
     // The hazard itself: a method off the instance arrives with the wrong

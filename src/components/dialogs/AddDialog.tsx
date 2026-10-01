@@ -27,7 +27,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
 import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvite, type BuzzJoinPolicy } from "@/buzz/invite";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord/lib/invite";
-import { parseGroupNaddr } from "@/lib/nip29";
+import { nip29GroupPath, parseGroupAddress, parseGroupNaddr } from "@/lib/nip29";
 import { bridgePortalUrl, normalizeRelayUrl, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 
 import { cn } from "@/lib/utils";
@@ -106,7 +106,7 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
 
 /**
  * Smart-paste classifier, checked in order: NIP-29 group naddr (kind 39000,
- * optional `?invite=<code>`), Buzz invite (`https://<host>/invite/<code>`,
+ * optional `?invite=<code>`), legacy `<host>'<group-id>` address, Buzz invite (`https://<host>/invite/<code>`,
  * dotted HMAC code), Concord invite (`…/invite/<naddr>#…` or `naddr#fragment`),
  * or a NIP-29 relay URL.
  */
@@ -132,6 +132,15 @@ function classify(input: string): Classified {
         identity: `g:${relay}:${groupNaddr.groupId}:${groupNaddr.inviteCode ?? ""}`,
       };
     }
+  }
+  // Also ahead of the relay-URL fallback, which would read `host'id` as a hostname.
+  const groupAddress = parseGroupAddress(trimmed);
+  if (groupAddress) {
+    return {
+      kind: "nip29-group",
+      group: groupAddress,
+      identity: `g:${groupAddress.relay}:${groupAddress.groupId}:${groupAddress.inviteCode ?? ""}`,
+    };
   }
   const buzz = parseBuzzInviteUrl(trimmed);
   if (buzz) return { kind: "buzz", invite: buzz, identity: `buzz:${buzz.host}:${buzz.code}` };
@@ -311,11 +320,9 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         return;
       }
       if (target.kind === "nip29-group") {
-        // Joining on the channel page adds the server to the rail; an `?invite=` code
-        // is pre-filled into the kind-9021 join request.
-        const query = target.inviteCode ? `?invite=${encodeURIComponent(target.inviteCode)}` : "";
+        // Joining on the channel page adds the server to the rail.
         onDone();
-        navigate(`/s/${relayToRouteParam(target.relay)}/${encodeURIComponent(target.groupId)}${query}`);
+        navigate(nip29GroupPath(target));
         return;
       }
       // The 10009 list is the only store for added servers, so this needs a signer

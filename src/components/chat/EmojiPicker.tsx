@@ -180,6 +180,8 @@ export function EmojiPicker({ onSelect, customEmojis, onBrowsePacks, packsLinkIn
           ".scroll::-webkit-scrollbar-track { background: transparent !important; }",
           ".sticky { color: hsl(var(--muted-foreground)) !important; font-size: 11px !important; text-transform: uppercase !important; letter-spacing: 0.05em !important; }",
           ".emoji-mart-emoji img[src] { width: 1em; height: 1em; object-fit: contain; }",
+          // emoji-mart inlines its own stack, which lacks the bundled Twemoji fallback.
+          ".emoji-mart-emoji > span { font-family: var(--emoji-fonts) !important; }",
         ].join(" ");
         shadowRoot.appendChild(style);
       }

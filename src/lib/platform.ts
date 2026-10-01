@@ -41,6 +41,10 @@ export function normalizeRelayUrl(url: string): string | undefined {
   try {
     const u = new URL(value);
     if (u.protocol !== "ws:" && u.protocol !== "wss:") return undefined;
+    // WHATWG URL accepts e.g. `'` in a host (`host'group` would become a hostname).
+    if (!/^[a-z\d._-]+$/i.test(u.hostname) && !/^\[[\da-f:.]+\]$/i.test(u.hostname)) {
+      return undefined;
+    }
     return u.toString().replace(/\/$/, "");
   } catch {
     return undefined;
