@@ -11,15 +11,18 @@ interface ImageCropDialogProps {
   imageSrc: string;
   aspect: number;
   title?: string;
+  /** Longest edge of the output in pixels; larger crops are scaled down. */
+  maxEdge?: number;
   onCancel: () => void;
   onCrop: (croppedBlob: Blob) => void;
 }
 
-async function getCroppedBlob(imageSrc: string, pixelCrop: Area): Promise<Blob> {
+async function getCroppedBlob(imageSrc: string, pixelCrop: Area, maxEdge?: number): Promise<Blob> {
   const image = await createImageBitmap(await (await fetch(imageSrc)).blob());
+  const scale = maxEdge ? Math.min(1, maxEdge / Math.max(pixelCrop.width, pixelCrop.height)) : 1;
   const canvas = document.createElement('canvas');
-  canvas.width = pixelCrop.width;
-  canvas.height = pixelCrop.height;
+  canvas.width = Math.max(1, Math.round(pixelCrop.width * scale));
+  canvas.height = Math.max(1, Math.round(pixelCrop.height * scale));
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas context unavailable');
   ctx.drawImage(
@@ -30,8 +33,8 @@ async function getCroppedBlob(imageSrc: string, pixelCrop: Area): Promise<Blob> 
     pixelCrop.height,
     0,
     0,
-    pixelCrop.width,
-    pixelCrop.height,
+    canvas.width,
+    canvas.height,
   );
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -41,7 +44,7 @@ async function getCroppedBlob(imageSrc: string, pixelCrop: Area): Promise<Blob> 
   });
 }
 
-export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', onCancel, onCrop }: ImageCropDialogProps) {
+export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', maxEdge, onCancel, onCrop }: ImageCropDialogProps) {
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
@@ -60,7 +63,7 @@ export function ImageCropDialog({ open, imageSrc, aspect, title = 'Crop Image', 
     if (!croppedAreaPixels) return;
     setIsProcessing(true);
     try {
-      const blob = await getCroppedBlob(imageSrc, croppedAreaPixels);
+      const blob = await getCroppedBlob(imageSrc, croppedAreaPixels, maxEdge);
       onCrop(blob);
     } finally {
       setIsProcessing(false);

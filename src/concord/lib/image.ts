@@ -11,6 +11,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { APP_BLOSSOM_SERVERS, mediaCandidates } from "@/lib/blossom";
 import { decryptBuffer, fetchCapped } from "@/lib/encryptedMedia";
 import { defaultMediaPolicy, routeMediaCandidates, type MediaPolicy } from "@/lib/mediaPolicy";
+import { notificationIconDataUrl } from "@/lib/notificationIcon";
 
 import type { ImagePointer } from "@/concord/lib/types";
 
@@ -21,6 +22,12 @@ const NONCE_BYTES = 16;
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 const CACHE_NAME = "concord-images";
+
+/** Longest edge an uploaded community icon is stored at; it is never shown larger. */
+export const COMMUNITY_ICON_EDGE = 512;
+
+/** Longest edge an uploaded community banner is stored at. */
+export const COMMUNITY_BANNER_EDGE = 1500;
 
 function buf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const ab = new ArrayBuffer(bytes.byteLength);
@@ -134,4 +141,22 @@ export async function decryptImageBytes(
   const mime = sniffImageMime(plaintext);
   void writeCached(pointer.hash, plaintext, mime);
   return { bytes: plaintext, mime };
+}
+
+/**
+ * A community icon as a small `data:` URL for a notification: a host draws it
+ * from the URL alone, and can neither fetch a `blob:` nor afford the original.
+ * Undefined when it can't be fetched, decrypted or made small enough.
+ */
+export async function decryptNotificationIcon(
+  pointer: ImagePointer,
+  servers: readonly string[] = APP_BLOSSOM_SERVERS,
+  policy: MediaPolicy = defaultMediaPolicy(),
+): Promise<string | undefined> {
+  try {
+    const { bytes, mime } = await decryptImageBytes(pointer, undefined, servers, policy);
+    return await notificationIconDataUrl(bytes, mime);
+  } catch {
+    return undefined;
+  }
 }

@@ -22,7 +22,7 @@ import {
   KIND_SEAL_ENCRYPTED,
   PLANE_KINDS,
 } from "@/concord/lib/kinds";
-import { decryptImageBytes } from "@/concord/lib/image";
+import { decryptNotificationIcon } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { sentDuringMembership } from "@/concord/lib/membershipFloor";
@@ -205,20 +205,9 @@ async function mentionNamesFor(content: string, policy: MediaPolicy): Promise<Ma
   return names;
 }
 
-/**
- * A community icon as a `data:` URL (workers lack `URL.createObjectURL`).
- * Usually served from the `concord-images` cache; oversized icons are skipped.
- */
-async function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<string | undefined> {
-  try {
-    const { bytes, mime } = await decryptImageBytes(pointer, undefined, APP_BLOSSOM_SERVERS, policy);
-    if (bytes.byteLength > 512 * 1024) return undefined;
-    let binary = "";
-    for (const b of bytes) binary += String.fromCharCode(b);
-    return `data:${mime};base64,${btoa(binary)}`;
-  } catch {
-    return undefined;
-  }
+/** A community icon as a small `data:` URL (workers lack `URL.createObjectURL`). */
+function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<string | undefined> {
+  return decryptNotificationIcon(pointer, APP_BLOSSOM_SERVERS, policy);
 }
 
 /** Deep link to a message in a NIP-29 group (mirrors `routes.ts`). */

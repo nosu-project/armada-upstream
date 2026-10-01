@@ -16,7 +16,7 @@ import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/lib/authorCache";
 import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettings";
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
-import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { decryptNotificationIcon } from "@/concord/lib/image";
 import { sentDuringMembership } from "@/concord/lib/membershipFloor";
 import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
 import { isRoomActive } from "@/lib/activeRooms";
@@ -527,10 +527,10 @@ export function useForegroundNotifications(): void {
         if (cand.plane === "c2") {
           if (!communityId || !cand.channelIdHex) return {};
           const room = await concordRoomIdentity(communityId, cand.channelIdHex);
-          // Encrypted blob; usually a warm Cache Storage hit.
+          // Encrypted blob, usually a warm Cache Storage hit. A `data:` URL, since a
+          // native host (Tenna) draws the notification and can't read a `blob:`.
           const image = room.iconPointer
-            ? await resolveDecryptedImage(room.iconPointer, ctx.current.blossomServers, ctx.current.mediaPolicy)
-              .catch(() => undefined)
+            ? await decryptNotificationIcon(room.iconPointer, ctx.current.blossomServers, ctx.current.mediaPolicy)
             : undefined;
           return { title: room.title, image };
         }

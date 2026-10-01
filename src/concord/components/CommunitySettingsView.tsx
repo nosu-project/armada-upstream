@@ -88,7 +88,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
-import { encryptImageBlob } from "@/concord/lib/image";
+import { COMMUNITY_BANNER_EDGE, COMMUNITY_ICON_EDGE, encryptImageBlob } from "@/concord/lib/image";
 import { mirrorHistoryToRelays, type MirrorProgress } from "@/concord/lib/relayMirror";
 import { canonicalOrigin, communityAvBrokers, probeAvBroker } from "@/concord/lib/voice";
 import {
@@ -427,6 +427,7 @@ export function CommunitySettingsView({
               imageSrc={cropState.imageSrc}
               aspect={cropState.aspect}
               title={cropState.title}
+              maxEdge={cropState.field === "icon" ? COMMUNITY_ICON_EDGE : COMMUNITY_BANNER_EDGE}
               onCancel={handleCropCancel}
               onCrop={handleCropConfirm}
             />
