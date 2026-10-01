@@ -18,6 +18,11 @@ import { KvPrefixCache } from "@/lib/db/kvCache";
 /** How long a newly observed author's media stays held. */
 export const MEDIA_PROBATION_MS = 24 * 3_600_000;
 /**
+ * The same for their avatar and banner. Shorter: a held picture costs every
+ * newcomer their face, where held media costs only a tap.
+ */
+export const AVATAR_PROBATION_MS = 3_600_000;
+/**
  * After this client first reads a channel, observations keep their own timestamp
  * for this long (its history arriving); afterwards an unseen author is new NOW.
  */
@@ -80,22 +85,36 @@ export interface MediaHoldInputs {
   now: number;
 }
 
+function untrusted(author: string, i: MediaHoldInputs, probationMs: number): boolean {
+  if (i.isStaff?.(author) || i.trusted?.has(author) || i.follows?.has(author)) return false;
+  const seen = i.sightings?.authors[author];
+  return seen === undefined || i.now - seen < probationMs;
+}
+
 /** Whether `author`'s media must wait for the reader to load it. */
 export function holdsMedia(author: string, i: MediaHoldInputs): boolean {
   if (author === i.self) return false;
   if (i.mode === "always") return false;
   if (i.mode === "never") return true;
-  if (i.isStaff?.(author) || i.trusted?.has(author) || i.follows?.has(author)) return false;
-  const seen = i.sightings?.authors[author];
-  return seen === undefined || i.now - seen < MEDIA_PROBATION_MS;
+  return untrusted(author, i, MEDIA_PROBATION_MS);
 }
 
-/** When the next observed author leaves probation, or undefined. */
+/**
+ * Whether `author`'s profile picture and banner are withheld (initials instead).
+ * `never` applies the trusted rule here: holding every avatar would leave no faces.
+ */
+export function holdsAvatar(author: string, i: MediaHoldInputs): boolean {
+  if (author === i.self || i.mode === "always") return false;
+  return untrusted(author, i, AVATAR_PROBATION_MS);
+}
+
+/** When the next observed author leaves either probation, or undefined. */
 export function nextEstablishedAt(sightings: Sightings | undefined, now: number): number | undefined {
   let next: number | undefined;
   for (const seen of Object.values(sightings?.authors ?? {})) {
-    const at = seen + MEDIA_PROBATION_MS;
-    if (at > now && (next === undefined || at < next)) next = at;
+    for (const at of [seen + AVATAR_PROBATION_MS, seen + MEDIA_PROBATION_MS]) {
+      if (at > now && (next === undefined || at < next)) next = at;
+    }
   }
   return next;
 }

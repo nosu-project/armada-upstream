@@ -52,10 +52,11 @@ function message(): NostrEvent {
 }
 
 function renderWith(holds: ((pubkey: string) => boolean) | null) {
+  const hold = holds && { media: holds, avatar: holds };
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
-        <MediaHoldContext.Provider value={holds}>
+        <MediaHoldContext.Provider value={hold}>
           <ChatContent event={message()} />
         </MediaHoldContext.Provider>
       </MemoryRouter>

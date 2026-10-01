@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { MediaHoldContext } from "@/components/chat/mediaHold";
+import { MediaHoldContext, type MediaHold } from "@/components/chat/mediaHold";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import {
+  holdsAvatar,
   holdsMedia,
   nextEstablishedAt,
   readSightings,
@@ -64,11 +65,14 @@ export function ConcordMediaHold({
   }, [sightings, now]);
 
   const self = user?.pubkey;
-  const holds = useMemo(() => {
-    // `now` re-memoizes on a probation crossing; the predicate reads the clock itself.
+  const holds = useMemo<MediaHold>(() => {
+    // `now` re-memoizes on a probation crossing; the predicates read the clock themselves.
     void now;
-    return (author: string) =>
-      holdsMedia(author, { mode, self, isStaff, trusted: stableTrusted, follows, sightings, now: Date.now() });
+    const inputs = () => ({ mode, self, isStaff, trusted: stableTrusted, follows, sightings, now: Date.now() });
+    return {
+      media: (author) => holdsMedia(author, inputs()),
+      avatar: (author) => holdsAvatar(author, inputs()),
+    };
   }, [mode, self, isStaff, stableTrusted, follows, sightings, now]);
 
   return <MediaHoldContext.Provider value={holds}>{children}</MediaHoldContext.Provider>;

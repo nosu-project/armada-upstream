@@ -2,6 +2,8 @@ import { useNostr } from '@nostrify/react';
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
+import { useAvatarHeld } from '@/components/chat/mediaHold';
+
 import { useEventStore } from '@/hooks/useEventStore';
 import { authorQueryKey, parseAuthorEvent, type AuthorResult } from '@/lib/authorCache';
 import { demandProfiles } from '@/sync/profileSync';
@@ -45,6 +47,18 @@ export function authorQueryOptions(
   };
 }
 
+/** A held author's profile without its images; module-level so `select` stays memoized. */
+function withoutImages(result: AuthorResult): AuthorResult {
+  if (!result.metadata?.picture && !result.metadata?.banner) return result;
+  const { picture: _picture, banner: _banner, ...metadata } = result.metadata;
+  return { ...result, metadata };
+}
+
+/**
+ * A pubkey's profile. Inside a media hold (`components/chat/mediaHold.ts`) an
+ * author not yet trusted comes back without `picture`/`banner`, so every avatar
+ * and banner falls back to initials without each call site knowing.
+ */
 export function useAuthor(pubkey: string | undefined) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
@@ -56,5 +70,9 @@ export function useAuthor(pubkey: string | undefined) {
     return demandProfiles([pubkey], { nostr, queryClient });
   }, [pubkey, nostr, queryClient]);
 
-  return useQuery<AuthorResult>(authorQueryOptions(queryClient, eventStore, pubkey));
+  const held = useAvatarHeld(pubkey);
+  return useQuery<AuthorResult>({
+    ...authorQueryOptions(queryClient, eventStore, pubkey),
+    ...(held ? { select: withoutImages } : {}),
+  });
 }

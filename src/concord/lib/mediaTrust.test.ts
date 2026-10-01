@@ -6,10 +6,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AVATAR_PROBATION_MS,
   MEDIA_PROBATION_MS,
   MEDIA_SEED_GRACE_MS,
   MEDIA_SIGHTINGS_MAX_AUTHORS,
   flushSightings,
+  holdsAvatar,
   holdsMedia,
   nextEstablishedAt,
   noteSightings,
@@ -99,8 +101,19 @@ describe("holdsMedia", () => {
     expect(holdsMedia(ana, base({ mode: "never", self: ana }))).toBe(false);
   });
 
-  it("schedules the next probation crossing", () => {
-    expect(nextEstablishedAt(established, NOW)).toBe(NOW - 60_000 + MEDIA_PROBATION_MS);
+  it("releases avatars on the shorter probation, and treats never as trusted for them", () => {
+    const at = NOW - 60_000 + AVATAR_PROBATION_MS;
+    expect(holdsAvatar(ben, base({ sightings: established }))).toBe(true);
+    expect(holdsAvatar(ben, base({ sightings: established, now: at }))).toBe(false);
+    expect(holdsMedia(ben, base({ sightings: established, now: at }))).toBe(true);
+    expect(holdsAvatar(ana, base({ mode: "never", sightings: established }))).toBe(false);
+    expect(holdsAvatar(spam, base({ mode: "never", sightings: established }))).toBe(true);
+    expect(holdsAvatar(spam, base({ mode: "always" }))).toBe(false);
+  });
+
+  it("schedules the next probation crossing, avatar or media", () => {
+    expect(nextEstablishedAt(established, NOW)).toBe(NOW - 60_000 + AVATAR_PROBATION_MS);
+    expect(nextEstablishedAt(established, NOW - 60_000 + AVATAR_PROBATION_MS)).toBe(NOW - 60_000 + MEDIA_PROBATION_MS);
     expect(nextEstablishedAt(undefined, NOW)).toBeUndefined();
   });
 });

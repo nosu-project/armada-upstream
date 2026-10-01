@@ -33,7 +33,8 @@ export function MediaPrivacySettings() {
         description={
           "Images, videos and link previews from anyone else wait for you to tap Load, and "
           + "nothing is fetched until you do. People you trust: yourself, moderators, people you "
-          + "follow, people in your conversations, and members this device has seen for a day."
+          + "follow, people in your conversations, and members this device has seen for a day. "
+          + "Profile pictures from people you don't trust show initials for their first hour."
         }
       >
         <Select
