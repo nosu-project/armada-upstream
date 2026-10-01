@@ -8,8 +8,6 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
-def apkAbis = project.findProperty("apkAbis")
-
 android {
     namespace = "buzz.armada.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -26,6 +24,7 @@ android {
         // libsqliteJni.so (~2.5 MB per ABI, ~10 MB of an 18 MB APK), and the
         // x86 pair is emulators and a handful of Chromebooks. The AAB is built
         // WITHOUT this property so Play keeps splitting all four.
+        def apkAbis = project.findProperty("apkAbis")
         if (apkAbis) {
             ndk {
                 abiFilters.clear()
@@ -42,18 +41,12 @@ android {
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             // Also omitted: the web build's files only a browser reads — PWA
             // install screenshots and icons (manifest.webmanifest), the OG card,
-            // the iOS home-screen icon. The WebView never requests them.
+            // the iOS home-screen icon, and the Web Push worker (main.tsx
+            // unregisters service workers on native) — and the Twemoji fallback
+            // font, since Android ships Noto Color Emoji.
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~' +
-                ':!<dir>screenshots:!og.png:!og.svg:!apple-touch-icon.png:!logo-512.png:!maskable-192.png:!maskable-512.png'
-        }
-    }
-    packaging {
-        jniLibs {
-            // The downloadable APK (-PapkAbis) stores its .so files compressed:
-            // libsqliteJni.so halves under deflate, so the download shrinks at
-            // the cost of the libs being extracted on install. The AAB keeps
-            // them stored, which is what Play's splits want.
-            useLegacyPackaging = apkAbis != null
+                ':!<dir>screenshots:!og.png:!og.svg:!apple-touch-icon.png:!logo-512.png:!maskable-192.png:!maskable-512.png' +
+                ':!sw.js:!twemoji-*'
         }
     }
     signingConfigs {
