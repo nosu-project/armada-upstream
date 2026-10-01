@@ -522,3 +522,32 @@ export function canActOnMember(
   const targetPosition = highestPosition(roles, targetHex) ?? Number.MAX_SAFE_INTEGER;
   return canActOnPosition(roles, actorHex, ownerHex, targetPosition, permission);
 }
+
+export type StockTier = "admin" | "moderator";
+
+/** The member's STOCK tier, by the stock role names (never permission-bit inference, unlike {@link badgeOf}). */
+export function stockTierOf(roles: CommunityRoles, memberHex: string): StockTier | undefined {
+  const held = new Set(roles.grants.find((g) => g.member === memberHex)?.roleIds ?? []);
+  const has = (name: string) => roles.roles.some((r) => r.name === name && r.scope.kind === "server" && held.has(r.roleId));
+  return has("Admin") ? "admin" : has("Moderator") ? "moderator" : undefined;
+}
+
+/**
+ * The stock-tier changes `actorHex` may make to a member, in menu order; `null`
+ * is "remove". Mirrors `setTier`'s pre-checks so no offered move is refused.
+ */
+export function tierMoves(
+  roles: CommunityRoles,
+  actorHex: string,
+  ownerHex: string | undefined,
+  memberHex: string,
+): Array<StockTier | null> {
+  if (!canActOnMember(roles, actorHex, ownerHex, memberHex, Permissions.MANAGE_ROLES)) return [];
+  const current = stockTierOf(roles, memberHex);
+  const may = (position: number) => canActOnPosition(roles, actorHex, ownerHex, position, Permissions.MANAGE_ROLES);
+  const out: Array<StockTier | null> = [];
+  if (current !== "admin" && may(adminRole("").position)) out.push("admin");
+  if (current !== "moderator" && may(moderatorRole("").position)) out.push("moderator");
+  if (current) out.push(null);
+  return out;
+}

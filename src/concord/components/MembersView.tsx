@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useQueries } from "@tanstack/react-query";
-import { Ban, Crown, KeyRound, Loader2, Search, Shield, ShieldAlert, TriangleAlert, UserMinus, Users } from "lucide-react";
+import { Ban, Crown, KeyRound, Loader2, Search, Shield, ShieldAlert, ShieldOff, TriangleAlert, UserMinus, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -23,6 +23,7 @@ import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
 import { useMembers } from "@/concord/hooks/useGuestbook";
 import { useInviteActions } from "@/concord/hooks/useInvites";
 import { useModeration } from "@/concord/hooks/useModeration";
+import { useRoles } from "@/concord/hooks/useRoles";
 import { useSuspiciousActivity } from "@/concord/hooks/useSuspiciousActivity";
 import { describeAttempts, type SuspiciousActor } from "@/concord/lib/auditLog";
 import { KIND_COMMENT, KIND_MESSAGE } from "@/concord/lib/kinds";
@@ -36,7 +37,7 @@ import {
   sortMemberRows,
 } from "@/concord/lib/memberDirectory";
 import { clickRow, emptySelection, pruneSelection, type SelectionState } from "@/concord/lib/rosterSelection";
-import { badgeOf } from "@/concord/lib/roles";
+import { badgeOf, stockTierOf, tierMoves, type StockTier } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 import { authorQueryOptions, useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -58,11 +59,14 @@ export function MembersView({
   community,
   memberPubkeys,
   canModerate,
+  canManageRoles,
 }: {
   community: Community;
   /** The keep-list a rotating mass ban preserves. */
   memberPubkeys: string[];
+  /** May kick or ban. */
   canModerate: boolean;
+  canManageRoles: boolean;
 }) {
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();
@@ -74,6 +78,8 @@ export function MembersView({
   const { data: folded } = useControlFold(community);
   const moderation = useModeration(community, memberPubkeys);
   const { sendDirectInvite } = useInviteActions(community);
+  const { setTier, isSettingTier } = useRoles(community);
+  const selectable = canModerate || canManageRoles;
   const { actors: suspiciousActors } = useSuspiciousActivity(community, folded);
   const suspiciousOf = useMemo(() => {
     const map = new Map<string, SuspiciousActor>();
@@ -185,6 +191,22 @@ export function MembersView({
   );
   const kickable = selected.filter((pk) => moderation.canKick(pk));
   const bannable = selected.filter((pk) => moderation.canBan(pk));
+  // One member at a time: a tier move may first mint the stock role, which the
+  // next member's move would mint again before the fold caught up.
+  const tierTarget = canManageRoles && selected.length === 1 ? selected[0] : undefined;
+  const tierOptions = tierTarget && folded && user
+    ? tierMoves(folded.roster, user.pubkey, folded.ownerHex ?? community.owner, tierTarget)
+    : [];
+  const tierCurrent = tierTarget && folded ? stockTierOf(folded.roster, tierTarget) : undefined;
+  const runSetTier = async (member: string, tier: StockTier | null) => {
+    try {
+      await setTier({ member, tier });
+      toast({ title: tier === "admin" ? "Made admin" : tier === "moderator" ? "Made moderator" : "Role removed" });
+      setSelection(emptySelection());
+    } catch (e) {
+      toast({ title: "Couldn't change role", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    }
+  };
   const healTargets = useMemo(() => {
     const behind = new Set(visible.filter((r) => r.behind).map((r) => r.pubkey));
     return selected.filter((pk) => behind.has(pk) && pk !== user?.pubkey);
@@ -352,7 +374,7 @@ export function MembersView({
         </Select>
       </div>
 
-      {canModerate && visible.length > 0 && (
+      {selectable && visible.length > 0 && (
         <label className="flex w-fit cursor-pointer items-center gap-2 px-1 text-xs text-muted-foreground">
           <Checkbox
             checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
@@ -375,7 +397,7 @@ export function MembersView({
               row={row}
               density={density}
               currentEpoch={community.rootEpoch}
-              selectable={canModerate}
+              selectable={selectable}
               selected={selection.selected.has(row.pubkey)}
               onToggle={(shiftKey) => setSelection((s) => clickRow(s, visibleOrder, row.pubkey, shiftKey))}
               roleNames={roles.filter((r) => row.roleIds.includes(r.roleId)).map((r) => r.name)}
@@ -392,7 +414,7 @@ export function MembersView({
         </Button>
       )}
 
-      {canModerate && selected.length > 0 && (
+      {selectable && selected.length > 0 && (
         <div className="sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur pb-safe">
           <span className="text-sm font-medium">{selected.length} selected</span>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -411,26 +433,47 @@ export function MembersView({
                 )}
               </Button>
             )}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={kickable.length === 0}
-              onClick={() => setKickTargets(kickable)}
-            >
-              <UserMinus className="size-3.5" />
-              Kick{kickable.length > 0 ? ` (${kickable.length})` : ""}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="destructive"
-              disabled={bannable.length === 0}
-              onClick={() => setBanTargets(bannable)}
-            >
-              <Ban className="size-3.5" />
-              Ban{bannable.length > 0 ? ` (${bannable.length})` : ""}
-            </Button>
+            {tierTarget && tierOptions.map((tier) => (
+              <Button
+                key={tier ?? "none"}
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={isSettingTier}
+                onClick={() => void runSetTier(tierTarget, tier)}
+              >
+                {tier === "admin" ? <Crown className="size-3.5" /> : tier === "moderator" ? <Shield className="size-3.5" /> : <ShieldOff className="size-3.5" />}
+                {tier === "admin"
+                  ? "Make admin"
+                  : tier === "moderator"
+                    ? tierCurrent === "admin" ? "Demote to moderator" : "Make moderator"
+                    : tierCurrent === "admin" ? "Remove admin" : "Remove moderator"}
+              </Button>
+            ))}
+            {canModerate && (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={kickable.length === 0}
+                  onClick={() => setKickTargets(kickable)}
+                >
+                  <UserMinus className="size-3.5" />
+                  Kick{kickable.length > 0 ? ` (${kickable.length})` : ""}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  disabled={bannable.length === 0}
+                  onClick={() => setBanTargets(bannable)}
+                >
+                  <Ban className="size-3.5" />
+                  Ban{bannable.length > 0 ? ` (${bannable.length})` : ""}
+                </Button>
+              </>
+            )}
             <Button type="button" size="sm" variant="ghost" onClick={() => setSelection(emptySelection())}>
               Clear
             </Button>
