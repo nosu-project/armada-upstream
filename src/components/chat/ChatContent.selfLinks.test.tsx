@@ -35,6 +35,16 @@ vi.mock("@/components/chat/ProfilePreviewCard", () => ({
   ProfilePreviewCard: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
+// The group join card's network-facing hooks; only which card renders is under test.
+vi.mock("@/hooks/useRelayInfo", () => ({ useRelayInfo: () => ({ data: undefined }) }));
+vi.mock("@/hooks/useGroupMembership", () => ({
+  useJoinGroup: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+vi.mock("@/hooks/useUserGroupList", () => ({
+  useUserGroupList: () => ({ data: { groups: [{ id: "joined", relay: "wss://groups.example" }], servers: [] } }),
+  useUpdateUserGroupList: () => ({ mutateAsync: vi.fn() }),
+}));
+
 const MEMBER_COMMUNITY = "abc123";
 const STRANGER_COMMUNITY = "def456";
 const CACHED_MSG = "1".repeat(64);
@@ -188,19 +198,29 @@ describe("ChatContent NIP-29 group references", () => {
     relays: ["wss://groups.example"],
   });
 
-  it("renders a group naddr as an in-app group card", () => {
-    const { container } = renderContent(`You've been added.\nnostr:${GROUP_NADDR}`);
-    expect(container.textContent).toContain("Group · groups.example");
+  it("renders a group naddr as a join card", () => {
+    const { container, getByRole } = renderContent(`You've been added.\nnostr:${GROUP_NADDR}`);
     expect(container.textContent).toContain("pizza");
+    expect(container.textContent).toContain("groups.example");
+    expect(getByRole("button", { name: "Join" })).toBeInTheDocument();
     expect(container.textContent).not.toContain("naddr1");
   });
 
-  it("folds the naddr's ?invite= suffix into the card", () => {
+  it("folds the naddr's ?invite= suffix into the card as an invite", () => {
     const { container } = renderContent(`nostr:${GROUP_NADDR}?invite=abc123.`);
-    expect(container.querySelector('[role="link"]')?.getAttribute("title")).toBe(
-      `nostr:${GROUP_NADDR}?invite=abc123`,
-    );
+    expect(container.textContent).toContain("You've been invited to join a channel");
     expect(container.textContent).not.toContain("?invite=");
+  });
+
+  it("offers Open for a group already in the user's list", () => {
+    const naddr = nip19.naddrEncode({
+      kind: 39000,
+      pubkey: "c".repeat(64),
+      identifier: "joined",
+      relays: ["wss://groups.example"],
+    });
+    const { getByRole } = renderContent(`nostr:${naddr}`);
+    expect(getByRole("button", { name: "Open" })).toBeInTheDocument();
   });
 
   it("routes a legacy host'group link to the group, keeping its code", () => {

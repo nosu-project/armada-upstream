@@ -13,7 +13,7 @@ import { openedToStored, queryRumorsByIds } from "@/concord/lib/rumorStore";
 import { useAuthor } from "@/hooks/useAuthor";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { KIND_GROUP_METADATA, parseGroupMetadata } from "@/lib/nip29";
+import { useLocalGroupMeta } from "@/hooks/useLocalGroupMeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
@@ -289,7 +289,7 @@ function Nip29RouteCard({
   path: string;
   className?: string;
 }) {
-  const group = useNip29GroupMeta(route.relayUrl, route.groupId);
+  const group = useLocalGroupMeta(route.relayUrl, route.groupId);
   const rumor = useMainStoreRumor(route.messageId ?? route.threadRoot, route.relayUrl);
 
   let host = route.relayUrl;
@@ -313,22 +313,4 @@ function Nip29RouteCard({
       {rumor ? <MessageBody rumor={rumor} /> : route.messageId ? <NotCachedNote /> : null}
     </RouteCardShell>
   );
-}
-
-function useNip29GroupMeta(relayUrl: string, groupId: string | undefined) {
-  const storePromise = useContext(EventStoreContext);
-  const { data } = useQuery({
-    queryKey: ["self-link-nip29-meta", relayUrl, groupId ?? ""],
-    enabled: !!storePromise && !!groupId,
-    queryFn: async ({ signal }) => {
-      const store = await storePromise!;
-      const events = await store.query(
-        [{ kinds: [KIND_GROUP_METADATA], "#d": [groupId!], limit: 1 }],
-        { relay: relayUrl, signal },
-      );
-      return events[0] ? parseGroupMetadata(events[0], relayUrl) : null;
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  return data ?? undefined;
 }
