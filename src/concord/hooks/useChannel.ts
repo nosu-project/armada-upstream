@@ -39,6 +39,7 @@ import {
   rememberQuarantined,
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
+import { recordSightings, sightingsRevision, subscribeSightings } from "@/concord/lib/mediaTrust";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
 import { useActivePause } from "@/concord/hooks/usePause";
@@ -120,6 +121,15 @@ function cursorHolds(cursor: PageCursor | undefined, data: readonly OpenedChat[]
   return !!cursor && data.some((m) => cursor.ids.has(m.rumorId));
 }
 
+export interface ChatModerationState extends ChatModeration {
+  /**
+   * Whether a control fold (live or restored) backs this context. Until then
+   * `banned` is empty for want of a Banlist, not because nobody is banned, so
+   * a read surface withholds rows rather than painting banned authors.
+   */
+  ready: boolean;
+}
+
 /**
  * Moderation context from the control fold. AMBIENT callers (rail, badges)
  * must pass `active` false: one active observer lights the shared key into
@@ -128,11 +138,12 @@ function cursorHolds(cursor: PageCursor | undefined, data: readonly OpenedChat[]
 export function useChatModeration(
   community: Community | undefined,
   active = true,
-): ChatModeration {
+): ChatModerationState {
   const { data: folded } = useControlFold(community, active);
   const { data: dissolvedAtMs } = useDissolved(community, active);
   return useMemo(
     () => ({
+      ready: folded !== undefined,
       banned: folded?.banned ?? new Set<string>(),
       canDelete: (deleter: string, author: string, action?: { citation?: AuthorityCitation; ms: number }) => {
         if (!folded || !community) return false;
@@ -473,11 +484,15 @@ export function useChannelTimeline(
     return oldest;
   }, [community?.heldRoots, firstSeen]);
 
+  // Rows wait for the Banlist (CORD-04 §4) so a snapshot or store read that
+  // beats the control fold never paints a banned author.
+  const moderated = moderation.ready ? raw : EMPTY_RAW;
+
   // Keyed per channel so a switch-back returns the cached fold.
   const folded: FoldedTimeline = useKeyedMemo(channelIdHex, () => {
     void memoryRev;
     void revealTick;
-    const result = foldTimeline(raw, moderation, {
+    const result = foldTimeline(moderated, moderation, {
       ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
       ...(firstSeen ? { firstSeen } : {}),
       ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
@@ -501,7 +516,7 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [raw, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev, revealTick]);
+  }, [moderated, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev, revealTick]);
 
   // Wake the fold when a held future-dated message (FUTURE_HOLD_MS) comes due;
   // nothing else re-renders this timeline for it.
@@ -525,21 +540,32 @@ export function useChannelTimeline(
   useEffect(() => {
     if (!community?.idHex || !channelIdHex || folded.quarantined.size === 0) return;
     const entries: Array<[string, number]> = [];
-    for (const m of raw) {
+    for (const m of moderated) {
       if (folded.quarantined.has(m.rumorId) && !folded.paused.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
     }
     if (entries.length > 0) rememberQuarantined(community.idHex, channelIdHex, entries);
-  }, [folded.quarantined, folded.paused, raw, community?.idHex, channelIdHex]);
+  }, [folded.quarantined, folded.paused, moderated, community?.idHex, channelIdHex]);
+
+  // Who this client has seen speak, and since when — the media hold's probation
+  // clock (mediaTrust.ts). After the local read, so a channel isn't seeded empty.
+  const sightingsRev = useSyncExternalStore(subscribeSightings, sightingsRevision);
+  const localReadDone = !query.isPending && moderation.ready;
+  useEffect(() => {
+    if (!community?.idHex || !channelIdHex || !localReadDone) return;
+    const observed: Array<[string, number]> = folded.messages.map((m) => [m.author, m.ms]);
+    if (firstSeen) observed.push(...firstSeen);
+    recordSightings(community.idHex, channelIdHex, observed);
+  }, [folded.messages, firstSeen, localReadDone, community?.idHex, channelIdHex, sightingsRev]);
 
   return {
     folded,
     /** The RAW rows, pre-fold; a Pin needs the Edit rumor itself (CORD-04 §7). */
-    raw,
-    // The LOCAL read only; network catch-up is sync activity. Gated on
-    // `channel` since a disabled query stays `isPending` forever.
+    raw: moderated,
+    // The LOCAL reads only (rows + control fold); network catch-up is sync
+    // activity. Gated on `channel` since a disabled query stays `isPending` forever.
     isLoading:
       Boolean(channel) &&
-      (query.isPending || (focusIds.length > 0 && focusQuery.isPending)),
+      (query.isPending || !moderation.ready || (focusIds.length > 0 && focusQuery.isPending)),
     loadOlder,
     hasMore,
     isLoadingOlder,

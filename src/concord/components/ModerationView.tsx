@@ -20,6 +20,7 @@ export function ModerationView({
   access,
   memberPubkeys,
   canModerateMembers,
+  canManageRoles,
   onSelect,
 }: {
   community: Community;
@@ -27,6 +28,7 @@ export function ModerationView({
   access: ModerationAccess;
   memberPubkeys: string[];
   canModerateMembers: boolean;
+  canManageRoles: boolean;
   onSelect: (pane: ModerationPane) => void;
 }) {
   const tabs = MODERATION_PANES.filter((p) => access[p]).map((p) => MODERATION_TABS[p]);
@@ -45,6 +47,7 @@ export function ModerationView({
           community={community}
           memberPubkeys={memberPubkeys}
           canModerate={canModerateMembers}
+          canManageRoles={canManageRoles}
         />
       ) : pane === "roles" ? (
         <RolesView community={community} />

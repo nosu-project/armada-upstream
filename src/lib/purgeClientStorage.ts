@@ -7,6 +7,7 @@ import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
+import { clearSightingsMemory } from "@/concord/lib/mediaTrust";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
@@ -114,6 +115,7 @@ export async function purgeClientStorage(): Promise<void> {
   clearDeferredFoldMemory();
   clearAudioMetadata();
   clearPendingJoins();
+  clearSightingsMemory();
   resetDecryptConsent();
   // Shared DM ephemeral REQs linger past their last consumer; close them.
   closeDmEphemeralSubs();
@@ -135,4 +137,5 @@ export async function purgeClientStorage(): Promise<void> {
   clearFoldedMemory();
   clearAudioMetadata();
   clearPendingJoins();
+  clearSightingsMemory();
 }

@@ -16,6 +16,17 @@
 #      seeded from the image only while EMPTY, so after an image rebuild the
 #      old volume shadows any new/changed toolcache content until removed.
 #      Removing it here makes the next job re-seed it from the new image.
+#
+# The image carries no dependency caches. The coordinator mounts them into
+# every job as persistent volumes, via NGIT_CI_ACT_CONTAINER_OPTIONS in
+# /opt/ngit-ci/.env:
+#   -v ci-gradle:/root/.gradle -v ci-npm:/root/.npm
+#   -v ci-electron:/root/.cache/electron
+#   -v ci-electron-builder:/root/.cache/electron-builder
+#   -v ci-cargo-registry:/root/.cargo/registry -v ci-cargo-git:/root/.cargo/git
+#   -v ci-cargo-target:/root/.cargo-target
+# Concurrent jobs share them safely (Gradle, npm and cargo all lock their
+# stores). To reset one, `docker volume rm` it while no job is running.
 set -eu
 
 ref="${1:-HEAD}"
@@ -28,10 +39,9 @@ cd "$repo_root"
 ctx="$(mktemp -d /tmp/armada-ci-context.XXXXXX)"
 trap 'rm -rf "$ctx"' EXIT
 
-# Context = tracked files only, from the requested ref.
-git archive "$ref" android electron crates package.json package-lock.json \
-  capacitor.config.ts .ngit/ci-image | tar -x -C "$ctx"
-cp "$ctx/.ngit/ci-image/Dockerfile" "$ctx/Dockerfile"
+# The Dockerfile copies nothing from the repo, so the context is just itself.
+git archive "$ref" .ngit/ci-image/Dockerfile | tar -x -C "$ctx"
+mv "$ctx/.ngit/ci-image/Dockerfile" "$ctx/Dockerfile"
 
 docker build -t "$tag" "$ctx"
 docker push "$tag"

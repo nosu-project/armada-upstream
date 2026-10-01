@@ -5000,7 +5000,7 @@ public class NotificationRelayService extends Service {
                 }
                 resolveAuthor(author2, relayUrl, profile -> {
                     String name = displayName(profile);
-                    String picture = profile != null ? profile.picture : null;
+                    String picture = communityAvatarShown(author2) && profile != null ? profile.picture : null;
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
                             fStR.community, "c2:" + fStR.channelId, fStR.name,
@@ -5043,7 +5043,7 @@ public class NotificationRelayService extends Service {
             }
             resolveAuthor(author2, relayUrl, profile -> {
                 String name = displayName(profile);
-                String picture = profile != null ? profile.picture : null;
+                String picture = communityAvatarShown(author2) && profile != null ? profile.picture : null;
                 String text = buildMessageText(preview2, fMention2, threadRoot2 != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
@@ -5340,6 +5340,19 @@ public class NotificationRelayService extends Service {
             }
         }
         return true;
+    }
+
+    /**
+     * Whether a Concord sender's avatar may appear on a notification. Anyone with
+     * the key can post (CORD-04 §1), so only a known peer's face reaches the lock
+     * screen; mirrors {@code communityAvatarShown} in {@code pushRuntime.ts}.
+     */
+    private boolean communityAvatarShown(String author) {
+        return communityAvatarShown(author, dmFollows, dmKnownPeers);
+    }
+
+    static boolean communityAvatarShown(String author, Set<String> follows, Set<String> knownPeers) {
+        return author != null && (follows.contains(author) || knownPeers.contains(author));
     }
 
     /**

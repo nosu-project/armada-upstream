@@ -11,6 +11,11 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "buzz.armada.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    // Nothing here is compiled with the NDK: AGP uses its llvm-strip to drop
+    // debug symbols from prebuilt .so files (libsqliteJni.so ships unstripped,
+    // ~0.2 MB per ABI). Without this NDK installed the build still succeeds,
+    // packaging the libs unstripped. The CI image installs the same version.
+    ndkVersion = rootProject.ext.ndkVersion
     defaultConfig {
         applicationId "buzz.armada.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -39,7 +44,32 @@ android {
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
-            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+            // Also omitted: the web build's files only a browser reads — PWA
+            // install screenshots and icons (manifest.webmanifest), the OG card,
+            // the iOS home-screen icon, and the Web Push worker (main.tsx
+            // unregisters service workers on native) — and the Twemoji fallback
+            // font, since Android ships Noto Color Emoji, and the landing page's
+            // three.js sea, which SailingSea.tsx doesn't render on Android.
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~' +
+                ':!<dir>screenshots:!og.png:!og.svg:!apple-touch-icon.png:!logo-512.png:!maskable-192.png:!maskable-512.png' +
+                ':!sw.js:!twemoji-*:!sailingScene-*'
+        }
+    }
+    packaging {
+        resources {
+            // Library metadata nothing reads at runtime: Kotlin builtins (for
+            // kotlin-reflect, which isn't a dependency), the coroutines debug
+            // agent's probes, BouncyCastle's X.509 path-review messages (Bitchat
+            // uses only Ed25519), Cordova's allowlist docs, and version stamps.
+            excludes += [
+                '**/*.kotlin_builtins',
+                'DebugProbesKt.bin',
+                'kotlin-tooling-metadata.json',
+                'org/bouncycastle/x509/*.properties',
+                'org/apache/cordova/allowlist/*.html',
+                'META-INF/*.version',
+                'META-INF/androidx/**/LICENSE.txt',
+            ]
         }
     }
     signingConfigs {

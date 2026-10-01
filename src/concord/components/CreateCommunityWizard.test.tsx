@@ -55,6 +55,8 @@ vi.mock("@/components/ImageCropDialog", () => ({
 }));
 
 vi.mock("@/concord/lib/image", () => ({
+  COMMUNITY_ICON_EDGE: 512,
+  COMMUNITY_BANNER_EDGE: 1500,
   encryptImageBlob: async () => ({
     ciphertext: new Uint8Array([1, 2, 3]),
     key: "aa".repeat(32),

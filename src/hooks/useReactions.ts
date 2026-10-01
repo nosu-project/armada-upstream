@@ -22,6 +22,11 @@ export interface ReactionTally {
   /** Distinct pubkeys that reacted with this key. */
   count: number;
   pubkeys: string[];
+  /**
+   * Per reactor, parallel to {@link pubkeys}: the image their own reaction named.
+   * Lets the media hold show a trusted reactor's image rather than whoever was first.
+   */
+  urls?: (string | undefined)[];
   mine: boolean;
   /** The user's reaction event id for this key (to retract it). */
   mineEventId?: string;

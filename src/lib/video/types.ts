@@ -1,4 +1,6 @@
-/** Composer ↔ video worker message contract; separate so the main bundle skips mediabunny. */
+/** Main thread ↔ media worker message contract; separate so the main bundle skips mediabunny. */
+
+import type { AudioMetadata } from "@/lib/audioMetadata";
 
 /** The outcome of processing an attached video. */
 export interface ProcessedVideo {
@@ -18,9 +20,11 @@ export interface ProcessedVideo {
 
 export type WorkerRequest =
   | { type: "process"; file: File }
-  | { type: "cancel" };
+  | { type: "cancel" }
+  | { type: "audioTags"; id: number; source: Blob | string };
 
 export type WorkerResponse =
   | { type: "progress"; value: number }
   | { type: "done"; result: ProcessedVideo }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "audioTags"; id: number; result: AudioMetadata };

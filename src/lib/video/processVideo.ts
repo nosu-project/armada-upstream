@@ -72,7 +72,7 @@ function runWorker(file: File, options: ProcessVideoOptions): Promise<ProcessedV
         options.onProgress?.(message.value);
       } else if (message.type === "done") {
         finish(() => resolve(message.result));
-      } else {
+      } else if (message.type === "error") {
         finish(() => reject(new Error(message.message)));
       }
     };

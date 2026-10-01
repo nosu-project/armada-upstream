@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, Users, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Crown, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, Users, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 
@@ -96,6 +96,7 @@ import { MemberActionsContext, type MemberActionItem, type MemberActionsValue } 
 import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
+import { ConcordMediaHold } from "@/concord/components/ConcordMediaHold";
 import { useAppContext } from "@/hooks/useAppContext";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
@@ -171,7 +172,7 @@ import { resolveVoiceBroker, useVoiceBroker, useVoicePresence } from "@/concord/
 import { communityAvBrokers } from "@/concord/lib/voice";
 import { useRegisterChannelStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { completeMemberlist } from "@/concord/lib/guestbook";
-import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions } from "@/concord/lib/roles";
+import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions, stockTierOf, tierMoves } from "@/concord/lib/roles";
 import { channelGitRepositoryAttachments, type Channel, type Community, type ImagePointer } from "@/concord/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
@@ -1389,7 +1390,7 @@ export function ConcordPage() {
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById } = useTransport(
+  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById, trustedAuthors } = useTransport(
     community,
     channel,
     canWrite,
@@ -2294,6 +2295,29 @@ export function ConcordPage() {
       actionsFor: (pubkey: string) => {
         if (!user || pubkey === user.pubkey) return [];
         const out: MemberActionItem[] = [];
+        // Tier moves first: the card is where anyone clicked lands, poster or not.
+        if (canManageRoles && roster) {
+          const current = stockTierOf(roster, pubkey);
+          for (const tier of tierMoves(roster, user.pubkey, ownerHex, pubkey)) {
+            out.push(
+              tier === "admin"
+                ? { id: "make-admin", label: "Make admin", icon: Crown, onSelect: () => void handleSetRoleStable(pubkey, ["admin"]) }
+                : tier === "moderator"
+                  ? {
+                    id: "make-moderator",
+                    label: current === "admin" ? "Demote to moderator" : "Make moderator",
+                    icon: Shield,
+                    onSelect: () => void handleSetRoleStable(pubkey, ["moderator"]),
+                  }
+                  : {
+                    id: "remove-tier",
+                    label: current === "admin" ? "Remove admin" : "Remove moderator",
+                    icon: ShieldOff,
+                    onSelect: () => void handleSetRoleStable(pubkey, []),
+                  },
+            );
+          }
+        }
         if (canKickAny && moderation.canKick(pubkey)) {
           out.push({
             id: "kick",
@@ -2331,7 +2355,7 @@ export function ConcordPage() {
       },
     }),
     [
-      user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel,
+      user, canKickAny, canBanAny, moderation, handleUnbanMember, memberBanLabel, roster, ownerHex, handleSetRoleStable,
       canManageRoles, roleCatalog, canEditMemberRoles, intendedRolesFor, isRoleTogglePending, handleToggleRoleStable,
     ],
   );
@@ -2953,6 +2977,7 @@ export function ConcordPage() {
       <ProfileRelayHints relays={community?.relays} />
       <MemberRolesContext.Provider value={memberRolesValue}>
       <MemberActionsContext.Provider value={memberActionsValue}>
+      <ConcordMediaHold community={community} trusted={trustedAuthors}>
       <ChatShell
         scope={appScope}
         reveal={{
@@ -3070,22 +3095,6 @@ export function ConcordPage() {
                   <TooltipContent>Search messages</TooltipContent>
                 </Tooltip>
               )}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn("size-8 hidden sidebar:inline-flex text-muted-foreground", membersVisible && "text-foreground")}
-                    aria-label={membersVisible ? "Hide members" : "Show members"}
-                    aria-pressed={membersVisible}
-                    onClick={toggleMembersVisible}
-                  >
-                    <Users className="size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
-              </Tooltip>
-
               {view === "channel" && channel && channel.view !== "forum" && (pins.pins.length > 0 || pins.dark) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -3104,7 +3113,8 @@ export function ConcordPage() {
                 </Tooltip>
               )}
 
-              {view === "channel" && channel && channel.view !== "forum" && (calendar.events.length > 0 || calendar.canModerate) && (
+              {/* Like pins, only once there is something to show; staff schedule from ⋮. */}
+              {view === "channel" && channel && channel.view !== "forum" && calendar.events.length > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -3144,6 +3154,16 @@ export function ConcordPage() {
                     <Users className="size-4" />
                     Members
                   </DropdownMenuItem>
+                  <DropdownMenuItem className="px-3 py-2 hidden sidebar:flex" onClick={toggleMembersVisible}>
+                    <Users className="size-4" />
+                    {membersVisible ? "Hide members" : "Show members"}
+                  </DropdownMenuItem>
+                  {view === "channel" && channel && channel.view !== "forum" && calendar.canModerate && calendar.events.length === 0 && (
+                    <DropdownMenuItem className="px-3 py-2" onClick={() => setCreateEventOpen(true)}>
+                      <CalendarClock className="size-4" />
+                      Schedule an event
+                    </DropdownMenuItem>
+                  )}
                   {view === "channel" && channel?.isPrivate && addableChannelRoles.length > 0 && (
                     <DropdownMenuItem className="px-3 py-2" onClick={openAddMembers}>
                       <UserPlus className="size-4" />
@@ -3270,6 +3290,7 @@ export function ConcordPage() {
                       access={moderationAccess}
                       memberPubkeys={memberPubkeys}
                       canModerateMembers={canKickAny || canBanAny}
+                      canManageRoles={canManageRoles && !dissolved}
                       onSelect={selectPane}
                     />
                   )}
@@ -3799,6 +3820,7 @@ export function ConcordPage() {
           onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
         />
       </MountWhenOpened>
+      </ConcordMediaHold>
     </MemberActionsContext.Provider>
     </MemberRolesContext.Provider>
     </ChannelNavContext.Provider>

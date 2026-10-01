@@ -21,7 +21,7 @@ import type { RsvpVote } from "@/lib/calendar";
 import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { citationFromTags, type AuthorityCitation } from "@/concord/lib/edition";
-import { floodClusters } from "@/concord/lib/floodCluster";
+import { floodVerdict } from "@/concord/lib/floodCluster";
 import { checkChannelBinding, FUTURE_HOLD_MS, openWrapToSeal, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib/stream";
 import type { Channel } from "@/concord/lib/types";
 
@@ -356,6 +356,8 @@ export interface ChatModeration {
 export interface ReactionEntry {
   reactors: Map<string, string>;
   url?: string;
+  /** reactor → the emoji image THEIR reaction named, so a held reactor's can be skipped. */
+  urls?: Map<string, string>;
 }
 
 export interface FoldedTimeline {
@@ -372,6 +374,12 @@ export interface FoldedTimeline {
    * a second author drop.
    */
   quarantined: Set<string>;
+  /**
+   * Authors with earned trust in this batch (`floodVerdict`): the reader, speaking
+   * staff, and whoever the reader's reply/quote/mention graph reaches. Read by the
+   * media hold (`mediaTrust.ts`).
+   */
+  trusted: Set<string>;
   /**
    * The subset of {@link quarantined} collapsed by a community PAUSE (CORD-04 §8),
    * so the row doesn't wrongly call paused traffic spam.
@@ -512,7 +520,10 @@ export function foldTimeline(
       let entry = byEmoji.get(key);
       if (!entry) byEmoji.set(key, (entry = { reactors: new Map() }));
       entry.reactors.set(ev.author, ev.rumorId);
-      if (url && !entry.url) entry.url = url;
+      if (url) {
+        if (!entry.url) entry.url = url;
+        (entry.urls ??= new Map()).set(ev.author, url);
+      }
       continue;
     }
     if (ev.kind === KIND_ZAP) {
@@ -676,7 +687,7 @@ export function foldTimeline(
   );
 
   const isStaff = opts?.staff ?? moderation?.isStaff;
-  const quarantined = floodClusters(messages, {
+  const { flagged: quarantined, trusted } = floodVerdict(messages, {
     ...(opts?.self !== undefined ? { self: opts.self } : {}),
     ...(opts?.firstSeen !== undefined ? { firstSeen: opts.firstSeen } : {}),
     ...(isStaff !== undefined ? { staff: isStaff } : {}),
@@ -704,6 +715,7 @@ export function foldTimeline(
     messages,
     ...(nextRevealMs !== undefined ? { nextRevealMs } : {}),
     quarantined,
+    trusted,
     paused,
     reactions,
     zaps,

@@ -20,6 +20,16 @@ public class NotificationRelayServiceDmTrustTest {
     private static final List<String> GROUP_PEERS = Arrays.asList(ALICE, BOB);
 
     @Test
+    public void communityAvatarOnlyForFollowsAndKnownPeers() {
+        Set<String> follows = Collections.singleton(ALICE);
+        Set<String> known = Collections.singleton(BOB);
+        assertTrue(NotificationRelayService.communityAvatarShown(ALICE, follows, known));
+        assertTrue(NotificationRelayService.communityAvatarShown(BOB, follows, known));
+        assertFalse(NotificationRelayService.communityAvatarShown(CAROL, follows, known));
+        assertFalse(NotificationRelayService.communityAvatarShown(null, follows, known));
+    }
+
+    @Test
     public void exactGroupRosterTrustDoesNotGlobalizeMembers() {
         Set<String> knownConversations = Collections.singleton(GROUP);
 

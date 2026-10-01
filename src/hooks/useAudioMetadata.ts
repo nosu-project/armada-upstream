@@ -1,5 +1,6 @@
 import { createAttachmentCache } from "@/hooks/attachmentCache";
-import { readAudioMetadata, type AudioMetadata } from "@/lib/audioMetadata";
+import type { AudioMetadata } from "@/lib/audioMetadata";
+import { readAudioMetadata } from "@/lib/readAudioMetadata";
 import { computeWaveformFromUrl } from "@/lib/audioWaveform";
 
 /** An attachment's tags, with its cover as an object URL ready for an `<img>`. */

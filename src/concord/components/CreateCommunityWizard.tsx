@@ -23,7 +23,7 @@ import { ownAvServers } from "@/concord/hooks/useVoice";
 import { canonicalOrigin } from "@/concord/lib/voice";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { COMMUNITY_TIMER_PRESETS, DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord/lib/disappearing";
-import { encryptImageBlob } from "@/concord/lib/image";
+import { COMMUNITY_BANNER_EDGE, COMMUNITY_ICON_EDGE, encryptImageBlob } from "@/concord/lib/image";
 import {
   DESCRIPTION_MAX_BYTES,
   MAX_COMMUNITY_AV_BROKERS,
@@ -400,6 +400,7 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
           imageSrc={cropState.imageSrc}
           aspect={cropState.aspect}
           title={cropState.title}
+          maxEdge={cropState.field === "icon" ? COMMUNITY_ICON_EDGE : COMMUNITY_BANNER_EDGE}
           onCancel={handleCropCancel}
           onCrop={handleCropConfirm}
         />

@@ -1,3 +1,4 @@
+import { Capacitor } from "@capacitor/core";
 import { useEffect, useRef, useState } from "react";
 
 /** One throwaway context, so a browser without WebGL gives up the sea's space early. */
@@ -13,10 +14,16 @@ function canWebGL(): boolean {
   }
 }
 
-/** Only the small host is eager; without WebGL it renders nothing. */
+/**
+ * Only the small host is eager; without WebGL it renders nothing. Android
+ * renders nothing too: its APK omits the scene's chunk (three.js) for size —
+ * see `ignoreAssetsPattern` in android/app/build.gradle.
+ */
 export function SailingSea() {
   const hostRef = useRef<HTMLDivElement>(null);
-  const [supported, setSupported] = useState(() => typeof WebGLRenderingContext !== "undefined");
+  const [supported, setSupported] = useState(
+    () => typeof WebGLRenderingContext !== "undefined" && Capacitor.getPlatform() !== "android",
+  );
 
   useEffect(() => {
     if (!supported) return;

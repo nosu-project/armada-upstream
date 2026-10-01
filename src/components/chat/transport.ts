@@ -130,7 +130,9 @@ export function sameReactionTallies(a: readonly ReactionTally[], b: readonly Rea
       && t.mine === u.mine
       && t.mineEventId === u.mineEventId
       && t.pubkeys.length === u.pubkeys.length
-      && t.pubkeys.every((pk, k) => pk === u.pubkeys[k]);
+      && t.pubkeys.every((pk, k) => pk === u.pubkeys[k])
+      && t.urls?.length === u.urls?.length
+      && (t.urls ?? []).every((url, k) => url === u.urls![k]);
   });
 }
 

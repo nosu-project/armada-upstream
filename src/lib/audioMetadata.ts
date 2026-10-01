@@ -1,4 +1,6 @@
-import type { Input, MetadataTags, Source } from "mediabunny";
+/** Pure tag normalization; the reading itself runs in the media worker (`readAudioMetadata.ts`). */
+
+import type { MetadataTags } from "mediabunny";
 
 /** Tags read from a music file's own container metadata (ID3, Vorbis, MP4 `ilst`). */
 export interface AudioMetadata {
@@ -29,33 +31,4 @@ export function audioTagsFrom(tags: MetadataTags): Omit<AudioMetadata, "cover"> 
     album: cleanTag(tags.album),
     year: year && /^\d{4}$/.test(year) ? year : undefined,
   };
-}
-
-/**
- * Read an audio file's tags and front cover. http(s) URLs use range requests
- * so only the tag block is fetched. Never throws.
- */
-export async function readAudioMetadata(source: Blob | string): Promise<AudioMetadata> {
-  let input: Input | undefined;
-  try {
-    // Loaded on demand: the main bundle has no other use for it.
-    const { ALL_FORMATS, BlobSource, Input, UrlSource } = await import("mediabunny");
-    let src: Source;
-    if (typeof source !== "string") src = new BlobSource(source);
-    else if (source.startsWith("blob:")) src = new BlobSource(await (await fetch(source)).blob());
-    else src = new UrlSource(source);
-
-    input = new Input({ source: src, formats: ALL_FORMATS });
-    const tags = await input.getMetadataTags();
-    const images = (tags.images ?? []).filter((img) => img.mimeType.startsWith("image/"));
-    const art = images.find((img) => img.kind === "coverFront") ?? images[0];
-    return {
-      ...audioTagsFrom(tags),
-      cover: art ? new Blob([art.data as Uint8Array<ArrayBuffer>], { type: art.mimeType }) : undefined,
-    };
-  } catch {
-    return {};
-  } finally {
-    input?.dispose();
-  }
 }

@@ -10,6 +10,9 @@ import { CashuToken } from "@/components/chat/CashuToken";
 import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
+import { HeldMedia, HeldPreviews } from "@/components/chat/HeldMedia";
+import { useMediaHeld, useMediaUrlHold } from "@/components/chat/mediaHold";
+import { mediaHost } from "@/lib/mediaPolicy";
 import { BuzzInviteEmbed } from "@/components/chat/BuzzInviteEmbed";
 import { Nip29GroupInviteEmbed } from "@/components/chat/Nip29GroupInviteEmbed";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
@@ -871,15 +874,29 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   const { emojis: viewerEmojis } = useCustomEmojis();
   // `#channel` → local channel, else a Ditto hashtag link.
   const channelNav = useChannelNav();
+  // Held media (mediaHold.ts) is never fetched: no sender emoji images, no previews,
+  // until the reader loads this message's media.
+  const mediaHeld = useMediaHeld(event.pubkey);
+  const [mediaLoaded, setMediaLoaded] = useState(false);
+  const holdMedia = mediaHeld && !mediaLoaded;
+  const loadMedia = useCallback(() => setMediaLoaded(true), []);
+  // Per URL: the sender's hold, or a host the viewer doesn't know. Undefined = loads;
+  // otherwise the host to name on the card (empty when the SENDER is why).
+  const urlHold = useMediaUrlHold(event.pubkey);
+  const heldReason = (url: string): string | undefined => {
+    if (mediaLoaded || !urlHold(url)) return undefined;
+    return mediaHeld ? "" : mediaHost(url) ?? url;
+  };
+
   const emojiMap = useMemo(() => {
-    const map = buildEmojiMap(event.tags);
+    const map = holdMedia ? new Map<string, string>() : buildEmojiMap(event.tags);
     for (const e of viewerEmojis) {
       if (!map.has(e.shortcode)) {
         map.set(e.shortcode, e.url);
       }
     }
     return map;
-  }, [event.tags, viewerEmojis]);
+  }, [event.tags, viewerEmojis, holdMedia]);
 
   const imetaMap = useMemo(() => parseImetaMap(event.tags), [event.tags]);
 
@@ -944,6 +961,15 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     });
     return map;
   }, [groupedTokens]);
+
+  // A held message whose only holdable content is previews/embeds has no HeldMedia
+  // card to carry Load, so it gets a trailing one.
+  const heldPreviewsOnly = useMemo(
+    () =>
+      !groupedTokens.some((t) => HELD_CARD_TOKENS.has(t.type))
+      && groupedTokens.some((t) => HELD_PREVIEW_TOKENS.has(t.type)),
+    [groupedTokens],
+  );
 
   const isEmojiOnly = groupedTokens.length === 1
     && groupedTokens[0].type === "text"
@@ -1115,6 +1141,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return <hr key={key} className="my-2 border-border" />;
       case "image-embed": {
         if (inQuote) return inlineLink(key, token.url);
+        const held = heldReason(token.url);
+        if (held !== undefined) return <HeldMedia key={key} kind="image" host={held || undefined} onLoad={loadMedia} />;
         const imgIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
         return (
           <InlineImage
@@ -1125,6 +1153,10 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "image-gallery": {
+        const held = token.urls.map((u) => heldReason(u.url)).find((r) => r !== undefined);
+        if (held !== undefined) {
+          return <HeldMedia key={key} kind="image" count={token.urls.length} host={held || undefined} onLoad={loadMedia} />;
+        }
         const galleryStartIndex = topIndex !== null ? tokenImageIndex.get(topIndex) ?? 0 : 0;
         return (
           <ImageGrid
@@ -1135,16 +1167,16 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "link-embed":
-        if (inQuote) return inlineLink(key, token.url);
+        if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <LinkEmbed key={key} url={token.url} className="my-1.5" />;
       case "invite-embed":
-        if (inQuote) return inlineLink(key, token.url);
+        if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <InviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "buzz-invite-embed":
-        if (inQuote) return inlineLink(key, token.url);
+        if (inQuote || holdMedia) return inlineLink(key, token.url);
         return <BuzzInviteEmbed key={key} url={token.url} className="my-1.5" />;
       case "group-invite-embed":
-        if (disableNoteEmbeds || inQuote) return selfLink(key, token.url, nip29GroupPath(token.group));
+        if (disableNoteEmbeds || inQuote || holdMedia) return selfLink(key, token.url, nip29GroupPath(token.group));
         return <Nip29GroupInviteEmbed key={key} group={token.group} className="my-1.5" />;
       case "self-chat-embed":
         // Demoted in quotes and embedded cards (the preview renders ChatContent: recursion).
@@ -1176,10 +1208,12 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const isXdc = isWebxdcMime(mime)
           || /\.xdc([?#][^\s]*)?$/i.test(token.url);
         if (isXdc) {
-          return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} />;
+          return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} hideIcon={holdMedia} />;
         }
         const isAudio = mime.startsWith("audio/") || AUDIO_EXT_URL_REGEX.test(token.url);
         if (isAudio) {
+          const held = heldReason(token.url);
+          if (held !== undefined) return <HeldMedia key={key} kind="audio" host={held || undefined} onLoad={loadMedia} />;
           const waveform = imeta ? getImetaField(event.tags, token.url, "waveform") : undefined;
           const duration = imeta ? getImetaField(event.tags, token.url, "duration") : undefined;
           return (
@@ -1208,6 +1242,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             />
           );
         }
+        const heldVideo = heldReason(token.url);
+        if (heldVideo !== undefined) return <HeldMedia key={key} kind="video" host={heldVideo || undefined} onLoad={loadMedia} />;
         return (
           <VideoPlayer
             key={key}
@@ -1239,7 +1275,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "nevent-embed": {
-        if (disableNoteEmbeds || inQuote) {
+        if (disableNoteEmbeds || inQuote || holdMedia) {
           return <TruncatedNostrLink key={key} encode={() =>
             nip19.neventEncode({
               id: token.eventId,
@@ -1260,7 +1296,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         );
       }
       case "naddr-embed": {
-        if (disableNoteEmbeds || inQuote) {
+        if (disableNoteEmbeds || inQuote || holdMedia) {
           return <TruncatedNostrLink key={key} encode={() => nip19.naddrEncode(token.addr)} />;
         }
         // The emoji-pack card is self-contained, so hide the raw URL.
@@ -1349,6 +1385,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   const body = (
     <div dir="auto" className={cn("whitespace-pre-wrap break-words overflow-hidden", className, clampClass, isEmojiOnly && (isSingleEmoji ? "text-5xl leading-normal" : "text-4xl leading-tight"))}>
       {renderTokens(groupedTokens, "", true)}
+      {holdMedia && heldPreviewsOnly && <HeldPreviews onLoad={loadMedia} />}
 
       {lightboxIndex !== null && (
         <Lightbox
@@ -1374,6 +1411,18 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
 /** Memoized: rows re-render for reasons unrelated to the body. */
 export const ChatContent = memo(ChatContentInner);
+
+/** Top-level tokens a held message replaces with a {@link HeldMedia} card. */
+const HELD_CARD_TOKENS: ReadonlySet<ContentToken["type"]> = new Set(["image-embed", "image-gallery", "media-embed"]);
+/** Top-level tokens a held message demotes to a plain link. */
+const HELD_PREVIEW_TOKENS: ReadonlySet<ContentToken["type"]> = new Set([
+  "link-embed",
+  "invite-embed",
+  "buzz-invite-embed",
+  "group-invite-embed",
+  "nevent-embed",
+  "naddr-embed",
+]);
 
 /**
  * Clamp with fade + "Read more" when the rendered height overflows (measured,

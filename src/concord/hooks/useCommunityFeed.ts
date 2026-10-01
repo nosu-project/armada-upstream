@@ -95,7 +95,8 @@ export function useCommunityFeed(
   // Kept outside the query so a mute/fold/roster change re-derives without re-scanning.
   const { messages, hasMore } = useMemo(() => {
     void memoryRev;
-    if (byChannel.size === 0) return { messages: NO_MESSAGES, hasMore: false };
+    // Withheld until the Banlist is folded (see `ChatModerationState.ready`).
+    if (byChannel.size === 0 || !moderation.ready) return { messages: NO_MESSAGES, hasMore: false };
 
     const merged: OpenedChat[] = [];
     // Oldest point back to which EVERY channel has been read (see watermark above).
@@ -154,11 +155,11 @@ export function useCommunityFeed(
     () => ({
       messages,
       // `isPending` alone stays true for a disabled query.
-      isLoading: active && !!communityIdHex && channelIds.length > 0 && isPending,
+      isLoading: active && !!communityIdHex && channelIds.length > 0 && (isPending || !moderation.ready),
       hasMore,
       isLoadingOlder: isFetching && !isPending,
       loadOlder,
     }),
-    [messages, active, communityIdHex, channelIds, isPending, hasMore, isFetching, loadOlder],
+    [messages, active, communityIdHex, channelIds, isPending, moderation.ready, hasMore, isFetching, loadOlder],
   );
 }

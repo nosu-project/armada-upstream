@@ -29,13 +29,14 @@ const h = vi.hoisted(() => ({
   releaseWindow: () => {},
   window: [] as unknown[],
   focus: [] as unknown[],
+  fold: { roster: { roles: [], grants: [] }, ownerHex: "", banned: new Set<string>(), heads: new Map(), signals: new Map() },
 }));
 
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({ nostr: { relay: () => ({ query: async () => [] }) } }),
 }));
 vi.mock("@/concord/hooks/useControlPlane", () => ({
-  useControlFold: () => ({ data: undefined }),
+  useControlFold: () => ({ data: h.fold }),
   useDissolved: () => ({ data: null }),
   citationFor: () => undefined,
 }));

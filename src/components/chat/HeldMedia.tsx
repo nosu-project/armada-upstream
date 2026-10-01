@@ -1,0 +1,68 @@
+import { ShieldAlert } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+
+/**
+ * Stand-in for media held by the media hold (`components/chat/mediaHold.ts`).
+ * Renders nothing of the sender's — no blurhash, no thumbnail, no alt — since
+ * all of it is theirs to choose; the media is fetched only after "Load".
+ */
+export function HeldMedia({
+  kind,
+  count = 1,
+  host,
+  onLoad,
+}: {
+  kind: "image" | "video" | "audio";
+  count?: number;
+  /** Held for where it is hosted rather than who sent it. */
+  host?: string;
+  onLoad: () => void;
+}) {
+  const noun = kind === "video" ? "Video" : kind === "audio" ? "Audio" : count > 1 ? `${count} images` : "Image";
+  return (
+    <div className="my-1.5 flex max-w-sm items-center gap-3 rounded-lg bg-muted/60 px-3 py-2.5 whitespace-normal">
+      <ShieldAlert className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium leading-tight">{noun} not loaded</div>
+        <div className="text-xs leading-snug text-muted-foreground">
+          {host
+            ? `From ${host}, a site you haven't added. Load only if you trust it.`
+            : "From someone you don't know yet. Load only if you trust it."}
+        </div>
+      </div>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="shrink-0 touch:h-11"
+        onClick={(e) => {
+          e.stopPropagation();
+          onLoad();
+        }}
+        // Keep the row's long-press menu from claiming the press.
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        Load
+      </Button>
+    </div>
+  );
+}
+
+/** Trailing Load for a held message whose only held content is previews and embeds. */
+export function HeldPreviews({ onLoad }: { onLoad: () => void }) {
+  return (
+    <button
+      type="button"
+      className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground touch:min-h-11"
+      onClick={(e) => {
+        e.stopPropagation();
+        onLoad();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <ShieldAlert className="size-3.5" aria-hidden />
+      Previews not loaded · Load
+    </button>
+  );
+}

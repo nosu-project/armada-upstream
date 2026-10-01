@@ -148,9 +148,9 @@ jobs:
       # deliberately non-fatal for frontend-only contributors — so here, where
       # it is NOT optional, WEBXDC_RT_REQUIRED makes a missing toolchain or a
       # failed compile fail the deploy instead of quietly publishing a build
-      # with multiplayer switched off. The Rust toolchain and the warm iroh
-      # dependency tree are baked into the armada-ci runner image
-      # (.ngit/ci-image/Dockerfile). (npm build also copies dist/index.html ->
+      # with multiplayer switched off. The Rust toolchain is baked into the
+      # armada-ci runner image and iroh's compiled dependency tree persists in
+      # the coordinator's cargo volumes (.ngit/ci-image). (npm build also copies dist/index.html ->
       # dist/404.html, the path NIP-5A host servers fall back to.)
       - run: npm run build
         env:

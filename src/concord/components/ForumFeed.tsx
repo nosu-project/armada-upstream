@@ -1,8 +1,9 @@
-import { ChevronDown, Clock, EyeOff, Flame, ImageOff, Loader2, MessageSquareText, MessagesSquare, Pin, Plus } from "lucide-react";
+import { ChevronDown, Clock, EyeOff, Flame, ImageOff, Loader2, MessageSquareText, MessagesSquare, Pin, Plus, ShieldAlert } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { DisplayName } from "@/components/DisplayName";
+import { useMediaUrlHold } from "@/components/chat/mediaHold";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
@@ -61,6 +62,7 @@ const ForumPostRow = memo(function ForumPostRow({
 }) {
   const hasComments = post.replyCount > 0;
   const images = useMemo(() => forumImages(post.root), [post.root]);
+  const holds = useMediaUrlHold(post.root.pubkey);
   return (
     <button
       type="button"
@@ -101,18 +103,18 @@ const ForumPostRow = memo(function ForumPostRow({
           </span>
         </span>
       </span>
-      {images.length > 0 && <ForumGallery images={images} />}
+      {images.length > 0 && <ForumGallery images={images} holds={holds} />}
     </button>
   );
 });
 
 /** Reddit-style gallery: one whole over a blurred fill, two side by side, three+ as a mosaic. */
-function ForumGallery({ images }: { images: readonly ForumImage[] }) {
+function ForumGallery({ images, holds }: { images: readonly ForumImage[]; holds: (url: string) => boolean }) {
   const frame = "mt-2 w-full max-w-md aspect-video overflow-hidden rounded-lg sm:ml-11 sm:w-[calc(100%-2.75rem)]";
   if (images.length === 1) {
     return (
       <span className={cn("block", frame)}>
-        <ForumImageTile image={images[0]} fit="contain" className="size-full" />
+        <ForumImageTile image={images[0]} held={holds(images[0].url)} fit="contain" className="size-full" />
       </span>
     );
   }
@@ -120,7 +122,7 @@ function ForumGallery({ images }: { images: readonly ForumImage[] }) {
     return (
       <span className={cn("grid grid-cols-2 gap-1", frame)}>
         {images.map((image, i) => (
-          <ForumImageTile key={i} image={image} className="size-full" />
+          <ForumImageTile key={i} image={image} held={holds(image.url)} className="size-full" />
         ))}
       </span>
     );
@@ -128,24 +130,33 @@ function ForumGallery({ images }: { images: readonly ForumImage[] }) {
   const extra = images.length - 3;
   return (
     <span className={cn("grid grid-cols-3 grid-rows-2 gap-1", frame)}>
-      <ForumImageTile image={images[0]} className="col-span-2 row-span-2 size-full" />
-      <ForumImageTile image={images[1]} className="size-full" />
-      <ForumImageTile image={images[2]} className="size-full" overflow={extra > 0 ? extra : undefined} />
+      <ForumImageTile image={images[0]} held={holds(images[0].url)} className="col-span-2 row-span-2 size-full" />
+      <ForumImageTile image={images[1]} held={holds(images[1].url)} className="size-full" />
+      <ForumImageTile image={images[2]} held={holds(images[2].url)} className="size-full" overflow={extra > 0 ? extra : undefined} />
     </span>
   );
 }
 
-/** A spoilered image is never fetched — the post page reveals it. */
+/**
+ * A spoilered or held (mediaHold.ts) image is never fetched — the post page
+ * reveals it. A held one shows none of the sender's blurhash either.
+ */
 function ForumImageTile(props: {
   image: ForumImage;
+  held: boolean;
   fit?: "cover" | "contain";
   overflow?: number;
   className?: string;
 }) {
-  const { image, overflow, className } = props;
+  const { image, held, overflow, className } = props;
   return (
     <span className={cn("relative block overflow-hidden bg-muted", className)}>
-      {image.spoiler ? (
+      {held ? (
+        <span className="absolute inset-0 flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <ShieldAlert className="size-3.5" />
+          Not loaded
+        </span>
+      ) : image.spoiler ? (
         <>
           {image.blurhash && <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />}
           <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/40 text-xs font-medium text-white">

@@ -52,7 +52,7 @@ export function useConcordReplyParents(
   return useMemo(() => {
     void memoryRev;
     const opened = query.data;
-    if (!opened || opened.length === 0 || !communityIdHex || !channelIdHex) return EMPTY;
+    if (!opened || opened.length === 0 || !communityIdHex || !channelIdHex || !moderation.ready) return EMPTY;
     const quarantined = recallQuarantined(communityIdHex, channelIdHex);
     const out = new Map<string, ChatMsg>();
     for (const m of foldTimeline(opened, moderation).messages) {

@@ -22,7 +22,7 @@ import {
   KIND_SEAL_ENCRYPTED,
   PLANE_KINDS,
 } from "@/concord/lib/kinds";
-import { decryptImageBytes } from "@/concord/lib/image";
+import { decryptNotificationIcon } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
 import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { sentDuringMembership } from "@/concord/lib/membershipFloor";
@@ -205,20 +205,9 @@ async function mentionNamesFor(content: string, policy: MediaPolicy): Promise<Ma
   return names;
 }
 
-/**
- * A community icon as a `data:` URL (workers lack `URL.createObjectURL`).
- * Usually served from the `concord-images` cache; oversized icons are skipped.
- */
-async function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<string | undefined> {
-  try {
-    const { bytes, mime } = await decryptImageBytes(pointer, undefined, APP_BLOSSOM_SERVERS, policy);
-    if (bytes.byteLength > 512 * 1024) return undefined;
-    let binary = "";
-    for (const b of bytes) binary += String.fromCharCode(b);
-    return `data:${mime};base64,${btoa(binary)}`;
-  } catch {
-    return undefined;
-  }
+/** A community icon as a small `data:` URL (workers lack `URL.createObjectURL`). */
+function imageDataUrl(pointer: ImagePointer, policy: MediaPolicy): Promise<string | undefined> {
+  return decryptNotificationIcon(pointer, APP_BLOSSOM_SERVERS, policy);
 }
 
 /** Deep link to a message in a NIP-29 group (mirrors `routes.ts`). */
@@ -270,6 +259,8 @@ async function present(
   room: { title?: string; image?: string },
   route: { tag: string; url: string; timestamp: number; roomKey?: string; eventId?: string },
   policy: MediaPolicy,
+  /** Show the sender's avatar; false = the room icon or the app's. */
+  showAvatar = true,
 ): Promise<PreparedPush> {
   const [{ name, avatar }, mentionNames] = await Promise.all([
     profileFor(author, policy),
@@ -278,7 +269,7 @@ async function present(
   const full: NotificationMessage = {
     ...msg,
     authorName: name,
-    authorAvatar: avatar,
+    authorAvatar: showAvatar ? avatar : undefined,
     roomTitle: room.title,
     roomImage: room.image,
     mentionNames,
@@ -497,7 +488,17 @@ async function prepareConcord(
       timestamp: opened.createdAt * 1000,
     },
     policy,
+    communityAvatarShown(opened.author, cfg),
   );
+}
+
+/**
+ * Whether a community sender's avatar may be the notification icon. Anyone with
+ * the key can post (CORD-04 §1), so only a known peer's face reaches the lock
+ * screen — the worker has no view of the in-app trust graph (`mediaTrust.ts`).
+ */
+export function communityAvatarShown(author: string, cfg: SwPushConfig | null): boolean {
+  return Boolean(cfg?.knownPeers?.includes(author));
 }
 
 /**

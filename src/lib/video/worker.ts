@@ -1,9 +1,10 @@
 /// <reference lib="webworker" />
 
 /**
- * Video processing worker: probes, decides via `./policy.ts`, executes with
- * mediabunny (WebCodecs), and extracts NIP-94 `imeta` metadata (dim, duration,
- * blurhash, poster).
+ * The one place mediabunny runs. Video processing: probes, decides via
+ * `./policy.ts`, executes (WebCodecs), and extracts NIP-94 `imeta` metadata
+ * (dim, duration, blurhash, poster). Also reads audio tags for
+ * `readAudioMetadata.ts`, so the main bundle carries no second copy.
  */
 
 import { encode as blurhashEncode } from "blurhash";
@@ -18,10 +19,14 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  UrlSource,
   type AudioCodec,
   type InputVideoTrack,
   type MetadataTags,
+  type Source,
 } from "mediabunny";
+
+import { audioTagsFrom, type AudioMetadata } from "@/lib/audioMetadata";
 
 import {
   AUDIO_BITRATE,
@@ -54,6 +59,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
 
   if (message.type === "cancel") {
     await active?.cancel().catch(() => {});
+    return;
+  }
+
+  if (message.type === "audioTags") {
+    post({ type: "audioTags", id: message.id, result: await readAudioTags(message.source) });
     return;
   }
 
@@ -269,6 +279,30 @@ async function audioOptions(track: { codec: AudioCodec | null }) {
   if (!codec) return {};
 
   return { codec, bitrate: AUDIO_BITRATE };
+}
+
+/** Tags and front cover; http(s) sources are read by range request. Never throws. */
+async function readAudioTags(source: Blob | string): Promise<AudioMetadata> {
+  let input: Input | undefined;
+  try {
+    let src: Source;
+    if (typeof source !== "string") src = new BlobSource(source);
+    else if (source.startsWith("blob:")) src = new BlobSource(await (await fetch(source)).blob());
+    else src = new UrlSource(source);
+
+    input = new Input({ source: src, formats: ALL_FORMATS });
+    const tags = await input.getMetadataTags();
+    const images = (tags.images ?? []).filter((img) => img.mimeType.startsWith("image/"));
+    const art = images.find((img) => img.kind === "coverFront") ?? images[0];
+    return {
+      ...audioTagsFrom(tags),
+      cover: art ? new Blob([art.data as Uint8Array<ArrayBuffer>], { type: art.mimeType }) : undefined,
+    };
+  } catch {
+    return {};
+  } finally {
+    input?.dispose();
+  }
 }
 
 function dimOf(width: number, height: number): string | undefined {

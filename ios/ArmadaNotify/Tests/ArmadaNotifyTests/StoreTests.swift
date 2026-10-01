@@ -488,6 +488,16 @@ final class SenderIdentityTests: XCTestCase {
         )
     }
 
+    func testCommunityAvatarOnlyForKnownPeers() {
+        let stranger = String(repeating: "f", count: 64)
+        let cfg = config(knownPeers: [peer])
+        XCTAssertTrue(PushProcessor.communityAvatarShown(author: peer, config: cfg))
+        XCTAssertFalse(
+            PushProcessor.communityAvatarShown(author: stranger, config: cfg),
+            "anyone with a community's key can post; their face stays off the lock screen"
+        )
+    }
+
     func testGroupTrustAndTapStayScopedToTheExactConversation() {
         let other = String(repeating: "c", count: 64)
         let peers = [peer, other].sorted()

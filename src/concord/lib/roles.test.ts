@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adminRole,
   byDisplayOrder,
   canActOnMember,
   canActOnPosition,
@@ -9,11 +10,14 @@ import {
   effectivePermissionsIn,
   hexToColor,
   isAuthorizedIn,
+  moderatorRole,
   normalizeOrder,
   Permissions,
   projectReorder,
   roleFromJSON,
   roleToJSON,
+  stockTierOf,
+  tierMoves,
   type CommunityRoles,
   type Role,
 } from "./roles";
@@ -405,5 +409,38 @@ describe("grant authority (CORD-04 §3 strict outrank)", () => {
   it("lets the owner act on anything", () => {
     expect(canActOnMember(grantRoster, R_OWNER, R_OWNER, R_ADMIN, Permissions.MANAGE_ROLES)).toBe(true);
     expect(canActOnPosition(grantRoster, R_OWNER, R_OWNER, 1, Permissions.MANAGE_ROLES)).toBe(true);
+  });
+});
+
+describe("tierMoves (stock Admin/Moderator)", () => {
+  const admin = adminRole("1".repeat(64));
+  const mod = moderatorRole("2".repeat(64));
+  const tiered: CommunityRoles = {
+    roles: [admin, mod],
+    grants: [
+      { member: R_ADMIN, roleIds: [admin.roleId] },
+      { member: R_MOD, roleIds: [mod.roleId] },
+    ],
+  };
+
+  it("offers the owner every promotion of a roleless member, even before the roles exist", () => {
+    expect(tierMoves(tiered, R_OWNER, R_OWNER, R_PLAIN)).toEqual(["admin", "moderator"]);
+    expect(tierMoves({ roles: [], grants: [] }, R_OWNER, R_OWNER, R_PLAIN)).toEqual(["admin", "moderator"]);
+  });
+
+  it("offers demotion and removal of an admin to the owner", () => {
+    expect(stockTierOf(tiered, R_ADMIN)).toBe("admin");
+    expect(tierMoves(tiered, R_OWNER, R_OWNER, R_ADMIN)).toEqual(["moderator", null]);
+  });
+
+  it("lets an admin make or unmake moderators but never admins", () => {
+    expect(tierMoves(tiered, R_ADMIN, R_OWNER, R_PLAIN)).toEqual(["moderator"]);
+    expect(tierMoves(tiered, R_ADMIN, R_OWNER, R_MOD)).toEqual([null]);
+  });
+
+  it("offers nothing against the owner, a peer, or without MANAGE_ROLES", () => {
+    expect(tierMoves(tiered, R_ADMIN, R_OWNER, R_OWNER)).toEqual([]);
+    expect(tierMoves(tiered, R_MOD, R_OWNER, R_PLAIN)).toEqual([]);
+    expect(tierMoves(tiered, R_PLAIN, R_OWNER, R_MOD)).toEqual([]);
   });
 });

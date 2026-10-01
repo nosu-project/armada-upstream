@@ -1,6 +1,6 @@
 import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCheck, UserCog, UserMinus, UserPlus, UserX, X } from "lucide-react";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
@@ -82,6 +82,8 @@ interface MenuParts {
 const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
 
 const ROW_MIN_H = 48;
+/** Below this many members the panel shows no search field. */
+const SEARCH_MIN_MEMBERS = 10;
 /**
  * Offscreen rows are viewport-gated at every roster size: each row's `useAuthor`
  * demands a profile, so ungated rows put a kind-0 REQ for the whole roster on
@@ -556,18 +558,6 @@ export const MemberList = memo(function MemberList({
 }: MemberListProps) {
   const { mutedPubkeys } = useMutedPubkeys();
   const [query, setQuery] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // `preventScroll`: the field starts off the right edge.
-  useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
-  }, [searchOpen]);
-
-  const closeSearch = useCallback(() => {
-    setSearchOpen(false);
-    setQuery("");
-  }, []);
 
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
   // Stable arrays so memoized rows get stable `roles` identities.
@@ -625,28 +615,9 @@ export const MemberList = memo(function MemberList({
     regulars.length === 0 &&
     visibleSections.every((section) => section.members.length === 0);
 
-  // The reveal toggle rides the first rendered section header.
   const firstSection = visibleSections.find((s) => !searching || s.members.length > 0);
-  const toggleHost: string | null =
-    visibleAdmins.length > 0
-      ? "admins"
-      : firstSection
-        ? `section:${firstSection.id}`
-        : !searching || regulars.length > 0
-          ? "members"
-          : null;
-
-  const searchToggle = searchOpen ? null : (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label="Search members"
-      className="-my-1 size-6 touch:size-10 shrink-0 text-muted-foreground"
-      onClick={() => setSearchOpen(true)}
-    >
-      <Search className="size-4" />
-    </Button>
-  );
+  // A list short enough to read at a glance needs no search; kept while a query is live.
+  const showSearch = roster.length >= SEARCH_MIN_MEMBERS || query !== "";
 
   return (
     <aside
@@ -677,45 +648,39 @@ export const MemberList = memo(function MemberList({
         </button>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
-      {/* grid-rows 0fr→1fr animates the height without hardcoding it. */}
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows] duration-150 ease-in-out",
-          searchOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-        )}
-      >
-        <div className="overflow-hidden">
-          <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1">
-            <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            <Input
-              ref={searchInputRef}
-              // Not type="search": WebKit/Blink add their own cancel button.
-              type="text"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.stopPropagation();
-                  closeSearch();
-                }
-              }}
-              placeholder="Search members"
-              aria-label="Search members"
-              className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-            />
+      {showSearch && (
+        <div className="flex shrink-0 items-center gap-1.5 px-2 pb-1.5 pt-1">
+          <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          <Input
+            // Not type="search": WebKit/Blink add their own cancel button.
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.stopPropagation();
+                setQuery("");
+              }
+            }}
+            placeholder="Search members"
+            aria-label="Search members"
+            className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+          {query && (
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Close search"
+              aria-label="Clear search"
               className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={closeSearch}
+              onClick={() => setQuery("")}
             >
               <X className="size-4" />
             </Button>
-          </div>
+          )}
         </div>
-      </div>
+      )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
       {noMatches && (
         <p className="px-2 py-3 text-xs text-muted-foreground">
           No members match “{query.trim()}”.
@@ -727,7 +692,6 @@ export const MemberList = memo(function MemberList({
             <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Admins · {visibleAdmins.length}
             </h3>
-            {toggleHost === "admins" && searchToggle}
           </div>
           {visibleAdmins.map((admin) => (
             <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H}>
@@ -769,7 +733,6 @@ export const MemberList = memo(function MemberList({
               >
                 {section.name} · {section.members.length}
               </h3>
-              {toggleHost === `section:${section.id}` && searchToggle}
             </div>
             {section.members.map((pubkey) => (
               <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
@@ -806,7 +769,6 @@ export const MemberList = memo(function MemberList({
           <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Members · {regulars.length}
           </h3>
-          {toggleHost === "members" && searchToggle}
         </div>
       )}
       {regulars.length === 0 ? (
