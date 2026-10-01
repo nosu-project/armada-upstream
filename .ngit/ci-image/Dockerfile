@@ -91,7 +91,9 @@ RUN set -eux; \
     rm /tmp/cmdline-tools.zip; \
     export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"; \
     printf 'y\ny\ny\ny\ny\ny\ny\n' | sdkmanager --licenses >/dev/null 2>&1 || true; \
-    sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" >/dev/null
+    # The NDK only strips debug symbols from prebuilt .so files; keep it in
+    # step with ndkVersion in android/variables.gradle.
+    sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" "ndk;29.0.14206865" >/dev/null
 ENV PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 
 # ── System ruby + fastlane (Google Play publish in release.yml) ──────────────

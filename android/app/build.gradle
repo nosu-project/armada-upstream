@@ -11,6 +11,11 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "buzz.armada.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    // Nothing here is compiled with the NDK: AGP uses its llvm-strip to drop
+    // debug symbols from prebuilt .so files (libsqliteJni.so ships unstripped,
+    // ~0.2 MB per ABI). Without this NDK installed the build still succeeds,
+    // packaging the libs unstripped. The CI image installs the same version.
+    ndkVersion = rootProject.ext.ndkVersion
     defaultConfig {
         applicationId "buzz.armada.app"
         minSdkVersion rootProject.ext.minSdkVersion
