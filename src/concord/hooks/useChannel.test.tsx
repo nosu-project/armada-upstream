@@ -60,7 +60,7 @@ const CID = "cc".repeat(32);
 
 const h = vi.hoisted(() => ({
   pool: undefined as unknown,
-  folded: undefined as unknown,
+  folded: { roster: { roles: [], grants: [] }, ownerHex: "", banned: new Set<string>(), heads: new Map(), signals: new Map() } as unknown,
   dissolved: null as number | null,
 }));
 
@@ -506,6 +506,59 @@ describe("useChannelTimeline — issue #19 (notified but never rendered)", () =>
     const uncovered = frames.find((f) => !f.loading && f.count === 0 && !f.syncing);
     expect(uncovered).toBeUndefined();
     expect(result.current.folded.messages.map((m) => m.content)).toContain("b-msg");
+  });
+});
+
+describe("useChannelTimeline — the Banlist gates the paint (CORD-04 §4)", () => {
+  it("withholds stored rows until the control fold lands, then drops banned authors", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const mallory = signer();
+    const now = Math.floor(Date.now() / 1000);
+    const wraps = [
+      await wrapChatAt(channel, alice, "kept", now - 100),
+      await wrapChatAt(channel, mallory, "banned-msg", now - 90),
+    ];
+    writeRumors(CID, await openChatBatch(wraps, channel));
+    await waitFor(async () => {
+      expect((await queryChannelRumors(CID, idHex, { limit: 10 })).length).toBe(2);
+    });
+
+    h.pool = makePool({ [RELAY]: new FakeRelay() });
+    const fold = h.folded;
+    h.folded = undefined;
+    try {
+      const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
+      const seen: string[][] = [];
+      const { wrapper } = makeWrapper();
+      const { result, rerender } = renderHook(
+        () => {
+          const t = useChannelTimeline(community, channel);
+          seen.push(t.folded.messages.map((m) => m.content));
+          return t;
+        },
+        { wrapper },
+      );
+
+      // The store read lands, but with no fold the rows stay behind the skeleton.
+      await waitFor(async () => {
+        expect((await queryChannelRumors(CID, idHex, { limit: 10 })).length).toBe(2);
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      rerender();
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.raw).toEqual([]);
+
+      h.folded = { roster: { roles: [], grants: [] }, ownerHex: "", banned: new Set([mallory.pubkey]), heads: new Map(), signals: new Map() };
+      rerender();
+      await waitFor(() => {
+        expect(result.current.folded.messages.map((m) => m.content)).toEqual(["kept"]);
+      });
+      expect(result.current.isLoading).toBe(false);
+      expect(seen.some((frame) => frame.includes("banned-msg"))).toBe(false);
+    } finally {
+      h.folded = fold;
+    }
   });
 });
 

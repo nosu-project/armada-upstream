@@ -64,7 +64,9 @@ export function useConcordThreads(community: Community | undefined, channels: Ch
 
   // Pure computation over the shared scan; deferred off the render path since it
   // folds every channel's window.
-  const scanned = useIdleMemo(communityIdHex ?? null, () => {
+  const scanned = useIdleMemo<ScannedThread[] | undefined>(communityIdHex ?? null, () => {
+    // Withheld until the Banlist is folded (see `ChatModerationState.ready`).
+    if (!moderation.ready) return undefined;
     const out: ScannedThread[] = [];
 
     for (const [idHex, rumors] of rumorsByChannel) {

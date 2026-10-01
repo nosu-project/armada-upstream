@@ -38,7 +38,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: ME } }) }));
 vi.mock("@/hooks/useMuteList", () => ({ useMutedPubkeys: () => ({ mutedPubkeys: h.muted }) }));
 vi.mock("@/concord/hooks/useChannel", () => ({
-  useChatModeration: () => ({ banned: new Set<string>(), canDelete: () => false }),
+  useChatModeration: () => ({ ready: true, banned: new Set<string>(), canDelete: () => false }),
 }));
 vi.mock("@/concord/lib/quarantineMemory", () => ({
   quarantineMemoryRevision: () => 0,

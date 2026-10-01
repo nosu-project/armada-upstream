@@ -16,6 +16,8 @@ import type { Community } from "@/concord/lib/types";
 
 import type { ChatMsg } from "@/components/chat/transport";
 
+const NO_RESULTS: ChatMsg[] = [];
+
 /**
  * Community-wide search over the local decrypted rumor store (Concord chat is
  * E2E encrypted, so there's no relay query). Text is debounced 300ms; results
@@ -76,6 +78,7 @@ export function useConcordSearch(
   const channelsSig = channelIds.join(",");
   const results = useMemo(() => {
     void memoryRev;
+    if (!moderation.ready) return NO_RESULTS;
     let list = search.data ?? [];
     if (mutedPubkeys.size > 0) list = list.filter((m) => !mutedPubkeys.has(m.pubkey));
     if (moderation.banned.size > 0) list = list.filter((m) => !moderation.banned.has(m.pubkey));
@@ -95,7 +98,7 @@ export function useConcordSearch(
 
   return {
     results,
-    isLoading: search.isFetching && results.length === 0,
+    isLoading: (search.isFetching || (active && !moderation.ready)) && results.length === 0,
     active,
   };
 }
