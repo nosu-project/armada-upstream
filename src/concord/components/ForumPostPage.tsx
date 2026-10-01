@@ -179,6 +179,7 @@ export function ForumPostPage({
       groupId={groupId}
       messages={[]}
       layout="document"
+      documentEnterSends
       submitLabel={opts.inline ? "Reply" : "Comment"}
       onCancel={opts.inline ? () => setReplyingTo(undefined) : () => setCommentOpen(false)}
       mentionPubkeys={mentionPubkeys}
