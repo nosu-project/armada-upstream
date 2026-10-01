@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 /**
  * Entry points into the Discord bridge portal (`armada-discord-bridge`), a
  * separate service holding the OAuth app and bot token. Every export renders
- * `null` when `VITE_BRIDGE_PORTAL_URL` is unset.
+ * `null` when `BRIDGE_PORTAL_URL` is unset.
  */
 
 /** Discord wordmark; lucide dropped brand icons. */

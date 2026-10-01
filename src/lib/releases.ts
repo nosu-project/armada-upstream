@@ -1,6 +1,7 @@
 /** Reads NIP-34 repository releases (kind 30622; see `docs/releases.md`) for `/downloads`. */
 
 import type { DownloadOs } from "./downloads";
+import { config } from "./env";
 import { normalizeRelayUrl } from "./platform";
 
 /** See docs/releases.md. */
@@ -13,7 +14,7 @@ export const RELEASE_KIND = 30622;
  * release events.
  */
 export const RELEASE_RELAYS: string[] = (
-  import.meta.env.VITE_RELEASE_RELAYS ??
+  config("RELEASE_RELAYS") ??
   "wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net"
 )
   .split(",")
@@ -21,7 +22,7 @@ export const RELEASE_RELAYS: string[] = (
   .filter((url: string | undefined): url is string => Boolean(url));
 
 /** Repository id (`d` of the 30617 announcement, `D` of each release). Overridable for forks. */
-export const RELEASE_REPO_ID: string = import.meta.env.VITE_RELEASE_REPO_ID || "armada";
+export const RELEASE_REPO_ID: string = config("RELEASE_REPO_ID") || "armada";
 
 /**
  * Trusted release signers (hex). Build-time, NOT the announcement's mutable
@@ -29,7 +30,7 @@ export const RELEASE_REPO_ID: string = import.meta.env.VITE_RELEASE_REPO_ID || "
  * go through code review.
  */
 export const RELEASE_AUTHORS: string[] = (
-  import.meta.env.VITE_RELEASE_AUTHORS ||
+  config("RELEASE_AUTHORS") ||
   "781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5"
 )
   .split(",")

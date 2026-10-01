@@ -383,7 +383,7 @@ public class NotificationRelayService extends Service {
     // settings are actually published to.
     private final Set<String> selfRelays = new LinkedHashSet<>();
     // The `d` tags of Armada's own NIP-78 settings documents, supplied by the
-    // WebView so a fork that changes VITE_APP_ID renames them here too. Falls
+    // WebView so a fork that changes APP_ID renames them here too. Falls
     // back to the built-in set when the pref is absent — on a cold boot before
     // the app has ever been opened, and for an older WebView that doesn't send
     // it. Empty is never a valid value: it would drop the subscription.
@@ -1217,7 +1217,7 @@ public class NotificationRelayService extends Service {
      * carry {@code readState} and dismiss the same way, since the WebView merges
      * them max-per-key. Matched by the {@code d}-tag suffix rather than a
      * compiled-in constant: the tag is structurally {@code ${APP_ID}/read-state},
-     * so a fork that renames {@code VITE_APP_ID} is covered without threading
+     * so a fork that renames {@code APP_ID} is covered without threading
      * another config value through the plugin. Caller has already checked the
      * kind is 30078.
      */

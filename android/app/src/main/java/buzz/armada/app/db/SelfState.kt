@@ -54,7 +54,7 @@ object SelfState {
      * only cost space.
      *
      * The WebView supplies the real set through the plugin config
-     * (`selfDTags`), because a fork can change `VITE_APP_ID` and rename every
+     * (`selfDTags`), because a fork can change `APP_ID` and rename every
      * document. This default is what the service runs on before any WebView
      * has ever configured it — on a cold boot, the prefs are read and the
      * sockets opened long before the app is opened — and is therefore the set

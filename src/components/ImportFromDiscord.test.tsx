@@ -12,12 +12,12 @@ beforeEach(() => {
 });
 
 /**
- * `platform.ts` reads `VITE_BRIDGE_PORTAL_URL` once, at module load, so each
- * case has to stub the env and then re-import the whole graph.
+ * `platform.ts` reads `BRIDGE_PORTAL_URL` once, at module load, so each
+ * case has to set `window.ENV` and then re-import the whole graph.
  */
 async function load(portalUrl: string) {
   vi.resetModules();
-  vi.stubEnv('VITE_BRIDGE_PORTAL_URL', portalUrl);
+  window.ENV = { BRIDGE_PORTAL_URL: portalUrl };
   return {
     ...(await import('./ImportFromDiscord')),
     ...(await import('@/lib/platform')),
@@ -27,7 +27,7 @@ async function load(portalUrl: string) {
 const wrap = (ui: React.ReactNode) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 afterEach(() => {
-  vi.unstubAllEnvs();
+  delete window.ENV;
 });
 
 describe('bridgePortalUrl', () => {

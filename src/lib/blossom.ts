@@ -1,17 +1,18 @@
+import { config } from "@/lib/env";
 import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * App default Blossom servers (mirrors Ditto's APP_BLOSSOM_SERVERS), most
- * trusted first (BUD-03). Overridable via `VITE_APP_BLOSSOM_SERVERS`
+ * trusted first (BUD-03). Overridable via `APP_BLOSSOM_SERVERS`
  * (comma-separated origins).
  */
 const DEFAULT_APP_BLOSSOM_SERVERS =
   "https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/";
 
 export const APP_BLOSSOM_SERVERS: string[] = (
-  import.meta.env.VITE_APP_BLOSSOM_SERVERS || DEFAULT_APP_BLOSSOM_SERVERS
+  config("APP_BLOSSOM_SERVERS") || DEFAULT_APP_BLOSSOM_SERVERS
 )
   .split(",")
   .map((url: string) => normalizeBlossomServerUrl(url))

@@ -24,7 +24,10 @@ import path from "node:path";
 
 import { defineConfig } from "vite";
 
+import { buildConfigPlugin } from "./src/build/buildConfig";
+
 export default defineConfig({
+  plugins: [buildConfigPlugin()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),

@@ -8,7 +8,7 @@ interface PlausibleProviderProps {
 }
 
 /**
- * Plausible Analytics, OFF unless the build sets `VITE_PLAUSIBLE_DOMAIN` (see
+ * Plausible Analytics, OFF unless the build sets `PLAUSIBLE_DOMAIN` (see
  * `platform.ts`); otherwise the tracker is never imported. `init()` may run
  * only once, hence the StrictMode ref guard. Pageviews auto-capture via the History API.
  */

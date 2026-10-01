@@ -1,5 +1,6 @@
 import { nip19 } from "nostr-tools";
 
+import { config } from "@/lib/env";
 import { isNostrId } from "@/lib/nostrId";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { isLocalNetworkUrl } from "@/lib/sanitizeUrl";
@@ -21,9 +22,9 @@ export const ARMADA_FOLLOW_PACK =
 
 export const DISCOVER_CURATION_NONE = "none";
 
-/** This build's source via `VITE_DISCOVER_CURATION` (empty = none). */
+/** This build's source via `DISCOVER_CURATION` (empty = none). */
 export const BUILD_DISCOVER_CURATION: string =
-  (import.meta.env.VITE_DISCOVER_CURATION ?? ARMADA_FOLLOW_PACK).trim() || DISCOVER_CURATION_NONE;
+  (config("DISCOVER_CURATION") ?? ARMADA_FOLLOW_PACK).trim() || DISCOVER_CURATION_NONE;
 
 export type DiscoverCuration =
   | {

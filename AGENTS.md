@@ -179,13 +179,28 @@ never a compiled-in server address:
 - The relay's HTTP endpoints (NIP-29 LiveKit token, push) are derived at runtime
   from the relay's WS URL via `relayToHttpUrl()` in `src/lib/platform.ts`.
 - Concord voice (CORD-07) fetches LiveKit tokens from a blind AV broker,
-  defaulting to `VITE_CONCORD_AV_SERVERS` (public `https://armada.buzz`).
+  defaulting to `CONCORD_AV_SERVERS` (public `https://armada.buzz`).
 
 There is **no build-time relay pin at all** — every build, hosted included, has
 no baked-in servers, and the user adds their own. Don't reintroduce one: a pin
 is a WebSocket the client dials on boot whether or not that origin speaks Nostr
 (the hosted `wss://armada.buzz` pin dialed the SPA's own origin, which serves
 HTML and never upgrades), and `ws://localhost` is meaningless on a phone.
+
+### Deployment settings: `config()`, never `import.meta.env`
+
+Deployment settings (relay defaults, AV brokers, `APP_ID`, …) are read through
+`config(name)` in `src/lib/env.ts`, never `import.meta.env`. The names are
+unprefixed and listed once, in `CONFIG_NAMES` (`src/build/buildConfig.ts`);
+the build bakes them in from its environment, still accepting the deprecated
+`VITE_` spelling with a warning. A page may override any of them at runtime
+through `window.ENV`, Remix-style browser environment variables set by a
+same-origin script that runs before the bundle. A string there wins, empty
+included. Only the PAGE consults it: the service worker and the Electron
+main-process bundles have no `window` and keep the build value, which is what
+keeps the desktop updater's trusted `RELEASE_AUTHORS` out of a host's reach.
+A new setting goes into `CONFIG_NAMES`. `VITE_PROFILE` is not a setting — it
+gates code out of the build, so it stays `import.meta.env`.
 
 ## Voice / LiveKit (client side)
 
@@ -307,7 +322,7 @@ WKWebView — so it takes an APNs device token (`ios/App/App/ArmadaPushPlugin.sw
 `src/lib/nativePush.ts`) and registers it with the content-blind nostr-push
 gateway, as NIP-PUSH's `type: "apns"` subscription. The web client has moved to
 nostr-push2 (next section); this path has not, so `nostrPush.ts`,
-`VITE_NOSTR_PUSH_*` and the per-record id bookkeeping below are iOS-only now. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
+`NOSTR_PUSH_*` and the per-record id bookkeeping below are iOS-only now. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
 register one watch set (`usePushWatchSet.ts`) and expose one
 `UsePushNotificationsReturn`, so the settings UI never learns which it has.
 Apple is unavoidably in the delivery path; what survives is that the GATEWAY
@@ -409,7 +424,7 @@ message.
   same account's browser records and the browser's next sync would take them
   back. (Browsers no longer register here at all.)
 - **The gateway is build-time config, and iOS has no CI to set it.**
-  `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` must be in the
+  `NOSTR_PUSH_PUBKEY` / `NOSTR_PUSH_RELAYS` must be in the
   environment of the `npm run build` that precedes `npx cap sync ios`, or the
   app ships with `unavailableReason: "gateway"` and no push path at all.
 - Taps are routed by the plugin, not by a URL. A tap that LAUNCHED the process
@@ -446,7 +461,7 @@ drives both: Tenna's `window.napp.push` when Armada runs there as an nsite
 (`~/Projects/tenna/NAPP.md`), and Web Push through a
 nostr-push2 (`nostr://npub1q3sle0kvfsehgsuexttt3ugjd8xdklxfwwkh559wxckmzddywnws6cd26p/git.shakespeare.diy/nostr-push2`)
 gateway everywhere else (`nostrPush2.ts`; the public service is hardcoded in
-`platform.ts`, and `VITE_NOSTR_PUSH2_*` only overrides it). They differ
+`platform.ts`, and `NOSTR_PUSH2_*` only overrides it). They differ
 ONLY in the `PushTarget` the list is handed to. Both take the same
 `NappSubscription[]` (`nappPush.ts` packs the shared watch set into them) and
 both deliver the same `napp.push.payload` to `sw.js`, which normalizes it and

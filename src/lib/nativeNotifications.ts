@@ -188,7 +188,7 @@ export interface ArmadaNotificationPlugin {
     selfRelays?: string[];
     /**
      * `d` tags of Armada's NIP-78 docs (kind 30078 is shared across clients).
-     * Sent rather than hardcoded since forks can change `VITE_APP_ID`. Absent =
+     * Sent rather than hardcoded since forks can change `APP_ID`. Absent =
      * built-in defaults, never "none".
      */
     selfDTags?: string[];

@@ -6,7 +6,7 @@
 
 import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 
-/** The App Links host, from the same build-time origin as share links (`VITE_PUBLIC_WEB_ORIGIN`). */
+/** The App Links host, from the same build-time origin as share links (`PUBLIC_WEB_ORIGIN`). */
 const APP_LINK_HOST = ((): string | null => {
   try {
     return new URL(PUBLIC_WEB_ORIGIN).hostname.toLowerCase();

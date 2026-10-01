@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useEventStore } from "@/hooks/useEventStore";
+import { config } from "@/lib/env";
 
 type EventStore = ReturnType<typeof useEventStore>;
 type Nostr = ReturnType<typeof useNostr>["nostr"];
@@ -11,7 +12,7 @@ type Nostr = ReturnType<typeof useNostr>["nostr"];
  * client-side, so like Ditto we read them from a stats pubkey.
  */
 const NIP85_STATS_PUBKEY: string =
-  import.meta.env.VITE_NIP85_STATS_PUBKEY ??
+  config("NIP85_STATS_PUBKEY") ??
   "5f68e85ee174102ca8978eef302129f081f03456c884185d5ec1c1224ab633ea";
 
 const followerCount = (event: { tags: string[][] } | undefined): number | null => {

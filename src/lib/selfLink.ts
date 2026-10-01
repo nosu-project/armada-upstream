@@ -27,7 +27,7 @@ function ownOrigins(): Set<string> {
     try {
       origins.add(new URL(candidate).origin);
     } catch {
-      // Unparseable origin (e.g. a bad VITE_PUBLIC_WEB_ORIGIN) — skip it.
+      // Unparseable origin (e.g. a bad PUBLIC_WEB_ORIGIN) — skip it.
     }
   }
   return origins;
