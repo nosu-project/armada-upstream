@@ -134,27 +134,11 @@ struct NotifyStore {
     /// entries leave the raw token in place rather than showing a wrong name.
     func mentionNames(in content: String) -> [String: String] {
         var names = [String: String]()
-        for pubkey in mentionedPubkeys(in: content) {
+        for pubkey in NotificationPreview.mentionedPubkeys(in: content) {
             let name = displayName(pubkey: pubkey)
             if name != "Anonymous" { names[pubkey] = name }
         }
         return names
-    }
-
-    /// Every pubkey named by a NIP-27 mention in `content`.
-    func mentionedPubkeys(in content: String) -> [String] {
-        var found = [String]()
-        var seen = Set<String>()
-        for token in content.split(whereSeparator: { $0.isWhitespace }) {
-            let cleaned = String(token).trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?)"))
-            guard cleaned.lowercased().contains("npub1") || cleaned.lowercased().contains("nprofile1")
-            else { continue }
-            if let pubkey = Bech32.mentionPubkey(cleaned), !seen.contains(pubkey) {
-                seen.insert(pubkey)
-                found.append(pubkey)
-            }
-        }
-        return found
     }
 
     /// A NIP-29 group's name from its relay-signed kind-39000 metadata, scoped

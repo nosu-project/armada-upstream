@@ -59,7 +59,31 @@ describe("cleanContent", () => {
   });
 
   it("collects each mentioned pubkey once", () => {
-    expect(mentionPubkeys(`${ALEX_NPUB} and nostr:${ALEX_NPUB}`)).toEqual([ALEX_HEX]);
+    expect(mentionPubkeys(`nostr:${ALEX_NPUB} and nostr:${ALEX_NPUB}`)).toEqual([ALEX_HEX]);
+  });
+
+  it("resolves a mention after opening punctuation", () => {
+    const names = new Map([[ALEX_HEX, "Alex"]]);
+    expect(cleanContent(`(nostr:${ALEX_NPUB})`, names)).toBe("(@Alex)");
+  });
+
+  it("leaves a bare npub alone: only NIP-21 URIs are mentions", () => {
+    const names = new Map([[ALEX_HEX, "Alex"]]);
+    expect(mentionPubkeys(`hi ${ALEX_NPUB}`)).toEqual([]);
+    expect(cleanContent(`hi ${ALEX_NPUB}`, names)).toBe(`hi ${ALEX_NPUB}`);
+  });
+
+  it("never rewrites an npub inside a URL", () => {
+    const names = new Map([[ALEX_HEX, "Team Soapbox"]]);
+    for (const url of [
+      `https://ditto.pub/${ALEX_NPUB}`,
+      `https://njump.me/nostr:${ALEX_NPUB}`,
+      `https://example.com/?u=nostr:${ALEX_NPUB}`,
+      `ditto.pub/nostr:${ALEX_NPUB}`,
+    ]) {
+      expect(mentionPubkeys(`see ${url}`)).toEqual([]);
+      expect(cleanContent(`see ${url}`, names)).toBe(`see ${url}`);
+    }
   });
 });
 

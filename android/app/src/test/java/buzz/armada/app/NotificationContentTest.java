@@ -74,9 +74,30 @@ public class NotificationContentTest {
     }
 
     @Test
-    public void resolvesBareMentionToName() {
-        assertEquals("hi @Alex there",
+    public void leavesBareNpubAlone() {
+        // Only NIP-21 `nostr:` URIs are mentions.
+        assertEquals("hi " + NPUB1 + " there",
                 NotificationContent.clean("hi " + NPUB1 + " there", named(PK1, "Alex")));
+    }
+
+    @Test
+    public void resolvesMentionAfterOpeningPunctuation() {
+        assertEquals("(@Alex)",
+                NotificationContent.clean("(nostr:" + NPUB1 + ")", named(PK1, "Alex")));
+    }
+
+    @Test
+    public void neverRewritesNpubInsideUrl() {
+        String[] urls = {
+                "https://ditto.pub/" + NPUB1,
+                "https://njump.me/nostr:" + NPUB1,
+                "https://example.com/?u=nostr:" + NPUB1,
+                "ditto.pub/nostr:" + NPUB1,
+        };
+        for (String url : urls) {
+            assertEquals("see " + url,
+                    NotificationContent.clean("see " + url, named(PK1, "Team Soapbox")));
+        }
     }
 
     @Test
@@ -99,6 +120,12 @@ public class NotificationContentTest {
         // Resolver returns "User <8hex>" for anything it doesn't know.
         assertEquals("yo @User 3bf0c63f",
                 NotificationContent.clean("yo nostr:" + NPUB1, resolver(new HashMap<>())));
+    }
+
+    @Test
+    public void unresolvedMentionKeepsRawToken() {
+        assertEquals("yo nostr:" + NPUB1,
+                NotificationContent.clean("yo nostr:" + NPUB1, pubkey -> null));
     }
 
     @Test

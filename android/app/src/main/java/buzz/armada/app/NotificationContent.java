@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  */
 final class NotificationContent {
 
-    /** Resolves a hex pubkey to a display name (never null; short id fallback). */
+    /** Resolves a hex pubkey to a display name; null keeps the raw token. */
     interface MentionResolver {
         String nameFor(String pubkeyHex);
     }
@@ -51,10 +51,15 @@ final class NotificationContent {
             "\\s*https?://\\S+\\.(" + MEDIA_EXTS + ")(?:\\?\\S*)?",
             Pattern.CASE_INSENSITIVE);
 
-    /** A {@code nostr:npub…}/{@code nostr:nprofile…} (or bare) mention. */
+    /**
+     * A NIP-21 {@code nostr:npub…}/{@code nostr:nprofile…} mention starting a
+     * token, so one inside a URL ({@code https://ditto.pub/npub1…},
+     * {@code …/nostr:npub1…}) stays part of the link. Mirrors {@code MENTION}
+     * in {@code src/lib/notificationPreview.ts}.
+     */
     private static final Pattern MENTION = Pattern.compile(
-            "(?:nostr:)?(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)",
-            Pattern.CASE_INSENSITIVE);
+            "(?<![^\\s(\\[{<\"'])nostr:(npub1|nprofile1)([023456789acdefghjklmnpqrstuvwxyz]+)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
 
     private static final String BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
