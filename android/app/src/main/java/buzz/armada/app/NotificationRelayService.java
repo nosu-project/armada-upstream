@@ -5275,11 +5275,14 @@ public class NotificationRelayService extends Service {
     /**
      * Display name for a MENTIONED pubkey, resolved best-effort from what we
      * already hold (memory store, then the shared DB) — never the network, so a
-     * mention can't delay or block the notification. An unknown mention falls
-     * back to "Anonymous" via {@link #displayName}, never a wrong name.
+     * mention can't delay or block the notification. Null for an unknown one,
+     * which keeps its raw token: "@Anonymous" would name nobody.
      */
     private String mentionName(String pubkeyHex) {
-        return displayName(cachedProfile(pubkeyHex));
+        Profile profile = cachedProfile(pubkeyHex);
+        if (profile == null) return null;
+        String name = displayName(profile);
+        return "Anonymous".equals(name) ? null : name;
     }
 
     /** Synchronous profile lookup from cache/DB only; null when not held. */

@@ -116,12 +116,24 @@ enum NotificationPreview {
         return mediaExtensions.contains(ext) ? ext : nil
     }
 
+    /// Every pubkey a NIP-27 mention in `content` names, first occurrence first.
+    static func mentionedPubkeys(in content: String) -> [String] {
+        var found = [String]()
+        var seen = Set<String>()
+        var index = content.startIndex
+        while let token = nextMention(in: content, from: index) {
+            if let pubkey = Bech32.mentionPubkey(String(content[token])), seen.insert(pubkey).inserted {
+                found.append(pubkey)
+            }
+            index = token.upperBound
+        }
+        return found
+    }
+
     /// Replace `nostr:npub1…` / `nostr:nprofile1…` tokens with `@name` where a
     /// name is known, leaving the token alone otherwise.
     private static func resolveMentions(_ content: String, names: [String: String]) -> String {
-        guard !names.isEmpty || content.contains("npub1") || content.contains("nprofile1") else {
-            return content
-        }
+        guard !names.isEmpty else { return content }
         var out = ""
         var index = content.startIndex
         while index < content.endIndex {
@@ -141,17 +153,19 @@ enum NotificationPreview {
         return out
     }
 
+    /// The next NIP-21 `nostr:npub1…` / `nostr:nprofile1…` mention starting a
+    /// token, so one inside a URL (`https://ditto.pub/npub1…`,
+    /// `…/nostr:npub1…`) stays part of the link. Mirrors `MENTION` in
+    /// `src/lib/notificationPreview.ts`.
     private static func nextMention(
         in content: String, from start: String.Index
     ) -> Range<String.Index>? {
         var index = start
         while index < content.endIndex {
-            let rest = content[index...]
-            let withPrefix = rest.lowercased().hasPrefix("nostr:")
-            let bodyStart = withPrefix ? content.index(index, offsetBy: 6) : index
-            if bodyStart < content.endIndex {
-                let body = content[bodyStart...].lowercased()
-                if body.hasPrefix("npub1") || body.hasPrefix("nprofile1") {
+            if startsToken(content, at: index), hasPrefix(content[index...], "nostr:") {
+                let bodyStart = content.index(index, offsetBy: 6)
+                let body = content[bodyStart...]
+                if hasPrefix(body, "npub1") || hasPrefix(body, "nprofile1") {
                     var end = bodyStart
                     while end < content.endIndex, isBech32Character(content[end]) {
                         end = content.index(after: end)
@@ -162,6 +176,26 @@ enum NotificationPreview {
             index = content.index(after: index)
         }
         return nil
+    }
+
+    /// Whether `index` begins a token: the start, or after whitespace or an
+    /// opening bracket or quote.
+    private static func startsToken(_ content: String, at index: String.Index) -> Bool {
+        guard index > content.startIndex else { return true }
+        let previous = content[content.index(before: index)]
+        return previous.isWhitespace || "([{<\"'".contains(previous)
+    }
+
+    /// ASCII case-insensitive prefix test, without lowercasing the whole tail.
+    private static func hasPrefix(_ text: Substring, _ prefix: String) -> Bool {
+        var cursor = text.startIndex
+        for expected in prefix {
+            guard cursor < text.endIndex, text[cursor].lowercased() == String(expected) else {
+                return false
+            }
+            cursor = text.index(after: cursor)
+        }
+        return true
     }
 
     private static func isBech32Character(_ c: Character) -> Bool {

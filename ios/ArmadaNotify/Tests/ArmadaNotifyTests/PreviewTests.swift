@@ -211,6 +211,40 @@ final class PreviewTests: XCTestCase {
         XCTAssertEqual(cleaned, "hi @bob there")
     }
 
+    func testResolvesAMentionAfterOpeningPunctuation() {
+        let cleaned = NotificationPreview.cleanContent(
+            "(nostr:\(npub))", names: [vectorString("alicePk"): "bob"]
+        )
+        XCTAssertEqual(cleaned, "(@bob)")
+    }
+
+    func testLeavesABareNpubAlone() {
+        // Only NIP-21 `nostr:` URIs are mentions.
+        let names = [vectorString("alicePk"): "bob"]
+        XCTAssertEqual(NotificationPreview.cleanContent("hi \(npub)", names: names), "hi \(npub)")
+        XCTAssertEqual(NotificationPreview.mentionedPubkeys(in: "hi \(npub)"), [])
+    }
+
+    func testNeverRewritesAnNpubInsideAUrl() {
+        let names = [vectorString("alicePk"): "Team Soapbox"]
+        for url in [
+            "https://ditto.pub/\(npub)",
+            "https://njump.me/nostr:\(npub)",
+            "https://example.com/?u=nostr:\(npub)",
+            "ditto.pub/nostr:\(npub)",
+        ] {
+            XCTAssertEqual(NotificationPreview.cleanContent("see \(url)", names: names), "see \(url)")
+            XCTAssertEqual(NotificationPreview.mentionedPubkeys(in: "see \(url)"), [])
+        }
+    }
+
+    func testCollectsEachMentionedPubkeyOnce() {
+        XCTAssertEqual(
+            NotificationPreview.mentionedPubkeys(in: "nostr:\(npub) and NOSTR:\(nprofile)"),
+            [vectorString("alicePk")]
+        )
+    }
+
     func testLeavesAnUnnameableMentionAlone() {
         let cleaned = NotificationPreview.cleanContent("hi nostr:\(npub) there")
         XCTAssertEqual(cleaned, "hi nostr:\(npub) there")

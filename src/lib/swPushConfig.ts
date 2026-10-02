@@ -3,7 +3,8 @@
  * events: DM policy, known peers, own pubkey, the nsec (nsec logins only, while
  * push is enabled) and per-channel Concord stream keys. Written to Cache
  * Storage (workers can't read localStorage); missing/stale entries degrade to a
- * generic wake-up. Display data is read from ArmadaDB at push time instead.
+ * generic wake-up. Display data is read from ArmadaDB at push time instead,
+ * with `profileRelays` asked for any profile the device has never stored.
  *
  * SECURITY: AES-GCM sealed under a non-extractable WebCrypto key
  * (swSecretVault), wiped by {@link clearSwPushConfig}. Concord keys are
@@ -74,6 +75,8 @@ export interface SwPushConfig {
   concord?: SwConcordStream[];
   /** Media policy for avatar/icon fetches; absent = default policy. */
   mediaPolicy?: MediaPolicyConfig;
+  /** The pool's general read relays, asked for a kind 0 missing from ArmadaDB. */
+  profileRelays?: string[];
 }
 
 function pushConfigUrl(): string {

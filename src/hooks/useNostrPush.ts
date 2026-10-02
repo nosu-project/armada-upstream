@@ -1,6 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { generalReadRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
@@ -341,6 +342,11 @@ export function useNostrPush(): UsePushNotificationsReturn {
     watchSetReady,
   } = usePushWatchSet(prefs);
   const mediaPolicy = useMediaPolicyConfig();
+  const profileRelaysKey = generalReadRelays(config, user?.pubkey).join(",");
+  const profileRelays = useMemo(
+    () => (profileRelaysKey ? profileRelaysKey.split(",") : []),
+    [profileRelaysKey],
+  );
   const notificationSettingsReadyRef = useRef(notificationSettingsReady);
   notificationSettingsReadyRef.current = notificationSettingsReady;
 
@@ -413,6 +419,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
         ),
         ...(dmSk ? { sk: dmSk } : {}),
         mediaPolicy,
+        profileRelays,
       });
       if (!written) {
         throw new Error("The service worker notification policy could not be stored");
@@ -431,6 +438,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     concordConfigReady,
     dmSk,
     mediaPolicy,
+    profileRelays,
     queueSwConfig,
   ]);
 

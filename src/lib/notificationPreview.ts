@@ -34,8 +34,13 @@ export const NOTIFICATION_BADGE_ICON = "/badge-96.png";
  */
 const MEDIA_URL = new RegExp(`\\s*https?://\\S+\\.(${ALL_MEDIA_EXTS})(?:\\?\\S*)?`, "gi");
 
-/** A `nostr:npub…` / `nostr:nprofile…` (or bare) NIP-27 mention. */
-const MENTION = /(?:nostr:)?(npub1|nprofile1)[023456789acdefghjklmnpqrstuvwxyz]+/gi;
+/**
+ * A NIP-21 `nostr:npub…` / `nostr:nprofile…` mention starting a token, so one
+ * inside a URL (`https://ditto.pub/npub1…`, `…/nostr:npub1…`, `?u=nostr:…`)
+ * stays part of the link. Mirrored by Android's `NotificationContent.MENTION`
+ * and iOS's `NotificationPreview.nextMention`.
+ */
+const MENTION = /(?<![^\s([{<"'])nostr:(npub1|nprofile1)[023456789acdefghjklmnpqrstuvwxyz]+/gi;
 
 function mentionPubkey(token: string): string | undefined {
   try {
