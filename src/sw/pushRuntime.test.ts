@@ -1,12 +1,20 @@
 import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from "nostr-tools/pure";
 import { getConversationKey, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { describe, expect, it } from "vitest";
+import { nip19 } from "nostr-tools";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { queryChannelRumors } from "@/concord/lib/rumorStore";
+import { appEventStore } from "@/lib/db/mainEventStore";
 import { queryDm17Thread } from "@/lib/nip17/dm17Store";
+import { fetchProfiles } from "@/sw/profileFetch";
 
 import { communityAvatarShown, openConcord, openDm, preparePush, pushScope } from "./pushRuntime";
+
+// No sockets in the suite: profile lookups answer from whatever a test sets.
+vi.mock("@/sw/profileFetch", () => ({ fetchProfiles: vi.fn(async () => []) }));
+const fetchProfilesMock = vi.mocked(fetchProfiles);
+afterEach(() => fetchProfilesMock.mockClear());
 
 import type { SwConcordStream, SwPushConfig } from "@/lib/swPushConfig";
 
@@ -1022,5 +1030,94 @@ describe("communityAvatarShown", () => {
     expect(communityAvatarShown(known, cfg)).toBe(true);
     expect(communityAvatarShown("f".repeat(64), cfg)).toBe(false);
     expect(communityAvatarShown(known, null)).toBe(false);
+  });
+});
+
+describe("preparePush — profiles the device has never stored", () => {
+  const relay = "wss://group.example";
+
+  function profileEvent(sk: Uint8Array, metadata: Record<string, string>) {
+    return finalizeEvent({ kind: 0, content: JSON.stringify(metadata), tags: [], created_at: now() }, sk);
+  }
+
+  function groupMessage(content: string, sk = generateSecretKey()) {
+    return finalizeEvent({ kind: 9, content, tags: [["h", "lobby"]], created_at: now() }, sk);
+  }
+
+  it("asks the relays for a missing author, names them, and keeps the profile", async () => {
+    const authorSk = generateSecretKey();
+    const author = getPublicKey(authorSk);
+    fetchProfilesMock.mockResolvedValueOnce([profileEvent(authorSk, { name: "Fiatjaf" })]);
+
+    const prepared = await preparePush(
+      { event: groupMessage("gm", authorSk), relays: [relay] },
+      { policy: "generic", self: "c".repeat(64), knownPeers: [], profileRelays: ["wss://app.example"] },
+    );
+
+    expect(prepared?.line).toBe("Fiatjaf: gm");
+    expect(fetchProfilesMock).toHaveBeenCalledWith([relay, "wss://app.example"], [author]);
+    const store = await appEventStore();
+    const [stored] = await store.query([{ kinds: [0], authors: [author] }]);
+    expect(JSON.parse(stored.content).name).toBe("Fiatjaf");
+  });
+
+  it("does not ask again for a profile already stored", async () => {
+    const authorSk = generateSecretKey();
+    const store = await appEventStore();
+    await store.event(profileEvent(authorSk, { name: "Stored" }));
+
+    const prepared = await preparePush({ event: groupMessage("hi", authorSk), relays: [relay] }, null);
+    expect(prepared?.line).toBe("Stored: hi");
+    expect(fetchProfilesMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a nostr: mention to the mentioned user's name", async () => {
+    const mentionedSk = generateSecretKey();
+    const npub = nip19.npubEncode(getPublicKey(mentionedSk));
+    fetchProfilesMock.mockResolvedValueOnce([profileEvent(mentionedSk, { display_name: "Team Soapbox" })]);
+
+    const prepared = await preparePush(
+      { event: groupMessage(`thanks nostr:${npub}! see https://ditto.pub/${npub}`), relays: [relay] },
+      null,
+    );
+    expect(prepared?.line).toContain(`thanks @Team Soapbox! see https://ditto.pub/${npub}`);
+  });
+
+  it("keeps a mention nobody can name as its raw token", async () => {
+    const npub = nip19.npubEncode(getPublicKey(generateSecretKey()));
+    const prepared = await preparePush(
+      { event: groupMessage(`cc nostr:${npub}`), relays: [relay] },
+      null,
+    );
+    expect(prepared?.line).toContain(`cc nostr:${npub}`);
+    expect(prepared?.line).not.toContain("@Anonymous");
+  });
+
+  it("asks only the user's relays about a DM sender, never the inbox that delivered it", async () => {
+    const senderSk = generateSecretKey();
+    const senderPk = getPublicKey(senderSk);
+    const recipientSk = generateSecretKey();
+    const recipientPk = getPublicKey(recipientSk);
+    fetchProfilesMock.mockResolvedValueOnce([profileEvent(senderSk, { name: "Ana" })]);
+    const dm = wrap(seal({
+      pubkey: senderPk,
+      kind: 14,
+      content: "hey",
+      tags: [["p", recipientPk]],
+      created_at: now(),
+    }, senderSk, recipientPk), recipientPk);
+
+    const prepared = await preparePush(
+      { scope: "dm", event: dm, relays: ["wss://inbox.example"] },
+      {
+        policy: "generic",
+        self: recipientPk,
+        knownPeers: [senderPk],
+        sk: bytesToHex(recipientSk),
+        profileRelays: ["wss://app.example"],
+      },
+    );
+    expect(prepared?.title).toBe("Ana");
+    expect(fetchProfilesMock).toHaveBeenCalledWith(["wss://app.example"], [senderPk]);
   });
 });

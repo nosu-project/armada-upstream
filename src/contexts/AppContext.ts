@@ -476,6 +476,25 @@ export function userWriteRelays(config: AppConfig, pubkey?: string): string[] {
 }
 
 /**
+ * The relays the pool reads general data such as profiles from: app relays
+ * (unless off) plus the user's NIP-65 read and write relays. For readers
+ * outside the pool, like the push worker.
+ */
+export function generalReadRelays(config: AppConfig, pubkey?: string): string[] {
+  const urls = new Set<string>();
+  const candidates = [
+    ...(config.useAppRelays ? config.appRelays : []),
+    ...userReadRelays(config, pubkey),
+    ...userWriteRelays(config, pubkey),
+  ];
+  for (const url of candidates) {
+    const normalized = normalizeRelayUrl(url);
+    if (normalized) urls.add(normalized);
+  }
+  return [...urls];
+}
+
+/**
  * Relays holding the user's ACCOUNT-DATA singletons: app relays (unless off) plus
  * NIP-65 WRITE relays when `useUserRelays` is on. Excludes NIP-29 group relays:
  * `NPool.req` only EOSEs once every routed relay has, so one slow group relay would

@@ -6,7 +6,8 @@
  *   - OPENS it via the app's own `openDmWrap`/`openWrap`, so the worker can't
  *     apply laxer anti-spoof/seal/NIP-40 rules than the page;
  *   - STORES it in ArmadaDB (IndexedDB) via `writeDm17Rumors`/`writeRumors`;
- *   - PRESENTS it with names/images read from that same database.
+ *   - PRESENTS it with names/images read from that same database, asking
+ *     relays only for a profile it has never stored (`profileFetch.ts`).
  * Every step is best-effort; failure falls back to the gateway's static wake-up.
  */
 
@@ -46,6 +47,7 @@ import {
 } from "@/lib/notificationPreview";
 import { concordRoomIdentity, nip29RoomIdentity } from "@/lib/notificationRoom";
 import { openSealedConfig } from "@/lib/swSecretVault";
+import { fetchProfiles } from "@/sw/profileFetch";
 
 import type { OpenedChat } from "@/concord/lib/chat";
 import type { ImagePointer } from "@/concord/lib/types";
@@ -170,39 +172,67 @@ function policyOf(cfg: SwPushConfig | null): MediaPolicy {
   return mediaPolicyFromConfig(cfg?.mediaPolicy);
 }
 
-/**
- * Sender name and avatar from the local kind-0 only, the avatar routed per
- * media policy (the OS fetches notification icons from this device).
- */
-async function profileFor(pubkey: string, policy: MediaPolicy): Promise<{ name: string; avatar?: string }> {
-  try {
-    const store = await appEventStore();
-    const [ev] = await store.query([{ kinds: [0], authors: [pubkey], limit: 1 }]);
-    if (ev) {
-      const metadata = JSON.parse(ev.content) as NostrMetadata;
-      const name = getDisplayName(metadata, pubkey);
-      const picture = typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)
-        ? metadata.picture
-        : undefined;
-      const avatar = mediaSrc(picture, policy);
-      return { name, avatar };
-    }
-  } catch {
-    // store unreadable
-  }
-  return { name: "Anonymous" };
+/** A name and an avatar routed per media policy (the OS fetches icons from this device). */
+interface ResolvedProfile {
+  name: string;
+  avatar?: string;
 }
 
-/** Resolve the names a message's NIP-27 mentions refer to, locally. */
-async function mentionNamesFor(content: string, policy: MediaPolicy): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
-  const keys = mentionPubkeys(content);
-  if (keys.length === 0) return names;
-  await Promise.all(keys.map(async (pk) => {
-    const { name } = await profileFor(pk, policy);
-    if (name !== "Anonymous") names.set(pk, name);
+/** Mentions looked up per message; any beyond keep their raw token. */
+const MAX_MENTION_LOOKUPS = 8;
+
+/** The name of someone whose profile can't be found. */
+const ANONYMOUS = getDisplayName(undefined);
+
+function resolvedProfile(ev: { content: string; pubkey: string }, policy: MediaPolicy): ResolvedProfile | undefined {
+  try {
+    const metadata = JSON.parse(ev.content) as NostrMetadata;
+    if (!metadata || typeof metadata !== "object") return undefined;
+    const picture = typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)
+      ? metadata.picture
+      : undefined;
+    return { name: getDisplayName(metadata, ev.pubkey), avatar: mediaSrc(picture, policy) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Profiles for `pubkeys`: the stored kind 0 first, then a short lookup on
+ * `relays` for whoever this device has never stored. What the relays return is
+ * kept, so the app opens already knowing the name.
+ */
+async function profilesFor(
+  pubkeys: string[],
+  relays: string[],
+  policy: MediaPolicy,
+): Promise<Map<string, ResolvedProfile>> {
+  const profiles = new Map<string, ResolvedProfile>();
+  let store: Awaited<ReturnType<typeof appEventStore>> | undefined;
+  try {
+    store = await appEventStore();
+    for (const ev of await store.query([{ kinds: [0], authors: pubkeys }])) {
+      const profile = resolvedProfile(ev, policy);
+      if (profile) profiles.set(ev.pubkey, profile);
+    }
+  } catch {
+    // store unreadable — the relays may still answer
+  }
+
+  const missing = pubkeys.filter((pk) => !profiles.has(pk));
+  if (missing.length === 0 || relays.length === 0) return profiles;
+  const fetched = await fetchProfiles(relays, missing);
+  await Promise.all(fetched.map(async (ev) => {
+    const profile = resolvedProfile(ev, policy);
+    if (profile) profiles.set(ev.pubkey, profile);
+    await store?.event(ev).catch(() => undefined);
   }));
-  return names;
+  return profiles;
+}
+
+/** Where to ask for a missing kind 0: the push's own relays first, then the user's. */
+function profileRelaysFor(cfg: SwPushConfig | null, pushRelays: string[] = []): string[] {
+  return [...new Set([...pushRelays, ...(cfg?.profileRelays ?? [])])];
 }
 
 /** A community icon as a small `data:` URL (workers lack `URL.createObjectURL`). */
@@ -259,13 +289,20 @@ async function present(
   room: { title?: string; image?: string },
   route: { tag: string; url: string; timestamp: number; roomKey?: string; eventId?: string },
   policy: MediaPolicy,
+  /** Relays to ask for a kind 0 this device doesn't hold. */
+  profileRelays: string[],
   /** Show the sender's avatar; false = the room icon or the app's. */
   showAvatar = true,
 ): Promise<PreparedPush> {
-  const [{ name, avatar }, mentionNames] = await Promise.all([
-    profileFor(author, policy),
-    mentionNamesFor(msg.content, policy),
-  ]);
+  const mentioned = mentionPubkeys(msg.content).slice(0, MAX_MENTION_LOOKUPS);
+  const profiles = await profilesFor([...new Set([author, ...mentioned])], profileRelays, policy);
+  const { name, avatar } = profiles.get(author) ?? { name: ANONYMOUS };
+  // An unnamed mention keeps its raw token: "@Anonymous" would name nobody.
+  const mentionNames = new Map<string, string>();
+  for (const pk of mentioned) {
+    const mentionedName = profiles.get(pk)?.name;
+    if (mentionedName && mentionedName !== ANONYMOUS) mentionNames.set(pk, mentionedName);
+  }
   const full: NotificationMessage = {
     ...msg,
     authorName: name,
@@ -343,7 +380,7 @@ export async function preparePush(
   }
   if (scope === "c2") {
     if (cfg?.concordReady === false) return DROP;
-    return prepareConcord(wrapOrEvent, cfg);
+    return prepareConcord(wrapOrEvent, relays, cfg);
   }
   if (scope === "group" || scope === "group-mention") {
     return prepareGroup(wrapOrEvent, relays, cfg);
@@ -405,11 +442,15 @@ async function prepareDm(
       timestamp: opened.createdAt * 1000,
     },
     policyOf(cfg),
+    // Not the wrap's relays: asking the inbox that just delivered a wrap for
+    // the sender's profile ties the two together there.
+    profileRelaysFor(cfg),
   );
 }
 
 async function prepareConcord(
   wrap: NostrEvent,
+  relays: string[],
   cfg: SwPushConfig | null,
 ): Promise<PreparedPush | undefined> {
   const streams = cfg?.concord;
@@ -488,6 +529,7 @@ async function prepareConcord(
       timestamp: opened.createdAt * 1000,
     },
     policy,
+    profileRelaysFor(cfg, relays),
     communityAvatarShown(opened.author, cfg),
   );
 }
@@ -569,6 +611,7 @@ async function prepareGroup(
       timestamp: ev.created_at * 1000,
     },
     policy,
+    profileRelaysFor(cfg, relays),
   );
 }
 
