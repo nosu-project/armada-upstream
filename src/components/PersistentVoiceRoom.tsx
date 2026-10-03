@@ -68,6 +68,7 @@ import {
   useVoiceReactions,
 } from "@/concord/hooks/useVoice";
 import { CallSignalsContext, type CallSignals } from "@/contexts/CallSignalsContext";
+import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
@@ -80,6 +81,7 @@ import {
   subscribeUserVolumes,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
+import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
 import { bytesToBase64 } from "@/lib/fileBytes";
 import {
@@ -282,6 +284,51 @@ function MicNoiseProcessor() {
   return null;
 }
 
+/** Rejoins a dropped call (see voiceRejoin.ts); `onGiveUp` ends it. */
+function AutoRejoin({
+  serverUrl,
+  token,
+  onRejoiningChange,
+  onGiveUp,
+}: {
+  serverUrl: string;
+  token: string;
+  onRejoiningChange: (rejoining: boolean) => void;
+  onGiveUp: (reason?: DisconnectReason) => void;
+}) {
+  const room = useRoomContext();
+  const onGiveUpRef = useRef(onGiveUp);
+  onGiveUpRef.current = onGiveUp;
+  const onRejoiningRef = useRef(onRejoiningChange);
+  onRejoiningRef.current = onRejoiningChange;
+
+  useEffect(() => {
+    const intent = trackMicIntent(room);
+    let active: AbortController | null = null;
+    const onDisconnected = (reason?: DisconnectReason) => {
+      // A failed attempt inside the loop disconnects too; the loop owns retries.
+      if (active || !isRecoverableDisconnect(reason)) return;
+      const ctrl = new AbortController();
+      active = ctrl;
+      onRejoiningRef.current(true);
+      void rejoinRoom(room, serverUrl, token, { signal: ctrl.signal, micWanted: intent.wanted }).then((ok) => {
+        if (ctrl.signal.aborted) return;
+        active = null;
+        onRejoiningRef.current(false);
+        if (!ok) onGiveUpRef.current(reason);
+      });
+    };
+    room.on(RoomEvent.Disconnected, onDisconnected);
+    return () => {
+      room.off(RoomEvent.Disconnected, onDisconnected);
+      active?.abort();
+      intent.dispose();
+    };
+  }, [room, serverUrl, token]);
+
+  return null;
+}
+
 /** `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case defaults change. */
 const audioPublishDefaults = {
   audioPreset: AudioPresets.musicHighQuality,
@@ -473,6 +520,14 @@ function VoiceRoomShell({
   label: React.ReactNode;
   scopeRelayUrl?: string;
 }) {
+  const [rejoining, setRejoining] = useState(false);
+  // Recoverable drops belong to AutoRejoin.
+  const handleDisconnected = useCallback(
+    (reason?: DisconnectReason) => {
+      if (!isRecoverableDisconnect(reason)) onDisconnected(reason);
+    },
+    [onDisconnected],
+  );
   const mobileBar = (
     <ServerScopeProvider relayUrl={scopeRelayUrl}>
       <div className="clip-corner-lg bg-chrome-deep shadow-lg">
@@ -498,9 +553,15 @@ function VoiceRoomShell({
       audio={false}
       video={false}
       options={options}
-      onDisconnected={onDisconnected}
+      onDisconnected={handleDisconnected}
       style={{ display: "contents" }}
     >
+      <AutoRejoin
+        serverUrl={serverUrl}
+        token={token}
+        onRejoiningChange={setRejoining}
+        onGiveUp={onDisconnected}
+      />
       <RoomAudioRenderer />
       <CallSoundEffects />
       <MicNoiseProcessor />
@@ -509,12 +570,14 @@ function VoiceRoomShell({
       <MutedReporter />
       <RosterReporter />
       <PlaybackVolumeApplier />
-      {placeStage(
-        <ServerScopeProvider relayUrl={scopeRelayUrl}>
-          <CallStage callLabel={label} open={stageOpen} />
-        </ServerScopeProvider>,
-      )}
-      {placeBar(mobileBar, desktopBar)}
+      <VoiceRejoiningContext.Provider value={rejoining}>
+        {placeStage(
+          <ServerScopeProvider relayUrl={scopeRelayUrl}>
+            <CallStage callLabel={label} open={stageOpen} />
+          </ServerScopeProvider>,
+        )}
+        {placeBar(mobileBar, desktopBar)}
+      </VoiceRejoiningContext.Provider>
     </LiveKitRoom>
   );
 }
@@ -1321,6 +1384,9 @@ function ConcordVoiceRoom({
   );
 }
 
+/** How long an empty DM room waits for the peer to rejoin before hanging up. */
+const DM_PEER_GONE_GRACE_MS = 60_000;
+
 /**
  * DM voice room (see src/lib/dmCall.ts): blind-broker token authorized by the
  * per-call room key, media E2EE under one shared key. Signaling lives in DmCallProvider.
@@ -1399,16 +1465,29 @@ function DmVoiceRoom({
   useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
 
   // End when the peer leaves the SFU: the ephemeral "end" wrap may be lost,
-  // which would leave activeCall stuck (permanently "busy"). Fires only on transition to empty.
+  // which would leave activeCall stuck (permanently "busy"). Grace covers a peer
+  // rejoining, and our own full reconnect reporting every remote as gone.
   useEffect(() => {
     const room = e2ee.room;
     if (!room) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const onParticipantDisconnected = () => {
-      if (room.remoteParticipants.size === 0) onLeave();
+      if (room.remoteParticipants.size !== 0 || timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        if (room.remoteParticipants.size === 0) onLeave();
+      }, DM_PEER_GONE_GRACE_MS);
+    };
+    const onParticipantConnected = () => {
+      clearTimeout(timer);
+      timer = undefined;
     };
     room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    room.on(RoomEvent.ParticipantConnected, onParticipantConnected);
     return () => {
+      clearTimeout(timer);
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+      room.off(RoomEvent.ParticipantConnected, onParticipantConnected);
     };
   }, [e2ee.room, onLeave]);
 
