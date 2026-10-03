@@ -35,6 +35,7 @@ import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
+import { PreferredBlossomServerField } from "@/components/PreferredBlossomServerField";
 import { AccountStandingDialog } from "@/components/settings/AccountStandingDialog";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
@@ -789,7 +790,18 @@ export function SettingsPage({
                 emptyText="No personal media servers configured."
               />
             </SettingsRow>
+            <SettingsRow
+              stack
+              label="Preferred media server"
+              description="Uploads link to this server's copy when it accepts the file, and fall back to the others when it doesn't. Leave empty to use whichever server answers first."
+            >
+              <PreferredBlossomServerField
+                value={config.preferredBlossomServer}
+                onChange={(server) => updateConfig((current) => ({ ...current, preferredBlossomServer: server }))}
+              />
+            </SettingsRow>
             {!config.useAppBlossomServers
+              && !config.preferredBlossomServer
               && config.blossomServerMetadata.servers.length === 0 && (
               <SettingsRow>
                 <p className="text-sm text-destructive">

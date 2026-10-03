@@ -25,6 +25,7 @@ COPY . .
 #   BROADCAST_RELAYS      relay.primal.net
 #   SEARCH_RELAYS         relay.ditto.pub, relay.dreamith.to
 #   APP_BLOSSOM_SERVERS   blossom.ditto.pub, .dreamith.to, .primal.net
+#   PREFERRED_BLOSSOM_SERVER  empty ⇒ whichever server answers first
 #   SANDBOX_DOMAIN        "iframe.diy"
 #   DEFAULT_*             true
 #   CONCORD_AV_SERVERS    https://armada.buzz (empty disables Concord voice)
@@ -37,6 +38,7 @@ ARG APP_RELAYS
 ARG BROADCAST_RELAYS
 ARG SEARCH_RELAYS
 ARG APP_BLOSSOM_SERVERS
+ARG PREFERRED_BLOSSOM_SERVER
 ARG CONCORD_AV_SERVERS
 ARG SANDBOX_DOMAIN
 ARG KLIPY_API_KEY

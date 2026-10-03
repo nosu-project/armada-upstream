@@ -4,6 +4,35 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.0] - 2026-10-03
+
+3D models sent in chat can now be turned, flicked and zoomed right in the
+message, with a preview rendered when you attach one. Community messages and
+joins that haven't reached a relay yet are tracked with a Retry button, voice
+calls rejoin on their own after a dropped connection, and held media can be
+loaded for a whole session or always from hosts you trust.
+
+### Added
+- 3D model attachments (glb, gltf, stl, obj, ply, 3mf, fbx, dae) open in an interactive viewer on tap, and attaching one uploads a rendered preview
+- Community messages and joins show as pending until a relay holds them, and as failed with Retry if none does; they are re-sent when the app reopens or reconnects
+- Trust a media host with "Always load", and Load reveals a host's media for the rest of the session
+- A "Preferred media server" setting picks which of your media servers your uploads link to, with the others kept as backups
+- A notice with Retry in the sidebar when your community list can't be unlocked, or your signer can't decrypt it
+
+### Changed
+- Voice calls rejoin automatically after an unexpected disconnect instead of hanging up, show Leave while reconnecting, and a direct call waits a minute for the other person to come back
+- Media from unknown hosts waits for Load whatever your sender setting, unless you use a media proxy; forum posts and avatars follow the same rules, and notification avatars follow the setting
+- Media settings are split into privacy and uploads
+- Remote signers are reminded once per stall rather than for every signature, and get five minutes to approve
+- Back from an open conversation list on Android sends the app to the background
+- Android's default microphone and earpiece are labelled "Automatic" and "Phone earpiece" in the device pickers
+
+### Fixed
+- Call audio resumes when the browser pauses it mid-call
+- Noise suppression no longer breaks when the microphone restarts during a call
+- Muting a community on Android applies to every notification it should
+- Browser notifications show sender and mentioned names even when their profiles weren't loaded, and no longer turn links containing Nostr addresses into names
+
 ## [0.63.4] - 2026-10-01
 
 Communities now hold images, videos, previews and avatars from people you

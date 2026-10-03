@@ -92,6 +92,45 @@ export function mimeFromExt(ext: string): string {
     case 'opus': return 'audio/opus';
     case 'weba': return 'audio/webm';
     case 'xdc':  return WEBXDC_MIME;
-    default:     return 'application/octet-stream';
+    default:     return modelMimeFromExt(ext) ?? 'application/octet-stream';
   }
+}
+
+/** 3D formats the model viewer draws, keyed by MIME type. */
+export const RENDERABLE_MODEL_FORMATS = {
+  'model/gltf-binary': 'glb',
+  'model/gltf+json': 'gltf',
+  'model/stl': 'stl',
+  'model/obj': 'obj',
+  'model/x-ply': 'ply',
+  'model/3mf': '3mf',
+  'model/x-fbx': 'fbx',
+  'model/vnd.collada+xml': 'dae',
+} as const;
+
+export type ModelFormat = typeof RENDERABLE_MODEL_FORMATS[keyof typeof RENDERABLE_MODEL_FORMATS];
+
+const MODEL_MIME_BY_EXT: Record<string, string> = Object.fromEntries(
+  Object.entries(RENDERABLE_MODEL_FORMATS).map(([mime, ext]) => [ext, mime]),
+);
+
+/**
+ * The MIME type of a drawable 3D model extension. Browsers report none for most
+ * of them and a wrong one for some (Windows calls `.stl` a certificate trust
+ * list), so for these the extension wins over the reported type.
+ */
+export function modelMimeFromExt(ext: string): string | undefined {
+  return MODEL_MIME_BY_EXT[ext.toLowerCase()];
+}
+
+/**
+ * The drawable 3D format of an attachment: by MIME type, else by the extension
+ * of its name or URL, since other clients often send models as octet-stream.
+ */
+export function modelFormat(mime: string | undefined, name?: string): ModelFormat | undefined {
+  const byMime = mime ? RENDERABLE_MODEL_FORMATS[mime.toLowerCase() as keyof typeof RENDERABLE_MODEL_FORMATS] : undefined;
+  if (byMime) return byMime;
+  const ext = name?.split(/[?#]/)[0].split("/").pop()?.match(/\.([a-z0-9]+)$/i)?.[1];
+  const mimeFromName = ext ? modelMimeFromExt(ext) : undefined;
+  return mimeFromName ? RENDERABLE_MODEL_FORMATS[mimeFromName as keyof typeof RENDERABLE_MODEL_FORMATS] : undefined;
 }

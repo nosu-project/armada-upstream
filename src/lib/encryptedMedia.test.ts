@@ -198,6 +198,16 @@ describe("readCapped", () => {
     await expect(readCapped(res, 100)).rejects.toBeInstanceOf(FileTooLargeError);
   });
 
+  it("reports progress against a declared length, and none without one", async () => {
+    const declared: number[] = [];
+    await readCapped(streamed(new Uint8Array(100), { chunkSize: 25 }), 1024, (f) => declared.push(f));
+    expect(declared).toEqual([0.25, 0.5, 0.75, 1]);
+
+    const undeclared: number[] = [];
+    await readCapped(streamed(new Uint8Array(100), { declare: null, chunkSize: 25 }), 1024, (f) => undeclared.push(f));
+    expect(undeclared).toEqual([]);
+  });
+
   it("enforces the cap with no Content-Length at all", async () => {
     const res = streamed(new Uint8Array(400), { declare: null, chunkSize: 50 });
     await expect(readCapped(res, 100)).rejects.toBeInstanceOf(FileTooLargeError);

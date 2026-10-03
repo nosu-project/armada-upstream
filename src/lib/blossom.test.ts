@@ -84,6 +84,31 @@ describe("getEffectiveBlossomServers", () => {
       true,
     )).toEqual(["https://custom.example/"]);
   });
+
+  it("puts the preferred server first, moving it out of the lists", () => {
+    const userMeta = { servers: ["https://mine.example/"], updatedAt: 0 };
+    expect(getEffectiveBlossomServers(
+      ["https://a.example/", "https://b.example/"],
+      userMeta,
+      true,
+      "https://B.example",
+    )).toEqual(["https://b.example/", "https://a.example/", "https://mine.example/"]);
+  });
+
+  it("adds a preferred server neither list names, even with app servers off", () => {
+    expect(getEffectiveBlossomServers(
+      ["https://a.example/"],
+      { servers: ["https://mine.example/"], updatedAt: 0 },
+      false,
+      "https://self.example/",
+    )).toEqual(["https://self.example/", "https://mine.example/"]);
+  });
+
+  it("ignores an empty or unusable preferred server", () => {
+    const userMeta = { servers: [], updatedAt: 0 };
+    expect(getEffectiveBlossomServers(["https://a.example/"], userMeta, true, "")).toEqual(["https://a.example/"]);
+    expect(getEffectiveBlossomServers(["https://a.example/"], userMeta, true, "ftp://x")).toEqual(["https://a.example/"]);
+  });
 });
 
 describe("blossomFallbackUrls", () => {

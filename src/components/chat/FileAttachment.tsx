@@ -1,8 +1,9 @@
 import { Capacitor } from "@capacitor/core";
-import { Download, File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Box, Download, File, FileArchive, FileAudio, FileImage, FileText, FileVideo, Loader2, Rotate3d } from "lucide-react";
+import { lazy, Suspense, useCallback, useState } from "react";
 
 import { useBlossomCandidates } from "@/hooks/useBlossomCandidates";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { toast } from "@/hooks/useToast";
 import { downloadBinaryFile } from "@/lib/downloadFile";
 import {
@@ -12,9 +13,13 @@ import {
   verifyPlaintextHash,
 } from "@/lib/encryptedMedia";
 import { formatBytes, safeFilename } from "@/lib/fileBytes";
+import { companionEncryption } from "@/lib/imeta";
+import { modelFormat } from "@/lib/mediaUrls";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
+
+const ModelViewer = lazy(() => import("@/components/chat/ModelViewer"));
 
 interface FileAttachmentProps {
   url: string;
@@ -27,6 +32,13 @@ interface FileAttachmentProps {
   encryption?: ImetaEncryption;
   /** Sender-declared alternative sources (imeta `fallback`), tried after `url`. */
   fallbacks?: string[];
+  /**
+   * imeta `thumb`/`image`, under the file's key when encrypted. Shown for 3D
+   * models only; the caller passes none while the message's media is held.
+   */
+  thumbnail?: string;
+  /** Always the plain download row, never the 3D card (e.g. the pin bar). */
+  compact?: boolean;
   className?: string;
 }
 
@@ -52,19 +64,23 @@ function typeLabel(name: string, mime: string | undefined): string | null {
 }
 
 /**
- * Download-only card for non-media attachments.
- * SECURITY: bytes are never rendered or opened. Web: octet-stream object URL
- * + `download`; native: written to Documents (the anchor silently fails in the
- * WebView). `safeFilename` guards the name; the sender's MIME only picks an icon.
+ * Download card for non-media attachments.
+ * SECURITY: bytes are never rendered as a document or opened. Web:
+ * octet-stream object URL + `download`; native: written to Documents (the
+ * anchor silently fails in the WebView). `safeFilename` guards the name; the
+ * sender's MIME picks an icon, and for a 3D model the parser three.js draws it
+ * with — on a tap, into a canvas, with no outside resources (`modelRenderer`).
  */
-export function FileAttachment({ url, mime, name, size, encryption, fallbacks, className }: FileAttachmentProps) {
+export function FileAttachment({ url, mime, name, size, encryption, fallbacks, thumbnail, compact, className }: FileAttachmentProps) {
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [viewing3d, setViewing3d] = useState(false);
 
   const displayName = safeFilename(name);
   const Icon = iconFor(mime);
   const kind = typeLabel(displayName, mime);
+  const format = compact ? undefined : modelFormat(mime, name ?? url);
   // Mirrors on the viewer's other Blossom servers. Fetched directly, not via the
-  // image proxy (that's for passive display).
+  // image proxy (that's for passive display): a download or a model is a deliberate open.
   const candidates = useBlossomCandidates(url, fallbacks);
 
   const download = useCallback(async () => {
@@ -88,8 +104,63 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
       setStatus("idle");
     } catch {
       setStatus("error");
+      // A model card has no status line to say so.
+      if (format) toast({ title: "Download failed", description: displayName, variant: "destructive" });
     }
-  }, [status, candidates, encryption, displayName]);
+  }, [status, candidates, encryption, displayName, format]);
+
+  // A viewable model is its own card; its download lives in the viewer.
+  if (format) {
+    return (
+      <div
+        className={cn("my-1.5 w-full max-w-md overflow-hidden rounded-2xl border border-border bg-secondary/30", className)}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {viewing3d ? (
+          <div className="relative">
+            <Suspense
+              fallback={
+                <div className="flex aspect-[4/3] items-center justify-center bg-muted">
+                  <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                </div>
+              }
+            >
+              <ModelViewer candidates={candidates} format={format} encryption={encryption} />
+            </Suspense>
+            <button
+              type="button"
+              onClick={() => void download()}
+              disabled={status === "loading"}
+              aria-label={`Download ${displayName}`}
+              className="absolute right-3 top-3 z-10 flex size-10 touch:size-11 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            >
+              {status === "loading" ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setViewing3d(true)}
+            aria-label={`View ${displayName} in 3D`}
+            className="relative block aspect-[4/3] w-full bg-gradient-to-b from-muted/40 to-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          >
+            {thumbnail ? (
+              <ModelPreview url={thumbnail} encryption={encryption} />
+            ) : (
+              <ModelPlaceholder />
+            )}
+            <span className="absolute inset-x-0 bottom-0 flex justify-center p-4">
+              <span className="inline-flex items-center gap-2 rounded-full bg-background/90 px-4 py-2 text-sm font-medium shadow-sm backdrop-blur transition-colors hover:bg-background">
+                <Rotate3d className="size-4" />
+                View in 3D
+                {size ? <span className="text-muted-foreground tabular-nums">· {formatBytes(size)}</span> : null}
+              </span>
+            </span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <button
@@ -119,4 +190,24 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, c
       </span>
     </button>
   );
+}
+
+function ModelPlaceholder() {
+  return (
+    <span className="flex size-full items-center justify-center">
+      <Box className="size-16 text-muted-foreground/50" />
+    </span>
+  );
+}
+
+/** The sender's still of the model, through the media policy like any passive image. */
+function ModelPreview({ url, encryption }: { url: string; encryption?: ImetaEncryption }) {
+  const { resolved, onError, failed } = useMediaWithFallback({
+    url,
+    // NIP-17: a `thumb` shares the file's key and nonce, not its `ox`.
+    encryption: companionEncryption(encryption),
+    mime: "image/png",
+  });
+  if (failed || resolved.status !== "ready") return <ModelPlaceholder />;
+  return <img src={resolved.src} alt="" decoding="async" onError={onError} className="block size-full object-contain" />;
 }

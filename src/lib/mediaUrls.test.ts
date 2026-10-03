@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isGifLikeUrl, isUnplayableVideo } from "./mediaUrls";
+import { isGifLikeUrl, isUnplayableVideo, mimeFromExt, modelFormat, modelMimeFromExt } from "./mediaUrls";
 
 describe("isGifLikeUrl", () => {
   it("matches Tenor and Giphy media hosts (and subdomains)", () => {
@@ -65,5 +65,34 @@ describe("isUnplayableVideo", () => {
   it("returns false for non-URLs and missing info", () => {
     expect(isUnplayableVideo("not a url")).toBe(false);
     expect(isUnplayableVideo("")).toBe(false);
+  });
+});
+
+describe("modelFormat", () => {
+  it("reads the format from a model MIME type", () => {
+    expect(modelFormat("model/gltf-binary")).toBe("glb");
+    expect(modelFormat("MODEL/STL")).toBe("stl");
+    expect(modelFormat("model/vnd.collada+xml")).toBe("dae");
+  });
+
+  it("falls back to the extension of the name or URL when the MIME says nothing", () => {
+    expect(modelFormat("application/octet-stream", "benchy.STL")).toBe("stl");
+    expect(modelFormat(undefined, "https://blossom.example/abc123.glb?x=1#y")).toBe("glb");
+    expect(modelFormat("", "scene.3mf")).toBe("3mf");
+  });
+
+  it("is undefined for anything else", () => {
+    expect(modelFormat("application/pdf", "doc.pdf")).toBeUndefined();
+    expect(modelFormat("model/step", "part.step")).toBeUndefined();
+    expect(modelFormat(undefined, "https://example.com/glb/readme")).toBeUndefined();
+  });
+});
+
+describe("modelMimeFromExt", () => {
+  it("maps drawable model extensions, which mimeFromExt also knows", () => {
+    expect(modelMimeFromExt("glb")).toBe("model/gltf-binary");
+    expect(modelMimeFromExt("OBJ")).toBe("model/obj");
+    expect(mimeFromExt("ply")).toBe("model/x-ply");
+    expect(modelMimeFromExt("png")).toBeUndefined();
   });
 });

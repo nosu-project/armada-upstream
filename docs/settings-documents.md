@@ -55,8 +55,8 @@ still change when the user explicitly edits or saves those lists.
 
 Synchronized endpoint arrays are complete replacement sets. Build-time values
 seed a fresh config only. In particular, `appRelays`, `appDmRelays`,
-`appBlossomServers`, `communityRelays`, and a non-empty voice-server preference
-do not have public Armada addresses unioned back in after restore. Public
+`appBlossomServers`, `preferredBlossomServer`, `communityRelays`, and a
+non-empty voice-server preference do not have public Armada addresses unioned back in after restore. Public
 NIP-65 discovery indexes and CORD's versioned stock-relay dictionary are
 protocol discovery/interoperability floors, not runtime account settings.
 

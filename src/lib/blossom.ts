@@ -19,6 +19,13 @@ export const APP_BLOSSOM_SERVERS: string[] = (
   .filter((url: string | null): url is string => url !== null);
 
 /**
+ * The deployment's preferred Blossom server (`PREFERRED_BLOSSOM_SERVER`):
+ * the URL uploads embed when it takes the blob. Empty = no preference.
+ */
+export const PREFERRED_BLOSSOM_SERVER: string =
+  normalizeBlossomServerUrl(config("PREFERRED_BLOSSOM_SERVER") ?? "") ?? "";
+
+/**
  * The user's Blossom server list, synced with their kind 10063 event.
  * `updatedAt` (0 = never synced) keeps a stale relay read from clobbering local edits.
  */
@@ -73,14 +80,19 @@ function normalizeUrl(url: string): string {
 /**
  * Effective Blossom servers: app servers + user's (deduped) when enabled, else
  * only the user's — even if empty; an explicit off must not dial defaults.
+ * A preferred server goes first, joining the list if neither names it: it is
+ * a setting of its own, cleared rather than switched off.
  */
 export function getEffectiveBlossomServers(
   appServers: string[],
   userMeta: BlossomServerMetadata,
   useAppBlossomServers: boolean,
+  preferredServer = "",
 ): string[] {
-  if (!useAppBlossomServers) return dedupeServers(userMeta.servers);
-  return dedupeServers([...appServers, ...userMeta.servers]);
+  const preferred = normalizeBlossomServerUrl(preferredServer);
+  const head = preferred ? [preferred] : [];
+  if (!useAppBlossomServers) return dedupeServers([...head, ...userMeta.servers]);
+  return dedupeServers([...head, ...appServers, ...userMeta.servers]);
 }
 
 /** A content-addressed path `/<sha256>` (64 hex), optionally with an extension. */

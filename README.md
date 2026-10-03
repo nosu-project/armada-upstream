@@ -111,6 +111,13 @@ in `index.html`, which link-preview crawlers read without running scripts.
   `https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/`).
   User-editable in Settings, and can be turned off entirely with the "Use app
   media servers" toggle.
+- `PREFERRED_BLOSSOM_SERVER` — a Blossom server whose URL uploads embed
+  whenever it accepts the file. It is tried first, and is retried once if it
+  fails for any reason other than refusing the file. Only if it can't take the
+  file does an upload fall back to the first other server to answer. Every
+  other server already holding the blob is listed as a NIP-94 `fallback`.
+  Empty by default, which means whichever server answers first. Seeds the
+  "Preferred media server" setting.
 - `CONCORD_AV_SERVERS` — fallback Concord voice (CORD-07) token brokers
   (default `https://armada.buzz`).
 - `BRIDGE_PORTAL_URL` — origin of a Discord bridge portal

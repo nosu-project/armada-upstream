@@ -1,7 +1,7 @@
 import { useContext, useMemo } from "react";
 
 import { AppContext } from "@/contexts/AppContext";
-import { APP_BLOSSOM_SERVERS, getEffectiveBlossomServers } from "@/lib/blossom";
+import { APP_BLOSSOM_SERVERS, getEffectiveBlossomServers, PREFERRED_BLOSSOM_SERVER } from "@/lib/blossom";
 
 /**
  * The viewer's effective Blossom server list, stable across renders. Reads the
@@ -14,11 +14,12 @@ export function useBlossomServers(): string[] {
   const appBlossomServers = config?.appBlossomServers ?? APP_BLOSSOM_SERVERS;
   const blossomServerMetadata = config?.blossomServerMetadata;
   const useAppBlossomServers = config?.useAppBlossomServers ?? true;
+  const preferredBlossomServer = config?.preferredBlossomServer ?? PREFERRED_BLOSSOM_SERVER;
   return useMemo(
     () =>
       blossomServerMetadata
-        ? getEffectiveBlossomServers(appBlossomServers, blossomServerMetadata, useAppBlossomServers)
+        ? getEffectiveBlossomServers(appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer)
         : [...appBlossomServers],
-    [appBlossomServers, blossomServerMetadata, useAppBlossomServers],
+    [appBlossomServers, blossomServerMetadata, useAppBlossomServers, preferredBlossomServer],
   );
 }

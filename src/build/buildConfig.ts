@@ -23,6 +23,8 @@ export const CONFIG_NAMES = [
   "GIT_DISCOVERY_RELAY",
   "DM_RELAYS",
   "APP_BLOSSOM_SERVERS",
+  // Blossom server whose URL uploads embed when it takes the blob; the rest become fallbacks. Empty = first to answer.
+  "PREFERRED_BLOSSOM_SERVER",
   "CONCORD_AV_SERVERS",
   // Discover's curated author list: an naddr, npub/hex pubkey, or empty/"none". Unset = Armada's follow pack.
   "DISCOVER_CURATION",

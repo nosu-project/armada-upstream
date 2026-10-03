@@ -38,6 +38,7 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
         name={entry.name}
         size={sizeBytes(entry.size)}
         encryption={entry.encryption}
+        compact
       />
     );
   }
@@ -119,6 +120,7 @@ export function PinAttachments({
             name={entry.name}
             size={sizeBytes(entry.size)}
             encryption={entry.encryption}
+            compact
             className="max-w-full"
           />
         );

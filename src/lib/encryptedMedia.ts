@@ -44,8 +44,13 @@ export class FileTooLargeError extends Error {
  * Read a body, refusing to buffer more than `maxBytes`: Content-Length is
  * checked first, then enforced on the stream (the header can lie).
  * Preallocates when the length is known, keeping peak memory at one copy.
+ * `onProgress` gets the fraction read, only when the length is declared.
  */
-export async function readCapped(res: Response, maxBytes: number): Promise<ArrayBuffer> {
+export async function readCapped(
+  res: Response,
+  maxBytes: number,
+  onProgress?: (fraction: number) => void,
+): Promise<ArrayBuffer> {
   const header = res.headers.get("content-length");
   const declared = header === null ? NaN : Number(header);
   const hasDeclared = Number.isFinite(declared) && declared >= 0;
@@ -75,6 +80,7 @@ export async function readCapped(res: Response, maxBytes: number): Promise<Array
     if (preallocated) preallocated.set(value, total);
     else chunks.push(value);
     total += value.byteLength;
+    if (hasDeclared && declared > 0) onProgress?.(Math.min(1, total / declared));
   }
 
   if (preallocated) {
@@ -117,7 +123,7 @@ const withDecryptSlot = createSemaphore(3);
  */
 export async function fetchCapped(
   urls: string | readonly string[],
-  opts: { signal?: AbortSignal; maxBytes?: number } = {},
+  opts: { signal?: AbortSignal; maxBytes?: number; onProgress?: (fraction: number) => void } = {},
 ): Promise<ArrayBuffer> {
   const list = typeof urls === "string" ? [urls] : urls;
   if (list.length === 0) throw new Error("attachment fetch failed: no source");
@@ -126,7 +132,7 @@ export async function fetchCapped(
     try {
       const res = await fetch(url, { signal: opts.signal });
       if (!res.ok) throw new Error(`attachment fetch failed: HTTP ${res.status}`);
-      return await readCapped(res, opts.maxBytes ?? MAX_DECRYPT_BYTES);
+      return await readCapped(res, opts.maxBytes ?? MAX_DECRYPT_BYTES, opts.onProgress);
     } catch (e) {
       if (opts.signal?.aborted || e instanceof FileTooLargeError) throw e;
       lastError = e;

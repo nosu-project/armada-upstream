@@ -11,6 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAudioMetadata } from "@/hooks/useAudioMetadata";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { companionEncryption } from "@/lib/imeta";
+import { modelFormat } from "@/lib/mediaUrls";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +25,7 @@ export interface TrayAttachment {
   url: string;
   mime: string;
   label: string;
-  /** A webxdc icon, or a video's poster frame. */
+  /** A webxdc icon, a video's poster frame, or a 3D model's still. */
   icon?: string;
   isImage: boolean;
   isVideo: boolean;
@@ -335,6 +336,9 @@ function CardPreview({ item }: { item: TrayAttachment }) {
         )}
       </span>
     );
+  }
+  if (item.icon && modelFormat(item.mime)) {
+    return <AttachmentPreviewImage url={item.icon} mime="image/png" encryption={companionEncryption(item.encryption)} alt="" />;
   }
   return (
     <span className="flex size-full flex-col items-center justify-center gap-1.5 px-1.5 text-muted-foreground">

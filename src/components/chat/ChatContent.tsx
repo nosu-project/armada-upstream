@@ -154,7 +154,7 @@ type ContentToken =
   | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[]; alt?: string; spoiler?: boolean }
   | { type: "image-gallery"; urls: ImageRef[] }
   | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string; fallbacks?: string[] }
-  | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number }
+  | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number; thumbnail?: string; fallbacks?: string[] }
   | { type: "link-embed"; url: string }
   | { type: "invite-embed"; url: string }
   | { type: "buzz-invite-embed"; url: string }
@@ -618,6 +618,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               mime: imetaMime ?? inlineImeta.mime,
               name: inlineImeta.name,
               size: inlineImeta.size ? Number(inlineImeta.size) : undefined,
+              thumbnail: inlineImeta.thumbnail,
+              fallbacks: inlineImeta.fallbacks,
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -833,6 +835,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             mime: mime ?? entry.mime,
             name: entry.name,
             size: entry.size ? Number(entry.size) : undefined,
+            thumbnail: entry.thumbnail,
+            fallbacks: entry.fallbacks,
           });
           renderedUrls.add(url);
         }
@@ -1263,6 +1267,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       }
       case "file-embed": {
         if (inQuote) return inlineLink(key, token.url);
+        const thumbnail = token.thumbnail ? sanitizeUrl(token.thumbnail) : undefined;
         return (
           <FileAttachment
             key={key}
@@ -1271,6 +1276,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             name={token.name}
             size={token.size}
             encryption={token.encryption}
+            fallbacks={token.fallbacks}
+            thumbnail={thumbnail && heldReason(thumbnail) === undefined ? thumbnail : undefined}
           />
         );
       }

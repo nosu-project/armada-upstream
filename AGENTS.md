@@ -880,8 +880,13 @@ to fail a run:
   never turned a proxy on. An explicit `""` is off too.
   Two bypasses load directly on purpose: a Buzz-hosted blob (its signed GET
   header would not survive a proxy, and its host is a relay the viewer joined),
-  and a deliberate file download or Mini App open (`FileAttachment`, `Webxdc`),
-  which the image proxy is not for.
+  and a deliberate file download, 3D model view or Mini App open
+  (`FileAttachment`, `ModelViewer`, `Webxdc`), which the image proxy is not for.
+  A model's still (its imeta `thumb`) is passive display and goes through the
+  policy like any image. The model itself must stay self-contained:
+  `modelRenderer.ts` routes every loader through a manager that refuses any URL
+  but the `blob:`/`data:` resources inside the file, since a model can name
+  buffers and textures on any host.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes
