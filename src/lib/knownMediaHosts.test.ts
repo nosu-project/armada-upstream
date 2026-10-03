@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { holdsMediaUrl } from "@/concord/lib/mediaTrust";
-import { isKnownMediaHost, knownHostSet } from "@/lib/knownMediaHosts";
+import { isKnownMediaHost, knownHostSet, normalizeMediaHostInput } from "@/lib/knownMediaHosts";
 
 const known = knownHostSet(["https://media.example.org/"]);
 
@@ -10,6 +10,10 @@ describe("isKnownMediaHost", () => {
     expect(isKnownMediaHost("https://i.nostr.build/a.jpg", known)).toBe(true);
     expect(isKnownMediaHost("https://nostr.build/a.jpg", known)).toBe(true);
     expect(isKnownMediaHost("https://media.example.org/" + "a".repeat(64), known)).toBe(true);
+    expect(isKnownMediaHost("https://gifverse.net/media/abc/original.gif", known)).toBe(true);
+    expect(isKnownMediaHost("https://i.imgur.com/a.jpg", known)).toBe(true);
+    expect(isKnownMediaHost("https://cdn.discordapp.com/attachments/1/2/a.png", known)).toBe(true);
+    expect(isKnownMediaHost("https://media.discordapp.net/attachments/1/2/a.png", known)).toBe(true);
   });
 
   it("refuses look-alikes, other hosts and non-https", () => {
@@ -21,19 +25,36 @@ describe("isKnownMediaHost", () => {
   });
 });
 
+describe("knownHostSet", () => {
+  it("adds the reader's trusted sites, however they were typed", () => {
+    const set = knownHostSet([], ["Pics.example.com", "https://cdn.example.net/x.png", "nonsense"]);
+    expect(isKnownMediaHost("https://i.pics.example.com/a.jpg", set)).toBe(true);
+    expect(isKnownMediaHost("https://cdn.example.net/b.jpg", set)).toBe(true);
+    expect(set.has("nonsense")).toBe(false);
+  });
+});
+
+describe("normalizeMediaHostInput", () => {
+  it("reads a bare host or a URL", () => {
+    expect(normalizeMediaHostInput(" Example.COM ")).toBe("example.com");
+    expect(normalizeMediaHostInput("https://i.example.com/a.png")).toBe("i.example.com");
+    expect(normalizeMediaHostInput("localhost")).toBeUndefined();
+    expect(normalizeMediaHostInput("")).toBeUndefined();
+  });
+});
+
 describe("holdsMediaUrl", () => {
   const me = "a".repeat(64);
   const other = "b".repeat(64);
   const unknown = "https://spam.example/a.jpg";
 
-  it("holds an unknown host in trusted mode, whoever sent it, except the reader", () => {
-    expect(holdsMediaUrl(other, unknown, { mode: "trusted", self: me }, known)).toBe(true);
-    expect(holdsMediaUrl(me, unknown, { mode: "trusted", self: me }, known)).toBe(false);
-    expect(holdsMediaUrl(other, "https://i.nostr.build/a.jpg", { mode: "trusted", self: me }, known)).toBe(false);
+  it("holds an unknown host whoever sent it, except the reader", () => {
+    expect(holdsMediaUrl(other, unknown, { self: me, proxied: false }, known)).toBe(true);
+    expect(holdsMediaUrl(me, unknown, { self: me, proxied: false }, known)).toBe(false);
+    expect(holdsMediaUrl(other, "https://i.nostr.build/a.jpg", { self: me, proxied: false }, known)).toBe(false);
   });
 
-  it("leaves the always and never modes to their own rule", () => {
-    expect(holdsMediaUrl(other, unknown, { mode: "always", self: me }, known)).toBe(false);
-    expect(holdsMediaUrl(other, unknown, { mode: "never", self: me }, known)).toBe(false);
+  it("lets a media proxy satisfy it", () => {
+    expect(holdsMediaUrl(other, unknown, { self: me, proxied: true }, known)).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { clearRevealedMedia } from "@/components/chat/revealedMedia";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { clearAudioMetadata } from "@/hooks/useAudioMetadata";
 import { clearRecentDecrypts } from "@/lib/AppSigner";
@@ -116,6 +117,7 @@ export async function purgeClientStorage(): Promise<void> {
   clearAudioMetadata();
   clearPendingJoins();
   clearSightingsMemory();
+  clearRevealedMedia();
   resetDecryptConsent();
   // Shared DM ephemeral REQs linger past their last consumer; close them.
   closeDmEphemeralSubs();
@@ -138,4 +140,5 @@ export async function purgeClientStorage(): Promise<void> {
   clearAudioMetadata();
   clearPendingJoins();
   clearSightingsMemory();
+  clearRevealedMedia();
 }

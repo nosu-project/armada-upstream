@@ -51,7 +51,7 @@ export function authorQueryOptions(
 function withoutImages(result: AuthorResult): AuthorResult {
   if (!result.metadata?.picture && !result.metadata?.banner) return result;
   const { picture: _picture, banner: _banner, ...metadata } = result.metadata;
-  return { ...result, metadata };
+  return { ...result, metadata, imagesWithheld: true };
 }
 
 /**

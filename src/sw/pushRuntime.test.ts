@@ -1031,6 +1031,16 @@ describe("communityAvatarShown", () => {
     expect(communityAvatarShown("f".repeat(64), cfg)).toBe(false);
     expect(communityAvatarShown(known, null)).toBe(false);
   });
+
+  it("shows every sender's avatar when the reader loads everyone's media", () => {
+    const cfg = {
+      policy: "generic",
+      self: "c".repeat(64),
+      knownPeers: [],
+      mediaPolicy: { proxy: "", allCommunityAvatars: true },
+    } as SwPushConfig;
+    expect(communityAvatarShown("f".repeat(64), cfg)).toBe(true);
+  });
 });
 
 describe("preparePush — profiles the device has never stored", () => {

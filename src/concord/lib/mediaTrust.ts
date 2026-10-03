@@ -6,8 +6,8 @@
  * no blurhash, no unfurl — until the reader asks for it. A render rule only;
  * nothing is dropped.
  *
- * In `trusted` mode a URL on a host the viewer doesn't know is held too, whoever
- * sent it (`holdsMediaUrl`, `lib/knownMediaHosts.ts`).
+ * Separately, a URL on a host the viewer doesn't know is held whoever sent it
+ * (`holdsMediaUrl`, `lib/knownMediaHosts.ts`).
  *
  * An author's media loads when they are the reader, staff, followed by the reader,
  * reached by the fold's earned-trust graph (`floodVerdict`), or ESTABLISHED: first
@@ -114,15 +114,16 @@ export function holdsAvatar(author: string, i: MediaHoldInputs): boolean {
 
 /**
  * Whether one media URL waits for "Load" because of where it is hosted, however
- * trusted its sender: only `trusted` mode applies it, and never to the reader.
+ * trusted its sender. Independent of the sender mode; never the reader's own, and
+ * never behind a media proxy, which already keeps the host from seeing the reader.
  */
 export function holdsMediaUrl(
   author: string,
   url: string,
-  i: Pick<MediaHoldInputs, "mode" | "self">,
+  i: { self?: string; proxied: boolean },
   known: ReadonlySet<string>,
 ): boolean {
-  if (author === i.self || i.mode !== "trusted") return false;
+  if (author === i.self || i.proxied) return false;
   return !isKnownMediaHost(url, known);
 }
 

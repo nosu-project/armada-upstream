@@ -238,10 +238,13 @@ export interface AppConfig {
    */
   communityMediaAutoload: MediaAutoload;
   /**
-   * In `trusted` mode, also hold media hosted anywhere but the viewer's Blossom
-   * servers and the built-in Nostr hosts (`lib/knownMediaHosts.ts`). Default on. Synced.
+   * Also hold community media hosted anywhere but the viewer's Blossom servers,
+   * {@link trustedMediaHosts} and the built-in Nostr hosts (`lib/knownMediaHosts.ts`),
+   * in every mode but `always`; a media proxy satisfies it. Default on. Synced.
    */
   communityMediaKnownHostsOnly: boolean;
+  /** Hosts the viewer chose to load media from without asking ("Always load"). Synced. */
+  trustedMediaHosts: string[];
   /**
    * Whether Enter sends (Shift+Enter = newline) versus Ctrl/Cmd+Enter. Keyed by
    * device CLASS and synced; unset = auto (sends on keyboards, newline on touch).
@@ -319,6 +322,7 @@ export const METADATA_CONFIG_KEYS = [
   "mediaProxies",
   "communityMediaAutoload",
   "communityMediaKnownHostsOnly",
+  "trustedMediaHosts",
   "sendOnEnter",
   "currencyDisplay",
   "defaultZapMethod",
@@ -414,6 +418,7 @@ export const defaultConfig: AppConfig = {
   mediaProxies: [],
   communityMediaAutoload: "trusted",
   communityMediaKnownHostsOnly: true,
+  trustedMediaHosts: [],
   meshIncognito: true,
   meshEnabled: false,
   currencyDisplay: "usd",

@@ -496,6 +496,13 @@ final class SenderIdentityTests: XCTestCase {
             PushProcessor.communityAvatarShown(author: stranger, config: cfg),
             "anyone with a community's key can post; their face stays off the lock screen"
         )
+        let all = PushConfig(
+            policy: .generic, directMessages: true, dmLevels: [:],
+            selfPubkey: self_, knownPeers: [], knownConversations: [], mutedPeers: [],
+            secretKey: nil, nip46: nil, concord: [],
+            mediaPolicy: MediaPolicy(allCommunityAvatars: true)
+        )
+        XCTAssertTrue(PushProcessor.communityAvatarShown(author: stranger, config: all))
     }
 
     func testGroupTrustAndTapStayScopedToTheExactConversation() {

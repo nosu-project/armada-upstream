@@ -1,5 +1,5 @@
 import { ReplyContextLine, ReplyContextUnavailable, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
-import { useMediaHeld, useMediaUrlHold } from "@/components/chat/mediaHold";
+import { useMediaHeld, useMediaUrlHold, useMessageRevealed } from "@/components/chat/mediaHold";
 import { firstImageRef } from "@/components/chat/messageHelpers";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -22,8 +22,9 @@ export function ReplyContext({
 }) {
   const author = useAuthor(parent?.pubkey);
   const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
-  const held = useMediaHeld(parent?.pubkey);
-  const holdsUrl = useMediaUrlHold(parent?.pubkey);
+  const revealed = useMessageRevealed(parent?.id);
+  const held = useMediaHeld(parent?.pubkey) && !revealed;
+  const holdsUrl = useMediaUrlHold(parent?.pubkey, parent?.id);
   if (!parent) return <ReplyContextUnavailable onClick={() => onJump(parentId)} />;
   // A held parent's thumbnail would fetch exactly what its own row is holding.
   const ref = held ? undefined : firstImageRef(parent);
