@@ -404,6 +404,8 @@ interface ProbeNostr {
  */
 const dissolvedProbes = new Map<string, Map<string, Array<ProbeWaiter>>>();
 const dissolvedProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Filters per probe REQ; relays cap a REQ's filters, and closing one past it fails them all. */
+const DISSOLVED_PROBE_FILTERS = 16;
 
 interface ProbeWaiter {
   resolve: (events: NostrEvent[]) => void;
@@ -436,20 +438,25 @@ async function flushDissolvedProbes(nostr: ProbeNostr, url: string): Promise<voi
   dissolvedProbes.delete(url);
   if (!byPk) return;
 
-  let events: NostrEvent[];
-  try {
-    events = await nostr.relay(url).query(
-      [...byPk.keys()].map((pk) => ({ kinds: [KIND_WRAP], authors: [pk], limit: 10 })),
-      { signal: AbortSignal.timeout(8000) },
-    );
-  } catch (error) {
-    for (const waiters of byPk.values()) for (const { reject } of waiters) reject(error);
-    return;
-  }
-  for (const [pk, waiters] of byPk) {
-    const mine = events.filter((event) => event.pubkey === pk);
-    for (const { resolve } of waiters) resolve(mine);
-  }
+  const pks = [...byPk.keys()];
+  const chunks: string[][] = [];
+  for (let i = 0; i < pks.length; i += DISSOLVED_PROBE_FILTERS) chunks.push(pks.slice(i, i + DISSOLVED_PROBE_FILTERS));
+  await Promise.all(chunks.map(async (chunk) => {
+    let events: NostrEvent[];
+    try {
+      events = await nostr.relay(url).query(
+        chunk.map((pk) => ({ kinds: [KIND_WRAP], authors: [pk], limit: 10 })),
+        { signal: AbortSignal.timeout(8000) },
+      );
+    } catch (error) {
+      for (const pk of chunk) for (const { reject } of byPk.get(pk)!) reject(error);
+      return;
+    }
+    for (const pk of chunk) {
+      const mine = events.filter((event) => event.pubkey === pk);
+      for (const { resolve } of byPk.get(pk)!) resolve(mine);
+    }
+  }));
 }
 
 /**

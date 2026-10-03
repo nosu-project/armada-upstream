@@ -391,6 +391,31 @@ describe("probeCommunityDissolved — a non-member's check, from the public iden
   });
 });
 
+describe("probeCommunityDissolved — many at once", () => {
+  it("batches a burst into REQs of at most 16 filters, and still finds each grave", async () => {
+    const owner = signer();
+    const communities = Array.from({ length: 20 }, (_, i) => communityOf(120 + 2 * i, owner.pubkey));
+    const relay = new FakeRelay();
+    const last = communities[communities.length - 1];
+    relay.events = [await sealDissolved(last.id, owner.pubkey, owner)];
+    const sizes: number[] = [];
+    const query = relay.query.bind(relay);
+    relay.query = async (filters) => {
+      sizes.push(filters.length);
+      return query(filters);
+    };
+
+    const verdicts = await Promise.all(
+      communities.map((c) =>
+        probeCommunityDissolved({ relay: () => relay }, { communityId: c.idHex, owner: owner.pubkey, relays: [RELAY_A] }),
+      ),
+    );
+    expect(sizes.sort((a, b) => b - a)).toEqual([16, 4]);
+    expect(verdicts.slice(0, -1).every((at) => at === undefined)).toBe(true);
+    expect(verdicts.at(-1)).toBeTypeOf("number");
+  });
+});
+
 describe("probeCommunityDissolved — answering fast", () => {
   it("case-folds the community id before touching the marker", async () => {
     const owner = signer();
