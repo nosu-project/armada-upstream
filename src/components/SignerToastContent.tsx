@@ -1,79 +1,25 @@
-import { useState, type ReactNode } from "react";
-import { Loader2 } from "lucide-react";
+import type { ReactNode } from "react";
 
-/**
- * Signer nudge toast body (see signerWithNudge). On Android, an "Approve in
- * signer" `nostrsigner:` link task-switches without suspending the WebView (NIP-46 sockets survive).
- */
+/** Signer nudge toast body (see signerWithNudge). */
 export function NudgeToastContent({
   description,
-  android,
-  relayOk,
   onCancel,
 }: {
   description: string;
-  android: boolean;
-  relayOk: boolean;
   onCancel: () => void;
 }): ReactNode {
   return (
     <span>
       <span className="block text-sm opacity-80">{description}</span>
-      {android && relayOk ? (
-        <AndroidApproveRow onCancel={onCancel} />
-      ) : (
-        <span className="block mt-1.5">
-          <SkipButton onClick={onCancel} />
-        </span>
-      )}
-    </span>
-  );
-}
-
-function AndroidApproveRow({ onCancel }: { onCancel: () => void }) {
-  const [waiting, setWaiting] = useState(false);
-
-  return (
-    <span className="flex items-center gap-3 mt-2">
-      {waiting ? (
-        <span className="text-sm opacity-80 inline-flex items-center gap-1.5">
-          <Loader2 className="size-4 animate-spin" />
-          Waiting for signer...
-        </span>
-      ) : (
-        <a
-          href="nostrsigner:"
-          className="text-sm font-semibold border border-current rounded px-3 py-1.5 no-underline inline-flex items-center gap-1.5 min-h-[44px]"
-          onClick={() => {
-            setWaiting(true);
-          }}
-        >
-          Approve in signer
-        </a>
-      )}
-      {waiting ? (
+      <span className="block mt-1.5">
         <button
           type="button"
           onClick={onCancel}
-          className="text-sm font-semibold border border-current rounded px-3 py-1.5 min-h-[44px]"
+          className="text-sm bg-transparent border-none p-0 cursor-pointer opacity-80 underline underline-offset-2 min-h-[44px] inline-flex items-center"
         >
-          Cancel
+          Skip
         </button>
-      ) : (
-        <SkipButton onClick={onCancel} />
-      )}
+      </span>
     </span>
-  );
-}
-
-function SkipButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-sm bg-transparent border-none p-0 cursor-pointer opacity-80 underline underline-offset-2 min-h-[44px] inline-flex items-center"
-    >
-      Skip
-    </button>
   );
 }

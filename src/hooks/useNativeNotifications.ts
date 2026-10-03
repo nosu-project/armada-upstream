@@ -23,6 +23,7 @@ import {
 } from "@/lib/nativeNotifications";
 import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
 import { useConcordSubsState } from "@/concord/hooks/useConcordSubs";
+import { withoutNudge } from "@/lib/signerWithNudge";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
@@ -601,7 +602,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   }, [relayUrls, dmRelays, concordSubs]);
 
   // NIP-42: the service bridges AUTH challenges here; no key enters native code.
-  const signer = user?.signer;
+  // A background sign, so never the approval nudge (as NostrProvider's own AUTH).
+  const signer = useMemo(() => (user?.signer ? withoutNudge(user.signer) : undefined), [user?.signer]);
   useEffect(() => {
     if (!supported || !signer) return;
     let handle: { remove: () => void } | undefined;

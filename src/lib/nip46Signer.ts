@@ -2,9 +2,13 @@
  * NIP-46 remote signer, replacing Nostrify's `NConnectSigner`, whose per-RPC
  * subscriptions missed ephemeral kind-24133 responses, left zombie subs, and
  * retried explicit rejections. This keeps ONE session-lived response
- * subscription and dispatches by request id. Only silence/publish failure is
- * retried; bunker error responses fail immediately. Requests are NIP-44;
- * responses fall back to NIP-04 for legacy bunkers.
+ * subscription and dispatches by request id. Requests are NIP-44; responses
+ * fall back to NIP-04 for legacy bunkers.
+ *
+ * Each RPC keeps ONE request id and re-publishes it while unanswered: relays
+ * don't store ephemeral 24133, so a sleeping signer only sees a copy published
+ * after it reconnects, and signers key prompts by request id. A signature waits
+ * minutes, since the user may have to go approve it.
  */
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
@@ -19,11 +23,16 @@ export interface Nip46SignerOpts {
   bunkerPubkey: string;
   /** Local ephemeral client signer (the pairing's client key). */
   clientSigner: NostrSigner;
-  /** Per-attempt budget for one RPC round-trip. Default 30s. */
+  /** Re-publish an unanswered request this often. Default 30s. */
   attemptTimeoutMs?: number;
-  /** How many attempts before an RPC fails. Default 2. */
+  /** How many publishes a non-signing RPC gets before it fails. Default 2. */
   attempts?: number;
+  /** How long a `sign_event` waits for the user to approve it. Default 5 min. */
+  signTimeoutMs?: number;
 }
+
+/** Long enough to switch to the signer app, find the request and approve it. */
+export const NIP46_SIGN_TIMEOUT_MS = 5 * 60_000;
 
 const NIP46_KIND = 24133;
 
@@ -58,8 +67,11 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
   private readonly clientSigner: NostrSigner;
   private readonly attemptTimeoutMs: number;
   private readonly attempts: number;
+  private readonly signTimeoutMs: number;
 
   private readonly pending = new Map<string, PendingRpc>();
+  /** Re-publish of each unanswered request, by request id. */
+  private readonly republish = new Map<string, () => Promise<void>>();
   private readonly abort = new AbortController();
   private clientPubkey: string | undefined;
 
@@ -72,7 +84,20 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     this.clientSigner = opts.clientSigner;
     this.attemptTimeoutMs = opts.attemptTimeoutMs ?? 30_000;
     this.attempts = opts.attempts ?? 2;
+    this.signTimeoutMs = opts.signTimeoutMs ?? NIP46_SIGN_TIMEOUT_MS;
     this.ready = this.subscribe();
+    // A backgrounded page's timers stall; coming back is when the signer most
+    // likely just woke, so give it a fresh copy of everything outstanding.
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") this.resendPending();
+      }, { signal: this.abort.signal });
+    }
+  }
+
+  /** Re-publish every unanswered request now (same ids, so no duplicate prompts). */
+  resendPending(): void {
+    for (const publish of this.republish.values()) void publish().catch(() => undefined);
   }
 
   /** Open the session-lived response subscription and pump it forever. */
@@ -110,66 +135,76 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
     }
     if (typeof response?.id !== "string") return;
     const rpc = this.pending.get(response.id);
-    if (!rpc) return; // Stale/foreign response (e.g. a retried attempt's twin).
+    if (!rpc) return; // Stale/foreign: settled already (a re-published copy's second answer).
     this.pending.delete(response.id);
     rpc.resolve(response);
   }
 
-  /** RPC with retries on silence/publish failure only — a user rejection must not re-prompt. */
+  /**
+   * One RPC under one request id, re-published every `attemptTimeoutMs` while
+   * unanswered. A bunker error (a rejection) fails at once and is never re-asked.
+   */
   private async cmd(method: string, params: string[]): Promise<string> {
     await this.ready;
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= this.attempts; attempt++) {
-      const t0 = Date.now();
-      logSync("nip46", `→ ${method}${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
-      try {
-        const result = await this.attemptOnce(method, params);
-        logSync("nip46", `← ${method} ok in ${Date.now() - t0}ms${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
-        return result;
-      } catch (err) {
-        if (err instanceof BunkerResponseError) {
-          logSync("nip46", `✗ ${method} rejected by bunker in ${Date.now() - t0}ms: ${err.message}`);
-          throw err;
-        }
-        lastErr = err;
-        logSync(
-          "nip46",
-          `✗ ${method} attempt ${attempt}/${this.attempts} failed in ${Date.now() - t0}ms: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    throw lastErr;
-  }
-
-  private async attemptOnce(method: string, params: string[]): Promise<string> {
     const request: NostrConnectRequest = { id: crypto.randomUUID(), method, params };
-    const event = await this.clientSigner.signEvent({
-      kind: NIP46_KIND,
-      content: await this.clientSigner.nip44!.encrypt(this.bunkerPubkey, JSON.stringify(request)),
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [["p", this.bunkerPubkey]],
-    });
-
+    const budgetMs = method === "sign_event" ? this.signTimeoutMs : this.attemptTimeoutMs * this.attempts;
+    const t0 = Date.now();
+    const deadline = t0 + budgetMs;
     const response = new Promise<NostrConnectResponse>((resolve) => {
       this.pending.set(request.id, { resolve, method });
     });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`NIP-46 ${method} timed out after ${this.attemptTimeoutMs}ms`)),
-        this.attemptTimeoutMs,
-      );
-    });
-    try {
-      // The persistent sub is already live, so the response can't be missed.
+    let copies = 0;
+    const publish = async () => {
+      copies++;
+      const event = await this.clientSigner.signEvent({
+        kind: NIP46_KIND,
+        content: await this.clientSigner.nip44!.encrypt(this.bunkerPubkey, JSON.stringify(request)),
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [["p", this.bunkerPubkey]],
+      });
       await this.transport.event(event, { signal: AbortSignal.timeout(this.attemptTimeoutMs) });
-      const { result, error } = await Promise.race([response, timeout]);
-      if (error) throw new BunkerResponseError(error);
-      if (typeof result !== "string") throw new BunkerResponseError("malformed NIP-46 response");
-      return result;
+    };
+    this.republish.set(request.id, publish);
+    logSync("nip46", `→ ${method} ${request.id.slice(0, 8)}`);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      let lastErr: unknown;
+      for (;;) {
+        try {
+          await publish();
+          lastErr = undefined;
+        } catch (err) {
+          lastErr = err;
+          logSync("nip46", `✗ ${method} publish failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        const wait = Math.min(this.attemptTimeoutMs, deadline - Date.now());
+        const outcome = await Promise.race([
+          response,
+          new Promise<undefined>((r) => {
+            timer = setTimeout(() => r(undefined), Math.max(0, wait));
+          }),
+        ]);
+        clearTimeout(timer);
+        if (outcome) {
+          const { result, error } = outcome;
+          if (error) {
+            logSync("nip46", `✗ ${method} rejected by bunker in ${Date.now() - t0}ms: ${error}`);
+            throw new BunkerResponseError(error);
+          }
+          if (typeof result !== "string") throw new BunkerResponseError("malformed NIP-46 response");
+          logSync("nip46", `← ${method} ok in ${Date.now() - t0}ms (${copies} cop${copies === 1 ? "y" : "ies"})`);
+          return result;
+        }
+        if (Date.now() >= deadline) {
+          logSync("nip46", `✗ ${method} unanswered after ${Date.now() - t0}ms (${copies} copies)`);
+          throw lastErr ?? new Error(`NIP-46 ${method} timed out after ${budgetMs}ms`);
+        }
+        logSync("nip46", `… ${method} unanswered after ${Date.now() - t0}ms, re-publishing`);
+      }
     } finally {
       clearTimeout(timer);
       this.pending.delete(request.id);
+      this.republish.delete(request.id);
     }
   }
 

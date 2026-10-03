@@ -107,6 +107,40 @@ describe("signerWithNudge", () => {
     await assertion;
   });
 
+  it("tells a NIP-46 user where to approve, with no link into the signer app", async () => {
+    await vi.advanceTimersByTimeAsync(9_000);
+    const { upstream, gate } = makeUpstream();
+    const wrapped = signerWithNudge(upstream, () => true, { remote: true, hardTimeoutMs: 300_000 });
+
+    const p = wrapped.signEvent({ ...TEMPLATE, kind: 20013 });
+    await vi.advanceTimersByTimeAsync(4_000);
+    const call = toastMock.mock.calls.at(-1)![0] as { title: string; duration: number; description: { props: { description: string } } };
+    expect(call.title).toBe("Approve community activity");
+    expect(call.description.props.description).toMatch(/Always/);
+    // The toast lasts as long as the request may.
+    expect(call.duration).toBe(300_000);
+    // A bare `nostrsigner:` is what Amber reports as a malformed request.
+    expect(JSON.stringify(call.description.props)).not.toMatch(/nostrsigner/);
+
+    gate.resolve();
+    await expect(p).resolves.toBeTruthy();
+  });
+
+  it("lets a NIP-46 signature wait past the 65s fence, up to its own", async () => {
+    await vi.advanceTimersByTimeAsync(9_000);
+    const { upstream, gate } = makeUpstream();
+    const wrapped = signerWithNudge(upstream, () => true, { remote: true, hardTimeoutMs: 300_000 });
+
+    const p = wrapped.signEvent(TEMPLATE);
+    let settled = false;
+    void p.then(() => (settled = true), () => (settled = true));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(settled).toBe(false);
+
+    gate.resolve(); // approved two minutes in
+    await expect(p).resolves.toMatchObject({ id: "x" });
+  });
+
   it("propagates underlying signer errors", async () => {
     const { upstream, gate } = makeUpstream();
     const wrapped = signerWithNudge(upstream);

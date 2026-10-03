@@ -10,7 +10,7 @@ import {
   NSecSignerBtc,
   NBrowserSignerBtc,
 } from "@/lib/bitcoin-signers";
-import { Nip46Signer } from "@/lib/nip46Signer";
+import { NIP46_SIGN_TIMEOUT_MS, Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { signerWithNudge } from "@/lib/signerWithNudge";
 import { logSync } from "@/lib/syncLog";
@@ -35,7 +35,16 @@ export function useCurrentUser() {
       new NUser(
         user.method,
         user.pubkey,
-        signerWithNudge(new AppSigner(user.signer, user.pubkey), isBunkerConnected),
+        signerWithNudge(
+          new AppSigner(user.signer, user.pubkey),
+          isBunkerConnected,
+          // A NIP-46 or NIP-55 signature may wait on the user approving it in the signer app.
+          user.method === "bunker"
+            ? { remote: true, hardTimeoutMs: NIP46_SIGN_TIMEOUT_MS + 10_000 }
+            : user.method === "x-android-signer"
+              ? { hardTimeoutMs: NIP46_SIGN_TIMEOUT_MS + 10_000 }
+              : undefined,
+        ),
       ),
     [],
   );
