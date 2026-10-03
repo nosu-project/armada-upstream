@@ -3,7 +3,11 @@
  * paints before the key-derivation chain resolves (seeded from the route's
  * channel id on first render).
  *
- * - Seeded STALE, so the real store read still runs.
+ * - Seeded STALE, so the real store read still runs, and that read REPLACES the
+ *   seed ({@link takeSnapshotSeed}) rather than merging into it: a row the store
+ *   doesn't hold must not outlive the reload that restored it.
+ * - Never holds an unsealed send: it was never a message, and `outgoing.ts`
+ *   owns it until it is one.
  * - Never overwrites a populated cache (re-checked after the KV await).
  * - Rows filtered to their claimed channel id.
  * - Moderation is applied live by `foldTimeline`, not baked in.
@@ -12,6 +16,7 @@
  * SCOPED BY VIEWER, load-bearing: this cache is read before any key proves
  * membership, so without the pubkey key another account could read it.
  */
+import { isUnsealedRow } from "@/concord/lib/outgoing";
 import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
 import { perfMark } from "@/lib/perf";
 
@@ -26,6 +31,8 @@ function snapKey(viewerPubkey: string, channelIdHex: string): string {
 
 const prewarmed = new Set<string>();
 const lastWritten = new Map<string, string>();
+/** Channels whose cache currently holds a snapshot seed no store read has replaced yet. */
+const seeded = new Set<string>();
 
 /** Seed `queryKey` from the snapshot unless the cache has data. */
 export async function prewarmTimelineSnapshot(
@@ -43,12 +50,13 @@ export async function prewarmTimelineSnapshot(
     perfMark("snap.prewarm", `${channelIdHex.slice(0, 8)} miss`);
     return;
   }
-  const own = snap.filter((m) => m.channelIdHex === channelIdHex);
+  const own = snap.filter((m) => m.channelIdHex === channelIdHex && !isUnsealedRow(m));
   if (own.length === 0) return;
   // The real store read may have landed meanwhile; it wins.
   if ((queryClient.getQueryData<OpenedChat[]>(queryKey)?.length ?? 0) > 0) return;
   // Stale on arrival: a first frame, never an answer.
   queryClient.setQueryData<OpenedChat[]>(queryKey, own, { updatedAt: Date.now() - 60_000 });
+  seeded.add(key);
   perfMark("snap.prewarm", `${channelIdHex.slice(0, 8)} seeded ${own.length} row(s)`);
 }
 
@@ -57,9 +65,10 @@ export function persistTimelineSnapshot(
   channelIdHex: string,
   window: OpenedChat[],
 ): Promise<void> {
-  if (window.length === 0) return Promise.resolve();
+  const sealed = window.filter((m) => !isUnsealedRow(m));
+  if (sealed.length === 0) return Promise.resolve();
   const key = snapKey(viewerPubkey, channelIdHex);
-  const newest = [...window].sort((a, b) => b.ms - a.ms).slice(0, SNAP_WINDOW);
+  const newest = sealed.sort((a, b) => b.ms - a.ms).slice(0, SNAP_WINDOW);
   const serialized = encode(newest);
   if (lastWritten.get(key) === serialized) return Promise.resolve();
   const firstWrite = !lastWritten.has(key);
@@ -68,7 +77,14 @@ export function persistTimelineSnapshot(
   return writeFolded(key, newest);
 }
 
+/** Whether the cache holds an unreplaced snapshot seed; true at most once per seed. */
+export function takeSnapshotSeed(viewerPubkey: string | undefined, channelIdHex: string): boolean {
+  if (!viewerPubkey) return false;
+  return seeded.delete(snapKey(viewerPubkey, channelIdHex));
+}
+
 export function _resetTimelineSnapshotForTests(): void {
   prewarmed.clear();
   lastWritten.clear();
+  seeded.clear();
 }

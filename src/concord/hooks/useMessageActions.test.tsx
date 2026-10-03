@@ -31,6 +31,11 @@ import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/l
 import type { Channel, Community } from "@/concord/lib/types";
 import type { SendStatus } from "@/hooks/useSendStatusMap";
 
+import { getOutgoing, outgoingReady, outgoingStatus, putOutgoing, withoutMsTag } from "@/concord/lib/outgoing";
+import { _setVerifyDelayForTests } from "@/concord/lib/outgoingVerify";
+
+_setVerifyDelayForTests(50);
+
 import { broadcastWrap, channelKey, useMessageActions } from "./useChannel";
 
 const CID = "cc".repeat(32);
@@ -42,7 +47,6 @@ const root = new Uint8Array(32).fill(3);
 const h = vi.hoisted(() => ({
   pool: undefined as unknown,
   user: undefined as unknown,
-  status: {} as Record<string, SendStatus>,
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: h.pool }) }));
@@ -52,16 +56,6 @@ vi.mock("@/concord/hooks/useControlPlane", () => ({
   useDissolved: () => ({ data: null }),
   citationFor: () => undefined,
   dissolvedAt: async () => undefined,
-}));
-vi.mock("@/hooks/useSendStatusMap", () => ({
-  useSendStatusMap: () => ({
-    status: h.status,
-    setStatus: (id: string, value: SendStatus | undefined) => {
-      if (value === undefined) delete h.status[id];
-      else h.status[id] = value;
-    },
-  }),
-  useSendStatusMapValue: () => h.status,
 }));
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -87,6 +81,12 @@ function signer(sk = generateSecretKey()) {
 class CapturingRelay {
   sent: NostrEvent[] = [];
   reject = false;
+  /** The read-back: serves what was accepted. */
+  async query(filters: Array<{ ids?: string[] }>): Promise<NostrEvent[]> {
+    if (this.reject) return [];
+    const ids = new Set(filters.flatMap((f) => f.ids ?? []));
+    return this.sent.filter((e) => ids.has(e.id));
+  }
   async event(ev: NostrEvent): Promise<void> {
     this.sent.push(ev);
     if (this.reject) throw new Error("rejected");
@@ -131,10 +131,37 @@ async function failedRow(
 }
 
 afterEach(() => {
-  h.status = {};
   h.pool = undefined;
   h.user = undefined;
 });
+
+/** A persisted failed send for `row`, as an earlier attempt left it. */
+async function recordFailed(row: OpenedChat, viewer: string): Promise<void> {
+  await outgoingReady();
+  putOutgoing(
+    {
+      rumorId: row.rumorId,
+      viewer,
+      communityIdHex: CID,
+      channelIdHex: row.channelIdHex,
+      kind: row.kind,
+      content: row.content,
+      tags: withoutMsTag(row.tags),
+      ms: row.ms,
+      createdAt: row.createdAt,
+      epoch: String(row.epoch),
+      state: "failed",
+      relays: [RELAY],
+      updatedAt: Date.now(),
+    },
+    false,
+  );
+}
+
+const statusOf = (id: string) => {
+  const rec = getOutgoing(id);
+  return rec && outgoingStatus(rec);
+};
 
 // ── retry (bug #1) ───────────────────────────────────────────────────────────
 
@@ -150,7 +177,7 @@ describe("useMessageActions.retry", () => {
     const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
     const { queryClient, wrapper } = makeWrapper();
     queryClient.setQueryData(channelKey(idHex), [row]);
-    h.status[row.rumorId] = "failed";
+    await recordFailed(row, alice.pubkey);
 
     const { result } = renderHook(() => useMessageActions(community, channel), { wrapper });
     act(() => result.current.retry(row.rumorId));
@@ -159,8 +186,8 @@ describe("useMessageActions.retry", () => {
     // The re-broadcast wrap opens to the SAME rumor id — not a fresh one.
     const reopened = await openChatBatch(relay.sent, channel);
     expect(reopened.map((m) => m.rumorId)).toEqual([row.rumorId]);
-    // And the relay's accept retires the failed badge.
-    await waitFor(() => expect(h.status[row.rumorId]).toBeUndefined());
+    // And the relay's accept retires the failed badge (the record is gone).
+    await waitFor(() => expect(getOutgoing(row.rumorId)).toBeUndefined());
   });
 
   it("re-asserts failed when the retry also finds no relay", async () => {
@@ -175,13 +202,13 @@ describe("useMessageActions.retry", () => {
     const community = { idHex: CID, relays: [RELAY] } as unknown as Community;
     const { queryClient, wrapper } = makeWrapper();
     queryClient.setQueryData(channelKey(idHex), [row]);
-    h.status[row.rumorId] = "failed";
+    await recordFailed(row, alice.pubkey);
 
     const { result } = renderHook(() => useMessageActions(community, channel), { wrapper });
     act(() => result.current.retry(row.rumorId));
 
     await waitFor(() => expect(relay.sent.length).toBe(1));
-    await waitFor(() => expect(h.status[row.rumorId]).toBe("failed"));
+    await waitFor(() => expect(statusOf(row.rumorId)).toBe("failed"));
     // The row is preserved (same id), never dropped for a fresh send.
     const rows = (queryClient.getQueryData(channelKey(idHex)) ?? []) as OpenedChat[];
     expect(rows.map((m) => m.rumorId)).toEqual([row.rumorId]);
@@ -207,6 +234,38 @@ describe("broadcastWrap", () => {
     broadcastWrap(nostr, ["wss://a", "wss://b"], wrap, "nsec", (s) => seen.push(s));
     await waitFor(() => expect(seen).toContain("failed"));
     expect(seen[seen.length - 1]).toBe("failed");
+  });
+
+  it("counts a `duplicate:` rejection as delivered: the relay already holds it", async () => {
+    const nostr = { relay: () => ({ event: () => Promise.reject(new Error("duplicate: already have this event")) }) };
+    const seen: Array<SendStatus | undefined> = [];
+    broadcastWrap(nostr, ["wss://a"], wrap, "nsec", (s) => seen.push(s));
+    await waitFor(() => expect(seen).toContain(undefined));
+    expect(seen).not.toContain("failed");
+  });
+
+  it("re-sends a delivered wrap once to a relay that never answered, not to one that refused", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const nostr = {
+        relay: (url: string) => ({
+          event: () => {
+            calls.push(url);
+            if (url === "wss://ok") return Promise.resolve();
+            if (url === "wss://refuses") return Promise.reject(new Error("blocked: not allowed"));
+            return Promise.reject(new Error("The operation was aborted due to timeout"));
+          },
+        }),
+      };
+      broadcastWrap(nostr, ["wss://ok", "wss://refuses", "wss://silent"], wrap, "nsec", () => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual(["wss://ok", "wss://refuses", "wss://silent"]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(calls.slice(3)).toEqual(["wss://silent"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks failed immediately when there are no relays", () => {

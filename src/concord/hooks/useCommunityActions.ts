@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { removeCommunityLocally, useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useControlFold, citationFor, invalidateControl, markDissolvedLocally, probeCommunityDissolved, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
-import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord/lib/guestbook";
+import { attemptGuestbookJoin, forgetGuestbookJoin, queueGuestbookJoin } from "@/concord/lib/pendingGuestbookJoin";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRemoveRailKey } from "@/hooks/useRemoveRailKey";
@@ -36,6 +36,7 @@ import {
 import { KIND_INVITE_BUNDLE, VSK_INVITE_REVOKED } from "@/concord/lib/kinds";
 import {
   claimPendingJoinRun,
+  releasePendingJoinRun,
   forgetPendingJoin,
   hasPendingJoin,
   hydratePendingJoins,
@@ -544,13 +545,8 @@ export function useCommunityActions() {
         }).catch(() => undefined);
       }
 
-      void (async () => {
-        const rumor = buildJoinRumor(user.pubkey, Date.now());
-        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
-        await Promise.allSettled(
-          community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-        );
-      })().catch(() => undefined);
+      queueGuestbookJoin({ viewer: user.pubkey, communityIdHex: community.idHex, ms: Date.now() });
+      void attemptGuestbookJoin(nostr, community, user.signer, user.pubkey);
 
       return { communityId: community.idHex, name: trimmed };
     },
@@ -600,20 +596,15 @@ export function useCommunityActions() {
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
       if (!isLive(list, bundle.community_id)) return { communityId: bundle.community_id, name: bundle.name };
 
-      // Best-effort Guestbook Join (CORD-02 §5 / CORD-05 §1). Re-check walk-away
-      // after each await: a Join after a Leave would read as joined. Awaited here
-      // because the pending record is forgotten once this returns.
+      // Guestbook Join (CORD-02 §5 / CORD-05 §1), recorded before the signer is
+      // asked so a signer or relay that fails it is retried (`pendingGuestbookJoin`),
+      // not dropped. A Leave forgets the record, so it never goes out after one.
       if (community && !walkedAway()) {
         const attribution = bundle.creator_npub
           ? { creator: bundle.creator_npub, label: bundle.label }
           : undefined;
-        const rumor = buildJoinRumor(user.pubkey, entry.added_at, attribution);
-        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer).catch(() => undefined);
-        if (wrap && !walkedAway()) {
-          void Promise.allSettled(
-            community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-          );
-        }
+        queueGuestbookJoin({ viewer: user.pubkey, communityIdHex: community.idHex, ms: entry.added_at, attribution });
+        void attemptGuestbookJoin(nostr, community, user.signer, user.pubkey);
       }
 
       return { communityId: bundle.community_id, name: bundle.name };
@@ -637,6 +628,8 @@ export function useCommunityActions() {
       .catch(async (e) => {
         const rejected = isJoinRejected(e);
         const gaveUp = !rejected && (await recordPendingJoinFailure(pubkey, communityId));
+        // Transient (a signer still awaiting approval, slow relays): this session may retry.
+        if (!rejected && !gaveUp) releasePendingJoinRun(pubkey, communityId);
         logSync(
           "list2",
           `pending join ${communityId.slice(0, 8)} ${rejected ? "refused" : gaveUp ? "failed, given up on" : "failed, kept for retry"}: ${e instanceof Error ? e.message : String(e)}`,
@@ -692,7 +685,10 @@ export function useCommunityActions() {
   };
 }
 
-/** Resume pending joins from a previous launch (pendingJoins.ts), once per session. */
+/** How often an in-session failed pending join is tried again. */
+const PENDING_JOIN_RETRY_MS = 2 * 60_000;
+
+/** Resume pending joins from a previous launch (pendingJoins.ts), and retry this session's failed ones. */
 export function useResumePendingJoins(): void {
   const { user } = useCurrentUser();
   const { settleJoin } = useCommunityActions();
@@ -704,24 +700,35 @@ export function useResumePendingJoins(): void {
   useEffect(() => {
     if (!pubkey || !canWrite) return;
     let cancelled = false;
-    void hydratePendingJoins(pubkey).then(() => {
-      if (cancelled) return;
-      for (const entry of takeExpiredPendingJoins(pubkey)) {
-        logSync("list2", `pending join ${entry.community_id.slice(0, 8)} past its retry bound, given up on`);
-        toastJoinAbandoned(entry.current.name);
-      }
-      for (const entry of pendingJoinEntriesFor(pubkey)) {
-        if (!claimPendingJoinRun(pubkey, entry.community_id)) continue;
-        const invite = typeof entry.invite_ref === "string" ? parseInviteLink(entry.invite_ref) : undefined;
-        if (!invite) {
-          void forgetPendingJoin(pubkey, entry.community_id);
-          continue;
+    const resume = () =>
+      void hydratePendingJoins(pubkey).then(() => {
+        if (cancelled) return;
+        for (const entry of takeExpiredPendingJoins(pubkey)) {
+          logSync("list2", `pending join ${entry.community_id.slice(0, 8)} past its retry bound, given up on`);
+          toastJoinAbandoned(entry.current.name);
         }
-        settleRef.current(invite, entry.community_id, entry.current.name, true);
-      }
-    });
+        for (const entry of pendingJoinEntriesFor(pubkey)) {
+          if (!claimPendingJoinRun(pubkey, entry.community_id)) continue;
+          const invite = typeof entry.invite_ref === "string" ? parseInviteLink(entry.invite_ref) : undefined;
+          if (!invite) {
+            void forgetPendingJoin(pubkey, entry.community_id);
+            continue;
+          }
+          settleRef.current(invite, entry.community_id, entry.current.name, true);
+        }
+      });
+    resume();
+    // A chain that failed this session (a signer awaiting approval) is retried
+    // when the user comes back — likely from approving it — and on a slow timer.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resume();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(resume, PENDING_JOIN_RETRY_MS);
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(timer);
     };
   }, [pubkey, canWrite]);
 }
@@ -746,6 +753,7 @@ export function useCommunityManagement(community: Community | undefined) {
       // The local tombstone is authoritative and on disk now. Walk away from any
       // pending join too, or its chain would re-add membership.
       await forgetPendingJoin(user.pubkey, communityId);
+      forgetGuestbookJoin(user.pubkey, communityId);
       await removeCommunityLocally(queryClient, user.pubkey, communityId, removedAt);
       // Follows the local leave so a rejoin doesn't land back in the old folder.
       removeRailKey(`c2:${communityId}`);
@@ -1381,18 +1389,14 @@ export function useStrandedRecovery(
       queryClient.invalidateQueries({ queryKey: ["concord", "list"] });
 
       // The stranded Join went to the superseded Guestbook; announce on the new one.
-      void (async () => {
-        const rehydrated = rehydrateCommunity(fresh);
-        if (!rehydrated) return;
+      const rehydrated = rehydrateCommunity(fresh);
+      if (rehydrated) {
         const attribution = bundle.creator_npub
           ? { creator: bundle.creator_npub, label: bundle.label }
           : undefined;
-        const rumor = buildJoinRumor(user.pubkey, Date.now(), attribution);
-        const wrap = await sealGuestbook(rumor, currentGuestbookGroup(rehydrated), user.signer);
-        await Promise.allSettled(
-          rehydrated.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-        );
-      })().catch(() => undefined);
+        queueGuestbookJoin({ viewer: user.pubkey, communityIdHex: rehydrated.idHex, ms: Date.now(), attribution });
+        void attemptGuestbookJoin(nostr, rehydrated, user.signer, user.pubkey);
+      }
       return true;
     } catch {
       // A revoked link can never heal this; only a fresh invite can.

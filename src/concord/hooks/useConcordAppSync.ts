@@ -196,7 +196,7 @@ export function useConcordAppSync(
           channelIdHex: channel.idHex,
           epoch: channel.current.epoch,
         },
-      ]);
+      ], { local: true });
       await Promise.allSettled(
         community.relays.map((url) =>
           nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) }),

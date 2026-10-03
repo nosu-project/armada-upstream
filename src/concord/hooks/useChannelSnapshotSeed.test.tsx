@@ -1,18 +1,13 @@
 /**
- * The `/m/<id>` focus read and the channel's own window read race, and the
- * focus read is the one that wins: it is a by-ids lookup while the window read
- * pages `WINDOW_SIZE` rumors and folds them.
- *
- * That ordering must not be observable. `isLoading` is the caller's skeleton,
- * and dropping it early publishes a timeline holding ONE row — which
- * MessageTimeline pins to the bottom, satisfying the permalink against a
- * dataset that is about to be replaced. When the real window lands the reader
- * is at the newest message: exactly the jump the permalink exists to prevent.
+ * The first store read after a snapshot seed REPLACES the seed. A seeded row
+ * the store doesn't hold was never stored — the optimistic copy of a send whose
+ * signer never answered — and merging kept it forever, reading as sent.
+ * Without a seed, the cache is still merged into (live rows, scrolled pages).
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 
@@ -25,10 +20,11 @@ const CHANNEL_ID = "aa".repeat(32);
 const CID = "cc".repeat(32);
 
 const h = vi.hoisted(() => ({
-  /** Resolves the channel's window read, so the race can be run either way. */
-  releaseWindow: () => {},
   window: [] as unknown[],
   focus: [] as unknown[],
+  /** What the snapshot seeds into the cache, and whether a seed is pending. */
+  seed: [] as unknown[],
+  seeded: false,
   fold: { roster: { roles: [], grants: [] }, ownerHex: "", banned: new Set<string>(), heads: new Map(), signals: new Map() },
 }));
 
@@ -43,10 +39,18 @@ vi.mock("@/concord/hooks/useControlPlane", () => ({
 vi.mock("@/concord/hooks/usePause", () => ({ useActivePause: () => undefined }));
 vi.mock("@/concord/hooks/timelineSnapshot", () => ({
   persistTimelineSnapshot: async () => undefined,
-  prewarmTimelineSnapshot: async () => undefined,
-  takeSnapshotSeed: () => false,
+  prewarmTimelineSnapshot: async (qc: QueryClient, _viewer: string, _channel: string, key: readonly unknown[]) => {
+    if (h.seed.length === 0) return;
+    qc.setQueryData(key, h.seed, { updatedAt: Date.now() - 60_000 });
+    h.seeded = true;
+  },
+  takeSnapshotSeed: () => {
+    const was = h.seeded;
+    h.seeded = false;
+    return was;
+  },
 }));
-vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefined }) }));
+vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: "b".repeat(64) } }) }));
 vi.mock("@/concord/lib/channelSync", () => ({
   LOAD_OLDER_MAX_PAGES: 3,
   backfillStore: async () => ({ events: [], exhausted: true }),
@@ -68,10 +72,7 @@ vi.mock("@/concord/lib/rumorStore", () => ({
   peekPendingWraps: async () => [],
   queryChannelFirstSeen: async () => new Map(),
   queryChannelFirstSeenCached: async () => new Map(),
-  queryChannelRumors: () =>
-    new Promise((resolve) => {
-      h.releaseWindow = () => resolve(h.window);
-    }),
+  queryChannelRumors: async () => h.window,
   queryChannelRumorsByIds: async () => h.focus,
   readStreamCursor: async () => undefined,
   sweepExpiredCommunityRumors: async () => undefined,
@@ -79,7 +80,7 @@ vi.mock("@/concord/lib/rumorStore", () => ({
   writeRumors: () => true,
 }));
 
-import { useChannelTimeline } from "./useChannel";
+import { channelKey, useChannelTimeline } from "./useChannel";
 
 function chat(id: string, ms: number): OpenedChat {
   return {
@@ -112,56 +113,39 @@ function wrapperFor(client: QueryClient) {
   );
 }
 
-describe("useChannelTimeline focus hydration", () => {
-  it("holds the skeleton until the window read lands, however the race falls", async () => {
-    const target = chat("01", 1_000_000);
-    h.focus = [target];
-    h.window = [chat("02", 5_000_000), chat("03", 6_000_000), chat("04", 7_000_000)];
+beforeEach(() => {
+  h.seed = [];
+  h.seeded = false;
+});
+
+describe("useChannelTimeline after a snapshot seed", () => {
+  it("drops a seeded row the store never held", async () => {
+    const stored = [chat("01", 1_000_000), chat("02", 2_000_000)];
+    const ghost = { ...chat("99", 3_000_000), wrapId: "" };
+    h.window = stored;
+    h.seed = [...stored, ghost];
 
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { result } = renderHook(
-      () => useChannelTimeline(community, channel, CHANNEL_ID, { messageId: target.rumorId }),
-      { wrapper: wrapperFor(client) },
+    const { result } = renderHook(() => useChannelTimeline(community, channel, CHANNEL_ID), {
+      wrapper: wrapperFor(client),
+    });
+
+    await waitFor(() =>
+      expect(result.current.raw.map((m) => m.rumorId)).toEqual(stored.map((m) => m.rumorId)),
     );
-
-    // The by-ids lookup resolves first — it reads one row while the window
-    // read pages a hundred and folds them.
-    await waitFor(() => expect(result.current.raw.map((m) => m.rumorId)).toContain(target.rumorId));
-
-    // Publishing now would hand MessageTimeline a one-row timeline. The
-    // channel's own read has not returned, so this is still loading.
-    expect(result.current.isLoading).toBe(true);
-
-    h.releaseWindow();
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    // …and when it does clear, the focused row is there beside the window.
-    expect(result.current.raw).toHaveLength(4);
-    expect(result.current.raw.map((m) => m.rumorId)).toContain(target.rumorId);
   });
 
-  it("retains the visited row in the channel cache after `/m/` clears", async () => {
-    const target = chat("11", 1_000_000);
-    h.focus = [target];
-    h.window = [chat("12", 5_000_000), chat("13", 6_000_000)];
+  it("still merges into a cache no snapshot seeded", async () => {
+    const live = chat("50", 5_000_000);
+    h.window = [chat("01", 1_000_000)];
 
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { result, rerender } = renderHook(
-      ({ messageId }: { messageId?: string }) =>
-        useChannelTimeline(community, channel, CHANNEL_ID, { messageId }),
-      {
-        initialProps: { messageId: target.rumorId as string | undefined },
-        wrapper: wrapperFor(client),
-      },
-    );
+    client.setQueryData(channelKey(CHANNEL_ID), [live]);
+    const { result } = renderHook(() => useChannelTimeline(community, channel, CHANNEL_ID), {
+      wrapper: wrapperFor(client),
+    });
 
-    await waitFor(() => expect(result.current.raw.map((m) => m.rumorId)).toContain(target.rumorId));
-    h.releaseWindow();
-    await waitFor(() => expect(result.current.raw).toHaveLength(3));
-
-    // Sending a message drops the segment. The row the reader is parked at
-    // must not vanish with it — the focus query is keyed by id, so retention
-    // is the channel cache's job.
-    rerender({ messageId: undefined });
-    expect(result.current.raw.map((m) => m.rumorId)).toContain(target.rumorId);
+    await waitFor(() => expect(result.current.raw).toHaveLength(2));
+    expect(result.current.raw.map((m) => m.rumorId)).toContain(live.rumorId);
   });
 });

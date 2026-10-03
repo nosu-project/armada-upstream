@@ -10,6 +10,8 @@ import { ScreenSharePicker } from "@/components/ScreenSharePicker";
 import { SyncGate } from "@/components/SyncGate";
 import { LoginSetup } from "@/components/onboarding/LoginSetup";
 import { useResumePendingJoins } from "@/concord/hooks/useCommunityActions";
+import { useResumeOutgoing } from "@/concord/hooks/useResumeOutgoing";
+import { useResumeGuestbookJoins } from "@/concord/hooks/usePendingGuestbookJoin";
 import { useWarmDiscover } from "@/hooks/useDiscover";
 import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
 import { WireSync } from "@/wire/WireSync";
@@ -50,11 +52,19 @@ export function SignedInPushServices() {
 /**
  * Signed-in services that must sit inside `<BrowserRouter>`: the foreground
  * notifier (navigates on click), the Discover directory warm, and resuming
- * interrupted Concord joins (`pendingJoins.ts`).
+ * interrupted Concord joins (`pendingJoins.ts`), their Guestbook Joins
+ * (`pendingGuestbookJoin.ts`) and sends (`outgoing.ts`).
  */
 export function SignedInRouterServices() {
   useForegroundNotifications();
   useWarmDiscover();
   useResumePendingJoins();
+  useResumeOutgoing();
+  // Its own leaf: it reads the live community list, which changes often.
+  return <GuestbookJoinResume />;
+}
+
+function GuestbookJoinResume() {
+  useResumeGuestbookJoins();
   return null;
 }
