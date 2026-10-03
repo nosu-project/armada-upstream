@@ -3,9 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <!-- Content Security Policy, delivered as a meta tag so it applies on every
-         platform. The hosted web build also gets it as a response header from
-         nginx.conf; the two INTERSECT per directive, so a directive loosened
-         here alone still has no effect there. Native has no header at all —
+         platform. armada-stack, which hosts the web build, also sends it as a
+         response header, so it covers every response and not just documents. Native has no header at all —
          Capacitor serves the bundle from https://localhost (Android) and
          capacitor://localhost (iOS), and Electron from app://armada — so this
          tag is the whole policy in those builds.
@@ -18,7 +17,8 @@
          - blob: in worker-src/media-src carries bundled web workers and
            decrypted attachment playback respectively.
          - frame-ancestors is ignored in a meta-delivered policy, so the
-           clickjacking defense lives in nginx.conf only. -->
+           clickjacking defense is the host's: armada-stack adds
+           frame-ancestors 'none' to the header for a policy that names none. -->
     <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' https://www.youtube-nocookie.com https://open.spotify.com https://platform.twitter.com https://www.instagram.com https://streamable.com https://*.iframe.diy; object-src 'none'; font-src 'self' https: data:; base-uri 'self'; manifest-src 'self'; connect-src 'self' blob: https: wss:; img-src 'self' data: blob: https:; media-src 'self' blob: https:" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png" />

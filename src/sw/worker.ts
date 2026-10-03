@@ -12,7 +12,7 @@
  * into the error screen: a stale cached shell referencing old chunk hashes
  * survived even the client's one-time chunk-error recovery reload, on both the
  * hosted web app and inside the Capacitor WebView. HTTP caching of the build
- * (immutable hashed /assets/*, no-cache index.html — see nginx.conf) covers
+ * (immutable hashed /assets/*, revalidated index.html — armada-stack's) covers
  * fast loads without a second, self-managed cache layer that can go stale.
  *
  * This module is the worker's event handling; `sw.ts` is the entry that

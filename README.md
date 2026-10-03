@@ -154,7 +154,10 @@ in `index.html`, which link-preview crawlers read without running scripts.
 - **Desktop** — Electron shell in `electron/`. Bundles the web build and serves
   it over a custom secure scheme. CI produces Linux/Windows/macOS installers on
   tags.
-- **Web** — `Dockerfile` (nginx-served static build) + `nginx.conf`.
+- **Web** — CI publishes the build as an nsite (`scripts/nsite-deploy.sh`).
+  To host it yourself, run armada-stack, which serves that nsite alongside a
+  relay, a Blossom server and a voice broker, and points the app at them
+  through `window.ENV`.
 
 ## License
 
