@@ -42,6 +42,7 @@ import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import {
+  audioDeviceLabel,
   getAudioProcessing,
   rememberVoiceDevice,
   setAudioProcessing,
@@ -87,7 +88,7 @@ function DeviceSelectGroup({
             className="gap-2"
           >
             <Check className={cn("size-3.5 shrink-0", active ? "opacity-100" : "opacity-0")} />
-            <span className="truncate">{device.label || "Unnamed device"}</span>
+            <span className="truncate">{audioDeviceLabel(device, "Unnamed device")}</span>
           </DropdownMenuItem>
         );
       })}

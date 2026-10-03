@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  audioDeviceLabel,
   effectiveAvServers,
   getScreenShareVolume,
   getUserVolume,
@@ -76,5 +77,20 @@ describe("voice playback volumes", () => {
     unsubscribe();
     rememberUserVolume("alice", 1.3);
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("audioDeviceLabel", () => {
+  const dev = (deviceId: string, label: string) => ({ deviceId, label }) as MediaDeviceInfo;
+
+  it("names Android WebView's route choices for what they are", () => {
+    expect(audioDeviceLabel(dev("default", ""), "Unnamed device")).toBe("Automatic");
+    expect(audioDeviceLabel(dev("a1", "Headset earpiece"), "x")).toBe("Phone earpiece");
+    expect(audioDeviceLabel(dev("a2", "Speakerphone"), "x")).toBe("Speakerphone");
+  });
+
+  it("falls back for other unlabeled devices", () => {
+    expect(audioDeviceLabel(dev("a3", ""), "Microphone 2")).toBe("Microphone 2");
+    expect(audioDeviceLabel(dev("default", "Default - USB Mic"), "x")).toBe("Default - USB Mic");
   });
 });

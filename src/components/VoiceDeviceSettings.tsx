@@ -36,13 +36,14 @@ import {
   getPreferredSpeakerId,
   getPreferredVoiceServer,
   preferredVoiceServerOrigin,
+  audioDeviceLabel,
   rememberVoiceDevice,
   setPreferredVoiceServer,
   supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
 
 function deviceLabel(device: MediaDeviceInfo, index: number, kind: string): string {
-  return device.label || `${kind} ${index + 1}`;
+  return audioDeviceLabel(device, `${kind} ${index + 1}`);
 }
 
 /**

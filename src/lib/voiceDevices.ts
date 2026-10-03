@@ -72,6 +72,19 @@ export function supportsSpeakerSelection(): boolean {
   return Boolean(Ctx && "setSinkId" in Ctx.prototype);
 }
 
+/**
+ * Chromium on Android names its route choices itself: the phone's own earpiece
+ * is "Headset earpiece", and the default (which follows a plugged-in headset)
+ * has no label at all.
+ */
+const ROUTE_LABELS: Record<string, string> = { "Headset earpiece": "Phone earpiece" };
+
+/** A device's display name; `fallback` for an unlabeled non-default device. */
+export function audioDeviceLabel(device: MediaDeviceInfo, fallback: string): string {
+  if (device.label) return ROUTE_LABELS[device.label] ?? device.label;
+  return device.deviceId === "default" || device.deviceId === "" ? "Automatic" : fallback;
+}
+
 /** Persist the user's device choice for the given kind. */
 export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): void {
   if (kind === "audioinput") write(MIC_KEY, deviceId);
