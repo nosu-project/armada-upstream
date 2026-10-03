@@ -81,6 +81,7 @@ import {
   subscribeUserVolumes,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
+import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
 import { bytesToBase64 } from "@/lib/fileBytes";
@@ -329,6 +330,12 @@ function AutoRejoin({
   return null;
 }
 
+function CallAudioKeeper() {
+  const room = useRoomContext();
+  useEffect(() => keepCallAudioRunning(room), [room]);
+  return null;
+}
+
 /** `musicHighQuality` (96 kbps) mono, with RED + DTX asserted explicitly in case defaults change. */
 const audioPublishDefaults = {
   audioPreset: AudioPresets.musicHighQuality,
@@ -563,6 +570,7 @@ function VoiceRoomShell({
         onGiveUp={onDisconnected}
       />
       <RoomAudioRenderer />
+      <CallAudioKeeper />
       <CallSoundEffects />
       <MicNoiseProcessor />
       <DesktopPushToTalk />
