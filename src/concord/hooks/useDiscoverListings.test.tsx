@@ -292,18 +292,15 @@ describe("forgetDiscoverAnnouncements", () => {
     const kept = announcementFromEvent(announce(sk, linkUrl().url, 2))!;
     const qc = new QueryClient();
     const infiniteKey = ["discover", "directory-infinite", ["wss://discover.test"]];
-    const flatKey = ["discover", "community-announcements", ["wss://discover.test"], "all"];
     qc.setQueryData<InfiniteData<{ invites: DiscoveredInvite[] }>>(infiniteKey, {
       pages: [{ invites: [gone, kept] }],
       pageParams: [undefined],
     });
-    qc.setQueryData<DiscoveredInvite[]>(flatKey, [gone, kept]);
 
     await forgetDiscoverAnnouncements(qc, [gone.source.id]);
 
     const ids = (invites: DiscoveredInvite[] | undefined) => invites?.map((i) => i.source.id);
     const infinite = qc.getQueryData<InfiniteData<{ invites: DiscoveredInvite[] }>>(infiniteKey)!;
     expect(ids(infinite.pages[0].invites)).toEqual([kept.source.id]);
-    expect(ids(qc.getQueryData<DiscoveredInvite[]>(flatKey))).toEqual([kept.source.id]);
   });
 });
