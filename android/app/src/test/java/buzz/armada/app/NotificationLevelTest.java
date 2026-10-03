@@ -255,6 +255,118 @@ public class NotificationLevelTest {
         assertEquals("kept", values.getJSONObject(0).getString("communityId"));
     }
 
+    // A mute reaches concordSubs only as an OMISSION, which a merge (unready
+    // plane) can't act on, so the level policy rides beside it
+    // (useNativeNotifications.mute.test.ts). These replay the bridge's
+    // concord2Subs write for that payload.
+
+    /** What the service stored before the mute: two Soapbox channels at "all". */
+    private static final String STORED_BEFORE_MUTE =
+            "[{\"communityId\":\"soapbox\",\"channelId\":\"general\",\"mentionOnly\":false,"
+                    + "\"relays\":[\"wss://relay.ditto.pub\"],\"streams\":[{\"pk\":\"g\"}]},"
+                    + "{\"communityId\":\"soapbox\",\"channelId\":\"memes\",\"mentionOnly\":false,"
+                    + "\"relays\":[\"wss://relay.ditto.pub\"],\"streams\":[{\"pk\":\"m\"}]},"
+                    + "{\"communityId\":\"other\",\"channelId\":\"general\",\"mentionOnly\":false,"
+                    + "\"relays\":[\"wss://relay.example\"],\"streams\":[{\"pk\":\"o\"}]}]";
+
+    /** The configure after muting Soapbox: its channels are omitted. */
+    private static final String SENT_AFTER_MUTE =
+            "[{\"communityId\":\"other\",\"channelId\":\"general\",\"mentionOnly\":false,"
+                    + "\"relays\":[\"wss://relay.example\"],\"streams\":[{\"pk\":\"o\"}]}]";
+
+    /** The level policy sent beside it. */
+    private static final String SOAPBOX_MUTED =
+            "{\"default\":\"all\",\"communities\":{\"soapbox\":\"nothing\"},\"channels\":{}}";
+
+    /** ArmadaNotificationPlugin.configure's concord2Subs write, for a same-account configure. */
+    private static String storedAfterConfigure(boolean concordPlaneReady, String levels) {
+        boolean replace = NotificationRelayService.shouldReplaceConfigPlane(true, concordPlaneReady);
+        if (replace) return SENT_AFTER_MUTE;
+        return ArmadaNotificationPlugin.applyConcordLevels(
+                ArmadaNotificationPlugin.withoutCommunities(
+                        ArmadaNotificationPlugin.mergeConcordSubscriptions(STORED_BEFORE_MUTE, SENT_AFTER_MUTE),
+                        ArmadaNotificationPlugin.lowerCaseSet("[]")),
+                SENT_AFTER_MUTE, levels);
+    }
+
+    /** Whether the service would notify for an ordinary (non-mention) message in this channel. */
+    private static boolean notifiesFor(String stored, String community, String channel)
+            throws Exception {
+        org.json.JSONArray subs = new org.json.JSONArray(stored);
+        for (int i = 0; i < subs.length(); i++) {
+            JSONObject sub = subs.getJSONObject(i);
+            if (!community.equals(sub.optString("communityId"))
+                    || !channel.equals(sub.optString("channelId"))) continue;
+            return NotificationRelayService.wantsResolvedGroupMessage(
+                    sub.optBoolean("mentionOnly", false), false);
+        }
+        return false; // no subscription, no stream: the service never sees the wrap
+    }
+
+    @Test public void mutedCommunityStopsNotifyingWhenConcordPlaneReady() throws Exception {
+        String stored = storedAfterConfigure(true, SOAPBOX_MUTED);
+        assertFalse(notifiesFor(stored, "soapbox", "general"));
+        assertFalse(notifiesFor(stored, "soapbox", "memes"));
+        assertTrue(notifiesFor(stored, "other", "general"));
+    }
+
+    @Test public void mutedCommunityStopsNotifyingWhenConcordPlaneUnready() throws Exception {
+        String stored = storedAfterConfigure(false, SOAPBOX_MUTED);
+        assertFalse(notifiesFor(stored, "soapbox", "general"));
+        assertFalse(notifiesFor(stored, "soapbox", "memes"));
+        assertTrue(notifiesFor(stored, "other", "general"));
+    }
+
+    @Test public void unreadyMergeWithoutLevelsKeepsOmittedEntries() throws Exception {
+        // An older WebView sends no policy: the merge stays purely additive.
+        String stored = storedAfterConfigure(false, null);
+        assertTrue(notifiesFor(stored, "soapbox", "general"));
+        assertTrue(notifiesFor(stored, "soapbox", "memes"));
+    }
+
+    @Test public void keptEntriesResolveChannelThenCommunityThenDefault() throws Exception {
+        String levels = "{\"default\":\"nothing\","
+                + "\"communities\":{\"soapbox\":\"mentions\"},"
+                + "\"channels\":{\"soapbox:memes\":\"all\"}}";
+        String stored = storedAfterConfigure(false, levels);
+        org.json.JSONArray subs = new org.json.JSONArray(stored);
+        java.util.Map<String, Boolean> mentionOnly = new java.util.HashMap<>();
+        for (int i = 0; i < subs.length(); i++) {
+            JSONObject sub = subs.getJSONObject(i);
+            mentionOnly.put(sub.getString("communityId") + "/" + sub.getString("channelId"),
+                    sub.optBoolean("mentionOnly", false));
+        }
+        assertEquals(Boolean.TRUE, mentionOnly.get("soapbox/general")); // community: mentions
+        assertEquals(Boolean.FALSE, mentionOnly.get("soapbox/memes"));   // channel: all
+        // Carried by the snapshot, so already resolved: passes through untouched.
+        assertEquals(Boolean.FALSE, mentionOnly.get("other/general"));
+    }
+
+    @Test public void levelKeysMatchCaseInsensitively() throws Exception {
+        JSONObject policy = new JSONObject(
+                "{\"default\":\"all\",\"communities\":{\"abc\":\"nothing\"},\"channels\":{}}");
+        assertEquals("nothing", ArmadaNotificationPlugin.concordLevel(policy, "ABC", "x"));
+        assertEquals("all", ArmadaNotificationPlugin.concordLevel(policy, "def", "x"));
+    }
+
+    @Test public void quietChannelsLoseGitAttachmentsKeptByAMerge() throws Exception {
+        String levels = "{\"default\":\"all\","
+                + "\"communities\":{\"soapbox\":\"nothing\"},"
+                + "\"channels\":{\"other:dev\":\"mentions\"}}";
+        String filtered = ArmadaNotificationPlugin.withoutQuietGitAttachments(
+                "[{\"address\":\"30617:owner:shared\",\"attachments\":["
+                        + "{\"communityId\":\"soapbox\",\"channelId\":\"git\",\"attachedAt\":1},"
+                        + "{\"communityId\":\"other\",\"channelId\":\"git\",\"attachedAt\":1}]},"
+                        + "{\"address\":\"30617:owner:dev\",\"attachments\":["
+                        + "{\"communityId\":\"other\",\"channelId\":\"dev\",\"attachedAt\":1}]}]",
+                levels);
+        org.json.JSONArray values = new org.json.JSONArray(filtered);
+        assertEquals(1, values.length());
+        org.json.JSONArray attachments = values.getJSONObject(0).getJSONArray("attachments");
+        assertEquals(1, attachments.length());
+        assertEquals("other", attachments.getJSONObject(0).getString("communityId"));
+    }
+
     @Test public void leftCommunityGitAttachmentsAreDropped() throws Exception {
         java.util.Set<String> left = ArmadaNotificationPlugin.lowerCaseSet("[\"gone\"]");
         String filtered = ArmadaNotificationPlugin.withoutGitCommunities(

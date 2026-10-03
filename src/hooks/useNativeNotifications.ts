@@ -8,7 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
-import { useNotifLevels } from "@/hooks/useNotifLevels";
+import { concordLevelPolicy, useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
   savePushPrefs,
@@ -396,6 +396,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
     [allConcordSubs, concordChannelLevel],
   );
+  const concordLevels = useMemo(
+    () => concordLevelPolicy(config.notifLevels, config.mutedCommunities, config.mutedChannels, prefs),
+    [config.notifLevels, config.mutedCommunities, config.mutedChannels, prefs],
+  );
   // The route stays local and is never copied into relay filters.
   const gitRepositories = useMemo<GitRepositoryWireInput[]>(() => {
     const byAddress = new Map<string, GitRepositoryWireInput>();
@@ -499,6 +503,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
           mentionOnlyGroupIds,
           prefs: prefsRecord,
           concordSubs,
+          concordLevels,
           dmLevels,
           dmRequests: prefs.dmRequests,
           gitSubs,
@@ -515,7 +520,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
+  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
 
   // Auto-enable on launch only if intended AND already granted; never prompts here (LoginSetup
   // and Settings do).
