@@ -109,6 +109,7 @@ export const AppConfigSchema = z.object({
   blossomServerMetadata: BlossomServerMetadataSchema.catch(defaultConfig.blossomServerMetadata),
   useAppBlossomServers: z.boolean().catch(defaultConfig.useAppBlossomServers),
   appBlossomServers: z.array(z.string()).catch(defaultConfig.appBlossomServers),
+  preferredBlossomServer: z.string().catch(defaultConfig.preferredBlossomServer),
   lastChannelByServer: z.record(z.string(), z.string()).catch({}),
   mutedCommunities: z.array(z.string()).catch([]),
   mutedChannels: z.array(z.string()).catch([]),
@@ -168,6 +169,8 @@ export const MetadataDocSchema = z.looseObject({
   useAppBlossomServers: z.boolean().optional(),
   /** Complete app-provided Blossom server set; replaces the build defaults. */
   appBlossomServers: z.array(z.string()).optional(),
+  /** Blossom server whose URL uploads embed; empty = first to answer. */
+  preferredBlossomServer: z.string().optional(),
   dmTypingIndicators: z.boolean().optional(),
   dmsDisabled: z.boolean().optional(),
   showDmRequests: z.boolean().optional(),

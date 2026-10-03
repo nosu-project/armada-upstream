@@ -1,7 +1,7 @@
 import { createContext } from "react";
 
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
-import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
+import { APP_BLOSSOM_SERVERS, PREFERRED_BLOSSOM_SERVER } from "@/lib/blossom";
 import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
@@ -132,6 +132,12 @@ export interface AppConfig {
   useAppBlossomServers: boolean;
   /** App Blossom servers; seeded only for a fresh config, a synced value replaces them. */
   appBlossomServers: string[];
+  /**
+   * Blossom server whose URL an upload embeds when it takes the blob, the
+   * others becoming `fallback`s; empty = whichever answers first. Seeded from
+   * `PREFERRED_BLOSSOM_SERVER` for a fresh config, like `appBlossomServers`.
+   */
+  preferredBlossomServer: string;
   /**
    * Last open channel per server/community: `relayUrl` → groupId, `c:${communityId}`
    * → channel id hex.
@@ -312,6 +318,7 @@ export const METADATA_CONFIG_KEYS = [
   "useOwnDmRelays",
   "useAppBlossomServers",
   "appBlossomServers",
+  "preferredBlossomServer",
   "dmTypingIndicators",
   "dmsDisabled",
   "showDmRequests",
@@ -397,6 +404,7 @@ export const defaultConfig: AppConfig = {
   blossomServerMetadata: { servers: [], updatedAt: 0 },
   useAppBlossomServers: true,
   appBlossomServers: [...APP_BLOSSOM_SERVERS],
+  preferredBlossomServer: PREFERRED_BLOSSOM_SERVER,
   lastChannelByServer: {},
   mutedCommunities: [],
   mutedChannels: [],
