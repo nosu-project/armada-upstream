@@ -17,6 +17,8 @@ export const CONFIG_NAMES = [
   // Comma-separated write-only relays: published to, never read from.
   "BROADCAST_RELAYS",
   "SEARCH_RELAYS",
+  // Comma-separated default home relays for new Concord communities. Unset/empty = the CORD stock set.
+  "COMMUNITY_RELAYS",
   // Comma-separated NIP-65 indexers used only for bounded login discovery.
   "NIP65_DISCOVERY_RELAYS",
   // NIP-34 repository directory relay. Empty = no directory search.

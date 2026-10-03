@@ -47,3 +47,35 @@ describe("linkPreviewUrl", () => {
     expect(linkPreviewUrl("https://example.com/a")).toBeNull();
   });
 });
+
+describe("COMMUNITY_RELAYS", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  async function load(value?: string) {
+    if (value !== undefined) vi.stubGlobal("window", { ENV: { COMMUNITY_RELAYS: value } });
+    vi.resetModules();
+    const [{ COMMUNITY_RELAYS }, { STOCK_RELAYS }] = await Promise.all([
+      import("./platform"),
+      import("@/concord/lib/stockRelays"),
+    ]);
+    return { COMMUNITY_RELAYS, STOCK_RELAYS };
+  }
+
+  it("defaults to the CORD stock set, unchanged", async () => {
+    const { COMMUNITY_RELAYS, STOCK_RELAYS } = await load();
+    expect(COMMUNITY_RELAYS).toEqual(STOCK_RELAYS);
+  });
+
+  it("falls back to the stock set when set empty", async () => {
+    const { COMMUNITY_RELAYS, STOCK_RELAYS } = await load("");
+    expect(COMMUNITY_RELAYS).toEqual(STOCK_RELAYS);
+  });
+
+  it("takes a deployment's own relays", async () => {
+    const { COMMUNITY_RELAYS } = await load("wss://armada.example.com/, relay.ditto.pub");
+    expect(COMMUNITY_RELAYS).toEqual(["wss://armada.example.com", "wss://relay.ditto.pub"]);
+  });
+});

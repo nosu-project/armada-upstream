@@ -24,6 +24,7 @@ COPY . .
 #   APP_RELAYS            relay.ditto.pub, relay.dreamith.to
 #   BROADCAST_RELAYS      relay.primal.net
 #   SEARCH_RELAYS         relay.ditto.pub, relay.dreamith.to
+#   COMMUNITY_RELAYS      the CORD stock set (stockRelays.ts)
 #   APP_BLOSSOM_SERVERS   blossom.ditto.pub, .dreamith.to, .primal.net
 #   PREFERRED_BLOSSOM_SERVER  empty ⇒ whichever server answers first
 #   SANDBOX_DOMAIN        "iframe.diy"
@@ -37,6 +38,7 @@ ARG APP_NAME
 ARG APP_RELAYS
 ARG BROADCAST_RELAYS
 ARG SEARCH_RELAYS
+ARG COMMUNITY_RELAYS
 ARG APP_BLOSSOM_SERVERS
 ARG PREFERRED_BLOSSOM_SERVER
 ARG CONCORD_AV_SERVERS

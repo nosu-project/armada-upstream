@@ -9,6 +9,7 @@
 import { Capacitor } from "@capacitor/core";
 import { nip19 } from "nostr-tools";
 
+import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { config } from "@/lib/env";
 
 /**
@@ -134,6 +135,17 @@ export const RELAY_LIST_DISCOVERY_RELAYS: string[] = (
   config("NIP65_DISCOVERY_RELAYS")
   ?? "wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social"
 )
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Default home relays for a NEW Concord community. Seeds
+ * `AppConfig.communityRelays`; unset or empty means the CORD stock set, which
+ * an emptied list falls back to anyway. Only this default moves: the stock
+ * set's protocol uses (fragment codec, vault floor, invite fallbacks) don't.
+ */
+export const COMMUNITY_RELAYS: string[] = (config("COMMUNITY_RELAYS") || STOCK_RELAYS.join(","))
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
