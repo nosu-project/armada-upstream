@@ -76,7 +76,7 @@ import { extForMime } from "@/lib/fileBytes";
 import { galleryItemFile, hasMediaGallery, type GalleryItem } from "@/lib/mediaGallery";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
-import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
+import { IMETA_MEDIA_URL_REGEX, mimeFromExt, modelFormat, modelMimeFromExt, type ModelFormat } from "@/lib/mediaUrls";
 import { MAX_ENCRYPTED_BYTES, deviceInputLimit, keepUserFields, mimeOfPicked } from "@/lib/attachmentLimits";
 import { describeRefusal, uploadFailureReason } from "@/lib/blossomPreflight";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
@@ -131,6 +131,21 @@ const emptyHeights = new Map<string, number>();
 function replaceExtension(filename: string, ext: string): string {
   const dot = filename.lastIndexOf(".");
   return (dot > 0 ? filename.slice(0, dot) : filename) + ext;
+}
+
+/** Largest 3D model parsed for a preview still; bigger ones can take the tab down. */
+const MAX_MODEL_PREVIEW_BYTES = 150 * 1024 * 1024;
+
+/** A still of a 3D model, for its imeta `image`/`thumb`. Undefined on any failure, or after 30s. */
+async function renderModelStill(file: File, format: ModelFormat): Promise<Blob | undefined> {
+  if (file.size > MAX_MODEL_PREVIEW_BYTES) return undefined;
+  try {
+    const { renderModelPreview } = await import("@/lib/modelRenderer");
+    const render = file.arrayBuffer().then((data) => renderModelPreview(data, format));
+    return await Promise.race([render, new Promise<undefined>((resolve) => setTimeout(resolve, 30_000, undefined))]);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Concurrent attachment processing/uploads, bounding memory for large batches. */
@@ -957,8 +972,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
 
       // Browsers report "" for some containers (`.avi`), so fall back to the extension.
+      // A 3D model's extension always wins: browsers report nothing or nonsense for them.
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-      const mime = file.type || mimeFromExt(ext);
+      const modelMime = modelMimeFromExt(ext);
+      const mime = modelMime ?? (file.type || mimeFromExt(ext));
+      const model = modelFormat(mime);
       const isImage = mime.startsWith("image/");
       const isVideo = mime.startsWith("video/");
       const isAudio = mime.startsWith("audio/");
@@ -984,11 +1002,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         }
       }
 
-      let uploadableFile = file;
+      // Re-typed so the upload's Content-Type and the encrypted path's `m` carry it.
+      let uploadableFile = modelMime && file.type !== modelMime
+        ? new File([file], file.name, { type: modelMime, lastModified: file.lastModified })
+        : file;
       let resizedDim: string | undefined;
       let video: ProcessedVideo | undefined;
       let audio: AudioMetadata | undefined;
       let audioWaveform: Promise<number[] | undefined> | undefined;
+      let modelStill: Blob | undefined;
 
       if (isImage) {
         const resized = await resizeImage(file);
@@ -1015,6 +1037,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         audio = await readAudioMetadata(file);
         if (audio.cover && !previewUrl && !abort.signal.aborted) {
           previewUrl = URL.createObjectURL(audio.cover);
+          patchPending({ previewUrl });
+        }
+      } else if (model) {
+        modelStill = await renderModelStill(file, model);
+        if (modelStill && !previewUrl && !abort.signal.aborted) {
+          previewUrl = URL.createObjectURL(modelStill);
           patchPending({ previewUrl });
         }
       }
@@ -1057,10 +1085,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       }
       const originalMime = uploadableFile.type || mime;
 
-      // Poster frame: a second blob, referenced as `image`/`thumb`.
+      // Poster frame or model still: a second blob, referenced as `image`/`thumb`.
       let posterFile = video?.poster
         ? new File([video.poster], replaceExtension(uploadableFile.name, ".jpg"), { type: "image/jpeg" })
-        : undefined;
+        : modelStill
+          ? new File([modelStill], replaceExtension(uploadableFile.name, ".png"), { type: "image/png" })
+          : undefined;
 
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
@@ -1074,7 +1104,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         }
       }
 
-      // Poster first: small, and its failure mustn't cost the video.
+      // Poster first: small, and its failure mustn't cost the file.
       let posterUrl: string | undefined;
       if (posterFile) {
         try {
@@ -1088,7 +1118,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       const url = tags[0][1];
 
       // Encrypted: server NIP-94 fields describe the ciphertext; restore the real `m`.
-      if (encryption && originalMime) {
+      // Likewise a model: servers type what they don't recognise as octet-stream.
+      if ((encryption || modelMime) && originalMime) {
         const mTag = tags.find((t) => t[0] === "m");
         if (mTag) mTag[1] = originalMime;
         else tags.push(["m", originalMime]);
