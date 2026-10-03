@@ -23,12 +23,20 @@ function handleBack() {
       // A throwing handler shouldn't trap the user — fall through to the next.
     }
   }
-  // Unconsumed: walk history, or minimize at the root (not exitApp, which kills it).
+  // Unconsumed: walk history, or minimize at the root.
   if (window.history.length > 1) {
     window.history.back();
   } else {
-    void App.minimizeApp().catch(() => undefined);
+    leaveApp();
   }
+}
+
+/**
+ * Background the app, as Android does for back on a root activity (not exitApp,
+ * which kills it). For a handler standing on one of the app's root screens.
+ */
+export function leaveApp(): void {
+  void App.minimizeApp().catch(() => undefined);
 }
 
 export function ensureAndroidBackListener() {

@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The back listener is installed once per module (it dispatches to the
 // handler stack), so this is never cleared between tests.
 const backListeners: Array<() => void> = [];
+const minimizeApp = vi.fn(() => Promise.resolve());
 
 vi.mock("@capacitor/core", async (orig) => {
   const actual = await orig<typeof import("@capacitor/core")>();
@@ -27,7 +28,7 @@ vi.mock("@capacitor/app", () => ({
       if (event === "backButton") backListeners.push(fn);
       return Promise.resolve({ remove: () => undefined });
     },
-    minimizeApp: () => Promise.resolve(),
+    minimizeApp: () => minimizeApp(),
   },
 }));
 vi.mock("@/hooks/useIsMobile", () => ({ useIsTouch: () => true, useIsMobile: () => true }));
@@ -95,6 +96,7 @@ function stubViewport(narrow: boolean) {
 beforeEach(() => {
   // Narrow (mobile) viewport so SwipeReveal enables its drill-down + back handler.
   stubViewport(true);
+  minimizeApp.mockClear();
 });
 
 const overlay = () => screen.queryByTestId("members-overlay");
@@ -151,6 +153,23 @@ describe("useMobileMembersOverlay", () => {
     fireEvent.click(screen.getByText("Members"));
     rerender(<Page communityId="c2" />);
     expect(overlay()).toBeNull();
+  });
+
+  it("back goes chat → list → out of the app, never through earlier chats", async () => {
+    // Earlier communities and chats on the history stack.
+    window.history.pushState({}, "", "/c/earlier");
+    window.history.pushState({}, "", "/c/c1");
+    const back = vi.spyOn(window.history, "back");
+    render(<Page communityId="c1" />);
+
+    await pressBack();
+    expect(chat().dataset.listOpen).toBe("true");
+    expect(minimizeApp).not.toHaveBeenCalled();
+
+    await pressBack();
+    expect(minimizeApp).toHaveBeenCalledTimes(1);
+    expect(back).not.toHaveBeenCalled();
+    back.mockRestore();
   });
 
   it("leaves back alone on the desktop layout", async () => {
