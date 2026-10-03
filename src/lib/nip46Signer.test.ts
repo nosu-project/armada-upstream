@@ -116,14 +116,27 @@ const clientSk = generateSecretKey();
 const bunkerSk = generateSecretKey();
 const bunkerPubkey = getPublicKey(bunkerSk);
 
-function makeSigner(transport: FakeTransport, opts?: { attemptTimeoutMs?: number; attempts?: number }) {
+function makeSigner(
+  transport: FakeTransport,
+  opts?: { attemptTimeoutMs?: number; attempts?: number; signTimeoutMs?: number },
+) {
   return new Nip46Signer({
     transport: transport as unknown as Nip46Transport,
     bunkerPubkey,
     clientSigner: new NSecSigner(clientSk),
     attemptTimeoutMs: opts?.attemptTimeoutMs ?? 200,
     attempts: opts?.attempts ?? 2,
+    signTimeoutMs: opts?.signTimeoutMs,
   });
+}
+
+/** The request ids carried by everything the client published. */
+async function publishedRequestIds(transport: FakeTransport): Promise<string[]> {
+  const bunker = new NSecSigner(bunkerSk);
+  const clientPubkey = getPublicKey(clientSk);
+  return Promise.all(
+    transport.published.map(async (e) => (JSON.parse(await bunker.nip44.decrypt(clientPubkey, e.content)) as BunkerRequest).id),
+  );
 }
 
 const pendingSize = (s: Nip46Signer) =>
@@ -188,6 +201,60 @@ describe("Nip46Signer", () => {
     await expect(signer.ping()).resolves.toBe("pong");
   });
 
+  it("waits for a signature the user approves late, re-publishing ONE request id meanwhile", async () => {
+    const transport = makeFakeTransport();
+    let seen = 0;
+    attachBunker(transport, async (req) => {
+      seen++;
+      if (seen < 4) return null; // queued in the signer app, awaiting the user
+      const tpl = JSON.parse(req.params[0]);
+      return { result: JSON.stringify({ ...tpl, id: "a".repeat(64), pubkey: bunkerPubkey, sig: "b".repeat(128) }) };
+    });
+    // Copies every 100ms; a non-signing RPC would have given up after 2 of them.
+    const signer = makeSigner(transport, { attemptTimeoutMs: 100, attempts: 2, signTimeoutMs: 5_000 });
+
+    const signed = await signer.signEvent({ kind: 20013, content: "seal", tags: [], created_at: 1 });
+    expect(signed.kind).toBe(20013);
+    expect(transport.published.length).toBeGreaterThanOrEqual(4);
+    // Every copy is the same request: a signer queues and notifies it once.
+    expect(new Set(await publishedRequestIds(transport)).size).toBe(1);
+    expect(pendingSize(signer)).toBe(0);
+  });
+
+  it("gives up on a signature after the sign budget", async () => {
+    const transport = makeFakeTransport();
+    attachBunker(transport, async () => null);
+    const signer = makeSigner(transport, { attemptTimeoutMs: 100, signTimeoutMs: 350 });
+
+    const t0 = Date.now();
+    await expect(signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 })).rejects.toThrow(/timed out/);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(340);
+    expect(pendingSize(signer)).toBe(0);
+  });
+
+  it("resendPending re-publishes an outstanding request under its id", async () => {
+    const transport = makeFakeTransport();
+    let answer: (() => void) | undefined;
+    attachBunker(transport, (req) =>
+      transport.published.length < 2
+        ? Promise.resolve(null)
+        : new Promise((r) => (answer = () => r({ result: `ok:${req.method}` }))),
+    );
+    const signer = makeSigner(transport, { attemptTimeoutMs: 60_000, signTimeoutMs: 120_000 });
+
+    const pending = signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(transport.published).toHaveLength(1);
+
+    signer.resendPending();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(transport.published).toHaveLength(2);
+    expect(new Set(await publishedRequestIds(transport)).size).toBe(1);
+    answer?.();
+    await pending;
+    expect(pendingSize(signer)).toBe(0);
+  });
+
   it("republishes a fresh request when an attempt goes unanswered", async () => {
     const transport = makeFakeTransport();
     let calls = 0;
@@ -200,7 +267,9 @@ describe("Nip46Signer", () => {
 
     await expect(signer.ping()).resolves.toBe("recovered");
     expect(transport.published).toHaveLength(2);
+    // A fresh event (relays don't keep ephemeral 24133) for the SAME request.
     expect(transport.published[0].id).not.toBe(transport.published[1].id);
+    expect(new Set(await publishedRequestIds(transport)).size).toBe(1);
     expect(pendingSize(signer)).toBe(0);
   });
 

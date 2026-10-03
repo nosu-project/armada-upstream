@@ -3,10 +3,10 @@ import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { citationFor, dissolvedAt, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
-import { persistTimelineSnapshot, prewarmTimelineSnapshot } from "@/concord/hooks/timelineSnapshot";
+import { persistTimelineSnapshot, prewarmTimelineSnapshot, takeSnapshotSeed } from "@/concord/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useKeyedMemo } from "@/hooks/useKeyedMemo";
-import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
+import type { SendStatus, SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
   buildConcordCommentTags,
   filterEpochCutoff,
@@ -32,7 +32,22 @@ import {
   writeRumors,
   peekPendingWraps,
   ackPendingWraps,
+  removeRumors,
 } from "@/concord/lib/rumorStore";
+import {
+  discardOutgoing,
+  failOutgoing,
+  getOutgoing,
+  outgoingStatusMap,
+  putOutgoing,
+  recordToRow,
+  updateOutgoing,
+  subscribeOutgoing,
+  unsealedOutgoingRows,
+  withoutMsTag,
+  type OutgoingRecord,
+} from "@/concord/lib/outgoing";
+import { isRelayTrusted, verifyOutgoing, type VerifyPool } from "@/concord/lib/outgoingVerify";
 import {
   quarantineMemoryRevision,
   recallQuarantined,
@@ -60,7 +75,6 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 export const channelKey = (channelIdHex: string | null) => ["concord", "channel", channelIdHex] as const;
-const statusKey = (channelIdHex: string | null) => ["concord", "msg-status", channelIdHex] as const;
 const deletedKey = (channelIdHex: string | null) => ["concord", "msg-deleted", channelIdHex] as const;
 
 /** Reactions share the wrap kind with messages (no relay pre-filter), so the window absorbs both. */
@@ -95,6 +109,15 @@ export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: Opened
 }
 
 const upsert = upsertOpenedChat;
+
+/** Swap in `row` for the cached row with its rumor id (`upsert` keeps the old one). */
+function replaceRow(old: OpenedChat[] | undefined, row: OpenedChat): OpenedChat[] {
+  const i = old?.findIndex((m) => m.rumorId === row.rumorId) ?? -1;
+  if (!old || i < 0) return upsert(old, [row]);
+  const next = old.slice();
+  next[i] = row;
+  return next;
+}
 
 /**
  * Scroll-back resume point, kept per channel beside the cache. Not derived
@@ -317,9 +340,10 @@ export function useChannelTimeline(
           readStreamCursor(cursorKeyId),
         ]);
         setHasMore(!endReachedRef.current && (rumors.length >= WINDOW_SIZE || !saved?.exhausted));
-        const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
-          (m) => m.channelIdHex === channelIdHex,
-        );
+        // A snapshot seed is replaced, not merged into: a row only it holds was never stored.
+        const prev = takeSnapshotSeed(viewerPubkey, channelIdHex!)
+          ? []
+          : (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter((m) => m.channelIdHex === channelIdHex);
         // A cursor for a dropped cache would skip rows; restart it from this page.
         const held = pageCursors.get(cursorKeyId);
         const cursor = lowerCursor(cursorHolds(held, prev) ? held : undefined, rumors);
@@ -348,15 +372,19 @@ export function useChannelTimeline(
     },
   });
 
+  // Sends that never sealed live only in the outgoing record, so a reload still shows them (failed).
+  // Identity-stable: an outgoing change that adds no such row re-renders nothing.
+  const unsealed = useSyncExternalStore(subscribeOutgoing, () => unsealedOutgoingRows(viewerPubkey, channelIdHex));
+
   // Focused rows paint immediately and are retained in the channel cache after `/m/` clears.
   // Keyed per channel so a switch-back returns the same array (downstream memos bail).
   const raw = useKeyedMemo(
     channelIdHex,
-    () =>
-      channel
-        ? filterEpochCutoff(upsert(query.data, focusQuery.data ?? EMPTY_RAW), channel)
-        : query.data ?? EMPTY_RAW,
-    [query.data, focusQuery.data, channel],
+    () => {
+      const base = unsealed.length > 0 ? upsert(query.data, unsealed) : (query.data ?? EMPTY_RAW);
+      return channel ? filterEpochCutoff(upsert(base, focusQuery.data ?? EMPTY_RAW), channel) : base;
+    },
+    [query.data, focusQuery.data, channel, unsealed],
   );
   useEffect(() => {
     const rows = focusQuery.data;
@@ -576,6 +604,11 @@ interface WrapPublisher {
   relay(url: string): { event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<unknown> };
 }
 
+/** NIP-01 machine-readable refusals: the relay answered, so a re-send won't change its mind. */
+const NIP01_REFUSAL = /^(duplicate|pow|blocked|rate-limited|invalid|restricted|mute|error|auth-required):/;
+/** Delay before re-sending a delivered wrap to the relays that never answered it. */
+const SILENT_RELAY_RETRY_MS = 30_000;
+
 /** Publishes keep running this long after the failed decision so a late ACK clears "failed". */
 const LATE_ACK_GRACE_MS = 20_000;
 
@@ -590,6 +623,12 @@ export function broadcastWrap(
   wrap: NostrEvent,
   method: string | undefined,
   onStatus: (status: SendStatus | undefined) => void,
+  opts?: {
+    /** Every relay that said OK (or `duplicate:`), trusted or not. */
+    onAccept?: (url: string) => void;
+    /** Whether a relay's OK alone clears the status; others only feed `onAccept`. */
+    countsAsDelivered?: (url: string) => boolean;
+  },
 ): void {
   if (relays.length === 0) {
     onStatus("failed");
@@ -600,6 +639,8 @@ export function broadcastWrap(
   const started = Date.now();
   let accepted = false;
   let settled = 0;
+  /** Relays that never answered (timeout, dead socket), as opposed to refusing it. */
+  const silent: string[] = [];
 
   const decide = setTimeout(() => {
     if (!accepted) onStatus("failed");
@@ -609,8 +650,15 @@ export function broadcastWrap(
     void nostr
       .relay(url)
       .event(wrap, { signal: AbortSignal.timeout(hardMs) })
+      // NIP-01 says a duplicate is OK true, but relays that answer false still HAVE it.
+      .catch((reason) => {
+        if (reason instanceof Error && /^duplicate:/.test(reason.message)) return;
+        throw reason;
+      })
       .then(() => {
         logSync("send", `wrap ${wrap.id.slice(0, 8)} → ${url}: accepted in ${sinceMs(started)}`);
+        opts?.onAccept?.(url);
+        if (opts?.countsAsDelivered && !opts.countsAsDelivered(url)) return;
         if (!accepted) {
           accepted = true;
           clearTimeout(decide);
@@ -618,33 +666,77 @@ export function broadcastWrap(
         }
       })
       .catch((reason) => {
-        logSync(
-          "send",
-          `wrap ${wrap.id.slice(0, 8)} → ${url}: FAILED (${reason instanceof Error ? reason.message : String(reason)}) in ${sinceMs(started)}`,
-        );
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (!NIP01_REFUSAL.test(message)) silent.push(url);
+        logSync("send", `wrap ${wrap.id.slice(0, 8)} → ${url}: FAILED (${message}) in ${sinceMs(started)}`);
       })
       .finally(() => {
         settled += 1;
+        if (settled < relays.length) return;
         // All relays answered with no accept: fail now.
-        if (settled === relays.length && !accepted) {
+        if (!accepted) {
           clearTimeout(decide);
           onStatus("failed");
+          return;
+        }
+        // Delivered, so nothing else will re-send it: give the relays that never
+        // answered one more copy, as one accept may be a relay that drops it.
+        if (silent.length > 0) {
+          setTimeout(() => {
+            for (const url of silent) {
+              void nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(hardMs) }).catch(() => undefined);
+            }
+          }, SILENT_RELAY_RETRY_MS);
         }
       });
   }
 }
 
 /**
+ * Drive a visible send's outgoing record from `broadcastWrap`: any accept means
+ * it landed; "failed" keeps the record (and its wrap) for Retry and the resume.
+ */
+/** (Re-)broadcast a recorded send's signed wrap under the outgoing-record callbacks. */
+export function rebroadcastOutgoing(nostr: WrapPublisher & VerifyPool, rec: OutgoingRecord, method: string | undefined): void {
+  if (!rec.wrap) return;
+  putOutgoing(rec);
+  const tracked = outgoingBroadcast(nostr, rec.rumorId, method);
+  broadcastWrap(nostr, rec.relays, rec.wrap, method, tracked.onStatus, tracked);
+}
+
+export function outgoingBroadcast(nostr: WrapPublisher & VerifyPool, rumorId: string, method: string | undefined) {
+  const acked: string[] = [];
+  const rebroadcast = (rec: OutgoingRecord) => rebroadcastOutgoing(nostr, rec, method);
+  return {
+    onAccept: (url: string) => {
+      acked.push(url);
+      // A late accept joins a read-back already queued.
+      if (getOutgoing(rumorId)?.verifyAt !== undefined) verifyOutgoing(nostr, rumorId, [url], rebroadcast);
+    },
+    countsAsDelivered: isRelayTrusted,
+    onStatus: (status: SendStatus | undefined) => {
+      if (status === undefined) {
+        updateOutgoing(rumorId, { state: "verifying" });
+        verifyOutgoing(nostr, rumorId, acked, rebroadcast);
+      } else if (status === "failed") {
+        failOutgoing(rumorId);
+        // Only distrusted relays took it: shown failed until a read-back finds it.
+        if (acked.length > 0) verifyOutgoing(nostr, rumorId, acked, rebroadcast);
+      }
+    },
+  };
+}
+
+/**
  * Send one chat-plane rumor: insert optimistically, sign the seal (remote for
- * NIP-46), wrap under the CURRENT epoch key, broadcast fire-and-forget. No
- * pending spinner (one dead relay would hold it); failures mark it "failed", never vanish.
+ * NIP-46), wrap under the CURRENT epoch key, broadcast fire-and-forget. A visible
+ * rumor is tracked in `outgoing.ts` until a relay is seen to hold it.
  */
 export function useSendMessage(community: Community | undefined, channel: Channel | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
   const channelIdHex = channel?.idHex ?? null;
-  const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
   // CORD-08 timer at send time; an unlanded fold reads as OFF (the signed tag governs).
   const { data: folded } = useControlFold(community);
   const timerSecs = messageExpirationOf(folded?.metadata);
@@ -743,7 +835,26 @@ export function useSendMessage(community: Community | undefined, channel: Channe
         channelIdHex: channel.idHex,
         epoch: channel.current.epoch,
       };
-      if (isVisible) {
+      const record: OutgoingRecord | undefined = isVisible
+        ? {
+            rumorId: rumor.id,
+            viewer: user.pubkey,
+            communityIdHex: community.idHex,
+            channelIdHex: channel.idHex,
+            kind: effectiveKind,
+            content,
+            tags,
+            ms: effectiveMs,
+            createdAt: rumor.created_at,
+            epoch: String(channel.current.epoch),
+            state: "signing",
+            relays: community.relays,
+            updatedAt: Date.now(),
+          }
+        : undefined;
+      if (record) {
+        // Only a local key answers inside the grace; a remote signer's send is written now.
+        putOutgoing(record, true, { deferPersist: user.method === "nsec" });
         queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [opened]));
       }
 
@@ -754,8 +865,8 @@ export function useSendMessage(community: Community | undefined, channel: Channe
         seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
       } catch (err) {
         logSync("send", `sealing ${rumor.id.slice(0, 8)} FAILED in ${sinceMs(sealStarted)}: ${err instanceof Error ? err.message : String(err)}`);
-        if (isVisible) {
-          setStatus(rumor.id, "failed");
+        if (record) {
+          failOutgoing(rumor.id);
           return { rumorId: rumor.id, wrap: undefined };
         }
         throw err; // reactions/edits/deletes: callers own the rollback
@@ -767,13 +878,17 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       await markOwnWebPushEvent(wrap.id);
 
       const sealed: OpenedChat = { ...opened, seal, wrapId: wrap.id, streamPk: wrap.pubkey };
-      queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [sealed]));
+      if (record) putOutgoing({ ...record, state: "sending", wrap });
+      queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => replaceRow(old, sealed));
       // Persist so a mid-flight refresh keeps it (and self-deletes apply via NIP-09).
-      writeRumors(community.idHex, [sealed]);
+      writeRumors(community.idHex, [sealed], { local: true });
 
-      broadcastWrap(nostr, community.relays, wrap, user.method, (status) => {
-        if (isVisible) setStatus(rumor.id, status);
-      });
+      if (record) {
+        const tracked = outgoingBroadcast(nostr, rumor.id, user.method);
+        broadcastWrap(nostr, community.relays, wrap, user.method, tracked.onStatus, tracked);
+      } else {
+        broadcastWrap(nostr, community.relays, wrap, user.method, () => undefined);
+      }
 
       return { rumorId: rumor.id, wrap: wrap as NostrEvent | undefined };
     },
@@ -787,70 +902,102 @@ export function useMessageActions(community: Community | undefined, channel: Cha
   // Own Grant head, which a moderation delete cites (CORD-04 §5).
   const { data: folded } = useControlFold(community);
   const channelIdHex = channel?.idHex ?? null;
-  const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
   const { mutateAsync: send } = useSendMessage(community, channel);
 
-  // Re-broadcast under the SAME rumor id so a slow-ACKed original dedupes.
-  // Reuse the signed seal when possible; otherwise buildRumor reproduces the id.
+  // Re-broadcast under the SAME rumor id so a slow-ACKed original dedupes:
+  // the recorded wrap verbatim when sealed, else re-seal (`buildRumor`
+  // reproduces the id from the ms-less tags). Visible kinds only.
   const resend = useCallback(
     (msg: OpenedChat) => {
       if (!user || !community || !channel) return;
-      const isVisible = msg.kind === KIND_MESSAGE || msg.kind === KIND_COMMENT || msg.kind === KIND_POLL;
-      const onStatus = (status: SendStatus | undefined) => {
-        if (isVisible) setStatus(msg.rumorId, status);
+      const prior = getOutgoing(msg.rumorId);
+      const record: OutgoingRecord = prior ?? {
+        rumorId: msg.rumorId,
+        viewer: user.pubkey,
+        communityIdHex: community.idHex,
+        channelIdHex: channel.idHex,
+        kind: msg.kind,
+        content: msg.content,
+        tags: withoutMsTag(msg.tags),
+        ms: msg.ms,
+        createdAt: msg.createdAt,
+        epoch: String(msg.epoch),
+        state: "failed",
+        relays: community.relays,
+        updatedAt: Date.now(),
       };
       void (async () => {
         try {
-          let seal = msg.seal && msg.seal.sig ? msg.seal : undefined;
-          if (!seal) {
-            const rumor = buildRumor({
-              kind: msg.kind,
-              content: msg.content,
-              tags: msg.tags,
-              pubkey: user.pubkey,
-              ms: msg.ms,
-            });
-            seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
+          let wrap = record.wrap;
+          if (!wrap) {
+            let seal = msg.seal && msg.seal.sig ? msg.seal : undefined;
+            if (!seal) {
+              putOutgoing({ ...record, state: "signing" }, true, { deferPersist: user.method === "nsec" });
+              const rumor = buildRumor({
+                kind: record.kind,
+                content: record.content,
+                tags: record.tags,
+                pubkey: user.pubkey,
+                ms: record.ms,
+              });
+              seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
+            }
+            // Mirror the rumor's NIP-40 onto the re-wrap (CORD-08 §2).
+            const expTag = record.tags.find((t) => t[0] === "expiration")?.[1];
+            const expiration = expTag !== undefined && /^[0-9]+$/.test(expTag) ? Number(expTag) : undefined;
+            wrap = wrapSeal(seal, channel.current.group, expiration !== undefined ? { expiration } : undefined);
+            await markOwnWebPushEvent(wrap.id);
+            // Persist so a mid-flight refresh keeps it.
+            writeRumors(community.idHex, [{ ...msg, seal, wrapId: wrap.id, streamPk: wrap.pubkey }], { local: true });
+            queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) =>
+              replaceRow(old, { ...msg, seal, wrapId: wrap!.id, streamPk: wrap!.pubkey }),
+            );
           }
-          // Mirror the rumor's NIP-40 onto the re-wrap (CORD-08 §2).
-          const expTag = msg.tags.find((t) => t[0] === "expiration")?.[1];
-          const expiration = expTag !== undefined && /^[0-9]+$/.test(expTag) ? Number(expTag) : undefined;
-          const wrap = wrapSeal(seal, channel.current.group, expiration !== undefined ? { expiration } : undefined);
-          await markOwnWebPushEvent(wrap.id);
-          // Persist so a mid-flight refresh keeps it.
-          writeRumors(community.idHex, [{ ...msg, seal, wrapId: wrap.id, streamPk: wrap.pubkey }]);
-          broadcastWrap(nostr, community.relays, wrap, user.method, onStatus);
+          // A manual retry starts the read-back over.
+          putOutgoing({ ...record, state: "sending", wrap, verifyAt: undefined, acked: undefined, verifyAttempts: 0 });
+          const tracked = outgoingBroadcast(nostr, record.rumorId, user.method);
+          broadcastWrap(nostr, community.relays, wrap, user.method, tracked.onStatus, tracked);
         } catch {
-          onStatus("failed");
+          failOutgoing(record.rumorId);
         }
       })();
     },
-    [nostr, user, community, channel, setStatus],
+    [nostr, user, community, channel, channelIdHex, queryClient],
+  );
+
+  /** The row to act on: the cached one, else the record (an unsealed send restored after a reload). */
+  const rowFor = useCallback(
+    (id: string): OpenedChat | undefined => {
+      const cached = (queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? []).find((m) => m.rumorId === id);
+      if (cached) return cached;
+      const rec = getOutgoing(id);
+      return rec && rec.channelIdHex === channelIdHex ? recordToRow(rec) : undefined;
+    },
+    [queryClient, channelIdHex],
   );
 
   const retry = useCallback(
     (id: string) => {
       if (!user || !community || !channel) return;
-      const raw = queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? [];
-      const msg = raw.find((m) => m.rumorId === id);
+      const msg = rowFor(id);
       if (!msg) return;
       // `broadcastWrap` re-asserts "failed" only if this attempt finds no relay too.
       if (msg.epoch === channel.current.epoch) {
-        setStatus(id, undefined);
         resend(msg);
         return;
       }
       // The epoch rotated, retiring the id's binding: re-send as a fresh rumor.
       // Comments keep their NIP-22 thread tags (minus the channel binding `send` re-adds).
       const isComment = msg.kind === KIND_COMMENT;
-      // Strip `expiration` too; the re-send computes a fresh one.
+      // Strip `expiration` and `ms` too; the re-send computes fresh ones.
       const threadTags = isComment
-        ? msg.tags.filter(([n]) => n !== "channel" && n !== "epoch" && n !== "expiration")
+        ? msg.tags.filter(([n]) => n !== "channel" && n !== "epoch" && n !== "expiration" && n !== "ms")
         : undefined;
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old = []) =>
         old.filter((m) => m.rumorId !== id),
       );
-      setStatus(id, undefined);
+      discardOutgoing(id);
+      void removeRumors(community.idHex, [id]).catch(() => undefined);
       void send({
         content: msg.content,
         kind: msg.kind,
@@ -859,17 +1006,20 @@ export function useMessageActions(community: Community | undefined, channel: Cha
         bypassRateLimit: true,
       }).catch(() => undefined);
     },
-    [user, community, channel, channelIdHex, queryClient, setStatus, send, resend],
+    [user, community, channel, channelIdHex, queryClient, send, resend, rowFor],
   );
 
+  // Gone from the screen, the record and the store: it never reached a relay,
+  // so a stored copy would come back after a reload looking sent.
   const discard = useCallback(
     (id: string) => {
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old = []) =>
         old.filter((m) => m.rumorId !== id),
       );
-      setStatus(id, undefined);
+      discardOutgoing(id);
+      if (community) void removeRumors(community.idHex, [id]).catch(() => undefined);
     },
-    [queryClient, channelIdHex, setStatus],
+    [queryClient, channelIdHex, community],
   );
 
   const deleteMessage = useCallback(
@@ -900,6 +1050,10 @@ export function useMessageActions(community: Community | undefined, channel: Cha
   return { retry, discard, deleteMessage };
 }
 
+/** Send status by rumor id for one channel, from the persisted outgoing records. */
 export function useSendStatus(channel: Channel | undefined): SendStatusMap {
-  return useSendStatusMapValue(statusKey(channel?.idHex ?? null));
+  const { user } = useCurrentUser();
+  const viewer = user?.pubkey;
+  const channelIdHex = channel?.idHex ?? null;
+  return useSyncExternalStore(subscribeOutgoing, () => outgoingStatusMap(viewer, channelIdHex));
 }

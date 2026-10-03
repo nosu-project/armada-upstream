@@ -75,10 +75,6 @@ vi.mock("@/concord/hooks/useControlPlane", () => ({
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: undefined }),
 }));
-vi.mock("@/hooks/useSendStatusMap", () => ({
-  useSendStatusMap: () => ({ setStatus: () => {} }),
-  useSendStatusMapValue: () => ({}),
-}));
 
 // ── Fake relay ───────────────────────────────────────────────────────────────
 

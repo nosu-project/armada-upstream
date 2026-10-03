@@ -27,6 +27,7 @@ public class NotificationRelayServiceDmTrustTest {
         assertTrue(NotificationRelayService.communityAvatarShown(BOB, follows, known));
         assertFalse(NotificationRelayService.communityAvatarShown(CAROL, follows, known));
         assertFalse(NotificationRelayService.communityAvatarShown(null, follows, known));
+        assertTrue(NotificationRelayService.communityAvatarShown(CAROL, follows, known, true));
     }
 
     @Test

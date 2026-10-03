@@ -1,9 +1,10 @@
-import { ChevronDown, Clock, EyeOff, Flame, ImageOff, Loader2, MessageSquareText, MessagesSquare, Pin, Plus, ShieldAlert } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Clock, EyeOff, Flame, ImageOff, Loader2, MessageSquareText, MessagesSquare, Pin, Plus } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { DisplayName } from "@/components/DisplayName";
-import { useMediaUrlHold } from "@/components/chat/mediaHold";
+import { HeldMedia } from "@/components/chat/HeldMedia";
+import { revealMessageMedia, useMediaHeld, useMediaUrlHold, useMessageRevealed } from "@/components/chat/mediaHold";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
@@ -14,6 +15,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { forumImages, type ForumImage, type ForumPost, type ForumSort } from "@/concord/lib/forum";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { fullDateTime, shortTimeAgo } from "@/lib/formatTime";
+import { mediaHost } from "@/lib/mediaPolicy";
 import { cn } from "@/lib/utils";
 
 import type { ReactNode } from "react";
@@ -62,59 +64,74 @@ const ForumPostRow = memo(function ForumPostRow({
 }) {
   const hasComments = post.replyCount > 0;
   const images = useMemo(() => forumImages(post.root), [post.root]);
-  const holds = useMediaUrlHold(post.root.pubkey);
+  const revealed = useMessageRevealed(post.root.id);
+  const senderHeld = useMediaHeld(post.root.pubkey) && !revealed;
+  const holds = useMediaUrlHold(post.root.pubkey, post.root.id);
+  // Like a chat gallery, one held image holds them all; the card sits outside the
+  // row's button so its own buttons aren't nested in it.
+  const heldImage = images.find((image) => holds(image.url));
+  const heldHost = heldImage && !senderHeld ? mediaHost(heldImage.url) ?? heldImage.url : undefined;
+  const rootId = post.root.id;
+  const load = useCallback(() => revealMessageMedia(rootId), [rootId]);
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(post)}
-      data-event-id={post.root.id}
-      className={cn(
-        "flex w-full flex-col p-3 text-left transition-colors hover:bg-foreground/5 focus:outline-none focus-visible:bg-foreground/5",
-        isNew && "bg-primary/5",
-      )}
-    >
-      <span className="flex w-full items-center gap-3">
-        <AuthorAvatar pubkey={post.root.pubkey} className="shrink-0" />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            {isNew && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="New activity" />}
-            <span className={cn("truncate text-sm leading-5 text-foreground", isNew ? "font-bold" : "font-semibold")}>
-              {post.title}
+    <div className={cn(isNew && "bg-primary/5")}>
+      <button
+        type="button"
+        onClick={() => onOpen(post)}
+        data-event-id={post.root.id}
+        className={cn(
+          "flex w-full flex-col p-3 text-left transition-colors hover:bg-foreground/5 focus:outline-none focus-visible:bg-foreground/5",
+          heldImage && "pb-1.5",
+        )}
+      >
+        <span className="flex w-full items-center gap-3">
+          <AuthorAvatar pubkey={post.root.pubkey} className="shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1.5">
+              {isNew && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="New activity" />}
+              <span className={cn("truncate text-sm leading-5 text-foreground", isNew ? "font-bold" : "font-semibold")}>
+                {post.title}
+              </span>
+            </span>
+            <span className="block truncate text-xs leading-4 text-muted-foreground">
+              <DisplayName pubkey={post.root.pubkey} />
+              <span title={fullDateTime(post.root.created_at)}> · {shortTimeAgo(post.root.created_at)}</span>
+              {hasComments && (
+                <span title={fullDateTime(post.lastActivityAt)}> · active {shortTimeAgo(post.lastActivityAt)}</span>
+              )}
             </span>
           </span>
-          <span className="block truncate text-xs leading-4 text-muted-foreground">
-            <DisplayName pubkey={post.root.pubkey} />
-            <span title={fullDateTime(post.root.created_at)}> · {shortTimeAgo(post.root.created_at)}</span>
-            {hasComments && (
-              <span title={fullDateTime(post.lastActivityAt)}> · active {shortTimeAgo(post.lastActivityAt)}</span>
-            )}
+          <span className="flex shrink-0 items-center gap-2">
+            {hasComments && <ParticipantStack pubkeys={post.participants} />}
+            <span
+              className={cn(
+                "flex items-center gap-1 text-xs tabular-nums",
+                isNew ? "font-medium text-primary" : "text-muted-foreground",
+              )}
+            >
+              <MessagesSquare className="size-3.5" />
+              {post.replyCount}
+            </span>
           </span>
         </span>
-        <span className="flex shrink-0 items-center gap-2">
-          {hasComments && <ParticipantStack pubkeys={post.participants} />}
-          <span
-            className={cn(
-              "flex items-center gap-1 text-xs tabular-nums",
-              isNew ? "font-medium text-primary" : "text-muted-foreground",
-            )}
-          >
-            <MessagesSquare className="size-3.5" />
-            {post.replyCount}
-          </span>
-        </span>
-      </span>
-      {images.length > 0 && <ForumGallery images={images} holds={holds} />}
-    </button>
+        {images.length > 0 && !heldImage && <ForumGallery images={images} />}
+      </button>
+      {heldImage && (
+        <div className="px-3 pb-1.5 sm:pl-14">
+          <HeldMedia kind="image" count={images.length} host={heldHost} onLoad={load} />
+        </div>
+      )}
+    </div>
   );
 });
 
 /** Reddit-style gallery: one whole over a blurred fill, two side by side, three+ as a mosaic. */
-function ForumGallery({ images, holds }: { images: readonly ForumImage[]; holds: (url: string) => boolean }) {
+function ForumGallery({ images }: { images: readonly ForumImage[] }) {
   const frame = "mt-2 w-full max-w-md aspect-video overflow-hidden rounded-lg sm:ml-11 sm:w-[calc(100%-2.75rem)]";
   if (images.length === 1) {
     return (
       <span className={cn("block", frame)}>
-        <ForumImageTile image={images[0]} held={holds(images[0].url)} fit="contain" className="size-full" />
+        <ForumImageTile image={images[0]} fit="contain" className="size-full" />
       </span>
     );
   }
@@ -122,7 +139,7 @@ function ForumGallery({ images, holds }: { images: readonly ForumImage[]; holds:
     return (
       <span className={cn("grid grid-cols-2 gap-1", frame)}>
         {images.map((image, i) => (
-          <ForumImageTile key={i} image={image} held={holds(image.url)} className="size-full" />
+          <ForumImageTile key={i} image={image} className="size-full" />
         ))}
       </span>
     );
@@ -130,33 +147,24 @@ function ForumGallery({ images, holds }: { images: readonly ForumImage[]; holds:
   const extra = images.length - 3;
   return (
     <span className={cn("grid grid-cols-3 grid-rows-2 gap-1", frame)}>
-      <ForumImageTile image={images[0]} held={holds(images[0].url)} className="col-span-2 row-span-2 size-full" />
-      <ForumImageTile image={images[1]} held={holds(images[1].url)} className="size-full" />
-      <ForumImageTile image={images[2]} held={holds(images[2].url)} className="size-full" overflow={extra > 0 ? extra : undefined} />
+      <ForumImageTile image={images[0]} className="col-span-2 row-span-2 size-full" />
+      <ForumImageTile image={images[1]} className="size-full" />
+      <ForumImageTile image={images[2]} className="size-full" overflow={extra > 0 ? extra : undefined} />
     </span>
   );
 }
 
-/**
- * A spoilered or held (mediaHold.ts) image is never fetched — the post page
- * reveals it. A held one shows none of the sender's blurhash either.
- */
+/** A spoilered image is never fetched — the post page reveals it. */
 function ForumImageTile(props: {
   image: ForumImage;
-  held: boolean;
   fit?: "cover" | "contain";
   overflow?: number;
   className?: string;
 }) {
-  const { image, held, overflow, className } = props;
+  const { image, overflow, className } = props;
   return (
     <span className={cn("relative block overflow-hidden bg-muted", className)}>
-      {held ? (
-        <span className="absolute inset-0 flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <ShieldAlert className="size-3.5" />
-          Not loaded
-        </span>
-      ) : image.spoiler ? (
+      {image.spoiler ? (
         <>
           {image.blurhash && <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />}
           <span className="absolute inset-0 flex items-center justify-center gap-1.5 bg-black/40 text-xs font-medium text-white">

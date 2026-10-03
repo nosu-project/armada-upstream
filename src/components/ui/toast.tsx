@@ -14,7 +14,7 @@ const ToastViewport = React.forwardRef<
   <ToastPrimitives.Viewport
     ref={ref}
     className={cn(
-      "fixed top-0 z-[300] flex max-h-screen w-full flex-col-reverse p-4 pt-[max(1rem,var(--safe-area-inset-top,env(safe-area-inset-top)))] md:bottom-0 md:right-0 md:top-auto md:flex-col md:pt-4 md:max-w-[420px]",
+      "fixed top-0 z-[300] flex max-h-screen w-full flex-col-reverse p-4 pt-[max(1rem,var(--safe-area-inset-top,env(safe-area-inset-top)))] md:right-0 md:pt-4 md:max-w-[420px]",
       className
     )}
     {...props}
@@ -28,9 +28,9 @@ const toastVariants = cva(
   // Mobile (< md): top-positioned, swipe up.
   "max-md:data-[swipe=cancel]:translate-y-0 max-md:data-[swipe=end]:translate-y-[var(--radix-toast-swipe-end-y)] max-md:data-[swipe=move]:translate-y-[var(--radix-toast-swipe-move-y)] " +
   "max-md:data-[state=open]:slide-in-from-top-full max-md:data-[state=closed]:slide-out-to-top-full " +
-  // Desktop (md+): bottom-right, swipe right.
+  // Desktop (md+): top-right, off the composer; swipe right.
   "md:data-[swipe=cancel]:translate-x-0 md:data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] md:data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] " +
-  "md:data-[state=open]:slide-in-from-bottom-full md:data-[state=closed]:slide-out-to-right-full",
+  "md:data-[state=open]:slide-in-from-right-full md:data-[state=closed]:slide-out-to-right-full",
   {
     variants: {
       variant: {

@@ -142,8 +142,10 @@ describe("publishTimerNotices (CORD-08 §4)", () => {
     // The actor's own copy is written through the store so their timelines
     // show the notice immediately.
     const { writeRumors } = await import("@/concord/lib/rumorStore");
-    expect(writeRumors).toHaveBeenCalledWith(community.idHex, expect.arrayContaining([
-      expect.objectContaining({ kind: KIND_TIMER_NOTICE }),
-    ]));
+    expect(writeRumors).toHaveBeenCalledWith(
+      community.idHex,
+      expect.arrayContaining([expect.objectContaining({ kind: KIND_TIMER_NOTICE })]),
+      { local: true },
+    );
   });
 });

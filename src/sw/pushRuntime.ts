@@ -536,10 +536,12 @@ async function prepareConcord(
 
 /**
  * Whether a community sender's avatar may be the notification icon. Anyone with
- * the key can post (CORD-04 §1), so only a known peer's face reaches the lock
- * screen — the worker has no view of the in-app trust graph (`mediaTrust.ts`).
+ * the key can post (CORD-04 §1), so unless the reader loads everyone's media only
+ * a known peer's face reaches the lock screen — the worker has no view of the
+ * in-app trust graph (`mediaTrust.ts`).
  */
 export function communityAvatarShown(author: string, cfg: SwPushConfig | null): boolean {
+  if (cfg?.mediaPolicy?.allCommunityAvatars === true) return true;
   return Boolean(cfg?.knownPeers?.includes(author));
 }
 

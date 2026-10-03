@@ -79,6 +79,38 @@ function effectiveMap(
   return m;
 }
 
+/**
+ * The Concord half of the policy as data, for a notifier that must resolve a
+ * channel the WebView didn't list (Android's merge of an unready snapshot).
+ * Keys are lower-case: `communities[<id>]`, `channels["<id>:<channel>"]`.
+ */
+export interface ConcordLevelPolicy {
+  default: NotifLevel;
+  communities: Record<string, NotifLevel>;
+  channels: Record<string, NotifLevel>;
+}
+
+export function concordLevelPolicy(
+  levels: Record<string, NotifLevel>,
+  mutedCommunities: string[],
+  mutedChannels: string[],
+  prefs: PushPrefs,
+): ConcordLevelPolicy {
+  const communities: Record<string, NotifLevel> = {};
+  const channels: Record<string, NotifLevel> = {};
+  // Sorted, so an unrelated reorder doesn't change the native config.
+  const entries = [...effectiveMap(levels, mutedCommunities, mutedChannels)]
+    .filter(([key]) => key.startsWith("c2:"))
+    .sort(([a], [b]) => a.localeCompare(b));
+  for (const [key, level] of entries) {
+    const [community, channel] = key.slice(3).toLowerCase().split("::");
+    if (!community) continue;
+    if (channel) channels[`${community}:${channel}`] = level;
+    else communities[community] = level;
+  }
+  return { default: globalChannelLevel(prefs), communities, channels };
+}
+
 export function useNotifLevels(): UseNotifLevelsReturn {
   const { config, updateConfig } = useAppContext();
   // Account-scoped AppConfig only; never another account's legacy localStorage mirror.

@@ -226,6 +226,11 @@ export function claimPendingJoinRun(pubkey: string, communityId: string): boolea
   return true;
 }
 
+/** A run that failed transiently gives its claim back, so this session can try again. */
+export function releasePendingJoinRun(pubkey: string, communityId: string): void {
+  runs.delete(`${pubkey}:${communityId}`);
+}
+
 /** Drop everything in memory (via `purgeClientStorage`): entries carry community roots. */
 export function clearPendingJoins(): void {
   owner = undefined;

@@ -1,6 +1,13 @@
-import { ShieldAlert } from "lucide-react";
+import { EyeOff } from "lucide-react";
 
+import { useMediaHoldMode, useTrustMediaHost } from "@/components/chat/mediaHold";
 import { Button } from "@/components/ui/button";
+
+import type { MouseEvent, PointerEvent } from "react";
+
+/** Keep the row's tap and long-press menu from claiming a press meant for the card. */
+const stopClick = (e: MouseEvent) => e.stopPropagation();
+const stopPointer = (e: PointerEvent) => e.stopPropagation();
 
 /**
  * Stand-in for media held by the media hold (`components/chat/mediaHold.ts`).
@@ -19,17 +26,42 @@ export function HeldMedia({
   host?: string;
   onLoad: () => void;
 }) {
+  const mode = useMediaHoldMode();
+  const trustHost = useTrustMediaHost();
   const noun = kind === "video" ? "Video" : kind === "audio" ? "Audio" : count > 1 ? `${count} images` : "Image";
+
+  let title: string;
+  let detail: string | undefined;
+  if (host) {
+    title = `${noun} on ${host}`;
+  } else if (mode === "never") {
+    title = `${noun} not loaded`;
+    detail = "You load community media yourself.";
+  } else {
+    title = `${noun} from a new member`;
+    detail = "Loads on its own once they've been around a day.";
+  }
+
   return (
-    <div className="my-1.5 flex max-w-sm items-center gap-3 rounded-lg bg-muted/60 px-3 py-2.5 whitespace-normal">
-      <ShieldAlert className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+    <div className="my-1.5 flex max-w-sm items-center gap-3 rounded-lg bg-muted/60 px-3 py-2 whitespace-normal">
+      <EyeOff className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium leading-tight">{noun} not loaded</div>
-        <div className="text-xs leading-snug text-muted-foreground">
-          {host
-            ? `From ${host}, a site you haven't added. Load only if you trust it.`
-            : "From someone you don't know yet. Load only if you trust it."}
-        </div>
+        <div className="truncate text-sm font-medium leading-tight">{title}</div>
+        {host && trustHost ? (
+          <button
+            type="button"
+            className="text-xs leading-snug text-muted-foreground underline-offset-2 hover:text-foreground hover:underline touch:min-h-11"
+            onClick={(e) => {
+              stopClick(e);
+              trustHost(host);
+            }}
+            onPointerDown={stopPointer}
+          >
+            Always load from {host}
+          </button>
+        ) : (
+          detail && <div className="text-xs leading-snug text-muted-foreground">{detail}</div>
+        )}
       </div>
       <Button
         type="button"
@@ -37,11 +69,10 @@ export function HeldMedia({
         size="sm"
         className="shrink-0 touch:h-11"
         onClick={(e) => {
-          e.stopPropagation();
+          stopClick(e);
           onLoad();
         }}
-        // Keep the row's long-press menu from claiming the press.
-        onPointerDown={(e) => e.stopPropagation()}
+        onPointerDown={stopPointer}
       >
         Load
       </Button>
@@ -54,15 +85,15 @@ export function HeldPreviews({ onLoad }: { onLoad: () => void }) {
   return (
     <button
       type="button"
-      className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground touch:min-h-11"
+      className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground touch:min-h-11"
       onClick={(e) => {
-        e.stopPropagation();
+        stopClick(e);
         onLoad();
       }}
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={stopPointer}
     >
-      <ShieldAlert className="size-3.5" aria-hidden />
-      Previews not loaded · Load
+      <EyeOff className="size-3.5" aria-hidden />
+      Load previews
     </button>
   );
 }

@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Compass,
   Download,
+  EyeOff,
   FileText,
   Image,
   KeyRound,
@@ -102,6 +103,7 @@ type SectionId =
   | "dms"
   | "chat"
   | "media"
+  | "uploads"
   | "links"
   | "discover"
   | "emojis"
@@ -366,7 +368,8 @@ export function SettingsPage({
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "chat", title: "Chat", icon: MessageSquare },
-      { id: "media", title: "Media", icon: Image },
+      { id: "media", title: "Media privacy", icon: EyeOff },
+      { id: "uploads", title: "Media uploads", icon: Image },
       { id: "links", title: "Links", icon: Link2 },
       { id: "discover", title: "Discover", icon: Compass },
     );
@@ -754,9 +757,10 @@ export function SettingsPage({
         );
       }
       case "media":
+        return <MediaPrivacySettings />;
+      case "uploads":
         return (
           <>
-            <MediaPrivacySettings />
             <SettingsRow
               label="Use app media servers"
               description="Upload files to the synchronized app Blossom servers in addition to your own."

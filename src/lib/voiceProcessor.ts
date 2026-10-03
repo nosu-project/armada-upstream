@@ -52,10 +52,15 @@ class RnnoiseTrackProcessor implements AudioTrackProcessor {
     await this.setup(opts);
   }
 
-  /** Rebuild the graph for a replacement track, tearing the old one down first. */
+  /**
+   * Rebuild the graph for a replacement track, tearing the old one down first.
+   * LiveKit's `LocalTrack.restart` (unmute after a device change, track-ended
+   * recovery, full-reconnect republish) passes no `audioContext`, so keep ours.
+   */
   async restart(opts: AudioProcessorOptions): Promise<void> {
+    const audioContext = opts.audioContext ?? this.audioContext;
     await this.teardown();
-    await this.setup(opts);
+    await this.setup({ ...opts, audioContext: audioContext! });
   }
 
   async destroy(): Promise<void> {

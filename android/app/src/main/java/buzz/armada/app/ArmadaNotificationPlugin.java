@@ -757,6 +757,16 @@ public class ArmadaNotificationPlugin extends Plugin {
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
         java.util.Set<String> concordLeft =
                 lowerCaseSet(arrayToString(call.getArray("concordLeftCommunities")));
+        // The level policy behind concordSubs, so a merge can apply a mute the
+        // snapshot could only express by omission. Absent from older WebViews.
+        String concordLevelsRaw = null;
+        try {
+            if (call.getObject("concordLevels") != null) {
+                concordLevelsRaw = call.getObject("concordLevels").toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read Concord notification levels", e);
+        }
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
         try {
@@ -915,8 +925,12 @@ public class ArmadaNotificationPlugin extends Plugin {
                 // A merge keeps whatever the unready snapshot didn't mention,
                 // which for a community the member LEFT is every channel of it.
                 // The tombstone is positive knowledge, so drop those here.
-                putOrRemove(editor, "concord2Subs", withoutCommunities(mergeConcordSubscriptions(
-                        prefs.getString("concord2Subs", null), concordSubsRaw), concordLeft));
+                // Entries it kept are re-resolved against the current levels, or a
+                // channel muted since they were stored would keep notifying.
+                putOrRemove(editor, "concord2Subs", applyConcordLevels(
+                        withoutCommunities(mergeConcordSubscriptions(
+                                prefs.getString("concord2Subs", null), concordSubsRaw), concordLeft),
+                        concordSubsRaw, concordLevelsRaw));
             }
             if (signerSealed != null) {
                 editor.putString("signerSealed", signerSealed);
@@ -937,11 +951,11 @@ public class ArmadaNotificationPlugin extends Plugin {
                     editor.remove("gitSubs");
                 }
             } else {
-                putOrRemove(editor, "gitSubs", withoutGitCommunities(
+                putOrRemove(editor, "gitSubs", withoutQuietGitAttachments(withoutGitCommunities(
                         gitSubsRaw != null
                                 ? mergeGitSubscriptions(prefs.getString("gitSubs", null), gitSubsRaw)
                                 : prefs.getString("gitSubs", null),
-                        concordLeft));
+                        concordLeft), concordLevelsRaw));
             }
             // Versioned only for the additive Git plane. Existing installations
             // without this key retain their message/DM configuration unchanged.
@@ -1115,6 +1129,106 @@ public class ArmadaNotificationPlugin extends Plugin {
                 if (value == null) continue;
                 String community = value.optString("communityId", "").toLowerCase(java.util.Locale.ROOT);
                 if (!communityIds.contains(community)) kept.put(value);
+            }
+            return kept.toString();
+        } catch (Exception ignored) {
+            return json;
+        }
+    }
+
+    /**
+     * A Concord channel's level under the WebView's policy
+     * ({@code {default, communities, channels}}): channel, then community, then
+     * default, as {@code concordChannelLevel} resolves it. Null without a policy.
+     */
+    static String concordLevel(JSONObject policy, String communityId, String channelId) {
+        if (policy == null) return null;
+        String community = communityId.toLowerCase(java.util.Locale.ROOT);
+        String channel = channelId.toLowerCase(java.util.Locale.ROOT);
+        JSONObject channels = policy.optJSONObject("channels");
+        String level = channels != null ? channels.optString(community + ":" + channel, "") : "";
+        if (level.isEmpty()) {
+            JSONObject communities = policy.optJSONObject("communities");
+            level = communities != null ? communities.optString(community, "") : "";
+        }
+        if (level.isEmpty()) level = policy.optString("default", "");
+        return level.isEmpty() ? null : level;
+    }
+
+    private static JSONObject parsePolicy(String policyJson) {
+        if (policyJson == null) return null;
+        try {
+            return new JSONObject(policyJson);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Merged Concord subscriptions with every entry the incoming snapshot did NOT
+     * carry re-resolved by {@code policyJson}: dropped at "nothing", mention-only
+     * at "mentions". Incoming entries are already resolved and pass through.
+     */
+    static String applyConcordLevels(String mergedJson, String incomingJson, String policyJson) {
+        JSONObject policy = parsePolicy(policyJson);
+        if (mergedJson == null || policy == null) return mergedJson;
+        try {
+            java.util.Set<String> incoming = new java.util.HashSet<>();
+            if (incomingJson != null) {
+                incoming.addAll(objectMap(new JSONArray(incomingJson), "communityId", "channelId").keySet());
+            }
+            JSONArray input = new JSONArray(mergedJson);
+            JSONArray kept = new JSONArray();
+            for (int i = 0; i < input.length(); i++) {
+                JSONObject value = input.optJSONObject(i);
+                if (value == null) continue;
+                String identity = objectIdentity(value, "communityId", "channelId");
+                if (identity == null || incoming.contains(identity)) {
+                    kept.put(value);
+                    continue;
+                }
+                String level = concordLevel(
+                        policy, value.optString("communityId"), value.optString("channelId"));
+                if ("nothing".equals(level)) continue;
+                if ("mentions".equals(level) || "all".equals(level)) {
+                    value = new JSONObject(value.toString());
+                    value.put("mentionOnly", "mentions".equals(level));
+                }
+                kept.put(value);
+            }
+            return kept.toString();
+        } catch (Exception ignored) {
+            return mergedJson;
+        }
+    }
+
+    /**
+     * Git subscriptions minus attachments whose channel is not at "all" under
+     * {@code policyJson} (Git events carry no mention, so mentions-only gets none).
+     */
+    static String withoutQuietGitAttachments(String json, String policyJson) {
+        JSONObject policy = parsePolicy(policyJson);
+        if (json == null || policy == null) return json;
+        try {
+            JSONArray input = new JSONArray(json);
+            JSONArray kept = new JSONArray();
+            for (int i = 0; i < input.length(); i++) {
+                JSONObject repository = input.optJSONObject(i);
+                if (repository == null) continue;
+                JSONArray attachments = repository.optJSONArray("attachments");
+                JSONArray keptAttachments = new JSONArray();
+                if (attachments != null) for (int j = 0; j < attachments.length(); j++) {
+                    JSONObject attachment = attachments.optJSONObject(j);
+                    if (attachment == null) continue;
+                    String community = attachment.optString("communityId", "");
+                    String level = community.isEmpty() ? null : concordLevel(
+                            policy, community, attachment.optString("channelId", ""));
+                    if (level == null || "all".equals(level)) keptAttachments.put(attachment);
+                }
+                if (keptAttachments.length() == 0) continue;
+                JSONObject next = new JSONObject(repository.toString());
+                next.put("attachments", keptAttachments);
+                kept.put(next);
             }
             return kept.toString();
         } catch (Exception ignored) {

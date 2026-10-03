@@ -5,7 +5,12 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import type { NostrRumor } from '@/lib/nostrRumor';
 
-export type AuthorResult = { event?: NostrRumor; metadata?: NostrMetadata };
+export type AuthorResult = {
+  event?: NostrRumor;
+  metadata?: NostrMetadata;
+  /** The media hold removed a picture/banner from `metadata` (`useAuthor`). */
+  imagesWithheld?: boolean;
+};
 
 export function authorQueryKey(pubkey: string): [string, string] {
   return ['author', pubkey];

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { leaveApp, useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { onAppStateChange } from "@/lib/appStateEvents";
@@ -134,14 +134,16 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
     deferCommit(() => onCloseRef.current());
   }, [deferCommit]);
 
-  // Android back reveals the channel list when the chat is showing (the OS eats
-  // in-WebView edge swipes). When already revealed, return false so history handles it.
+  // Android back reveals the list when the chat is showing (the OS eats in-WebView
+  // edge swipes). The revealed list is a root screen, so back from it leaves the
+  // app rather than replaying every chat visited before.
   useAndroidBack(() => {
     if (!effectiveOpen) {
       commitReveal();
-      return true;
+    } else {
+      leaveApp();
     }
-    return false;
+    return true;
   }, swipeEnabled);
 
   // Compositor-run keyframe slide-in on fresh mount, so heavy chat mounting doesn't

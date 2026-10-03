@@ -44,14 +44,20 @@ export function ConcordMediaHold({
   trusted: ReadonlySet<string> | undefined;
   children: ReactNode;
 }) {
-  const { communityMediaAutoload: mode, communityMediaKnownHostsOnly: hostsOnly } = useAppContext().config;
+  const {
+    communityMediaAutoload: mode,
+    communityMediaKnownHostsOnly: hostsOnly,
+    trustedMediaHosts,
+    mediaProxies,
+  } = useAppContext().config;
+  const proxied = mediaProxies.length > 0;
   const { user } = useCurrentUser();
   const { isStaff } = useChatModeration(community);
   const followPubkeys = useFollowList().data?.pubkeys;
   const follows = useMemo(() => new Set(followPubkeys ?? []), [followPubkeys]);
   const stableTrusted = useStableSet(trusted);
   const blossomServers = useBlossomServers();
-  const knownHosts = useMemo(() => knownHostSet(blossomServers), [blossomServers]);
+  const knownHosts = useMemo(() => knownHostSet(blossomServers, trustedMediaHosts), [blossomServers, trustedMediaHosts]);
 
   const revision = useSyncExternalStore(subscribeSightings, sightingsRevision);
   const communityIdHex = community?.idHex;
@@ -75,11 +81,12 @@ export function ConcordMediaHold({
     void now;
     const inputs = () => ({ mode, self, isStaff, trusted: stableTrusted, follows, sightings, now: Date.now() });
     return {
+      mode,
       media: (author) => holdsMedia(author, inputs()),
       avatar: (author) => holdsAvatar(author, inputs()),
-      host: (author, url) => hostsOnly && holdsMediaUrl(author, url, { mode, self }, knownHosts),
+      host: (author, url) => hostsOnly && holdsMediaUrl(author, url, { self, proxied }, knownHosts),
     };
-  }, [mode, hostsOnly, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);
+  }, [mode, hostsOnly, proxied, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);
 
   return <MediaHoldContext.Provider value={holds}>{children}</MediaHoldContext.Provider>;
 }

@@ -9,13 +9,27 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { toast } from "@/hooks/useToast";
+import { KNOWN_MEDIA_HOSTS, normalizeMediaHostInput } from "@/lib/knownMediaHosts";
 import { DEFAULT_MEDIA_PROXY, fillUriTemplate, mediaHost, normalizeMediaProxy } from "@/lib/mediaPolicy";
 
 import type { MediaAutoload } from "@/concord/lib/mediaTrust";
 
+const AUTOLOAD_DESCRIPTIONS: Record<MediaAutoload, string> = {
+  trusted:
+    "Images, videos and link previews from members who are new to you wait for you to tap "
+    + "Load, and nothing is fetched until you do. Everyone else loads: moderators, people you "
+    + "follow or talk with, and members you've seen here for a day. A new member's profile "
+    + "picture shows initials for their first hour.",
+  always: "Every image, video and link preview loads as soon as it's on screen, whoever posted it.",
+  never:
+    "Nothing loads until you tap Load. Profile pictures still show once a member is no longer "
+    + "new to you.",
+};
+
 /**
- * Media proxy settings (`lib/mediaPolicy.ts`), OFF by default. The first
- * proxy is primary for native writers and single-image sites; the web client
+ * What loads without asking: the community media hold (`concord/lib/mediaTrust.ts`) by
+ * sender and by host, and the media proxy (`lib/mediaPolicy.ts`, OFF by default). The
+ * first proxy is primary for native writers and single-image sites; the web client
  * spreads across all and falls through on failure.
  */
 export function MediaPrivacySettings() {
@@ -24,24 +38,20 @@ export function MediaPrivacySettings() {
   const enabled = proxies.length > 0;
 
   const setProxies = (next: string[]) => updateConfig((current) => ({ ...current, mediaProxies: next }));
+  const setTrustedHosts = (next: string[]) => updateConfig((current) => ({ ...current, trustedMediaHosts: next }));
 
   return (
     <>
       <SettingsRow
         stack
-        label="Load media in communities from"
-        description={
-          "Images, videos and link previews from anyone else wait for you to tap Load, and "
-          + "nothing is fetched until you do. People you trust: yourself, moderators, people you "
-          + "follow, people in your conversations, and members this device has seen for a day. "
-          + "Profile pictures from people you don't trust show initials for their first hour."
-        }
+        label="Load community media from"
+        description={AUTOLOAD_DESCRIPTIONS[config.communityMediaAutoload]}
       >
         <Select
           value={config.communityMediaAutoload}
           onValueChange={(v) => updateConfig((current) => ({ ...current, communityMediaAutoload: v as MediaAutoload }))}
         >
-          <SelectTrigger className="w-44 shrink-0" aria-label="Load media in communities from">
+          <SelectTrigger className="w-44 shrink-0" aria-label="Load community media from">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -51,18 +61,28 @@ export function MediaPrivacySettings() {
           </SelectContent>
         </Select>
       </SettingsRow>
-      {config.communityMediaAutoload === "trusted" && (
+      <SettingsRow
+        label="Ask before loading from other sites"
+        description={
+          enabled
+            ? "Not needed while images load through a proxy: the sites see the proxy, not you."
+            : "Media posted from a site other than your media servers, the sites below or the "
+              + "common Nostr hosts waits for Load, whoever posted it. Loading it tells that site "
+              + "your address."
+        }
+      >
+        <Switch
+          checked={config.communityMediaKnownHostsOnly}
+          onCheckedChange={(on) => updateConfig((current) => ({ ...current, communityMediaKnownHostsOnly: on }))}
+        />
+      </SettingsRow>
+      {config.communityMediaKnownHostsOnly && !enabled && (
         <SettingsRow
-          label="Only load from known hosts"
-          description={
-            "Also wait for Load on media hosted anywhere but your media servers and the common "
-            + "Nostr hosts, whoever sent it."
-          }
+          stack
+          label="Sites you trust"
+          description={`Media from these loads without asking. Always included: your media servers and ${KNOWN_MEDIA_HOSTS.join(", ")}.`}
         >
-          <Switch
-            checked={config.communityMediaKnownHostsOnly}
-            onCheckedChange={(on) => updateConfig((current) => ({ ...current, communityMediaKnownHostsOnly: on }))}
-          />
+          <TrustedHostListEditor hosts={config.trustedMediaHosts} onChange={setTrustedHosts} />
         </SettingsRow>
       )}
       <SettingsRow
@@ -94,6 +114,76 @@ export function MediaPrivacySettings() {
         </SettingsRow>
       )}
     </>
+  );
+}
+
+function HostIdentity({ host }: { host: string }) {
+  return (
+    <div className="flex items-center gap-2.5 min-w-0">
+      <Avatar className="size-7 rounded-md shrink-0">
+        <AvatarFallback className="rounded-md bg-secondary text-secondary-foreground text-xs">
+          {host.charAt(0).toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <div className="text-sm font-medium truncate leading-tight">{host}</div>
+    </div>
+  );
+}
+
+function TrustedHostListEditor({ hosts, onChange }: { hosts: string[]; onChange: (hosts: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+
+  const handleAdd = () => {
+    const host = normalizeMediaHostInput(draft);
+    if (!host) {
+      toast({ title: "Invalid site", description: "Enter a site name like example.com.", variant: "destructive" });
+      return;
+    }
+    if (!hosts.includes(host)) onChange([...hosts, host]);
+    setDraft("");
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {hosts.map((host) => (
+        <div key={host} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+          <div className="flex-1 min-w-0">
+            <HostIdentity host={host} />
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove ${host}`}
+            className="size-7 text-muted-foreground hover:text-destructive shrink-0 touch:size-11"
+            onClick={() => onChange(hosts.filter((h) => h !== host))}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+      ))}
+
+      <form
+        className="flex gap-2 pt-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleAdd();
+        }}
+      >
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="example.com"
+          aria-label="Add site"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          className="text-base md:text-sm bg-background/40 border-transparent"
+        />
+        <Button type="submit" disabled={!draft.trim()} className="clip-corner-lg shrink-0">
+          <Plus className="size-4 mr-1.5" /> Add
+        </Button>
+      </form>
+    </div>
   );
 }
 

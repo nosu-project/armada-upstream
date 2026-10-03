@@ -44,12 +44,9 @@ vi.mock("@/concord/hooks/usePause", () => ({ useActivePause: () => undefined }))
 vi.mock("@/concord/hooks/timelineSnapshot", () => ({
   persistTimelineSnapshot: async () => undefined,
   prewarmTimelineSnapshot: async () => undefined,
+  takeSnapshotSeed: () => false,
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefined }) }));
-vi.mock("@/hooks/useSendStatusMap", () => ({
-  useSendStatusMap: () => ({ setStatus: () => {} }),
-  useSendStatusMapValue: () => ({}),
-}));
 vi.mock("@/concord/lib/channelSync", () => ({
   LOAD_OLDER_MAX_PAGES: 3,
   backfillStore: async () => ({ events: [], exhausted: true }),

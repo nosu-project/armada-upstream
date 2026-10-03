@@ -105,6 +105,7 @@ vi.mock("@/hooks/useNip29Servers", () => ({
   ],
 }));
 vi.mock("@/concord/hooks/useCommunityList", () => ({
+  useCommunityList: () => ({ data: { decryptFailed: false } }),
   useCommunity: () => undefined,
   useLiveCommunities: () => [],
   useIsExcluded: () => false,

@@ -139,6 +139,8 @@ import { useCommunityManagement, useStrandedRecovery } from "@/concord/hooks/use
 import { useChannels, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { PAUSE_DURATIONS, useCommunityPause } from "@/concord/hooks/usePause";
 import { CommunityPauseBanner } from "@/concord/components/CommunityPauseBanner";
+import { PendingJoinNotice } from "@/concord/components/PendingJoinNotice";
+import { usePendingGuestbookJoin } from "@/concord/hooks/usePendingGuestbookJoin";
 import { usePins } from "@/concord/hooks/usePins";
 import { BanMemberDialog } from "@/concord/components/BanMemberDialog";
 import { KickMembersDialog } from "@/concord/components/KickMembersDialog";
@@ -1334,6 +1336,7 @@ export function ConcordPage() {
   const { sendDirectInvite } = useInviteActions(community);
   const { rekeyChannel, canRekeyChannel } = useChannelRekey(community);
   const { pause: communityPause, setPaused, clearPause } = useCommunityPause(community);
+  const pendingJoin = usePendingGuestbookJoin(baseCommunity);
   const ownerHex = folded?.ownerHex ?? community?.owner;
   const messageMentionsEveryone = useCallback(
     (message: ChatMsg) => {
@@ -3471,14 +3474,17 @@ export function ConcordPage() {
                       isNew={isPostNew}
                       onNewPost={canWrite ? () => setNewPostOpen(true) : undefined}
                       banner={
-                        communityPause && channel ? (
-                          <CommunityPauseBanner
-                            pause={communityPause}
-                            canManage={canManageChannels}
-                            onResume={() => clearPause.mutate()}
-                            resuming={clearPause.isPending}
-                          />
-                        ) : undefined
+                        <>
+                          {communityPause && channel && (
+                            <CommunityPauseBanner
+                              pause={communityPause}
+                              canManage={canManageChannels}
+                              onResume={() => clearPause.mutate()}
+                              resuming={clearPause.isPending}
+                            />
+                          )}
+                          <PendingJoinNotice state={pendingJoin.state} onRetry={pendingJoin.retry} />
+                        </>
                       }
                     />
                   ) : (
@@ -3632,6 +3638,7 @@ export function ConcordPage() {
                             resuming={clearPause.isPending}
                           />
                         )}
+                        <PendingJoinNotice state={pendingJoin.state} onRetry={pendingJoin.retry} />
                         <ChatComposer
                           relayUrl="dm"
                           groupId={channel.idHex}

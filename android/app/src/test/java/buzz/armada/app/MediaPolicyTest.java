@@ -72,6 +72,8 @@ public class MediaPolicyTest {
         // Empty and absent are both proxying off, the WebView's default.
         assertEquals("", MediaPolicy.parse("{\"proxy\":\"\"}").proxy);
         assertEquals("", MediaPolicy.parse("{}").proxy);
+        assertFalse(MediaPolicy.parse("{\"proxy\":\"\"}").allCommunityAvatars);
+        assertTrue(MediaPolicy.parse("{\"proxy\":\"\",\"allCommunityAvatars\":true}").allCommunityAvatars);
     }
 
     @Test public void missingOrBrokenConfigIsTheDefaultPolicyProxyOff() {

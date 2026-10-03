@@ -11,7 +11,7 @@ import { emojify } from "@/components/chat/emojify";
 import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
 import { FileAttachment } from "@/components/chat/FileAttachment";
 import { HeldMedia, HeldPreviews } from "@/components/chat/HeldMedia";
-import { useMediaHeld, useMediaUrlHold } from "@/components/chat/mediaHold";
+import { revealMessageMedia, useMediaHeld, useMediaUrlHold, useMessageRevealed } from "@/components/chat/mediaHold";
 import { mediaHost } from "@/lib/mediaPolicy";
 import { BuzzInviteEmbed } from "@/components/chat/BuzzInviteEmbed";
 import { Nip29GroupInviteEmbed } from "@/components/chat/Nip29GroupInviteEmbed";
@@ -877,14 +877,14 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   // Held media (mediaHold.ts) is never fetched: no sender emoji images, no previews,
   // until the reader loads this message's media.
   const mediaHeld = useMediaHeld(event.pubkey);
-  const [mediaLoaded, setMediaLoaded] = useState(false);
+  const mediaLoaded = useMessageRevealed(event.id);
   const holdMedia = mediaHeld && !mediaLoaded;
-  const loadMedia = useCallback(() => setMediaLoaded(true), []);
+  const loadMedia = useCallback(() => revealMessageMedia(event.id), [event.id]);
   // Per URL: the sender's hold, or a host the viewer doesn't know. Undefined = loads;
   // otherwise the host to name on the card (empty when the SENDER is why).
-  const urlHold = useMediaUrlHold(event.pubkey);
+  const urlHold = useMediaUrlHold(event.pubkey, event.id);
   const heldReason = (url: string): string | undefined => {
-    if (mediaLoaded || !urlHold(url)) return undefined;
+    if (!urlHold(url)) return undefined;
     return mediaHeld ? "" : mediaHost(url) ?? url;
   };
 

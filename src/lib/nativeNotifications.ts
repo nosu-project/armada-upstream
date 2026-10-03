@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
+import type { ConcordLevelPolicy } from "@/hooks/useNotifLevels";
 import type { MediaPolicyConfig } from "@/lib/mediaPolicy";
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -218,6 +219,12 @@ export interface ArmadaNotificationPlugin {
       /** CORD-08 disappearing timer (seconds; 0/absent = off), stamped as NIP-40 on quick replies. */
       timerSecs?: number;
     }>;
+    /**
+     * The level policy `concordSubs` was resolved by. An unready plane merges, and
+     * keeps entries the snapshot omitted, so native re-resolves those by this —
+     * otherwise a mute (sent only as an omission) never reaches them.
+     */
+    concordLevels?: ConcordLevelPolicy;
     /**
      * Signer credential so the service can open gift wraps and answer NIP-42 with
      * the app dead. Sealed with an Android Keystore key; wiped on disable/logout.

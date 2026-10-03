@@ -43,6 +43,7 @@ import { ARMADA_TENANTS, getArmadaDB } from "@/lib/db/armadaDB";
 import type { NRumorStore } from "@/lib/db/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { OpenedChat } from "@/concord/lib/chat";
+import { confirmOutgoing } from "@/concord/lib/outgoing";
 
 /** The chat plane's channel binding (CORD-03 §3) — the tag chat reads index. */
 const TAG_CHANNEL = "channel";
@@ -785,9 +786,20 @@ export function writeOpened(
 export function writeRumors(
   communityIdHex: string,
   opened: OpenedChat[],
-  /** `ring: false` leaves announcing the write to the caller (a throttled backfill). */
-  { ring = true }: { ring?: boolean } = {},
+  {
+    ring = true,
+    local = false,
+  }: {
+    /** `false` leaves announcing the write to the caller (a throttled backfill). */
+    ring?: boolean;
+    /**
+     * Our own send, stored before any relay has it. Every other write was READ
+     * from a relay, which is proof the rumor landed (see `outgoing.ts`).
+     */
+    local?: boolean;
+  } = {},
 ): Promise<boolean> {
+  if (!local) confirmOutgoing(opened.map((o) => o.rumorId));
   // The `channel` binding was already proven by `checkChannelBinding`.
   // THE OTHER HALF OF THE PLANE BOUNDARY: refuse plane kinds ({@link PLANE_KINDS}),
   // or a channel key-holder could inject a kind-3308 that {@link queryPlane} serves
@@ -802,6 +814,12 @@ export function writeRumors(
     if (ring && stored && channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
     return stored;
   });
+}
+
+/** Delete our own rows by rumor id (a discarded send that never reached a relay). */
+export async function removeRumors(communityIdHex: string, rumorIds: string[]): Promise<void> {
+  if (rumorIds.length === 0) return;
+  await rumorStore(communityIdHex).remove([{ ids: rumorIds }]);
 }
 
 // Expiry sweep (CORD-08 §3)

@@ -8,7 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useMediaPolicyConfig } from "@/hooks/useMediaPolicy";
-import { useNotifLevels } from "@/hooks/useNotifLevels";
+import { concordLevelPolicy, useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
   savePushPrefs,
@@ -23,6 +23,7 @@ import {
 } from "@/lib/nativeNotifications";
 import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
 import { useConcordSubsState } from "@/concord/hooks/useConcordSubs";
+import { withoutNudge } from "@/lib/signerWithNudge";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
@@ -396,6 +397,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
     [allConcordSubs, concordChannelLevel],
   );
+  const concordLevels = useMemo(
+    () => concordLevelPolicy(config.notifLevels, config.mutedCommunities, config.mutedChannels, prefs),
+    [config.notifLevels, config.mutedCommunities, config.mutedChannels, prefs],
+  );
   // The route stays local and is never copied into relay filters.
   const gitRepositories = useMemo<GitRepositoryWireInput[]>(() => {
     const byAddress = new Map<string, GitRepositoryWireInput>();
@@ -499,6 +504,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
           mentionOnlyGroupIds,
           prefs: prefsRecord,
           concordSubs,
+          concordLevels,
           dmLevels,
           dmRequests: prefs.dmRequests,
           gitSubs,
@@ -515,7 +521,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
+  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordLevels, concordSubsReady, concordLeftCommunities, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, mediaPolicy, groupList, gitRepositories.length, gitAnnouncements.data, health]);
 
   // Auto-enable on launch only if intended AND already granted; never prompts here (LoginSetup
   // and Settings do).
@@ -596,7 +602,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   }, [relayUrls, dmRelays, concordSubs]);
 
   // NIP-42: the service bridges AUTH challenges here; no key enters native code.
-  const signer = user?.signer;
+  // A background sign, so never the approval nudge (as NostrProvider's own AUTH).
+  const signer = useMemo(() => (user?.signer ? withoutNudge(user.signer) : undefined), [user?.signer]);
   useEffect(() => {
     if (!supported || !signer) return;
     let handle: { remove: () => void } | undefined;

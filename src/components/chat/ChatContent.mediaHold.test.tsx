@@ -29,8 +29,12 @@ vi.mock("@/hooks/useCustomEmojis", () => ({
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { MediaHoldContext } from "@/components/chat/mediaHold";
+import { clearRevealedMedia } from "@/components/chat/revealedMedia";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  clearRevealedMedia();
+});
 
 const STRANGER = "f".repeat(64);
 const IMAGE = "https://blossom.example.com/x.jpg";
@@ -56,7 +60,7 @@ function renderWith(
   event = message(),
   host: (pubkey: string, url: string) => boolean = () => false,
 ) {
-  const hold = holds && { media: holds, avatar: holds, host };
+  const hold = holds && { mode: "trusted" as const, media: holds, avatar: holds, host };
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
@@ -73,23 +77,31 @@ describe("ChatContent media hold", () => {
     const { container } = renderWith((pk) => pk === STRANGER);
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("canvas")).toBeNull();
-    expect(screen.getByText("Image not loaded")).toBeInTheDocument();
+    expect(screen.getByText("Image from a new member")).toBeInTheDocument();
     expect(container.textContent).toContain(":wave:");
 
     fireEvent.click(screen.getByRole("button", { name: "Load" }));
-    expect(screen.queryByText("Image not loaded")).toBeNull();
+    expect(screen.queryByText("Image from a new member")).toBeNull();
     expect(container.querySelector(`img[src="${EMOJI}"]`)).not.toBeNull();
+  });
+
+  it("keeps a loaded message loaded when it mounts again", () => {
+    const first = renderWith((pk) => pk === STRANGER);
+    fireEvent.click(screen.getByRole("button", { name: "Load" }));
+    first.unmount();
+    renderWith((pk) => pk === STRANGER);
+    expect(screen.queryByText("Image from a new member")).toBeNull();
   });
 
   it("is a no-op without a provider", () => {
     renderWith(null);
-    expect(screen.queryByText("Image not loaded")).toBeNull();
+    expect(screen.queryByText("Image from a new member")).toBeNull();
   });
 
   it("holds audio behind Load", () => {
     const audio = "https://blossom.example.com/v.ogg";
     const { container } = renderWith((pk) => pk === STRANGER, message(audio, [["imeta", `url ${audio}`, "m audio/ogg"]]));
-    expect(screen.getByText("Audio not loaded")).toBeInTheDocument();
+    expect(screen.getByText("Audio from a new member")).toBeInTheDocument();
     expect(container.querySelector("audio")).toBeNull();
   });
 
@@ -97,7 +109,7 @@ describe("ChatContent media hold", () => {
     const link = "https://news.example.com/story";
     renderWith((pk) => pk === STRANGER, message(`look ${link}`, []));
     expect(screen.getByRole("link", { name: link })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Previews not loaded/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load previews" })).toBeInTheDocument();
   });
 
   it("holds a trusted sender's image on an unknown host, naming the host", () => {
@@ -107,7 +119,7 @@ describe("ChatContent media hold", () => {
       (_pk, url) => !url.startsWith("https://emoji.example.com/"),
     );
     expect(container.querySelector("img[src*='x.jpg']")).toBeNull();
-    expect(screen.getByText(/From blossom\.example\.com, a site you haven't added/)).toBeInTheDocument();
+    expect(screen.getByText("Image on blossom.example.com")).toBeInTheDocument();
     // The sender isn't held, so their emoji still render.
     expect(container.querySelector(`img[src="${EMOJI}"]`)).not.toBeNull();
   });

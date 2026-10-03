@@ -5347,15 +5347,21 @@ public class NotificationRelayService extends Service {
 
     /**
      * Whether a Concord sender's avatar may appear on a notification. Anyone with
-     * the key can post (CORD-04 §1), so only a known peer's face reaches the lock
-     * screen; mirrors {@code communityAvatarShown} in {@code pushRuntime.ts}.
+     * the key can post (CORD-04 §1), so unless the reader loads everyone's media
+     * only a known peer's face reaches the lock screen; mirrors
+     * {@code communityAvatarShown} in {@code pushRuntime.ts}.
      */
     private boolean communityAvatarShown(String author) {
-        return communityAvatarShown(author, dmFollows, dmKnownPeers);
+        return communityAvatarShown(author, dmFollows, dmKnownPeers, mediaPolicy.allCommunityAvatars);
     }
 
     static boolean communityAvatarShown(String author, Set<String> follows, Set<String> knownPeers) {
-        return author != null && (follows.contains(author) || knownPeers.contains(author));
+        return communityAvatarShown(author, follows, knownPeers, false);
+    }
+
+    static boolean communityAvatarShown(String author, Set<String> follows, Set<String> knownPeers,
+                                        boolean all) {
+        return author != null && (all || follows.contains(author) || knownPeers.contains(author));
     }
 
     /**

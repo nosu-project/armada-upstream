@@ -32,6 +32,11 @@ export const MAX_PROXY_POOL = 32;
 /** The policy as sent to the service worker, Android service and iOS extension (plain JSON). */
 export interface MediaPolicyConfig {
   proxy: string;
+  /**
+   * Any community sender's avatar may be a notification icon (the reader's
+   * `communityMediaAutoload` is `always`); absent = known peers only.
+   */
+  allCommunityAvatars?: boolean;
 }
 
 /**

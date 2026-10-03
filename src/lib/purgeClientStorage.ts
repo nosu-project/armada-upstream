@@ -1,3 +1,4 @@
+import { clearRevealedMedia } from "@/components/chat/revealedMedia";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { clearAudioMetadata } from "@/hooks/useAudioMetadata";
 import { clearRecentDecrypts } from "@/lib/AppSigner";
@@ -8,6 +9,9 @@ import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
 import { clearSightingsMemory } from "@/concord/lib/mediaTrust";
+import { clearOutgoingMemory } from "@/concord/lib/outgoing";
+import { clearOutgoingVerifyMemory } from "@/concord/lib/outgoingVerify";
+import { clearPendingGuestbookJoinMemory } from "@/concord/lib/pendingGuestbookJoin";
 import { clearPendingJoins } from "@/concord/lib/pendingJoins";
 import { clearShareShortcuts } from "@/lib/shareTarget";
 import { writePushDisabledFlag } from "@/lib/swPushDisabled";
@@ -116,6 +120,10 @@ export async function purgeClientStorage(): Promise<void> {
   clearAudioMetadata();
   clearPendingJoins();
   clearSightingsMemory();
+  clearOutgoingMemory();
+  clearOutgoingVerifyMemory();
+  clearPendingGuestbookJoinMemory();
+  clearRevealedMedia();
   resetDecryptConsent();
   // Shared DM ephemeral REQs linger past their last consumer; close them.
   closeDmEphemeralSubs();
@@ -138,4 +146,8 @@ export async function purgeClientStorage(): Promise<void> {
   clearAudioMetadata();
   clearPendingJoins();
   clearSightingsMemory();
+  clearOutgoingMemory();
+  clearOutgoingVerifyMemory();
+  clearPendingGuestbookJoinMemory();
+  clearRevealedMedia();
 }

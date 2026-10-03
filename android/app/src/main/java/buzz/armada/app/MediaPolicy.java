@@ -25,9 +25,19 @@ import java.util.Locale;
 final class MediaPolicy {
     /** Normalized proxy template, or "" for none. */
     final String proxy;
+    /**
+     * Any community sender's avatar may be a notification icon (the reader loads
+     * everyone's media); false = known peers only.
+     */
+    final boolean allCommunityAvatars;
 
     MediaPolicy(String proxy) {
+        this(proxy, false);
+    }
+
+    MediaPolicy(String proxy, boolean allCommunityAvatars) {
         this.proxy = normalizeProxy(proxy);
+        this.allCommunityAvatars = allCommunityAvatars;
     }
 
     /**
@@ -53,8 +63,8 @@ final class MediaPolicy {
     }
 
     static MediaPolicy parse(JSONObject obj) {
-        if (obj == null || !obj.has("proxy")) return defaults();
-        return new MediaPolicy(obj.optString("proxy", ""));
+        if (obj == null) return defaults();
+        return new MediaPolicy(obj.optString("proxy", ""), obj.optBoolean("allCommunityAvatars", false));
     }
 
     /**

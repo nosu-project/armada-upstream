@@ -28,6 +28,7 @@ import { getNsecCredential } from '@/lib/credentialManager';
 import { useLoggedInAccounts } from '@/hooks/useLoggedInAccounts';
 import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
+import { withConnectPerms } from "@/lib/nostrConnectPerms";
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface LoginScreenProps {
@@ -110,10 +111,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     const relayUrls = login.getRelayUrls();
     const params = generateNostrConnectParams(relayUrls);
     const isMobileDevice = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const uri = generateNostrConnectURI(params, {
+    const uri = withConnectPerms(generateNostrConnectURI(params, {
       name: APP_NAME,
       callback: isMobileDevice ? `${callbackOrigin}/remoteloginsuccess` : undefined,
-    });
+    }));
     setNostrConnectParams(params);
     setNostrConnectUri(uri);
     setConnectError(null);

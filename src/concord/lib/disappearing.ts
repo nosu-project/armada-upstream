@@ -123,7 +123,7 @@ export async function publishTimerNotices(
     });
   }
 
-  await writeRumors(community.idHex, opened);
+  await writeRumors(community.idHex, opened, { local: true });
   await Promise.allSettled(
     wraps.flatMap((wrap) =>
       community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),

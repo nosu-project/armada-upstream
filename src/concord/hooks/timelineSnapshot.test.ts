@@ -5,18 +5,22 @@
  *  - a populated cache is never overwritten;
  *  - rows claiming another channel are dropped;
  *  - the window is capped to the newest rows;
- *  - another account on the same device reads none of it.
+ *  - another account on the same device reads none of it;
+ *  - a send whose seal was never signed is never persisted, nor restored from
+ *    a snapshot written before that rule (it would reload looking sent);
+ *  - a seed is reported once, so the first store read can replace it.
  */
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { purgeArmadaDB } from "@/lib/db/armadaDB";
-import { __resetFoldedForTests } from "@/lib/foldedCache";
+import { __resetFoldedForTests, writeFolded } from "@/lib/foldedCache";
 
 import {
   _resetTimelineSnapshotForTests,
   persistTimelineSnapshot,
   prewarmTimelineSnapshot,
+  takeSnapshotSeed,
 } from "./timelineSnapshot";
 
 import type { OpenedChat } from "@/concord/lib/chat";
@@ -46,7 +50,39 @@ afterEach(async () => {
   _resetTimelineSnapshotForTests();
 });
 
+/** The optimistic row of a send whose seal never came back from the signer. */
+const unsealed = (id: string, ms: number) => ({ ...row(id, ms), wrapId: "" });
+
 describe("timelineSnapshot", () => {
+  it("never persists an unsealed send", async () => {
+    await persistTimelineSnapshot(VIEWER, CH, [row("sent", 1000), unsealed("ghost", 2000)]);
+    _resetTimelineSnapshotForTests();
+
+    const qc = new QueryClient();
+    await prewarmTimelineSnapshot(qc, VIEWER, CH, key);
+    expect(qc.getQueryData<OpenedChat[]>(key)?.map((m) => m.rumorId)).toEqual(["sent"]);
+  });
+
+  it("drops an unsealed send from a snapshot written before the rule", async () => {
+    await writeFolded(`c2-timeline-snap:${VIEWER}:${CH}`, [unsealed("ghost", 2000), row("sent", 1000)]);
+
+    const qc = new QueryClient();
+    await prewarmTimelineSnapshot(qc, VIEWER, CH, key);
+    expect(qc.getQueryData<OpenedChat[]>(key)?.map((m) => m.rumorId)).toEqual(["sent"]);
+  });
+
+  it("reports a seed exactly once, and only for the viewer it seeded", async () => {
+    await persistTimelineSnapshot(VIEWER, CH, [row("1", 1000)]);
+    _resetTimelineSnapshotForTests();
+    expect(takeSnapshotSeed(VIEWER, CH)).toBe(false);
+
+    const qc = new QueryClient();
+    await prewarmTimelineSnapshot(qc, VIEWER, CH, key);
+    expect(takeSnapshotSeed(OTHER_VIEWER, CH)).toBe(false);
+    expect(takeSnapshotSeed(VIEWER, CH)).toBe(true);
+    expect(takeSnapshotSeed(VIEWER, CH)).toBe(false);
+  });
+
   it("round-trips a window into an empty cache, marked stale", async () => {
     await persistTimelineSnapshot(VIEWER, CH, [row("1", 1000), row("2", 2000)]);
     _resetTimelineSnapshotForTests();

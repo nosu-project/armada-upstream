@@ -31,6 +31,7 @@ import { MAX_RAIL_RECENT_DMS } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { CommunityListLocked } from "@/concord/components/CommunityListLocked";
 import { useCommunityManagement } from "@/concord/hooks/useCommunityActions";
 import { useCommunity, useIsExcluded, useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
@@ -1954,6 +1955,8 @@ function ServerRailInner({
         )}
 
         {renderNodes.length > 0 && <div className="w-7 h-px bg-chrome-divider shrink-0" />}
+
+        <CommunityListLocked />
 
         <Tooltip>
           <TooltipTrigger asChild>

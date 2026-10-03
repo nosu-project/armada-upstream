@@ -22,7 +22,7 @@ import "@livekit/components-styles";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
-import { useCallback, useState } from "react";
+import { useCallback, useContext, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,8 +39,10 @@ import { useCall } from "@/hooks/useCall";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
+import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import {
+  audioDeviceLabel,
   getAudioProcessing,
   rememberVoiceDevice,
   setAudioProcessing,
@@ -86,7 +88,7 @@ function DeviceSelectGroup({
             className="gap-2"
           >
             <Check className={cn("size-3.5 shrink-0", active ? "opacity-100" : "opacity-0")} />
-            <span className="truncate">{device.label || "Unnamed device"}</span>
+            <span className="truncate">{audioDeviceLabel(device, "Unnamed device")}</span>
           </DropdownMenuItem>
         );
       })}
@@ -274,21 +276,27 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   const { stageVisible, toggleStage } = useCall();
   const participants = useParticipants();
   const connectionState = useConnectionState();
+  const rejoining = useContext(VoiceRejoiningContext);
+
+  // Between rejoin attempts the room reads Disconnected/Connecting; keep Leave reachable.
+  if (
+    connectionState === ConnectionState.Reconnecting ||
+    (rejoining && connectionState !== ConnectionState.Connected)
+  ) {
+    return (
+      <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
+        <Loader2 className="size-4 animate-spin text-amber-500" />
+        <span className="flex-1 min-w-0 truncate text-sm text-amber-500">Reconnecting…</span>
+        <LeaveButton />
+      </div>
+    );
+  }
 
   if (connectionState === ConnectionState.Connecting) {
     return (
       <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
         <span className="text-sm text-muted-foreground">Connecting to voice…</span>
-      </div>
-    );
-  }
-
-  if (connectionState === ConnectionState.Reconnecting) {
-    return (
-      <div className="flex items-center justify-center gap-2 px-3 py-2 min-h-12">
-        <Loader2 className="size-4 animate-spin text-amber-500" />
-        <span className="text-sm text-amber-500">Reconnecting…</span>
       </div>
     );
   }
