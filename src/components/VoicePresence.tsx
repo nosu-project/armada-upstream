@@ -20,7 +20,7 @@ function ParticipantAvatar({ pubkey, className }: { pubkey: string; className?: 
       shape={getAvatarShape(metadata)}
       className={cn("size-5 ring-2 ring-chrome", className)}
     >
-      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-success/20 text-success text-[9px]">
         {name[0]?.toUpperCase()}
       </AvatarFallback>
@@ -103,7 +103,7 @@ function VoiceParticipantRow({
           style={wrapperStyle}
         >
           <Avatar shape={getAvatarShape(metadata)} className="size-6">
-            <AvatarImage src={metadata?.picture} alt={name} />
+            <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
             <AvatarFallback className="bg-success/20 text-success text-[10px]">
               {name[0]?.toUpperCase()}
             </AvatarFallback>

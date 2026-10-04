@@ -344,7 +344,7 @@ const MemberRow = memo(function MemberRow({
       <ProfilePreviewCard pubkey={pubkey}>
         <button type="button" className="relative shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Avatar shape={getAvatarShape(metadata)} className="size-8 cursor-pointer transition-opacity hover:opacity-90">
-            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
             <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
               {displayName[0]?.toUpperCase()}
             </AvatarFallback>

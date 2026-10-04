@@ -55,6 +55,7 @@ import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { PushScope } from "@/lib/pushSubscriptions";
 import type { SwConcordStream, SwPushConfig } from "@/lib/swPushConfig";
+import { plainProfilePicture } from "@/lib/profileImeta";
 
 // The worker shares the page's store; fix the adapter before anything reads.
 presetIndexedDBArmadaDB();
@@ -184,13 +185,12 @@ const MAX_MENTION_LOOKUPS = 8;
 /** The name of someone whose profile can't be found. */
 const ANONYMOUS = getDisplayName(undefined);
 
-function resolvedProfile(ev: { content: string; pubkey: string }, policy: MediaPolicy): ResolvedProfile | undefined {
+function resolvedProfile(ev: { content: string; pubkey: string; tags: string[][] }, policy: MediaPolicy): ResolvedProfile | undefined {
   try {
     const metadata = JSON.parse(ev.content) as NostrMetadata;
     if (!metadata || typeof metadata !== "object") return undefined;
-    const picture = typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)
-      ? metadata.picture
-      : undefined;
+    const plain = plainProfilePicture(ev.tags, metadata);
+    const picture = plain && /^https:\/\//.test(plain) ? plain : undefined;
     return { name: getDisplayName(metadata, ev.pubkey), avatar: mediaSrc(picture, policy) };
   } catch {
     return undefined;

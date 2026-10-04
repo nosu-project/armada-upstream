@@ -7,12 +7,15 @@ import { NostrMetadata } from '@nostrify/nostrify';
 import { useEventStore } from '@/hooks/useEventStore';
 import { metadataSchema } from '@/lib/authorCache';
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { parseProfileImeta, type ProfileImeta } from '@/lib/profileImeta';
 
 export interface Account {
   id: string;
   pubkey: string;
   event?: NostrRumor;
   metadata: NostrMetadata;
+  /** Describes `picture`/`banner`. */
+  imeta?: ProfileImeta;
 }
 
 function parseMetadata(event: NostrRumor | undefined): NostrMetadata {
@@ -21,6 +24,13 @@ function parseMetadata(event: NostrRumor | undefined): NostrMetadata {
   } catch {
     return {};
   }
+}
+
+/** An account's metadata and the imeta describing its images. */
+function parseProfile(event: NostrRumor | undefined): { metadata: NostrMetadata; imeta?: ProfileImeta } {
+  const metadata = parseMetadata(event);
+  const imeta = event && parseProfileImeta(event.tags, metadata);
+  return imeta ? { metadata, imeta } : { metadata };
 }
 
 interface LoginRef {
@@ -41,13 +51,13 @@ export async function mergeAccounts(
 ): Promise<Account[]> {
   return Promise.all(    logins.map(async ({ id, pubkey }): Promise<Account> => {
       const fresh = freshEvents.find((e) => e.pubkey === pubkey);
-      if (fresh) return { id, pubkey, metadata: parseMetadata(fresh), event: fresh };
+      if (fresh) return { id, pubkey, ...parseProfile(fresh), event: fresh };
 
       const existing = prev.find((a) => a.id === id);
       if (existing?.event) return existing;
 
       const cached = await cachedFor(pubkey);
-      if (cached) return { id, pubkey, metadata: parseMetadata(cached), event: cached };
+      if (cached) return { id, pubkey, ...parseProfile(cached), event: cached };
 
       return { id, pubkey, metadata: {} };
     }),
@@ -79,7 +89,7 @@ export function useLoggedInAccounts() {
         queryKey,
         logins.map(({ id, pubkey }) => {
           const event = events.find((e) => e.pubkey === pubkey);
-          return { id, pubkey, metadata: parseMetadata(event), event };
+          return { id, pubkey, ...parseProfile(event), event };
         }),
       );
     })();

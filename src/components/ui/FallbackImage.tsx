@@ -1,5 +1,7 @@
-import { useImageFallback } from "@/hooks/useBlossomCandidates";
+import { useImetaImage } from "@/hooks/useImetaImage";
+import { imetaFor } from "@/lib/profileImeta";
 
+import type { ImetaEntry } from "@/lib/imeta";
 import type { ImgHTMLAttributes, ReactNode } from "react";
 
 interface FallbackImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "onError"> {
@@ -7,7 +9,14 @@ interface FallbackImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "
   src: string | undefined;
   /** Other URLs for the same image, tried before the viewer's own servers. */
   fallbacks?: readonly string[];
+  /**
+   * imeta describing `src` (e.g. `author.data?.imeta?.banner`): its declared
+   * fallbacks, and decryption for an encrypted image. Ignored unless its `url` is `src`.
+   */
+  imeta?: ImetaEntry;
   fallback?: ReactNode;
+  /** Rendered while an encrypted image decrypts. Defaults to `fallback`. */
+  placeholder?: ReactNode;
 }
 
 /**
@@ -15,8 +24,10 @@ interface FallbackImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "
  * `useImageFallback`) before showing `fallback`. Under the media policy; a
  * gated image renders nothing.
  */
-export function FallbackImage({ src, fallbacks, fallback = null, alt = "", ...props }: FallbackImageProps) {
-  const walk = useImageFallback(src, fallbacks);
-  if (!walk.src || walk.failed) return <>{fallback}</>;
-  return <img {...props} src={walk.src} alt={alt} onError={walk.onError} />;
+export function FallbackImage({ src, fallbacks, imeta, fallback = null, placeholder, alt, ...props }: FallbackImageProps) {
+  const entry = imetaFor(src, imeta);
+  const image = useImetaImage(src, entry ?? (fallbacks ? { url: src ?? "", fallbacks: [...fallbacks] } : undefined));
+  if (image.pending) return <>{placeholder ?? fallback}</>;
+  if (!image.src || image.failed) return <>{fallback}</>;
+  return <img {...props} src={image.src} alt={alt ?? entry?.alt ?? ""} onError={image.onError} />;
 }

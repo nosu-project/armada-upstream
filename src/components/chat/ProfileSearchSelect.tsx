@@ -12,6 +12,7 @@ import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles
 import { getAvatarShape } from "@/lib/avatarShape";
 import { resolvePubkey } from "@/lib/resolvePubkey";
 import { cn } from "@/lib/utils";
+import { parseProfileImeta } from "@/lib/profileImeta";
 
 /**
  * Single-select user picker on NIP-50 profile search (follows first). Inline,
@@ -154,7 +155,7 @@ function ProfileRow({
     >
       <div className="relative shrink-0">
         <Avatar shape={getAvatarShape(metadata)} className="size-9">
-          <AvatarImage src={metadata.picture} alt={displayName} />
+          <AvatarImage src={metadata.picture} imeta={parseProfileImeta(profile.event.tags, metadata)?.picture} alt={displayName} />
           <AvatarFallback className="bg-primary/20 text-primary text-xs">
             {displayName[0]?.toUpperCase() || "?"}
           </AvatarFallback>

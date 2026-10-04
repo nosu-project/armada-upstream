@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppContext, type AppContextType } from "@/contexts/AppContext";
+import type { ImetaEntry } from "@/lib/imeta";
 
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 
@@ -108,5 +109,48 @@ describe("AvatarImage under the media policy", () => {
   it("loads a picture directly when no proxy is set", () => {
     render(tree("https://pics.example/me.jpg", { mediaProxies: [] }));
     expect(screen.getByTestId<HTMLImageElement>("img").src).toBe("https://pics.example/me.jpg");
+  });
+});
+
+/** A kind 0's imeta for its picture: the author's own fallback hosts first, and decryption. */
+describe("AvatarImage imeta", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const renderAvatar = (src: string, imeta: ImetaEntry) =>
+    render(
+      <AppContext.Provider value={context}>
+        <Avatar>
+          <AvatarImage src={src} imeta={imeta} data-testid="img" />
+          <AvatarFallback data-testid="fallback">A</AvatarFallback>
+        </Avatar>
+      </AppContext.Provider>,
+    );
+
+  it("tries declared fallbacks before the viewer's servers", () => {
+    const src = `https://blossom.ditto.pub/${HASH}.png`;
+    renderAvatar(src, { url: src, fallbacks: [`https://mirror.example/${HASH}.png`] });
+    const img = () => screen.getByTestId<HTMLImageElement>("img");
+
+    fireEvent.error(img());
+    expect(img().src).toBe(`https://mirror.example/${HASH}.png`);
+    fireEvent.error(img());
+    expect(img().src).toBe(`https://blossom.dreamith.to/${HASH}.png`);
+  });
+
+  it("ignores imeta describing a different picture", () => {
+    renderAvatar("https://pics.example/me.jpg", {
+      url: "https://pics.example/old.jpg",
+      fallbacks: ["https://mirror.example/old.jpg"],
+    });
+    fireEvent.error(screen.getByTestId("img"));
+    expect(screen.queryByTestId("img")).toBeNull();
+  });
+
+  it("shows the initial, never the ciphertext, while an encrypted picture decrypts", () => {
+    vi.stubGlobal("fetch", () => new Promise(() => {}));
+    const src = `https://blossom.ditto.pub/${HASH}`;
+    renderAvatar(src, { url: src, encryption: { algorithm: "aes-gcm", key: "00".repeat(32), nonce: "00".repeat(16) } });
+    expect(screen.queryByTestId("img")).toBeNull();
+    expect(screen.getByTestId("fallback")).toBeTruthy();
   });
 });

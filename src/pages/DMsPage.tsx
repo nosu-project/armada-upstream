@@ -128,6 +128,7 @@ import { cn } from "@/lib/utils";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { DmConversationLatest } from "@/lib/dmConversationIndex";
+import { parseProfileImeta, type ProfileImeta } from "@/lib/profileImeta";
 
 /**
  * Highlight case-insensitive `query` matches in `text`, rendering NIP-30 emoji
@@ -1415,12 +1416,14 @@ const Conversation = memo(function Conversation({
 function RecipientSuggestion({
   pubkey,
   metadata,
+  imeta,
   active,
   followed,
   onSelect,
 }: {
   pubkey: string;
   metadata: SearchProfile["metadata"] | undefined;
+  imeta?: ProfileImeta;
   active: boolean;
   followed: boolean;
   onSelect: () => void;
@@ -1447,7 +1450,7 @@ function RecipientSuggestion({
         <NoteToSelfAvatar sizePx={36} className="size-9" />
       ) : (
         <Avatar shape={getAvatarShape(metadata)} className="size-9 shrink-0">
-          <AvatarImage src={picture} alt={name} />
+          <AvatarImage src={picture} imeta={imeta?.picture} alt={name} />
           <AvatarFallback className="bg-primary/20 text-primary text-xs">
             {name[0]?.toUpperCase()}
           </AvatarFallback>
@@ -1487,6 +1490,7 @@ function ResolvedRecipientSuggestion({
     <RecipientSuggestion
       pubkey={pubkey}
       metadata={author.data?.metadata}
+      imeta={author.data?.imeta}
       active={active}
       followed={followed}
       onSelect={onSelect}
@@ -1501,7 +1505,7 @@ function RecipientChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => v
   return (
     <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-secondary py-0.5 pl-0.5 pr-1.5 text-sm">
       <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-5 shrink-0">
-        <AvatarImage src={sanitizeUrl(author.data?.metadata?.picture)} alt={name} />
+        <AvatarImage src={sanitizeUrl(author.data?.metadata?.picture)} imeta={author.data?.imeta?.picture} alt={name} />
         <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
           {name[0]?.toUpperCase()}
         </AvatarFallback>
@@ -1545,9 +1549,11 @@ function NewDMPane({
   const chosenSet = useMemo(() => new Set(chosen), [chosen]);
   const recipients = useMemo(() => {
     const fromSearch = (profiles ?? []).filter((p) => p.pubkey !== direct);
-    const list: { pubkey: string; metadata?: SearchProfile["metadata"]; resolved?: boolean }[] = [];
+    const list: { pubkey: string; metadata?: SearchProfile["metadata"]; imeta?: ProfileImeta; resolved?: boolean }[] = [];
     if (direct) list.push({ pubkey: direct, resolved: true });
-    for (const p of fromSearch) list.push({ pubkey: p.pubkey, metadata: p.metadata });
+    for (const p of fromSearch) {
+      list.push({ pubkey: p.pubkey, metadata: p.metadata, imeta: parseProfileImeta(p.event.tags, p.metadata) });
+    }
     return group ? list.filter((r) => !chosenSet.has(r.pubkey)) : list;
   }, [profiles, direct, group, chosenSet]);
 
@@ -1710,6 +1716,7 @@ function NewDMPane({
                 key={r.pubkey}
                 pubkey={r.pubkey}
                 metadata={r.metadata}
+                imeta={r.imeta}
                 active={index === activeIndex}
                 followed={followedPubkeys.has(r.pubkey)}
                 onSelect={() => pick(r.pubkey)}

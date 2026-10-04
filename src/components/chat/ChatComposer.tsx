@@ -1,4 +1,3 @@
-import { encode as blurhashEncode } from "blurhash";
 import {
   ArrowUpRight,
   BarChart3,
@@ -62,6 +61,7 @@ import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useToast } from "@/hooks/useToast";
 import { useUploadFile, useUploadPreflight } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { getImageMeta } from "@/lib/imageProbe";
 import { getAvatarShape } from "@/lib/avatarShape";
 import type { AudioMetadata } from "@/lib/audioMetadata";
 import { readAudioMetadata } from "@/lib/readAudioMetadata";
@@ -214,48 +214,6 @@ function writeDraft(key: string, content: string, attachments: Map<string, strin
     draftCache.set(key, { content, attachments: [...attachments] });
   } else {
     draftCache.delete(key);
-  }
-}
-
-/** For an image File: `{ dim: "WxH", blurhash }`, decoded at ≤64px wide. */
-async function getImageMeta(file: File): Promise<{ dim?: string; blurhash?: string }> {
-  if (!file.type.startsWith("image/")) return {};
-  try {
-    const url = URL.createObjectURL(file);
-    try {
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const el = new Image();
-        el.onload = () => resolve(el);
-        el.onerror = reject;
-        el.src = url;
-      });
-
-      const naturalWidth = img.naturalWidth;
-      const naturalHeight = img.naturalHeight;
-      if (!naturalWidth || !naturalHeight) return {};
-
-      const dim = `${naturalWidth}x${naturalHeight}`;
-
-      const SAMPLE_W = 64;
-      const scale = SAMPLE_W / naturalWidth;
-      const sampleH = Math.max(1, Math.round(naturalHeight * scale));
-
-      const canvas = document.createElement("canvas");
-      canvas.width = SAMPLE_W;
-      canvas.height = sampleH;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return { dim };
-
-      ctx.drawImage(img, 0, 0, SAMPLE_W, sampleH);
-      const { data } = ctx.getImageData(0, 0, SAMPLE_W, sampleH);
-
-      const blurhash = blurhashEncode(data, SAMPLE_W, sampleH, 4, 3);
-      return { dim, blurhash };
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  } catch {
-    return {};
   }
 }
 
@@ -2550,7 +2508,7 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
       <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
         <span className="shrink-0">Replying to</span>
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
-          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
@@ -2616,7 +2574,7 @@ function QuoteBannerBody({ event }: { event: NostrRumor }) {
     <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
       <span className="shrink-0">Quoting</span>
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
-        <AvatarImage src={metadata?.picture} alt="" />
+        <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
         <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>

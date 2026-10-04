@@ -25,7 +25,10 @@ import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { FallbackImage } from "@/components/ui/FallbackImage";
+import { isValidBlurhash } from "@/lib/blurhash";
+import { imetaFor } from "@/lib/profileImeta";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -174,6 +177,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const metadata = author.data?.metadata;
   // kind-0 is author-controlled.
   const banner = sanitizeImageSrc(metadata?.banner);
+  const bannerImeta = imetaFor(banner, author.data?.imeta?.banner);
   const theme = useProfileTheme(pubkey).data?.theme;
   const nsite = useNsite(pubkey).data;
   const badgesQuery = useProfileBadges(pubkey);
@@ -279,8 +283,17 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       </Button>
 
       <div className="relative h-full overflow-y-auto">
-        <div className="h-36 md:h-52 bg-secondary">
-          <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+        <div className="relative h-36 md:h-52 bg-secondary">
+          {isValidBlurhash(bannerImeta?.blurhash) && (
+            <BlurhashCanvas hash={bannerImeta.blurhash} className="absolute inset-0 size-full" />
+          )}
+          <FallbackImage
+            src={banner}
+            imeta={bannerImeta}
+            className="relative w-full h-full object-cover"
+            loading="lazy"
+            decoding="async"
+          />
         </div>
 
         <section className={background ? card : undefined}>
@@ -288,7 +301,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               <div className="flex items-end justify-between gap-2 flex-wrap">
                 <div className="-mt-10 md:-mt-12">
                   <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
-                    <AvatarImage src={metadata?.picture} alt={displayName} />
+                    <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
                     <AvatarFallback className="bg-primary/20 text-primary text-2xl">
                       {displayName[0]?.toUpperCase()}
                     </AvatarFallback>
@@ -760,7 +773,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0 text-left"
       >
         <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
-          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-xs">
             {name[0]?.toUpperCase()}
           </AvatarFallback>

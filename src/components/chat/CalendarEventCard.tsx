@@ -37,7 +37,7 @@ function AttendeeAvatar({ pubkey }: { pubkey: string }) {
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
   return (
     <Avatar className="size-6 ring-2 ring-background">
-      <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+      <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
         {name.slice(0, 2).toUpperCase()}
       </AvatarFallback>

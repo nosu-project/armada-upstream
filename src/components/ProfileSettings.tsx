@@ -16,6 +16,8 @@ import { PaymentTargetsEditor, type PaymentTargetsEditorHandle } from '@/compone
 import { useCurrentUserProfile } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useUploadFile } from '@/hooks/useUploadFile';
+import { useUploadProfileImage } from '@/hooks/useUploadProfileImage';
+import { profileImetaTags } from '@/lib/profileImeta';
 import { useToast } from '@/hooks/useToast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -403,10 +405,14 @@ interface ProfileSettingsProps {
 
 /** WYSIWYG kind-0 editor: an editable {@link ProfileCard} plus typed custom fields. */
 export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = true }: ProfileSettingsProps = {}) {
-  const { user, metadata, event } = useCurrentUserProfile();
+  const { user, metadata, event, imeta: profileImeta } = useCurrentUserProfile();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent, isPending } = useNostrPublish();
-  const { mutateAsync: uploadFile, isPending: isUploading } = useUploadFile();
+  const { mutateAsync: uploadFile, isPending: isUploadingMedia } = useUploadFile();
+  const { upload: uploadProfileImage, isPending: isUploadingImage } = useUploadProfileImage();
+  const isUploading = isUploadingMedia || isUploadingImage;
+  // imeta for each picture/banner uploaded this session, offered to the kind 0 on save.
+  const uploadedImeta = useRef<string[][]>([]);
   const { toast } = useToast();
 
   const [cropState, setCropState] = useState<CropState | null>(null);
@@ -535,7 +541,8 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
 
   const uploadImage = async (file: File, field: 'picture' | 'banner') => {
     try {
-      const [[, url]] = await uploadFile(file);
+      const { url, imeta } = await uploadProfileImage(file);
+      uploadedImeta.current.unshift(imeta);
       form.setValue(field, url, { shouldDirty: true });
       toast({ title: 'Uploaded', description: `${field === 'picture' ? 'Profile picture' : 'Banner'} updated` });
     } catch {
@@ -615,7 +622,12 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
         const nonEmpty = customFields.filter((f) => f.label.trim() && f.value.trim());
         if (nonEmpty.length > 0) data.fields = nonEmpty.map((f) => [f.label, f.value]);
       }
-      await publishEvent({ kind: 0, content: JSON.stringify(data), tags: [], prev: event });
+      await publishEvent({
+        kind: 0,
+        content: JSON.stringify(data),
+        tags: profileImetaTags(data, [...uploadedImeta.current, ...(event?.tags ?? [])]),
+        prev: event,
+      });
       queryClient.invalidateQueries({ queryKey: ['logins'] });
       queryClient.invalidateQueries({ queryKey: ['author', user.pubkey] });
 
@@ -674,6 +686,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
           <ProfileCard
             pubkey={user.pubkey}
             metadata={cardMetadata}
+            imeta={profileImeta}
             onChange={handleCardChange}
             onPickImage={handlePickImage}
             onAvatarShape={(shape) => form.setValue('shape', shape, { shouldDirty: true })}

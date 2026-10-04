@@ -300,7 +300,7 @@ function BuzzForumPost({ event, transport, votes, onVote, isAgent }: BuzzForumPo
         <div className="min-w-0 flex-1 cursor-pointer px-3 py-2" onClick={handleBodyClick}>
           <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
-              <AvatarImage src={metadata?.picture} alt={displayName} />
+              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-[8px] font-semibold">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>

@@ -125,7 +125,7 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
       {...(isTouch ? longPress : {})}
     >
       <Avatar className="mt-0.5 size-6 shrink-0">
-        <AvatarImage src={author.data?.metadata?.picture} alt={actorName} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={actorName} />
         <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
           {actorName[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>

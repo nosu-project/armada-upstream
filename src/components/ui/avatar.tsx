@@ -1,7 +1,9 @@
 import * as React from "react"
 
 import { useBuzzMediaSrc } from "@/buzz/useBuzzMediaSrc"
-import { useImageFallback } from "@/hooks/useBlossomCandidates"
+import { useImetaImage } from "@/hooks/useImetaImage"
+import type { ImetaEntry } from "@/lib/imeta"
+import { imetaFor } from "@/lib/profileImeta"
 import { cn } from "@/lib/utils"
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl"
 import { type AvatarShape, isEmoji, getAvatarMaskUrl, isValidAvatarShape } from "@/lib/avatarShape"
@@ -77,21 +79,31 @@ function upgradeToHttps(src: string | undefined): string | undefined {
 const RETRY_BASE_MS = 3000
 const MAX_TIMED_RETRIES = 4
 
+export interface AvatarImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+  /**
+   * The kind 0's imeta for this picture (`author.data?.imeta?.picture`):
+   * declared fallbacks, and decryption for an encrypted picture. Ignored
+   * unless its `url` is `src`, so it's safe to pass while `src` is edited.
+   */
+  imeta?: ImetaEntry
+}
+
 /** Covers the fallback immediately; the browser renders progressively. */
-const AvatarImage = React.forwardRef<
-  HTMLImageElement,
-  React.ImgHTMLAttributes<HTMLImageElement>
->(({ className, onError, src: rawSrc, ...props }, ref) => {
+const AvatarImage = React.forwardRef<HTMLImageElement, AvatarImageProps>(
+  ({ className, onError, src: rawSrc, imeta, ...props }, ref) => {
   const hasSrcRef = React.useContext(AvatarHasSrcContext)
   // The one chokepoint for untrusted avatar URLs, so scheme/local-network
   // checks live here. Must run BEFORE useBuzzMediaSrc (its object URL is ours).
   const src0 = sanitizeImageSrc(typeof rawSrc === "string" ? rawSrc : undefined)
-  // Buzz avatars need a signed BUD-11 GET header, so they're fetched into an object URL.
-  const { src: resolvedSrc } = useBuzzMediaSrc(src0)
-  const primary = upgradeToHttps(resolvedSrc)
-  // Walk Blossom mirrors (BUD-04) before the initial so one dead server doesn't
-  // blank its avatars. Loaded under the media policy (`lib/mediaPolicy.ts`).
-  const { src, onError: advance, failed, reset } = useImageFallback(primary)
+  const entry = imetaFor(src0, imeta)
+  // Buzz avatars need a signed BUD-11 GET header, so they're fetched into an
+  // object URL. An encrypted picture is fetched by the decrypt instead.
+  const { src: resolvedSrc } = useBuzzMediaSrc(entry?.encryption ? undefined : src0)
+  const primary = upgradeToHttps(entry?.encryption ? src0 : resolvedSrc)
+  // Walk the declared fallbacks, then Blossom mirrors (BUD-04), before the
+  // initial so one dead server doesn't blank its avatars. Loaded under the
+  // media policy (`lib/mediaPolicy.ts`). Encrypted: the initial until decrypted.
+  const { src, onError: advance, failed, reset } = useImetaImage(primary, entry)
 
   const prevSrc = React.useRef(primary)
   const attemptsRef = React.useRef(0)

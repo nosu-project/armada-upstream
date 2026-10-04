@@ -151,7 +151,7 @@ export const MessageRow = memo(function MessageRow({
 
   const avatar = (
     <Avatar shape={getAvatarShape(metadata)} className="size-10">
-      <AvatarImage src={metadata?.picture} alt={displayName} />
+      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
       <AvatarFallback
         className="text-sm"
         style={color ? { backgroundColor: `${color}33`, color } : undefined}
@@ -240,7 +240,7 @@ export const MessageRow = memo(function MessageRow({
         <ProfilePreviewCard pubkey={pubkey}>
           <button type="button" className="shrink-0 mt-0.5 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <Avatar shape={getAvatarShape(metadata)} className="size-10 cursor-pointer transition-opacity hover:opacity-90">
-              <AvatarImage src={metadata?.picture} alt={displayName} />
+              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-sm">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>

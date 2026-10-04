@@ -114,7 +114,7 @@ function ProfilePreviewBody({
   return (
     <>
       <div className="h-16 bg-secondary relative">
-        <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" />
+        <FallbackImage src={banner} imeta={author.data?.imeta?.banner} className="w-full h-full object-cover" loading="lazy" />
 
         {/* Negative actions (unfollow, mute, report) live in this overflow menu. */}
         {!isSelf && (isFollowing || mute.canMute || (user && onReport)) && (
@@ -173,7 +173,7 @@ function ProfilePreviewBody({
       <div className="px-4 pb-4">
         <div className="-mt-8 mb-2">
           <Avatar shape={avatarShape} className="size-16 border-[3px] border-background">
-            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
             <AvatarFallback className="bg-primary/20 text-primary text-lg">
               {displayName[0]?.toUpperCase()}
             </AvatarFallback>

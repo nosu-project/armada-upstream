@@ -27,7 +27,7 @@ function ZapperRow({ zap }: { zap: ZapEntry }) {
   return (
     <div className="flex items-start gap-2.5 px-3 py-1.5">
       <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0 mt-0.5">
-        <AvatarImage src={metadata?.picture} alt={displayName} />
+        <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
         <AvatarFallback className="bg-amber-500/20 text-amber-500 text-[9px]">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>

@@ -88,7 +88,7 @@ function TravelerRow({
     <li className="clip-corner-lg bg-primary/10 p-3">
       <div className="flex items-start gap-3">
         <Avatar className="size-9 shrink-0">
-          {picture ? <AvatarImage src={picture} alt="" /> : null}
+          {picture ? <AvatarImage src={picture} imeta={author.data?.imeta?.picture} alt="" /> : null}
           <AvatarFallback className="bg-primary/20 text-primary">
             <Clock className="size-4" />
           </AvatarFallback>

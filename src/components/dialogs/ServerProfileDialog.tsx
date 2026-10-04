@@ -33,7 +33,7 @@ const PRESET_COLORS = [
 
 /** Per-server nickname, label and username color: NIP-32 self-labels scoped to this relay only. */
 export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProfileDialogProps) {
-  const { user, metadata } = useCurrentUserProfile();
+  const { user, metadata, imeta } = useCurrentUserProfile();
   const { data: profile, isLoading } = useServerProfile(relayUrl, user?.pubkey);
   const { mutateAsync: save, isPending } = useUpdateServerProfile(relayUrl);
 
@@ -103,7 +103,7 @@ export function ServerProfileDialog({ relayUrl, open, onOpenChange }: ServerProf
           <div className="clip-corner-lg bg-background/40 p-3">
             <div className="flex items-start gap-3">
               <Avatar shape={getAvatarShape(metadata)} className="size-10 shrink-0">
-                <AvatarImage src={metadata?.picture} alt={previewName} />
+                <AvatarImage src={metadata?.picture} imeta={imeta?.picture} alt={previewName} />
                 <AvatarFallback className="bg-primary/20 text-primary text-sm">
                   {previewName[0]?.toUpperCase()}
                 </AvatarFallback>

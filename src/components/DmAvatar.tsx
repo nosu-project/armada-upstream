@@ -34,7 +34,7 @@ function DmAvatarCell({
       shape={tile ? "circle" : getAvatarShape(metadata)}
       className={cn("size-full", tile && "rounded-none")}
     >
-      {!anonymous && <AvatarImage src={metadata?.picture} alt={name} />}
+      {!anonymous && <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />}
       <AvatarFallback className={cn("bg-primary/20 text-primary", tile && "rounded-none", fallbackClassName)}>
         {name[0]?.toUpperCase()}
       </AvatarFallback>

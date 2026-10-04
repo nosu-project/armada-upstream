@@ -209,7 +209,7 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
         <NoteToSelfAvatar sizePx={16} className="size-full" />
       ) : (
         <Avatar shape={getAvatarShape(metadata)} className="size-full">
-          <AvatarImage src={metadata?.picture} alt="" draggable={false} />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" draggable={false} />
           <AvatarFallback className="bg-primary/20 text-[9px] font-semibold leading-none text-primary">
             {name.trim().charAt(0).toUpperCase() || "?"}
           </AvatarFallback>
@@ -378,7 +378,7 @@ function DmDragGhost({ pubkey }: { pubkey: string }) {
         <NoteToSelfAvatar sizePx={48} className="size-12 ring-2 ring-primary" />
       ) : (
         <Avatar shape={getAvatarShape(metadata)} className="size-12 ring-2 ring-primary">
-          <AvatarImage src={metadata?.picture} alt={name} />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
           <AvatarFallback className="bg-primary/20 font-semibold text-primary">
             {name.trim().charAt(0).toUpperCase() || "?"}
           </AvatarFallback>
@@ -899,7 +899,7 @@ const DmButton = memo(function DmButton({
                           shape={getAvatarShape(metadata)}
                           className={cn("size-12", dimClass(isActive))}
                         >
-                          <AvatarImage src={metadata?.picture} alt={name} />
+                          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
                           <AvatarFallback className="bg-primary/20 font-semibold text-primary">
                             {name.trim().charAt(0).toUpperCase() || "?"}
                           </AvatarFallback>

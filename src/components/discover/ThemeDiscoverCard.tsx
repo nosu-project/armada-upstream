@@ -157,7 +157,7 @@ export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) 
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground min-w-0"
           >
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
-              <AvatarImage src={metadata?.picture} alt={displayName} />
+              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>

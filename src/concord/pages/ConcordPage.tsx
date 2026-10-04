@@ -927,7 +927,7 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
   const name = metadata?.name ?? pubkey.slice(0, 8);
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-chrome" title={name}>
-      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/20 text-primary text-[9px] font-semibold uppercase">
         {name.slice(0, 1)}
       </AvatarFallback>

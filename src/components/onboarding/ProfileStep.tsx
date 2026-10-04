@@ -13,7 +13,8 @@ import {
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
-import { useUploadFile } from "@/hooks/useUploadFile";
+import { useUploadProfileImage } from "@/hooks/useUploadProfileImage";
+import { profileImetaTags } from "@/lib/profileImeta";
 import { DEFAULT_AVATARS, type DefaultAvatar } from "@/lib/defaultAvatars";
 import { impact } from "@/lib/haptics";
 import { cn } from "@/lib/utils";
@@ -24,7 +25,7 @@ type Picture =
   | { kind: "none" }
   /** A preset is already a Blossom URL, so publishing one uploads nothing. */
   | { kind: "default"; avatar: DefaultAvatar }
-  | { kind: "uploaded"; url: string };
+  | { kind: "uploaded"; url: string; imeta: string[] };
 
 export interface ProfileStepBodyProps {
   /**
@@ -45,7 +46,7 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent } = useNostrPublish();
-  const { mutateAsync: uploadFile, isPending: uploading } = useUploadFile();
+  const { upload: uploadProfileImage, isPending: uploading } = useUploadProfileImage();
 
   const busy = saving || uploading;
 
@@ -76,8 +77,8 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
     }
 
     try {
-      const [[, url]] = await uploadFile(file);
-      if (url) setPicture({ kind: "uploaded", url });
+      const { url, imeta } = await uploadProfileImage(file);
+      if (url) setPicture({ kind: "uploaded", url, imeta });
     } catch {
       toast({
         title: "Couldn't upload that",
@@ -122,7 +123,11 @@ export function ProfileStepBody({ expectedPubkey, onFinish }: ProfileStepBodyPro
       if (trimmed) metadata.name = trimmed;
       if (pictureUrl) metadata.picture = pictureUrl;
 
-      await publishEvent({ kind: 0, content: JSON.stringify(metadata), tags: [] });
+      await publishEvent({
+        kind: 0,
+        content: JSON.stringify(metadata),
+        tags: picture.kind === "uploaded" ? profileImetaTags(metadata, [picture.imeta]) : [],
+      });
       queryClient.invalidateQueries({ queryKey: ["logins"] });
       queryClient.invalidateQueries({ queryKey: ["author", user.pubkey] });
     } catch {

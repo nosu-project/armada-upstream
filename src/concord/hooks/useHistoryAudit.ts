@@ -49,6 +49,7 @@ import { parseImetaMap, type ImetaEntry } from "@/lib/imeta";
 import { routeMediaCandidates, type MediaPolicy } from "@/lib/mediaPolicy";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { useMediaPolicy } from "@/hooks/useMediaPolicy";
+import { plainProfilePicture } from "@/lib/profileImeta";
 
 /** Backfill rounds per channel; each round pages up to 20×50 wraps oldest-ward. */
 const MAX_BACKFILL_ROUNDS = 60;
@@ -325,7 +326,7 @@ export function useHistoryAudit(community: Community | undefined) {
             const name = metadata?.name || metadata?.display_name || "";
             // Member-controlled URL that ends up in a `<style>` rule; scheme-check at the
             // source as well as at the sink.
-            const picture = sanitizeUrl(metadata?.picture);
+            const picture = sanitizeUrl(plainProfilePicture(ev.tags, metadata));
             profiles[pk] = { pubkey: pk, name, ...(picture ? { picture } : {}) };
           }
         }
