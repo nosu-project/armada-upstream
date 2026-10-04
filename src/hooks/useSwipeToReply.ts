@@ -32,6 +32,7 @@ export interface UseSwipeToReplyResult {
     onTouchStart: (e: React.TouchEvent) => void;
     onTouchMove: (e: React.TouchEvent) => void;
     onTouchEnd: () => void;
+    onTouchCancel: () => void;
   };
 }
 
@@ -109,6 +110,14 @@ export function useSwipeToReply(
     [enabled],
   );
 
+  // The system back gesture pilfers an edge swipe mid-drag; spring back, never reply.
+  const onTouchCancel = useCallback(() => {
+    active.current = false;
+    horizontal.current = false;
+    setDragging(false);
+    setOffset(0);
+  }, []);
+
   const onTouchEnd = useCallback(
     () => {
       if (!enabled || !active.current) {
@@ -136,6 +145,6 @@ export function useSwipeToReply(
     offset,
     dragging,
     pastThreshold: offset >= THRESHOLD,
-    touchHandlers: { onTouchStart, onTouchMove, onTouchEnd },
+    touchHandlers: { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel },
   };
 }
