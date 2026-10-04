@@ -580,11 +580,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
       min: layout === "document" ? 120 : 0,
     });
+    // The wrapper is held at its height during the probe: a collapsed composer
+    // would grow the timeline for the forced layout and clamp its scrollTop.
     const measure = () => {
       const { max, min } = bounds();
+      const box = el.parentElement;
+      const held = box?.style.height ?? "";
+      if (box) box.style.height = `${box.offsetHeight}px`;
       el.style.height = "auto";
       const height = Math.min(Math.max(el.scrollHeight, min), max);
       el.style.height = `${height}px`;
+      if (box) box.style.height = held;
       return height;
     };
     const emptyKey = `${layout}:${window.innerWidth >= MD_BREAKPOINT_PX}:${window.innerHeight}`;

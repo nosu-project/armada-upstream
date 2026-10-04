@@ -680,15 +680,25 @@ export function MessageTimeline({
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
+    let viewportHeight = el.clientHeight;
     const ro = new ResizeObserver(() => {
       if (pinBottomRef.current || pendingJumpRef.current) return;
+      const resized = el.clientHeight !== viewportHeight;
+      viewportHeight = el.clientHeight;
       if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
-      else stickToBottom();
+      else if (resized && distanceRef.current > 1) {
+        // The pane resized under a reader just short of the bottom (the composer
+        // grew a line): keep what they're reading still rather than shifting it.
+        distanceRef.current = distanceFromBottom(el);
+        lastScrollTopRef.current = clampedScrollTop(el);
+        setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
+        captureReadingAnchor();
+      } else stickToBottom();
     });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [listVisible, restoreReadingAnchor, stickToBottom]);
+  }, [listVisible, captureReadingAnchor, restoreReadingAnchor, stickToBottom]);
 
   /**
    * Near the top: reveal loaded messages, else request an older page. Only when
