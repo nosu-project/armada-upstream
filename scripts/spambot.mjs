@@ -505,6 +505,33 @@ async function resolveBundle(pool, invite) {
 
 /** Fold the control plane and return public, non-deleted channels. */
 async function discoverChannels(pool, bundle) {
+  const editions = await readControlEditions(pool, bundle);
+  const channels = [];
+  let privateSkipped = 0;
+  let deletedSkipped = 0;
+  // Own testing grounds sometimes have only PRIVATE channels; let a run target
+  // them explicitly. The stream key derives from community_root + channel id
+  // regardless of the private flag, so a post reads back the same way.
+  const includePrivate = process.env.INCLUDE_PRIVATE === "1";
+  for (const [eid, ed] of editions) {
+    if (ed.vsk !== "2") continue;
+    try {
+      const def = JSON.parse(ed.content);
+      if (def.deleted) { deletedSkipped += 1; continue; }
+      if (def.private && !includePrivate) { privateSkipped += 1; continue; }
+      channels.push({ id: eid, name: def.name ?? "channel", private: Boolean(def.private) });
+    } catch {
+      // skip
+    }
+  }
+  if (channels.length === 0) {
+    log(`discoverChannels: ${editions.size} edition(s), ${privateSkipped} private skipped, ${deletedSkipped} deleted (set INCLUDE_PRIVATE=1 to include private)`);
+  }
+  return channels;
+}
+
+/** The control plane's latest edition per `eid`: eid -> { ev, vsk, content }. */
+async function readControlEditions(pool, bundle) {
   // The control plane has split read/write keys. Post-split, the wrap AUTHOR is
   // the delivered `control_pk` (a control_root-derived signer a joiner can't
   // derive), while the wraps are still decrypted under the community_root read
@@ -541,28 +568,7 @@ async function discoverChannels(pool, bundle) {
       // not decryptable / malformed — skip
     }
   }
-  const channels = [];
-  let privateSkipped = 0;
-  let deletedSkipped = 0;
-  // Own testing grounds sometimes have only PRIVATE channels; let a run target
-  // them explicitly. The stream key derives from community_root + channel id
-  // regardless of the private flag, so a post reads back the same way.
-  const includePrivate = process.env.INCLUDE_PRIVATE === "1";
-  for (const [eid, ed] of editions) {
-    if (ed.vsk !== "2") continue;
-    try {
-      const def = JSON.parse(ed.content);
-      if (def.deleted) { deletedSkipped += 1; continue; }
-      if (def.private && !includePrivate) { privateSkipped += 1; continue; }
-      channels.push({ id: eid, name: def.name ?? "channel", private: Boolean(def.private) });
-    } catch {
-      // skip
-    }
-  }
-  if (channels.length === 0) {
-    log(`discoverChannels: ${editions.size} edition(s), ${privateSkipped} private skipped, ${deletedSkipped} deleted (set INCLUDE_PRIVATE=1 to include private)`);
-  }
-  return channels;
+  return editions;
 }
 
 // ---------------------------------------------------------------------------
@@ -1380,6 +1386,22 @@ async function main() {
     await sleep(opts.intervalMs);
   }
 }
+
+// Shared with scripts/voicebots.mjs.
+export {
+  RelayPool,
+  buildInfo,
+  buildRumor,
+  channelGroupKey,
+  groupKey,
+  guestbookJoin,
+  hkdf32,
+  log,
+  parseInvite,
+  readControlEditions,
+  resolveBundle,
+  STOCK_RELAYS,
+};
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
