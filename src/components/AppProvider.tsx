@@ -9,6 +9,8 @@ import {
   subscribeActivePubkey,
 } from "@/lib/activeAccount";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
+import { useThemePreview } from "@/lib/themePreview";
 import { hslStringToHex, isDarkTheme } from "@/lib/colorUtils";
 import { syncNativeStatusBar } from "@/lib/statusBar";
 import {
@@ -128,7 +130,13 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
     deserialize: deserializeConfig,
   });
 
-  useApplyTheme(config);
+  // A theme preview paints over the user's own theme without touching the stored config.
+  const preview = useThemePreview();
+  const paintedConfig = useMemo<AppConfig>(
+    () => (preview ? { ...config, theme: "custom", customTheme: preview.config } : config),
+    [config, preview],
+  );
+  useApplyTheme(paintedConfig);
 
   // public/theme.js handles the very first paint.
   useEffect(() => {
@@ -142,5 +150,42 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
     [config, setConfig],
   );
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      <ThemeBackgroundSync config={paintedConfig} />
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+/** CSS `url()` value for a resolved src; quotes, backslashes and newlines can't break out of the string. */
+function cssUrl(src: string): string {
+  return `url("${src.replace(/["\\\n\r]/g, (c) => encodeURIComponent(c))}")`;
+}
+
+/**
+ * Publish the active theme's background to CSS (`html.theme-bg` + `--theme-bg-*`,
+ * consumed in index.css). Inside the provider so the image loads under the media policy.
+ */
+function ThemeBackgroundSync({ config }: { config: AppConfig }) {
+  const background = resolveTheme(config.theme) === "custom" ? config.customTheme?.background : undefined;
+  const src = useMediaSrc(background?.url);
+  const tile = background?.mode === "tile";
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (!src) {
+      root.classList.remove("theme-bg");
+      return;
+    }
+    root.style.setProperty("--theme-bg-image", cssUrl(src));
+    root.style.setProperty("--theme-bg-size", tile ? "auto" : "cover");
+    root.style.setProperty("--theme-bg-repeat", tile ? "repeat" : "no-repeat");
+    root.classList.add("theme-bg");
+    return () => {
+      root.classList.remove("theme-bg");
+    };
+  }, [src, tile]);
+
+  return null;
 }

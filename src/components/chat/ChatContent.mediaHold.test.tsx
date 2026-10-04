@@ -60,7 +60,7 @@ function renderWith(
   event = message(),
   host: (pubkey: string, url: string) => boolean = () => false,
 ) {
-  const hold = holds && { mode: "trusted" as const, media: holds, avatar: holds, host };
+  const hold = holds && { mode: "trusted" as const, media: holds, host };
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>

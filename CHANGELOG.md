@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.1] - 2026-10-03
+
+Themes can be tried on before applying, carry a background image and credit
+their creator, and Discover can be narrowed to you, your friends or everyone.
+Calls keep the screen awake and recover their audio after an interruption, and
+remote signers are retried more gently.
+
+### Added
+- Try a theme on before applying it, with background images, a creator credit, and editing or deleting the themes you published
+- A You / Friends / The world filter on Discover
+- Open-signer buttons for Amber, Clave and Aegis in the remote signer reminder
+
+### Changed
+- Theme backgrounds show a heavier tint behind app surfaces
+- Discover lists communities from the curated list, you and the people you follow unless "Show all content" is on
+- Remote signer requests back off instead of re-sending rapidly, and pending ones are re-sent when a relay reconnects
+- Creating a channel on a relay-hosted server waits for the server to confirm it, and channels the server doesn't know are listed under "Not found on this server"
+
+### Fixed
+- The screen stays on during calls, and call audio resumes after being interrupted
+- New members' avatars and banners in communities are no longer held back
+- The member list no longer stays limited to a private channel's members after leaving it
+- "Launch on startup" on Windows shows as on when "Start minimized" is enabled, and turning it off works
+
 ## [0.64.0] - 2026-10-03
 
 3D models sent in chat can now be turned, flicked and zoomed right in the

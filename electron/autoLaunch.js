@@ -61,6 +61,16 @@ function isSupported(platform, appImpl, method) {
   );
 }
 
+// Windows compares the whole Run value, args included, so an entry written
+// with --hidden only reads as registered when the same arg is passed back.
+function readOpenAtLogin(platform, appImpl) {
+  if (appImpl.getLoginItemSettings().openAtLogin) return true;
+  return (
+    platform === "win32" &&
+    Boolean(appImpl.getLoginItemSettings({ args: [HIDDEN_ARG] }).openAtLogin)
+  );
+}
+
 function getLaunchSettings({
   platform = process.platform,
   appImpl,
@@ -72,7 +82,7 @@ function getLaunchSettings({
   }
   let openAtLogin = false;
   try {
-    openAtLogin = Boolean(appImpl.getLoginItemSettings().openAtLogin);
+    openAtLogin = readOpenAtLogin(platform, appImpl);
   } catch {
     openAtLogin = false;
   }

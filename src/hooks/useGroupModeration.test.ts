@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { metadataTags } from "@/hooks/useGroupModeration";
+import { metadataTags, waitForGroupMetadata } from "@/hooks/useGroupModeration";
 
+import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 const current = {
@@ -55,5 +56,25 @@ describe("metadataTags (kind 9002)", () => {
 
   it("builds from the patch alone for a new group", () => {
     expect(metadataTags({ name: "Fresh", isClosed: false })).toEqual([["name", "Fresh"], ["open"]]);
+  });
+});
+
+describe("waitForGroupMetadata", () => {
+  const meta = { ...current, tags: [["d", "g"]] } as NostrEvent;
+
+  it("resolves true once the relay serves the group's 39000", async () => {
+    const answers: NostrEvent[][] = [[], [meta]];
+    const query = vi.fn(async (_filters: unknown[]) => answers.shift() ?? []);
+    expect(await waitForGroupMetadata({ query }, "g", "b".repeat(64), [0, 0, 0])).toBe(true);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0][0]).toEqual([{ kinds: [39000], "#d": ["g"], authors: ["b".repeat(64)], limit: 1 }]);
+  });
+
+  it("resolves false when no read ever shows it, treating a failed read as no answer", async () => {
+    const query = vi.fn()
+      .mockRejectedValueOnce(new Error("closed"))
+      .mockResolvedValue([{ ...meta, kind: 9007 }]);
+    expect(await waitForGroupMetadata({ query }, "g", undefined, [0, 0])).toBe(false);
+    expect(query.mock.calls[1][0]).toEqual([{ kinds: [39000], "#d": ["g"], limit: 1 }]);
   });
 });

@@ -27,7 +27,7 @@ const ANA = "a".repeat(64);
 const SPAM_URL = "https://spam.example/x.png";
 const ANA_URL = "https://emoji.example/heart.png";
 
-const holdSpam: MediaHold = { mode: "trusted", media: (pk) => pk === SPAM, avatar: (pk) => pk === SPAM, host: () => false };
+const holdSpam: MediaHold = { mode: "trusted", media: (pk) => pk === SPAM, host: () => false };
 
 function renderPill(tally: ReactionTally, onReact: (i: ReactInput) => void = () => {}) {
   return render(

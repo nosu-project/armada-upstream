@@ -1,6 +1,8 @@
-import { Check, Loader2, Palette, Share2 } from "lucide-react";
+import { Check, Loader2, Palette, Pencil, Share2 } from "lucide-react";
 import { useState } from "react";
 
+import { ThemeCreatorDialog } from "@/components/discover/ThemeCreatorDialog";
+import { ThemeBackgroundField } from "@/components/ThemeBackgroundField";
 import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
@@ -9,7 +11,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCopyNaddrLink } from "@/hooks/useNaddrLink";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
-import { useUserThemes } from "@/hooks/useUserThemes";
+import { useUserThemes, type UserTheme } from "@/hooks/useUserThemes";
 import { toast } from "@/hooks/useToast";
 import { buildThemeDefinitionEvent } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
@@ -19,6 +21,7 @@ import {
   coreToTokens,
   themePresets,
   type CoreThemeColors,
+  type ThemeBackground,
   type ThemeConfig,
 } from "@/themes";
 
@@ -44,31 +47,47 @@ interface TileProps {
   colors: CoreThemeColors;
   active: boolean;
   onClick: () => void;
+  /** Shows an edit control on the tile (the user's own library themes). */
+  onEdit?: () => void;
 }
 
-function ThemeTile({ label, emoji, colors, active, onClick }: TileProps) {
+function ThemeTile({ label, emoji, colors, active, onClick, onEdit }: TileProps) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "group relative flex flex-col items-stretch gap-1.5 rounded-xl border-2 p-1.5 text-left transition-all",
-        active ? "border-primary" : "border-transparent hover:border-border",
-      )}
-    >
-      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg border">
-        <Swatch colors={colors} />
-        {active && (
-          <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
-            <Check className="size-3" />
-          </span>
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        className={cn(
+          "flex w-full flex-col items-stretch gap-1.5 rounded-xl border-2 p-1.5 text-left transition-all",
+          active ? "border-primary" : "border-transparent hover:border-border",
         )}
-      </div>
-      <span className="px-0.5 text-xs font-medium truncate">
-        {emoji ? `${emoji} ` : ""}{label}
-      </span>
-    </button>
+      >
+        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg border">
+          <Swatch colors={colors} />
+          {active && (
+            <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
+              <Check className="size-3" />
+            </span>
+          )}
+        </div>
+        <span className={cn("px-0.5 text-xs font-medium truncate", onEdit && "pr-7")}>
+          {emoji ? `${emoji} ` : ""}{label}
+        </span>
+      </button>
+      {onEdit && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="absolute bottom-0.5 right-0.5 size-7 touch:size-11 text-muted-foreground hover:text-foreground"
+          onClick={onEdit}
+          aria-label={`Edit ${label}`}
+          title="Edit theme"
+        >
+          <Pencil className="size-3.5" />
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -80,6 +99,7 @@ export function ThemeSelector() {
   const { mutateAsync: publishEvent, isPending: sharing } = useNostrPublish();
   const copyLinkFor = useCopyNaddrLink();
   const [builderOpen, setBuilderOpen] = useState(false);
+  const [editingTheme, setEditingTheme] = useState<UserTheme | undefined>();
 
   const presetKeys = Object.keys(themePresets);
   const activeColorsJson = theme === "custom" && customTheme
@@ -95,16 +115,30 @@ export function ThemeSelector() {
 
   const selectMode = (mode: Theme) => setTheme(mode);
 
-  const canShare = theme === "custom" && !!customTheme;
+  // Someone else's theme is already on Discover under their name.
+  const canShare = theme === "custom" && !!customTheme && !customTheme.source;
   const shareTheme = async () => {
     if (!customTheme) return;
+    const title = customTheme.title || "My theme";
+    // Re-sharing updates the library theme of the same name instead of adding another.
+    const existing = userThemes?.find((t) => t.title === title && !t.source);
+    const sameAsExisting = !!existing
+      && JSON.stringify([existing.colors, existing.background]) === JSON.stringify([customTheme.colors, customTheme.background]);
     try {
-      const event = await publishEvent(
-        buildThemeDefinitionEvent(customTheme.title || "My theme", customTheme.colors),
-      );
+      const event = sameAsExisting
+        ? existing.event
+        : await publishEvent({
+          ...buildThemeDefinitionEvent(title, customTheme.colors, existing?.identifier, {
+            background: customTheme.background,
+            font: existing?.font,
+            titleFont: existing?.titleFont,
+            description: existing?.description,
+          }),
+          prev: existing?.event,
+        });
       const copyLink = copyLinkFor(event);
       toast({
-        title: "Theme shared",
+        title: sameAsExisting ? "Already shared" : "Theme shared",
         description: "It's now discoverable by others.",
         ...(copyLink && {
           action: (
@@ -186,7 +220,13 @@ export function ThemeSelector() {
                   label={t.title}
                   colors={t.colors}
                   active={activeUserThemeId === t.identifier}
-                  onClick={() => applyCustomTheme({ title: t.title, colors: t.colors })}
+                  onClick={() => applyCustomTheme({
+                    title: t.title,
+                    colors: t.colors,
+                    ...(t.background && { background: t.background }),
+                    ...(t.source && { source: t.source }),
+                  })}
+                  onEdit={() => setEditingTheme(t)}
                 />
               ))}
             </div>
@@ -217,6 +257,14 @@ export function ThemeSelector() {
         initial={isCustomBuild ? customTheme : undefined}
         onApply={applyCustomTheme}
       />
+
+      {editingTheme && (
+        <ThemeCreatorDialog
+          open
+          onOpenChange={(open) => { if (!open) setEditingTheme(undefined); }}
+          editing={editingTheme}
+        />
+      )}
     </div>
   );
 }
@@ -231,6 +279,8 @@ interface BuilderProps {
 function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderProps) {
   const [colors, setColors] = useState<CoreThemeColors>(initial?.colors ?? builderStarterColors);
   const [title, setTitle] = useState(initial?.title ?? "My theme");
+  const [background, setBackground] = useState<ThemeBackground | undefined>(initial?.background);
+  const [uploading, setUploading] = useState(false);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -255,14 +305,18 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
             onTitleChange={setTitle}
           />
 
+          <ThemeBackgroundField value={background} onChange={setBackground} onUploadingChange={setUploading} />
+
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button
               className="flex-1 clip-corner-lg"
+              disabled={uploading}
               onClick={() => {
-                onApply({ title: title.trim() || "Custom", colors });
+                // Built here, so no creator credit carries over.
+                onApply({ title: title.trim() || "Custom", colors, ...(background && { background }) });
                 onOpenChange(false);
               }}
             >

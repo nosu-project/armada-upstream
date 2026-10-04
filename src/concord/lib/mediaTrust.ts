@@ -10,22 +10,19 @@
  * (`holdsMediaUrl`, `lib/knownMediaHosts.ts`).
  *
  * An author's media loads when they are the reader, staff, followed by the reader,
- * reached by the fold's earned-trust graph (`floodVerdict`), or ESTABLISHED: first
- * observed by THIS client at least {@link MEDIA_PROBATION_MS} ago. Observation time
- * is the local clock, not `created_at`, so a backdated message can't age its key —
- * except while a channel is first being read ({@link MEDIA_SEED_GRACE_MS}), when
- * its existing history is all there is to go on.
+ * reached by the fold's earned-trust graph (`floodVerdict`), or ESTABLISHED: already
+ * speaking when this client first read the community (the baseline a joiner extends
+ * to the members it found there), or first observed by THIS client at least
+ * {@link MEDIA_PROBATION_MS} ago. Observation time is the local clock, not
+ * `created_at`, so a backdated message can't age its key — except while a channel is
+ * first being read ({@link MEDIA_SEED_GRACE_MS}), when its existing history is all
+ * there is to go on.
  */
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { isKnownMediaHost } from "@/lib/knownMediaHosts";
 
 /** How long a newly observed author's media stays held. */
 export const MEDIA_PROBATION_MS = 24 * 3_600_000;
-/**
- * The same for their avatar and banner. Shorter: a held picture costs every
- * newcomer their face, where held media costs only a tap.
- */
-export const AVATAR_PROBATION_MS = 3_600_000;
 /**
  * After this client first reads a channel, observations keep their own timestamp
  * for this long (its history arriving); afterwards an unseen author is new NOW.
@@ -89,10 +86,11 @@ export interface MediaHoldInputs {
   now: number;
 }
 
-function untrusted(author: string, i: MediaHoldInputs, probationMs: number): boolean {
-  if (i.isStaff?.(author) || i.trusted?.has(author) || i.follows?.has(author)) return false;
-  const seen = i.sightings?.authors[author];
-  return seen === undefined || i.now - seen < probationMs;
+/** When this client first read any channel of the community: its arrival. */
+function firstReadAt(sightings: Sightings): number | undefined {
+  let first: number | undefined;
+  for (const at of Object.values(sightings.channels)) if (first === undefined || at < first) first = at;
+  return first;
 }
 
 /** Whether `author`'s media must wait for the reader to load it. */
@@ -100,16 +98,13 @@ export function holdsMedia(author: string, i: MediaHoldInputs): boolean {
   if (author === i.self) return false;
   if (i.mode === "always") return false;
   if (i.mode === "never") return true;
-  return untrusted(author, i, MEDIA_PROBATION_MS);
-}
-
-/**
- * Whether `author`'s profile picture and banner are withheld (initials instead).
- * `never` applies the trusted rule here: holding every avatar would leave no faces.
- */
-export function holdsAvatar(author: string, i: MediaHoldInputs): boolean {
-  if (author === i.self || i.mode === "always") return false;
-  return untrusted(author, i, AVATAR_PROBATION_MS);
+  if (i.isStaff?.(author) || i.trusted?.has(author) || i.follows?.has(author)) return false;
+  const seen = i.sightings?.authors[author];
+  if (seen === undefined) return true;
+  // Present before the reader arrived: a member they joined, not a newcomer.
+  const arrived = firstReadAt(i.sightings!);
+  if (arrived !== undefined && seen < arrived) return false;
+  return i.now - seen < MEDIA_PROBATION_MS;
 }
 
 /**
@@ -127,13 +122,12 @@ export function holdsMediaUrl(
   return !isKnownMediaHost(url, known);
 }
 
-/** When the next observed author leaves either probation, or undefined. */
+/** When the next observed author leaves probation, or undefined. */
 export function nextEstablishedAt(sightings: Sightings | undefined, now: number): number | undefined {
   let next: number | undefined;
   for (const seen of Object.values(sightings?.authors ?? {})) {
-    for (const at of [seen + AVATAR_PROBATION_MS, seen + MEDIA_PROBATION_MS]) {
-      if (at > now && (next === undefined || at < next)) next = at;
-    }
+    const at = seen + MEDIA_PROBATION_MS;
+    if (at > now && (next === undefined || at < next)) next = at;
   }
   return next;
 }

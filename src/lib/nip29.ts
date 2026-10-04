@@ -518,6 +518,28 @@ export function relayGroupCacheFilters(
 }
 
 /**
+ * NIP-11 lists its NIPs and 29 is not among them. An absent or empty list says
+ * nothing (plenty of relays publish none), so it is only ever a warning.
+ */
+export function relayDeniesNip29(info: { supported_nips?: number[] } | undefined): boolean {
+  const nips = info?.supported_nips;
+  return Array.isArray(nips) && nips.length > 0 && !nips.includes(29);
+}
+
+/** The kind-10009 refs hosted on `relay`; lists mix `wss://host` and `wss://host/`. */
+export function groupRefsOn(refs: GroupRef[], relay: string): GroupRef[] {
+  const target = normalizeRelayUrl(relay) ?? relay;
+  return refs.filter((ref) => (normalizeRelayUrl(ref.relay) ?? ref.relay) === target);
+}
+
+/** Ids of the user's channels on `relay` that have no metadata in `groups`, deduped and sorted. */
+export function missingGroupIds(refs: GroupRef[], relay: string, groups: Nip29Group[]): string[] {
+  const known = new Set(groups.map((g) => g.id));
+  const ids = groupRefsOn(refs, relay).map((ref) => ref.id).filter((id) => !known.has(id));
+  return [...new Set(ids)].sort();
+}
+
+/**
  * Dedupe kind-39000 events by `d` (newest wins) into a name-sorted channel list.
  * Staleness is decided by `reconcileRelayGroups`.
  */
