@@ -1,4 +1,4 @@
-import { AtSign, Check, Copy, Eye, Flag, Globe, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
+import { AtSign, Check, Copy, Flag, Globe, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
 import { Slot } from "@radix-ui/react-slot";
 import { useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
@@ -7,7 +7,6 @@ import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { MemberModerationActions } from "@/components/chat/MemberModerationActions";
-import { revealAvatar } from "@/components/chat/mediaHold";
 import { FollowButton } from "@/components/FollowButton";
 import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -116,19 +115,6 @@ function ProfilePreviewBody({
     <>
       <div className="h-16 bg-secondary relative">
         <FallbackImage src={banner} className="w-full h-full object-cover" loading="lazy" />
-
-        {/* Withheld by the media hold (`mediaHold.ts`); loads for this session. */}
-        {author.data?.imagesWithheld && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="absolute left-1.5 top-1.5 z-10 h-8 gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground hover:bg-background/40 hover:text-foreground touch:h-11"
-            onClick={() => revealAvatar(pubkey)}
-          >
-            <Eye className="size-3.5" />
-            Show pictures
-          </Button>
-        )}
 
         {/* Negative actions (unfollow, mute, report) live in this overflow menu. */}
         {!isSelf && (isFollowing || mute.canMute || (user && onReport)) && (

@@ -1,27 +1,25 @@
 import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 
-import { isAvatarRevealed, isMessageRevealed, subscribeRevealed } from "@/components/chat/revealedMedia";
+import { isMessageRevealed, subscribeRevealed } from "@/components/chat/revealedMedia";
 import { AppContext } from "@/contexts/AppContext";
 
 /**
- * Which authors' sender-chosen images wait (see `concord/lib/mediaTrust.ts`):
- * `media` is message media, behind an explicit "Load"; `avatar` is the profile
- * picture and banner, shown as initials; `host` holds one media URL whose host
- * the viewer doesn't know (`lib/knownMediaHosts.ts`), whoever sent it. Absent
+ * Which authors' message media waits behind an explicit "Load" (see
+ * `concord/lib/mediaTrust.ts`): `media` by sender; `host` holds one media URL whose
+ * host the viewer doesn't know (`lib/knownMediaHosts.ts`), whoever sent it. Absent
  * provider = load everything, so surfaces that don't hold (DMs, NIP-29) are
- * unchanged. The value must be memoized: every message body and avatar reads it.
+ * unchanged. The value must be memoized: every message body reads it.
  */
 export interface MediaHold {
   /** The reader's autoload mode, for the held card's wording. */
   mode: "always" | "trusted" | "never";
   media: (pubkey: string) => boolean;
-  avatar: (pubkey: string) => boolean;
   host: (pubkey: string, url: string) => boolean;
 }
 
 export const MediaHoldContext = createContext<MediaHold | null>(null);
 
-export { revealAvatar, revealMessageMedia } from "@/components/chat/revealedMedia";
+export { revealMessageMedia } from "@/components/chat/revealedMedia";
 
 export function useMessageRevealed(id: string | undefined): boolean {
   return useSyncExternalStore(subscribeRevealed, () => isMessageRevealed(id));
@@ -30,12 +28,6 @@ export function useMessageRevealed(id: string | undefined): boolean {
 export function useMediaHeld(pubkey: string | undefined): boolean {
   const hold = useContext(MediaHoldContext);
   return Boolean(hold && pubkey && hold.media(pubkey));
-}
-
-export function useAvatarHeld(pubkey: string | undefined): boolean {
-  const hold = useContext(MediaHoldContext);
-  const revealed = useSyncExternalStore(subscribeRevealed, () => isAvatarRevealed(pubkey));
-  return Boolean(hold && pubkey && !revealed && hold.avatar(pubkey));
 }
 
 /**
