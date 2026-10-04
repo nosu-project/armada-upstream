@@ -48,14 +48,34 @@ import { useChatEditing } from "@/components/chat/useChatEditing";
 import type { CalendarTransport } from "@/lib/calendar";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** NIP-29 reply context: fetches the replied-to event and renders the shared chrome. */
-function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl: string; onJump: (id: string) => void }) {
+/**
+ * NIP-29 reply context. A parent already in the loaded window renders with its
+ * row, so a fresh reply never paints first and gains its context a fetch later.
+ */
+function ReplyContext({
+  eventId,
+  parent,
+  relayUrl,
+  onJump,
+}: {
+  eventId: string;
+  parent: ChatMsg | undefined;
+  relayUrl: string;
+  onJump: (id: string) => void;
+}) {
+  if (parent) return <ReplyContextFor event={parent} onJump={onJump} />;
+  return <FetchedReplyContext eventId={eventId} relayUrl={relayUrl} onJump={onJump} />;
+}
+
+function FetchedReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl: string; onJump: (id: string) => void }) {
   const { data: event } = useEvent(eventId, [relayUrl]);
-  const author = useAuthor(event?.pubkey);
-  const displayName = useScopedDisplayName(event?.pubkey, author.data?.metadata);
-
   if (!event) return null;
+  return <ReplyContextFor event={event} onJump={onJump} />;
+}
 
+function ReplyContextFor({ event, onJump }: { event: ChatMsg; onJump: (id: string) => void }) {
+  const author = useAuthor(event.pubkey);
+  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
   const image = firstImageRef(event);
   return (
     <ReplyContextLine
@@ -63,7 +83,7 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
       pubkey={event.pubkey}
       preview={<ReplyPreview content={event.content} tags={event.tags} hideMediaPlaceholder={!!image} />}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(eventId)}
+      onClick={() => onJump(event.id)}
     />
   );
 }
@@ -83,6 +103,8 @@ interface Nip29ChatMessageProps {
   onEditCancel: () => void;
   onJumpToReply: (id: string) => void;
   onReply: (event: ChatMsg) => void;
+  /** The inline-reply parent when it is in the loaded window. */
+  replyParent?: ChatMsg;
 }
 
 /**
@@ -104,6 +126,7 @@ function Nip29ChatMessage({
   onEditCancel,
   onJumpToReply,
   onReply,
+  replyParent,
 }: Nip29ChatMessageProps) {
   const { config } = useAppContext();
   // The transport is rebuilt on every message/page, so memoize derived props and
@@ -128,9 +151,9 @@ function Nip29ChatMessage({
   const replyContext = useMemo(
     () =>
       replyToId ? (
-        <ReplyContext eventId={replyToId} relayUrl={relayUrl} onJump={onJumpToReply} />
+        <ReplyContext eventId={replyToId} parent={replyParent} relayUrl={relayUrl} onJump={onJumpToReply} />
       ) : undefined,
-    [replyToId, relayUrl, onJumpToReply],
+    [replyToId, replyParent, relayUrl, onJumpToReply],
   );
   // Timeline rows link to the room; ThreadPanel supplies thread-scoped links.
   const permalink = useMemo(
@@ -423,6 +446,16 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     );
   }, [messages, calendarMsgs]);
 
+  const messagesById = useMemo(() => {
+    const map = new Map<string, ChatMsg>();
+    for (const m of messages) map.set(m.id, m);
+    return map;
+  }, [messages]);
+  const replyParentOf = (msg: ChatMsg) => {
+    const id = getReplyToId(msg);
+    return id ? messagesById.get(id) : undefined;
+  };
+
   const { editingId, startEditing, cancelEditing, handleEditSubmit, editLast } = useChatEditing({
     edit: async (original, content) => {
       const edited = await editMessage({ original, content });
@@ -541,6 +574,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                       onEditCancel={cancelEditing}
                       onJumpToReply={jumpToReply}
                       onReply={setReplyTo}
+                      replyParent={replyParentOf(msg)}
                     />
                   ))}
               </>
@@ -575,6 +609,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
                 onEditCancel={cancelEditing}
                 onJumpToReply={jumpToReply}
                 onReply={setReplyTo}
+                replyParent={replyParentOf(msg)}
               />
             )}
           />
