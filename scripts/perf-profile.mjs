@@ -576,7 +576,7 @@ try {
     });
   }
 
-  const concordScenarios = ["concord-boot", "concord-idle", "concord-scroll", "concord-switch"];
+  const concordScenarios = ["concord-boot", "concord-idle", "concord-scroll", "concord-switch", "concord-type", "concord-type-touch"];
   if (concordScenarios.some(wants)) {
     // Seed a community: a 3000-message #general and seven small channels.
     await page.goto("/e2e/concordSeed.html");
@@ -672,6 +672,76 @@ try {
         errors: errorsSince(mark),
         report: await report(page),
       });
+    }
+
+    for (const touch of [false, true]) {
+      const name = touch ? "concord-type-touch" : "concord-type";
+      if (!wants(name)) continue;
+      console.log(`▶ ${name} (composing in #general${touch ? ", phone-sized with touch" : ""})`);
+      mark = errors.length;
+      if (touch) {
+        await page.setViewportSize({ width: 412, height: 915 });
+        await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+      }
+      await page.goto(channelPath(0));
+      await until(page, generalVisible, 90_000);
+      await page.waitForTimeout(3000);
+      const coarse = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+      const box = page.locator("main textarea:visible").first();
+      await box.click();
+      // Keydown → the first task after the next frame: what a keystroke costs
+      // the reader, layout included.
+      await page.evaluate(() => {
+        window.__keyMs = [];
+        addEventListener("keydown", (e) => {
+          const t0 = e.timeStamp;
+          requestAnimationFrame(() => setTimeout(() => window.__keyMs.push(performance.now() - t0)));
+        }, true);
+      });
+      await resetCounters(page);
+      const a = await metrics(cdp);
+      const t = Date.now();
+      let keys = 0;
+      /** Whether the long message moved the field onto its own full-width row. */
+      let fullWidth = false;
+      const { hot } = await cpuProfile(name, async () => {
+        for (let round = 0; round < 3; round++) {
+          // Long enough to wrap several lines on a phone; edits mid-message
+          // take the composer's full re-measure path.
+          const text = LINES.slice(0, 6).join(" ");
+          await box.pressSequentially(text, { delay: 25 });
+          if (round === 0) fullWidth = await box.evaluate((el) => el.parentElement.classList.contains("basis-full"));
+          for (let i = 0; i < 40; i++) await page.keyboard.press("Backspace", { delay: 25 });
+          await box.pressSequentially(LINES[7], { delay: 25 });
+          await page.keyboard.press("ControlOrMeta+a");
+          await page.keyboard.press("Backspace");
+          keys += text.length + 40 + LINES[7].length + 2;
+        }
+      });
+      const b = await metrics(cdp);
+      const ms = (await page.evaluate(() => window.__keyMs)).sort((x, y) => x - y);
+      const at = (q) => Math.round(ms[Math.min(ms.length - 1, Math.floor(ms.length * q))] * 10) / 10;
+      save(name, {
+        hot,
+        coarsePointer: coarse,
+        fullWidth,
+        keys,
+        keyToFrameMs: { p50: at(0.5), p95: at(0.95), p99: at(0.99), max: at(1) },
+        perKey: {
+          taskMs: Math.round(((b.TaskDuration - a.TaskDuration) / keys) * 1e4) / 10,
+          scriptMs: Math.round(((b.ScriptDuration - a.ScriptDuration) / keys) * 1e4) / 10,
+          layoutMs: Math.round(((b.LayoutDuration - a.LayoutDuration) / keys) * 1e4) / 10,
+          styleMs: Math.round(((b.RecalcStyleDuration - a.RecalcStyleDuration) / keys) * 1e4) / 10,
+          layouts: Math.round(((b.LayoutCount - a.LayoutCount) / keys) * 100) / 100,
+        },
+        cost: cost(a, b, (Date.now() - t) / 1000),
+        errors: errorsSince(mark),
+        report: await report(page),
+      });
+      if (touch) {
+        await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+        await page.setViewportSize({ width: 1280, height: 800 });
+      }
     }
   }
 

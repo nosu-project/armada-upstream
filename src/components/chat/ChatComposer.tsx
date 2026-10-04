@@ -573,10 +573,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // `height: auto` probe re-lays-out the whole pane, so skip it for an empty
   // field (cached per layout) and for append-only edits (compare `scrollHeight`).
   const measuredContentRef = useRef<string | null>(null);
+  // Touch: once a message wraps, the field takes the full width and the controls
+  // drop to a row beneath it, until it's cleared (latched, so it can't oscillate).
+  const [wrapped, setWrapped] = useState(false);
+  if (wrapped && !content) setWrapped(false);
+  const measuredWrappedRef = useRef(wrapped);
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    const previous = measuredContentRef.current;
+    // The field's width changed with the layout: a stale height can't be grown from.
+    const relaid = measuredWrappedRef.current !== wrapped;
+    measuredWrappedRef.current = wrapped;
+    const previous = relaid ? null : measuredContentRef.current;
     measuredContentRef.current = content;
     const bounds = () => ({
       max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
@@ -608,9 +616,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } else {
       measure();
     }
+    if (isTouch && layout === "bar" && !wrapped && content) {
+      const style = getComputedStyle(el);
+      const text = el.scrollHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      if (text > parseFloat(style.lineHeight) * 1.5) setWrapped(true);
+    }
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [content, layout]);
+  }, [content, layout, isTouch, wrapped]);
 
   // Deferred a frame: a context menu still trapping focus would pull it back.
   useEffect(() => {
@@ -2042,7 +2055,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <div
               className={cn(
                 "clip-corner-lg bg-secondary/60 px-1.5 py-1.5",
-                isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
+                isDocument || wrapped ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
               )}
             >
               {/* Pointer: a double-click on "+" skips the menu and opens the file picker. */}
@@ -2125,7 +2138,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </Popover>
               )}
 
-              <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
+              <div className={cn("relative flex-1 min-w-0", (isDocument || wrapped) && "order-first basis-full")}>
                 {/* Overlay, not the `placeholder` attribute: a wrapped native placeholder
                     inflates scrollHeight and the empty composer to two lines. */}
                 {!content && (
@@ -2198,7 +2211,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
               </div>
 
-              <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
+              <div ref={pickerToggleGroupRef} className={cn("flex shrink-0 items-center gap-0.5 touch:gap-1", wrapped && "ml-auto")}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
