@@ -794,13 +794,20 @@ const inflight = new Map<string, Promise<OpenedEvent[]>>();
 /** Extra enrollment time for an OPEN gate, so same-render callers coalesce. */
 const BATCH_WINDOW_MS = 50;
 
+/**
+ * Scopes per batch, each one filter of its REQ. Relays cap filters per REQ and
+ * CLOSE the whole REQ past it; a full batch leaves the next scope a new one.
+ */
+const MAX_FILTERS_PER_REQ = 16;
+
 /** A per-relay batch collecting scopes until the auth gate opens. */
 interface RelayBatch {
   scopes: PlaneScope[];
   closed: boolean;
   promise: Promise<Map<string, OpenedEvent[]>>;
 }
-const batches = new Map<string, RelayBatch>();
+/** Each relay's batches still taking scopes, oldest first; only the last has room. */
+const batches = new Map<string, RelayBatch[]>();
 
 /** Build and register a fresh batch; its promise resolves after the auth gate. */
 function newBatch(nostr: NostrLike, url: string): RelayBatch {
@@ -812,13 +819,15 @@ function newBatch(nostr: NostrLike, url: string): RelayBatch {
       await new Promise((r) => setTimeout(r, BATCH_WINDOW_MS));
       await whenAuthReady(url, () => b.scopes.flatMap((s) => s.groups));
       b.closed = true;
-      if (batches.get(url) === b) batches.delete(url);
+      const open = batches.get(url)?.filter((other) => other !== b) ?? [];
+      if (open.length > 0) batches.set(url, open);
+      else batches.delete(url);
       return await runScopes(nostr, url, b.scopes);
     } finally {
       task.end();
     }
   })();
-  batches.set(url, b);
+  batches.set(url, [...(batches.get(url) ?? []), b]);
   return b;
 }
 
@@ -830,10 +839,13 @@ const flightKey = (s: PlaneScope) => (s.exhaustive ? `${s.scope}|exhaustive` : s
 
 /** Enroll one scope into the relay's open batch (creating one if needed). */
 function enqueue(nostr: NostrLike, url: string, scope: PlaneScope): Promise<OpenedEvent[]> {
-  const batch = batches.get(url);
-  const b = batch && !batch.closed ? batch : newBatch(nostr, url);
   // A budgeted and an exhaustive request for one plane collapse to the stronger
-  // read here, fanning callbacks out, so they don't race to publish a verdict.
+  // read here, fanning callbacks out, so they don't race to publish a verdict —
+  // in whichever open batch holds it, full or not.
+  const open = (batches.get(url) ?? []).filter((batch) => !batch.closed);
+  const holder = open.find((batch) => batch.scopes.some((s) => s.scope === scope.scope));
+  const last = open.at(-1);
+  const b = holder ?? (last && last.scopes.length < MAX_FILTERS_PER_REQ ? last : newBatch(nostr, url));
   const twin = b.scopes.find((s) => s.scope === scope.scope);
   if (twin) {
     twin.exhaustive = twin.exhaustive || scope.exhaustive;

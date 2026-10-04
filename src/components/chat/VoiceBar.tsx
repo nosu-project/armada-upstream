@@ -213,7 +213,7 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
     <div className="px-2 py-1.5" onPointerDown={(e) => e.stopPropagation()}>
       <div className="flex items-center gap-2 mb-1.5">
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
-          <AvatarImage src={metadata?.picture} alt={name} />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
           <AvatarFallback className="bg-success/20 text-success text-[9px]">
             {name[0]?.toUpperCase()}
           </AvatarFallback>

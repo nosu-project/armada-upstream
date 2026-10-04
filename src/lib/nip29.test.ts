@@ -4,10 +4,12 @@ import { nip19 } from "nostr-tools";
 import {
   buildGroupNaddr,
   buildGroupPinsTags,
+  groupRefsOn,
   KIND_GROUP_METADATA,
   KIND_GROUP_PINS,
   KIND_RELAY_MEMBERS,
   KIND_UPDATE_PIN_LIST,
+  missingGroupIds,
   nip29GroupPath,
   parseAddrPinRef,
   parseGroupAddress,
@@ -16,6 +18,7 @@ import {
   parseGroupPins,
   parseRelayMemberRoles,
   reconcileRelayGroups,
+  relayDeniesNip29,
 } from "@/lib/nip29";
 import { normalizeRelayUrl } from "@/lib/platform";
 
@@ -298,5 +301,36 @@ describe("reconcileRelayGroups", () => {
 
   it("is a plain collapse with no cache", () => {
     expect(ids([meta("b"), meta("a")])).toEqual(["a", "b"]);
+  });
+});
+
+describe("relayDeniesNip29", () => {
+  it("is true only for a NIP list that omits 29", () => {
+    expect(relayDeniesNip29({ supported_nips: [1, 11, 42] })).toBe(true);
+    expect(relayDeniesNip29({ supported_nips: [1, 29] })).toBe(false);
+  });
+
+  it("reads a missing or empty list as no information", () => {
+    expect(relayDeniesNip29(undefined)).toBe(false);
+    expect(relayDeniesNip29({})).toBe(false);
+    expect(relayDeniesNip29({ supported_nips: [] })).toBe(false);
+  });
+});
+
+describe("missingGroupIds", () => {
+  const RELAY = "wss://relay.example";
+  const group = (id: string) =>
+    reconcileRelayGroups([], [{ ...snapshot([["d", id], ["name", id]], KIND_GROUP_METADATA), id: id.padEnd(64, "0") }], RELAY)
+      .groups[0];
+
+  it("lists refs on the relay that have no metadata, deduped across URL spellings", () => {
+    const refs = [
+      { id: "known", relay: RELAY },
+      { id: "gone", relay: RELAY },
+      { id: "gone", relay: `${RELAY}/` },
+      { id: "elsewhere", relay: "wss://other.example" },
+    ];
+    expect(missingGroupIds(refs, RELAY, [group("known")])).toEqual(["gone"]);
+    expect(groupRefsOn(refs, `${RELAY}/`).map((r) => r.relay)).toEqual([RELAY, RELAY, `${RELAY}/`]);
   });
 });

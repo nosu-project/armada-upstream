@@ -57,7 +57,7 @@ function ReportRow({ report }: { report: ReportEntry }) {
     <li className="space-y-2 rounded-md bg-foreground/5 px-3 py-2.5 text-sm">
       <div className="flex items-center gap-2.5">
         <Avatar className="size-6 shrink-0">
-          <AvatarImage src={accusedAuthor.data?.metadata?.picture} alt={accusedName} />
+          <AvatarImage src={accusedAuthor.data?.metadata?.picture} imeta={accusedAuthor.data?.imeta?.picture} alt={accusedName} />
           <AvatarFallback className="bg-destructive/20 text-[10px] text-destructive">
             {accusedName[0]?.toUpperCase() ?? "?"}
           </AvatarFallback>

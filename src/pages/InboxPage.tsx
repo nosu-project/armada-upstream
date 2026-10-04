@@ -60,7 +60,7 @@ function InboxRow({
       )}
     >
       <Avatar className="size-9 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={displayName} />
+        <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
         <AvatarFallback className="bg-primary/20 text-primary text-xs">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>

@@ -1,9 +1,12 @@
 import { hexToHslString, hslStringToHex, isValidHex } from "@/lib/colorUtils";
+import { isNostrId } from "@/lib/nostrId";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { EventTemplate } from "@/hooks/useNostrPublish";
-import type { CoreThemeColors } from "@/themes";
+import type { CoreThemeColors, ThemeBackground, ThemeConfig, ThemeSource } from "@/themes";
 import type { NostrRumor } from "@/lib/nostrRumor";
+
+export type { ThemeBackground, ThemeSource } from "@/themes";
 
 /**
  * Ditto theme events (interop): core colors plus optional fonts and background
@@ -19,17 +22,6 @@ export const ACTIVE_THEME_KIND = 16767;
 export interface ThemeFont {
   family: string;
   url?: string;
-}
-
-/** A theme background image (`bg` tag, imeta-style key-value entries). */
-export interface ThemeBackground {
-  url: string;
-  /** How the image fills the page. Default: cover. */
-  mode?: "cover" | "tile";
-  mimeType?: string;
-  /** `<width>x<height>` as published. */
-  dimensions?: string;
-  blurhash?: string;
 }
 
 /** Parse the `c` color tags (hex, role-tagged) into CoreThemeColors. */
@@ -136,6 +128,63 @@ export interface DittoTheme {
   description?: string;
   /** `a`-tag coordinate of the source kind-36767 definition (16767 only). */
   sourceRef?: string;
+  /** The original creator, when this event is someone wearing or keeping another user's theme. */
+  source?: ThemeSource;
+}
+
+/**
+ * The credited creator of an adopted theme: a well-formed 36767 `a` coordinate,
+ * else a `p` tag. Undefined when the event's own author made it.
+ */
+function parseThemeSource(event: NostrRumor): ThemeSource | undefined {
+  let source: ThemeSource | undefined;
+  for (const [name, value] of event.tags) {
+    if (name !== "a" || !value) continue;
+    const [kind, pubkey, ...rest] = value.split(":");
+    const identifier = rest.join(":");
+    if (kind === String(THEME_DEFINITION_KIND) && isNostrId(pubkey) && identifier) {
+      source = { pubkey, identifier };
+      break;
+    }
+  }
+  if (!source) {
+    const pubkey = event.tags.find(([n]) => n === "p")?.[1];
+    if (isNostrId(pubkey)) source = { pubkey };
+  }
+  return source && source.pubkey !== event.pubkey ? source : undefined;
+}
+
+function buildSourceTags(source: ThemeSource | undefined): string[][] {
+  if (!source) return [];
+  const tags: string[][] = [];
+  if (source.identifier) tags.push(["a", `${THEME_DEFINITION_KIND}:${source.pubkey}:${source.identifier}`]);
+  tags.push(["p", source.pubkey]);
+  return tags;
+}
+
+export function isAdoptedTheme(event: NostrRumor): boolean {
+  return (event.kind === THEME_DEFINITION_KIND || event.kind === ACTIVE_THEME_KIND)
+    && !!parseThemeSource(event);
+}
+
+/**
+ * The ThemeConfig a viewer adopts from a theme event, crediting its creator:
+ * the event's own credit if it is itself a copy, else its author.
+ */
+export function themeEventToConfig(event: NostrRumor): ThemeConfig | null {
+  const theme = parseDittoTheme(event);
+  if (!theme) return null;
+  const source: ThemeSource = theme.source ?? (
+    event.kind === THEME_DEFINITION_KIND && theme.identifier
+      ? { pubkey: event.pubkey, identifier: theme.identifier }
+      : { pubkey: event.pubkey }
+  );
+  return {
+    title: theme.title,
+    colors: theme.colors,
+    ...(theme.background && { background: theme.background }),
+    source,
+  };
 }
 
 /** Parse a kind 36767 / 16767 event into a DittoTheme. Returns null if invalid. */
@@ -155,8 +204,9 @@ export function parseDittoTheme(event: NostrRumor): DittoTheme | null {
   const background = parseBackgroundTag(event.tags);
   const sourceRef =
     event.kind === ACTIVE_THEME_KIND ? event.tags.find(([n]) => n === "a")?.[1] : undefined;
+  const source = parseThemeSource(event);
 
-  return { identifier, title, colors, font, titleFont, background, description, sourceRef };
+  return { identifier, title, colors, font, titleFont, background, description, sourceRef, source };
 }
 
 /** The optional non-color parts of a theme, shared by both builders. */
@@ -165,6 +215,7 @@ export interface ThemeExtras {
   titleFont?: ThemeFont;
   background?: ThemeBackground;
   description?: string;
+  source?: ThemeSource;
 }
 
 /** A short, stable-ish slug for a theme's `d` identifier. */
@@ -194,14 +245,16 @@ export function buildThemeDefinitionEvent(
     // NIP-31 alt + topic tag, matching Ditto's emit.
     ["alt", `Custom theme: ${name}`],
     ["t", "theme"],
+    ...buildSourceTags(extras?.source),
   ];
   if (extras?.description) tags.push(["description", extras.description]);
   return { kind: THEME_DEFINITION_KIND, content: "", tags };
 }
 
 /**
- * Build the kind-16767 active profile theme (Ditto-compatible). `sourceRef` is
- * the originating 36767 `a` coordinate. Only published on explicit user action.
+ * Build the kind-16767 active profile theme (Ditto-compatible). `source` credits
+ * the theme's creator (`a` + `p`); a bare `sourceRef` is the older `a`-only form.
+ * Only published on explicit user action.
  */
 export function buildActiveThemeEvent(
   colors: CoreThemeColors,
@@ -215,11 +268,22 @@ export function buildActiveThemeEvent(
   ];
   if (opts?.title) tags.push(["title", opts.title]);
   if (opts?.description) tags.push(["description", opts.description]);
-  if (opts?.sourceRef) tags.push(["a", opts.sourceRef]);
+  if (opts?.source) tags.push(...buildSourceTags(opts.source));
+  else if (opts?.sourceRef) tags.push(["a", opts.sourceRef]);
   return { kind: ACTIVE_THEME_KIND, content: "", tags };
 }
 
 /** Kind-16767 with no colors: removes the profile theme (as Ditto's clearActiveTheme). */
 export function buildClearActiveThemeEvent(): EventTemplate {
   return { kind: ACTIVE_THEME_KIND, content: "", tags: [] };
+}
+
+/** NIP-09 deletion of one of the user's kind-36767 definitions, by address (and id when known). */
+export function buildThemeDeletionEvent(pubkey: string, identifier: string, eventId?: string): EventTemplate {
+  const tags: string[][] = [
+    ["a", `${THEME_DEFINITION_KIND}:${pubkey}:${identifier}`],
+    ["k", String(THEME_DEFINITION_KIND)],
+  ];
+  if (eventId) tags.unshift(["e", eventId]);
+  return { kind: 5, content: "", tags };
 }

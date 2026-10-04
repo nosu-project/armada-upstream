@@ -170,7 +170,7 @@ export function ReplyContextLine({
       <span aria-hidden className="chat-reply-connector" />
       {pubkey && (
         <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
-          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
             {name[0]?.toUpperCase()}
           </AvatarFallback>
@@ -227,7 +227,7 @@ function ThreadParticipantAvatar({ pubkey }: { pubkey: string }) {
   const name = useScopedDisplayName(pubkey, metadata);
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-background">
-      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/25 text-primary text-[9px] font-semibold">
         {name[0]?.toUpperCase()}
       </AvatarFallback>

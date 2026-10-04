@@ -143,7 +143,43 @@ async function fetchAllWraps(
   }
 }
 
-/** Deliver wraps to one target relay; every event is attempted, failures counted. */
+/**
+ * Pacing for a relay that answers `rate-limited:`: wait, doubling to the cap,
+ * and send one at a time until it accepts again. A relay that refuses this way
+ * for `giveUpMs` straight has the rest counted as rejected.
+ */
+const rateLimitBackoff = { initialMs: 2_000, maxMs: 30_000, giveUpMs: 180_000 };
+
+/** Test-only: shrink the rate-limit pacing. */
+export function _configureMirrorBackoffForTests(cfg: Partial<typeof rateLimitBackoff>): void {
+  Object.assign(rateLimitBackoff, cfg);
+}
+
+function isRateLimited(reason: unknown): boolean {
+  return reason instanceof Error && /^rate-limited:/i.test(reason.message);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Mirror cancelled.", "AbortError"));
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Mirror cancelled.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Deliver wraps to one target relay; every event is attempted, failures counted.
+ * A refusal or loss gets one more try, after the rest (a transient socket loss
+ * shouldn't count as a rejection). `rate-limited:` is not a refusal: those
+ * events wait and go again, paced by {@link rateLimitBackoff}.
+ */
 async function publishWraps(
   nostr: MirrorNostr,
   url: string,
@@ -152,30 +188,59 @@ async function publishWraps(
   signal?: AbortSignal,
 ): Promise<MirrorRelayResult> {
   let accepted = 0;
-  const failed: NostrEvent[] = [];
-  const deliver = async (batchList: NostrEvent[], sink: NostrEvent[] | null) => {
-    let done = 0;
-    for (const batch of chunk(batchList, PUBLISH_CONCURRENCY)) {
-      throwIfAborted(signal);
-      const results = await Promise.allSettled(
-        batch.map((w) => nostr.relay(url).event(w, { signal: AbortSignal.timeout(8000) })),
-      );
-      results.forEach((r, i) => {
-        if (r.status === "fulfilled") accepted++;
-        else sink?.push(batch[i]);
-      });
-      done += batch.length;
-      onProgress?.(done);
+  let rejected = 0;
+  const queue = [...wraps];
+  const retried = new Set<string>();
+  let concurrency = PUBLISH_CONCURRENCY;
+  let backoff = rateLimitBackoff.initialMs;
+  let limitedSince: number | undefined;
+
+  while (queue.length > 0) {
+    throwIfAborted(signal);
+    const batch = queue.splice(0, concurrency);
+    const results = await Promise.allSettled(
+      batch.map((w) => nostr.relay(url).event(w, { signal: AbortSignal.timeout(8000) })),
+    );
+    const limited: NostrEvent[] = [];
+    let progressed = false;
+    results.forEach((r, i) => {
+      const wrap = batch[i];
+      if (r.status === "fulfilled") {
+        accepted++;
+        progressed = true;
+      } else if (isRateLimited(r.reason)) {
+        limited.push(wrap);
+      } else if (!retried.has(wrap.id)) {
+        retried.add(wrap.id);
+        queue.push(wrap);
+      } else {
+        rejected++;
+      }
+    });
+    if (progressed) {
+      backoff = rateLimitBackoff.initialMs;
+      concurrency = Math.min(concurrency * 2, PUBLISH_CONCURRENCY);
+      limitedSince = undefined;
     }
-  };
-  await deliver(wraps, failed);
-  // One retry sweep: a transient socket loss shouldn't count as a rejection.
-  const retry = failed.splice(0, failed.length);
-  if (retry.length > 0) await deliver(retry, failed);
-  return { accepted, rejected: failed.length };
+    onProgress?.(accepted + rejected);
+    if (limited.length === 0) continue;
+
+    limitedSince ??= Date.now();
+    if (Date.now() - limitedSince >= rateLimitBackoff.giveUpMs) {
+      logSync("mirror", `${url}: still rate-limited after ${Math.round((Date.now() - limitedSince) / 1000)}s — giving up`);
+      rejected += limited.length + queue.length;
+      queue.length = 0;
+      onProgress?.(accepted + rejected);
+      break;
+    }
+    queue.unshift(...limited);
+    concurrency = 1;
+    await sleep(backoff, signal);
+    backoff = Math.min(backoff * 2, rateLimitBackoff.maxMs);
+  }
+  return { accepted, rejected };
 }
 
-/**
 /**
  * Copy the correctness-set history onto `targetRelays`. Idempotent: relays dedup by id.
  */

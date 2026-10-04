@@ -11,8 +11,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import type { EmojiSelection } from '@/components/chat/EmojiPicker';
-import { sanitizeUrl } from '@/lib/sanitizeUrl';
-import { useMediaSrc } from '@/hooks/useMediaPolicy';
+import { sanitizeImageSrc } from '@/lib/sanitizeUrl';
+import { FallbackImage } from '@/components/ui/FallbackImage';
+import type { ProfileImeta } from '@/lib/profileImeta';
 
 /** Lazy so emoji-mart (~420 KB data) stays out of this chunk; only used behind the avatar-shape dialog. */
 const LazyEmojiPicker = lazy(() =>
@@ -90,6 +91,8 @@ export interface ProfileField {
 export interface ProfileCardProps {
   pubkey?: string;
   metadata: Partial<NostrMetadata>;
+  /** The kind 0's imeta for `picture`/`banner`; entries for edited URLs are ignored. */
+  imeta?: ProfileImeta;
   onChange?: (patch: Partial<NostrMetadata>) => void;
   onPickImage?: (field: 'picture' | 'banner') => void;
   /** Called with an emoji string, or empty to clear. */
@@ -104,6 +107,7 @@ export interface ProfileCardProps {
 export function ProfileCard({
   pubkey,
   metadata,
+  imeta,
   onChange,
   onPickImage,
   onAvatarShape,
@@ -121,8 +125,7 @@ export function ProfileCard({
   const initial = displayName[0]?.toUpperCase() ?? '?';
   const patch = (key: keyof NostrMetadata) => (v: string) => onChange?.({ [key]: v });
 
-  // Sanitize before CSS url() interpolation, and load under the media policy.
-  const bannerUrl = useMediaSrc(sanitizeUrl(metadata.banner));
+  const bannerUrl = sanitizeImageSrc(metadata.banner);
 
   const rawShape = (metadata as { shape?: unknown }).shape;
   const shape: AvatarShape | undefined = isValidAvatarShape(rawShape) ? rawShape : undefined;
@@ -175,13 +178,10 @@ export function ProfileCard({
 
       <div
         className={cn('relative h-36 bg-secondary', editable && 'cursor-pointer group')}
-        style={
-          bannerUrl
-            ? { backgroundImage: `url("${bannerUrl}")`, backgroundSize: 'cover', backgroundPosition: 'center' }
-            : undefined
-        }
         onClick={() => editable && onPickImage?.('banner')}
       >
+        {/* An <img>, not a CSS background, so it can walk mirrors and decrypt. */}
+        <FallbackImage src={bannerUrl} imeta={imeta?.banner} className="absolute inset-0 size-full object-cover" />
         {!metadata.banner && <div className="absolute inset-0 bg-gradient-to-br from-accent/10 via-transparent to-primary/5" />}
         {editable && !metadata.banner && (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -215,7 +215,7 @@ export function ProfileCard({
                   <button type="button" className="relative shrink-0 cursor-pointer group outline-none">
                     <div style={hasCustomShape ? shapedAvatarBorderStyle : undefined}>
                       <Avatar shape={shape} className={cn("shadow-sm", hasCustomShape ? "size-[88px]" : "size-24 border-4 border-background")}>
-                        <AvatarImage src={metadata.picture} alt={displayName} className="object-cover" />
+                        <AvatarImage src={metadata.picture} imeta={imeta?.picture} alt={displayName} className="object-cover" />
                         <AvatarFallback className="bg-primary/20 text-primary text-2xl font-bold">
                           {metadata.picture ? initial : <Plus className="size-8 text-muted-foreground" strokeWidth={4} />}
                         </AvatarFallback>
@@ -289,7 +289,7 @@ export function ProfileCard({
           ) : (
             <div className="relative shrink-0" style={hasCustomShape ? shapedAvatarBorderStyle : undefined}>
               <Avatar shape={shape} className={cn("shadow-sm", hasCustomShape ? "size-[88px]" : "size-24 border-4 border-background")}>
-                <AvatarImage src={metadata.picture} alt={displayName} className="object-cover" />
+                <AvatarImage src={metadata.picture} imeta={imeta?.picture} alt={displayName} className="object-cover" />
                 <AvatarFallback className="bg-primary/20 text-primary text-2xl font-bold">
                   {initial}
                 </AvatarFallback>

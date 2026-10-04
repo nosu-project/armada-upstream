@@ -81,7 +81,7 @@ function MessageResult({ message, onSelect }: { message: MessageEntry; onSelect:
   return (
     <CommandItem value={`${message.content} ${message.key}`} onSelect={onSelect}>
       <Avatar className="mr-2 size-7 shrink-0">
-        <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
         <AvatarFallback className="text-xs">{name.slice(0, 1).toUpperCase()}</AvatarFallback>
       </Avatar>
       <div className="flex min-w-0 flex-col">

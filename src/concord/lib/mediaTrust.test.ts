@@ -6,12 +6,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AVATAR_PROBATION_MS,
   MEDIA_PROBATION_MS,
   MEDIA_SEED_GRACE_MS,
   MEDIA_SIGHTINGS_MAX_AUTHORS,
   flushSightings,
-  holdsAvatar,
   holdsMedia,
   nextEstablishedAt,
   noteSightings,
@@ -101,19 +99,22 @@ describe("holdsMedia", () => {
     expect(holdsMedia(ana, base({ mode: "never", self: ana }))).toBe(false);
   });
 
-  it("releases avatars on the shorter probation, and treats never as trusted for them", () => {
-    const at = NOW - 60_000 + AVATAR_PROBATION_MS;
-    expect(holdsAvatar(ben, base({ sightings: established }))).toBe(true);
-    expect(holdsAvatar(ben, base({ sightings: established, now: at }))).toBe(false);
-    expect(holdsMedia(ben, base({ sightings: established, now: at }))).toBe(true);
-    expect(holdsAvatar(ana, base({ mode: "never", sightings: established }))).toBe(false);
-    expect(holdsAvatar(spam, base({ mode: "never", sightings: established }))).toBe(true);
-    expect(holdsAvatar(spam, base({ mode: "always" }))).toBe(false);
+  it("trusts whoever was already speaking when the reader first read the community", () => {
+    const joined = noteSightings(undefined, "general", [[ana, NOW - 60_000]], NOW)!;
+    expect(holdsMedia(ana, base({ sightings: joined }))).toBe(false);
+    const later = noteSightings(joined, "general", [[spam, NOW + 60_000]], NOW + 60_000)!;
+    expect(holdsMedia(spam, base({ sightings: later, now: NOW + 60_000 }))).toBe(true);
   });
 
-  it("schedules the next probation crossing, avatar or media", () => {
-    expect(nextEstablishedAt(established, NOW)).toBe(NOW - 60_000 + AVATAR_PROBATION_MS);
-    expect(nextEstablishedAt(established, NOW - 60_000 + AVATAR_PROBATION_MS)).toBe(NOW - 60_000 + MEDIA_PROBATION_MS);
+  it("measures arrival from the community's first channel read, not a later channel's", () => {
+    const joined = noteSightings(undefined, "general", [[ana, NOW - DAY]], NOW)!;
+    const later = NOW + 2 * DAY;
+    const s = noteSightings(joined, "art", [[spam, later - 60_000]], later)!;
+    expect(holdsMedia(spam, base({ sightings: s, now: later }))).toBe(true);
+  });
+
+  it("schedules the next probation crossing", () => {
+    expect(nextEstablishedAt(established, NOW)).toBe(NOW - 60_000 + MEDIA_PROBATION_MS);
     expect(nextEstablishedAt(undefined, NOW)).toBeUndefined();
   });
 });

@@ -58,7 +58,7 @@ function BotIdentity({ pubkey, avatarOnly }: { pubkey: string; avatarOnly?: bool
   return (
     <>
       <Avatar className="size-4 shrink-0">
-        <AvatarImage src={image} alt="" />
+        <AvatarImage src={image} imeta={author.data?.imeta?.picture} alt="" />
         <AvatarFallback className="text-[8px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
       </Avatar>
       {!avatarOnly && (

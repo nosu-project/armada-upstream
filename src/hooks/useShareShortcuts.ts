@@ -18,6 +18,7 @@ import {
 import { sentRooms, subscribeSentRooms, warmSentRooms } from "@/lib/shareTargets";
 
 import type { Dm17Conversation } from "@/hooks/useDm17";
+import { plainProfilePicture } from "@/lib/profileImeta";
 import type { NostrMetadata } from "@nostrify/nostrify";
 
 /** Keep it off the boot path. */
@@ -114,7 +115,8 @@ export function useShareShortcuts(): void {
       for (const ev of events) {
         if ((at.get(ev.pubkey) ?? -1) >= ev.created_at) continue;
         try {
-          profiles.set(ev.pubkey, JSON.parse(ev.content) as NostrMetadata);
+          const metadata = JSON.parse(ev.content) as NostrMetadata;
+          profiles.set(ev.pubkey, { ...metadata, picture: plainProfilePicture(ev.tags, metadata) });
           at.set(ev.pubkey, ev.created_at);
         } catch {
           // Unparseable kind 0 — fall back to the npub label below.
@@ -129,10 +131,7 @@ export function useShareShortcuts(): void {
         const name = getDisplayName(metadata);
         const label =
           name !== "Anonymous" ? name : `${nip19.npubEncode(c.peer).slice(0, 12)}…`;
-        const iconUrl = mediaSrc(
-          typeof metadata?.picture === "string" ? metadata.picture : undefined,
-          mediaPolicyRef.current,
-        );
+        const iconUrl = mediaSrc(metadata?.picture, mediaPolicyRef.current);
         shortcuts.push({ id: c.id, label, ...(iconUrl ? { iconUrl } : {}) });
       } else if (c.label) {
         const iconUrl = mediaSrc(c.iconUrl, mediaPolicyRef.current);

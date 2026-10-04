@@ -15,8 +15,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCreateGroup, useGroupModeration } from "@/hooks/useGroupModeration";
+import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { toast } from "@/hooks/useToast";
+import { relayDeniesNip29 } from "@/lib/nip29";
 import { relayToRouteParam } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +55,9 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
   const { user } = useCurrentUser();
   const navigate = useNavigate();
   const { isBuzz } = useIsBuzzRelay(relayUrl);
+  const { data: relayInfo } = useRelayInfo(relayUrl);
+  const relaySelf = relayInfo?.self || relayInfo?.pubkey;
+  const noNip29 = !isBuzz && relayDeniesNip29(relayInfo);
   const [name, setName] = useState("");
   const [about, setAbout] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
@@ -82,7 +87,8 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
         if (about.trim()) extraTags.push(["about", about.trim()]);
         await createGroup({ groupId: effectiveId, extraTags });
       } else {
-        await createGroup({ groupId: effectiveId });
+        // Stops here, before the 9002 and the list entry, if the relay never makes the group.
+        await createGroup({ groupId: effectiveId, verify: { relaySelf } });
         await editMetadata.mutateAsync({
           patch: {
             name: name.trim(),
@@ -197,6 +203,14 @@ export function CreateGroupDialog({ relayUrl, open, onOpenChange }: CreateGroupD
               />
             )}
           </div>
+
+          {noNip29 && !error && (
+            <Alert>
+              <AlertDescription>
+                This server doesn&apos;t list support for NIP-29 groups, so it probably can&apos;t host channels.
+              </AlertDescription>
+            </Alert>
+          )}
 
           {error && (
             <Alert variant="destructive">

@@ -1,8 +1,7 @@
 import { createContext } from "react";
 
-import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { APP_BLOSSOM_SERVERS, PREFERRED_BLOSSOM_SERVER } from "@/lib/blossom";
-import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -85,7 +84,8 @@ export interface AppConfig {
   broadcastRelays: string[];
   /**
    * Home relays a NEW Concord community is minted on (create-dialog default).
-   * Seeded from the CORD stock set; emptied → falls back to it. Separate from
+   * Seeded from COMMUNITY_RELAYS (the CORD stock set unless a deployment
+   * names its own); emptied → falls back to the stock set. Separate from
    * `appRelays` (account traffic) and from the frozen protocol uses of
    * `STOCK_RELAYS` (fragment codec, vault rescue floor, invite fallbacks).
    */
@@ -390,7 +390,7 @@ export const defaultConfig: AppConfig = {
   collapsedChannelCategories: {},
   appRelays: [...APP_RELAYS],
   broadcastRelays: [...BROADCAST_RELAYS],
-  communityRelays: [...STOCK_RELAYS],
+  communityRelays: [...COMMUNITY_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   preferredVoiceServer: getPreferredVoiceServer(),
   automaticSettingsSync: true,

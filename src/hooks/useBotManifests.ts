@@ -5,6 +5,8 @@ import { useMemo } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useEventStore } from "@/hooks/useEventStore";
 import { BOT_MANIFEST_KIND, parseBotManifest, type BotCommandEntry } from "@/lib/botCommands";
+import { parseProfileImeta } from "@/lib/profileImeta";
+import type { ImetaEntry } from "@/lib/imeta";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -15,6 +17,8 @@ const AUTHOR_CHUNK = 50;
 export interface BotRosterProfile {
   name?: string;
   picture?: string;
+  /** The kind 0's imeta for `picture`. */
+  pictureImeta?: ImetaEntry;
 }
 
 export interface BotManifestsResult {
@@ -126,6 +130,7 @@ export function useBotManifests(
               ? meta.display_name
               : undefined,
           picture: typeof meta?.picture === "string" ? meta.picture : undefined,
+          pictureImeta: parseProfileImeta(ev.tags, meta)?.picture,
         };
       }
       return { bots: bots.sort(), profiles };

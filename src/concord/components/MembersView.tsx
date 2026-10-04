@@ -579,7 +579,7 @@ function MemberRow({
         />
       )}
       <Avatar className="size-6 shrink-0">
-        <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
         <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>

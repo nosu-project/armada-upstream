@@ -15,6 +15,7 @@ import {
   type BotCommandEntry,
 } from "@/lib/botCommands";
 import { cn } from "@/lib/utils";
+import type { ImetaEntry } from "@/lib/imeta";
 
 import type { BotRosterProfile } from "@/hooks/useBotManifests";
 
@@ -34,6 +35,7 @@ interface Option {
   value: string;
   label: string;
   picture?: string;
+  pictureImeta?: ImetaEntry;
 }
 
 const MAX_USER_OPTIONS = 6;
@@ -131,6 +133,7 @@ export function BotCommandComposer({
             value: pk,
             label: displayName(pk, profiles),
             picture: profiles[pk]?.picture,
+            pictureImeta: profiles[pk]?.pictureImeta,
           }));
       }
       return [];
@@ -296,7 +299,7 @@ export function BotCommandComposer({
         <span className="font-mono font-semibold text-foreground">/{command.name}</span>
         <span>with</span>
         <Avatar className="size-4 shrink-0">
-          <AvatarImage src={profiles[bot]?.picture} alt="" />
+          <AvatarImage src={profiles[bot]?.picture} imeta={profiles[bot]?.pictureImeta} alt="" />
           <AvatarFallback className="text-[8px]">
             {displayName(bot, profiles).slice(0, 2).toUpperCase()}
           </AvatarFallback>
@@ -422,7 +425,7 @@ export function BotCommandComposer({
                   >
                     {arg.type === "user" && (
                       <Avatar className="size-4 shrink-0">
-                        <AvatarImage src={option.picture} alt="" />
+                        <AvatarImage src={option.picture} imeta={option.pictureImeta} alt="" />
                         <AvatarFallback className="text-[8px]">
                           {option.label.slice(0, 2).toUpperCase()}
                         </AvatarFallback>

@@ -14,6 +14,7 @@ import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/lib/authorCache";
+import type { ProfileImeta } from "@/lib/profileImeta";
 import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettings";
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
 import { decryptNotificationIcon } from "@/concord/lib/image";
@@ -76,6 +77,17 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
   if (level === "nothing") return false;
   if (level === "mentions") return mention;
   return true; // "all"
+}
+
+/**
+ * The favicon dot promises something addressed to the viewer: a DM or a mention. Ordinary
+ * channel traffic and reactions may still notify per the room's level, but don't badge.
+ */
+export function callsForTabAttention(
+  candidate: Pick<NotifyCandidate, "plane" | "mention" | "reaction">,
+): boolean {
+  if (candidate.plane === "dm") return true;
+  return candidate.mention && !candidate.reaction;
 }
 
 /**
@@ -478,11 +490,12 @@ export function useForegroundNotifications(): void {
     // Local reads only (author cache, then event store kind-0), so a missing profile never
     // delays the notification. No profile → "Anonymous", matching Android and `getDisplayName`.
     const profileFor = async (pubkey: string): Promise<{ name: string; avatar?: string }> => {
-      const present = (metadata: NostrMetadata | undefined) => ({
+      const present = (metadata: NostrMetadata | undefined, imeta?: ProfileImeta) => ({
         name: getDisplayName(metadata, pubkey),
-        // https only (http is a failing mixed-content fetch), then the media policy.
+        // https only (http is a failing mixed-content fetch), then the media policy. An
+        // encrypted picture can't be an OS icon: its URL is ciphertext.
         avatar: mediaSrc(
-          typeof metadata?.picture === "string" && /^https:\/\//.test(metadata.picture)
+          typeof metadata?.picture === "string" && /^https:\/\//.test(metadata.picture) && !imeta?.picture?.encryption
             ? metadata.picture
             : undefined,
           ctx.current.mediaPolicy,
@@ -492,8 +505,11 @@ export function useForegroundNotifications(): void {
       if (!pubkey) return { name: "Anonymous" };
       const qc = ctx.current.queryClient;
       const cached = qc.getQueryData<AuthorResult>(["author", pubkey]);
-      if (cached?.metadata) return present(cached.metadata);
-      if (cached?.event) return present(parseAuthorEvent(cached.event).metadata);
+      if (cached?.metadata) return present(cached.metadata, cached.imeta);
+      if (cached?.event) {
+        const parsed = parseAuthorEvent(cached.event);
+        return present(parsed.metadata, parsed.imeta);
+      }
 
       // Local event store fallback (no network).
       try {
@@ -502,7 +518,7 @@ export function useForegroundNotifications(): void {
         if (ev) {
           const parsed = parseAuthorEvent(ev);
           seedAuthorCache(qc, pubkey, ev);
-          if (parsed.metadata) return present(parsed.metadata);
+          if (parsed.metadata) return present(parsed.metadata, parsed.imeta);
         }
       } catch {
         // Store unavailable — fall through.
@@ -743,7 +759,7 @@ export function useForegroundNotifications(): void {
         const silent = roomAlertSilent(roomKey);
 
         // Page-owned cues need no permission; one sound per batch. The favicon badge is idempotent.
-        markTabAttention();
+        if (callsForTabAttention(cand)) markTabAttention();
 
         // Play the sound here at ingest, not after the presentation handoff: the worker can't play
         // audio and OS notifications are always silent.

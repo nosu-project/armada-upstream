@@ -30,6 +30,22 @@ function makeApp(initial = { openAtLogin: false }) {
   };
 }
 
+// Electron on Windows stores the command line, args included, in the Run
+// value and compares a read against it whole (shell/browser/browser_win.cc).
+function makeWindowsApp() {
+  let runValue = null;
+  const commandLine = (args = []) => ["Armada.exe", ...args].join(" ");
+  return {
+    runValue: () => runValue,
+    getLoginItemSettings: vi.fn((options = {}) => ({
+      openAtLogin: runValue !== null && runValue === commandLine(options.args),
+    })),
+    setLoginItemSettings: vi.fn((options) => {
+      runValue = options.openAtLogin ? commandLine(options.args) : null;
+    }),
+  };
+}
+
 describe("desktop launch-at-login", () => {
   it("reports unsupported on platforms without the API", () => {
     const { fsImpl } = makeFs();
@@ -105,5 +121,38 @@ describe("desktop launch-at-login", () => {
     expect(
       getLaunchSettings({ platform: "linux", appImpl, userDataPath: "/profile", fsImpl }),
     ).toEqual({ supported: true, openAtLogin: false, openAsHidden: false });
+  });
+
+  it("reads an entry registered with --hidden as on under Windows", () => {
+    const { fsImpl } = makeFs();
+    const appImpl = makeWindowsApp();
+    const result = setLaunchSettings(
+      { openAtLogin: true, openAsHidden: true },
+      { platform: "win32", appImpl, userDataPath: "C:\\profile", fsImpl, env: {} },
+    );
+    expect(appImpl.runValue()).toBe("Armada.exe --hidden");
+    expect(result).toEqual({ supported: true, openAtLogin: true, openAsHidden: true });
+  });
+
+  it("lets launch-at-login be turned off after start minimized under Windows", () => {
+    const { fsImpl } = makeFs();
+    const appImpl = makeWindowsApp();
+    const opts = { platform: "win32", appImpl, userDataPath: "C:\\profile", fsImpl, env: {} };
+    expect(setLaunchSettings({ openAtLogin: true, openAsHidden: false }, opts)).toEqual({
+      supported: true,
+      openAtLogin: true,
+      openAsHidden: false,
+    });
+    expect(setLaunchSettings({ openAtLogin: true, openAsHidden: true }, opts)).toEqual({
+      supported: true,
+      openAtLogin: true,
+      openAsHidden: true,
+    });
+    expect(setLaunchSettings({ openAtLogin: false, openAsHidden: true }, opts)).toEqual({
+      supported: true,
+      openAtLogin: false,
+      openAsHidden: true,
+    });
+    expect(appImpl.runValue()).toBeNull();
   });
 });

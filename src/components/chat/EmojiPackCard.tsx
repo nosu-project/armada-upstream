@@ -159,7 +159,7 @@ export function EmojiPackCard({ event, expanded = false, className }: EmojiPackC
             onClick={(e) => e.stopPropagation()}
           >
             <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
-              <AvatarImage src={metadata?.picture} alt={displayName} />
+              <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
               <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
                 {displayName[0]?.toUpperCase()}
               </AvatarFallback>

@@ -51,7 +51,6 @@ import {
 } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { useMediaSrc } from "@/hooks/useMediaPolicy";
 import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
@@ -67,6 +66,9 @@ import { cn } from "@/lib/utils";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { isHevcScreenShareParticipant } from "@/lib/hevcScreenShare";
 import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
+import type { ImetaEntry } from "@/lib/imeta";
+import type { ProfileImeta } from "@/lib/profileImeta";
+import { FallbackImage } from "@/components/ui/FallbackImage";
 import { PortalContainerProvider, usePortalContainer } from "@/hooks/usePortalContainer";
 
 const TILE_ASPECT = 16 / 9;
@@ -323,6 +325,7 @@ function useTileDisplayName(participant: Participant): {
   displayName: string;
   verified: boolean;
   metadata: NostrMetadata | undefined;
+  imeta: ProfileImeta | undefined;
 } {
   const room = useRoomContext();
   const { pubkey, verified } = useVoiceIdentity()(participant.identity);
@@ -348,6 +351,7 @@ function useTileDisplayName(participant: Participant): {
     displayName: verified ? scopedName : inGrace ? "Verifying…" : "Unverified",
     verified,
     metadata,
+    imeta: author.data?.imeta,
   };
 }
 
@@ -426,14 +430,15 @@ function VolumeMenu({
 }
 
 /** Blurred avatar filling a camera-off tile (the Signal look). */
-function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
-  // kind-0 content: same sanitizer and media policy as the avatar itself.
-  const src = useMediaSrc(sanitizeImageSrc(picture));
+function BlurredAvatarBackdrop({ picture, imeta }: { picture?: string; imeta?: ImetaEntry }) {
+  // kind-0 content: same sanitizer, media policy and decryption as the avatar itself.
+  const src = sanitizeImageSrc(picture);
   if (!src) return null;
   return (
     <div className="absolute inset-0 overflow-hidden" aria-hidden>
-      <img
+      <FallbackImage
         src={src}
+        imeta={imeta}
         alt=""
         // Scale up so blurred edges never reveal the tile background.
         className="h-full w-full scale-150 object-cover blur-2xl"
@@ -524,7 +529,7 @@ const StageReactionFloater = memo(function StageReactionFloater({
       {/* Matches the tile nameplate's width budget so names don't clip. */}
       <span className="flex items-center gap-1 rounded-full bg-black/70 pl-0.5 pr-2 py-0.5 text-xs text-white shadow shrink-0 max-w-56">
         <Avatar className="size-4 shrink-0">
-          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/30 text-primary text-[9px]">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
@@ -582,7 +587,7 @@ function VideoTile({
   onToggleFocus: () => void;
 }) {
   const participant = trackRef.participant;
-  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
+  const { pubkey, displayName, verified, metadata, imeta } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
   const { enabled: endToEndEncrypted } = useCallSignals();
@@ -669,9 +674,9 @@ function VideoTile({
         />
       ) : (
         <>
-          <BlurredAvatarBackdrop picture={metadata?.picture} />
+          <BlurredAvatarBackdrop picture={metadata?.picture} imeta={imeta?.picture} />
           <Avatar shape={shape} className={cn("relative", focused ? "size-24" : "size-16")}>
-            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarImage src={metadata?.picture} imeta={imeta?.picture} alt={displayName} />
             <AvatarFallback className="bg-primary/20 text-primary text-xl">
               {displayName[0]?.toUpperCase()}
             </AvatarFallback>
@@ -934,7 +939,7 @@ function AvatarTile({
   focused: boolean;
   onToggleFocus: () => void;
 }) {
-  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
+  const { pubkey, displayName, verified, metadata, imeta } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
@@ -962,7 +967,7 @@ function AvatarTile({
         focused ? "h-full w-full" : "h-full w-full",
       )}
     >
-      <BlurredAvatarBackdrop picture={metadata?.picture} />
+      <BlurredAvatarBackdrop picture={metadata?.picture} imeta={imeta?.picture} />
       <div
         className={cn(
           "relative rounded-full transition-shadow",
@@ -971,7 +976,7 @@ function AvatarTile({
         style={ringStyle}
       >
         <Avatar shape={shape} className={focused ? "size-28" : "size-16"}>
-          <AvatarImage src={metadata?.picture} alt={displayName} />
+          <AvatarImage src={metadata?.picture} imeta={imeta?.picture} alt={displayName} />
           <AvatarFallback className="bg-primary/20 text-primary text-xl">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>

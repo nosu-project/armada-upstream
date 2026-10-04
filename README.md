@@ -100,6 +100,12 @@ in `index.html`, which link-preview crawlers read without running scripts.
   mention autocomplete); `search` filters route only to these (default
   `wss://relay.ditto.pub,wss://relay.dreamith.to`). User-editable in Settings;
   when empty, search falls back to the app relays.
+- `COMMUNITY_RELAYS` — the relays a new Concord community is created on
+  (default: the CORD stock set, `wss://jskitty.com/nostr`,
+  `wss://asia.vectorapp.io/nostr`, `wss://relay.ditto.pub` and
+  `wss://relay.dreamith.to`). A community holds at most five. User-editable in
+  Settings, and changeable per community when it's created. Empty means the
+  stock set.
 - `NIP65_DISCOVERY_RELAYS` — comma-separated public NIP-65 indexes queried
   once after login to locate the user's signed kind-10002 read/write relay list
   (default `wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social`).
@@ -148,7 +154,10 @@ in `index.html`, which link-preview crawlers read without running scripts.
 - **Desktop** — Electron shell in `electron/`. Bundles the web build and serves
   it over a custom secure scheme. CI produces Linux/Windows/macOS installers on
   tags.
-- **Web** — `Dockerfile` (nginx-served static build) + `nginx.conf`.
+- **Web** — CI publishes the build as an nsite (`scripts/nsite-deploy.sh`).
+  To host it yourself, run armada-stack, which serves that nsite alongside a
+  relay, a Blossom server and a voice broker, and points the app at them
+  through `window.ENV`.
 
 ## License
 

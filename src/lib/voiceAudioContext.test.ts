@@ -43,6 +43,15 @@ describe("keepCallAudioRunning", () => {
     stop();
   });
 
+  it("resumes a context WebKit reports as interrupted", () => {
+    const ctx = new FakeContext();
+    const room = fakeRoom(ctx);
+    const stop = keepCallAudioRunning(room as unknown as Room);
+    ctx.set("interrupted" as AudioContextState);
+    expect(ctx.resume).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it("follows the new context LiveKit creates on reconnect", () => {
     const first = new FakeContext();
     const room = fakeRoom(first);

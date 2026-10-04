@@ -94,7 +94,7 @@ export function discoverActivityFilters(
  * Relays commonly cap filters per REQ by rejecting the whole subscription, so an
  * over-wide REQ costs every listing its timestamp.
  */
-const MAX_FILTERS_PER_REQ = 20;
+const MAX_FILTERS_PER_REQ = 16;
 
 /** One REQ: a relay set and the filters to ask it for. */
 export interface DiscoverActivityBatch {

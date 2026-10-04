@@ -54,7 +54,7 @@ function AuthorChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 py-0.5 pl-1 pr-1.5 text-xs text-foreground">
       <Avatar className="size-4">
-        <AvatarImage src={author.data?.metadata?.picture} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} />
         <AvatarFallback className="text-[8px]">{(name || pubkey).slice(0, 2)}</AvatarFallback>
       </Avatar>
       <span className="max-w-28 truncate">
@@ -91,7 +91,7 @@ function AuthorOption({
       className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-sm hover:bg-foreground/5"
     >
       <Avatar className="size-6">
-        <AvatarImage src={author.data?.metadata?.picture} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} />
         <AvatarFallback className="text-[9px]">{(name || pubkey).slice(0, 2)}</AvatarFallback>
       </Avatar>
       <span className="min-w-0 flex-1 truncate">

@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { MediaHoldContext, type MediaHold } from "@/components/chat/mediaHold";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import {
-  holdsAvatar,
   holdsMedia,
   holdsMediaUrl,
   nextEstablishedAt,
@@ -77,13 +76,12 @@ export function ConcordMediaHold({
 
   const self = user?.pubkey;
   const holds = useMemo<MediaHold>(() => {
-    // `now` re-memoizes on a probation crossing; the predicates read the clock themselves.
+    // `now` re-memoizes on a probation crossing; the predicate reads the clock itself.
     void now;
     const inputs = () => ({ mode, self, isStaff, trusted: stableTrusted, follows, sightings, now: Date.now() });
     return {
       mode,
       media: (author) => holdsMedia(author, inputs()),
-      avatar: (author) => holdsAvatar(author, inputs()),
       host: (author, url) => hostsOnly && holdsMediaUrl(author, url, { self, proxied }, knownHosts),
     };
   }, [mode, hostsOnly, proxied, self, isStaff, stableTrusted, follows, sightings, now, knownHosts]);

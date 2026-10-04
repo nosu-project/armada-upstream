@@ -1,4 +1,19 @@
-import { Compass, Info, Loader2, Palette, Plus, Search, SlidersHorizontal, Smile, Users, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Compass,
+  Globe,
+  Info,
+  Loader2,
+  Palette,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Smile,
+  UserRound,
+  Users,
+  UsersRound,
+  X,
+} from "lucide-react";
 import { lazy, Suspense, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -26,6 +41,7 @@ import {
   useDiscoverCommunityActivity,
   useDiscoverEmojiPacks,
   useDiscoverThemes,
+  type DiscoverScope,
 } from "@/hooks/useDiscover";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { SettingsOverlayContext } from "@/lib/settingsOverlay";
@@ -71,6 +87,12 @@ const TABS: (PillTab<DiscoverTab> & { placeholder: string; blurb: string })[] = 
   },
 ];
 
+const SCOPES: PillTab<DiscoverScope>[] = [
+  { id: "you", label: "You", icon: UserRound },
+  { id: "friends", label: "Friends", icon: UsersRound },
+  { id: "world", label: "The world", icon: Globe },
+];
+
 /**
  * Discover: public directory events — opt-in Concord community listings, NIP-30
  * emoji packs, and themes.
@@ -92,6 +114,10 @@ export function DiscoverPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [themeCreateOpen, setThemeCreateOpen] = useState(false);
+  const [chosenScope, setScope] = useState<DiscoverScope>("world");
+  // "You" and "Friends" have nobody in them signed out.
+  const scope = user ? chosenScope : "world";
+  const unrestricted = useAppContext().config.discoverAllContent && scope === "world";
   const query = queries[tab];
   const setQuery = (v: string) => setQueries((prev) => ({ ...prev, [tab]: v }));
   const active = TABS.find((t) => t.id === tab)!;
@@ -105,7 +131,8 @@ export function DiscoverPage() {
           <header className="relative h-12 touch:h-14 mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
             <Compass className="size-5 shrink-0 text-muted-foreground" />
             <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
-            <DiscoverScopeInfo signedIn={!!user} />
+            {user && <DiscoverScopeToggle scope={scope} onChange={setScope} />}
+            <DiscoverScopeInfo scope={scope} signedIn={!!user} />
           </header>
 
           <p className="hidden sm:block mt-3 px-1 text-sm text-muted-foreground">{active.blurb}</p>
@@ -144,6 +171,14 @@ export function DiscoverPage() {
                 )}
               </div>
 
+              {/* Phones have no header; the scope toggle and its hint fold into one button. */}
+              <DiscoverScopeMenu
+                scope={scope}
+                onChange={setScope}
+                signedIn={!!user}
+                className="sm:hidden"
+              />
+
               {/* Beside the search, not in the header, so it survives on phones. */}
               {tab === "communities" && user && (
                 <Button
@@ -179,12 +214,13 @@ export function DiscoverPage() {
             </div>
           </div>
 
+          {unrestricted && <UnfilteredWarning />}
+
           {/* Top spacing is a MARGIN so the gap stays put while the grid scrolls. */}
           <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable mt-3 sm:mt-4 pb-8">
-            {tab === "communities" && <CommunitiesTab query={query} />}
-            {tab === "emojis" && <EmojisTab query={query} />}
-            {tab === "themes" && <ThemesTab query={query} />}
-            <DiscoverScopeFooter signedIn={!!user} className="sm:hidden" />
+            {tab === "communities" && <CommunitiesTab query={query} scope={scope} />}
+            {tab === "emojis" && <EmojisTab query={query} scope={scope} />}
+            {tab === "themes" && <ThemesTab query={query} scope={scope} />}
           </div>
         </div>
       </main>
@@ -210,12 +246,46 @@ export function DiscoverPage() {
   );
 }
 
+/** Whose content the feeds show. Signed-in only: signed out there's only the world. */
+function DiscoverScopeToggle({
+  scope,
+  onChange,
+  className,
+}: {
+  scope: DiscoverScope;
+  onChange: (scope: DiscoverScope) => void;
+  className?: string;
+}) {
+  return <PillTabs tabs={SCOPES} value={scope} onChange={onChange} className={cn("p-0.5", className)} />;
+}
+
+/** Inline while "The world" is unfiltered (`discoverAllContent`), since it's one tap away. */
+function UnfilteredWarning() {
+  return (
+    <p className="mt-3 flex items-start gap-1.5 px-1 text-xs leading-snug text-destructive">
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <span>
+        Showing everything posted to your relays, by anyone. None of it is filtered or moderated,
+        so expect spam and things you may not want to see. People you've muted stay hidden.
+      </span>
+    </p>
+  );
+}
+
 /**
- * Info popover on what the grid is drawn from, linking to the relay settings.
+ * Info popover on what the grid is drawn from, linking to the Discover settings.
  * A popover (not a tooltip) because it holds a focusable button.
  */
-function DiscoverScopeInfo({ signedIn, className }: { signedIn: boolean; className?: string }) {
-  const { hint, unrestricted } = useDiscoverScopeHint(signedIn);
+function DiscoverScopeInfo({
+  scope,
+  signedIn,
+  className,
+}: {
+  scope: DiscoverScope;
+  signedIn: boolean;
+  className?: string;
+}) {
+  const { hint, unrestricted } = useDiscoverScopeHint(scope, signedIn);
   const settings = useContext(SettingsOverlayContext);
   const [open, setOpen] = useState(false);
 
@@ -233,60 +303,126 @@ function DiscoverScopeInfo({ signedIn, className }: { signedIn: boolean; classNa
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 space-y-3 p-3 text-xs text-muted-foreground">
         <p className="leading-snug">{hint}</p>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="h-8 touch:h-11 w-full text-xs"
-          onClick={() => {
-            setOpen(false);
-            settings.show("discover");
-          }}
-        >
-          <SlidersHorizontal className="size-3.5" />
-          {unrestricted ? "Discover settings" : "Show everything"}
-        </Button>
+        {scope === "world" && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-8 touch:h-11 w-full text-xs"
+            onClick={() => {
+              setOpen(false);
+              settings.show("discover");
+            }}
+          >
+            <SlidersHorizontal className="size-3.5" />
+            {unrestricted ? "Discover settings" : "Show everything"}
+          </Button>
+        )}
       </PopoverContent>
     </Popover>
   );
 }
 
-/** What the grid is drawn from, in words — shared by the popover and the phone footer. */
-function useDiscoverScopeHint(signedIn: boolean): { hint: string; unrestricted: boolean } {
+function useDiscoverScopeHint(
+  scope: DiscoverScope,
+  signedIn: boolean,
+): { hint: string; unrestricted: boolean } {
   const { config } = useAppContext();
   const curation = useDiscoverCuration();
-  const unrestricted = config.discoverAllContent;
+  const unrestricted = scope === "world" && config.discoverAllContent;
 
-  const hint = unrestricted
-    ? "Showing everything posted to your relays, by anyone. None of it is filtered or moderated, so expect spam and things you may not want to see."
-    : curation.type !== "none"
-      ? signedIn
-        ? "Showing picks from a curated list and from people you follow. Everything else on your relays is hidden."
-        : "Showing picks from a curated list. Sign in to also see what people you follow have shared."
-      : signedIn
-        ? "Showing only what you and people you follow have shared."
-        : "Sign in to see picks from people you follow.";
+  const hint = scope === "you"
+    ? "Showing only what you've shared."
+    : scope === "friends"
+      ? "Showing only what you and people you follow have shared."
+      : unrestricted
+        ? "Showing everything posted to your relays, by anyone. None of it is filtered or moderated, so expect spam and things you may not want to see."
+        : curation.type !== "none"
+          ? signedIn
+            ? "Showing picks from a curated list and from people you follow. Everything else on your relays is hidden."
+            : "Showing picks from a curated list. Sign in to also see what people you follow have shared."
+          : signedIn
+            ? "Showing only what you and people you follow have shared."
+            : "Sign in to see picks from people you follow.";
 
   return { hint, unrestricted };
 }
 
-/** The popover's content inline after the results, for phones (no header there). */
-function DiscoverScopeFooter({ signedIn, className }: { signedIn: boolean; className?: string }) {
-  const { hint, unrestricted } = useDiscoverScopeHint(signedIn);
+/**
+ * The phone stand-in for the header's toggle and info popover: one button showing
+ * the current scope, opening the choices and the hint. Signed out it's the hint alone.
+ */
+function DiscoverScopeMenu({
+  scope,
+  onChange,
+  signedIn,
+  className,
+}: {
+  scope: DiscoverScope;
+  onChange: (scope: DiscoverScope) => void;
+  signedIn: boolean;
+  className?: string;
+}) {
+  const { hint, unrestricted } = useDiscoverScopeHint(scope, signedIn);
   const settings = useContext(SettingsOverlayContext);
+  const [open, setOpen] = useState(false);
+  const current = SCOPES.find((s) => s.id === scope)!;
+  const Icon = signedIn ? current.icon : Info;
 
   return (
-    <div className={cn("mt-2 flex flex-col items-center gap-3 px-4 text-center", className)}>
-      <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
-      <Button
-        variant="secondary"
-        size="sm"
-        className="h-8 touch:h-11 text-xs"
-        onClick={() => settings.show("discover")}
-      >
-        <SlidersHorizontal className="size-3.5" />
-        {unrestricted ? "Discover settings" : "Show everything"}
-      </Button>
-    </div>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="secondary"
+          size="icon"
+          aria-label={signedIn ? `Showing content from: ${current.label}` : "What Discover shows"}
+          className={cn("size-12 shrink-0 clip-corner-lg", className)}
+        >
+          <Icon className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 space-y-3 p-2 text-xs text-muted-foreground">
+        {signedIn && (
+          <div role="radiogroup" aria-label="Show content from" className="flex flex-col gap-1">
+            {SCOPES.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                role="radio"
+                aria-checked={s.id === scope}
+                onClick={() => {
+                  onChange(s.id);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex h-11 items-center gap-2 px-3 text-sm clip-corner-lg",
+                  s.id === scope
+                    ? "bg-primary font-medium text-primary-foreground"
+                    : "text-foreground hover:bg-foreground/5",
+                )}
+              >
+                <s.icon className="size-4 shrink-0" />
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="px-1 leading-snug">{hint}</p>
+        {scope === "world" && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-11 w-full text-xs"
+            onClick={() => {
+              setOpen(false);
+              settings.show("discover");
+            }}
+          >
+            <SlidersHorizontal className="size-3.5" />
+            {unrestricted ? "Discover settings" : "Show everything"}
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -330,7 +466,7 @@ function TabState({ icon: Icon, children }: { icon: typeof Users; children: Reac
   );
 }
 
-function CommunitiesTab({ query }: { query: string }) {
+function CommunitiesTab({ query, scope }: { query: string; scope: DiscoverScope }) {
   const {
     data,
     packAuthors,
@@ -341,8 +477,8 @@ function CommunitiesTab({ query }: { query: string }) {
     hasNextPage,
     isFetchingNextPage,
     pageCount,
-  } = useDiscoverCommunities();
-  const unrestricted = useAppContext().config.discoverAllContent;
+  } = useDiscoverCommunities(scope);
+  const unrestricted = useAppContext().config.discoverAllContent && scope === "world";
   const sentinelRef = useInfiniteScroll({
     hasNextPage,
     isFetchingNextPage,
@@ -448,9 +584,13 @@ function CommunitiesTab({ query }: { query: string }) {
           <CreateCommunityCard />
         </div>
         <TabState icon={Users}>
-          {unrestricted
-            ? "No public communities listed yet. Yours could be the first."
-            : "None of the authors Discover is showing have listed a community yet. Yours could be the first."}
+          {scope === "you"
+            ? "You haven't listed a community yet. Add one and it'll show up here."
+            : scope === "friends"
+              ? "None of the people you follow have listed a community yet. Yours could be the first."
+              : unrestricted
+                ? "No public communities listed yet. Yours could be the first."
+                : "None of the authors Discover is showing have listed a community yet. Yours could be the first."}
         </TabState>
       </div>
     );
@@ -481,9 +621,9 @@ function CommunitiesTab({ query }: { query: string }) {
   );
 }
 
-function EmojisTab({ query }: { query: string }) {
+function EmojisTab({ query, scope }: { query: string; scope: DiscoverScope }) {
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage, pageCount } =
-    useDiscoverEmojiPacks(query);
+    useDiscoverEmojiPacks(query, scope);
   const sentinelRef = useInfiniteScroll({
     hasNextPage,
     isFetchingNextPage,
@@ -517,9 +657,9 @@ function EmojisTab({ query }: { query: string }) {
   );
 }
 
-function ThemesTab({ query }: { query: string }) {
+function ThemesTab({ query, scope }: { query: string; scope: DiscoverScope }) {
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage, pageCount } =
-    useDiscoverThemes(query);
+    useDiscoverThemes(query, scope);
   const sentinelRef = useInfiniteScroll({
     hasNextPage,
     isFetchingNextPage,

@@ -39,7 +39,7 @@ function MutedRow({ pubkey }: { pubkey: string }) {
   return (
     <SettingsRow className="flex items-center gap-3">
       <Avatar shape={getAvatarShape(metadata)} className="size-8 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={displayName} />
+        <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
         <AvatarFallback className="bg-primary/20 text-primary text-xs">
           {displayName[0]?.toUpperCase()}
         </AvatarFallback>

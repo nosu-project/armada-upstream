@@ -201,7 +201,7 @@ function CandidateRow({ pubkey, added, busy, onAdd }: {
   return (
     <li className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/50">
       <Avatar className="size-8 shrink-0">
-        <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
         <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>

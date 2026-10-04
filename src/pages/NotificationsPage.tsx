@@ -186,7 +186,7 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
       )}
     >
       <Avatar className="size-10 shrink-0">
-        <AvatarImage src={metadata?.picture} alt={authorName} />
+        <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={authorName} />
         <AvatarFallback className="bg-primary/20 text-sm text-primary">
           {authorName.charAt(0).toUpperCase() || "?"}
         </AvatarFallback>

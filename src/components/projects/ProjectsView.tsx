@@ -54,7 +54,7 @@ function PersonAvatar({ pubkey, size = "size-7" }: { pubkey: string; size?: stri
     <Tooltip>
       <TooltipTrigger asChild>
         <Avatar className={cn(size, "border border-border/60")}>
-          <AvatarImage src={picture} alt={name} />
+          <AvatarImage src={picture} imeta={author.data?.imeta?.picture} alt={name} />
           <AvatarFallback className="text-[10px]">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
         </Avatar>
       </TooltipTrigger>

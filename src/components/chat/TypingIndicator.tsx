@@ -13,7 +13,7 @@ function TypingAvatar({ pubkey }: { pubkey: string }) {
   const name = useScopedDisplayName(pubkey, metadata);
   return (
     <Avatar shape={getAvatarShape(metadata)} className="size-5 ring-2 ring-background" title={name}>
-      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/25 text-primary text-[9px] font-semibold">
         {name?.trim()?.[0]?.toUpperCase() ?? "?"}
       </AvatarFallback>

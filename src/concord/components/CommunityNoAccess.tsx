@@ -48,7 +48,7 @@ export function CommunityNoAccess() {
               className="flex items-center gap-2 clip-corner-lg p-2 text-left hover:bg-accent touch:min-h-11"
             >
               <Avatar shape={getAvatarShape(user.metadata)} className="size-8 shrink-0">
-                <AvatarImage src={user.metadata.picture} alt={displayName(user.metadata)} />
+                <AvatarImage src={user.metadata.picture} imeta={user.imeta?.picture} alt={displayName(user.metadata)} />
                 <AvatarFallback>
                   {displayName(user.metadata).charAt(0) || <UserIcon className="size-4" />}
                 </AvatarFallback>

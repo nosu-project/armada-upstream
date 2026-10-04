@@ -293,6 +293,30 @@ describe("sweepRelayScopes — stream-auth gate", () => {
     expect(relay.calls[0].length, "one filter per scope").toBe(4);
     expect(aFresh.map((e) => e.rumorId)).toContain(aCtl.rumor.id);
   });
+  it("splits a batch past 16 scopes into REQs of at most 16 filters", async () => {
+    _configureAuthWaitForTests({ maxWaitMs: 5_000 });
+    const owner = signer();
+    const communities = Array.from({ length: 10 }, (_, i) => communityOf(100 + i * 4, owner.pubkey));
+    const now = Math.floor(Date.now() / 1000);
+    const last = communities[9];
+    const lastGb = await wrapAt(guestbookGroupKey(last.root, last.id, 0), owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [lastGb.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    // 20 scopes held behind the gate, then an exhaustive twin of one already in the full batch.
+    const sweeps = Promise.all(communities.flatMap((c) => [sweepControl(nostr, c), sweepGuestbook(nostr, c)]));
+    const twin = sweepControl(nostr, communities[0], { exhaustive: true });
+    registerStreamKeys(communities.flatMap((c) => [...controlGroups(c), ...guestbookGroups(c)]), [RELAY_A]);
+    const fresh = await sweeps;
+    await twin;
+
+    expect(openingCalls(relay), "20 scopes take two REQs").toBe(2);
+    expect(relay.calls.map((fs) => fs.length).sort((x, y) => x - y)).toEqual([4, 16]);
+    expect(fresh[19].map((e) => e.rumorId), "the scope past the cap still gets its events").toContain(lastGb.rumor.id);
+  });
+
   it("registrations irrelevant to the batch's scopes never hold its gate", { timeout: 15_000 }, async () => {
     _configureAuthWaitForTests({ maxWaitMs: 3_000 });
     const owner = signer();

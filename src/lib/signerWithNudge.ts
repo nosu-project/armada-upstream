@@ -1,7 +1,8 @@
+import { Capacitor } from "@capacitor/core";
 import type { NostrEvent, NostrSigner } from "@nostrify/types";
 import { createElement } from "react";
 
-import { NudgeToastContent } from "@/components/SignerToastContent";
+import { NudgeToastContent, type SignerAppLink } from "@/components/SignerToastContent";
 import { toast } from "@/hooks/useToast";
 import { type BtcSigner, hasBtcSigning } from "@/lib/bitcoin-signers";
 
@@ -54,19 +55,59 @@ const TIMEOUT = Symbol("timeout");
 
 type Signal = typeof CANCEL | typeof TIMEOUT;
 
+function isIos(): boolean {
+  if (Capacitor.getPlatform() === "ios") return true;
+  if (typeof navigator === "undefined") return false;
+  // iPadOS Safari reports itself as a Mac; only the touch points give it away.
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+function isAndroid(): boolean {
+  if (Capacitor.getPlatform() === "android") return true;
+  return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+}
+
+const CLAVE: SignerAppLink = { href: "clave://", label: "Open Clave" };
+const AEGIS: SignerAppLink = { href: "aegis://", label: "Open Aegis" };
+
+/** The iOS signer app, read off the session's relays: Aegis runs a local relay, Clave uses relay.powr.build. */
+function iosSignerApp(relays: string[]): SignerAppLink | undefined {
+  const hosts = relays.flatMap((url) => {
+    try {
+      return [new URL(url).hostname];
+    } catch {
+      return [];
+    }
+  });
+  if (hosts.some((h) => h === "localrelay.link" || h === "127.0.0.1" || h === "localhost")) return AEGIS;
+  if (hosts.includes("relay.powr.build")) return CLAVE;
+  return undefined;
+}
+
 /**
- * Show the nudge toast. No `nostrsigner:` link: it can't open a NIP-46 queue,
- * and Amber ≥ 6.1 rejects it as malformed whenever its queue is empty.
+ * Links that bring a NIP-46 signer app to the front. On iOS each app has its own
+ * scheme, so both are offered when the relays don't say which. None on desktop.
  */
+export function signerAppLinks(signerRelays: string[] = []): SignerAppLink[] {
+  if (isAndroid()) return [{ href: "nostrsigner:", label: "Open signer" }];
+  if (isIos()) {
+    const app = iosSignerApp(signerRelays);
+    return app ? [app] : [CLAVE, AEGIS];
+  }
+  return [];
+}
+
 function showNudgeToast(opts: {
   kind: number | undefined;
   opType: OpType;
   isBunkerConnected: (() => boolean) | undefined;
   remote: boolean;
+  signerRelays: string[] | undefined;
   durationMs: number;
   onCancel: () => void;
 }): { dismiss: () => void } {
-  const { kind, opType, isBunkerConnected, remote, durationMs, onCancel } = opts;
+  const { kind, opType, isBunkerConnected, remote, signerRelays, durationMs, onCancel } = opts;
   const relayOk = isBunkerConnected ? isBunkerConnected() : true;
   const subject = labelForOp(kind, opType);
 
@@ -78,8 +119,8 @@ function showNudgeToast(opts: {
     descriptionText = "Check your connection and try again.";
   } else if (remote) {
     title = `Approve ${subject}`;
-    // Amber's default policy asks once per kind; "Always" ends the prompts.
-    descriptionText = 'Open your signer app (Amber…) and approve the request. Choose "Always" so it isn\'t asked again.';
+    // An auto-approving push signer (Clave) still needs waking when it falls behind.
+    descriptionText = "Your signer hasn't answered yet. Open it to approve the request, or to wake it if it signs automatically.";
   } else {
     title = `Approve ${subject}`;
     descriptionText = "Approve the request in your signer.";
@@ -90,6 +131,7 @@ function showNudgeToast(opts: {
 
   const description = createElement(NudgeToastContent, {
     description: descriptionText,
+    openSigner: remote && relayOk ? signerAppLinks(signerRelays) : [],
     onCancel: () => { dismissRef.fn?.(); onCancel(); },
   });
 
@@ -120,15 +162,22 @@ interface PendingOp {
 class Nudger {
   readonly #isBunkerConnected: (() => boolean) | undefined;
   readonly #remote: boolean;
+  readonly #signerRelays: string[] | undefined;
   readonly hardTimeoutMs: number;
   readonly #pending = new Set<PendingOp>();
   #timer: ReturnType<typeof setTimeout> | undefined;
   #shown: { dismiss: () => void } | undefined;
   #lastShownAt = -Infinity;
 
-  constructor(isBunkerConnected: (() => boolean) | undefined, remote: boolean, hardTimeoutMs: number) {
+  constructor(
+    isBunkerConnected: (() => boolean) | undefined,
+    remote: boolean,
+    signerRelays: string[] | undefined,
+    hardTimeoutMs: number,
+  ) {
     this.#isBunkerConnected = isBunkerConnected;
     this.#remote = remote;
+    this.#signerRelays = signerRelays;
     this.hardTimeoutMs = hardTimeoutMs;
   }
 
@@ -174,6 +223,7 @@ class Nudger {
       opType: head.opType,
       isBunkerConnected: this.#isBunkerConnected,
       remote: this.#remote,
+      signerRelays: this.#signerRelays,
       durationMs: this.hardTimeoutMs,
       // The rest are queued behind the stalled one, so skip them all.
       onCancel: () => {
@@ -249,14 +299,20 @@ interface DecryptCachePeek {
  *
  * @param isBunkerConnected - Checked at nudge time; false shows a relay-unreachable warning.
  * @param opts.remote - A NIP-46 signer: the nudge explains where to approve.
+ * @param opts.signerRelays - The bunker session's relays, which name its iOS signer app.
  * @param opts.hardTimeoutMs - Overrides the 65s fence (a NIP-46 signer waits longer).
  */
 export function signerWithNudge(
   signer: NostrSigner,
   isBunkerConnected?: () => boolean,
-  opts?: { remote?: boolean; hardTimeoutMs?: number },
+  opts?: { remote?: boolean; signerRelays?: string[]; hardTimeoutMs?: number },
 ): NostrSigner {
-  const nudger = new Nudger(isBunkerConnected, opts?.remote ?? false, opts?.hardTimeoutMs ?? HARD_TIMEOUT_MS);
+  const nudger = new Nudger(
+    isBunkerConnected,
+    opts?.remote ?? false,
+    opts?.signerRelays,
+    opts?.hardTimeoutMs ?? HARD_TIMEOUT_MS,
+  );
   function run<T>(op: () => Promise<T>, kind: number | undefined, opType: OpType): Promise<T> {
     return runWithNudge(op, nudger, kind, opType);
   }

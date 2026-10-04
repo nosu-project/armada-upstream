@@ -139,7 +139,7 @@ describe("discoverActivityBatches", () => {
       relays: ["wss://one/"],
     }));
     const batches = discoverActivityBatches(many, 1_700_000_000);
-    expect(batches.map((b) => b.filters.length)).toEqual([20, 20, 5]);
+    expect(batches.map((b) => b.filters.length)).toEqual([16, 16, 13]);
   });
 
   it("drops targets with no authors or no resolvable relay", () => {

@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
+import { Capacitor } from "@capacitor/core";
 import type { NostrSigner } from "@nostrify/types";
 
 import { toast } from "@/hooks/useToast";
@@ -107,23 +108,59 @@ describe("signerWithNudge", () => {
     await assertion;
   });
 
-  it("tells a NIP-46 user where to approve, with no link into the signer app", async () => {
+  type NudgeCall = {
+    title: string;
+    duration: number;
+    description: { props: { description: string; openSigner: { href: string; label: string }[] } };
+  };
+
+  async function remoteNudge(platform: string, relayOk = true, remote = true, signerRelays?: string[]): Promise<NudgeCall> {
+    const platformSpy = vi.spyOn(Capacitor, "getPlatform").mockReturnValue(platform);
+    onTestFinished(() => platformSpy.mockRestore());
     await vi.advanceTimersByTimeAsync(9_000);
     const { upstream, gate } = makeUpstream();
-    const wrapped = signerWithNudge(upstream, () => true, { remote: true, hardTimeoutMs: 300_000 });
-
+    const wrapped = signerWithNudge(upstream, () => relayOk, { remote, signerRelays, hardTimeoutMs: 300_000 });
     const p = wrapped.signEvent({ ...TEMPLATE, kind: 20013 });
     await vi.advanceTimersByTimeAsync(4_000);
-    const call = toastMock.mock.calls.at(-1)![0] as { title: string; duration: number; description: { props: { description: string } } };
+    const call = toastMock.mock.calls.at(-1)![0] as unknown as NudgeCall;
+    gate.resolve();
+    await p;
+    return call;
+  }
+
+  it("tells a NIP-46 user to open their signer, naming no particular app", async () => {
+    const call = await remoteNudge("web");
     expect(call.title).toBe("Approve community activity");
-    expect(call.description.props.description).toMatch(/Always/);
+    expect(call.description.props.description).toMatch(/Open it/);
+    expect(call.description.props.description).not.toMatch(/Amber|Always/);
     // The toast lasts as long as the request may.
     expect(call.duration).toBe(300_000);
-    // A bare `nostrsigner:` is what Amber reports as a malformed request.
-    expect(JSON.stringify(call.description.props)).not.toMatch(/nostrsigner/);
+    // A desktop browser has no signer app to open.
+    expect(call.description.props.openSigner).toEqual([]);
+  });
 
-    gate.resolve();
-    await expect(p).resolves.toBeTruthy();
+  it("offers to open Amber's bunker queue on Android", async () => {
+    const call = await remoteNudge("android");
+    expect(call.description.props.openSigner).toEqual([{ href: "nostrsigner:", label: "Open signer" }]);
+  });
+
+  it("on iOS, opens the signer app the bunker's relays name", async () => {
+    const clave = await remoteNudge("ios", true, true, ["wss://relay.powr.build/"]);
+    expect(clave.description.props.openSigner).toEqual([{ href: "clave://", label: "Open Clave" }]);
+    const aegis = await remoteNudge("ios", true, true, ["wss://localrelay.link:28443"]);
+    expect(aegis.description.props.openSigner).toEqual([{ href: "aegis://", label: "Open Aegis" }]);
+    const aegisLoopback = await remoteNudge("ios", true, true, ["ws://127.0.0.1:8081"]);
+    expect(aegisLoopback.description.props.openSigner).toEqual([{ href: "aegis://", label: "Open Aegis" }]);
+  });
+
+  it("on iOS, offers both signer apps when the relays don't say which", async () => {
+    const call = await remoteNudge("ios", true, true, ["wss://relay.damus.io/"]);
+    expect(call.description.props.openSigner.map((l) => l.href)).toEqual(["clave://", "aegis://"]);
+  });
+
+  it("offers no signer link when the signer relay is down, or for a non-NIP-46 signer", async () => {
+    expect((await remoteNudge("android", false)).description.props.openSigner).toEqual([]);
+    expect((await remoteNudge("android", true, false)).description.props.openSigner).toEqual([]);
   });
 
   it("lets a NIP-46 signature wait past the 65s fence, up to its own", async () => {

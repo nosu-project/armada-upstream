@@ -77,7 +77,7 @@ function BannedRow({
   return (
     <li className="flex items-center gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm">
       <Avatar className="size-6 shrink-0">
-        <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+        <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
         <AvatarFallback className="bg-destructive/20 text-[10px] text-destructive">
           {name[0]?.toUpperCase() ?? "?"}
         </AvatarFallback>

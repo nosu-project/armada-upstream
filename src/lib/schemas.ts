@@ -22,9 +22,26 @@ export const CoreThemeColorsSchema = z.object({
   primary: HslStringSchema,
 });
 
+export const ThemeBackgroundSchema = z.object({
+  // Rendered only through the media policy; the parse layer (`sanitizeUrl`) already required https.
+  url: z.url(),
+  mode: z.enum(["cover", "tile"]).optional(),
+  mimeType: z.string().optional(),
+  dimensions: z.string().optional(),
+  blurhash: z.string().optional(),
+});
+
+export const ThemeSourceSchema = z.object({
+  pubkey: z.string().regex(/^[0-9a-f]{64}$/),
+  identifier: z.string().optional(),
+});
+
 export const ThemeConfigSchema = z.object({
   title: z.string().optional(),
   colors: CoreThemeColorsSchema,
+  // `.catch` so a bad optional field drops alone instead of the whole theme.
+  background: ThemeBackgroundSchema.optional().catch(undefined),
+  source: ThemeSourceSchema.optional().catch(undefined),
 });
 
 /** The user's Blossom server list + kind 10063 sync timestamp (BUD-03). */

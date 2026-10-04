@@ -25,8 +25,9 @@ interface ActiveSub {
 interface PendingOk {
   resolve: () => void;
   reject: (err: Error) => void;
-  /** Relays that answered OK=false (all false ⇒ reject). */
+  /** Relays that answered OK=false (all `targets` false ⇒ reject). */
   denied: Set<string>;
+  targets: number;
 }
 
 /** Reconnect backoff: 1s, 2s, 4s, 8s, then 15s forever. */
@@ -41,11 +42,13 @@ class RelayConn {
   private timer?: ReturnType<typeof setTimeout>;
   private queue: string[] = [];
   private stopped = false;
+  private everOpened = false;
 
   constructor(
     readonly url: string,
     private onMessage: (url: string, data: string) => void,
-    private onOpen: (url: string) => void,
+    /** `reopened`: this relay had been open before, so frames sent since may be lost. */
+    private onOpen: (url: string, reopened: boolean) => void,
   ) {
     this.connect();
   }
@@ -64,7 +67,8 @@ class RelayConn {
       logSync("nip46", `transport socket open: ${this.url}`);
       // Re-issue REQs BEFORE flushing queued frames: kind-24133 is ephemeral, so a
       // request must never precede the subscription its response needs.
-      this.onOpen(this.url);
+      this.onOpen(this.url, this.everOpened);
+      this.everOpened = true;
       const queued = this.queue;
       this.queue = [];
       for (const frame of queued) ws.send(frame);
@@ -126,10 +130,15 @@ export class Nip46Transport {
   private pendingOks = new Map<string, PendingOk>();
   private backgroundedAt: number | undefined;
   private appStateHandle?: { remove: () => Promise<void> };
+  private reopenListeners = new Set<(url: string) => void>();
 
   constructor(relays: string[]) {
     this.conns = relays.map(
-      (url) => new RelayConn(url, (u, d) => this.route(u, d), (u) => this.resubscribe(u)),
+      (url) =>
+        new RelayConn(url, (u, d) => this.route(u, d), (u, reopened) => {
+          this.resubscribe(u);
+          if (reopened) for (const fn of this.reopenListeners) fn(u);
+        }),
     );
     if (Capacitor.isNativePlatform()) {
       void CapacitorApp.addListener("appStateChange", ({ isActive }) => {
@@ -178,7 +187,7 @@ export class Nip46Transport {
           pending.resolve();
         } else {
           pending.denied.add(url);
-          if (pending.denied.size >= this.conns.length) {
+          if (pending.denied.size >= pending.targets) {
             this.pendingOks.delete(id);
             pending.reject(new Error(reason || "rejected by every relay"));
           }
@@ -198,8 +207,21 @@ export class Nip46Transport {
     }
   }
 
-  /** Publish to every relay; resolves on the first OK=true. */
-  event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void> {
+  /**
+   * Called after a relay reconnects and its subscriptions are re-sent, so
+   * requests published before the drop can be sent again to that relay.
+   */
+  onReopen(fn: (url: string) => void): () => void {
+    this.reopenListeners.add(fn);
+    return () => {
+      this.reopenListeners.delete(fn);
+    };
+  }
+
+  /** Publish to every relay (or only `opts.relay`); resolves on the first OK=true. */
+  event(event: NostrEvent, opts?: { signal?: AbortSignal; relay?: string }): Promise<void> {
+    const targets = opts?.relay ? this.conns.filter((c) => c.url === opts.relay) : this.conns;
+    if (targets.length === 0) return Promise.reject(new Error(`unknown relay ${opts?.relay}`));
     return new Promise<void>((resolve, reject) => {
       const done = (fn: () => void) => {
         opts?.signal?.removeEventListener("abort", onAbort);
@@ -213,13 +235,14 @@ export class Nip46Transport {
         resolve: () => done(resolve),
         reject: (e) => done(() => reject(e)),
         denied: new Set(),
+        targets: targets.length,
       });
       if (opts?.signal) {
         if (opts.signal.aborted) return onAbort();
         opts.signal.addEventListener("abort", onAbort, { once: true });
       }
       const frame = JSON.stringify(["EVENT", event]);
-      for (const c of this.conns) c.send(frame);
+      for (const c of targets) c.send(frame);
     });
   }
 

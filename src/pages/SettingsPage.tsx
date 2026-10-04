@@ -70,8 +70,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { isDesktop } from "@/lib/desktop";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
-import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, COMMUNITY_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -648,7 +647,7 @@ export function SettingsPage({
               <RelayListEditor
                 relays={config.communityRelays}
                 onChange={setCommunityRelays}
-                onReset={() => setCommunityRelays([...STOCK_RELAYS])}
+                onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
                 emptyText="No community relays — new communities fall back to the shared Concord relays."
               />
             </SettingsRow>

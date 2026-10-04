@@ -18,12 +18,10 @@ const AUTOLOAD_DESCRIPTIONS: Record<MediaAutoload, string> = {
   trusted:
     "Images, videos and link previews from members who are new to you wait for you to tap "
     + "Load, and nothing is fetched until you do. Everyone else loads: moderators, people you "
-    + "follow or talk with, and members you've seen here for a day. A new member's profile "
-    + "picture shows initials for their first hour.",
+    + "follow or talk with, members who were already here when you arrived, and members "
+    + "you've seen here for a day.",
   always: "Every image, video and link preview loads as soon as it's on screen, whoever posted it.",
-  never:
-    "Nothing loads until you tap Load. Profile pictures still show once a member is no longer "
-    + "new to you.",
+  never: "Nothing loads until you tap Load.",
 };
 
 /**

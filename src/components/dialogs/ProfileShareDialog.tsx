@@ -83,7 +83,7 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
       >
         <div className="flex flex-col items-center gap-2 text-center">
           <Avatar shape={getAvatarShape(metadata)} className="size-14 ring-2 ring-primary/20">
-            <AvatarImage src={metadata?.picture} alt={displayName} />
+            <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={displayName} />
             <AvatarFallback className="text-lg font-semibold">
               {displayName.charAt(0).toUpperCase()}
             </AvatarFallback>

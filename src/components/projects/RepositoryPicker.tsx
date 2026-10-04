@@ -42,7 +42,7 @@ export function OwnerAvatar({ pubkey, className }: { pubkey: string; className?:
   const name = useOwnerName(pubkey);
   return (
     <Avatar className={cn("size-8 shrink-0 border border-border/60", className)}>
-      <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+      <AvatarImage src={author.data?.metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="text-[10px] font-semibold">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
     </Avatar>
   );

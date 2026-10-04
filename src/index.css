@@ -695,3 +695,31 @@
     color: hsl(172 60% 62%);
   }
 }
+
+/*
+ * Theme background image. Each opaque surface repaints the same fixed image under
+ * its own tint, so layers beneath it (swipe panels, overlays) stay hidden.
+ */
+html.theme-bg body,
+html.theme-bg #root .bg-background {
+  background:
+    linear-gradient(hsl(var(--background) / 0.9), hsl(var(--background) / 0.9)),
+    var(--theme-bg-image) center / var(--theme-bg-size) var(--theme-bg-repeat) fixed,
+    hsl(var(--background));
+}
+html.theme-bg #root .bg-chrome {
+  background:
+    linear-gradient(hsl(var(--chrome) / 0.93), hsl(var(--chrome) / 0.93)),
+    var(--theme-bg-image) center / var(--theme-bg-size) var(--theme-bg-repeat) fixed,
+    hsl(var(--chrome));
+}
+html.theme-bg #root .bg-chrome-deep {
+  background:
+    linear-gradient(hsl(var(--chrome-deep) / 0.95), hsl(var(--chrome-deep) / 0.95)),
+    var(--theme-bg-image) center / var(--theme-bg-size) var(--theme-bg-repeat) fixed,
+    hsl(var(--chrome-deep));
+}
+html.theme-bg #root .theme-scope,
+html.theme-bg #root .theme-scope .bg-background {
+  background: hsl(var(--background));
+}

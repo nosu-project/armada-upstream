@@ -34,7 +34,7 @@ function AuthorAvatar({ pubkey, className }: { pubkey: string; className?: strin
   const name = useScopedDisplayName(pubkey, metadata);
   return (
     <Avatar shape={getAvatarShape(metadata)} className={cn("size-8", className)}>
-      <AvatarImage src={metadata?.picture} alt={name} />
+      <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt={name} />
       <AvatarFallback className="bg-primary/20 text-primary text-xs">{name[0]?.toUpperCase()}</AvatarFallback>
     </Avatar>
   );
