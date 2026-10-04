@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import { getBuzzMediaHostsVersion, isBuzzMediaUrl, subscribeBuzzMediaHosts } from "@/buzz/media";
-import { MAX_EXPLICIT_DECRYPT_BYTES } from "@/lib/encryptedMedia";
+import { MAX_EXPLICIT_DECRYPT_BYTES, peekPrimedAttachment } from "@/lib/encryptedMedia";
 
 import { useRoutedCandidates, useSourceWalk } from "./useBlossomCandidates";
 import { useResolvedMediaSrc } from "./useResolvedMediaSrc";
@@ -47,8 +47,10 @@ export function useMediaWithFallback(ref: EncryptedRef): MediaWithFallback {
   const [oversizedAllowedFor, setOversizedAllowedFor] = useState<string | null>(null);
   const maxBytes = oversizedAllowedFor === ref.url ? MAX_EXPLICIT_DECRYPT_BYTES : undefined;
 
+  // A file this device uploaded renders from the bytes in hand, not a download.
+  const primed = peekPrimedAttachment(ref.url, ref.encryption?.algorithm ? ref.encryption : undefined);
   const resolved = useResolvedMediaSrc(
-    { ...ref, url: walk.src ?? ref.url },
+    primed ?? { ...ref, url: walk.src ?? ref.url },
     {
       maxBytes,
       alternates: encrypted ? sources.slice(1) : undefined,

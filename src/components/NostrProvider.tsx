@@ -14,6 +14,7 @@ import { VerifiedRelay } from "@/lib/verifiedRelay";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { detachableClient, NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
+import { authCooldownMs, nextAuthStreak, type AuthStreak } from "@/lib/authCooldown";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl } from "@/lib/platform";
@@ -39,12 +40,6 @@ import {
 interface NostrProviderProps {
   children: React.ReactNode;
 }
-
-/**
- * Per-relay cooldown between signing NEW NIP-42 challenges, collapsing
- * retry bursts onto one bunker sign. Signatures are never reused across challenges.
- */
-const AUTH_MIN_INTERVAL_MS = 5_000;
 
 /**
  * Head start for the user signer on a NIP-42 challenge before falling back to
@@ -193,8 +188,12 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   const authCacheRef = useRef<Map<string, { challenge: string; event: NostrEvent; signedAt: number }>>(new Map());
   // Collapse concurrent challenges onto one sign (the cache is only set after signing).
   const authInFlightRef = useRef<Map<string, Promise<NostrEvent>>>(new Map());
-  // Refuse to sign new challenges until this time, so re-challenging relays can't flood the bunker.
+  // Hold new signs until this time, so re-challenging relays can't flood the signer.
+  // Survives socket reopen: a flapping socket is exactly the flood (see authCooldown.ts).
   const authCooldownRef = useRef<Map<string, number>>(new Map());
+  const authStreakRef = useRef<Map<string, AuthStreak>>(new Map());
+  // Whether the signer shows the user each signature (anything but a local key).
+  const signerPromptsRef = useRef(false);
 
   // Concord auths as derived stream keys: a kind-1059 REQ passes a gating relay
   // only once every `authors` entry is authenticated.
@@ -247,7 +246,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       internals.authRetriedEvents?.clear();
       internals.authPromise = undefined;
       authCacheRef.current.delete(url);
-      authCooldownRef.current.delete(url);
       authInFlightRef.current.delete(url);
       resetRelayAuth(url); // the old session's AUTH acks died with the socket
       const entry = openRelaysRef.current.get(url);
@@ -372,15 +370,26 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
               const inFlight = authInFlightRef.current.get(url);
               if (inFlight) return inFlight;
               const wait = (authCooldownRef.current.get(url) ?? 0) - Date.now();
-              const signing = (wait > 0
+              if (wait > 0) logSync("auth", `user AUTH for ${url} held ${Math.round(wait / 1000)}s by cooldown`);
+              const signing: Promise<NostrEvent> = (wait > 0
                 ? new Promise<void>((resolve) => setTimeout(resolve, wait))
                 : Promise.resolve()
               ).then(() => {
+                // A reopen during the hold started a newer attempt; one sign answers both.
+                const newer = authInFlightRef.current.get(url);
+                if (newer && newer !== signing) return newer;
                 const current = openRelaysRef.current.get(url)?.challenge ?? challenge;
                 const liveSigner = signerRef.current;
                 if (!liveSigner) {
                   throw new Error("AUTH failed: no signer available (user not logged in)");
                 }
+                // A refused prompt counts too: the next challenge would only ask again.
+                const holdNext = () => {
+                  const now = Date.now();
+                  const streak = nextAuthStreak(authStreakRef.current.get(url), now);
+                  authStreakRef.current.set(url, streak);
+                  authCooldownRef.current.set(url, now + authCooldownMs(streak.count, signerPromptsRef.current));
+                };
                 return liveSigner.signEvent({
                   kind: 22242,
                   content: "",
@@ -390,12 +399,15 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
                   ],
                   created_at: Math.floor(Date.now() / 1000),
                 }).then((ev) => {
+                  holdNext();
                   authCacheRef.current.set(url, { challenge: current, event: ev, signedAt: Date.now() });
-                  authCooldownRef.current.set(url, Date.now() + AUTH_MIN_INTERVAL_MS);
                   return ev;
+                }, (err: unknown) => {
+                  holdNext();
+                  throw err;
                 });
               }).finally(() => {
-                authInFlightRef.current.delete(url);
+                if (authInFlightRef.current.get(url) === signing) authInFlightRef.current.delete(url);
               });
               authInFlightRef.current.set(url, signing);
               return signing;
@@ -500,6 +512,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   }, [currentLogin]);
 
   signerRef.current = currentSigner;
+  signerPromptsRef.current = currentLogin !== undefined && currentLogin.type !== "nsec";
 
   // NIP-42 has no un-auth: a socket authed as account A keeps A's grants after
   // switching to B. Bounce every socket on an account-to-account switch.
@@ -508,7 +521,11 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     const pubkey = currentLogin?.pubkey;
     const prev = prevPubkeyRef.current;
     prevPubkeyRef.current = pubkey;
-    if (!prev || !pubkey || prev === pubkey) return;
+    if (prev === pubkey) return;
+    // The next account owes nothing for this one's prompts.
+    authCooldownRef.current.clear();
+    authStreakRef.current.clear();
+    if (!prev || !pubkey) return;
     reconnectAllRelays("account switched");
   }, [currentLogin?.pubkey]);
 

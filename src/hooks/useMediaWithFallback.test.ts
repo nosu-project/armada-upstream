@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppContext, type AppContextType } from "@/contexts/AppContext";
-import { encryptBytes } from "@/lib/encryptedMedia";
+import { encryptBytes, primeAttachment } from "@/lib/encryptedMedia";
 
 import { useMediaWithFallback } from "./useMediaWithFallback";
 
@@ -94,6 +94,13 @@ describe("useMediaWithFallback — plain URL (element-driven walk)", () => {
     act(() => result.current.onError());
     expect(result.current.resolved).toEqual({ status: "ready", src: mirrorsOf(url)[0] });
   });
+
+  it("renders this device's own plain upload from the bytes in hand", () => {
+    const url = freshUrl();
+    primeAttachment(url, undefined, new Blob(["the photo just sent"]));
+    const { result } = renderHook(() => useMediaWithFallback({ url }));
+    expect(result.current.resolved).toEqual({ status: "ready", src: "blob:decrypted" });
+  });
 });
 
 /**
@@ -136,6 +143,14 @@ describe("useMediaWithFallback — encrypted (fetch-driven walk)", () => {
     );
     expect(result.current.failed).toBe(true);
     expect(result.current.resolved.status).toBe("error");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("renders this device's own upload from the bytes in hand, without fetching", () => {
+    const url = freshUrl();
+    primeAttachment(url, ENC, new Blob(["the photo just sent"]));
+    const { result } = renderHook(() => useMediaWithFallback({ url, encryption: ENC }));
+    expect(result.current.resolved).toEqual({ status: "ready", src: "blob:decrypted" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

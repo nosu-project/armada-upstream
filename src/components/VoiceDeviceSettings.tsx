@@ -37,6 +37,7 @@ import {
   getPreferredVoiceServer,
   preferredVoiceServerOrigin,
   audioDeviceLabel,
+  platformRoutesCallAudio,
   rememberVoiceDevice,
   setPreferredVoiceServer,
   supportsSpeakerSelection,
@@ -55,6 +56,8 @@ export function VoiceDeviceSettings() {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
+  // Android picks the route itself; see platformRoutesCallAudio.
+  const routeChoice = !platformRoutesCallAudio();
   const [speakerId, setSpeakerId] = useState<string>(() => getPreferredSpeakerId() ?? "default");
   const [permissionError, setPermissionError] = useState<string | null>(null);
   // OS privacy block (desktop), not our handler, so we can deep-link to OS Settings.
@@ -375,21 +378,23 @@ export function VoiceDeviceSettings() {
             Microphone
           </label>
         </div>
-        <Select value={micId} onValueChange={onMicChange}>
-          <SelectTrigger className="bg-background/40 border-transparent">
-            <SelectValue placeholder="System default" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="default">System default</SelectItem>
-            {mics
-              .filter((d) => d.deviceId && d.deviceId !== "default")
-              .map((d, i) => (
-                <SelectItem key={d.deviceId} value={d.deviceId}>
-                  {deviceLabel(d, i, "Microphone")}
-                </SelectItem>
-              ))}
-          </SelectContent>
-        </Select>
+        {routeChoice && (
+          <Select value={micId} onValueChange={onMicChange}>
+            <SelectTrigger className="bg-background/40 border-transparent">
+              <SelectValue placeholder="System default" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">System default</SelectItem>
+              {mics
+                .filter((d) => d.deviceId && d.deviceId !== "default")
+                .map((d, i) => (
+                  <SelectItem key={d.deviceId} value={d.deviceId}>
+                    {deviceLabel(d, i, "Microphone")}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        )}
 
         <div className="flex items-center gap-3">
           <Button
@@ -442,7 +447,7 @@ export function VoiceDeviceSettings() {
         )}
       </div>
 
-      {supportsSpeakerSelection() && (
+      {routeChoice && supportsSpeakerSelection() && (
         <div className="space-y-2.5">
           <div className="flex items-center gap-2">
             <Volume2 className="size-4 text-muted-foreground shrink-0" />

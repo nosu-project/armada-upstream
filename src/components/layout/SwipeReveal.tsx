@@ -289,8 +289,6 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         className={cn(
           "absolute inset-0 flex [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
-          // Reserve the mobile call bar height; `absolute inset-0` ignores the shell's padding.
-          "max-sidebar:pb-[var(--call-bar-h,0px)]",
         )}
         style={{
           transform: `translateX(${underlayShift}%)`,
@@ -313,8 +311,6 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           "absolute inset-0 z-10 flex flex-col bg-background shadow-2xl [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
           enterAnim && "animate-in slide-in-from-right duration-200 ease-out",
-          // Reserve the mobile call bar height; `absolute inset-0` ignores the shell's padding.
-          "max-sidebar:pb-[var(--call-bar-h,0px)]",
           // Keyed on the optimistic state so the list is tappable on the release frame.
           effectiveOpen && !dragging && "pointer-events-none",
         )}

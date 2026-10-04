@@ -22,7 +22,7 @@ import "@livekit/components-styles";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
-import { useCallback, useContext, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +44,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import {
   audioDeviceLabel,
   getAudioProcessing,
+  platformRoutesCallAudio,
   rememberVoiceDevice,
   setAudioProcessing,
   supportsSpeakerSelection,
@@ -52,6 +53,31 @@ import {
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import { cn } from "@/lib/utils";
+
+/**
+ * Whether `kind` is audio with unnamed devices, so a capture is worth opening to
+ * read the names. Never for cameras: an audio menu must not raise the camera
+ * prompt, and on Android a pending prompt stalls every later getUserMedia.
+ */
+function useNeedsAudioLabels(kind: MediaDeviceKind): boolean {
+  const [needs, setNeeds] = useState(false);
+  useEffect(() => {
+    if (kind === "videoinput") return;
+    let cancelled = false;
+    navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((list) => {
+        // The default entry stays unlabeled on Android even with a grant.
+        const unnamed = list.some((d) => d.kind === kind && d.deviceId && d.deviceId !== "default" && !d.label);
+        if (!cancelled) setNeeds(unnamed);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [kind]);
+  return needs;
+}
 
 function DeviceSelectGroup({
   kind,
@@ -62,10 +88,9 @@ function DeviceSelectGroup({
   label: string;
   icon: React.ReactNode;
 }) {
-  // `requestPermissions` needs an active mic grant, which we have once in a call.
   const { devices, activeDeviceId, setActiveMediaDevice } = useMediaDeviceSelect({
     kind,
-    requestPermissions: true,
+    requestPermissions: useNeedsAudioLabels(kind),
   });
 
   if (devices.length === 0) return null;
@@ -76,7 +101,7 @@ function DeviceSelectGroup({
         {icon}
         {label}
       </DropdownMenuLabel>
-      {devices.map((device) => {
+      {devices.map((device, index) => {
         const active = device.deviceId === activeDeviceId;
         return (
           <DropdownMenuItem
@@ -88,7 +113,7 @@ function DeviceSelectGroup({
             className="gap-2"
           >
             <Check className={cn("size-3.5 shrink-0", active ? "opacity-100" : "opacity-0")} />
-            <span className="truncate">{audioDeviceLabel(device, "Unnamed device")}</span>
+            <span className="truncate">{audioDeviceLabel(device, `${label} ${index + 1}`)}</span>
           </DropdownMenuItem>
         );
       })}
@@ -161,18 +186,22 @@ function DeviceMenu({ className }: { className?: string }) {
         <TooltipContent>Audio settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="max-w-72 max-h-[70vh] overflow-y-auto">
-        <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
-        {supportsSpeakerSelection() && (
+        {!platformRoutesCallAudio() && (
           <>
+            <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
+            {supportsSpeakerSelection() && (
+              <>
+                <DropdownMenuSeparator />
+                <DeviceSelectGroup
+                  kind="audiooutput"
+                  label="Speaker"
+                  icon={<Volume2 className="size-3.5" />}
+                />
+              </>
+            )}
             <DropdownMenuSeparator />
-            <DeviceSelectGroup
-              kind="audiooutput"
-              label="Speaker"
-              icon={<Volume2 className="size-3.5" />}
-            />
           </>
         )}
-        <DropdownMenuSeparator />
         <DeviceSelectGroup kind="videoinput" label="Camera" icon={<Video className="size-3.5" />} />
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs">Processing</DropdownMenuLabel>

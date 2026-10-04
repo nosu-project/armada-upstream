@@ -197,7 +197,7 @@
     -webkit-user-select: none;
     user-select: none;
   }
-  @media (hover: none) and (pointer: coarse) {
+  @media (pointer: coarse) {
     body {
       -webkit-tap-highlight-color: transparent;
       overscroll-behavior-y: none;
@@ -224,7 +224,7 @@
    * draw below reads as a desktop web page. Collapse our custom scrollbars to
    * the native overlay on coarse-pointer devices and in the APK.
    */
-  @media (hover: none) and (pointer: coarse) {
+  @media (pointer: coarse) {
     * {
       scrollbar-width: none;
     }

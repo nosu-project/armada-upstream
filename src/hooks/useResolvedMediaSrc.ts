@@ -6,7 +6,12 @@ import {
   resolveBuzzMediaObjectURL,
   subscribeBuzzMediaHosts,
 } from "@/buzz/media";
-import { decryptAttachmentToObjectURL, FileTooLargeError, peekAttachmentObjectURL } from "@/lib/encryptedMedia";
+import {
+  decryptAttachmentToObjectURL,
+  FileTooLargeError,
+  peekAttachmentObjectURL,
+  peekPrimedAttachment,
+} from "@/lib/encryptedMedia";
 import { isSupportedEncryption } from "@/lib/imeta";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -81,7 +86,7 @@ export function useResolvedMediaSrc(
       const cached = peekAttachmentObjectURL(url, encryption!);
       return cached ? { status: "ready", src: cached } : { status: "loading" };
     }
-    return needsBuzzAuth ? { status: "loading" } : { status: "ready", src: url };
+    return needsBuzzAuth ? { status: "loading" } : { status: "ready", src: peekPrimedAttachment(url, undefined) ?? url };
   });
 
   useEffect(() => {
@@ -92,7 +97,7 @@ export function useResolvedMediaSrc(
     }
     if (!encrypted) {
       if (!needsBuzzAuth) {
-        setState(ready(url));
+        setState(ready(peekPrimedAttachment(url, undefined) ?? url));
         return;
       }
       let cancelled = false;

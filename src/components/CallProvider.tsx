@@ -167,7 +167,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // Value-guarded, or every re-register would re-post the OS notification.
   const registerCallSummary = useCallback((summary: CallSummary | null) => {
     setCallSummary((prev) =>
-      prev?.title === summary?.title && prev?.subtitle === summary?.subtitle ? prev : summary,
+      prev?.title === summary?.title && prev?.subtitle === summary?.subtitle && prev?.icon === summary?.icon
+        ? prev
+        : summary,
     );
   }, []);
 
@@ -315,7 +317,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         className={cn(
           "relative flex h-full w-full overflow-hidden",
           // Mobile: reserve the fixed call bar's measured height. Desktop: the bar is in the sidebar.
-          user && activeCall && "max-sidebar:pb-[var(--call-bar-h,0px)]",
+          // The bar already clears the bottom inset, so content above it drops its own.
+          user && activeCall && "max-sidebar:pb-[var(--call-bar-h,0px)] max-sidebar:[--safe-area-pad-bottom:0px]",
         )}
       >
         {children}

@@ -152,8 +152,8 @@ interface Entry {
 const cache = new Map<string, Entry>();
 let totalBytes = 0;
 
-function cacheKey(url: string, enc: ImetaEncryption): string {
-  return `${url}\n${enc.key}\n${enc.nonce}`;
+function cacheKey(url: string, enc: ImetaEncryption | undefined): string {
+  return enc ? `${url}\n${enc.key}\n${enc.nonce}` : `${url}\nplain`;
 }
 
 function touch(k: string, entry: Entry): void {
@@ -208,6 +208,29 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
  * FIRST frame (a resolved promise still costs a commit). Counts as an LRU use.
  */
 export function peekAttachmentObjectURL(url: string, enc: ImetaEncryption): string | undefined {
+  const k = cacheKey(url, enc);
+  const entry = cache.get(k);
+  if (!entry?.url) return undefined;
+  touch(k, entry);
+  return entry.url;
+}
+
+/**
+ * Seed the cache with a file this device just uploaded, so rendering it (tray,
+ * timeline, lightbox) reads the bytes in hand instead of downloading them back.
+ * `enc` is the upload's encryption, or `undefined` for a plain blob.
+ */
+export function primeAttachment(url: string, enc: ImetaEncryption | undefined, plaintext: Blob): void {
+  const k = cacheKey(url, enc);
+  if (cache.get(k)?.url) return;
+  const objectUrl = URL.createObjectURL(plaintext);
+  cache.set(k, { promise: Promise.resolve(objectUrl), bytes: plaintext.size, url: objectUrl });
+  totalBytes += plaintext.size;
+  evictToBudget(k);
+}
+
+/** A {@link primeAttachment}ed object URL for a reference, or `undefined`. Counts as an LRU use. */
+export function peekPrimedAttachment(url: string, enc: ImetaEncryption | undefined): string | undefined {
   const k = cacheKey(url, enc);
   const entry = cache.get(k);
   if (!entry?.url) return undefined;

@@ -45,6 +45,8 @@ export interface CallSummary {
   title: string;
   /** Where that room lives: a server or community name. Absent for DMs. */
   subtitle?: string;
+  /** The community/server icon or DM peer's avatar, as a small `data:` URL. */
+  icon?: string;
 }
 
 export interface CallContextType {

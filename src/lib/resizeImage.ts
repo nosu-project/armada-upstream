@@ -19,8 +19,7 @@ interface ResizedImage {
 export async function resizeImage(file: File): Promise<ResizedImage> {
   const head = new Uint8Array(await file.slice(0, METADATA_SCAN_BYTES).arrayBuffer());
 
-  // Bake EXIF rotation into pixels; otherwise dropping the orientation tag leaves photos sideways.
-  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const bitmap = await decodeUpright(file);
   const { width, height } = bitmap;
 
   const needsResize = width > MAX_DIMENSION || height > MAX_DIMENSION;
@@ -66,6 +65,20 @@ export async function resizeImage(file: File): Promise<ResizedImage> {
     file: resizedFile,
     dimensions: `${newWidth}x${newHeight}`,
   };
+}
+
+/**
+ * Decode with EXIF rotation baked in, so dropping the orientation tag doesn't
+ * leave photos sideways. Older Chromium WebViews reject `"from-image"` with a
+ * TypeError; their default already applies the rotation.
+ */
+async function decodeUpright(file: File): Promise<ImageBitmap> {
+  try {
+    return await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return createImageBitmap(file);
+  }
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {

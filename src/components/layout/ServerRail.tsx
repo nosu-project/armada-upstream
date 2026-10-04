@@ -38,7 +38,7 @@ import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
 import { useConcordMentions } from "@/concord/hooks/useConcordMentions";
 import { useConcordUnread } from "@/concord/hooks/useConcordUnread";
 import { useInviteInbox } from "@/concord/hooks/useDirectInvites";
-import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { useCommunityIcon } from "@/concord/hooks/useCommunityIcon";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmActivity, type DmActivityItem } from "@/hooks/useDmActivity";
 import { useDmConversationName } from "@/hooks/useDmConversationName";
@@ -175,7 +175,7 @@ function ServerMiniIcon({ url }: { url: string }) {
 function Concord2MiniIcon({ communityId, name }: { communityId: string; name: string }) {
   const community = useCommunity(communityId);
   const { data: folded } = useControlFold(community, false);
-  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
+  const iconUrl = useCommunityIcon(communityId, folded ? (folded.metadata?.icon ?? null) : undefined);
   const displayName = folded?.metadata?.name || name;
   const initial = displayName.trim().charAt(0).toUpperCase() || "·";
   const channels = useChannels(community, false);
@@ -354,7 +354,7 @@ function Concord2DragGhost({ communityId, name }: { communityId: string; name: s
   const { data: folded } = useControlFold(community, false);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
-  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
+  const iconUrl = useCommunityIcon(communityId, folded ? (folded.metadata?.icon ?? null) : undefined);
   return (
     <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
       {iconUrl ? (
@@ -657,7 +657,7 @@ const Concord2Button = memo(function Concord2Button({
   const excluded = useIsExcluded(communityId);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
-  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
+  const iconUrl = useCommunityIcon(communityId, folded ? (folded.metadata?.icon ?? null) : undefined);
 
   // From the local rumor cache only. Muted channels don't light the dot; mentions still badge.
   const channels = useChannels(community, false);

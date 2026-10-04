@@ -10,10 +10,14 @@ export interface ArmadaCallPlugin {
    * Post or refresh the call notification. Idempotent; re-evaluates the service
    * type since the microphone type needs RECORD_AUDIO (calls are joined muted).
    */
-  start(options: { title: string; text?: string }): Promise<void>;
+  start(options: { title: string; text?: string; icon?: string }): Promise<void>;
   stop(): Promise<void>;
-  /** The notification's "Leave" button was tapped. */
+  /** `published`: a mic track exists, so the button can toggle without bringing the app forward. */
+  setMic(options: { muted: boolean; published: boolean }): Promise<void>;
+  /** The notification's hang-up button was tapped. */
   addListener(eventName: "hangup", listener: () => void): Promise<PluginListenerHandle>;
+  /** The notification's mute button was tapped. */
+  addListener(eventName: "toggleMute", listener: () => void): Promise<PluginListenerHandle>;
 }
 
 export const ArmadaCall = registerPlugin<ArmadaCallPlugin>("ArmadaCall");

@@ -71,7 +71,7 @@ import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { completedShortcodeAt } from "@/lib/emojiShortcode";
-import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
+import { encryptFileForUpload, encryptFileWithParams, MAX_DECRYPT_BYTES, primeAttachment } from "@/lib/encryptedMedia";
 import { extForMime } from "@/lib/fileBytes";
 import { galleryItemFile, hasMediaGallery, type GalleryItem } from "@/lib/mediaGallery";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
@@ -1050,6 +1050,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           ? new File([modelStill], replaceExtension(uploadableFile.name, ".png"), { type: "image/png" })
           : undefined;
 
+      // The plaintext, kept to render the upload locally (see primeAttachment).
+      const plainFile = uploadableFile;
+      const plainPoster = posterFile;
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
         const enc = await encryptFileForUpload(uploadableFile);
@@ -1074,6 +1077,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       const tags = await uploadFile({ file: uploadableFile, signal: abort.signal });
       const url = tags[0][1];
+      // Under the inline-decrypt cap only: past it a render wouldn't download it either.
+      if (plainFile.size <= MAX_DECRYPT_BYTES) primeAttachment(url, encryption, plainFile);
+      if (posterUrl && plainPoster) primeAttachment(posterUrl, encryption, plainPoster);
 
       // Encrypted: server NIP-94 fields describe the ciphertext; restore the real `m`.
       // Likewise a model: servers type what they don't recognise as octet-stream.
@@ -1694,6 +1700,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         type: recording.mimeType,
       });
 
+      // The plaintext, kept to play the upload locally (see primeAttachment).
+      const plainFile = file;
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
         const enc = await encryptFileForUpload(file);
@@ -1703,6 +1711,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       const uploadTags = await uploadFile(file);
       const audioUrl = uploadTags[0][1];
+      primeAttachment(audioUrl, encryption, plainFile);
 
       const tags = buildMessageTags(audioUrl);
       // Carry waveform + duration (and decryption params when encrypted).

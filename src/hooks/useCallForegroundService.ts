@@ -17,14 +17,15 @@ export function useCallForegroundService(
 ) {
   const title = summary?.title;
   const subtitle = summary?.subtitle;
+  const icon = summary?.icon;
 
   // The fallback label covers the gap before the room registers its summary.
   useEffect(() => {
     if (!active || !hasNativeCallService()) return;
-    ArmadaCall.start({ title: title ?? "Voice call", text: subtitle ?? "" }).catch((err) => {
+    ArmadaCall.start({ title: title ?? "Voice call", text: subtitle ?? "", icon }).catch((err) => {
       console.warn("[native-call] Could not post the ongoing call notification:", err);
     });
-  }, [active, title, subtitle]);
+  }, [active, title, subtitle, icon]);
 
   useEffect(() => {
     if (!active || !hasNativeCallService()) return;
@@ -35,7 +36,7 @@ export function useCallForegroundService(
     };
   }, [active]);
 
-  // The "Leave" button, registered once and dispatched via a ref so no tap lands
+  // The hang-up button, registered once and dispatched via a ref so no tap lands
   // during a re-registration.
   const hangupRef = useRef(onHangup);
   hangupRef.current = onHangup;

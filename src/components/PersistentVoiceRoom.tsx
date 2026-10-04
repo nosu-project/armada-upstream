@@ -21,10 +21,10 @@ import {
   type LocalTrack,
   type RoomOptions,
 } from "livekit-client";
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -59,6 +59,14 @@ import { toast } from "@/hooks/useToast";
 import { ToastAction } from "@/components/ui/toast";
 import { dmCallKeys } from "@/lib/dmCall";
 import { useCallSync } from "@/concord/hooks/useCallSync";
+import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { decryptNotificationIcon } from "@/concord/lib/image";
+import { useBlossomServers } from "@/hooks/useBlossomServers";
+import { useMediaPolicy, useMediaSrc } from "@/hooks/useMediaPolicy";
+import { ArmadaCall, hasNativeCallService } from "@/lib/nativeCall";
+import { useMicToggle } from "@/hooks/useMicToggle";
+import { fetchNotificationIcon } from "@/lib/notificationIcon";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import {
   ownAvServers,
   useCommunityAvBrokers,
@@ -83,6 +91,7 @@ import {
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
 import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
+import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
 import { bytesToBase64 } from "@/lib/fileBytes";
@@ -147,6 +156,38 @@ function MutedReporter() {
   }, [participants, resolveIdentity, setMutedPubkeys]);
 
   useEffect(() => () => setMutedPubkeys(new Set()), [setMutedPubkeys]);
+
+  return null;
+}
+
+/** Mirrors the mic into the Android call notification's mute button and runs its taps. */
+function CallNotificationMic() {
+  const { isMicrophoneEnabled, toggle } = useMicToggle();
+  const { localParticipant } = useLocalParticipant();
+  const published = Boolean(localParticipant.getTrackPublication(Track.Source.Microphone)?.track);
+
+  useEffect(() => {
+    if (!hasNativeCallService()) return;
+    ArmadaCall.setMic({ muted: !isMicrophoneEnabled, published }).catch(() => {});
+  }, [isMicrophoneEnabled, published]);
+
+  const toggleRef = useRef(toggle);
+  toggleRef.current = toggle;
+  useEffect(() => {
+    if (!hasNativeCallService()) return;
+    let handle: PluginListenerHandle | undefined;
+    let cancelled = false;
+    ArmadaCall.addListener("toggleMute", () => toggleRef.current())
+      .then((h) => {
+        if (cancelled) h.remove();
+        else handle = h;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, []);
 
   return null;
 }
@@ -401,6 +442,21 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
 
 type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode) => React.ReactNode;
 
+/** The call notification's picture as a small `data:` URL. Android only. */
+function useCallNotificationIcon(
+  key: string | undefined,
+  load: () => Promise<string | undefined>,
+): string | undefined {
+  const { data } = useQuery({
+    queryKey: ["call-notification-icon", key],
+    queryFn: async () => (await load()) ?? null,
+    enabled: Boolean(key) && hasNativeCallService(),
+    staleTime: Infinity,
+    retry: false,
+  });
+  return data ?? undefined;
+}
+
 /** Fixed mobile call bar; writes its measured height to `--call-bar-h` so the shell reserves exactly that. */
 function MobileCallBar({
   shellRef,
@@ -438,7 +494,8 @@ function MobileCallBar({
     <div
       ref={ref}
       className={cn(
-        "fixed bottom-0 inset-x-0 z-40 px-2 pb-safe sidebar:hidden",
+        // The inset is spelled out: the shell zeroes `--safe-area-pad-bottom` for everything above the bar.
+        "fixed bottom-0 inset-x-0 z-40 bg-background px-2 pb-[max(0.75rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] sidebar:hidden",
         exiting
           ? "animate-out fade-out-0 slide-out-to-bottom-4 duration-200 fill-mode-forwards"
           : "animate-in fade-in-0 slide-in-from-bottom-4 duration-300",
@@ -530,6 +587,8 @@ function VoiceRoomShell({
   scopeRelayUrl?: string;
 }) {
   const [rejoining, setRejoining] = useState(false);
+  // A layout effect, so it is in place before LiveKitRoom's connect effect runs.
+  useLayoutEffect(() => ignorePrivateCandidatesFrom(serverUrl), [serverUrl]);
   // Recoverable drops belong to AutoRejoin.
   const handleDisconnected = useCallback(
     (reason?: DisconnectReason) => {
@@ -578,6 +637,7 @@ function VoiceRoomShell({
       <DesktopPushToTalk />
       <SpeakingReporter />
       <MutedReporter />
+      <CallNotificationMic />
       <RosterReporter />
       <PlaybackVolumeApplier />
       <VoiceRejoiningContext.Provider value={rejoining}>
@@ -634,11 +694,15 @@ function Nip29VoiceRoom({
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToChannel]);
 
+  // The server icon the rail shows, else the group's own picture.
+  const iconSrc = useMediaSrc(sanitizeImageSrc(relayInfo?.icon ?? details?.group?.picture));
+  const icon = useCallNotificationIcon(iconSrc, () => fetchNotificationIcon(iconSrc));
+
   // Android ongoing-call notification label (plain text, no emoji images).
   useEffect(() => {
-    registerCallSummary({ title: `#${channelName}`, subtitle: serverName });
+    registerCallSummary({ title: `#${channelName}`, subtitle: serverName, icon });
     return () => registerCallSummary(null);
-  }, [registerCallSummary, channelName, serverName]);
+  }, [registerCallSummary, channelName, serverName, icon]);
 
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
@@ -824,11 +888,19 @@ function ConcordVoiceRoom({
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToChannel]);
 
-  // Decrypted names are fine here: the notification is drawn locally in-process.
+  const { data: folded } = useControlFold(community, false);
+  const iconPointer = folded?.metadata?.icon;
+  const blossomServers = useBlossomServers();
+  const mediaPolicy = useMediaPolicy();
+  const icon = useCallNotificationIcon(iconPointer?.hash, () =>
+    iconPointer ? decryptNotificationIcon(iconPointer, blossomServers, mediaPolicy) : Promise.resolve(undefined),
+  );
+
+  // Decrypted names and icon are fine here: the notification is drawn locally in-process.
   useEffect(() => {
-    registerCallSummary({ title: `#${channel.name}`, subtitle: community.name });
+    registerCallSummary({ title: `#${channel.name}`, subtitle: community.name, icon });
     return () => registerCallSummary(null);
-  }, [registerCallSummary, channel.name, community.name]);
+  }, [registerCallSummary, channel.name, community.name, icon]);
 
   // Heartbeat (§4) announces the broker that actually minted the token, not the
   // nominated one, so others aren't steered to an unreachable origin.
@@ -1524,10 +1596,14 @@ function DmVoiceRoom({
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToConversation]);
 
+  const picture = peerAuthor.data?.metadata?.picture;
+  const avatarSrc = useMediaSrc(typeof picture === "string" && /^https:\/\//.test(picture) ? picture : undefined);
+  const icon = useCallNotificationIcon(avatarSrc, () => fetchNotificationIcon(avatarSrc));
+
   useEffect(() => {
-    registerCallSummary({ title: peerName });
+    registerCallSummary({ title: peerName, icon });
     return () => registerCallSummary(null);
-  }, [registerCallSummary, peerName]);
+  }, [registerCallSummary, peerName, icon]);
 
   const handleDisconnected = useCallback(
     (reason?: DisconnectReason) => {
