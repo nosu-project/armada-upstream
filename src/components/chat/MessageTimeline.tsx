@@ -279,7 +279,7 @@ const TimelineSkeleton = memo(function TimelineSkeleton() {
       {[...SKELETON_ROWS, ...SKELETON_ROWS].map((row, i) => (
         <div
           key={i}
-          className={cn("flex items-start gap-3 px-2.5", row.continuation ? "py-0.5" : "py-1.5")}
+          className={cn("flex items-start gap-3 px-2.5", row.continuation ? "py-0.5" : "pt-1.5 pb-0.5")}
         >
           {row.continuation ? (
             <div className="w-10 shrink-0" />

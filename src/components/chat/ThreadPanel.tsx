@@ -339,7 +339,7 @@ export function ThreadMessage({
           ? "px-0 py-0"
           : isComment
             ? "px-3 py-3 hover:bg-secondary/30"
-            : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "py-1.5"),
+            : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "pt-1.5 pb-0.5"),
         sheetOpen && "bg-secondary/40",
         // Native selection/callout would fire `pointercancel` and eat the long-press (see MessageRow).
         isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
