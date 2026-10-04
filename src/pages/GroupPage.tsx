@@ -6,7 +6,7 @@ import { BuzzCanvasBar } from "@/buzz/BuzzCanvas";
 import { BuzzChat } from "@/buzz/BuzzChat";
 import { BuzzDmName } from "@/buzz/BuzzDmName";
 import { useIsBuzzRelay } from "@/buzz/detect";
-import { buzzChannelType } from "@/buzz/protocol";
+import { buzzChannelTopic, buzzChannelType } from "@/buzz/protocol";
 import { useBuzzOpenDm } from "@/buzz/useBuzzDms";
 import { useBuzzPresence } from "@/buzz/useBuzzPresence";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -291,6 +291,7 @@ export function GroupPage() {
 
   const group = details?.group;
   const buzzType = isBuzz && group ? buzzChannelType(group.event) : undefined;
+  const buzzTopic = isBuzz && group ? buzzChannelTopic(group.event) : undefined;
   // The user's own 10009 list counts as membership: it's cached locally and
   // resolves instantly/offline, while relay membership queries can be
   // cold/empty/AUTH-gated on reopen and flash "Join channel" at members.
@@ -389,6 +390,7 @@ export function GroupPage() {
                   ? <BuzzDmName members={details?.members ?? []} selfPubkey={user?.pubkey} />
                   : group?.name ?? groupId
             }
+            topic={buzzTopic || group?.about}
             avatar={<ChatHeaderAvatar src={serverIcon} name={serverName} />}
             context={serverName}
           />

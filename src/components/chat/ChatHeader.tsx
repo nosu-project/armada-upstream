@@ -54,6 +54,7 @@ export function ChatHeaderAvatar({ src, name }: { src: string | null | undefined
 export function ChatHeaderTitle({
   glyph,
   title,
+  topic,
   avatar,
   context,
   onContextClick,
@@ -64,6 +65,8 @@ export function ChatHeaderTitle({
   /** Rendered at both sizes, so it takes the size class. */
   glyph: (className: string) => ReactNode;
   title: ReactNode;
+  /** The channel's description, beneath the title on desktop and after it on mobile. */
+  topic?: string;
   avatar: ReactNode;
   context: ReactNode;
   onContextClick?: () => void;
@@ -77,9 +80,12 @@ export function ChatHeaderTitle({
       {avatar}
       <div className="min-w-0 flex flex-col">
         <span className="font-semibold text-base leading-tight truncate">{context}</span>
-        <span className="text-xs text-muted-foreground leading-tight truncate flex items-center gap-0.5">
+        <span className="text-xs text-muted-foreground leading-tight flex items-center gap-0.5 min-w-0">
           {glyph("size-3 shrink-0")}
-          {title}
+          <span className="truncate">
+            {title}
+            {topic && <> · {topic}</>}
+          </span>
         </span>
       </div>
     </>
@@ -89,7 +95,10 @@ export function ChatHeaderTitle({
       <div className={cn("relative hidden sidebar:flex items-center gap-1.5 min-w-0", className)}>
         {indicator?.("absolute -bottom-0.5 left-2 z-10")}
         {glyph("size-5 text-muted-foreground shrink-0")}
-        <h1 className="font-semibold truncate leading-tight">{title}</h1>
+        <div className="min-w-0">
+          <h1 className="font-semibold truncate leading-tight">{title}</h1>
+          {topic && <p className="text-xs text-muted-foreground truncate">{topic}</p>}
+        </div>
       </div>
       <div className={cn("relative flex sidebar:hidden items-center min-w-0", className)}>
         {/* Beside the button, not in it: the indicator may be interactive. */}
