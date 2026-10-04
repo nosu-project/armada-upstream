@@ -5,6 +5,8 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import androidx.activity.result.ActivityResult;
@@ -51,6 +53,10 @@ public class ArmadaSignerPlugin extends Plugin {
     private final Map<String, Integer> relaunches = new HashMap<>();
     private String leader;
     private final Set<String> followers = new LinkedHashSet<>();
+    /** Amber's rate-limit bucket per request, for launches that open a new screen. */
+    private final Map<String, String> paceKeys = new HashMap<>();
+    private final SignerLaunchPacer pacer = new SignerLaunchPacer();
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @PluginMethod
     public void request(PluginCall call) {
@@ -91,22 +97,36 @@ public class ArmadaSignerPlugin extends Plugin {
         intent.putExtra("id", id);
         intent.putExtra("current_user", currentUser);
         if (!pubkey.isEmpty()) intent.putExtra("pubkey", pubkey);
-        getActivity().runOnUiThread(() -> launch(id, intent, call));
+        String paceKey = SignerLaunchPacer.keyOf(type, payload);
+        getActivity().runOnUiThread(() -> launch(id, intent, call, paceKey));
     }
 
-    private void launch(String id, Intent intent, PluginCall call) {
+    private void launch(String id, Intent intent, PluginCall call, String paceKey) {
         if (pending.containsKey(id)) {
             call.reject("Duplicate request id", "FAILED");
             return;
         }
         pending.put(id, call);
         intents.put(id, intent);
+        paceKeys.put(id, paceKey);
         start(id, intent);
     }
 
     private void start(String id, Intent intent) {
-        if (leader == null) leader = id;
-        else followers.add(id);
+        if (leader == null) {
+            // A new screen counts against Amber's limit; one merged into an open screen doesn't.
+            long wait = pacer.reserve(paceKeys.get(id), System.currentTimeMillis());
+            if (wait > 0) {
+                Log.i(TAG, "pacing signer launch " + id + " by " + wait + "ms");
+                handler.postDelayed(() -> {
+                    if (pending.containsKey(id)) start(id, intent);
+                }, wait);
+                return;
+            }
+            leader = id;
+        } else {
+            followers.add(id);
+        }
         final ActivityResultLauncher<Intent>[] holder = new ActivityResultLauncher[1];
         holder[0] = getActivity().getActivityResultRegistry().register(
                 "armada-nip55-" + id,
@@ -202,6 +222,7 @@ public class ArmadaSignerPlugin extends Plugin {
         followers.remove(id);
         intents.remove(id);
         relaunches.remove(id);
+        paceKeys.remove(id);
         if (answer != null && answer.getString("result") != null) call.resolve(answer);
         else if (answer != null) call.reject("Signer returned no result", "FAILED");
         else call.reject(message, code);
