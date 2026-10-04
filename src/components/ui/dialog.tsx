@@ -2,10 +2,14 @@ import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
+import { useBackDismiss } from "@/hooks/useAndroidBack"
 import { usePortalContainer } from "@/hooks/usePortalContainer"
 import { cn } from "@/lib/utils"
 
-const Dialog = DialogPrimitive.Root
+const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => (
+  <DialogPrimitive.Root {...props} {...useBackDismiss(props)} />
+)
+Dialog.displayName = "Dialog"
 
 const DialogTrigger = DialogPrimitive.Trigger
 

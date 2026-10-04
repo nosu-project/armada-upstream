@@ -1,26 +1,34 @@
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 /**
  * Android hardware/gesture "back" handling via `@capacitor/app`'s `backButton`
- * (gesture nav steals edge swipes from the WebView). Handlers form a LIFO stack;
- * returning `true` consumes the event. Unconsumed → history back, or minimize at
- * the root.
+ * (gesture nav steals edge swipes from the WebView). Handlers form LIFO stacks,
+ * overlays above screens; returning `true` consumes the event. Unconsumed →
+ * history back, or minimize at the root.
  */
 
 type BackHandler = () => boolean;
 
-const stack: BackHandler[] = [];
+/**
+ * An open overlay covers its screen however the effects were ordered: a dialog
+ * mounted already open registers before the screen around it (child effects run first).
+ */
+export type BackLayer = "screen" | "overlay";
+
+const stacks: Record<BackLayer, BackHandler[]> = { screen: [], overlay: [] };
 let listenerInstalled = false;
 
 function handleBack() {
-  for (let i = stack.length - 1; i >= 0; i--) {
-    try {
-      if (stack[i]()) return;
-    } catch {
-      // A throwing handler shouldn't trap the user — fall through to the next.
+  for (const stack of [stacks.overlay, stacks.screen]) {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      try {
+        if (stack[i]()) return;
+      } catch {
+        // A throwing handler shouldn't trap the user — fall through to the next.
+      }
     }
   }
   // Unconsumed: walk history, or minimize at the root.
@@ -54,7 +62,7 @@ function ensureListener() {
  * Register an Android back handler while mounted and `active`; return `true` if
  * handled. No-op outside native (see `useOverlayBack` for browser back).
  */
-export function useAndroidBack(handler: BackHandler, active = true): void {
+export function useAndroidBack(handler: BackHandler, active = true, layer: BackLayer = "screen"): void {
   // Latest handler in a ref, so one stable stack entry is registered.
   const ref = useRef(handler);
   ref.current = handler;
@@ -62,13 +70,48 @@ export function useAndroidBack(handler: BackHandler, active = true): void {
   useEffect(() => {
     if (!active || !Capacitor.isNativePlatform()) return;
     ensureListener();
+    const stack = stacks[layer];
     const entry: BackHandler = () => ref.current();
     stack.push(entry);
     return () => {
       const i = stack.indexOf(entry);
       if (i >= 0) stack.splice(i, 1);
     };
-  }, [active]);
+  }, [active, layer]);
+}
+
+interface OpenStateProps {
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+/**
+ * For an overlay primitive's Root: owns its open state, controlled or not, so
+ * Android back closes the overlay instead of navigating away beneath it.
+ * Native only — a history entry per popover would be too much for browsers.
+ */
+export function useBackDismiss({ open: openProp, defaultOpen, onOpenChange }: OpenStateProps): {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+} {
+  const [uncontrolled, setUncontrolled] = useState(defaultOpen ?? false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? openProp : uncontrolled;
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
+  const setOpen = useCallback((next: boolean) => {
+    if (!controlled) setUncontrolled(next);
+    onOpenChangeRef.current?.(next);
+  }, [controlled]);
+
+  useAndroidBack(() => {
+    setOpen(false);
+    return true;
+  }, open, "overlay");
+
+  return { open, onOpenChange: setOpen };
 }
 
 /*
@@ -164,7 +207,7 @@ function ensureWebListener() {
  * Native uses `useAndroidBack`; browsers hold a history entry while `active`.
  */
 export function useOverlayBack(handler: BackHandler, active = true): void {
-  useAndroidBack(handler, active);
+  useAndroidBack(handler, active, "overlay");
 
   const ref = useRef(handler);
   ref.current = handler;

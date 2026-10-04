@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { primeAudioMetadata, primeAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -652,6 +653,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [pickerOpen]);
+
+  // Back closes the picker, not the conversation behind it.
+  useAndroidBack(() => {
+    setPickerOpen(false);
+    return true;
+  }, pickerOpen, "overlay");
 
   // Debounced draft save. Encrypted attachments are dropped: their params live
   // only in memory, so a restored ciphertext URL would be undecryptable.
