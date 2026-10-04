@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.media.AudioPlaybackConfiguration;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
@@ -20,11 +21,13 @@ import androidx.annotation.Nullable;
  *   - A media-button session, so headset presses (including spurious ones
  *     from mic-bias changes) don't reach the music app. Swallowed rather than
  *     mapped to mute/hang-up, since a spurious press would act on the call.
- *   - Volume keys on STREAM_MUSIC: Chromium plays call audio as USAGE_MEDIA,
- *     while MODE_IN_COMMUNICATION points the keys (and overrides
- *     setVolumeControlStream) at STREAM_VOICE_CALL.
+ *   - Volume keys on STREAM_MUSIC while the call plays as USAGE_MEDIA (a
+ *     playback stream Chromium opened before the held capture put it in
+ *     MODE_IN_COMMUNICATION, see callMicHold.ts), where the mode points the
+ *     keys at an idle STREAM_VOICE_CALL. Once the call plays as voice
+ *     communication the default handling is right and the keys pass through.
  *
- * No routing: a media-usage stream follows headsets and never hits the earpiece.
+ * No routing: Chromium picks the communication device itself.
  */
 final class CallAudioSession {
     private static final String TAG = "CallAudioSession";
@@ -66,19 +69,34 @@ final class CallAudioSession {
         abandonFocus();
     }
 
-    /** Steer a volume key to the stream the call actually plays on; false to let it through. */
+    /** Steer a volume key to STREAM_MUSIC only while the call plays as media; false to let it through. */
     static boolean handleVolumeKey(Context context, KeyEvent event) {
-        if (!inCall) return false;
+        if (!inCall || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
         int code = event.getKeyCode();
         if (code != KeyEvent.KEYCODE_VOLUME_UP && code != KeyEvent.KEYCODE_VOLUME_DOWN) return false;
+        AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null || !playsAsMediaOnly(am)) return false;
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
-            AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
-            if (am == null) return false;
             am.adjustStreamVolume(AudioManager.STREAM_MUSIC,
                     code == KeyEvent.KEYCODE_VOLUME_UP ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER,
                     AudioManager.FLAG_SHOW_UI);
         }
         return true;
+    }
+
+    /** Active media playback and no voice-communication playback: the call is on the media stream. */
+    private static boolean playsAsMediaOnly(AudioManager am) {
+        boolean media = false;
+        try {
+            for (AudioPlaybackConfiguration config : am.getActivePlaybackConfigurations()) {
+                int usage = config.getAudioAttributes().getUsage();
+                if (usage == AudioAttributes.USAGE_VOICE_COMMUNICATION) return false;
+                if (usage == AudioAttributes.USAGE_MEDIA) media = true;
+            }
+        } catch (Exception e) {
+            return false;
+        }
+        return media;
     }
 
     @SuppressWarnings("deprecation")

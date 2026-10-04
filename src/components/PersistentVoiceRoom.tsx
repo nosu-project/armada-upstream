@@ -64,6 +64,7 @@ import { decryptNotificationIcon } from "@/concord/lib/image";
 import { useBlossomServers } from "@/hooks/useBlossomServers";
 import { useMediaPolicy, useMediaSrc } from "@/hooks/useMediaPolicy";
 import { ArmadaCall, hasNativeCallService } from "@/lib/nativeCall";
+import { useCallMicHold } from "@/hooks/useCallMicHold";
 import { useMicToggle } from "@/hooks/useMicToggle";
 import { fetchNotificationIcon } from "@/lib/notificationIcon";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
@@ -587,6 +588,8 @@ function VoiceRoomShell({
   scopeRelayUrl?: string;
 }) {
   const [rejoining, setRejoining] = useState(false);
+  // Before connect: the mode has to be on before the playback streams open (callMicHold.ts).
+  const micReady = useCallMicHold();
   // A layout effect, so it is in place before LiveKitRoom's connect effect runs.
   useLayoutEffect(() => ignorePrivateCandidatesFrom(serverUrl), [serverUrl]);
   // Recoverable drops belong to AutoRejoin.
@@ -596,6 +599,7 @@ function VoiceRoomShell({
     },
     [onDisconnected],
   );
+  if (!micReady) return <LoadingBar placeBar={placeBar} label="Opening the microphone…" />;
   const mobileBar = (
     <ServerScopeProvider relayUrl={scopeRelayUrl}>
       <div className="clip-corner-lg bg-chrome-deep shadow-lg">
