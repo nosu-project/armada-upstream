@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
+import type { CallRoutesSnapshot } from "@/lib/callRoutes";
+
 /**
  * Bridge to the Android ongoing-call foreground service (ArmadaCallPlugin.java):
  * the call notification, plus foreground state so Android doesn't freeze the
@@ -18,6 +20,15 @@ export interface ArmadaCallPlugin {
   addListener(eventName: "hangup", listener: () => void): Promise<PluginListenerHandle>;
   /** The notification's mute button was tapped. */
   addListener(eventName: "toggleMute", listener: () => void): Promise<PluginListenerHandle>;
+  /** The call's output routes (Android 12+); `supported: false` elsewhere. */
+  listRoutes(): Promise<CallRoutesSnapshot>;
+  /** Route the call to `id` for the rest of the call; `ok: false` if gone or refused. */
+  selectRoute(options: { id: number }): Promise<{ ok: boolean }>;
+  /** A route appeared or left, or the active one switched. */
+  addListener(
+    eventName: "routesChanged",
+    listener: (snapshot: CallRoutesSnapshot) => void,
+  ): Promise<PluginListenerHandle>;
 }
 
 export const ArmadaCall = registerPlugin<ArmadaCallPlugin>("ArmadaCall");

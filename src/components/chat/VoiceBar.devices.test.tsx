@@ -44,6 +44,20 @@ vi.mock("@livekit/components-react", () => ({
   DisconnectButton: () => null,
 }));
 
+const nativeCall = vi.hoisted(() => ({
+  available: false,
+  routes: { supported: true, routes: [] as Array<{ id: number; type: string; name: string }>, active: null as number | null },
+  selectRoute: vi.fn<(o: { id: number }) => Promise<{ ok: boolean }>>(async () => ({ ok: true })),
+}));
+vi.mock("@/lib/nativeCall", () => ({
+  hasNativeCallService: () => nativeCall.available,
+  ArmadaCall: {
+    listRoutes: async () => nativeCall.routes,
+    selectRoute: (o: { id: number }) => nativeCall.selectRoute(o),
+    addListener: async () => ({ remove: vi.fn() }),
+  },
+}));
+
 vi.mock("@/lib/voiceProcessor", () => ({ rnnoiseSupported: () => false, syncRnnoise: vi.fn() }));
 vi.mock("@/lib/callSounds", () => ({
   playJoinSound: vi.fn(),
@@ -86,6 +100,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  nativeCall.available = false;
+  nativeCall.routes = { supported: true, routes: [], active: null };
 });
 
 describe("call device menu", () => {
@@ -110,6 +126,35 @@ describe("call device menu", () => {
     expect(screen.queryByText("Microphone")).toBeNull();
     expect(screen.queryByText("Speaker")).toBeNull();
     expect(deviceSelect.mock.calls.map(([o]) => o.kind)).not.toContain("audioinput");
+  });
+
+  it("offers the native output routes on Android, and applies a pick", async () => {
+    platform.name = "android";
+    nativeCall.available = true;
+    nativeCall.routes = {
+      supported: true,
+      routes: [
+        { id: 9, type: "bluetooth", name: "Pixel Buds" },
+        { id: 3, type: "speaker", name: "" },
+        { id: 2, type: "earpiece", name: "" },
+      ],
+      active: 3,
+    };
+    openMenu();
+    expect(await screen.findByText("Output")).toBeTruthy();
+    expect(screen.getByText("Pixel Buds")).toBeTruthy();
+    expect(screen.getByText("Speaker")).toBeTruthy();
+    fireEvent.click(screen.getByText("Phone earpiece"));
+    await waitFor(() => expect(nativeCall.selectRoute).toHaveBeenCalledWith({ id: 2 }));
+  });
+
+  it("shows no output group where the service reports none", async () => {
+    platform.name = "android";
+    nativeCall.available = true;
+    nativeCall.routes = { supported: false, routes: [], active: null };
+    openMenu();
+    expect(await screen.findByText("Camera")).toBeTruthy();
+    expect(screen.queryByText("Output")).toBeNull();
   });
 
   it("names unlabeled cameras by position", async () => {

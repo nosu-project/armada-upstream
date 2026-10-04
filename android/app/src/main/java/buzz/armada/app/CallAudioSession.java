@@ -27,7 +27,7 @@ import androidx.annotation.Nullable;
  *     keys at an idle STREAM_VOICE_CALL. Once the call plays as voice
  *     communication the default handling is right and the keys pass through.
  *
- * No routing: Chromium picks the communication device itself.
+ * Routing is CallRouteSelector's.
  */
 final class CallAudioSession {
     private static final String TAG = "CallAudioSession";

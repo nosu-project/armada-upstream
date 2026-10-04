@@ -36,6 +36,9 @@ import { CameraButton, LeaveButton, MicButton, ScreenShareButton } from "@/compo
 import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useCallRoutes } from "@/hooks/useCallRoutes";
+import { toast } from "@/hooks/useToast";
+import { routeLabel } from "@/lib/callRoutes";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
@@ -121,6 +124,46 @@ function DeviceSelectGroup({
   );
 }
 
+/**
+ * Android's output route, chosen natively (CallRouteSelector): the system's
+ * communication devices, since Chromium's device list reroutes the whole
+ * phone and never offers the earpiece.
+ */
+function CallRouteGroup() {
+  const { supported, routes, active, select } = useCallRoutes();
+  if (!supported || routes.length === 0) return null;
+
+  return (
+    <>
+      <DropdownMenuLabel className="flex items-center gap-2 text-xs">
+        <Volume2 className="size-3.5" />
+        Output
+      </DropdownMenuLabel>
+      {routes.map((route) => (
+        <DropdownMenuItem
+          key={route.id}
+          onSelect={() => {
+            void select(route.id).then((ok) => {
+              if (!ok) {
+                toast({
+                  title: "Couldn't switch output",
+                  description: `${routeLabel(route)} is no longer available.`,
+                  variant: "destructive",
+                });
+              }
+            });
+          }}
+          className="gap-2"
+        >
+          <Check className={cn("size-3.5 shrink-0", route.id === active ? "opacity-100" : "opacity-0")} />
+          <span className="truncate">{routeLabel(route)}</span>
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
 /** Call/audio settings gear: device pickers, audio processing and per-participant volume. */
 function DeviceMenu({ className }: { className?: string }) {
   const { localParticipant } = useLocalParticipant();
@@ -186,6 +229,7 @@ function DeviceMenu({ className }: { className?: string }) {
         <TooltipContent>Audio settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="max-w-72 max-h-[70vh] overflow-y-auto">
+        {platformRoutesCallAudio() && <CallRouteGroup />}
         {!platformRoutesCallAudio() && (
           <>
             <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
