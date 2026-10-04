@@ -15,6 +15,7 @@ export function ChatSearchBar({
   onChange,
   onClose,
   placeholder,
+  label = "Search messages",
   filters,
 }: {
   open: boolean;
@@ -22,6 +23,7 @@ export function ChatSearchBar({
   onChange: (value: string) => void;
   onClose: () => void;
   placeholder: string;
+  label?: string;
   /** Rendered between the input and the close button (Concord's filters popover). */
   filters?: ReactNode;
 }) {
@@ -45,10 +47,14 @@ export function ChatSearchBar({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          // Prevented so an enclosing Escape handler (the settings overlay) leaves itself open.
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+          }
         }}
         placeholder={placeholder}
-        aria-label="Search messages"
+        aria-label={label}
         className="h-8 touch:h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
       />
       {filters}

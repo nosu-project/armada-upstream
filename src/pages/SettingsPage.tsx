@@ -26,7 +26,6 @@ import {
   UserCircle,
   UserX,
   Waypoints,
-  X,
   Zap,
 } from "lucide-react";
 import { useNostrLogin } from "@nostrify/react/login";
@@ -48,6 +47,7 @@ import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
+import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { useSettingsFilter } from "@/components/settings/settingsSearch";
 import { WalletSettings } from "@/components/settings/WalletSettings";
@@ -55,7 +55,6 @@ import { ThemeSelector } from "@/components/ThemeSelector";
 import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useBackOrHome } from "@/hooks/useBackOrHome";
@@ -173,6 +172,11 @@ export function SettingsPage({
   );
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
   const searching = query.trim() !== "";
   const listRef = useRef<HTMLDivElement>(null);
   const visibleSections = useSettingsFilter(listRef, query);
@@ -976,35 +980,25 @@ export function SettingsPage({
         >
           <ArrowLeft className="size-5" />
         </Button>
-        <h1 className="font-semibold shrink-0 leading-tight">Settings</h1>
-        <div className="relative ml-auto w-full max-w-64 min-w-0">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
-          <Input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              // Escape clears first; the overlay's Escape skips prevented events.
-              if (e.key === "Escape" && query) {
-                e.preventDefault();
-                setQuery("");
-              }
-            }}
-            placeholder="Search settings"
-            aria-label="Search settings"
-            className="pl-8 pr-8 h-9 touch:h-11 text-base md:text-sm bg-muted/50 border-0 rounded-lg [&::-webkit-search-cancel-button]:hidden"
-          />
-          {query && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => setQuery("")}
-              className="absolute right-1 top-1/2 -translate-y-1/2 flex size-7 touch:size-9 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X className="size-3.5" />
-            </button>
-          )}
-        </div>
+        <h1 className="min-w-0 flex-1 font-semibold truncate leading-tight">Settings</h1>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Search settings"
+          aria-pressed={searchOpen}
+          className="size-9 shrink-0 text-muted-foreground"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search className="size-4" />
+        </Button>
+        <ChatSearchBar
+          open={searchOpen}
+          value={query}
+          onChange={setQuery}
+          onClose={closeSearch}
+          placeholder="Search settings…"
+          label="Search settings"
+        />
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto pb-safe">
