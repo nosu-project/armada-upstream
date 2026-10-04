@@ -1,6 +1,6 @@
 import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCheck, UserCog, UserMinus, UserPlus, UserX, X } from "lucide-react";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
@@ -558,6 +558,7 @@ export const MemberList = memo(function MemberList({
 }: MemberListProps) {
   const { mutedPubkeys } = useMutedPubkeys();
   const [query, setQuery] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
   // Stable arrays so memoized rows get stable `roles` identities.
@@ -680,7 +681,7 @@ export const MemberList = memo(function MemberList({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
       {noMatches && (
         <p className="px-2 py-3 text-xs text-muted-foreground">
           No members match “{query.trim()}”.
@@ -694,7 +695,7 @@ export const MemberList = memo(function MemberList({
             </h3>
           </div>
           {visibleAdmins.map((admin) => (
-            <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H}>
+            <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H} rootRef={scrollRef}>
             <MemberRow
               pubkey={admin.pubkey}
               roles={admin.roles}
@@ -735,7 +736,7 @@ export const MemberList = memo(function MemberList({
               </h3>
             </div>
             {section.members.map((pubkey) => (
-              <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
+              <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H} rootRef={scrollRef}>
               <MemberRow
                 pubkey={pubkey}
                 roles={adminMap.get(pubkey)}
@@ -779,7 +780,7 @@ export const MemberList = memo(function MemberList({
         )
       ) : (
         regulars.map((pubkey) => (
-          <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
+          <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H} rootRef={scrollRef}>
           <MemberRow
             pubkey={pubkey}
             roles={buzzRoles.get(pubkey)}

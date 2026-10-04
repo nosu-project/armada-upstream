@@ -1,4 +1,5 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
+import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DeferredRow } from "@/components/DeferredRow";
@@ -15,7 +16,9 @@ class MockIO {
   root = null;
   rootMargin = "";
   thresholds: number[] = [];
-  constructor(private cb: IntersectionObserverCallback) {
+  options?: IntersectionObserverInit;
+  constructor(private cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.options = options;
     observers.push(this);
   }
   observe(el: Element) {
@@ -104,6 +107,25 @@ describe("DeferredRow", () => {
     expect(observers[0].els.size).toBe(0);
     fireAll();
     expect(screen.getAllByTestId("row")).toHaveLength(1);
+  });
+
+  it("observes against rootRef rather than the viewport when given one", () => {
+    // A list parked off-screen (the mobile member overlay) is clipped out of the
+    // viewport but not out of its own scroller.
+    function List() {
+      const scrollRef = useRef<HTMLDivElement>(null);
+      return (
+        <div ref={scrollRef} data-testid="scroller">
+          <DeferredRow active minHeight={48} rootRef={scrollRef}>
+            <Row label="a" />
+          </DeferredRow>
+        </div>
+      );
+    }
+    render(<List />);
+
+    expect(observers).toHaveLength(1);
+    expect(observers[0].options?.root).toBe(screen.getByTestId("scroller"));
   });
 
   it("gates each row independently in a list", () => {
