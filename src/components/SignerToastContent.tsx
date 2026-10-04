@@ -3,7 +3,6 @@ import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-/** A deep link that brings the signer app to the front. */
 export interface SignerAppLink {
   href: string;
   label: string;

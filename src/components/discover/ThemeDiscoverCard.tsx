@@ -30,10 +30,6 @@ interface ThemeDiscoverCardProps {
   className?: string;
 }
 
-/**
- * A kind-36767 theme card: preview, creator, Try (a local preview until confirmed),
- * Save to library (credited copy) or Edit for the user's own, Copy link.
- */
 export function ThemeDiscoverCard({ event, className }: ThemeDiscoverCardProps) {
   const theme = useMemo(() => parseDittoTheme(event), [event]);
   const { customTheme, theme: mode } = useTheme();

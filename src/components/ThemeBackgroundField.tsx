@@ -10,7 +10,6 @@ import { toast } from "@/hooks/useToast";
 
 import type { ThemeBackground } from "@/themes";
 
-/** Upload, replace, fit and remove a theme's background image. */
 export function ThemeBackgroundField({
   value,
   onChange,
@@ -18,7 +17,6 @@ export function ThemeBackgroundField({
 }: {
   value: ThemeBackground | undefined;
   onChange: (background: ThemeBackground | undefined) => void;
-  /** Lets the form hold its save button while an upload is in flight. */
   onUploadingChange?: (uploading: boolean) => void;
 }) {
   const { mutateAsync: uploadFile, isPending: uploading } = useUploadFile();

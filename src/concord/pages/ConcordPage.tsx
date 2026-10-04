@@ -158,6 +158,7 @@ import { useInviteActions } from "@/concord/hooks/useInvites";
 import { channelsHingingOn, isEntitled } from "@/concord/lib/channelAccess";
 import { bytesToHex } from "@/concord/lib/derive";
 import { useRelayFollow } from "@/concord/hooks/useRelayFollow";
+import { useMemberPanelScope } from "@/concord/hooks/useMemberPanelScope";
 import { useRoleIntent } from "@/concord/hooks/useRoleIntent";
 import { useRoles, useStaffKeyWatch } from "@/concord/hooks/useRoles";
 import { useSendMessage } from "@/concord/hooks/useChannel";
@@ -1978,14 +1979,15 @@ export function ConcordPage() {
   }, [roster, memberPubkeys]);
 
   // A private channel's member panel lists only those entitled to its key (CORD-03).
-  // Gated on view === "channel": `channel` falls back to the last-viewed channel
-  // outside a channel view, which would otherwise leak that channel's scoping into
-  // panes like "All Messages" and hide members with no channel access yet.
-  const entitledHere = useCallback(
-    (pk: string) =>
-      view !== "channel" || !channel?.isPrivate || isEntitled(roster, ownerHex, pk, channel.idHex),
-    [view, channel, roster, ownerHex],
-  );
+  const { panelChannel, entitledHere, addableChannelRoles, addMemberCandidates } = useMemberPanelScope({
+    view,
+    channel,
+    roster,
+    ownerHex,
+    memberPubkeys,
+    channelRoleCatalog,
+    roleCatalog,
+  });
   const panelMembers = useMemo(() => memberPubkeys.filter(entitledHere), [memberPubkeys, entitledHere]);
   const panelAdmins = useMemo(() => memberAdmins.filter((a) => entitledHere(a.pubkey)), [memberAdmins, entitledHere]);
   const panelSections = useMemo(
@@ -1993,20 +1995,7 @@ export function ConcordPage() {
     [roleSections, entitledHere],
   );
 
-  // "Add members" = grant a scoped Role (vends the key); shown only if the viewer
-  // outranks one. Gated on view === "channel" for the same reason as entitledHere:
-  // `channel` outside a channel view is the last-viewed channel, not the current one.
-  const addableChannelRoles = useMemo(() => {
-    if (view !== "channel" || !channel?.isPrivate) return [];
-    const assignable = new Set((roleCatalog ?? []).filter((r) => r.assignable).map((r) => r.id));
-    return (channelRoleCatalog.get(channel.idHex) ?? []).filter((r) => assignable.has(r.id));
-  }, [view, channel, channelRoleCatalog, roleCatalog]);
-  const addMemberCandidates = useMemo(
-    () => (view === "channel" && channel?.isPrivate ? memberPubkeys.filter((pk) => !entitledHere(pk)) : []),
-    [view, channel, memberPubkeys, entitledHere],
-  );
-
-  useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
+  useEffect(() => setAddMembersOpen(false), [panelChannel?.idHex]);
   // The mobile member overlay closes on room/community switch, list reveal, or back.
   const [membersOpen, setMembersOpen] = useMobileMembersOverlay(
     `${communityId ?? ""}|${channel?.idHex ?? ""}`,
@@ -3760,11 +3749,7 @@ export function ConcordPage() {
                   banLabel={memberBanLabel}
                   onUnban={canBanAny ? handleUnbanMember : undefined}
                   bannedPubkeys={moderation.banned}
-                  onAddMembers={
-                    channel?.isPrivate && addableChannelRoles.length > 0
-                      ? openAddMembers
-                      : undefined
-                  }
+                  onAddMembers={addableChannelRoles.length > 0 ? openAddMembers : undefined}
                   onClose={closeMembers}
                 />
               </div>
@@ -3776,18 +3761,18 @@ export function ConcordPage() {
       <MountWhenOpened open={inviteOpen}>
         <InviteDialog community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
       </MountWhenOpened>
-      {channel?.isPrivate && (
+      {panelChannel?.isPrivate && (
         <MountWhenOpened open={addMembersOpen}>
           <AddChannelMembersDialog
             open={addMembersOpen}
             onOpenChange={setAddMembersOpen}
-            channelName={channel.name}
+            channelName={panelChannel.name}
             candidates={addMemberCandidates}
             roles={addableChannelRoles}
             onAdd={(pk, roleId) => handleToggleRole(pk, roleId, true)}
             isAdding={roleIntent.isPending}
             hasRole={(pk, roleId) => roleIntent.rolesFor(pk).includes(roleId)}
-            holdsKey={privateChannelsHere.some((c) => c.idHex === channel.idHex && c.heldByMe)}
+            holdsKey={privateChannelsHere.some((c) => c.idHex === panelChannel.idHex && c.heldByMe)}
           />
         </MountWhenOpened>
       )}

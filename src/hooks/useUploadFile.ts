@@ -207,11 +207,8 @@ function finishTags(tags: UploadTags, filename: string): UploadTags {
 }
 
 /**
- * Copy a remote file onto the user's own Blossom servers and return the new URL,
- * so borrowed content (an adopted theme's background) survives its owner
- * deleting or swapping it. Tries a server-side BUD-04 mirror (Blossom blob URLs
- * only), else downloads through the media policy and uploads. A file already on
- * one of the user's servers is returned as-is.
+ * Copy a remote file onto the user's Blossom servers so it survives its owner
+ * deleting it. BUD-04 mirror first, else download (through the media policy) and upload.
  */
 export function useRehostFile() {
   const { config } = useAppContext();

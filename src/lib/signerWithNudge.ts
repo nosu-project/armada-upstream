@@ -71,11 +71,7 @@ function isAndroid(): boolean {
 const CLAVE: SignerAppLink = { href: "clave://", label: "Open Clave" };
 const AEGIS: SignerAppLink = { href: "aegis://", label: "Open Aegis" };
 
-/**
- * The iOS signer app a bunker session runs through, read off its relays: Aegis
- * serves NIP-46 from an on-device relay (`localrelay.link`, or loopback), and
- * Clave's bunker URIs name `relay.powr.build`, where its push proxy listens.
- */
+/** The iOS signer app, read off the session's relays: Aegis runs a local relay, Clave uses relay.powr.build. */
 function iosSignerApp(relays: string[]): SignerAppLink | undefined {
   const hosts = relays.flatMap((url) => {
     try {
@@ -90,12 +86,8 @@ function iosSignerApp(relays: string[]): SignerAppLink | undefined {
 }
 
 /**
- * Links that bring a NIP-46 signer app to the front, where it can approve or
- * catch up on queued requests. Amber opens its pending bunker requests on a
- * bare `nostrsigner:` (Android shows a chooser if several signers claim it);
- * on iOS each app has its own scheme, so both are offered when the session's
- * relays don't say which. Nothing on desktop: Electron only opens browser and
- * mail schemes.
+ * Links that bring a NIP-46 signer app to the front. On iOS each app has its own
+ * scheme, so both are offered when the relays don't say which. None on desktop.
  */
 export function signerAppLinks(signerRelays: string[] = []): SignerAppLink[] {
   if (isAndroid()) return [{ href: "nostrsigner:", label: "Open signer" }];
@@ -106,7 +98,6 @@ export function signerAppLinks(signerRelays: string[] = []): SignerAppLink[] {
   return [];
 }
 
-/** Show the nudge toast. */
 function showNudgeToast(opts: {
   kind: number | undefined;
   opType: OpType;

@@ -27,7 +27,6 @@ vi.mock("@/hooks/useToast", () => ({ toast: h.toast }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: { pubkey: "a".repeat(64) } }),
 }));
-// Background uploads go to Blossom; not exercised here.
 vi.mock("@/hooks/useUploadFile", () => ({
   useUploadFile: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));

@@ -154,7 +154,6 @@ function parseThemeSource(event: NostrRumor): ThemeSource | undefined {
   return source && source.pubkey !== event.pubkey ? source : undefined;
 }
 
-/** Credit tags for a theme adopted from `source`. */
 function buildSourceTags(source: ThemeSource | undefined): string[][] {
   if (!source) return [];
   const tags: string[][] = [];
@@ -163,7 +162,6 @@ function buildSourceTags(source: ThemeSource | undefined): string[][] {
   return tags;
 }
 
-/** Whether this theme event is a credited copy of another user's theme rather than one they made. */
 export function isAdoptedTheme(event: NostrRumor): boolean {
   return (event.kind === THEME_DEFINITION_KIND || event.kind === ACTIVE_THEME_KIND)
     && !!parseThemeSource(event);
@@ -217,7 +215,6 @@ export interface ThemeExtras {
   titleFont?: ThemeFont;
   background?: ThemeBackground;
   description?: string;
-  /** Credit for a theme adopted from another user (`a` + `p` tags). */
   source?: ThemeSource;
 }
 

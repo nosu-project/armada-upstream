@@ -164,11 +164,7 @@ function ChannelLink({
   );
 }
 
-/**
- * A channel in the user's kind 10009 that the relay has no metadata for: never created
- * (a relay without NIP-29 accepts the 9007 anyway) or since deleted. Not a link, since
- * there is no channel to open.
- */
+/** A kind-10009 channel the relay has no metadata for: never created, or deleted. */
 function MissingChannelRow({ relayUrl, groupId }: { relayUrl: string; groupId: string }) {
   const { data: list } = useUserGroupList();
   const { mutateAsync: updateList, isPending } = useUpdateUserGroupList();

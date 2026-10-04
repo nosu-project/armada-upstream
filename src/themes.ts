@@ -22,7 +22,6 @@ export interface ThemeBackground {
 
 /** The original creator of a theme adopted from someone else. */
 export interface ThemeSource {
-  /** Hex pubkey of the theme's author. */
   pubkey: string;
   /** d-tag of the author's kind-36767 definition, when the theme came from one. */
   identifier?: string;
@@ -32,7 +31,6 @@ export interface ThemeSource {
 export interface ThemeConfig {
   title?: string;
   colors: CoreThemeColors;
-  /** Image painted behind the app's surfaces. */
   background?: ThemeBackground;
   /** Who made this theme, when it was adopted from another user. Dropped on edit. */
   source?: ThemeSource;

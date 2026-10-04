@@ -697,28 +697,25 @@
 }
 
 /*
- * Theme background image (`ThemeBackgroundSync` sets `html.theme-bg` and the
- * `--theme-bg-*` vars). Each opaque surface repaints the same viewport-fixed
- * image under a tint of its own color, so the image shows through without
- * exposing whatever is layered beneath the surface (swipe panels, overlays).
- * A scoped theme (`.theme-scope`, e.g. another user's profile) keeps its own.
+ * Theme background image. Each opaque surface repaints the same fixed image under
+ * its own tint, so layers beneath it (swipe panels, overlays) stay hidden.
  */
 html.theme-bg body,
 html.theme-bg #root .bg-background {
   background:
-    linear-gradient(hsl(var(--background) / 0.75), hsl(var(--background) / 0.75)),
+    linear-gradient(hsl(var(--background) / 0.9), hsl(var(--background) / 0.9)),
     var(--theme-bg-image) center / var(--theme-bg-size) var(--theme-bg-repeat) fixed,
     hsl(var(--background));
 }
 html.theme-bg #root .bg-chrome {
   background:
-    linear-gradient(hsl(var(--chrome) / 0.82), hsl(var(--chrome) / 0.82)),
+    linear-gradient(hsl(var(--chrome) / 0.93), hsl(var(--chrome) / 0.93)),
     var(--theme-bg-image) center / var(--theme-bg-size) var(--theme-bg-repeat) fixed,
     hsl(var(--chrome));
 }
 html.theme-bg #root .bg-chrome-deep {
   background:
-    linear-gradient(hsl(var(--chrome-deep) / 0.86), hsl(var(--chrome-deep) / 0.86)),
+    linear-gradient(hsl(var(--chrome-deep) / 0.95), hsl(var(--chrome-deep) / 0.95)),
     var(--theme-bg-image) center / var(--theme-bg-size) var(--theme-bg-repeat) fixed,
     hsl(var(--chrome-deep));
 }

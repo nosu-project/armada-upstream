@@ -406,13 +406,17 @@ function communitiesInfiniteOptions(
   };
 }
 
+export type DiscoverScope = "you" | "friends" | "world";
+
 /**
- * The author allow-list gating every Discover feed: the curated list's members,
- * plus the viewer and their follows when logged in.
+ * The author allow-list gating every Discover feed, by scope: the viewer alone
+ * ("you"), the viewer and their follows ("friends"), or ("world") the curated
+ * list's members plus both — unfiltered instead under `discoverAllContent`.
+ * Signed out, "you" and "friends" have nobody in them and read as "world".
  * Fail-closed: empty means show nothing — some relays treat empty `authors` as no
- * filter, so callers must NOT query when empty. `discoverAllContent` bypasses it all.
+ * filter, so callers must NOT query when empty.
  */
-export function useDiscoverAuthors(): {
+export function useDiscoverAuthors(requested: DiscoverScope): {
   authors: string[];
   /** The curated list's members alone, for ranking. */
   packAuthors: string[];
@@ -427,40 +431,42 @@ export function useDiscoverAuthors(): {
   const followList = useFollowList();
 
   const curation = useDiscoverCuration();
+  const scope = user ? requested : "world";
 
-  const unrestricted = config.discoverAllContent;
-  const curated = curation.type !== "none";
+  const unrestricted = scope === "world" && config.discoverAllContent;
+  const usesPack = scope === "world" && !unrestricted && curation.type !== "none";
 
   const packKey = packQueryKey(relays, curation);
-  useKvQuerySeed<string[]>(packSeedKey(curation), unrestricted || !curated ? undefined : packKey);
+  useKvQuerySeed<string[]>(packSeedKey(curation), usesPack ? packKey : undefined);
 
   const pack = useQuery<string[]>({
     queryKey: packKey,
-    enabled: relays.length > 0 && curated && !unrestricted,
+    enabled: relays.length > 0 && usesPack,
     staleTime: 60 * 60 * 1000,
     queryFn: ({ signal }) => fetchFollowPack(nostr, relays, curation, signal),
   });
 
   const authors = useMemo(() => {
-    const set = new Set<string>(pack.data ?? []);
+    if (scope === "you") return user ? [user.pubkey] : NO_AUTHORS;
+    const set = new Set<string>(usesPack ? pack.data ?? [] : []);
     if (user) {
       set.add(user.pubkey);
       for (const pk of followList.data?.pubkeys ?? []) set.add(pk);
     }
-    // Covers the restricted path only; `discoverAllContent` sends no author filter, so each
-    // feed also filters its results.
+    // Covers the restricted path only; `discoverAllContent` sends no author filter, so
+    // each feed also filters its results.
     for (const pk of mutedPubkeys) set.delete(pk);
     // Sorted for a stable react-query key.
     return [...set].sort();
-  }, [pack.data, user, followList.data, mutedPubkeys]);
+  }, [scope, usesPack, pack.data, user, followList.data, mutedPubkeys]);
 
   return {
     authors,
-    packAuthors: pack.data ?? NO_AUTHORS,
+    packAuthors: usesPack ? pack.data ?? NO_AUTHORS : NO_AUTHORS,
     unrestricted,
     // Only the pack read gates the feeds; follows merely widen the list and re-key later
     // (`placeholderData` holds results meanwhile).
-    isLoading: unrestricted || !curated ? false : pack.isLoading,
+    isLoading: usesPack ? pack.isLoading : false,
   };
 }
 
@@ -469,7 +475,7 @@ export function useDiscoverAuthors(): {
  * deduped by link signer, read by the allow-list's authors (all of them under
  * `discoverAllContent`). No search filter: announcements carry no metadata to match.
  */
-export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
+export function useDiscoverCommunities(scope: DiscoverScope): DiscoverFeed<DiscoveredInvite> & {
   packAuthors: string[];
   trustedAuthors: string[];
 } {
@@ -477,7 +483,7 @@ export function useDiscoverCommunities(): DiscoverFeed<DiscoveredInvite> & {
   const { mutedPubkeys } = useMutedPubkeys();
   const relays = useDiscoverRelays();
   const queryClient = useQueryClient();
-  const { authors, packAuthors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, packAuthors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors(scope);
   const authorFilter = unrestricted ? undefined : authors;
 
   // Warm load: seed last session's listings as the (stale) first page.
@@ -551,7 +557,7 @@ export function useWarmDiscover(): void {
   const { nostr } = useNostr();
   const relays = useDiscoverRelays();
   const queryClient = useQueryClient();
-  const { authors, packAuthors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, packAuthors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors("world");
   const authorFilter = unrestricted ? undefined : authors;
   const ready = relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0);
 
@@ -655,11 +661,11 @@ export interface DiscoverFeed<T> {
 }
 
 /** NIP-30 emoji packs (kind 30030), cursor-paginated. */
-export function useDiscoverEmojiPacks(query: string): DiscoverFeed<NostrRumor> {
+export function useDiscoverEmojiPacks(query: string, scope: DiscoverScope): DiscoverFeed<NostrRumor> {
   const { nostr } = useNostr();
   const { mutedPubkeys } = useMutedPubkeys();
   const relays = useDiscoverRelays();
-  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors(scope);
   const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;
@@ -704,11 +710,11 @@ export function useDiscoverEmojiPacks(query: string): DiscoverFeed<NostrRumor> {
 }
 
 /** Shareable theme definitions (Ditto kind 36767), cursor-paginated. */
-export function useDiscoverThemes(query: string): DiscoverFeed<NostrRumor> {
+export function useDiscoverThemes(query: string, scope: DiscoverScope): DiscoverFeed<NostrRumor> {
   const { nostr } = useNostr();
   const { mutedPubkeys } = useMutedPubkeys();
   const relays = useDiscoverRelays();
-  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors(scope);
   const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;

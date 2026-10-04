@@ -67,10 +67,7 @@ export interface PublishThemeInput extends ThemeExtras {
   editing?: UserTheme;
 }
 
-/**
- * Publish, edit and delete the user's kind-36767 themes, keeping the settings
- * library and the Discover lists in step. Only ever called from an explicit action.
- */
+/** Publish, edit and delete the user's kind-36767 themes. Explicit actions only. */
 export function useThemeLibrary() {
   const { user } = useCurrentUser();
   const { mutateAsync: publishEvent, isPending } = useNostrPublish();

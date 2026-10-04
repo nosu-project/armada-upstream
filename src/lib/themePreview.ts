@@ -7,7 +7,6 @@ import type { ThemeConfig } from "@/themes";
  * "Use this theme" in `ThemePreviewBar`.
  */
 export interface ThemePreview {
-  /** The theme being tried, with its title and creator credit. */
   config: ThemeConfig;
 }
 
@@ -18,13 +17,11 @@ function emit() {
   for (const listener of listeners) listener();
 }
 
-/** Start (or replace) the theme preview. */
 export function startThemePreview(config: ThemeConfig): void {
   current = { config };
   emit();
 }
 
-/** End the preview, restoring the user's own theme. */
 export function clearThemePreview(): void {
   if (!current) return;
   current = null;
@@ -42,7 +39,6 @@ function getSnapshot() {
   return current;
 }
 
-/** The theme currently being previewed, if any. */
 export function useThemePreview(): ThemePreview | null {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

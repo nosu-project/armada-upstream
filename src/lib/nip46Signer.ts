@@ -10,9 +10,8 @@
  * after it reconnects, and signers key prompts by request id. A signature waits
  * minutes, since the user may have to go approve it.
  *
- * Every copy can cost the signer a wake-up (Clave: one APNs push and one NSE
- * run per event, deduped by event id only), so copies back off, only a few
- * RPCs are in flight at once, and user-visible work goes ahead of decrypts.
+ * Every copy can cost the signer a wake-up (a push, for Clave), so copies back
+ * off, in-flight RPCs are capped, and user-visible work goes ahead of decrypts.
  */
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";

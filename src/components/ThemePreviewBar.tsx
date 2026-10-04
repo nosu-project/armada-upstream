@@ -17,11 +17,7 @@ import { clearThemePreview, useThemePreview } from "@/lib/themePreview";
 
 import type { ThemeConfig } from "@/themes";
 
-/**
- * Confirm bar for a theme being tried on. Previewing stores nothing; "Use this
- * theme" adopts it. Offers to keep the user's own copy of a borrowed background
- * so the creator can't later swap or delete it.
- */
+/** Confirm bar for a theme being tried on. Previewing stores nothing. */
 export function ThemePreviewBar() {
   const preview = useThemePreview();
   const { pathname } = useLocation();
