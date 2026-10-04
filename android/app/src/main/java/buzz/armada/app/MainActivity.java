@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -63,6 +64,12 @@ public class MainActivity extends BridgeActivity {
     private static final long GATE_POLL_MS = 16;
 
     @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (CallAudioSession.handleVolumeKey(this, event)) return true;
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     public void onCreate(Bundle savedInstanceState) {
         // Register native plugins before super.onCreate.
         registerPlugin(ArmadaNotificationPlugin.class);
@@ -73,6 +80,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(WebReadyPlugin.class);
         registerPlugin(ShareTargetPlugin.class);
         registerPlugin(MediaGalleryPlugin.class);
+        registerPlugin(ArmadaSignerPlugin.class);
 
         // Install the androidx splash screen. This dismisses the launch
         // (Theme.SplashScreen) window and hands off to postSplashScreenTheme

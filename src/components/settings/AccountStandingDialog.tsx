@@ -72,7 +72,7 @@ function Punchline() {
             setOpen((o) => !o);
           }}
         >
-          No score. No strikes. We can't ban you.
+          We can't ban you.
         </button>
       </TooltipTrigger>
       {/* Above the dialog (z-[250]), which the default tooltip layer is not. */}

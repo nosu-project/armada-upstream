@@ -45,6 +45,8 @@ export interface CallSummary {
   title: string;
   /** Where that room lives: a server or community name. Absent for DMs. */
   subtitle?: string;
+  /** The community/server icon or DM peer's avatar, as a small `data:` URL. */
+  icon?: string;
 }
 
 export interface CallContextType {
@@ -80,6 +82,13 @@ export interface CallContextType {
    * so off the call's channel it's a deferred preference.
    */
   stageVisible: boolean;
+  /**
+   * Whether the stage is docked in the call's own chat. The docked strip/stage
+   * then carries the controls, so the call bar steps aside.
+   */
+  stageDocked: boolean;
+  /** The call is sliding out after a leave (the room is still mounted). */
+  exiting: boolean;
   /**
    * Whether the stage is in the floating desktop window (no normal slot, not hidden,
    * desktop width). The same stage host is reparented, so no duplicate media.

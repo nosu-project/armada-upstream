@@ -144,7 +144,7 @@ function InviteBody({ community, canCreateLink }: { community: Community | undef
     if (
       listPublicly &&
       !confirm(
-        "Sharing to Discover posts a public note from your account with this invite link — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
+        "Sharing to Discover posts this invite link, secret included, as a public note from your account. Anyone can find it and join. Only do this for a community you want strangers to join.",
       )
     ) {
       throw new Error("Cancelled");

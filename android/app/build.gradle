@@ -90,6 +90,9 @@ android {
             // two keep separate data. Log in to the profiling copy to measure.
             if (project.findProperty("armadaProfile") == "true") {
                 applicationIdSuffix ".profile"
+            } else if (project.findProperty("armadaDev") == "true") {
+                // -ParmadaDev=true: the same side-by-side install, without the profiler.
+                applicationIdSuffix ".dev"
             }
         }
         release {

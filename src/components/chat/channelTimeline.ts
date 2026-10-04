@@ -100,8 +100,3 @@ export function isGitContinuation(previous: ChannelTimelineEntry | undefined, en
   }
   return previous.type === "git-ci-run" && entry.type === "git-ci-run";
 }
-
-/** Git repository roles are intentionally irrelevant to Concord membership. */
-export function isCommunityGuest(pubkey: string, members: ReadonlySet<string>): boolean {
-  return !members.has(pubkey);
-}

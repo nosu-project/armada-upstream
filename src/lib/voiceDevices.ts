@@ -3,6 +3,8 @@
  * (no explicit preference).
  */
 
+import { Capacitor } from "@capacitor/core";
+
 import {
   DEFAULT_AUTO_GAIN_CONTROL,
   DEFAULT_ECHO_CANCELLATION,
@@ -43,9 +45,21 @@ function write(key: string, deviceId: string): void {
   }
 }
 
-/** The remembered preferred microphone deviceId, if any. */
+/**
+ * Whether the platform picks the call's audio route itself, so the app offers
+ * no mic or speaker choice. Chromium on Android lists routes as microphones;
+ * picking one re-routes the whole phone, and its default follows headsets.
+ */
+export function platformRoutesCallAudio(): boolean {
+  return Capacitor.getPlatform() === "android";
+}
+
+/**
+ * The remembered preferred microphone deviceId, if any. Never on Android, where
+ * a stale route pick (the earpiece) would otherwise re-route every call.
+ */
 export function getPreferredMicId(): string | undefined {
-  return read(MIC_KEY);
+  return platformRoutesCallAudio() ? undefined : read(MIC_KEY);
 }
 
 /** The remembered preferred speaker (audio output) deviceId, if any. */
@@ -73,15 +87,11 @@ export function supportsSpeakerSelection(): boolean {
 }
 
 /**
- * Chromium on Android names its route choices itself: the phone's own earpiece
- * is "Headset earpiece", and the default (which follows a plugged-in headset)
- * has no label at all.
+ * A device's display name; `fallback` for an unlabeled non-default device. The
+ * unlabeled default is Chromium-on-Android's, which follows a plugged-in headset.
  */
-const ROUTE_LABELS: Record<string, string> = { "Headset earpiece": "Phone earpiece" };
-
-/** A device's display name; `fallback` for an unlabeled non-default device. */
 export function audioDeviceLabel(device: MediaDeviceInfo, fallback: string): string {
-  if (device.label) return ROUTE_LABELS[device.label] ?? device.label;
+  if (device.label) return device.label;
   return device.deviceId === "default" || device.deviceId === "" ? "Automatic" : fallback;
 }
 

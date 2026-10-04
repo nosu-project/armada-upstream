@@ -1,4 +1,4 @@
-import { Bell, BellOff, CalendarClock, ChevronLeft, DoorOpen, Hash, IdCard, Loader2, Lock, LogOut, MessageSquareText, MoreVertical, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus, Users, Volume2 } from "lucide-react";
+import { Bell, BellOff, CalendarClock, DoorOpen, Headphones, IdCard, Loader2, LogOut, MessageSquareText, Phone, Pin, ScrollText, Search, Settings2, Trash2, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -11,6 +11,16 @@ import { useBuzzOpenDm } from "@/buzz/useBuzzDms";
 import { useBuzzPresence } from "@/buzz/useBuzzPresence";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { AppStageSlot } from "@/components/chat/AppStage";
+import {
+  ChatHeader,
+  ChatHeaderAction,
+  ChatHeaderActions,
+  ChatHeaderAvatar,
+  ChatHeaderBack,
+  ChatHeaderMenuTrigger,
+  ChatHeaderTitle,
+  ChatHeaderViewItems,
+} from "@/components/chat/ChatHeader";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { GroupChat } from "@/components/chat/GroupChat";
@@ -29,14 +39,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
+import { ChannelGlyph } from "@/concord/components/ChannelGlyph";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { CustomEmojisProvider } from "@/hooks/useCustomEmojis";
@@ -52,6 +60,8 @@ import { useHeaderOverflow } from "@/hooks/useHeaderOverflow";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMobileMembersOverlay } from "@/hooks/useMobileMembersOverlay";
 import { useRelayLivekitSupport } from "@/hooks/useLivekit";
+import { useMediaSrc } from "@/hooks/useMediaPolicy";
+import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { channelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNip29CalendarTransport } from "@/hooks/useCalendarEvents";
 import { usePinnedMessages } from "@/hooks/usePinnedMessages";
@@ -61,7 +71,7 @@ import { toast } from "@/hooks/useToast";
 import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
-import { displayHost } from "@/lib/sanitizeUrl";
+import { displayHost, sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { activateScope, nip29Scope } from "@/wire/activation";
 
@@ -96,7 +106,7 @@ function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId
         {inviteCode ? (
           <>You've been invited to this channel on <span className="font-medium">{displayHost(relayUrl)}</span>.</>
         ) : (
-          <>You're not a member of this channel{isClosed ? " — it's invite-only" : ""}.</>
+          <>You're not a member of this {isClosed ? "invite-only " : ""}channel.</>
         )}
       </span>
       {isClosed && (
@@ -131,6 +141,10 @@ export function GroupPage() {
   const { data: relayMemberRoles } = useRelayMembers(relayUrl);
   const { data: membership, isLoading: membershipLoading } = useGroupMembership(relayUrl, groupId);
   const { data: relayHasLivekit } = useRelayLivekitSupport(relayUrl);
+  const { data: relayInfo } = useRelayInfo(relayUrl);
+  const serverName = relayInfo?.name || relayUrl?.replace(/^wss?:\/\//, "");
+  // NIP-11 fields are relay-controlled, so sanitize.
+  const serverIcon = useMediaSrc(sanitizeImageSrc(relayInfo?.icon));
   // Buzz relays get BuzzChat and drop pins/calendar/polls. `ready` gates the
   // chat SURFACE: before NIP-11 answers, GroupChat would publish plain NIP-29
   // reply shapes Buzz mishandles or rejects — not undoable.
@@ -292,8 +306,6 @@ export function GroupPage() {
     Boolean(user && details?.members.includes(user.pubkey));
   // NIP-29 relays generally accept writes only from members.
   const canWrite = Boolean(user) && isMember;
-  // Also shown when pins/events overflowed into it, even for logged-out visitors.
-  const showChannelMenu = Boolean(user) || pinsCollapsed || eventsCollapsed;
   // Membership is TRI-STATE: while unresolved, show a skeleton instead of the
   // join prompt (which would flash at real members).
   const membershipPending = Boolean(user) && !isMember && (isLoading || membershipLoading);
@@ -361,172 +373,79 @@ export function GroupPage() {
         }
       >
         <main className="flex-1 min-w-0 flex flex-col safe-area-top h-full">
-        <header
-          ref={headerActionsRef}
-          className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome"
-        >
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Back to channels"
-            className="size-9 touch:size-11 shrink-0 sidebar:hidden"
-            onClick={() => setChannelsOpen(true)}
-          >
-            <ChevronLeft className="size-5" />
-          </Button>
-
-          {buzzType === "dm"
-            ? <MessageSquareText className="size-5 text-muted-foreground shrink-0" />
-            : group?.hasLivekit
-              ? <Volume2 className="size-5 text-muted-foreground shrink-0" />
-              : <Hash className="size-5 text-muted-foreground shrink-0" />}
-          {/* Min-width floor: the row overflows instead, which useHeaderOverflow measures. */}
-          <div className="min-w-[5rem] flex-1">
-            <h1 className="font-semibold truncate leading-tight">
-              {isLoading
+        <ChatHeader ref={headerActionsRef}>
+          <ChatHeaderBack onClick={() => setChannelsOpen(true)} />
+          <ChatHeaderTitle
+            // Floor: the row overflows instead, which useHeaderOverflow measures.
+            className="min-w-[5rem]"
+            glyph={(className) =>
+              buzzType === "dm"
+                ? <MessageSquareText className={className} />
+                : <ChannelGlyph isPrivate={group?.isPrivate} occupied={group?.hasLivekit} className={className} />
+            }
+            title={
+              isLoading
                 ? "…"
                 : buzzType === "dm"
                   ? <BuzzDmName members={details?.members ?? []} selfPubkey={user?.pubkey} />
-                  : group?.name ?? groupId}
-            </h1>
-            {(buzzTopic || group?.about) && (
-              <p className="text-xs text-muted-foreground truncate">{buzzTopic || group?.about}</p>
+                  : group?.name ?? groupId
+            }
+            topic={buzzTopic || group?.about}
+            avatar={<ChatHeaderAvatar src={serverIcon} name={serverName} />}
+            context={serverName}
+          />
+          <ChatHeaderActions>
+            {hasVoice && (
+              <ChatHeaderAction
+                icon={inThisCall ? Headphones : Phone}
+                label={inThisCall ? "In voice" : "Join voice"}
+                className={cn(inThisCall && "text-success")}
+                disabled={inThisCall}
+                onClick={() => joinCall(relayUrl, groupId)}
+              />
             )}
-          </div>
-          {group?.isPrivate && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Lock className="size-4 text-muted-foreground" aria-label="Members-only channel" />
-              </TooltipTrigger>
-              <TooltipContent>Members-only — only members can read</TooltipContent>
-            </Tooltip>
-          )}
-          {hasVoice && !inThisCall && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Join voice"
-                  className="size-8 touch:size-11 text-muted-foreground hover:text-success"
-                  onClick={() => joinCall(relayUrl, groupId)}
-                >
-                  <Phone className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Join voice</TooltipContent>
-            </Tooltip>
-          )}
-          {isBuzz && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Canvas"
-                  aria-pressed={canvasOpen}
-                  className={cn("size-8 touch:size-11 text-muted-foreground", canvasOpen && "text-foreground")}
-                  onClick={() => setCanvasOpen((v) => !v)}
-                >
-                  <ScrollText className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Canvas</TooltipContent>
-            </Tooltip>
-          )}
-          {showPins && !pinsCollapsed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Pinned messages"
-                  aria-pressed={pinsOpen}
-                  className={cn("size-8 touch:size-11 text-muted-foreground", pinsOpen && "text-foreground")}
-                  onClick={() => setPinsOpen((v) => !v)}
-                >
-                  <Pin className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Pinned messages</TooltipContent>
-            </Tooltip>
-          )}
-          {showEvents && !eventsCollapsed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Events"
-                  aria-pressed={eventsOpen}
-                  className={cn("size-8 touch:size-11 text-muted-foreground", eventsOpen && "text-foreground")}
-                  onClick={() => setEventsOpen((v) => !v)}
-                >
-                  <CalendarClock className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Events</TooltipContent>
-            </Tooltip>
-          )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Search messages"
-                aria-pressed={searchOpen}
-                className={cn("size-8 touch:size-11 text-muted-foreground", searchOpen && "text-foreground")}
-                onClick={() => setSearchOpen(true)}
-              >
-                <Search className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Search messages</TooltipContent>
-          </Tooltip>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Members"
-            aria-pressed={membersOpen}
-            className="size-8 touch:size-11 sidebar:hidden"
-            onClick={() => setMembersOpen((v) => !v)}
-          >
-            <Users className="size-4" />
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={membersVisible ? "Hide members" : "Show members"}
-                aria-pressed={membersVisible}
-                className={cn(
-                  "size-8 hidden sidebar:inline-flex text-muted-foreground",
-                  membersVisible && "text-foreground",
-                )}
-                onClick={toggleMembersVisible}
-              >
-                <Users className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
-          </Tooltip>
-          {showChannelMenu && (
+            <ChatHeaderAction
+              icon={Search}
+              label="Search messages"
+              pressed={searchOpen}
+              className="hidden sidebar:inline-flex"
+              onClick={() => setSearchOpen(true)}
+            />
+            {isBuzz && (
+              <ChatHeaderAction
+                icon={ScrollText}
+                label="Canvas"
+                pressed={canvasOpen}
+                onClick={() => setCanvasOpen((v) => !v)}
+              />
+            )}
+            {showPins && !pinsCollapsed && (
+              <ChatHeaderAction
+                icon={Pin}
+                label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
+                tooltip="Pinned messages"
+                pressed={pinsOpen}
+                onClick={() => setPinsOpen((v) => !v)}
+              />
+            )}
+            {showEvents && !eventsCollapsed && (
+              <ChatHeaderAction
+                icon={CalendarClock}
+                label={eventsOpen ? "Hide events" : "Show events"}
+                tooltip="Events"
+                pressed={eventsOpen}
+                onClick={() => setEventsOpen((v) => !v)}
+              />
+            )}
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="More options"
-                  className="size-8 touch:size-11 text-muted-foreground"
-                >
-                  <MoreVertical className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 p-1.5">
-                <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                  {group?.name ?? "Channel"}
-                </DropdownMenuLabel>
+              <ChatHeaderMenuTrigger />
+              <DropdownMenuContent align="end" className="w-52 p-1.5">
+                <ChatHeaderViewItems
+                  onSearch={() => setSearchOpen(true)}
+                  onMembers={() => setMembersOpen(true)}
+                  membersVisible={membersVisible}
+                  onToggleMembers={toggleMembersVisible}
+                />
                 {/* Pins/Events overflowed from the header. */}
                 {(pinsCollapsed || eventsCollapsed) && (
                   <>
@@ -615,7 +534,7 @@ export function GroupPage() {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-          )}
+          </ChatHeaderActions>
 
           <ChatSearchBar
             open={searchOpen}
@@ -624,7 +543,7 @@ export function GroupPage() {
             onClose={closeSearch}
             placeholder="Search this channel…"
           />
-        </header>
+        </ChatHeader>
 
         {group?.banner && (
           <div className="mx-2 mt-2 h-24 shrink-0 overflow-hidden clip-corner-lg">

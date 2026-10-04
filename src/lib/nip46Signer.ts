@@ -5,10 +5,16 @@
  * subscription and dispatches by request id. Requests are NIP-44; responses
  * fall back to NIP-04 for legacy bunkers.
  *
- * Each RPC keeps ONE request id and re-publishes it while unanswered: relays
+ * Each RPC keeps ONE request id and is re-published while unanswered: relays
  * don't store ephemeral 24133, so a sleeping signer only sees a copy published
- * after it reconnects, and signers key prompts by request id. A signature waits
- * minutes, since the user may have to go approve it.
+ * after it reconnects. Copies are the SAME signed event for the first minutes,
+ * because Amber drops a 24133 whose id it has handled but processes a fresh
+ * one from scratch, and a once-only approval remembers nothing, so a new event
+ * for a request it just answered prompts the user again (the answer is still
+ * in flight when the user comes back and a reopen resends). After that a copy
+ * is re-signed, since by then the answer itself may have been lost, and only a
+ * new id makes such a signer look again. A signature waits minutes, since the
+ * user may have to go approve it.
  *
  * Every copy can cost the signer a wake-up (a push, for Clave), so copies back
  * off, in-flight RPCs are capped, and user-visible work goes ahead of decrypts.
@@ -36,7 +42,11 @@ export interface Nip46SignerOpts {
   maxInFlight?: number;
 }
 
-/** Long enough to switch to the signer app, find the request and approve it. */
+/**
+ * Long enough to switch to the signer app, find the request and approve it.
+ * Not longer: every copy carries the FIRST publish's created_at, and Amber
+ * refuses a 24133 more than five minutes old.
+ */
 export const NIP46_SIGN_TIMEOUT_MS = 5 * 60_000;
 
 const NIP46_KIND = 24133;
@@ -195,14 +205,29 @@ export class Nip46Signer implements NostrSigner, BtcSigner {
       this.pending.set(request.id, { resolve, method });
     });
     let copies = 0;
-    const publish = async (relay?: string) => {
-      copies++;
-      const event = await this.clientSigner.signEvent({
+    // One signed event per `refreshMs` (see the header): a copy of an event this old
+    // is more likely answering a LOST answer than a missed request, and only a new
+    // id gets a signer that dedupes to look again. A failed sign is retried by the next copy.
+    const refreshMs = this.attemptTimeoutMs * MAX_GAP_FACTOR;
+    let signed: { at: number; event: Promise<NostrEvent> } | undefined;
+    const sign = async (): Promise<NostrEvent> =>
+      this.clientSigner.signEvent({
         kind: NIP46_KIND,
         content: await this.clientSigner.nip44!.encrypt(this.bunkerPubkey, JSON.stringify(request)),
         created_at: Math.floor(Date.now() / 1000),
         tags: [["p", this.bunkerPubkey]],
       });
+    const publish = async (relay?: string) => {
+      copies++;
+      if (!signed || Date.now() - signed.at >= refreshMs) {
+        const at = Date.now();
+        const event = sign().catch((err: unknown) => {
+          if (signed?.at === at) signed = undefined;
+          throw err;
+        });
+        signed = { at, event };
+      }
+      const event = await signed.event;
       await this.transport.event(event, { signal: AbortSignal.timeout(this.attemptTimeoutMs), relay });
     };
     this.republish.set(request.id, publish);

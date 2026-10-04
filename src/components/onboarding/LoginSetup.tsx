@@ -368,8 +368,8 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
       }
       title="stay in the loop"
       description={foreground
-        ? "Armada can notify you about direct messages, mentions and replies while it's open — including when it's behind another window. This browser can't deliver notifications once Armada is closed, so nothing leaves your device for them."
-        : "Armada can notify you about direct messages, mentions and replies even while it's closed. Delivery goes through your browser's push service; the notification carries no message content — Armada fetches and decrypts it on your device."}
+        ? "Armada can notify you about direct messages, mentions and replies while it's open, even behind another window. This browser can't deliver notifications once Armada is closed, so nothing leaves your device for them."
+        : "Armada can notify you about direct messages, mentions and replies even while it's closed. Notifications go through your browser's push service but carry no message content. Armada decrypts them on your device."}
     >
       <div className="w-full space-y-3">
         <Button

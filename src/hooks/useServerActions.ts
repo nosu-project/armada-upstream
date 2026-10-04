@@ -53,7 +53,7 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
         if (isPublishQueuedError(err)) {
           toast({
             title: "Server removed",
-            description: `${relayUrl} — syncing when the network is back.`,
+            description: `${relayUrl} will sync when the network is back.`,
           });
           return;
         }
@@ -62,7 +62,7 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
           title: "Couldn't remove server everywhere",
           description:
             `Hidden on this device, but your synced community list still has ${relayUrl}` +
-            ` — it will come back on other devices. ${err instanceof Error ? err.message : ""}`.trimEnd(),
+            `, so it will come back on other devices. ${err instanceof Error ? err.message : ""}`.trimEnd(),
           variant: "destructive",
         });
       },

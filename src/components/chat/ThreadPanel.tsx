@@ -1,6 +1,7 @@
 import { Braces, ChevronDown, Copy, EyeOff, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Reply, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -96,9 +97,12 @@ export function ThreadMessage({
   onEditCancel,
   presentation = "chat",
   onReply,
+  documentMarkdown = false,
 }: {
   event: ChatMsg;
   presentation?: ThreadMessagePresentation;
+  /** Long-form markdown (a NIP-34 issue/comment) rather than chat text; no note embeds. */
+  documentMarkdown?: boolean;
   /** `comment` only: an always-visible in-place reply action. */
   onReply?: (event: ChatMsg) => void;
   /** This thread's route; rows append their own `/m/<id>` to it. */
@@ -294,7 +298,7 @@ export function ThreadMessage({
       </div>
     </div>
   ) : (
-    <ChatContent event={event} className={isPost ? "text-[15px] leading-relaxed" : "text-[15px]"} everyoneMention={everyoneMention} />
+    <ChatContent event={event} className={isPost ? "text-[15px] leading-relaxed" : "text-[15px]"} everyoneMention={everyoneMention} documentMarkdown={documentMarkdown} disableNoteEmbeds={documentMarkdown} />
   );
   const reactionRow = ((zaps && zaps.tally.count > 0) || (reactions && reactions.tallies.length > 0)) ? (
     <ReactionBar
@@ -335,7 +339,7 @@ export function ThreadMessage({
           ? "px-0 py-0"
           : isComment
             ? "px-3 py-3 hover:bg-secondary/30"
-            : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "py-1.5"),
+            : cn("px-2.5 rounded hover:bg-secondary/40", continuation ? "py-0.5" : "pt-1.5 pb-0.5"),
         sheetOpen && "bg-secondary/40",
         // Native selection/callout would fire `pointercancel` and eat the long-press (see MessageRow).
         isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
@@ -535,13 +539,24 @@ interface ThreadPanelProps {
   open?: boolean;
   onClose: () => void;
   onExpandChange?: (expanded: boolean) => void;
+  /** Header label in place of "Thread"/"Post". */
+  title?: string;
+  /** Rendered above the root in place of the `rootTitle` heading. */
+  rootHeader?: ReactNode;
+  /** The root offers no edit/delete (it isn't the transport's to change). */
+  rootReadOnly?: boolean;
+  /** See {@link ThreadMessage}'s `documentMarkdown`. */
+  documentMarkdown?: boolean;
+  placeholder?: string;
+  /** Shown instead of the composer when `canWrite` is false. */
+  readOnlyNotice?: string;
 }
 
 /**
  * Thread side panel: root, replies and a reply composer. Transport-driven
  * (`threadRepliesFor`/`sendThreadReply`); replies never appear in the main timeline.
  */
-export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
+export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, encryptAttachments = false, autoFocus = false, open = true, permalink, onClose, onExpandChange, title, rootHeader, rootReadOnly = false, documentMarkdown = false, placeholder, readOnlyNotice }: ThreadPanelProps) {
   const isPost = Boolean(rootTitle);
   const replyNoun = isPost ? "comment" : "reply";
   const replyNounPlural = isPost ? "comments" : "replies";
@@ -702,17 +717,17 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           <span className="italic">
             {rootMuted
               ? "You blocked the person who started this thread."
-              : "Original message not loaded — it may be older than the channel window."}
+              : "Original message not loaded. It may be older than the channel window."}
           </span>
         </div>
       ) : (
         <div data-event-id={root.id} data-scroll-anchor={`root:${root.id}`}>
-        {rootTitle && (
+        {rootHeader ?? (rootTitle && (
           <h2 className="px-3 pb-1 text-lg font-semibold leading-snug break-words">
             {rootTitle}
           </h2>
-        )}
-        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} everyoneMention={transport.mentionsEveryone?.(root)} onDelete={onDelete} isEditing={editingId === root.id} onEdit={startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} />
+        ))}
+        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} everyoneMention={transport.mentionsEveryone?.(root)} onDelete={rootReadOnly ? undefined : onDelete} isEditing={editingId === root.id} onEdit={rootReadOnly ? undefined : startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} documentMarkdown={documentMarkdown} />
         </div>
       )}
       <div className="flex items-center gap-2 px-3 py-1 mt-1">
@@ -745,7 +760,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
         <div className="flex items-center gap-2 min-w-0">
           <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
-            {isPost ? "Post" : "Thread"}{replies.length > 0 ? ` · ${replies.length}` : ""}
+            {title ?? (isPost ? "Post" : "Thread")}{replies.length > 0 ? ` · ${replies.length}` : ""}
           </h3>
         </div>
         <div className="flex items-center gap-1">
@@ -776,7 +791,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
                 reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
               return (
                 <div key={reply.id} data-event-id={reply.id} data-scroll-anchor={`reply:${reply.id}`} className="pt-1">
-                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} everyoneMention={transport.mentionsEveryone?.(reply)} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} />
+                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} everyoneMention={transport.mentionsEveryone?.(reply)} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={startEditing} onEditSubmit={handleEditSubmit} onEditCancel={cancelEditing} documentMarkdown={documentMarkdown} />
                 </div>
               );
             })}
@@ -807,7 +822,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
           messages={[]}
           mentionPubkeys={mentionPubkeys}
           canMentionEveryone={transport.canMentionEveryone}
-          placeholder={isPost ? "Add a comment…" : "Reply in thread…"}
+          placeholder={placeholder ?? (isPost ? "Add a comment…" : "Reply in thread…")}
           draftScope={`thread:${root.id}`}
           // No `shareRoute`: the room's own composer is the share destination.
           autoFocus={autoFocus}
@@ -822,7 +837,7 @@ export function ThreadPanel({ root, rootTitle, transport, relayUrl, groupId, can
       ) : (
         <div className="p-3 shrink-0 pb-safe">
           <p className="text-xs text-muted-foreground text-center py-1">
-            Join this channel to reply.
+            {readOnlyNotice ?? "Join this channel to reply."}
           </p>
         </div>
       )}

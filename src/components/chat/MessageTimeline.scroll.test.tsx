@@ -145,6 +145,27 @@ describe("MessageTimeline reading anchor", () => {
     expect(rowViewportOffset(content, scroller, "m20")).toBe(0);
   });
 
+  it("keeps the rows still when the pane shrinks under a reader just short of the bottom", async () => {
+    const { scroller } = await mountedTimeline(40);
+    scroll(scroller, 2_500);
+    scroll(scroller, 2_460);
+
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 478 });
+    act(() => resizeCallbacks.at(-1)?.([], {} as ResizeObserver));
+
+    expect(scroller.scrollTop).toBe(2_460);
+  });
+
+  it("stays pinned when the pane shrinks under a reader at the bottom", async () => {
+    const { scroller } = await mountedTimeline(40);
+    scroll(scroller, 2_500);
+
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 478 });
+    act(() => resizeCallbacks.at(-1)?.([], {} as ResizeObserver));
+
+    expect(scroller.scrollTop).toBe(2_522);
+  });
+
   it("reveals a prior-day backfill at the top without requiring a second gesture", async () => {
     const loadOlder = vi.fn<() => Promise<number>>();
 

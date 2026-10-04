@@ -31,6 +31,24 @@ vi.mock("capacitor-plugin-nostr-signer", () => ({
   NostrSignerPlugin: plugin,
 }));
 
+// ArmadaSignerPlugin.java: signs and en/decrypts, matched by request id.
+const armadaSigner = {
+  request: vi.fn(async (opts: { type: string; payload: string; id: string; currentUser: string; pubkey?: string }) => {
+    if (opts.type === "sign_event") {
+      const unsigned = JSON.parse(opts.payload);
+      delete unsigned.id;
+      delete unsigned.sig;
+      const signed = finalizeEvent(unsigned, SK);
+      return { result: signed.sig, event: JSON.stringify(signed) };
+    }
+    return { result: `${opts.type}:${opts.payload}` };
+  }),
+};
+vi.mock("@capacitor/core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  registerPlugin: () => armadaSigner,
+}));
+
 // A stable identity shared by the mock and the assertions.
 const SK = generateSecretKey();
 const PUBKEY = getPublicKey(SK);
@@ -77,18 +95,30 @@ describe("AndroidNativeSigner", () => {
     expect(signed.sig).toBeTruthy();
     expect(signed.content).toBe("hello");
 
-    // The plugin was handed a precomputed id + placeholder sig + our pubkey.
-    const [pkgArg, jsonArg, idArg, pubkeyArg] = plugin.signEvent.mock.calls[0];
-    expect(pkgArg).toBe(PKG);
-    expect(pubkeyArg).toBe(PUBKEY);
-    const sent = JSON.parse(jsonArg as string);
-    expect(sent.id).toBe(idArg);
+    // The signer was handed a precomputed id + placeholder sig + our pubkey.
+    const [opts] = armadaSigner.request.mock.calls[0];
+    expect(opts).toMatchObject({ packageName: PKG, type: "sign_event", currentUser: PUBKEY });
+    const sent = JSON.parse(opts.payload);
+    expect(opts.id.startsWith(`${sent.id}:`)).toBe(true);
     expect(sent.sig).toBe("");
     expect(sent.pubkey).toBe(PUBKEY);
   });
 
+  it("assembles the event from a batch answer, which carries only the signature", async () => {
+    armadaSigner.request.mockImplementationOnce(async (opts) => {
+      const unsigned = JSON.parse(opts.payload);
+      delete unsigned.id;
+      delete unsigned.sig;
+      return { result: finalizeEvent(unsigned, SK).sig };
+    });
+    const signer = new AndroidNativeSigner(PKG, PUBKEY);
+    const signed = await signer.signEvent({ kind: 22242, content: "", tags: [["relay", "wss://r"]], created_at: 1 });
+    expect(signed).toMatchObject({ kind: 22242, pubkey: PUBKEY, tags: [["relay", "wss://r"]] });
+  });
+
   it("throws when the signer returns an invalid signature", async () => {
-    plugin.signEvent.mockResolvedValueOnce({
+    armadaSigner.request.mockResolvedValueOnce({
+      result: "0".repeat(128),
       event: JSON.stringify({
         id: "0".repeat(64),
         pubkey: PUBKEY,
@@ -98,8 +128,6 @@ describe("AndroidNativeSigner", () => {
         created_at: 1700000000,
         sig: "0".repeat(128),
       }),
-      id: "0".repeat(64),
-      signature: "0".repeat(128),
     });
 
     const signer = new AndroidNativeSigner(PKG, PUBKEY);
@@ -108,20 +136,19 @@ describe("AndroidNativeSigner", () => {
     ).rejects.toThrow(/invalid signature/i);
   });
 
-  it("maps nip04/nip44 encrypt & decrypt to the plugin with (counterparty, myPubkey)", async () => {
+  it("maps nip04/nip44 encrypt & decrypt to signer requests with the counterparty and our pubkey", async () => {
     const signer = new AndroidNativeSigner(PKG, PUBKEY);
 
-    expect(await signer.nip04.encrypt(PEER, "msg")).toBe("nip04-ct");
-    expect(await signer.nip04.decrypt(PEER, "ct")).toBe("nip04-pt");
-    expect(await signer.nip44.encrypt(PEER, "msg")).toBe("nip44-ct");
-    expect(await signer.nip44.decrypt(PEER, "ct")).toBe("nip44-pt");
+    expect(await signer.nip04.encrypt(PEER, "msg")).toBe("nip04_encrypt:msg");
+    expect(await signer.nip04.decrypt(PEER, "ct")).toBe("nip04_decrypt:ct");
+    expect(await signer.nip44.encrypt(PEER, "msg")).toBe("nip44_encrypt:msg");
+    expect(await signer.nip44.decrypt(PEER, "ct")).toBe("nip44_decrypt:ct");
 
-    // nipXX(pkg, text, id, counterpartyPubkey, myPubkey)
-    const enc = plugin.nip44Encrypt.mock.calls[0];
-    expect(enc[0]).toBe(PKG);
-    expect(enc[1]).toBe("msg");
-    expect(enc[3]).toBe(PEER);
-    expect(enc[4]).toBe(PUBKEY);
+    const ids = armadaSigner.request.mock.calls.map(([o]) => o.id);
+    expect(new Set(ids).size).toBe(4);
+    expect(armadaSigner.request.mock.calls[2][0]).toMatchObject({
+      packageName: PKG, type: "nip44_encrypt", payload: "msg", pubkey: PEER, currentUser: PUBKEY,
+    });
   });
 
   it("forwards PSBT signing to the plugin", async () => {

@@ -68,7 +68,7 @@ function searchCachedProfiles(
  * Prefetch followed users' kind-0s (store first, then one batched relay query) so follow
  * matches work even when NIP-50 relays don't return them. Keyed on the follow set only.
  */
-function useFollowProfiles(followedPubkeys: string[]) {
+function useFollowProfiles(followedPubkeys: string[], enabled = true) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
@@ -120,7 +120,7 @@ function useFollowProfiles(followedPubkeys: string[]) {
       }
       return profiles;
     },
-    enabled: followedPubkeys.length > 0,
+    enabled: enabled && followedPubkeys.length > 0,
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -221,6 +221,32 @@ export function useSearchProfiles(query: string) {
     followedPubkeys,
   };
 }
+
+/**
+ * Followed people matching `query`, alphabetical. Local only (no NIP-50 round-trip), so it can
+ * filter on every keystroke; `enabled` defers fetching the follows' profiles until needed.
+ */
+export function useFollowSearch(query: string, enabled = true, limit = 20): SearchProfile[] {
+  const { mutedPubkeys } = useMutedPubkeys();
+  const { data: followData } = useFollowList();
+  const { data: followProfiles } = useFollowProfiles(followData?.pubkeys ?? EMPTY, enabled);
+
+  return useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!enabled || !q || !followProfiles) return EMPTY_PROFILES;
+    return followProfiles
+      .filter((p) => !mutedPubkeys.has(p.pubkey) && profileMatches(p, q))
+      .sort((a, b) => {
+        const aName = (a.metadata.name || a.metadata.display_name || "").toLowerCase();
+        const bName = (b.metadata.name || b.metadata.display_name || "").toLowerCase();
+        return aName.localeCompare(bName);
+      })
+      .slice(0, limit);
+  }, [query, enabled, followProfiles, mutedPubkeys, limit]);
+}
+
+const EMPTY: string[] = [];
+const EMPTY_PROFILES: SearchProfile[] = [];
 
 /**
  * A fixed member set for scoped @-mention autocomplete; members without cached metadata still

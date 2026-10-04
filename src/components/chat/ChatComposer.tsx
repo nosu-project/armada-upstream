@@ -28,6 +28,7 @@ import { mayFocusOnSwitch, registerTypeToFocus } from "@/components/chat/typeToF
 import { authorsByRecency } from "@/components/chat/transport";
 import type { PollDraft } from "@/components/chat/transport";
 import { ReplyPreview } from "@/components/chat/ChatMessage";
+import { useMediaHeld, useMessageRevealed } from "@/components/chat/mediaHold";
 import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
 import { Lightbox } from "@/components/chat/Lightbox";
@@ -41,6 +42,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { primeAudioMetadata, primeAudioWaveform } from "@/hooks/useAudioMetadata";
 import { useAuthor } from "@/hooks/useAuthor";
@@ -71,7 +73,7 @@ import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { completedShortcodeAt } from "@/lib/emojiShortcode";
-import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
+import { encryptFileForUpload, encryptFileWithParams, MAX_DECRYPT_BYTES, primeAttachment } from "@/lib/encryptedMedia";
 import { extForMime } from "@/lib/fileBytes";
 import { galleryItemFile, hasMediaGallery, type GalleryItem } from "@/lib/mediaGallery";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
@@ -571,20 +573,34 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   // `height: auto` probe re-lays-out the whole pane, so skip it for an empty
   // field (cached per layout) and for append-only edits (compare `scrollHeight`).
   const measuredContentRef = useRef<string | null>(null);
+  // Touch: once a message wraps, the field takes the full width and the controls
+  // drop to a row beneath it, until it's cleared (latched, so it can't oscillate).
+  const [wrapped, setWrapped] = useState(false);
+  if (wrapped && !content) setWrapped(false);
+  const measuredWrappedRef = useRef(wrapped);
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    const previous = measuredContentRef.current;
+    // The field's width changed with the layout: a stale height can't be grown from.
+    const relaid = measuredWrappedRef.current !== wrapped;
+    measuredWrappedRef.current = wrapped;
+    const previous = relaid ? null : measuredContentRef.current;
     measuredContentRef.current = content;
     const bounds = () => ({
       max: layout === "document" ? Math.max(240, Math.round(window.innerHeight * 0.5)) : 160,
       min: layout === "document" ? 120 : 0,
     });
+    // The wrapper is held at its height during the probe: a collapsed composer
+    // would grow the timeline for the forced layout and clamp its scrollTop.
     const measure = () => {
       const { max, min } = bounds();
+      const box = el.parentElement;
+      const held = box?.style.height ?? "";
+      if (box) box.style.height = `${box.offsetHeight}px`;
       el.style.height = "auto";
       const height = Math.min(Math.max(el.scrollHeight, min), max);
       el.style.height = `${height}px`;
+      if (box) box.style.height = held;
       return height;
     };
     const emptyKey = `${layout}:${window.innerWidth >= MD_BREAKPOINT_PX}:${window.innerHeight}`;
@@ -600,9 +616,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } else {
       measure();
     }
+    if (isTouch && layout === "bar" && !wrapped && content) {
+      const style = getComputedStyle(el);
+      const text = el.scrollHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      if (text > parseFloat(style.lineHeight) * 1.5) setWrapped(true);
+    }
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [content, layout]);
+  }, [content, layout, isTouch, wrapped]);
 
   // Deferred a frame: a context menu still trapping focus would pull it back.
   useEffect(() => {
@@ -646,6 +667,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [pickerOpen]);
+
+  // Back closes the picker, not the conversation behind it.
+  useAndroidBack(() => {
+    setPickerOpen(false);
+    return true;
+  }, pickerOpen, "overlay");
 
   // Debounced draft save. Encrypted attachments are dropped: their params live
   // only in memory, so a restored ciphertext URL would be undecryptable.
@@ -1050,6 +1077,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           ? new File([modelStill], replaceExtension(uploadableFile.name, ".png"), { type: "image/png" })
           : undefined;
 
+      // The plaintext, kept to render the upload locally (see primeAttachment).
+      const plainFile = uploadableFile;
+      const plainPoster = posterFile;
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
         const enc = await encryptFileForUpload(uploadableFile);
@@ -1074,6 +1104,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       const tags = await uploadFile({ file: uploadableFile, signal: abort.signal });
       const url = tags[0][1];
+      // Under the inline-decrypt cap only: past it a render wouldn't download it either.
+      if (plainFile.size <= MAX_DECRYPT_BYTES) primeAttachment(url, encryption, plainFile);
+      if (posterUrl && plainPoster) primeAttachment(posterUrl, encryption, plainPoster);
 
       // Encrypted: server NIP-94 fields describe the ciphertext; restore the real `m`.
       // Likewise a model: servers type what they don't recognise as octet-stream.
@@ -1694,6 +1727,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         type: recording.mimeType,
       });
 
+      // The plaintext, kept to play the upload locally (see primeAttachment).
+      const plainFile = file;
       let encryption: (ImetaEncryption & { ox: string }) | undefined;
       if (encryptAttachments) {
         const enc = await encryptFileForUpload(file);
@@ -1703,6 +1738,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
       const uploadTags = await uploadFile(file);
       const audioUrl = uploadTags[0][1];
+      primeAttachment(audioUrl, encryption, plainFile);
 
       const tags = buildMessageTags(audioUrl);
       // Carry waveform + duration (and decryption params when encrypted).
@@ -2019,7 +2055,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
             <div
               className={cn(
                 "clip-corner-lg bg-secondary/60 px-1.5 py-1.5",
-                isDocument ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
+                isDocument || wrapped ? "flex flex-wrap items-center gap-0.5 touch:gap-1.5" : "flex items-end gap-0.5 touch:gap-1.5",
               )}
             >
               {/* Pointer: a double-click on "+" skips the menu and opens the file picker. */}
@@ -2102,7 +2138,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </Popover>
               )}
 
-              <div className={cn("relative flex-1 min-w-0", isDocument && "order-first basis-full")}>
+              <div className={cn("relative flex-1 min-w-0", (isDocument || wrapped) && "order-first basis-full")}>
                 {/* Overlay, not the `placeholder` attribute: a wrapped native placeholder
                     inflates scrollHeight and the empty composer to two lines. */}
                 {!content && (
@@ -2175,7 +2211,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 />
               </div>
 
-              <div ref={pickerToggleGroupRef} className="flex shrink-0 items-center gap-0.5 touch:gap-1">
+              <div ref={pickerToggleGroupRef} className={cn("flex shrink-0 items-center gap-0.5 touch:gap-1", wrapped && "ml-auto")}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -2501,20 +2537,27 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
+  // A held sender's custom emoji would fetch what their row is holding.
+  const revealed = useMessageRevealed(event.id);
+  const held = useMediaHeld(event.pubkey) && !revealed;
 
   return (
     <div className="flex items-center gap-2 rounded-md bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
       <Reply className="size-4 text-muted-foreground shrink-0" />
       <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
-        <span className="shrink-0">Replying to</span>
+        {/* Narrow screens: the reply icon says it, and the snippet needs the room. */}
+        <span className="sr-only sm:not-sr-only sm:shrink-0">Replying to</span>
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <span className="font-semibold text-primary truncate min-w-0">
+        <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
           <DisplayName pubkey={event.pubkey} name={displayName} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground/70">
+          <ReplyPreview content={event.content} tags={held ? undefined : event.tags} />
         </span>
       </span>
       <button

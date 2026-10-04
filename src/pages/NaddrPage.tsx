@@ -134,7 +134,7 @@ function ThemePreview({ title, tokens }: { title: string; tokens: ThemeTokens })
             <span className="size-8 shrink-0 rounded-full" style={{ backgroundColor: hsl(tokens.accent) }} />
             <div className="min-w-0">
               <p className="font-semibold" style={{ color: hsl(tokens.primary) }}>Ana</p>
-              <p>Trying out a new theme — what do you think?</p>
+              <p>Trying out a new theme. What do you think?</p>
             </div>
           </div>
           <div className="flex gap-2">

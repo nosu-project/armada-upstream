@@ -197,7 +197,7 @@
     -webkit-user-select: none;
     user-select: none;
   }
-  @media (hover: none) and (pointer: coarse) {
+  @media (pointer: coarse) {
     body {
       -webkit-tap-highlight-color: transparent;
       overscroll-behavior-y: none;
@@ -224,7 +224,7 @@
    * draw below reads as a desktop web page. Collapse our custom scrollbars to
    * the native overlay on coarse-pointer devices and in the APK.
    */
-  @media (hover: none) and (pointer: coarse) {
+  @media (pointer: coarse) {
     * {
       scrollbar-width: none;
     }
@@ -597,6 +597,16 @@
        outlive this 0.16s one-shot for as long as the element stays mounted. */
     animation: terminal-expand 0.16s ease-out;
   }
+}
+
+/* Settings search (src/components/settings/settingsSearch.ts). An attribute
+   rather than `hidden`, which a row's own `flex` class would override. */
+[data-search-hidden] {
+  display: none !important;
+}
+::highlight(settings-search) {
+  background-color: hsl(var(--primary) / 0.35);
+  color: inherit;
 }
 
 /*

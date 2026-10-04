@@ -57,7 +57,7 @@ export function NotificationSettings() {
       <div className="space-y-4">
         <NotificationToggles
           title="Background notifications"
-          description="Armada stays connected in the background and notifies you instantly — no Google services."
+          description="Armada stays connected in the background to notify you, without Google services."
           enabled={native.enabled}
           busy={native.busy}
           blocked={false}
@@ -288,7 +288,7 @@ function NotificationSoundSettings() {
                 <SelectContent>
                   {NOTIFICATION_SOUNDS.map((sound) => (
                     <SelectItem key={sound.id} value={sound.id}>
-                      {sound.label} — {sound.creator}
+                      {sound.label} by {sound.creator}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -450,7 +450,7 @@ function WebPushSettings() {
         ? "Preparing secure background notifications…"
         : hasIosPush()
           // No Notification Service Extension yet, so the lock screen shows the gateway's fixed text.
-          ? "Get notified even when Armada is closed. Notifications say a new message arrived without naming the sender or quoting it — Armada only decrypts once you open it."
+          ? "Get notified even when Armada is closed. Notifications don't name the sender or quote the message. Armada decrypts it when you open it."
           : hasNappPush()
             ? "Get notified even when Armada is closed."
             : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
@@ -507,8 +507,8 @@ function IosNotificationHint({
         </p>
         <p className="text-xs text-muted-foreground">
           If <strong>Lockdown Mode</strong> is on (Settings → Privacy &amp; Security → Lockdown
-          Mode), it disables web notifications — turn it off, or exclude Armada under its
-          &ldquo;Configure Web Browsing&rdquo; / Safari exceptions, to use them. A content blocker
+          Mode), it disables web notifications. To use them, turn it off or exclude Armada under its
+          &ldquo;Configure Web Browsing&rdquo; / Safari exceptions. A content blocker
           can have the same effect.
         </p>
       </div>
@@ -591,8 +591,8 @@ function ForegroundOnlySettings() {
         // Permission never asked: the master wish defaults on, so without this it looks enabled but never fires.
         hint={apiAvailable && permission === "default"
           ? desktop
-            ? "Armada hasn't been allowed to notify yet — turn this on to ask."
-            : "Your browser hasn't allowed notifications yet — turn this on to ask."
+            ? "Armada isn't allowed to notify yet. Turn this on to ask."
+            : "Your browser hasn't allowed notifications yet. Turn this on to ask."
           : undefined}
         prefs={prefs}
         onToggle={(v) => setEnabled(v).catch(() => {})}

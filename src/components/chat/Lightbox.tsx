@@ -287,6 +287,9 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
       ref={containerRef}
       className="fixed inset-0 z-[200] animate-in fade-in duration-200"
       onClick={handleBackdropClick}
+      // React bubbles through the portal to the message row, whose own menu would
+      // open on top of the image's.
+      onContextMenu={(e) => e.stopPropagation()}
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
       role="dialog"

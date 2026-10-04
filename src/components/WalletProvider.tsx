@@ -131,7 +131,7 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
             await client.nwcClient.getInfo();
           })(),
           CONNECT_TIMEOUT_MS,
-          "Wallet didn't respond — check the connection string and try again.",
+          "Wallet didn't respond. Check the connection string and try again.",
         );
       } catch (e) {
         throw e instanceof Error ? e : new Error("Couldn't reach that wallet.");
@@ -197,7 +197,7 @@ const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) =
             }
           })(),
           PAY_TIMEOUT_MS,
-          "Payment timed out — check your wallet before retrying.",
+          "Payment timed out. Check your wallet before retrying.",
         );
       } finally {
         try {

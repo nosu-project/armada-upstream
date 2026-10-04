@@ -8,6 +8,7 @@ import { resetDecryptConsent } from "@/lib/decryptConsent";
 import { closeDmEphemeralSubs } from "@/lib/nip17/ephemeralInbox";
 import { clearFoldedMemory } from "@/lib/foldedCache";
 import { clearDeferredFoldMemory } from "@/concord/hooks/useDeferredFold";
+import { clearIconThumbMemory } from "@/concord/lib/iconThumbs";
 import { clearSightingsMemory } from "@/concord/lib/mediaTrust";
 import { clearOutgoingMemory } from "@/concord/lib/outgoing";
 import { clearOutgoingVerifyMemory } from "@/concord/lib/outgoingVerify";
@@ -117,6 +118,7 @@ export async function purgeClientStorage(): Promise<void> {
   clearRecentDecrypts();
   clearFoldedMemory();
   clearDeferredFoldMemory();
+  clearIconThumbMemory();
   clearAudioMetadata();
   clearPendingJoins();
   clearSightingsMemory();
@@ -143,6 +145,7 @@ export async function purgeClientStorage(): Promise<void> {
   resetKvCaches();
   clearRecentDecrypts();
   clearFoldedMemory();
+  clearIconThumbMemory();
   clearAudioMetadata();
   clearPendingJoins();
   clearSightingsMemory();

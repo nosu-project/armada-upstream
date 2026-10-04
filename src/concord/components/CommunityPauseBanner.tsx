@@ -22,7 +22,7 @@ export function CommunityPauseBanner({
       <span className="flex-1 min-w-0">
         This community is paused. New messages are on hold
         {until ? ` until ${until.toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}` : ""}
-        {canManage ? "." : " — a moderator can resume it."}
+        {canManage ? "." : ". A moderator can resume it."}
       </span>
       {canManage && (
         <Button

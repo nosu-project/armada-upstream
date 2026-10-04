@@ -98,7 +98,7 @@ interface BunkerRequest {
  */
 function attachBunker(
   transport: FakeTransport,
-  handler: (req: BunkerRequest) => Promise<{ result?: string; error?: string } | null>,
+  handler: (req: BunkerRequest, event: NostrEvent) => Promise<{ result?: string; error?: string } | null>,
   opts?: { legacyNip04?: boolean },
 ) {
   const bunkerSigner = new NSecSigner(bunkerSk);
@@ -107,7 +107,7 @@ function attachBunker(
   transport.setOnPublish((event) => {
     void (async () => {
       const req = JSON.parse(await bunkerSigner.nip44.decrypt(clientPubkey, event.content)) as BunkerRequest;
-      const out = await handler(req);
+      const out = await handler(req, event);
       if (!out) return;
       const payload = JSON.stringify({ id: req.id, ...out });
       const content = opts?.legacyNip04
@@ -324,7 +324,7 @@ describe("Nip46Signer", () => {
     expect(pendingSize(signer)).toBe(0);
   });
 
-  it("republishes a fresh request when an attempt goes unanswered", async () => {
+  it("republishes the SAME signed event when an attempt goes unanswered", async () => {
     const transport = makeFakeTransport();
     let calls = 0;
     attachBunker(transport, async () => {
@@ -336,9 +336,53 @@ describe("Nip46Signer", () => {
 
     await expect(signer.ping()).resolves.toBe("recovered");
     expect(transport.published).toHaveLength(2);
-    // A fresh event (relays don't keep ephemeral 24133) for the SAME request.
-    expect(transport.published[0].id).not.toBe(transport.published[1].id);
+    // Byte-identical: a signer that handled the first copy drops the second by its id.
+    expect(transport.published[1]).toEqual(transport.published[0]);
+    expect(pendingSize(signer)).toBe(0);
+  });
+
+  it("re-signs a copy only once the event is old enough that its answer, not the request, may be lost", async () => {
+    const transport = makeFakeTransport();
+    attachBunker(transport, async () => null);
+    // Gaps 100, 200, 400: copies at ~0, 100, 300 share the event; the one at ~700 is past the 400ms refresh.
+    const signer = makeSigner(transport, { attemptTimeoutMs: 100, signTimeoutMs: 1_200 });
+
+    await expect(signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 })).rejects.toThrow(/timed out/);
+    const ids = transport.published.map((e) => e.id);
+    expect(ids.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(ids.slice(0, 3)).size).toBe(1);
+    expect(ids[3]).not.toBe(ids[0]);
     expect(new Set(await publishedRequestIds(transport)).size).toBe(1);
+  });
+
+  it("never re-prompts a signer that dedupes by event id after a once-only approval", async () => {
+    // Amber: a 24133 whose id it has handled is dropped; one it hasn't is
+    // processed afresh, and an approval the user did not remember ("this
+    // time only") leaves nothing behind, so an unseen copy of an answered
+    // request PROMPTS AGAIN. Returning to Armada fires a resend before the
+    // answer has made its round trip. That is the loop, if the copy is new.
+    const transport = makeFakeTransport();
+    const handledEventIds = new Set<string>();
+    let prompts = 0;
+    attachBunker(transport, async (req, event) => {
+      if (handledEventIds.has(event.id)) return null;
+      handledEventIds.add(event.id);
+      prompts++;
+      // The user approves, then comes back to Armada while the answer is still in flight.
+      if (prompts === 1) transport.reopen("wss://bunker.example");
+      const tpl = JSON.parse(req.params[0]);
+      return { result: JSON.stringify({ ...tpl, id: "a".repeat(64), pubkey: bunkerPubkey, sig: "b".repeat(128) }) };
+    });
+    const signer = makeSigner(transport, { attemptTimeoutMs: 60_000, signTimeoutMs: 120_000 });
+
+    await expect(signer.signEvent({ kind: 20013, content: "", tags: [], created_at: 1 })).resolves.toMatchObject({
+      kind: 20013,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    // The copy went out (a signer that MISSED the first one needs it)...
+    expect(transport.published).toHaveLength(2);
+    // ...and the signer that didn't miss it saw nothing new.
+    expect(prompts).toBe(1);
     expect(pendingSize(signer)).toBe(0);
   });
 

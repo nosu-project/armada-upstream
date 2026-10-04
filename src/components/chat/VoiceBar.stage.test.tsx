@@ -74,7 +74,6 @@ describe("InCallView show/hide control", () => {
     renderBar();
     const button = screen.getByRole("button", { name: "Show call stage" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
-    expect(button.textContent).toContain("Show");
   });
 
   it("offers to hide a stage while one is visible", () => {
@@ -82,6 +81,5 @@ describe("InCallView show/hide control", () => {
     renderBar();
     const button = screen.getByRole("button", { name: "Hide call stage" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
-    expect(button.textContent).toContain("Hide");
   });
 });

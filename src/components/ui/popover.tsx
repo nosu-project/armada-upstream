@@ -2,9 +2,13 @@ import * as React from "react"
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 
 import { cn } from "@/lib/utils"
+import { useBackDismiss } from "@/hooks/useAndroidBack"
 import { usePortalContainer } from "@/hooks/usePortalContainer"
 
-const Popover = PopoverPrimitive.Root
+const Popover = (props: React.ComponentProps<typeof PopoverPrimitive.Root>) => (
+  <PopoverPrimitive.Root {...props} {...useBackDismiss(props)} />
+)
+Popover.displayName = "Popover"
 
 const PopoverTrigger = PopoverPrimitive.Trigger
 

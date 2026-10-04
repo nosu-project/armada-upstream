@@ -69,7 +69,7 @@ const TABS: (PillTab<DiscoverTab> & { placeholder: string; blurb: string })[] = 
     label: "Communities",
     icon: Users,
     placeholder: "Search communities…",
-    blurb: "Encrypted communities you can join with a link. No server, no host.",
+    blurb: "Encrypted communities you can join with a link.",
   },
   {
     id: "emojis",

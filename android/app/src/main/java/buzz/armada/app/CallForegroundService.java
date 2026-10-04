@@ -10,18 +10,23 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.Person;
 import androidx.core.app.ServiceCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.drawable.IconCompat;
 
 /**
  * The ongoing-call foreground service: the persistent "you are in a voice call"
@@ -52,11 +57,14 @@ public class CallForegroundService extends Service {
 
     /** Set/refresh the ongoing notification (extras carry the labels). */
     static final String ACTION_UPDATE = "buzz.armada.app.action.CALL_UPDATE";
-    /** The notification's "Leave" button. */
+    /** The notification's hang-up button. */
     static final String ACTION_HANGUP = "buzz.armada.app.action.CALL_HANGUP";
+    /** The notification's mute button. */
+    static final String ACTION_TOGGLE_MUTE = "buzz.armada.app.action.CALL_TOGGLE_MUTE";
 
     static final String EXTRA_TITLE = "title";
     static final String EXTRA_TEXT = "text";
+    static final String EXTRA_ICON = "icon";
 
     /**
      * How often to re-check RECORD_AUDIO while it is still ungranted, so the
@@ -68,6 +76,21 @@ public class CallForegroundService extends Service {
      */
     private static final long MIC_POLL_MS = 5000;
 
+    /** Static so a report never starts the service (and can't resurrect it after a hang-up). */
+    @Nullable
+    private static volatile Boolean micMuted;
+    private static volatile boolean micPublished;
+    @Nullable
+    private static CallForegroundService live;
+
+    static void updateMic(boolean muted, boolean published) {
+        micMuted = muted;
+        micPublished = published;
+        new Handler(Looper.getMainLooper()).post(() -> {
+            if (live != null && live.foregrounded) live.refreshNotification();
+        });
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean foregrounded = false;
     /** Whether the microphone type is already part of our foreground state. */
@@ -75,6 +98,10 @@ public class CallForegroundService extends Service {
     private boolean micPollScheduled = false;
     private String title = "Voice call";
     private String text = "";
+    @Nullable
+    private Bitmap icon;
+    private String iconSource = "";
+    private final long startedAt = System.currentTimeMillis();
 
     @Nullable
     private PowerManager.WakeLock wakeLock;
@@ -99,6 +126,7 @@ public class CallForegroundService extends Service {
         // start-args are two separate main-thread messages and the
         // startForeground() deadline runs through the gap (the same reasoning
         // as MeshForegroundService).
+        live = this;
         enterForeground();
         acquireWakeLock();
     }
@@ -113,11 +141,21 @@ public class CallForegroundService extends Service {
             ArmadaCallPlugin.notifyHangup();
             return START_NOT_STICKY;
         }
+        if (intent != null && ACTION_TOGGLE_MUTE.equals(intent.getAction())) {
+            ArmadaCallPlugin.notifyToggleMute();
+            return START_NOT_STICKY;
+        }
         if (intent != null) {
             String t = intent.getStringExtra(EXTRA_TITLE);
             String s = intent.getStringExtra(EXTRA_TEXT);
             if (t != null && !t.isEmpty()) title = t;
             text = s != null ? s : "";
+            String i = intent.getStringExtra(EXTRA_ICON);
+            if (i == null) i = "";
+            if (!i.equals(iconSource)) {
+                iconSource = i;
+                icon = decodeDataUrl(i);
+            }
         }
         // Idempotent: re-posts the notification with the current labels, and
         // re-evaluates the service type in case the mic was granted since.
@@ -150,7 +188,7 @@ public class CallForegroundService extends Service {
         int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
         if (mic) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
         try {
-            ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(), type);
+            ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(mic), type);
             foregrounded = true;
             micTyped = mic;
         } catch (Exception e) {
@@ -165,8 +203,20 @@ public class CallForegroundService extends Service {
                 stopSelf();
                 return;
             }
+            refreshNotification();
         }
         if (!micTyped) scheduleMicPoll();
+    }
+
+    /** Not startForeground(): re-asking for the microphone type from the background can be refused. */
+    private void refreshNotification() {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        try {
+            nm.notify(NOTIF_ID, buildNotification(micTyped));
+        } catch (SecurityException e) {
+            Log.w(TAG, "Could not refresh the call notification", e);
+        }
     }
 
     private void scheduleMicPoll() {
@@ -212,7 +262,7 @@ public class CallForegroundService extends Service {
         }
     }
 
-    private Notification buildNotification() {
+    private Notification buildNotification(boolean micForeground) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
             NotificationChannel ch = new NotificationChannel(
@@ -223,26 +273,50 @@ public class CallForegroundService extends Service {
             ch.enableVibration(false);
             nm.createNotificationChannel(ch);
         }
+        // CallStyle is only accepted from a foreground service (or with a full-screen intent).
+        Person room = new Person.Builder()
+                .setName(title)
+                .setIcon(icon != null
+                        ? IconCompat.createWithBitmap(icon)
+                        : IconCompat.createWithResource(this, R.mipmap.ic_launcher_round))
+                .setImportant(true)
+                .build();
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle(title)
                 .setSmallIcon(R.drawable.ic_stat_armada)
+                .setStyle(NotificationCompat.CallStyle.forOngoingCall(room, hangupIntent()))
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setOngoing(true)
                 .setSilent(true)
-                .setShowWhen(false)
+                .setWhen(startedAt)
+                .setShowWhen(true)
+                .setUsesChronometer(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                // Colorized applies only to an ongoing foreground-service
-                // notification, which is exactly what this is: it gives the
-                // call the full-width accent card that reads at a glance in a
-                // crowded shade.
                 .setColor(ContextCompat.getColor(this, R.color.colorAccent))
-                .setColorized(true)
-                .setContentIntent(openAppIntent())
-                .addAction(new NotificationCompat.Action.Builder(
-                        R.drawable.ic_stat_armada, "Leave", hangupIntent()).build());
+                .setContentIntent(openAppIntent());
         if (!text.isEmpty()) b.setContentText(text);
+        Boolean muted = micMuted;
+        if (muted != null) {
+            b.addAction(new NotificationCompat.Action.Builder(
+                    muted ? R.drawable.ic_call_mic_off : R.drawable.ic_call_mic,
+                    muted ? "Unmute" : "Mute",
+                    toggleMuteIntent(micForeground)).build());
+        }
         return b.build();
+    }
+
+    @Nullable
+    private static Bitmap decodeDataUrl(String url) {
+        int comma = url.indexOf(',');
+        if (!url.startsWith("data:image/") || comma < 0 || !url.substring(0, comma).endsWith(";base64")) {
+            return null;
+        }
+        try {
+            byte[] bytes = Base64.decode(url.substring(comma + 1), Base64.DEFAULT);
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**
@@ -259,7 +333,28 @@ public class CallForegroundService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
-    /** "Leave" action: delivered back to this service as ACTION_HANGUP. */
+    /**
+     * Toggles in place only with a mic track and the microphone type: a first unmute
+     * needs getUserMedia, and background capture without the type is silence.
+     */
+    private PendingIntent toggleMuteIntent(boolean micForeground) {
+        if (micPublished && micForeground) {
+            Intent intent = new Intent(this, CallForegroundService.class);
+            intent.setAction(ACTION_TOGGLE_MUTE);
+            intent.setData(Uri.parse("armada-call:mute"));
+            return PendingIntent.getService(
+                    this, NOTIF_ID, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        }
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setAction(ACTION_TOGGLE_MUTE);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(
+                this, NOTIF_ID, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /** Hang-up action: delivered back to this service as ACTION_HANGUP. */
     private PendingIntent hangupIntent() {
         Intent intent = new Intent(this, CallForegroundService.class);
         intent.setAction(ACTION_HANGUP);
@@ -273,6 +368,7 @@ public class CallForegroundService extends Service {
 
     @Override
     public void onDestroy() {
+        if (live == this) live = null;
         handler.removeCallbacks(micPoll);
         micPollScheduled = false;
         releaseWakeLock();

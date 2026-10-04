@@ -1,21 +1,14 @@
-import { ArrowUpRight, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, ScrollText, XCircle } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 
 import type { ChannelTimelineEntry, GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
-import { isCommunityGuest } from "@/components/chat/channelTimeline";
-import { ChatContent } from "@/components/chat/ChatContent";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
+import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { Textarea } from "@/components/ui/textarea";
-import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
-import { useIsDesktop } from "@/hooks/useIsDesktop";
-import { useIsTouch } from "@/hooks/useIsMobile";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { ciGroupsOutcome, ciGroupsSummary, ciRunOutcome, ciWorkflowName, groupCIRunsByWorkflow, type CIRun, type CIRunJob, type CIWorkflowGroup } from "@/lib/ci";
@@ -35,16 +28,14 @@ import {
   type GitTimelineActivity,
 } from "@/lib/gitActivity";
 import { gitworkshopTicketUrl } from "@/lib/gitworkshopUrl";
-import { sendsOnEnter } from "@/lib/sendOnEnter";
 import { cn } from "@/lib/utils";
-import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ReactNode } from "react";
 
 /** Callbacks that make the conversation panel writable; absent means read-only. */
 export interface TicketPanelActions {
   viewerPubkey?: string;
-  /** `media` carries NIP-92 imeta tags for attached uploads. */
-  onComment?: (ticket: GitTicket, content: string, media?: readonly string[][]) => Promise<unknown>;
+  /** `tags`: the composer's content-derived tags (NIP-92 imeta, emoji, mentions). */
+  onComment?: (ticket: GitTicket, content: string, tags?: readonly string[][]) => Promise<unknown>;
   /** New event + NIP-09 retraction of the old. */
   onEditComment?: (ticket: GitTicket, comment: GitComment, content: string) => Promise<unknown>;
   onDeleteComment?: (ticket: GitTicket, comment: GitComment) => Promise<unknown>;
@@ -449,11 +440,10 @@ function CIGroupRow({ entries }: { entries: readonly Extract<GitChannelTimelineE
   );
 }
 
-/** `members` enables the Guest badge (panel only; every CI coordinator is a guest). */
-function ActorName({ pubkey, members, className }: { pubkey: string; members?: ReadonlySet<string>; className?: string }) {
+function ActorName({ pubkey, className }: { pubkey: string; className?: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <><span className={cn("font-semibold text-foreground", className ?? "text-sm")}>{name}</span>{members && isCommunityGuest(pubkey, members) && <span className="ml-1 rounded border border-border px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Guest</span>}</>;
+  return <span className={cn("font-semibold text-foreground", className ?? "text-sm")}>{name}</span>;
 }
 
 function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ label: string; kind: GitStatusKind }> {
@@ -471,11 +461,11 @@ function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ labe
 function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; status: GitTicketStatus; onSet: NonNullable<TicketPanelActions["onSetStatus"]> }) {
   const [busy, setBusy] = useState(false);
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
+    <div className="mt-2 flex flex-wrap gap-1.5">
       {statusOptions(status, ticket).map(({ label, kind }) => (
         <Button
           key={label}
-          variant="outline"
+          variant="secondary"
           size="sm"
           className="h-7 px-2.5 text-xs"
           disabled={busy}
@@ -493,263 +483,140 @@ function TicketStatusControls({ ticket, status, onSet }: { ticket: GitTicket; st
   );
 }
 
-function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onComment: NonNullable<TicketPanelActions["onComment"]> }) {
-  const { config } = useAppContext();
-  const isTouch = useIsTouch();
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const appendUrl = useCallback((url: string) => {
-    setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n${url}\n` : `${url}\n`));
-  }, []);
-  const { attach, isUploading, mediaFor } = useGitAttachmentUploads(appendUrl);
-  const submit = () => {
-    const content = text.trim();
-    if (!content || sending || isUploading) return;
-    setSending(true);
-    onComment(ticket, content, mediaFor(content))
-      .then(() => setText(""))
-      .catch((error) => toast({ title: "Couldn't post comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
-      .finally(() => setSending(false));
-  };
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [text]);
-
-  const placeholder = `Comment on this ${ticket.type === "issue" ? "issue" : "pull request"}`;
-
+function TicketHeader({ ticket, status, actions }: { ticket: GitTicket; status: GitTicketStatus; actions?: TicketPanelActions }) {
+  const workshopUrl = useMemo(() => gitworkshopTicketUrl(ticket), [ticket]);
+  const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
   return (
-    <div className="shrink-0 p-2 pb-safe">
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={(e) => {
-          void attach(e.target.files);
-          e.target.value = "";
-        }}
-      />
-      <div className="flex items-end gap-0.5 touch:gap-1.5 clip-corner-lg bg-secondary/60 px-1.5 py-1.5">
-        <button
-          type="button"
-          aria-label="Attach files"
-          disabled={isUploading}
-          onClick={() => fileInput.current?.click()}
-          className="p-2 shrink-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40 flex items-center justify-center size-9 touch:size-11"
-        >
-          {isUploading ? <Loader2 className="size-5 animate-spin" /> : <Paperclip className="size-5" />}
-        </button>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            // Ignore Enter confirming an IME composition. With send-on-Enter off,
-            // Ctrl/Cmd+Enter sends.
-            const sendKey = sendsOnEnter(config.sendOnEnter, isTouch)
-              ? e.key === "Enter" && !e.shiftKey
-              : e.key === "Enter" && (e.ctrlKey || e.metaKey);
-            if (sendKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          placeholder={placeholder}
-          aria-label={placeholder}
-          rows={1}
-          className="block flex-1 min-w-0 resize-none bg-transparent border-0 outline-none px-1.5 py-2 touch:py-3 leading-5 text-base md:text-sm max-h-40 overflow-y-auto align-middle placeholder:text-muted-foreground"
-        />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={sending || isUploading || !text.trim()}
-          aria-label="Comment"
-          className="p-2 shrink-0 clip-corner-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 disabled:bg-transparent disabled:text-muted-foreground flex items-center justify-center size-9 touch:size-11"
-        >
-          {sending ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-5" strokeWidth={2.5} />}
-        </button>
+    <div className="px-3 pb-2">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <TicketIcon ticket={ticket} />
+        <span className="truncate">{ticketType(ticket)} · {repository}</span>
       </div>
-      <p className="mt-1 px-1.5 truncate text-[10px] text-muted-foreground">Public: repository discussion is visible outside this community.</p>
+      <h2 className="mt-1 text-lg font-semibold leading-snug break-words">{ticket.subject}</h2>
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+        <span className="capitalize">{status}</span>
+        {workshopUrl && (
+          <a href={workshopUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-foreground hover:underline">
+            <ExternalLink className="size-3" />
+            gitworkshop
+          </a>
+        )}
+      </div>
+      {actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}
     </div>
   );
 }
 
-function TicketPanelBody({ ticket, members, activities, actions }: { ticket: GitTicket; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; actions?: TicketPanelActions }) {
-  const [jsonOpen, setJsonOpen] = useState(false);
-  const workshopUrl = useMemo(() => gitworkshopTicketUrl(ticket), [ticket]);
-  const { comments, latestStatus } = useMemo(() => {
-    const related = activities.filter(
-      (activity): activity is Exclude<GitTimelineActivity, { type: "ci-run" }> =>
-        activity.type !== "ci-run" && activity.ticket.id === ticket.id,
-    );
+/** The composer's own `h`; everything else it derives (imeta, emoji, mentions) belongs on the comment too. */
+function commentTags(tags: string[][]): string[][] {
+  return tags.filter((tag) => tag[0] !== "h");
+}
+
+function failed(title: string) {
+  return (error: unknown) => toast({ title, description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+}
+
+function TicketThread({ ticket, members, activities, open, onClose, onExpandChange, actions }: { ticket: GitTicket; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; open: boolean; onClose: () => void; onExpandChange: (expanded: boolean) => void; actions?: TicketPanelActions }) {
+  const { comments, status } = useMemo(() => {
+    const comments: GitComment[] = [];
+    let latestStatus: Extract<GitTimelineActivity, { type: "status-change" }> | undefined;
+    for (const activity of activities) {
+      if (activity.type === "ci-run" || activity.ticket.id !== ticket.id) continue;
+      if (activity.type === "comment") comments.push(activity.comment);
+      else if (activity.type === "status-change" && (!latestStatus || activity.createdAt > latestStatus.createdAt || (activity.createdAt === latestStatus.createdAt && activity.status.event.id < latestStatus.status.event.id))) latestStatus = activity;
+    }
+    comments.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    return { comments, status: gitStatusFromKind(latestStatus?.status.kind, ticket.kind) };
+  }, [activities, ticket.id, ticket.kind]);
+
+  const onComment = actions?.onComment;
+  const onEditComment = actions?.onEditComment;
+  const onDeleteComment = actions?.onDeleteComment;
+  const transport = useMemo<ChatTransport>(() => {
+    const replies: ChatMsg[] = comments.map((comment) => comment.event);
+    const byId = new Map(comments.map((comment) => [comment.id, comment]));
     return {
-      comments: related.filter((activity): activity is Extract<GitTimelineActivity, { type: "comment" }> => activity.type === "comment").sort((a, b) => a.createdAt - b.createdAt || a.comment.id.localeCompare(b.comment.id)),
-      latestStatus: related.filter((activity): activity is Extract<GitTimelineActivity, { type: "status-change" }> => activity.type === "status-change").sort((a, b) => b.createdAt - a.createdAt || a.status.event.id.localeCompare(b.status.event.id))[0],
+      messages: [],
+      isLoading: false,
+      canWrite: Boolean(onComment),
+      canModerate: false,
+      threadRepliesFor: () => replies,
+      sendThreadReply: onComment
+        ? async (_root, content, tags) => { await onComment(ticket, content, commentTags(tags)); }
+        : undefined,
+      editMessage: onEditComment
+        ? async (original, content) => {
+            const comment = byId.get(original.id);
+            if (comment) await onEditComment(ticket, comment, content);
+          }
+        : undefined,
+      deleteMessage: onDeleteComment
+        ? (event) => {
+            const comment = byId.get(event.id);
+            if (comment) onDeleteComment(ticket, comment).catch(failed("Couldn't delete comment"));
+          }
+        : undefined,
     };
-  }, [activities, ticket.id]);
-  const status = gitStatusFromKind(latestStatus?.status.kind, ticket.kind);
-  const repository = ticket.repositoryAddress?.identifier ?? "Unknown repository";
+  }, [comments, ticket, onComment, onEditComment, onDeleteComment]);
+  const mentionPubkeys = useMemo(() => [...members], [members]);
+  const noun = ticket.type === "issue" ? "issue" : "pull request";
 
-  return <div className="flex min-h-0 flex-1 flex-col"><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><TicketIcon ticket={ticket} />{ticketType(ticket)}</div><h2 className="mt-2 break-words text-sm font-semibold">{ticket.subject}</h2><p className="mt-1 text-xs text-muted-foreground">{repository} · <span className="capitalize">{status}</span></p>{actions?.canSetStatus && actions.onSetStatus && <TicketStatusControls ticket={ticket} status={status} onSet={actions.onSetStatus} />}<div className="my-4 border-t border-border" /><p className="text-xs text-muted-foreground">This is the work item’s durable discussion. Its card in the channel is a contextual reference, not a chat thread.</p>{ticket.content && <DiscussionMessage pubkey={ticket.author} createdAt={ticket.createdAt} event={ticket.event} members={members} className="mt-4" />}<div className="mt-4 space-y-4">{comments.map(({ comment }) => <DiscussionMessage key={comment.id} pubkey={comment.author} createdAt={comment.createdAt} event={comment.event} members={members} controls={actions?.viewerPubkey === comment.author && actions.onEditComment && actions.onDeleteComment ? { text: comment.content, onEdit: (content) => actions.onEditComment!(ticket, comment, content), onDelete: () => actions.onDeleteComment!(ticket, comment) } : undefined} />)}</div>{comments.length === 0 && <p className="mt-4 text-sm text-muted-foreground">No comments yet.</p>}<div className="mt-4 flex flex-wrap gap-1.5">{workshopUrl && <Button variant="ghost" size="sm" asChild><a href={workshopUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="mr-2 size-4" />Open on gitworkshop</a></Button>}<Button variant="ghost" size="sm" onClick={() => setJsonOpen(true)}><Braces className="mr-2 size-4" />View event JSON</Button></div></div>{actions?.onComment && <TicketCommentComposer ticket={ticket} onComment={actions.onComment} />}<Dialog open={jsonOpen} onOpenChange={setJsonOpen}><DialogContent><DialogHeader><DialogTitle>Event JSON</DialogTitle></DialogHeader><pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(ticket.event, null, 2)}</pre></DialogContent></Dialog></div>;
+  return (
+    <ThreadPanel
+      root={ticket.event}
+      transport={transport}
+      relayUrl="dm"
+      groupId={`git:${ticket.id}`}
+      canWrite={Boolean(onComment)}
+      mentionPubkeys={mentionPubkeys}
+      open={open}
+      onClose={onClose}
+      onExpandChange={onExpandChange}
+      title={ticketType(ticket)}
+      rootHeader={<TicketHeader ticket={ticket} status={status} actions={actions} />}
+      rootReadOnly
+      documentMarkdown
+      // Repository discussion is public, unlike the community around it.
+      placeholder={`Comment publicly on this ${noun}…`}
+      readOnlyNotice={`Sign in to comment on this ${noun}.`}
+    />
+  );
 }
 
-interface DiscussionControls {
-  text: string;
-  onEdit: (content: string) => Promise<unknown>;
-  onDelete: () => Promise<unknown>;
-}
-
-function DiscussionMessage({ pubkey, createdAt, event, members, className, controls }: { pubkey: string; createdAt: number; event: NostrRumor; members: ReadonlySet<string>; className?: string; controls?: DiscussionControls }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-
-  const saveEdit = () => {
-    const content = draft.trim();
-    if (!controls || !content || busy) return;
-    if (content === controls.text.trim()) {
-      setEditing(false);
+/** A work item's NIP-22 discussion, in the shared thread panel. */
+export function TicketSidePanel({ ticket, members, activities, onClose, onExpandChange, actions }: { ticket: GitTicket | undefined; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; onClose: () => void; onExpandChange?: (expanded: boolean) => void; actions?: TicketPanelActions }) {
+  // Outlives `ticket` through the slide-out, as `useThreadPanel`'s `lastThreadRoot`.
+  const [lastTicket, setLastTicket] = useState(ticket);
+  useEffect(() => {
+    if (ticket) {
+      setLastTicket(ticket);
       return;
     }
-    setBusy(true);
-    controls.onEdit(content)
-      .then(() => setEditing(false))
-      .catch((error) => toast({ title: "Couldn't edit comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
-      .finally(() => setBusy(false));
-  };
-  const runDelete = () => {
-    if (!controls || busy) return;
-    setBusy(true);
-    controls.onDelete()
-      .catch((error) => toast({ title: "Couldn't delete comment", description: error instanceof Error ? error.message : undefined, variant: "destructive" }))
-      .finally(() => setBusy(false));
-  };
+    const timer = setTimeout(() => setLastTicket(undefined), 200);
+    return () => clearTimeout(timer);
+  }, [ticket]);
+  const [expanded, setExpanded] = useState(false);
+  const handleExpandChange = useCallback((next: boolean) => {
+    setExpanded(next);
+    onExpandChange?.(next);
+  }, [onExpandChange]);
+  const shown = ticket ?? lastTicket;
 
   return (
-    <div className={cn("group relative flex gap-2.5", className)}>
-      <Avatar className="size-8 shrink-0"><ActorAvatar pubkey={pubkey} /></Avatar>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={pubkey} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(createdAt)}</span></div>
-        {editing && controls ? (
-          <div className="mt-1">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setEditing(false);
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  saveEdit();
-                }
-              }}
-              rows={3}
-              autoFocus
-              className="min-h-0 resize-none text-sm"
-            />
-            <div className="mt-1.5 flex justify-end gap-1.5">
-              <Button variant="ghost" size="sm" className="h-7 px-2.5 text-xs" disabled={busy} onClick={() => setEditing(false)}>Cancel</Button>
-              <Button size="sm" className="h-7 px-2.5 text-xs" disabled={busy || !draft.trim()} onClick={saveEdit}>
-                {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <ChatContent event={event} disableNoteEmbeds documentMarkdown className="mt-1 break-words text-sm leading-5" />
-        )}
-      </div>
-      {controls && !editing && (
-        <div className="absolute -top-1 right-0 flex gap-0.5 rounded-md border border-border bg-card p-0.5 select-none opacity-0 shadow-sm transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground"
-            aria-label="Edit comment"
-            disabled={busy}
-            onClick={() => {
-              setDraft(controls.text);
-              setEditing(true);
-            }}
-          >
-            <Pencil className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground hover:text-destructive"
-            aria-label="Delete comment"
-            disabled={busy}
-            onClick={() => setConfirmingDelete(true)}
-          >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-          </Button>
-        </div>
+    <ThreadPanelSlot open={Boolean(ticket)} expanded={expanded}>
+      {shown && (
+        <TicketThread
+          key={shown.id}
+          ticket={shown}
+          members={members}
+          activities={activities}
+          open={Boolean(ticket)}
+          onClose={onClose}
+          onExpandChange={handleExpandChange}
+          actions={actions}
+        />
       )}
-      {controls && (
-        <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete this comment?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This publishes a deletion request. Most clients will hide the comment, but relays and clients that ignore deletion requests may keep showing it.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={runDelete}>Delete</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
-    </div>
-  );
-}
-
-export function TicketSidePanel({ ticket, members, activities, onClose, actions }: { ticket: GitTicket | undefined; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; onClose: () => void; actions?: TicketPanelActions }) {
-  const isDesktop = useIsDesktop();
-
-  return (
-    <>
-      <aside className={cn(
-        "hidden shrink-0 overflow-hidden sidebar:flex sidebar:flex-col sidebar:transition-[width] sidebar:duration-200",
-        ticket ? "sidebar:w-[22rem]" : "sidebar:w-0",
-      )}>
-        {ticket && (
-          <div className="flex flex-1 min-h-0 flex-col m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome">
-            <div className="flex items-center justify-between px-2 py-1 shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <MessageCircle className="size-4 text-muted-foreground shrink-0" />
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
-                  Conversation
-                </h3>
-              </div>
-              <Button variant="ghost" size="icon" className="size-6 touch:size-10" onClick={onClose} aria-label="Close conversation">
-                <X className="size-4" />
-              </Button>
-            </div>
-            <TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} />
-          </div>
-        )}
-      </aside>
-      {ticket && !isDesktop && (
-        <Sheet open onOpenChange={(open) => !open && onClose()}>
-          <SheetContent side="right" className="flex w-[92vw] max-w-none flex-col p-0">
-            <div className="flex items-center gap-2 px-3 py-2 shrink-0">
-              <MessageCircle className="size-4 text-muted-foreground shrink-0" />
-              <SheetTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Conversation
-              </SheetTitle>
-            </div>
-            <TicketPanelBody ticket={ticket} members={members} activities={activities} actions={actions} />
-          </SheetContent>
-        </Sheet>
-      )}
-    </>
+    </ThreadPanelSlot>
   );
 }

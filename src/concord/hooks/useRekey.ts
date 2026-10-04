@@ -1122,7 +1122,7 @@ export function useRefound(community: Community | undefined) {
         toast({
           title: "Your invite links no longer work",
           description:
-            "The keys rotated to cut off the removed member, and your live links were left on the old epoch on purpose — refreshing them would have handed the new keys to anyone holding the URL. Revoke them and mint new ones.",
+            "The keys rotated to cut off the removed member. Your links stay on the old keys, because refreshing them would give the new keys to anyone holding the URL. Revoke them and make new ones.",
         });
       } else {
         const fresh = {

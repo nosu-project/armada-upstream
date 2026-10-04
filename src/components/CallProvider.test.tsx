@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { CallProvider } from "./CallProvider";
+import { CallStageSlot } from "@/components/chat/CallStageSlot";
+import { PaneCoveredContext } from "@/contexts/PaneCoveredContext";
 import { useCall } from "@/hooks/useCall";
 
 import type { CallContextType } from "@/contexts/CallContext";
@@ -143,5 +145,42 @@ describe("CallProvider stage visibility", () => {
     expect(h.call.stageVisible).toBe(true);
     expect(screen.getByTestId("floating-window")).toBeTruthy();
     expect(h.call.stageOpen).toBe(true);
+  });
+
+  it("reports the stage docked only while the call's channel is on screen", async () => {
+    const h = await setup();
+    expect(h.call.stageDocked).toBe(false);
+    act(() => h.setOnCallChannel(true));
+    expect(h.call.stageDocked).toBe(true);
+    act(() => h.setOnCallChannel(false));
+    expect(h.call.stageDocked).toBe(false);
+  });
+
+  it("undocks while the chat pane is swiped aside, so the floating window takes over", async () => {
+    const handle = { call: null as unknown as CallContextType, setCovered: (_: boolean) => {} };
+    function Probe() {
+      handle.call = useCall();
+      const [covered, setCovered] = useState(false);
+      handle.setCovered = setCovered;
+      return (
+        <PaneCoveredContext.Provider value={covered}>
+          <CallStageSlot active />
+        </PaneCoveredContext.Provider>
+      );
+    }
+    render(
+      <CallProvider>
+        <Probe />
+      </CallProvider>,
+    );
+    await act(async () => {
+      handle.call.joinCall("wss://relay.example", "group-1");
+    });
+    expect(handle.call.stageDocked).toBe(true);
+    expect(screen.queryByTestId("floating-window")).toBeNull();
+
+    act(() => handle.setCovered(true));
+    expect(handle.call.stageDocked).toBe(false);
+    expect(screen.getByTestId("floating-window")).toBeTruthy();
   });
 });

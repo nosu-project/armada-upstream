@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { PaneCoveredContext, setPaneCovered } from "@/contexts/PaneCoveredContext";
 import { leaveApp, useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -57,6 +58,12 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // Optimistic resting state; `null` whenever the `open` prop is authoritative.
   const [pendingOpen, setPendingOpen] = useState<boolean | null>(null);
   const effectiveOpen = pendingOpen ?? open;
+  const [coverToken] = useState(() => Symbol("pane"));
+  const listShowing = swipeEnabled && effectiveOpen;
+  useEffect(() => {
+    setPaneCovered(coverToken, listShowing);
+    return () => setPaneCovered(coverToken, false);
+  }, [coverToken, listShowing]);
 
   const paneRef = useRef<HTMLDivElement>(null);
   const underlayRef = useRef<HTMLDivElement>(null);
@@ -289,8 +296,6 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         className={cn(
           "absolute inset-0 flex [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
-          // Reserve the mobile call bar height; `absolute inset-0` ignores the shell's padding.
-          "max-sidebar:pb-[var(--call-bar-h,0px)]",
         )}
         style={{
           transform: `translateX(${underlayShift}%)`,
@@ -313,8 +318,6 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           "absolute inset-0 z-10 flex flex-col bg-background shadow-2xl [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
           enterAnim && "animate-in slide-in-from-right duration-200 ease-out",
-          // Reserve the mobile call bar height; `absolute inset-0` ignores the shell's padding.
-          "max-sidebar:pb-[var(--call-bar-h,0px)]",
           // Keyed on the optimistic state so the list is tappable on the release frame.
           effectiveOpen && !dragging && "pointer-events-none",
         )}
@@ -324,7 +327,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           willChange: moving ? "transform" : undefined,
         }}
       >
-        {children}
+        <PaneCoveredContext.Provider value={effectiveOpen}>{children}</PaneCoveredContext.Provider>
       </div>
     </>
   );

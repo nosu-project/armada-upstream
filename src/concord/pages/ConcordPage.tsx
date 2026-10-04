@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Crown, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, Users, X, type LucideIcon } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, Bell, BellOff, Crown, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessageSquareText, MessagesSquare, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, ShieldOff, Timer, Trash2, UserMinus, UserPlus, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 
@@ -62,6 +62,16 @@ import { useLinkAuthorityWatch, useLinkFreshnessWatch, useRetireCommunityLinks, 
 import { dissolveMissToast } from "@/concord/components/dissolveMissToast";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
+import {
+  ChatHeader,
+  ChatHeaderAction,
+  ChatHeaderActions,
+  ChatHeaderAvatar,
+  ChatHeaderBack,
+  ChatHeaderMenuTrigger,
+  ChatHeaderTitle,
+  ChatHeaderViewItems,
+} from "@/components/chat/ChatHeader";
 import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { ChatShell } from "@/components/chat/ChatShell";
 import { useChatEditing } from "@/components/chat/useChatEditing";
@@ -87,7 +97,6 @@ import {
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -217,17 +226,8 @@ function TitleIcon({ icon }: { icon: ImagePointer | undefined }) {
   return <img src={url} alt="" className="size-6 rounded object-cover shrink-0" />;
 }
 
-/** Larger community avatar for the mobile chat header, with an initial fallback. */
 function TitleAvatar({ icon, name }: { icon: ImagePointer | undefined; name: string | undefined }) {
-  const url = useDecryptedImage(icon);
-  if (url) {
-    return <img src={url} alt="" className="size-8 rounded object-cover shrink-0" />;
-  }
-  return (
-    <div className="size-8 rounded shrink-0 bg-muted text-muted-foreground flex items-center justify-center text-sm font-semibold uppercase">
-      {name?.trim()?.[0] ?? "#"}
-    </div>
-  );
+  return <ChatHeaderAvatar src={useDecryptedImage(icon)} name={name} />;
 }
 
 function Banner({ banner }: { banner: ImagePointer | undefined }) {
@@ -1156,6 +1156,9 @@ export function ConcordPage() {
   // Projects data loads lazily (tab opened, or a ticket conversation opens).
   const [projectsTouched, setProjectsTouched] = useState(false);
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
+  const [ticketExpanded, setTicketExpanded] = useState(false);
+  // The ticket and a chat thread share the right-hand slot; opening one closes the other.
+  const closeThreadRef = useRef<() => void>(() => {});
   // Close the ticket panel on community/channel/pane change during render. Uses
   // the ROUTE's channel, since the persisted fallback lags a switch.
   const ticketContextKey = `${communityId ?? ""}|${routeChannelId ?? ""}|${view}`;
@@ -1425,7 +1428,7 @@ export function ConcordPage() {
             return;
           }
           const opened = openedById.get(event.id);
-          if (!opened) throw new Error("That message isn't loaded here any more — scroll to it and try again.");
+          if (!opened) throw new Error("That message isn't loaded anymore. Scroll to it and try again.");
           await pins.pin({ opened });
           toast({ title: "Pinned", description: "Everyone in this channel can see it, now and after any key rotation." });
         } catch (e) {
@@ -1457,12 +1460,14 @@ export function ConcordPage() {
   const openProjectItem = useCallback((item: ProjectWorkItem) => {
     const ticket = projects.ticketsById.get(item.id);
     if (!ticket) return;
+    closeThreadRef.current();
     setOpenTicket(ticket);
     void projects.refreshTicket(ticket);
   }, [projects]);
   // Stable identity (depends on `refreshTicket`, not the rebuilt result object).
   const refreshChannelTicket = gitActivity.refreshTicket;
   const openChannelTicket = useCallback((ticket: GitTicket) => {
+    closeThreadRef.current();
     setOpenTicket(ticket);
     void refreshChannelTicket(ticket);
   }, [refreshChannelTicket]);
@@ -1495,8 +1500,8 @@ export function ConcordPage() {
   const ticketActions = useMemo(() => ({
     viewerPubkey: user?.pubkey,
     onComment: user
-      ? async (ticket: GitTicket, content: string, media?: readonly string[][]) => {
-          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)), media);
+      ? async (ticket: GitTicket, content: string, tags?: readonly string[][]) => {
+          await gitActions.commentOnTicket(ticket, content, projects.relaysForCoordinates(ticket.repositoryAddresses.map((address) => address.coordinate)), tags);
         }
       : undefined,
     onEditComment: user
@@ -1818,6 +1823,12 @@ export function ConcordPage() {
     onOpenThread: onOpenThreadCb,
     closeThread,
   } = useThreadPanel({ room: channelRoute, messages: allMessages, canWrite });
+  closeThreadRef.current = closeThread;
+  const [ticketThreadKey, setTicketThreadKey] = useState(threadRoot?.id);
+  if (ticketThreadKey !== threadRoot?.id) {
+    setTicketThreadKey(threadRoot?.id);
+    if (threadRoot) setOpenTicket(undefined);
+  }
 
   // Search survives channel switches, resets on community change.
   const [searchCommunityKey, setSearchCommunityKey] = useState(communityId);
@@ -2504,7 +2515,7 @@ export function ConcordPage() {
     if (!canRekeyChannel) {
       toast({
         title: "Channel keys not rotated",
-        description: "They lost access to a private channel, but rotating its key needs the Manage-channels permission — ask an admin to rotate it.",
+        description: "They lost access to a private channel, but rotating its key needs the Manage channels permission. Ask an admin to rotate it.",
         variant: "destructive",
       });
       return;
@@ -2991,170 +3002,73 @@ export function ConcordPage() {
           ),
         }}
       >
-          <header className="relative h-12 touch:h-14 max-sidebar:h-auto max-sidebar:py-2 mx-2 mt-3 px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Back to channels"
-              className="size-9 touch:size-11 shrink-0 sidebar:hidden"
-              onClick={() => setChannelsOpen(true)}
-            >
-              <ChevronLeft className="size-5" />
-            </Button>
-
-            <div className="relative hidden sidebar:flex items-center gap-1.5 min-w-0">
-              <SyncStatusIndicator
-                priorityScope={channelScope}
-                className="absolute -bottom-0.5 left-2 z-10"
-              />
-              {paneHeader ? (
-                <>
-                  <paneHeader.icon className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">{paneHeader.label}</h1>
-                </>
-              ) : (
-                <>
-                  <ChannelGlyph
-                    isPrivate={channel?.isPrivate}
-                    view={channel?.view}
-                    className="size-5 text-muted-foreground shrink-0"
-                  />
-                  <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
-                </>
-              )}
-            </div>
-
-            <div className="relative flex sidebar:hidden items-center min-w-0">
-              {/* Sync indicator on the avatar corner (can't nest in the info button). */}
-              <SyncStatusIndicator
-                priorityScope={channelScope}
-                className="absolute bottom-0 left-5 z-10"
-              />
-              <button
-                type="button"
-                className="flex items-center gap-2.5 min-w-0 text-left"
-                onClick={() => community && selectPane("settings")}
-                disabled={!community}
-                aria-label="Community settings"
-              >
-              <TitleAvatar icon={folded?.metadata?.icon} name={community?.name} />
-              <div className="min-w-0 flex flex-col">
-                <span className="font-semibold text-base leading-tight truncate">{community?.name ?? "…"}</span>
-                <span className="text-xs text-muted-foreground leading-tight truncate flex items-center gap-0.5">
-                  {paneHeader ? (
-                    <>
-                      <paneHeader.icon className="size-3 shrink-0" />
-                      {paneHeader.label}
-                    </>
-                  ) : (
-                    <>
-                      <ChannelGlyph isPrivate={channel?.isPrivate} view={channel?.view} className="size-3 shrink-0" />
-                      {channel?.name ?? "…"}
-                    </>
-                  )}
-                </span>
-              </div>
-            </button>
-            </div>
-            <div className="ml-auto flex items-center gap-0.5">
+          <ChatHeader>
+            <ChatHeaderBack onClick={() => setChannelsOpen(true)} />
+            <ChatHeaderTitle
+              glyph={(className) =>
+                paneHeader ? (
+                  <paneHeader.icon className={className} />
+                ) : (
+                  <ChannelGlyph isPrivate={channel?.isPrivate} view={channel?.view} className={className} />
+                )
+              }
+              title={paneHeader ? paneHeader.label : channel?.name ?? "…"}
+              avatar={<TitleAvatar icon={folded?.metadata?.icon} name={community?.name} />}
+              context={community?.name ?? "…"}
+              onContextClick={community ? () => selectPane("settings") : undefined}
+              contextLabel="Community settings"
+              indicator={(className) => <SyncStatusIndicator priorityScope={channelScope} className={className} />}
+            />
+            <ChatHeaderActions>
               {/* A forum has no call, pins bar or events. */}
               {user && view === "channel" && channel && channel.view !== "forum" && !dissolved && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn("size-8 touch:size-11", inThisVoice && "text-success")}
-                      aria-label={inThisVoice ? "In voice" : "Join voice"}
-                      disabled={inThisVoice}
-                      onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null)}
-                    >
-                      {inThisVoice ? <Headphones className="size-4" /> : <Phone className="size-4" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{inThisVoice ? "In voice" : "Join voice"}</TooltipContent>
-                </Tooltip>
+                <ChatHeaderAction
+                  icon={inThisVoice ? Headphones : Phone}
+                  label={inThisVoice ? "In voice" : "Join voice"}
+                  className={cn(inThisVoice && "text-success")}
+                  disabled={inThisVoice}
+                  onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null)}
+                />
               )}
               {view === "channel" && channel && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Search messages"
-                      aria-pressed={searchOpen}
-                      className={cn("size-8 hidden sidebar:inline-flex text-muted-foreground", searchOpen && "text-foreground")}
-                      onClick={() => setSearchOpen(true)}
-                    >
-                      <Search className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Search messages</TooltipContent>
-                </Tooltip>
+                <ChatHeaderAction
+                  icon={Search}
+                  label="Search messages"
+                  pressed={searchOpen}
+                  className="hidden sidebar:inline-flex"
+                  onClick={() => setSearchOpen(true)}
+                />
               )}
               {view === "channel" && channel && channel.view !== "forum" && (pins.pins.length > 0 || pins.dark) && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn("size-8 touch:size-11 text-muted-foreground", pinsOpen && "text-foreground")}
-                      aria-label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
-                      aria-pressed={pinsOpen}
-                      onClick={() => setPinsOpen((v) => !v)}
-                    >
-                      <Pin className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Pinned messages</TooltipContent>
-                </Tooltip>
+                <ChatHeaderAction
+                  icon={Pin}
+                  label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
+                  tooltip="Pinned messages"
+                  pressed={pinsOpen}
+                  onClick={() => setPinsOpen((v) => !v)}
+                />
               )}
 
               {/* Like pins, only once there is something to show; staff schedule from ⋮. */}
               {view === "channel" && channel && channel.view !== "forum" && calendar.events.length > 0 && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn("size-8 touch:size-11 text-muted-foreground", eventsOpen && "text-foreground")}
-                      aria-label={eventsOpen ? "Hide events" : "Show events"}
-                      aria-pressed={eventsOpen}
-                      onClick={() => setEventsOpen((v) => !v)}
-                    >
-                      <CalendarClock className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Events</TooltipContent>
-                </Tooltip>
+                <ChatHeaderAction
+                  icon={CalendarClock}
+                  label={eventsOpen ? "Hide events" : "Show events"}
+                  tooltip="Events"
+                  pressed={eventsOpen}
+                  onClick={() => setEventsOpen((v) => !v)}
+                />
               )}
 
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="More options"
-                    className="size-8 touch:size-11 shrink-0 text-muted-foreground"
-                  >
-                    <MoreVertical className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
+                <ChatHeaderMenuTrigger />
                 <DropdownMenuContent align="end" className="w-52 p-1.5">
-                  {view === "channel" && channel && (
-                    <DropdownMenuItem className="px-3 py-2 sidebar:hidden" onClick={() => setSearchOpen(true)}>
-                      <Search className="size-4" />
-                      Search messages
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem className="px-3 py-2 sidebar:hidden" onClick={() => setMembersOpen(true)}>
-                    <Users className="size-4" />
-                    Members
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="px-3 py-2 hidden sidebar:flex" onClick={toggleMembersVisible}>
-                    <Users className="size-4" />
-                    {membersVisible ? "Hide members" : "Show members"}
-                  </DropdownMenuItem>
+                  <ChatHeaderViewItems
+                    onSearch={view === "channel" && channel ? () => setSearchOpen(true) : undefined}
+                    onMembers={() => setMembersOpen(true)}
+                    membersVisible={membersVisible}
+                    onToggleMembers={toggleMembersVisible}
+                  />
                   {view === "channel" && channel && channel.view !== "forum" && calendar.canModerate && calendar.events.length === 0 && (
                     <DropdownMenuItem className="px-3 py-2" onClick={() => setCreateEventOpen(true)}>
                       <CalendarClock className="size-4" />
@@ -3227,7 +3141,7 @@ export function ConcordPage() {
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div>
+            </ChatHeaderActions>
 
             {view === "channel" && channel && (
               <ChatSearchBar
@@ -3246,7 +3160,7 @@ export function ConcordPage() {
                 }
               />
             )}
-          </header>
+          </ChatHeader>
 
           <CallStageSlot active={inThisVoice} />
 
@@ -3254,7 +3168,11 @@ export function ConcordPage() {
 
           <div className="relative flex flex-1 min-h-0">
             <ComposerBoundsProvider value={composerBoundsRef}>
-            <div className={cn("flex-1 min-w-0 flex flex-col", chatColumnClass)}>
+            <div className={cn(
+              "flex-1 min-w-0 flex flex-col",
+              chatColumnClass,
+              openTicket && ticketExpanded && "thread:flex-none thread:w-0 thread:opacity-0 thread:overflow-hidden thread:pointer-events-none",
+            )}>
               {view === "all" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <AllMessagesView
@@ -3505,7 +3423,7 @@ export function ConcordPage() {
                           </p>
                         ) : (
                           <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                            No messages yet. Say something — only members can read it.
+                            No messages yet. Only members can read this channel.
                           </p>
                         )
                       ) : undefined
@@ -3583,7 +3501,7 @@ export function ConcordPage() {
                         <p className="font-medium">You no longer have access to this community.</p>
                         <p className="text-muted-foreground">
                           A moderator rotated its keys without you. Your history stays readable; new
-                          messages won't. It reappears if you're re-invited — or you can leave.
+                          messages won't. It reappears if you're re-invited, or you can leave.
                         </p>
                       </div>
                       <Button
@@ -3668,7 +3586,7 @@ export function ConcordPage() {
               )}
             </div>
 
-            <TicketSidePanel ticket={openTicket} members={memberSet} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
+            <TicketSidePanel ticket={openTicket} members={memberSet} activities={panelActivities} onClose={() => setOpenTicket(undefined)} onExpandChange={setTicketExpanded} actions={ticketActions} />
             <MountWhenOpened open={creatingChannel}>
               <NewChannelDialog
                 open={creatingChannel}

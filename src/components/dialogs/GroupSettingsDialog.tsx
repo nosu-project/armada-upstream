@@ -111,7 +111,7 @@ export function GroupSettingsDialog({ relayUrl, group, open, onOpenChange }: Gro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title={`Channel settings — #${displayName}`}>
+      <ChromeDialogContent title={`#${displayName} settings`}>
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Hash className="size-6" />

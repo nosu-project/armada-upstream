@@ -23,6 +23,7 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 vi.mock("@livekit/components-react", () => ({
+  useConnectionState: () => "connected",
   useParticipants: () => [],
   useSpeakingParticipants: () => [],
   useTracks: () => runtime.tracks,
@@ -39,6 +40,10 @@ vi.mock("@/components/chat/CallControls", () => ({
   RaiseHandButton: () => <button type="button" aria-label="Raise hand" />,
   ReactionsMenu: () => <button type="button" aria-label="Reactions" />,
   LeaveButton: () => <button type="button" aria-label="Leave call" />,
+}));
+
+vi.mock("@/components/chat/VoiceBar", () => ({
+  DeviceMenu: () => <button type="button" aria-label="Audio settings" />,
 }));
 
 vi.mock("@/components/chat/ScreenShareDiagnosticsDialog", async () => {

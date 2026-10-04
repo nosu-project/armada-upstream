@@ -29,7 +29,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useNostrLogin } from "@nostrify/react/login";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { lazy, Suspense } from "react";
 
@@ -47,7 +47,9 @@ import { DiagnosticsSettings } from "@/components/settings/DiagnosticsSettings";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { MediaPrivacySettings } from "@/components/settings/MediaPrivacySettings";
 import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
+import { ChatSearchBar } from "@/components/chat/ChatSearchBar";
 import { SettingsRow } from "@/components/settings/SettingsSection";
+import { useSettingsFilter } from "@/components/settings/settingsSearch";
 import { WalletSettings } from "@/components/settings/WalletSettings";
 import { ThemeSelector } from "@/components/ThemeSelector";
 import { VoiceDeviceSettings } from "@/components/VoiceDeviceSettings";
@@ -144,8 +146,12 @@ export function SettingsPage({
   // Deep-linked section (e.g. /settings#profile) renders expanded and scrolled into view.
   const routedSection = useLocation().hash.slice(1);
   const targetSection = section ?? routedSection;
+  const [openSections, setOpenSections] = useState<ReadonlySet<string>>(
+    () => new Set(targetSection ? [targetSection] : []),
+  );
   useEffect(() => {
     if (!targetSection) return;
+    setOpenSections((prev) => (prev.has(targetSection) ? prev : new Set(prev).add(targetSection)));
     document.getElementById(`settings-${targetSection}`)?.scrollIntoView({ block: "start" });
   }, [targetSection]);
   const { config, updateConfig } = useAppContext();
@@ -165,6 +171,23 @@ export function SettingsPage({
     getAudioProcessing(),
   );
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
+  const searching = query.trim() !== "";
+  const listRef = useRef<HTMLDivElement>(null);
+  const visibleSections = useSettingsFilter(listRef, query);
+  const toggleSection = useCallback((id: string, open: boolean) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   const [standingOpen, setStandingOpen] = useState(false);
 
   /** Retire Account Standing's nag dot on open (not close). */
@@ -553,8 +576,8 @@ export function SettingsPage({
                         ? "Press once to copy your signed lists, encrypted settings, community recovery state, invite authority, and DM roster to every NIP-65 write relay. Later private setting changes will sync automatically."
                         : "Press once to copy your signed lists and encrypted recovery state. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
                     <span className="mt-2 block">
-                      Pull latest setup reads those records—including communities and DM
-                      conversations—back from your NIP-65 relays without publishing anything.
+                      Pull latest setup reads those records back from your NIP-65 relays, including
+                      communities and DM conversations. It publishes nothing.
                     </span>
                     <span className="mt-2 block">
                       Device hardware, audio processing, notification permission, Bluetooth, and
@@ -648,7 +671,7 @@ export function SettingsPage({
                 relays={config.communityRelays}
                 onChange={setCommunityRelays}
                 onReset={() => setCommunityRelays([...COMMUNITY_RELAYS])}
-                emptyText="No community relays — new communities fall back to the shared Concord relays."
+                emptyText="No community relays. New communities use the shared Concord relays."
               />
             </SettingsRow>
           </>
@@ -667,7 +690,7 @@ export function SettingsPage({
                 relays={config.searchRelays}
                 onChange={setSearchRelays}
                 onReset={() => setSearchRelays([...SEARCH_RELAYS])}
-                emptyText="No search relays — search falls back to your app relays."
+                emptyText="No search relays. Search uses your app relays."
               />
             </SettingsRow>
           </>
@@ -831,7 +854,7 @@ export function SettingsPage({
         return (
           <SettingsRow
             label="Clean up links"
-            description="Remove tracking parameters from links — YouTube's ?si=, utm_ campaign tags, and the click ids ad networks add. Applied to links you send, so they're clean for everyone who reads them, and to links you receive, so nothing they carry reaches the sites your app loads previews from. Only known tracking parameters are removed; the link still goes to the same page."
+            description="Remove tracking parameters like YouTube's ?si=, utm_ tags and ad click IDs from links you send and receive. Links still go to the same page."
           >
             <Switch
               checked={config.stripTrackingParams}
@@ -877,7 +900,7 @@ export function SettingsPage({
             {rnnoiseSupported() && (
               <SettingsRow
                 label="Noise cancellation"
-                description="ML background-noise removal (RNNoise) — removes keyboards, fans, and chatter. Applied to your next call."
+                description="Filters out keyboards, fans and chatter (RNNoise). Applies to your next call."
               >
                 <Switch
                   checked={voiceProcessing.rnnoise}
@@ -957,13 +980,36 @@ export function SettingsPage({
         >
           <ArrowLeft className="size-5" />
         </Button>
-        <h1 className="font-semibold truncate leading-tight">Settings</h1>
+        <h1 className="min-w-0 flex-1 font-semibold truncate leading-tight">Settings</h1>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Search settings"
+          aria-pressed={searchOpen}
+          className="size-9 shrink-0 text-muted-foreground"
+          onClick={() => setSearchOpen(true)}
+        >
+          <Search className="size-4" />
+        </Button>
+        <ChatSearchBar
+          open={searchOpen}
+          value={query}
+          onChange={setQuery}
+          onClose={closeSearch}
+          placeholder="Search settings…"
+          label="Search settings"
+        />
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto pb-safe">
-        <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-12 pt-4 space-y-6">
+        <div ref={listRef} className="max-w-2xl mx-auto px-4 sm:px-6 pb-12 pt-4 space-y-6">
+          {searching && visibleSections === 0 && (
+            <p className="px-1 py-8 text-center text-sm text-muted-foreground">
+              No settings match “{query.trim()}”.
+            </p>
+          )}
           {navGroups.map((group) => (
-            <section key={group.heading} className="space-y-1.5">
+            <section key={group.heading} data-settings-group className="space-y-1.5">
               <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 {group.heading}
               </h2>
@@ -973,6 +1019,8 @@ export function SettingsPage({
                     <div
                       key={item.id}
                       id={`settings-${item.id}`}
+                      data-settings-section
+                      data-settings-title={item.title}
                       className="bg-chrome clip-corner-lg overflow-hidden"
                     >
                       <button type="button" onClick={item.action} className={SECTION_HEADER_CLASS}>
@@ -987,6 +1035,9 @@ export function SettingsPage({
                     <div
                       key={item.id}
                       id={`settings-${item.id}`}
+                      data-settings-section
+                      data-settings-title={item.title}
+                      data-settings-body
                       className="bg-chrome clip-corner-lg overflow-hidden [&>*]:border-chrome [&>*:not(:first-child)]:border-t"
                     >
                       {sectionBody(item.id)}
@@ -995,7 +1046,12 @@ export function SettingsPage({
                     <Collapsible
                       key={item.id}
                       id={`settings-${item.id}`}
-                      defaultOpen={item.id === targetSection}
+                      data-settings-section
+                      data-settings-title={item.title}
+                      // Searching opens every section so its rows can be matched.
+                      open={searching || openSections.has(item.id)}
+                      onOpenChange={(open) => toggleSection(item.id, open)}
+                      disabled={searching}
                       className="bg-chrome clip-corner-lg overflow-hidden"
                     >
                       <CollapsibleTrigger asChild>
@@ -1008,7 +1064,7 @@ export function SettingsPage({
                         </button>
                       </CollapsibleTrigger>
                       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-                        <div className="border-t border-chrome [&>*]:border-chrome [&>*:not(:first-child)]:border-t">
+                        <div data-settings-body className="border-t border-chrome [&>*]:border-chrome [&>*:not(:first-child)]:border-t">
                           {sectionBody(item.id)}
                         </div>
                       </CollapsibleContent>

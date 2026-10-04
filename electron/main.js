@@ -1096,7 +1096,7 @@ function setUnreadBadge(count) {
   }
 
   if (tray) {
-    tray.setToolTip(n > 0 ? `Armada — ${n} unread` : "Armada");
+    tray.setToolTip(n > 0 ? `Armada (${n} unread)` : "Armada");
   }
 
   // Windows taskbar overlay icon (a simple dot) when there are unread items.

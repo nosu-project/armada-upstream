@@ -49,22 +49,23 @@ export function DesktopSettings() {
           checked={settings.openAtLogin}
           disabled={busy}
           onCheckedChange={(openAtLogin) =>
-            apply({ openAtLogin, openAsHidden: settings.openAsHidden })
+            apply({ openAtLogin, openAsHidden: openAtLogin && settings.openAsHidden })
           }
         />
       </SettingsRow>
-      <SettingsRow
-        label="Start minimized"
-        description="When launched at login, start hidden in the tray instead of opening the window."
-      >
-        <Switch
-          checked={settings.openAsHidden}
-          disabled={busy || !settings.openAtLogin}
-          onCheckedChange={(openAsHidden) =>
-            apply({ openAtLogin: settings.openAtLogin, openAsHidden })
-          }
-        />
-      </SettingsRow>
+      {settings.openAtLogin && (
+        <SettingsRow
+          label="Start minimized"
+          description="When launched at login, start hidden in the tray instead of opening the window."
+          className="pl-8 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-2 motion-safe:duration-200"
+        >
+          <Switch
+            checked={settings.openAsHidden}
+            disabled={busy}
+            onCheckedChange={(openAsHidden) => apply({ openAtLogin: true, openAsHidden })}
+          />
+        </SettingsRow>
+      )}
     </>
   );
 }

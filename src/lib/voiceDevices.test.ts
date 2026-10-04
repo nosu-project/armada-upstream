@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const platform = vi.hoisted(() => ({ name: "web" }));
+vi.mock("@capacitor/core", () => ({
+  Capacitor: { getPlatform: () => platform.name },
+}));
+
 import {
   audioDeviceLabel,
   effectiveAvServers,
+  getPreferredMicId,
+  micCaptureConstraints,
+  platformRoutesCallAudio,
+  rememberVoiceDevice,
   getScreenShareVolume,
   getUserVolume,
   getUserVolumes,
@@ -83,14 +92,38 @@ describe("voice playback volumes", () => {
 describe("audioDeviceLabel", () => {
   const dev = (deviceId: string, label: string) => ({ deviceId, label }) as MediaDeviceInfo;
 
-  it("names Android WebView's route choices for what they are", () => {
+  it("calls the unlabeled default Automatic", () => {
     expect(audioDeviceLabel(dev("default", ""), "Unnamed device")).toBe("Automatic");
-    expect(audioDeviceLabel(dev("a1", "Headset earpiece"), "x")).toBe("Phone earpiece");
     expect(audioDeviceLabel(dev("a2", "Speakerphone"), "x")).toBe("Speakerphone");
   });
 
   it("falls back for other unlabeled devices", () => {
     expect(audioDeviceLabel(dev("a3", ""), "Microphone 2")).toBe("Microphone 2");
     expect(audioDeviceLabel(dev("default", "Default - USB Mic"), "x")).toBe("Default - USB Mic");
+  });
+});
+
+describe("Android call routing", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    platform.name = "web";
+  });
+
+  it("leaves the route to the platform only on Android", () => {
+    expect(platformRoutesCallAudio()).toBe(false);
+    platform.name = "ios";
+    expect(platformRoutesCallAudio()).toBe(false);
+    platform.name = "android";
+    expect(platformRoutesCallAudio()).toBe(true);
+  });
+
+  it("ignores a remembered mic on Android, where it may be a stale route pick", () => {
+    rememberVoiceDevice("audioinput", "earpiece-id");
+    expect(getPreferredMicId()).toBe("earpiece-id");
+    expect(micCaptureConstraints().deviceId).toBe("earpiece-id");
+
+    platform.name = "android";
+    expect(getPreferredMicId()).toBeUndefined();
+    expect(micCaptureConstraints()).not.toHaveProperty("deviceId");
   });
 });

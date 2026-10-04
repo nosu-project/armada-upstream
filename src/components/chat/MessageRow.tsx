@@ -176,7 +176,7 @@ export const MessageRow = memo(function MessageRow({
       }}
       className={cn(
         "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
-        continuation ? "py-0.5" : "py-1.5",
+        continuation ? "py-0.5" : "pt-1.5 pb-0.5",
         pending && "animate-pulse",
         // Native text selection/callout fires `pointercancel` around 500ms and eats the
         // long-press; suppress it ("Copy text" replaces manual select).

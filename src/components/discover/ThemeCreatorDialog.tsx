@@ -102,7 +102,7 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
 
     if (applyToMine) applyCustomTheme({ title, colors, background });
 
-    const applied = applyToMine ? " — applied as your theme" : "";
+    const applied = applyToMine ? ", applied as your theme" : "";
     const syncing = result.queued ? " (syncing when the network is back)" : "";
     const copyLink = copyLinkFor(result.event);
     toast({
@@ -147,7 +147,7 @@ function ThemeCreatorForm({ editing, onDone }: { editing?: UserTheme; onDone: ()
           {editing ? "edit theme" : "new theme"}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Pick three colors — every other shade is derived automatically.
+          Pick three colors. Every other shade is derived from them.
         </p>
       </div>
 

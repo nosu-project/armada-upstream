@@ -1,4 +1,4 @@
-import { DisconnectButton, useLocalParticipant, useRoomContext } from "@livekit/components-react";
+import { DisconnectButton, useLocalParticipant } from "@livekit/components-react";
 import {
   Hand,
   Info,
@@ -29,8 +29,7 @@ import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useCall } from "@/hooks/useCall";
 import { toast } from "@/hooks/useToast";
 import { ToastAction } from "@/components/ui/toast";
-import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
-import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTalk";
+import { playLeaveSound } from "@/lib/callSounds";
 import {
   applyPublishedScreenShareQuality,
   installScreenShareCodecPreferences,
@@ -50,6 +49,7 @@ import {
 } from "@/lib/screenShareQuality";
 import { consumeOwnAudioDrop, describeOwnAudioDrop } from "@/lib/screenShareOwnAudio";
 import { cn } from "@/lib/utils";
+import { useMicToggle } from "@/hooks/useMicToggle";
 import { ScreenShareQualityDialog } from "@/components/chat/ScreenShareQualityDialog";
 import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
 import {
@@ -68,12 +68,10 @@ const supportsScreenShare =
 const CTRL = "inline-flex items-center justify-center rounded-md size-8 touch:size-11 shrink-0 transition-colors";
 
 export function MicButton({ className }: { className?: string }) {
-  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
-  const room = useRoomContext();
-  const pushToTalk = usePushToTalkRuntime();
+  const { isMicrophoneEnabled, pushToTalk, toggle } = useMicToggle();
   const label = pushToTalk.ready
     ? pushToTalk.pressed
-      ? "Talking — click to mute and stop push to talk"
+      ? "Talking. Click to mute and stop push to talk"
       : `Hold ${pushToTalk.bindingLabel || "your shortcut"} to talk`
     : isMicrophoneEnabled
       ? "Mute microphone"
@@ -83,43 +81,7 @@ export function MicButton({ className }: { className?: string }) {
       type="button"
       aria-label={label}
       title={label}
-      onClick={() => {
-        // Under push to talk this is an override, not a toggle: a global shortcut can
-        // lose its key-up, so disabling it could leave the user stuck transmitting.
-        if (pushToTalk.ready) {
-          playMuteSound();
-          requestPushToTalkOverride();
-          void localParticipant.setMicrophoneEnabled(false);
-          return;
-        }
-        const enabling = !isMicrophoneEnabled;
-        // On the click gesture (AudioContext unlocked).
-        if (enabling) playUnmuteSound();
-        else playMuteSound();
-        void (async () => {
-          try {
-            // `webAudioMix`'s graph starts suspended until a gesture unlocks it.
-            if (enabling && room && !room.canPlaybackAudio) {
-              await room.startAudio();
-            }
-            await localParticipant.setMicrophoneEnabled(enabling);
-          } catch (err) {
-            console.warn("failed to toggle microphone", err);
-            // Don't swallow an unmute rejection silently: retry once, then surface it.
-            if (!enabling) return;
-            try {
-              await localParticipant.setMicrophoneEnabled(true);
-            } catch (retryErr) {
-              toast({
-                title: "Couldn't unmute",
-                description:
-                  retryErr instanceof Error ? retryErr.message : "The microphone is unavailable.",
-                variant: "destructive",
-              });
-            }
-          }
-        })();
-      }}
+      onClick={toggle}
       className={cn(
         CTRL,
         isMicrophoneEnabled
@@ -408,12 +370,12 @@ export function ScreenShareButton({
             type="button"
             aria-label={
               screenShareAudioMissing
-                ? "Screen share options — audio is not being captured"
+                ? "Screen share options (audio not captured)"
                 : "Screen share options"
             }
             title={
               screenShareAudioMissing
-                ? "Screen share options — audio is not being captured"
+                ? "Screen share options (audio not captured)"
                 : "Screen share options"
             }
             disabled={working}

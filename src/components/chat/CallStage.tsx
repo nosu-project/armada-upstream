@@ -1,7 +1,7 @@
 import {
+  useConnectionState,
   useParticipants,
   useRoomContext,
-  useSpeakingParticipants,
   useTracks,
   VideoTrack,
 } from "@livekit/components-react";
@@ -9,10 +9,11 @@ import type { TrackReference } from "@livekit/components-react";
 import type { NostrMetadata } from "@nostrify/nostrify";
 import { Capacitor } from "@capacitor/core";
 import type { Participant, RemoteParticipant } from "livekit-client";
-import { Track } from "livekit-client";
+import { ConnectionState, Track } from "livekit-client";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Fullscreen,
   Hand,
   Info,
@@ -22,10 +23,10 @@ import {
   Monitor,
   ScreenShare,
   Shrink,
-  X,
+  Video,
 } from "lucide-react";
 import type { CSSProperties } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -44,6 +45,11 @@ import {
   ScreenShareButton,
 } from "@/components/chat/CallControls";
 import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
+import { DeviceMenu } from "@/components/chat/VoiceBar";
+import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { useIsDesktop } from "@/hooks/useIsDesktop";
+import { useSpeakers } from "@/hooks/useSpeakers";
 import {
   VoiceUserContextMenu,
   VolumeSliderRow,
@@ -414,7 +420,7 @@ function VolumeMenu({
         <div className="flex items-center justify-between gap-2 mb-2">
           <span className="text-sm font-medium truncate">
             <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-            {target === "screenShare" && " — screen share"}
+            {target === "screenShare" && "'s screen share"}
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
@@ -579,11 +585,13 @@ function VideoTile({
   trackRef,
   isSpeaking,
   focused,
+  large = focused,
   onToggleFocus,
 }: {
   trackRef: TrackReference;
   isSpeaking: boolean;
   focused: boolean;
+  large?: boolean;
   onToggleFocus: () => void;
 }) {
   const participant = trackRef.participant;
@@ -645,7 +653,7 @@ function VideoTile({
       ) : null}
       <span className="truncate">
         <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
-        {isScreenShare && " — screen"}
+        {isScreenShare && "'s screen"}
         {isLocal && " (you)"}
       </span>
     </>
@@ -675,7 +683,7 @@ function VideoTile({
       ) : (
         <>
           <BlurredAvatarBackdrop picture={metadata?.picture} imeta={imeta?.picture} />
-          <Avatar shape={shape} className={cn("relative", focused ? "size-24" : "size-16")}>
+          <Avatar shape={shape} className={cn("relative", large ? "size-24" : "size-16")}>
             <AvatarImage src={metadata?.picture} imeta={imeta?.picture} alt={displayName} />
             <AvatarFallback className="bg-primary/20 text-primary text-xl">
               {displayName[0]?.toUpperCase()}
@@ -879,7 +887,7 @@ function LocalHevcScreenShareTile({
           )}
         >
           <ScreenShare className="size-3 shrink-0" />
-          <span className="truncate">Your screen — H.265 (you)</span>
+          <span className="truncate">Your screen (H.265)</span>
         </div>
         {fullscreen && (
           <div
@@ -932,11 +940,13 @@ function AvatarTile({
   participant,
   isSpeaking,
   focused,
+  large = focused,
   onToggleFocus,
 }: {
   participant: Participant;
   isSpeaking: boolean;
   focused: boolean;
+  large?: boolean;
   onToggleFocus: () => void;
 }) {
   const { pubkey, displayName, verified, metadata, imeta } = useTileDisplayName(participant);
@@ -975,7 +985,7 @@ function AvatarTile({
         )}
         style={ringStyle}
       >
-        <Avatar shape={shape} className={focused ? "size-28" : "size-16"}>
+        <Avatar shape={shape} className={large ? "size-28" : "size-16"}>
           <AvatarImage src={metadata?.picture} imeta={imeta?.picture} alt={displayName} />
           <AvatarFallback className="bg-primary/20 text-primary text-xl">
             {displayName[0]?.toUpperCase()}
@@ -1084,9 +1094,8 @@ function useShareSharerLabel(participant: Participant | null): {
 }
 
 /**
- * Compact media controls inside the stage (floating window and theater, where
- * the call bar is hidden). Mirrors VoiceBar's behavior via the room's existing
- * local participant state.
+ * Media controls inside the stage: docked, floating and theater all stand in
+ * for the call bar, which steps aside while they are on screen.
  */
 function StageControls({
   className,
@@ -1106,7 +1115,433 @@ function StageControls({
       <ReactionsMenu
         portalContainer={portalContainer}
       />
+      <DeviceMenu />
       <LeaveButton />
+    </div>
+  );
+}
+
+/** Elapsed time since `since`; its own component so only it re-renders per tick. */
+function CallClock({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const secs = Math.max(0, Math.floor((now - since) / 1_000));
+  const h = Math.floor(secs / 3_600);
+  const m = Math.floor((secs % 3_600) / 60);
+  const s = String(secs % 60).padStart(2, "0");
+  return (
+    <span className="tabular-nums">
+      {h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`}
+    </span>
+  );
+}
+
+/**
+ * The call's state in words. A DM reads "Calling…" until the peer is in the
+ * room; after that, and in channels, the clock runs.
+ */
+function CallStatus({ calling, since }: { calling: boolean; since: number }) {
+  const connectionState = useConnectionState();
+  const rejoining = useContext(VoiceRejoiningContext);
+  if (
+    connectionState === ConnectionState.Reconnecting ||
+    (rejoining && connectionState !== ConnectionState.Connected)
+  ) {
+    return <span className="text-amber-500">Reconnecting…</span>;
+  }
+  if (connectionState === ConnectionState.Connecting) return <span>Connecting…</span>;
+  if (calling) return <span>Calling…</span>;
+  return <CallClock since={since} />;
+}
+
+/** One participant in the strip: their avatar in its own shape, lit while speaking. */
+function StripAvatar({ participant, isSpeaking }: { participant: Participant; isSpeaking: boolean }) {
+  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
+  const { raisedHands } = useVoiceActivity();
+  const shape = getAvatarShape(metadata);
+  const hasCustomShape = !!shape;
+  const muted = !participant.isMicrophoneEnabled;
+  const label = participant.isLocal ? `${displayName} (you)` : displayName;
+
+  const avatar = (
+    <div className="relative shrink-0" title={label} aria-label={muted ? `${label}, muted` : label}>
+      <div
+        className={cn(
+          "rounded-full transition-shadow",
+          !hasCustomShape && isSpeaking && "ring-2 ring-success ring-offset-2 ring-offset-chrome-deep",
+        )}
+        // A mask clips box rings, so a custom shape lights up as a silhouette.
+        style={hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined}
+      >
+        <Avatar shape={shape} className="size-8 touch:size-9">
+          <AvatarImage src={metadata?.picture} alt={displayName} />
+          <AvatarFallback className="bg-primary/20 text-primary text-xs">
+            {displayName[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+      </div>
+      {muted && (
+        <span className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-chrome-deep text-destructive">
+          <MicOff className="size-2.5" />
+        </span>
+      )}
+      {raisedHands.has(pubkey) && (
+        <span className="absolute -top-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-amber-500 text-white">
+          <Hand className="size-2.5" />
+        </span>
+      )}
+    </div>
+  );
+
+  return participant.isLocal ? (
+    avatar
+  ) : (
+    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName} verified={verified}>
+      {avatar}
+    </VoiceUserContextMenu>
+  );
+}
+
+/** A hero avatar: large, in the person's own shape, glowing while they speak. */
+function HeroAvatarView({
+  metadata,
+  name,
+  caption,
+  speaking,
+  muted,
+  pending,
+  theater,
+}: {
+  metadata: NostrMetadata | undefined;
+  name: string;
+  caption: string;
+  speaking: boolean;
+  muted: boolean;
+  /** Not in the room yet (a DM still ringing). */
+  pending?: boolean;
+  theater: boolean;
+}) {
+  const shape = getAvatarShape(metadata);
+  const hasCustomShape = !!shape;
+  return (
+    <div className="flex flex-col items-center gap-2 min-w-0">
+      <div className="relative">
+        <div
+          className={cn(
+            "rounded-full transition-[box-shadow,transform] duration-100",
+            speaking && "scale-105",
+            !hasCustomShape && speaking &&
+              "ring-[3px] ring-success shadow-[0_0_28px_6px_hsl(var(--success)/0.45)]",
+          )}
+          // A mask clips box rings, so a custom shape glows as a silhouette.
+          style={hasCustomShape && speaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined}
+        >
+          <Avatar
+            shape={shape}
+            className={cn("shadow-xl", theater ? "size-32" : "size-20", pending && "opacity-80")}
+          >
+            <AvatarImage src={metadata?.picture} alt={name} />
+            <AvatarFallback className={cn("bg-primary/20 text-primary", theater ? "text-4xl" : "text-2xl")}>
+              {name[0]?.toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </div>
+        {muted && (
+          <span
+            className={cn(
+              "absolute bottom-0 right-0 flex items-center justify-center rounded-full bg-background text-destructive shadow",
+              theater ? "size-8" : "size-6",
+            )}
+            aria-label="Muted"
+          >
+            <MicOff className={theater ? "size-4" : "size-3.5"} />
+          </span>
+        )}
+      </div>
+      <span className={cn("max-w-28 truncate text-muted-foreground", theater ? "text-sm" : "text-xs")}>
+        {caption}
+      </span>
+    </div>
+  );
+}
+
+function HeroParticipant({
+  participant,
+  speaking,
+  theater,
+}: {
+  participant: Participant;
+  speaking: boolean;
+  theater: boolean;
+}) {
+  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
+  const view = (
+    <div>
+      <HeroAvatarView
+        metadata={metadata}
+        name={displayName}
+        caption={participant.isLocal ? "You" : displayName}
+        speaking={speaking}
+        muted={!participant.isMicrophoneEnabled}
+        theater={theater}
+      />
+    </div>
+  );
+  return participant.isLocal ? (
+    view
+  ) : (
+    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName} verified={verified}>
+      {view}
+    </VoiceUserContextMenu>
+  );
+}
+
+/** The peer a DM is ringing, before they're in the room. */
+function HeroPendingPeer({ pubkey, theater }: { pubkey: string; theater: boolean }) {
+  const metadata = useAuthor(pubkey).data?.metadata;
+  const name = useScopedDisplayName(pubkey, metadata);
+  return (
+    <HeroAvatarView
+      metadata={metadata}
+      name={name}
+      caption={name}
+      speaking={false}
+      muted={false}
+      pending
+      theater={theater}
+    />
+  );
+}
+
+function HeroBackdrop({ pubkey }: { pubkey?: string }) {
+  const metadata = useAuthor(pubkey).data?.metadata;
+  return <BlurredAvatarBackdrop picture={metadata?.picture} />;
+}
+
+/**
+ * A voice-only 1:1 call: the two people, large and side by side over the
+ * peer's blurred picture, with the controls beneath (the FaceTime look).
+ * Docked above the chat, or the whole screen as `theater`.
+ */
+function CallHero({
+  variant,
+  callLabel,
+  self,
+  peer,
+  peerPubkey,
+  speakingIds,
+  calling,
+  since,
+  videoCount,
+  onShowVideo,
+  onToggleTheater,
+  exiting,
+}: {
+  variant: "docked" | "theater";
+  callLabel?: React.ReactNode;
+  self?: Participant;
+  peer?: Participant;
+  peerPubkey?: string;
+  speakingIds: ReadonlySet<string>;
+  calling: boolean;
+  since: number;
+  videoCount: number;
+  onShowVideo: () => void;
+  onToggleTheater: () => void;
+  exiting: boolean;
+}) {
+  const theater = variant === "theater";
+  const controlSize = theater ? "rounded-lg size-14 touch:size-14" : "size-10 touch:size-11";
+  const controls = (
+    <div className={cn("flex flex-wrap items-center justify-center", theater ? "gap-4" : "gap-2.5")}>
+      {videoCount > 0 && (
+        <button
+          type="button"
+          onClick={onShowVideo}
+          aria-label="Show video"
+          title="Show video"
+          className={cn(
+            "inline-flex items-center justify-center shrink-0 bg-primary/20 text-primary hover:bg-primary/30 transition-colors",
+            controlSize,
+          )}
+        >
+          <Video className="size-4" />
+        </button>
+      )}
+      <MicButton className={controlSize} />
+      <CameraButton className={controlSize} />
+      <ScreenShareButton className={controlSize} />
+      <DeviceMenu className={controlSize} />
+      <LeaveButton className={controlSize} />
+    </div>
+  );
+
+  const people = (
+    <div className={cn("flex items-start justify-center", theater ? "gap-12" : "gap-8")}>
+      {peer ? (
+        <HeroParticipant participant={peer} speaking={speakingIds.has(peer.identity)} theater={theater} />
+      ) : peerPubkey ? (
+        <HeroPendingPeer pubkey={peerPubkey} theater={theater} />
+      ) : null}
+      {self && (
+        <HeroParticipant participant={self} speaking={speakingIds.has(self.identity)} theater={theater} />
+      )}
+    </div>
+  );
+
+  const title = (
+    <div className="text-center min-w-0 max-w-full">
+      <div className={cn("font-semibold truncate", theater ? "text-2xl" : "text-base")}>{callLabel}</div>
+      <div className={cn("text-muted-foreground", theater ? "text-sm mt-1" : "text-xs")}>
+        <CallStatus calling={calling} since={since} />
+      </div>
+    </div>
+  );
+
+  const theaterToggle = (
+    <button
+      type="button"
+      onClick={onToggleTheater}
+      aria-label={theater ? "Exit full screen" : "Full screen"}
+      title={theater ? "Exit full screen" : "Full screen"}
+      className="absolute right-2 z-10 rounded-md p-1.5 touch:p-2.5 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+      style={{
+        top: theater
+          ? "calc(0.5rem + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)))"
+          : "0.5rem",
+      }}
+    >
+      {theater ? <Shrink className="size-4" /> : <Maximize2 className="size-4" />}
+    </button>
+  );
+
+  if (theater) {
+    return (
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-chrome-deep">
+        <HeroBackdrop pubkey={peerPubkey} />
+        <div className="absolute inset-0 bg-chrome-deep/60" />
+        {theaterToggle}
+        <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-6">
+          {people}
+          {title}
+        </div>
+        <div className="relative flex justify-center px-4 pt-4 pb-[max(2rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]">
+          {controls}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "shrink-0 mx-2 mt-2",
+        exiting
+          ? "animate-out fade-out-0 slide-out-to-top-2 duration-200 fill-mode-forwards"
+          : "animate-in fade-in-0 slide-in-from-top-2 duration-200",
+      )}
+    >
+      <div
+        role="region"
+        aria-label="Call"
+        className="relative clip-corner-lg overflow-hidden bg-chrome-deep shadow-lg"
+      >
+        <HeroBackdrop pubkey={peerPubkey} />
+        <div className="absolute inset-0 bg-chrome-deep/60" />
+        {theaterToggle}
+        <div className="relative flex flex-col items-center gap-3 px-4 pt-5 pb-3">
+          {people}
+          {title}
+          {controls}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const STRIP_MAX_AVATARS = 5;
+
+/**
+ * The call while nobody is showing video: one row of avatars, status and
+ * controls, sized to its content rather than to the window.
+ */
+function CallStrip({
+  callLabel,
+  roster,
+  speakingIds,
+  calling,
+  since,
+  videoCount,
+  onShowVideo,
+  exiting,
+}: {
+  callLabel?: React.ReactNode;
+  roster: readonly Participant[];
+  speakingIds: ReadonlySet<string>;
+  calling: boolean;
+  since: number;
+  /** Video feeds a collapsed stage is hiding; 0 when there are none. */
+  videoCount: number;
+  onShowVideo: () => void;
+  exiting: boolean;
+}) {
+  const shown = roster.slice(0, STRIP_MAX_AVATARS);
+  const overflow = roster.length - shown.length;
+  return (
+    <div
+      className={cn(
+        "shrink-0 mx-2 mt-2",
+        exiting
+          ? "animate-out fade-out-0 slide-out-to-top-2 duration-200 fill-mode-forwards"
+          : "animate-in fade-in-0 slide-in-from-top-2 duration-200",
+      )}
+    >
+      <div
+        role="region"
+        aria-label="Call"
+        className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-wrap items-center gap-x-3 gap-y-2 px-2.5 py-2"
+      >
+        <div className="flex flex-1 basis-48 items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {shown.map((p) => (
+              <StripAvatar key={p.identity} participant={p} isSpeaking={speakingIds.has(p.identity)} />
+            ))}
+            {overflow > 0 && (
+              <span className="text-xs text-muted-foreground tabular-nums">+{overflow}</span>
+            )}
+          </div>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="text-sm font-medium truncate">{callLabel}</div>
+            <div className="text-xs text-muted-foreground truncate">
+              <CallStatus calling={calling} since={since} />
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+          {videoCount > 0 && (
+            <button
+              type="button"
+              onClick={onShowVideo}
+              aria-label="Show video"
+              title="Show video"
+              className="inline-flex items-center gap-1.5 rounded-md h-8 touch:h-11 px-2.5 shrink-0 bg-primary/20 text-primary hover:bg-primary/30 text-xs font-medium transition-colors"
+            >
+              <Video className="size-4" />
+              <span className="tabular-nums">{videoCount}</span>
+            </button>
+          )}
+          <MicButton />
+          <CameraButton />
+          <ScreenShareButton />
+          <RaiseHandButton />
+          <ReactionsMenu />
+          <DeviceMenu />
+          <LeaveButton />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1155,16 +1590,14 @@ export function CallStage({
   callLabel?: React.ReactNode;
   open: boolean;
 }) {
-  const { setStageOpen, stageFloating, floatingVariant } = useCall();
+  const { setStageOpen, stageFloating, floatingVariant, stageDocked, exiting, activeCall } = useCall();
+  const isDesktop = useIsDesktop();
   const { enabled: endToEndEncrypted, hevcScreenShare } = useCallSignals();
   const participants = useParticipants();
   const resolveIdentity = useVoiceIdentity();
   const participantCount = uniqueParticipantCount(participants, resolveIdentity);
-  const speakingParticipants = useSpeakingParticipants();
-  const speakingIds = useMemo(
-    () => new Set(speakingParticipants.map((p) => p.identity)),
-    [speakingParticipants],
-  );
+  const speakers = useSpeakers();
+  const speakingIds = useMemo(() => new Set(speakers), [speakers]);
 
   const [focusKey, setFocusKey] = useState<string | null>(null);
 
@@ -1219,6 +1652,28 @@ export function CallStage({
       avatarPubkeys.add(identity.pubkey);
       return true;
     });
+  // The strip's roster: one avatar per person, camera or not.
+  const rosterPubkeys = new Set<string>();
+  const roster = [...participants].sort((l, r) => Number(r.isLocal) - Number(l.isLocal)).filter((participant) => {
+    if (isHevcScreenShareParticipant(participant, resolveIdentity)) return false;
+    const identity = resolveIdentity(participant.identity);
+    if (!identity.verified) return true;
+    if (rosterPubkeys.has(identity.pubkey)) return false;
+    rosterPubkeys.add(identity.pubkey);
+    return true;
+  });
+
+  // The clock starts when someone else is first in the room (a DM is "Calling…"
+  // until then), or at join in a channel. Kept here: the strip remounts.
+  const joinedAt = useRef(Date.now());
+  const [othersSince, setOthersSince] = useState<number | null>(null);
+  const hasOthers = participantCount > 1;
+  useEffect(() => {
+    if (hasOthers) setOthersSince((at) => at ?? Date.now());
+  }, [hasOthers]);
+  const isDmCall = Boolean(activeCall?.dm);
+  const calling = isDmCall && othersSince === null;
+  const clockSince = isDmCall ? othersSince ?? joinedAt.current : joinedAt.current;
 
   // Auto-expand and spotlight only on a NEW share, so a user-closed stage stays closed.
   const remoteScreenShareKeys = videoTracks
@@ -1242,17 +1697,17 @@ export function CallStage({
 
   // Auto-expand when video is already rolling on join. One-shot: the first video
   // sighting consumes it, so a later camera doesn't reopen a closed stage.
-  const mountedAt = useRef(Date.now());
   const sawVideo = useRef(false);
   const hasVideoTracks = videoTracks.length > 0 || Boolean(localHevcPreview);
   useEffect(() => {
     if (!hasVideoTracks || sawVideo.current) return;
     sawVideo.current = true;
-    if (Date.now() - mountedAt.current <= JOIN_VIDEO_EXPAND_WINDOW_MS) setStageOpen(true);
+    if (Date.now() - joinedAt.current <= JOIN_VIDEO_EXPAND_WINDOW_MS) setStageOpen(true);
   }, [hasVideoTracks, setStageOpen]);
 
   const tiles = useMemo(() => {
-    const list: { key: string; render: (focused: boolean) => React.ReactNode }[] = [];
+    // `large`: the tile has the stage to itself (a bigger avatar) without being focused.
+    const list: { key: string; render: (focused: boolean, large?: boolean) => React.ReactNode }[] = [];
     if (localHevcPreview && hevcScreenShare) {
       list.push({
         key: LOCAL_HEVC_SCREEN_SHARE_KEY,
@@ -1275,11 +1730,12 @@ export function CallStage({
       const key = trackTileKey(trackRef);
       list.push({
         key,
-        render: (focused) => (
+        render: (focused, large) => (
           <VideoTile
             trackRef={trackRef}
             isSpeaking={speakingIds.has(trackRef.participant.identity)}
             focused={focused}
+            large={large}
             onToggleFocus={() => setFocusKey((cur) => (cur === key ? null : key))}
           />
         ),
@@ -1289,11 +1745,12 @@ export function CallStage({
       const key = participantTileKey(p);
       list.push({
         key,
-        render: (focused) => (
+        render: (focused, large) => (
           <AvatarTile
             participant={p}
             isSpeaking={speakingIds.has(p.identity)}
             focused={focused}
+            large={large}
             onToggleFocus={() => setFocusKey((cur) => (cur === key ? null : key))}
           />
         ),
@@ -1355,16 +1812,16 @@ export function CallStage({
     },
     [sortedShareKeys, selectedShareKey],
   );
-  // speakingParticipants is loudest-first.
+  // `speakers` is loudest-first.
   const speakingKey = useMemo(() => {
-    for (const p of speakingParticipants) {
-      const cam = tiles.find((t) => t.key === `${p.identity}:${Track.Source.Camera}`);
+    for (const identity of speakers) {
+      const cam = tiles.find((t) => t.key === `${identity}:${Track.Source.Camera}`);
       if (cam) return cam.key;
-      const avatar = tiles.find((t) => t.key === participantTileKey(p));
+      const avatar = tiles.find((t) => t.key === `${identity}:avatar`);
       if (avatar) return avatar.key;
     }
     return null;
-  }, [speakingParticipants, tiles]);
+  }, [speakers, tiles]);
   const fallbackKey =
     tiles.find((t) => t.key.endsWith(`:${Track.Source.Camera}`))?.key ?? tiles[0]?.key ?? null;
 
@@ -1433,9 +1890,19 @@ export function CallStage({
   );
 
   const [theater, setTheater] = useState(false);
+  // Theater shows video; with none left (or the stage collapsed) it's back to the chat.
+  // A DM keeps its full-screen hero when video stops.
   useEffect(() => {
-    if (!open) setTheater(false);
-  }, [open]);
+    if (!open || (!hasVideoTracks && !isDmCall)) setTheater(false);
+  }, [open, hasVideoTracks, isDmCall]);
+  // On a phone, video takes the screen the moment it starts (the Signal model);
+  // leaving theater returns to the chat with the stage docked above it.
+  const hadVideo = useRef(false);
+  useEffect(() => {
+    const started = hasVideoTracks && !hadVideo.current;
+    hadVideo.current = hasVideoTracks;
+    if (started && !isDesktop && stageDocked && open) setTheater(true);
+  }, [hasVideoTracks, isDesktop, stageDocked, open]);
   useEffect(() => {
     if (!theater) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1444,10 +1911,34 @@ export function CallStage({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [theater]);
+  useAndroidBack(() => {
+    setTheater(false);
+    return true;
+  }, theater, "overlay");
+
+  // Over video, theater's chrome floats and fades after idle like a player's.
+  const [theaterEl, setTheaterEl] = useState<HTMLDivElement | null>(null);
+  const [theaterChromeVisible, setTheaterChromeVisible] = useState(false);
+  const overlayChrome = theater && hasVideoTracks;
+  useFullscreenControlsAutoHide(theaterEl, overlayChrome, setTheaterChromeVisible);
+  const theaterChromeHidden = overlayChrome && !theaterChromeVisible;
 
   const [gridRef, gridSize] = useElementSize<HTMLDivElement>();
   const GRID_GAP = 8; // matches gap-2
   const grid = fitGrid(tiles.length, gridSize.width, gridSize.height, GRID_GAP);
+
+  // 1:1 is a conversation, not a grid: the other person fills the stage and our
+  // camera is a corner inset (absent while it's off).
+  const localIdentity = participants.find((p) => p.isLocal)?.identity;
+  const isLocalTile = (key: string) =>
+    localIdentity !== undefined && key.startsWith(`${localIdentity}:`);
+  const oneOnOne =
+    participantCount === 2 && screenShareKeys.length === 0 && tiles.length <= 2
+      ? {
+          remote: tiles.find((t) => !isLocalTile(t.key)),
+          self: tiles.find((t) => t.key === `${localIdentity}:${Track.Source.Camera}`),
+        }
+      : null;
 
   const header = (
     <div
@@ -1459,6 +1950,9 @@ export function CallStage({
       }
     >
       <span className="text-sm font-medium truncate min-w-0 flex-1">{callLabel}</span>
+      <span className="text-xs text-muted-foreground shrink-0">
+        <CallStatus calling={calling} since={clockSince} />
+      </span>
       {focused && (
         <button
           type="button"
@@ -1469,27 +1963,30 @@ export function CallStage({
           Show all
         </button>
       )}
-      <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-        {participantCount} in call
-      </span>
-      <RaiseHandButton />
-      <ReactionsMenu />
+      {participantCount > 2 && (
+        <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+          {participantCount} in call
+        </span>
+      )}
       <button
         type="button"
         aria-label={theater ? "Exit theater mode" : "Theater mode"}
-        className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+        className="shrink-0 rounded-md p-1 touch:p-2.5 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
         onClick={() => setTheater((t) => !t)}
       >
         {theater ? <Shrink className="size-4" /> : <Monitor className="size-4" />}
       </button>
-      <button
-        type="button"
-        aria-label="Hide call stage"
-        className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
-        onClick={() => setStageOpen(false)}
-      >
-        <X className="size-4" />
-      </button>
+      {!theater && (
+        <button
+          type="button"
+          aria-label="Hide video"
+          title="Hide video"
+          className="shrink-0 rounded-md p-1 touch:p-2.5 text-muted-foreground hover:text-foreground hover:bg-foreground/10"
+          onClick={() => setStageOpen(false)}
+        >
+          <ChevronUp className="size-4" />
+        </button>
+      )}
     </div>
   );
 
@@ -1509,6 +2006,16 @@ export function CallStage({
                     {t.render(false)}
                   </div>
                 ))}
+            </div>
+          )}
+        </div>
+      ) : oneOnOne?.remote ? (
+        <div className="relative flex-1 min-h-0 p-3 pt-0">
+          {/* A camera fills edge to edge; an avatar tile gets its large avatar. */}
+          {oneOnOne.remote.render(false, true)}
+          {oneOnOne.self && (
+            <div className="absolute bottom-5 right-5 z-10 w-1/4 min-w-24 max-w-44 aspect-video shadow-lg">
+              {oneOnOne.self.render(false)}
             </div>
           )}
         </div>
@@ -1534,19 +2041,78 @@ export function CallStage({
     </div>
   );
 
+  // A DM with no video on screen is the hero, docked or full screen.
+  const heroMode = isDmCall && (!open || !hasVideoTracks);
+  const hero = (variant: "docked" | "theater") => (
+    <CallHero
+      variant={variant}
+      callLabel={callLabel}
+      self={participants.find((p) => p.isLocal)}
+      peer={roster.find((p) => !p.isLocal)}
+      peerPubkey={activeCall?.dm?.peer}
+      speakingIds={speakingIds}
+      calling={calling}
+      since={clockSince}
+      videoCount={hasVideoTracks ? tiles.length - avatarOnly.length : 0}
+      onShowVideo={() => setStageOpen(true)}
+      onToggleTheater={() => {
+        setStageOpen(true);
+        setTheater((t) => !t);
+      }}
+      exiting={exiting}
+    />
+  );
+
+  if (theater && heroMode) {
+    return createPortal(
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Call"
+        className="fixed inset-0 z-50 animate-in fade-in-0 duration-150"
+      >
+        {hero("theater")}
+      </div>,
+      document.body,
+    );
+  }
+
   if (theater) {
     return createPortal(
       // A dialog, so type-to-focus doesn't route keys to the chat underneath.
       <div
+        ref={setTheaterEl}
         role="dialog"
         aria-modal="true"
         aria-label="Call"
         className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm animate-in fade-in-0 duration-150"
       >
-        {header}
+        <div
+          className={cn(
+            "transition-opacity duration-200",
+            overlayChrome && "absolute inset-x-0 top-0 z-40 bg-gradient-to-b from-background/90 to-transparent",
+            theaterChromeHidden && "pointer-events-none opacity-0",
+          )}
+        >
+          {header}
+        </div>
         {body}
-        {/* The fixed call bar is behind this overlay, so theater has its own controls. */}
-        <StageControls className="pb-[max(0.375rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]" />
+        {/* The call bar is behind this overlay, so theater has its own controls. */}
+        <div
+          data-fullscreen-controls=""
+          className={cn(
+            "transition-[opacity,transform] duration-200",
+            overlayChrome && "absolute inset-x-0 bottom-0 z-40",
+            theaterChromeHidden && "pointer-events-none translate-y-2 opacity-0",
+          )}
+        >
+          <StageControls
+            className={cn(
+              "pb-[max(0.375rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]",
+              overlayChrome && "border-t-0 bg-background/90 backdrop-blur-md",
+            )}
+          />
+        </div>
       </div>,
       document.body,
     );
@@ -1601,16 +2167,33 @@ export function CallStage({
     );
   }
 
+  // Docked: the stage only while there is video to show (and it's not
+  // collapsed); otherwise a DM's hero or the strip, sized to their content.
+  if (heroMode) return hero("docked");
+  if (!open || !hasVideoTracks || exiting) {
+    return (
+      <CallStrip
+        callLabel={callLabel}
+        roster={roster}
+        speakingIds={speakingIds}
+        calling={calling}
+        since={clockSince}
+        videoCount={hasVideoTracks ? tiles.length - avatarOnly.length : 0}
+        onShowVideo={() => setStageOpen(true)}
+        exiting={exiting}
+      />
+    );
+  }
+
   return (
     <div
       className={cn(
-        "shrink-0 mx-2 overflow-hidden ease-out",
+        "shrink-0 mx-2 mt-2 overflow-hidden ease-out animate-in fade-in-0 duration-200",
         // No transition while dragging (it would lag the pointer).
-        dockedResize.current ? "" : "transition-all duration-200",
-        open ? "mt-2 opacity-100" : "mt-0 max-h-0 opacity-0",
+        dockedResize.current ? "" : "transition-[max-height] duration-200",
       )}
       // Must clear the resizable box plus its top margin.
-      style={open ? { maxHeight: dockedHeight + 16 } : undefined}
+      style={{ maxHeight: dockedHeight + 16 }}
     >
       <div
         className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-col"
@@ -1618,6 +2201,7 @@ export function CallStage({
       >
         {header}
         {body}
+        <StageControls />
         <div
           onPointerDown={beginDockedResize}
           role="separator"

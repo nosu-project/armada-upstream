@@ -1,7 +1,7 @@
 import { ConnectionState, RoomEvent, type Room } from "livekit-client";
 
 /** LiveKit's `webAudioMix` context; private in its typings, replaced on every reconnect after a close. */
-function contextOf(room: Room): AudioContext | undefined {
+export function contextOf(room: Room): AudioContext | undefined {
   return (room as unknown as { audioContext?: AudioContext }).audioContext;
 }
 

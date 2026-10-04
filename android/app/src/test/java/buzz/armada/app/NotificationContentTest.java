@@ -87,6 +87,15 @@ public class NotificationContentTest {
     }
 
     @Test
+    public void resolvesMentionAfterUnicodeWhitespace() {
+        // JS `\s` covers NBSP and ideographic space; the Java pattern must too.
+        assertEquals("hi\u00A0@Alex",
+                NotificationContent.clean("hi\u00A0nostr:" + NPUB1, named(PK1, "Alex")));
+        assertEquals("hi\u3000@Alex",
+                NotificationContent.clean("hi\u3000nostr:" + NPUB1, named(PK1, "Alex")));
+    }
+
+    @Test
     public void neverRewritesNpubInsideUrl() {
         String[] urls = {
                 "https://ditto.pub/" + NPUB1,

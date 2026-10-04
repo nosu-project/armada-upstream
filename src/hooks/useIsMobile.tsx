@@ -20,10 +20,12 @@ export function useIsMobile(): boolean {
 }
 
 /**
- * Touch-first devices without hover. Use this — not {@link useIsMobile} — to gate touch-only
- * interactions, so a narrow desktop window keeps hover behaviour.
+ * Touch-first devices: the PRIMARY pointer is a finger. Use this — not {@link useIsMobile} — to
+ * gate touch-only interactions, so a narrow desktop window keeps hover behaviour. Not also
+ * `(hover: none)`: some Android WebViews report `hover: hover` on a phone. Keep in step with
+ * the `touch:` variant (tailwind.config.ts) and index.css.
  */
-const TOUCH_QUERY = "(hover: none) and (pointer: coarse)";
+const TOUCH_QUERY = "(pointer: coarse)";
 
 // One shared query list + listener (per-row matchMedia showed up in profiles). Keyed on
 // `window.matchMedia` so a test stub is asked afresh.

@@ -53,7 +53,7 @@ export function MediaFallback({
             "absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted text-muted-foreground hover:text-foreground transition-colors",
             className,
           )}
-          title={`${label} is ${formatBytes(oversized)} — tap to decrypt anyway`}
+          title={`${label} is ${formatBytes(oversized)}. Tap to decrypt anyway`}
           aria-label={`Decrypt ${label.toLowerCase()} anyway`}
         >
           <Lock className="size-5" />
@@ -94,7 +94,7 @@ export function MediaFallback({
           "absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted text-muted-foreground hover:text-foreground transition-colors",
           className,
         )}
-        title={`${label} unavailable — tap to retry`}
+        title={`${label} unavailable. Tap to retry`}
         aria-label={`Retry loading ${label.toLowerCase()}`}
       >
         <ImageOff className="size-5" />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isCommunityGuest, isGitContinuation, mergeChannelTimeline } from "./channelTimeline";
+import { isGitContinuation, mergeChannelTimeline } from "./channelTimeline";
 import { parseCIRun } from "@/lib/ci";
 import type { ChatMsg } from "./transport";
 import type { GitStatusKind, GitTicket, GitTimelineActivity } from "@/lib/gitActivity";
@@ -22,11 +22,6 @@ const ciRun = (workflow: string, createdAt: number): GitTimelineActivity => ({
 describe("mixed channel timeline", () => {
   it("merges chat and Git chronologically with a deterministic id tie-break", () => {
     expect(mergeChannelTimeline([chat("z", 20), chat("a", 10)], [git("c", 20)]).map((entry) => entry.id)).toEqual(["chat:a", "chat:z", "git:c"]);
-  });
-
-  it("marks only roster members as community members", () => {
-    expect(isCommunityGuest(pk, new Set())).toBe(true);
-    expect(isCommunityGuest(pk, new Set([pk]))).toBe(false);
   });
 
   it("groups only adjacent comments on the same ticket", () => {

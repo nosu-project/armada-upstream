@@ -3,8 +3,12 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button-variants"
+import { useBackDismiss } from "@/hooks/useAndroidBack"
 
-const AlertDialog = AlertDialogPrimitive.Root
+const AlertDialog = (props: React.ComponentProps<typeof AlertDialogPrimitive.Root>) => (
+  <AlertDialogPrimitive.Root {...props} {...useBackDismiss(props)} />
+)
+AlertDialog.displayName = "AlertDialog"
 
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 

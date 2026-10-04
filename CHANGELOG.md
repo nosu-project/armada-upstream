@@ -4,6 +4,42 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.64.2] - 2026-10-04
+
+The docked call now fits its content and carries its own controls, with a
+compact strip for voice calls and a side-by-side view for voice DMs. Android
+gains an in-call output picker and steadier call audio, back closes the open
+menu or dialog, and profile pictures can be encrypted and carry fallbacks.
+
+### Added
+- Pick the call's audio output (speaker, earpiece, headset, Bluetooth) from the in-call audio menu on Android 12+
+- The ongoing-call notification on Android shows a timer and a mute button
+- Profile pictures and banners record their size and a preview, list fallback copies, and can be encrypted
+- The reply banner in the composer shows the text of the message being replied to
+- Settings search opens from a magnifier in the header
+
+### Changed
+- The docked call sizes itself to the call: a one-row strip for voice, both people side by side for a voice DM, and a resizable stage only while there is video; it carries the call controls itself
+- On a phone, video calls open full screen with controls that hide on their own, and DM calls read "Calling…" until the other person joins
+- Relay-hosted server channels share the community chat header, showing the channel's description or topic
+- Git issues and pull requests open in the same thread panel as chat threads
+- "Start minimized" only appears when "Launch on startup" is on
+- The tab's badge counts only direct messages and mentions
+- On touch screens, a composer that wraps moves onto its own full-width row
+- Tighter, simpler wording across settings, onboarding, communities and calls
+- Remote signer requests are re-sent unchanged for a while before being signed again, and Amber is launched at a pace it accepts
+- Sign-in prompts from relays are spaced out per relay, for at most a minute
+
+### Fixed
+- Android back closes the open menu, dialog, sheet or emoji picker instead of leaving the screen, and returns to the inbox from message requests
+- Call audio on Android stays in call mode through rejoins and settings changes, and the volume keys control the call
+- Typing in the composer no longer makes the timeline jump when it shrinks while you're reading back
+- Right-clicking an image in the lightbox no longer opens the message menu
+- Mention notifications on Android match correctly
+- Your own uploads show right away from the local file
+- Community icons in the sidebar appear without waiting to decrypt
+- Uploaded photos keep the right orientation on older browsers
+
 ## [0.64.1] - 2026-10-03
 
 Themes can be tried on before applying, carry a background image and credit

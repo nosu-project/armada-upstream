@@ -4,7 +4,7 @@
  * the push service worker can bundle it.
  */
 
-import { bytesToBase64 } from "@/lib/fileBytes";
+import { bytesToBase64, sniffImageMime } from "@/lib/fileBytes";
 
 /** Longest edge drawn; a notification shows a face at well under this. */
 export const NOTIFICATION_ICON_EDGE = 256;
@@ -65,6 +65,20 @@ export async function notificationIconDataUrl(
       if (url.length <= MAX_NOTIFICATION_ICON_CHARS) return url;
     }
     return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A media-policy URL as a notification icon `data:` URL; undefined if unfetchable (CORS) or too big. */
+export async function fetchNotificationIcon(url: string | undefined): Promise<string | undefined> {
+  if (!url) return undefined;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return undefined;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const mime = sniffImageMime(bytes) ?? res.headers.get("content-type") ?? "";
+    return await notificationIconDataUrl(bytes, mime);
   } catch {
     return undefined;
   }

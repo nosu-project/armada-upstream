@@ -16,12 +16,12 @@ function renderDialog() {
 describe("AccountStandingDialog", () => {
   it("keeps the punchline verbatim", () => {
     renderDialog();
-    expect(screen.getByRole("button", { name: "No score. No strikes. We can't ban you." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "We can't ban you." })).toBeInTheDocument();
   });
 
   it("toggles the explanation on tap, since touch never hovers", () => {
     renderDialog();
-    const punchline = screen.getByRole("button", { name: "No score. No strikes. We can't ban you." });
+    const punchline = screen.getByRole("button", { name: "We can't ban you." });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
     // A real tap: pointerdown and focus precede the click. Radix's trigger

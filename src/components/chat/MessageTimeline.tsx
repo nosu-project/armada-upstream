@@ -105,7 +105,7 @@ function KeyRotationDivider() {
     <div
       className="flex items-center gap-3 px-2 py-1 select-none"
       role="separator"
-      aria-label="Key rotated — earlier messages use a previous key"
+      aria-label="Key rotated. Earlier messages use a previous key"
     >
       <div className="h-px flex-1 bg-amber-500/50" />
       <span
@@ -279,7 +279,7 @@ const TimelineSkeleton = memo(function TimelineSkeleton() {
       {[...SKELETON_ROWS, ...SKELETON_ROWS].map((row, i) => (
         <div
           key={i}
-          className={cn("flex items-start gap-3 px-2.5", row.continuation ? "py-0.5" : "py-1.5")}
+          className={cn("flex items-start gap-3 px-2.5", row.continuation ? "py-0.5" : "pt-1.5 pb-0.5")}
         >
           {row.continuation ? (
             <div className="w-10 shrink-0" />
@@ -680,15 +680,25 @@ export function MessageTimeline({
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
+    let viewportHeight = el.clientHeight;
     const ro = new ResizeObserver(() => {
       if (pinBottomRef.current || pendingJumpRef.current) return;
+      const resized = el.clientHeight !== viewportHeight;
+      viewportHeight = el.clientHeight;
       if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
-      else stickToBottom();
+      else if (resized && distanceRef.current > 1) {
+        // The pane resized under a reader just short of the bottom (the composer
+        // grew a line): keep what they're reading still rather than shifting it.
+        distanceRef.current = distanceFromBottom(el);
+        lastScrollTopRef.current = clampedScrollTop(el);
+        setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
+        captureReadingAnchor();
+      } else stickToBottom();
     });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [listVisible, restoreReadingAnchor, stickToBottom]);
+  }, [listVisible, captureReadingAnchor, restoreReadingAnchor, stickToBottom]);
 
   /**
    * Near the top: reveal loaded messages, else request an older page. Only when

@@ -198,15 +198,15 @@ export function PinnedBar({
             <Loader2 className={cn("size-3 shrink-0", isRefreshingEdits && "animate-spin")} />
             {isRefreshingEdits
               ? "Publishing the revision so later members see it too…"
-              : `${staleEdits} pin${staleEdits === 1 ? "" : "s"} edited — publishing the revision shortly.`}
+              : `${staleEdits} pin${staleEdits === 1 ? "" : "s"} edited. Publishing the revision shortly.`}
             {!isRefreshingEdits && <span className="ml-auto shrink-0 underline">Now</span>}
           </button>
         )}
         {dark && pins.length === 0 ? (
           <p className="flex items-center gap-2 px-2 py-3 text-[12px] text-muted-foreground">
             <Lock className="size-3.5 shrink-0" />
-            This channel has pins from before you joined. They were sealed with keys you don't hold —
-            an admin can republish them to bring them back.
+            This channel has pins from before you joined. They were sealed with keys you don't hold.
+            An admin can republish them to bring them back.
           </p>
         ) : (
           <div className="max-h-56 overflow-y-auto space-y-0.5 pr-0.5">

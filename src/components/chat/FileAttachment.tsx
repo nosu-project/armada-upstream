@@ -181,7 +181,7 @@ export function FileAttachment({ url, mime, name, size, encryption, fallbacks, t
         <span className="block truncate text-sm font-medium">{displayName}</span>
         <span className="block text-[11px] text-muted-foreground tabular-nums">
           {status === "error"
-            ? "Download failed — tap to retry"
+            ? "Download failed. Tap to retry"
             : [kind, size ? formatBytes(size) : null, "Tap to download"].filter(Boolean).join(" · ")}
         </span>
       </span>

@@ -11,6 +11,7 @@ import {
   Headphones,
   Loader2,
   Mic,
+  PictureInPicture2,
   ScreenShare,
   Settings2,
   Video,
@@ -22,7 +23,7 @@ import "@livekit/components-styles";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
-import { useCallback, useContext, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +37,9 @@ import { CameraButton, LeaveButton, MicButton, ScreenShareButton } from "@/compo
 import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useCallRoutes } from "@/hooks/useCallRoutes";
+import { toast } from "@/hooks/useToast";
+import { routeLabel } from "@/lib/callRoutes";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
@@ -44,6 +48,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import {
   audioDeviceLabel,
   getAudioProcessing,
+  platformRoutesCallAudio,
   rememberVoiceDevice,
   setAudioProcessing,
   supportsSpeakerSelection,
@@ -52,6 +57,31 @@ import {
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { rnnoiseSupported } from "@/lib/rnnoiseSupport";
 import { cn } from "@/lib/utils";
+
+/**
+ * Whether `kind` is audio with unnamed devices, so a capture is worth opening to
+ * read the names. Never for cameras: an audio menu must not raise the camera
+ * prompt, and on Android a pending prompt stalls every later getUserMedia.
+ */
+function useNeedsAudioLabels(kind: MediaDeviceKind): boolean {
+  const [needs, setNeeds] = useState(false);
+  useEffect(() => {
+    if (kind === "videoinput") return;
+    let cancelled = false;
+    navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((list) => {
+        // The default entry stays unlabeled on Android even with a grant.
+        const unnamed = list.some((d) => d.kind === kind && d.deviceId && d.deviceId !== "default" && !d.label);
+        if (!cancelled) setNeeds(unnamed);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [kind]);
+  return needs;
+}
 
 function DeviceSelectGroup({
   kind,
@@ -62,10 +92,9 @@ function DeviceSelectGroup({
   label: string;
   icon: React.ReactNode;
 }) {
-  // `requestPermissions` needs an active mic grant, which we have once in a call.
   const { devices, activeDeviceId, setActiveMediaDevice } = useMediaDeviceSelect({
     kind,
-    requestPermissions: true,
+    requestPermissions: useNeedsAudioLabels(kind),
   });
 
   if (devices.length === 0) return null;
@@ -76,7 +105,7 @@ function DeviceSelectGroup({
         {icon}
         {label}
       </DropdownMenuLabel>
-      {devices.map((device) => {
+      {devices.map((device, index) => {
         const active = device.deviceId === activeDeviceId;
         return (
           <DropdownMenuItem
@@ -88,7 +117,7 @@ function DeviceSelectGroup({
             className="gap-2"
           >
             <Check className={cn("size-3.5 shrink-0", active ? "opacity-100" : "opacity-0")} />
-            <span className="truncate">{audioDeviceLabel(device, "Unnamed device")}</span>
+            <span className="truncate">{audioDeviceLabel(device, `${label} ${index + 1}`)}</span>
           </DropdownMenuItem>
         );
       })}
@@ -96,8 +125,48 @@ function DeviceSelectGroup({
   );
 }
 
+/**
+ * Android's output route, chosen natively (CallRouteSelector): the system's
+ * communication devices, since Chromium's device list reroutes the whole
+ * phone and never offers the earpiece.
+ */
+function CallRouteGroup() {
+  const { supported, routes, active, select } = useCallRoutes();
+  if (!supported || routes.length === 0) return null;
+
+  return (
+    <>
+      <DropdownMenuLabel className="flex items-center gap-2 text-xs">
+        <Volume2 className="size-3.5" />
+        Output
+      </DropdownMenuLabel>
+      {routes.map((route) => (
+        <DropdownMenuItem
+          key={route.id}
+          onSelect={() => {
+            void select(route.id).then((ok) => {
+              if (!ok) {
+                toast({
+                  title: "Couldn't switch output",
+                  description: `${routeLabel(route)} is no longer available.`,
+                  variant: "destructive",
+                });
+              }
+            });
+          }}
+          className="gap-2"
+        >
+          <Check className={cn("size-3.5 shrink-0", route.id === active ? "opacity-100" : "opacity-0")} />
+          <span className="truncate">{routeLabel(route)}</span>
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
 /** Call/audio settings gear: device pickers, audio processing and per-participant volume. */
-function DeviceMenu({ className }: { className?: string }) {
+export function DeviceMenu({ className }: { className?: string }) {
   const { localParticipant } = useLocalParticipant();
   const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
 
@@ -161,18 +230,23 @@ function DeviceMenu({ className }: { className?: string }) {
         <TooltipContent>Audio settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end" className="max-w-72 max-h-[70vh] overflow-y-auto">
-        <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
-        {supportsSpeakerSelection() && (
+        {platformRoutesCallAudio() && <CallRouteGroup />}
+        {!platformRoutesCallAudio() && (
           <>
+            <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
+            {supportsSpeakerSelection() && (
+              <>
+                <DropdownMenuSeparator />
+                <DeviceSelectGroup
+                  kind="audiooutput"
+                  label="Speaker"
+                  icon={<Volume2 className="size-3.5" />}
+                />
+              </>
+            )}
             <DropdownMenuSeparator />
-            <DeviceSelectGroup
-              kind="audiooutput"
-              label="Speaker"
-              icon={<Volume2 className="size-3.5" />}
-            />
           </>
         )}
-        <DropdownMenuSeparator />
         <DeviceSelectGroup kind="videoinput" label="Camera" icon={<Video className="size-3.5" />} />
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-xs">Processing</DropdownMenuLabel>
@@ -265,7 +339,7 @@ interface InCallViewProps {
   label?: React.ReactNode;
   onLabelClick?: () => void;
   stacked?: boolean;
-  /** Single-row layout for the fixed mobile bar, without inline roster. */
+  /** The fixed mobile bar: a larger label, no divider. */
   compact?: boolean;
 }
 
@@ -274,7 +348,6 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   // `stageVisible`, not `stageOpen`: away from the call's channel the visible
   // stage is the floating window, which `stageOpen` doesn't describe.
   const { stageVisible, toggleStage } = useCall();
-  const participants = useParticipants();
   const connectionState = useConnectionState();
   const rejoining = useContext(VoiceRejoiningContext);
 
@@ -301,6 +374,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     );
   }
 
+  const labelClass = cn("flex-1 min-w-0 truncate font-semibold", compact ? "text-sm" : "text-xs");
   const headerEl = (
     <div className="flex items-center gap-1.5 min-w-0 px-1">
       <Headphones className="size-4 text-success shrink-0" />
@@ -309,61 +383,42 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           <button
             type="button"
             onClick={onLabelClick}
-            className="flex-1 min-w-0 truncate text-xs font-semibold text-foreground hover:underline text-left"
+            className={cn(labelClass, "text-foreground hover:underline text-left")}
           >
             {label}
           </button>
         ) : (
-          <span className="flex-1 min-w-0 truncate text-xs font-semibold text-foreground">
-            {label}
-          </span>
+          <span className={cn(labelClass, "text-foreground")}>{label}</span>
         )
       ) : (
-        <span className="flex-1 min-w-0 truncate text-xs font-semibold text-success">
-          {compact ? "Connected" : "Voice connected"}
-        </span>
+        <span className={cn(labelClass, "text-success")}>Voice connected</span>
       )}
-      <button
-        type="button"
-        onClick={toggleStage}
-        aria-label={stageVisible ? "Hide call stage" : "Show call stage"}
-        aria-pressed={stageVisible}
-        className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-[11px] font-medium text-foreground hover:bg-foreground/20"
-      >
-        <Video className="size-3.5" />
-        <span className="tabular-nums">{participants.length}</span>
-        <span>{stageVisible ? "Hide" : "Show"}</span>
-      </button>
     </div>
   );
-
-  if (compact) {
-    // Controls are a single `shrink-0` group and the header is the only flexible
-    // child, so a long label truncates instead of pushing controls past the clip edge.
-    return (
-      <div className="flex items-center gap-1.5 px-2 py-1.5 min-h-12">
-        <div className="flex-1 min-w-0">{headerEl}</div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <MicButton />
-          <CameraButton />
-          <ScreenShareButton />
-          <DeviceMenu />
-          <LeaveButton />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={cn("flex flex-col gap-1.5 px-2 py-2", stacked && "min-w-0")}>
       {headerEl}
-      <div className="flex items-center gap-1.5 pt-1.5 border-t border-foreground/10">
-        <div className="flex items-center gap-1.5">
-          <MicButton />
-          <CameraButton />
-          <ScreenShareButton />
-          <DeviceMenu />
-        </div>
+      <div className={cn("flex items-center gap-1.5", !compact && "pt-1.5 border-t border-foreground/10")}>
+        <MicButton />
+        <CameraButton />
+        <ScreenShareButton />
+        <DeviceMenu />
+        <button
+          type="button"
+          onClick={toggleStage}
+          aria-label={stageVisible ? "Hide call stage" : "Show call stage"}
+          aria-pressed={stageVisible}
+          title={stageVisible ? "Hide call stage" : "Show call stage"}
+          className={cn(
+            "shrink-0 inline-flex items-center justify-center rounded-md size-8 touch:size-11 transition-colors",
+            stageVisible
+              ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+              : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+          )}
+        >
+          <PictureInPicture2 className="size-4" />
+        </button>
         <div className="flex-1" />
         <LeaveButton />
       </div>
