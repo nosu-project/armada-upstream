@@ -473,7 +473,7 @@ export const ChannelRow = memo(function ChannelRow({
   // broker is NOT resolved per row (one query observer per channel on every page
   // switch); `handleJoinVoice` resolves it lazily.
   const fold = useVoicePresence(community, channel);
-  const { voiceRoomPubkeys } = useVoiceActivity();
+  const { voiceRoomPubkeys, streamingPubkeys } = useVoiceActivity();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
   const notificationLevel = community
@@ -570,6 +570,7 @@ export const ChannelRow = memo(function ChannelRow({
               participants={participants}
               speaking={speaking}
               muted={mutedVoice}
+              streaming={inCall ? streamingPubkeys : undefined}
               raised={raisedVoice}
             />
           )}

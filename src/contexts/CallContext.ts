@@ -125,6 +125,11 @@ export interface CallContextType {
   setSpeakingPubkeys: (pubkeys: Set<string>) => void;
   /** Internal: the connected room reports its live muted set here. */
   setMutedPubkeys: (pubkeys: Set<string>) => void;
+  /** Internal: the connected room reports who is screen sharing here. */
+  setStreamingPubkeys: (pubkeys: Set<string>) => void;
+  /** Opt into a streamer's screen share (pubkey, or bare identity if unverified) and show the stage. */
+  watchStream: (owner: string) => void;
+  stopWatchingStream: (owner: string) => void;
   /** Internal: the connected Concord room reports its raised-hand set here. */
   setRaisedHands: (pubkeys: Set<string>) => void;
   /** Internal: the connected room reports its live participant roster here. */

@@ -10,6 +10,10 @@ export interface VoiceActivityContextType {
   speakingPubkeys: ReadonlySet<string>;
   /** Pubkeys muted in the ACTIVE call (unverified Concord identities excluded). */
   mutedPubkeys: ReadonlySet<string>;
+  /** Pubkeys screen sharing in the ACTIVE call, watched or not. */
+  streamingPubkeys: ReadonlySet<string>;
+  /** Streamers this client has opted into watching (see ScreenShareWatchContext). */
+  watchedStreams: ReadonlySet<string>;
   /** Pubkeys with a raised hand (Concord calls only; see CallSignalsContext). */
   raisedHands: ReadonlySet<string>;
   /**

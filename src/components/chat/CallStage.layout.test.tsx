@@ -3,10 +3,12 @@ import { Track } from "livekit-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CallStage } from "./CallStage";
+import { ScreenShareWatchContext } from "@/contexts/ScreenShareWatchContext";
 
 const runtime = vi.hoisted(() => ({
   participants: [] as Array<Record<string, unknown>>,
   tracks: [] as Array<Record<string, unknown>>,
+  streaming: new Set<string>(),
   call: {
     stageFloating: false,
     floatingVariant: null as "desktop" | "mobile" | null,
@@ -51,7 +53,7 @@ vi.mock("@/hooks/useScopedDisplayName", () => ({
 }));
 vi.mock("@/contexts/VoiceIdentityContext", () => ({
   useVoiceIdentity: () => (identity: string) => ({
-    pubkey: identity === "local" ? "a".repeat(64) : "b".repeat(64),
+    pubkey: identity === "local" ? "a".repeat(64) : identity === "remote" ? "b".repeat(64) : identity.padEnd(64, "c"),
     verified: true,
   }),
 }));
@@ -62,7 +64,7 @@ vi.mock("@/hooks/useCall", () => ({
   useCall: () => ({ ...runtime.call, setStageOpen }),
 }));
 vi.mock("@/hooks/useVoiceActivity", () => ({
-  useVoiceActivity: () => ({ raisedHands: new Set() }),
+  useVoiceActivity: () => ({ raisedHands: new Set(), streamingPubkeys: runtime.streaming }),
 }));
 vi.mock("@/hooks/useUserVolume", () => ({
   useUserVolume: () => [1, vi.fn()],
@@ -78,6 +80,7 @@ function participant(identity: string, isLocal: boolean) {
     isMicrophoneEnabled: true,
     joinedAt: new Date(0),
     setVolume: vi.fn(),
+    getTrackPublication: () => undefined,
   };
 }
 
@@ -99,6 +102,7 @@ afterEach(() => {
   vi.mocked(window.matchMedia).mockImplementation(phoneMedia);
   runtime.participants = [];
   runtime.tracks = [];
+  runtime.streaming = new Set();
   runtime.call.stageDocked = true;
   runtime.call.exiting = false;
   runtime.call.activeCall = null;
@@ -106,15 +110,24 @@ afterEach(() => {
 });
 
 describe("docked call layout", () => {
-  it("shows a voice-only call as a strip with its controls, not a stage", () => {
+  it("shows a voice-only channel call as the hero with its controls, not a stage", () => {
     runtime.participants = [local, remote];
-    render(<CallStage open callLabel="Friend" />);
-    const strip = screen.getByRole("region", { name: "Call" });
-    expect(within(strip).getByTitle("Me (you)")).toBeInTheDocument();
-    expect(within(strip).getByTitle("Friend")).toBeInTheDocument();
-    expect(within(strip).getByRole("button", { name: "Leave call" })).toBeInTheDocument();
-    expect(within(strip).getByRole("button", { name: "Audio settings" })).toBeInTheDocument();
+    render(<CallStage open callLabel="#general" />);
+    const hero = screen.getByRole("region", { name: "Call" });
+    expect(within(hero).getByText("You")).toBeInTheDocument();
+    expect(within(hero).getByText("Friend")).toBeInTheDocument();
+    expect(within(hero).getByRole("button", { name: "Leave call" })).toBeInTheDocument();
+    expect(within(hero).getByRole("button", { name: "Audio settings" })).toBeInTheDocument();
     expect(screen.queryByRole("separator", { name: "Resize call pane" })).not.toBeInTheDocument();
+  });
+
+  it("folds a crowded room's extra people into a count", () => {
+    runtime.participants = [local, ...Array.from({ length: 9 }, (_, i) => participant(`remote-${i}`, false))];
+    render(<CallStage open callLabel="#general" />);
+    const hero = screen.getByRole("region", { name: "Call" });
+    expect(within(hero).getAllByText("Friend")).toHaveLength(7);
+    expect(within(hero).getByText("+2")).toBeInTheDocument();
+    expect(within(hero).getByText("You")).toBeInTheDocument();
   });
 
   it("reads Calling… in a DM until the peer is in the room, then runs the clock", () => {
@@ -129,7 +142,7 @@ describe("docked call layout", () => {
     expect(screen.getByText("0:00")).toBeInTheDocument();
   });
 
-  it("shows a voice-only DM as both people side by side, not a strip", () => {
+  it("shows a voice-only DM as both people side by side", () => {
     runtime.call.activeCall = { dm: { peer: "b".repeat(64) } };
     runtime.participants = [local, remote];
     render(<CallStage open callLabel="Friend call" />);
@@ -174,7 +187,7 @@ describe("docked call layout", () => {
     expect(setStageOpen).toHaveBeenCalledWith(false);
   });
 
-  it("keeps a collapsed stage as the strip, offering to show the video", () => {
+  it("keeps a collapsed stage as the hero, offering to show the video", () => {
     runtime.participants = [local, remote];
     runtime.tracks = [camera(remote)];
     render(<CallStage open={false} callLabel="Friend" />);
@@ -189,6 +202,43 @@ describe("docked call layout", () => {
     render(<CallStage open callLabel="Friend" />);
     expect(screen.getAllByTestId("video-track")).toHaveLength(1);
     expect(screen.queryByText(/\(you\)/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a late-joining streamer on screen in a crowded room", () => {
+    runtime.participants = [local, ...Array.from({ length: 9 }, (_, i) => participant(`remote-${i}`, false))];
+    runtime.streaming = new Set(["remote-8".padEnd(64, "c")]);
+    render(<CallStage open callLabel="#general" />);
+    const hero = screen.getByRole("region", { name: "Call" });
+    expect(within(hero).getAllByRole("button", { name: "Watch stream" })).toHaveLength(1);
+    expect(within(hero).getByText("+2")).toBeInTheDocument();
+  });
+
+  it("tunes into a streamer from the LIVE badge on their avatar", () => {
+    runtime.participants = [local, remote];
+    runtime.streaming = new Set(["b".repeat(64)]);
+    const watch = vi.fn();
+    render(
+      <ScreenShareWatchContext.Provider value={{ watching: new Set(), watch, stopWatching: vi.fn() }}>
+        <CallStage open callLabel="#general" />
+      </ScreenShareWatchContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Watch stream" }));
+    expect(watch).toHaveBeenCalledWith("b".repeat(64));
+  });
+
+  it("offers an unwatched screen share as a Watch stream tile, not its video", () => {
+    const sharer = {
+      ...participant("sharer", false),
+      getTrackPublication: (source: Track.Source) => (source === Track.Source.ScreenShare ? {} : undefined),
+    };
+    runtime.participants = [local, remote, sharer];
+    runtime.tracks = [
+      camera(remote),
+      { participant: sharer, source: Track.Source.ScreenShare, publication: { track: {}, isMuted: false, trackSid: "ss" } },
+    ];
+    render(<CallStage open callLabel="#general" />);
+    expect(screen.getAllByTestId("video-track")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /Watch stream/ })[0]).toBeInTheDocument();
   });
 
   it("insets our camera in a 1:1 video call", () => {

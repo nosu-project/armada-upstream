@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  EyeOff,
   Fullscreen,
   Hand,
   Info,
@@ -47,6 +48,8 @@ import {
 import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
 import { DeviceMenu } from "@/components/chat/VoiceBar";
 import { VoiceRejoiningContext } from "@/contexts/VoiceRejoiningContext";
+import { streamOwnerKey, useScreenShareWatch } from "@/contexts/ScreenShareWatchContext";
+import { LiveBadge } from "@/components/VoicePresence";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useSpeakers } from "@/hooks/useSpeakers";
@@ -64,6 +67,7 @@ import type { VoiceReactionEntry } from "@/concord/lib/voice";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { playScreenShareSound } from "@/lib/callSounds";
+import { pickVisible, type CallActivity } from "@/lib/callRanking";
 import {
   getAvatarShape,
   shapedAvatarSpeakingStyle,
@@ -616,6 +620,10 @@ function VideoTile({
   // before the publication clears, which rendered a black tile.
   const hasVideo = Boolean(trackRef.publication?.track) && !trackRef.publication?.isMuted;
   const isLocal = participant.isLocal;
+  const { streamingPubkeys } = useVoiceActivity();
+  const streaming = !isScreenShare && verified && streamingPubkeys.has(pubkey);
+  const { watch, stopWatching } = useScreenShareWatch();
+  const resolveIdentity = useVoiceIdentity();
   useApplyPlaybackVolumes(participant, pubkey);
   const hasVolumeMenu = !isLocal;
   const volumeTarget: PlaybackVolumeTarget = isScreenShare ? "screenShare" : "user";
@@ -691,6 +699,19 @@ function VideoTile({
           </Avatar>
         </>
       )}
+      {isScreenShare && !isLocal && (
+        <button
+          type="button"
+          onClick={() => {
+            if (document.fullscreenElement === tileRef.current) void document.exitFullscreen().catch(() => {});
+            stopWatching(streamOwnerKey(participant.identity, resolveIdentity));
+          }}
+          className="absolute top-1.5 left-1.5 z-10 inline-flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-1 text-xs text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        >
+          <EyeOff className="size-3.5" />
+          Stop watching
+        </button>
+      )}
       {isScreenShare && (
         <>
           <button
@@ -717,6 +738,12 @@ function VideoTile({
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {!isScreenShare && <RaisedHandBadge pubkey={pubkey} />}
+      {streaming && (
+        <LiveBadge
+          className="absolute bottom-1.5 right-1.5 z-10"
+          onWatch={isLocal ? undefined : () => watch(pubkey)}
+        />
+      )}
       {hasVolumeMenu ? (
         <VolumeMenu
           pubkey={pubkey}
@@ -935,6 +962,31 @@ function FocusButton({ focused, onClick }: { focused: boolean; onClick: () => vo
   );
 }
 
+/** A stream nobody here has opted into yet: who is live, and a button to watch. */
+function StreamInviteTile({ participant, owner }: { participant: Participant; owner: string }) {
+  const { pubkey, displayName, verified, metadata, imeta } = useTileDisplayName(participant);
+  const { watch } = useScreenShareWatch();
+  return (
+    <div className="relative flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-lg bg-black ring-1 ring-white/10">
+      <BlurredAvatarBackdrop picture={metadata?.picture} imeta={imeta?.picture} />
+      <div className="relative flex max-w-full items-center gap-1.5 px-3 text-sm text-white">
+        <LiveBadge onWatch={() => watch(owner)} />
+        <span className="truncate">
+          <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => watch(owner)}
+        className="relative inline-flex items-center gap-1.5 rounded-md bg-primary px-3 h-8 touch:h-11 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+      >
+        <ScreenShare className="size-4" />
+        Watch stream
+      </button>
+    </div>
+  );
+}
+
 /** Avatar tile for a participant without video, so the stage shows everyone. */
 function AvatarTile({
   participant,
@@ -954,6 +1006,9 @@ function AvatarTile({
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
   const muted = !participant.isMicrophoneEnabled;
+  const { streamingPubkeys } = useVoiceActivity();
+  const streaming = verified && streamingPubkeys.has(pubkey);
+  const { watch } = useScreenShareWatch();
   useApplyPlaybackVolumes(participant, pubkey);
 
   // Emoji-shaped avatars get a silhouette drop-shadow (a box ring would clip).
@@ -994,6 +1049,12 @@ function AvatarTile({
       </div>
       <FocusButton focused={focused} onClick={onToggleFocus} />
       <RaisedHandBadge pubkey={pubkey} />
+      {streaming && (
+        <LiveBadge
+          className="absolute bottom-1.5 right-1.5 z-10"
+          onWatch={isLocal ? undefined : () => watch(pubkey)}
+        />
+      )}
       {!isLocal ? (
         <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
           {nameplate}
@@ -1157,53 +1218,29 @@ function CallStatus({ calling, since }: { calling: boolean; since: number }) {
   return <CallClock since={since} />;
 }
 
-/** One participant in the strip: their avatar in its own shape, lit while speaking. */
-function StripAvatar({ participant, isSpeaking }: { participant: Participant; isSpeaking: boolean }) {
-  const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
-  const { raisedHands } = useVoiceActivity();
-  const shape = getAvatarShape(metadata);
-  const hasCustomShape = !!shape;
-  const muted = !participant.isMicrophoneEnabled;
-  const label = participant.isLocal ? `${displayName} (you)` : displayName;
+type HeroSize = "xl" | "lg" | "md" | "sm" | "xs";
 
-  const avatar = (
-    <div className="relative shrink-0" title={label} aria-label={muted ? `${label}, muted` : label}>
-      <div
-        className={cn(
-          "rounded-full transition-shadow",
-          !hasCustomShape && isSpeaking && "ring-2 ring-success ring-offset-2 ring-offset-chrome-deep",
-        )}
-        // A mask clips box rings, so a custom shape lights up as a silhouette.
-        style={hasCustomShape && isSpeaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined}
-      >
-        <Avatar shape={shape} className="size-8 touch:size-9">
-          <AvatarImage src={metadata?.picture} alt={displayName} />
-          <AvatarFallback className="bg-primary/20 text-primary text-xs">
-            {displayName[0]?.toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-      </div>
-      {muted && (
-        <span className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-chrome-deep text-destructive">
-          <MicOff className="size-2.5" />
-        </span>
-      )}
-      {raisedHands.has(pubkey) && (
-        <span className="absolute -top-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-amber-500 text-white">
-          <Hand className="size-2.5" />
-        </span>
-      )}
-    </div>
-  );
+const HERO_SIZES: Record<HeroSize, { avatar: string; initial: string; badge: string; icon: string }> = {
+  xl: { avatar: "size-32", initial: "text-4xl", badge: "size-8", icon: "size-4" },
+  lg: { avatar: "size-24", initial: "text-3xl", badge: "size-7", icon: "size-4" },
+  md: { avatar: "size-20", initial: "text-2xl", badge: "size-6", icon: "size-3.5" },
+  sm: { avatar: "size-16", initial: "text-xl", badge: "size-6", icon: "size-3.5" },
+  xs: { avatar: "size-12", initial: "text-base", badge: "size-5", icon: "size-3" },
+};
 
-  return participant.isLocal ? (
-    avatar
-  ) : (
-    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName} verified={verified}>
-      {avatar}
-    </VoiceUserContextMenu>
-  );
+/**
+ * Avatars shrink as the room fills, so a group call stays one compact cluster.
+ * A desktop chat pane is wide enough to keep a group large.
+ */
+function heroSize(count: number, theater: boolean, wide: boolean): HeroSize {
+  if (theater) return count <= 4 ? "xl" : count <= 9 ? "lg" : "md";
+  if (wide) return count <= 6 ? "lg" : "md";
+  return count <= 2 ? "md" : count <= 4 ? "sm" : "xs";
 }
+
+/** More than this many people and the rest collapse into a "+N". */
+const HERO_MAX_DOCKED = 8;
+const HERO_MAX_THEATER = 16;
 
 /** A hero avatar: large, in the person's own shape, glowing while they speak. */
 function HeroAvatarView({
@@ -1212,7 +1249,11 @@ function HeroAvatarView({
   caption,
   speaking,
   muted,
+  handRaised,
+  streaming,
+  onWatch,
   pending,
+  size,
   theater,
 }: {
   metadata: NostrMetadata | undefined;
@@ -1220,12 +1261,18 @@ function HeroAvatarView({
   caption: string;
   speaking: boolean;
   muted: boolean;
+  handRaised?: boolean;
+  streaming?: boolean;
+  /** Tunes into their stream; absent for our own. */
+  onWatch?: () => void;
   /** Not in the room yet (a DM still ringing). */
   pending?: boolean;
+  size: HeroSize;
   theater: boolean;
 }) {
   const shape = getAvatarShape(metadata);
   const hasCustomShape = !!shape;
+  const s = HERO_SIZES[size];
   return (
     <div className="flex flex-col items-center gap-2 min-w-0">
       <div className="relative">
@@ -1239,12 +1286,9 @@ function HeroAvatarView({
           // A mask clips box rings, so a custom shape glows as a silhouette.
           style={hasCustomShape && speaking ? { filter: shapedAvatarSpeakingStyle.filter } : undefined}
         >
-          <Avatar
-            shape={shape}
-            className={cn("shadow-xl", theater ? "size-32" : "size-20", pending && "opacity-80")}
-          >
+          <Avatar shape={shape} className={cn("shadow-xl", s.avatar, pending && "opacity-80")}>
             <AvatarImage src={metadata?.picture} alt={name} />
-            <AvatarFallback className={cn("bg-primary/20 text-primary", theater ? "text-4xl" : "text-2xl")}>
+            <AvatarFallback className={cn("bg-primary/20 text-primary", s.initial)}>
               {name[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
@@ -1253,12 +1297,26 @@ function HeroAvatarView({
           <span
             className={cn(
               "absolute bottom-0 right-0 flex items-center justify-center rounded-full bg-background text-destructive shadow",
-              theater ? "size-8" : "size-6",
+              s.badge,
             )}
             aria-label="Muted"
           >
-            <MicOff className={theater ? "size-4" : "size-3.5"} />
+            <MicOff className={s.icon} />
           </span>
+        )}
+        {handRaised && (
+          <span
+            className={cn(
+              "absolute top-0 right-0 flex items-center justify-center rounded-full bg-amber-500 text-white shadow",
+              s.badge,
+            )}
+            aria-label="Hand raised"
+          >
+            <Hand className={s.icon} />
+          </span>
+        )}
+        {streaming && (
+          <LiveBadge className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 shadow" onWatch={onWatch} />
         )}
       </div>
       <span className={cn("max-w-28 truncate text-muted-foreground", theater ? "text-sm" : "text-xs")}>
@@ -1271,13 +1329,18 @@ function HeroAvatarView({
 function HeroParticipant({
   participant,
   speaking,
+  size,
   theater,
 }: {
   participant: Participant;
   speaking: boolean;
+  size: HeroSize;
   theater: boolean;
 }) {
   const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
+  const { raisedHands, streamingPubkeys } = useVoiceActivity();
+  const { watch } = useScreenShareWatch();
+  const streaming = verified && streamingPubkeys.has(pubkey);
   const view = (
     <div>
       <HeroAvatarView
@@ -1286,6 +1349,10 @@ function HeroParticipant({
         caption={participant.isLocal ? "You" : displayName}
         speaking={speaking}
         muted={!participant.isMicrophoneEnabled}
+        handRaised={raisedHands.has(pubkey)}
+        streaming={streaming}
+        onWatch={participant.isLocal ? undefined : () => watch(pubkey)}
+        size={size}
         theater={theater}
       />
     </div>
@@ -1300,7 +1367,7 @@ function HeroParticipant({
 }
 
 /** The peer a DM is ringing, before they're in the room. */
-function HeroPendingPeer({ pubkey, theater }: { pubkey: string; theater: boolean }) {
+function HeroPendingPeer({ pubkey, size, theater }: { pubkey: string; size: HeroSize; theater: boolean }) {
   const metadata = useAuthor(pubkey).data?.metadata;
   const name = useScopedDisplayName(pubkey, metadata);
   return (
@@ -1311,6 +1378,7 @@ function HeroPendingPeer({ pubkey, theater }: { pubkey: string; theater: boolean
       speaking={false}
       muted={false}
       pending
+      size={size}
       theater={theater}
     />
   );
@@ -1322,16 +1390,17 @@ function HeroBackdrop({ pubkey }: { pubkey?: string }) {
 }
 
 /**
- * A voice-only 1:1 call: the two people, large and side by side over the
- * peer's blurred picture, with the controls beneath (the FaceTime look).
- * Docked above the chat, or the whole screen as `theater`.
+ * A call with no video on screen: everyone large, in their own shapes, with the
+ * controls beneath. A DM sits over the peer's blurred
+ * picture. Docked above the chat, or the whole screen as `theater`.
  */
 function CallHero({
   variant,
   callLabel,
-  self,
-  peer,
-  peerPubkey,
+  people,
+  overflow,
+  pendingPubkey,
+  backdropPubkey,
   speakingIds,
   calling,
   since,
@@ -1339,12 +1408,17 @@ function CallHero({
   onShowVideo,
   onToggleTheater,
   exiting,
+  wide,
 }: {
   variant: "docked" | "theater";
   callLabel?: React.ReactNode;
-  self?: Participant;
-  peer?: Participant;
-  peerPubkey?: string;
+  /** Who is on screen, in display order: others first, then us. */
+  people: readonly Participant[];
+  /** Others left off screen, shown as "+N". */
+  overflow: number;
+  /** A DM peer still ringing, shown ahead of `people`. */
+  pendingPubkey?: string;
+  backdropPubkey?: string;
   speakingIds: ReadonlySet<string>;
   calling: boolean;
   since: number;
@@ -1352,6 +1426,8 @@ function CallHero({
   onShowVideo: () => void;
   onToggleTheater: () => void;
   exiting: boolean;
+  /** A desktop layout: room for larger avatars. */
+  wide: boolean;
 }) {
   const theater = variant === "theater";
   const controlSize = theater ? "rounded-lg size-14 touch:size-14" : "size-10 touch:size-11";
@@ -1374,20 +1450,42 @@ function CallHero({
       <MicButton className={controlSize} />
       <CameraButton className={controlSize} />
       <ScreenShareButton className={controlSize} />
+      <RaiseHandButton className={controlSize} />
+      <ReactionsMenu className={controlSize} />
       <DeviceMenu className={controlSize} />
       <LeaveButton className={controlSize} />
     </div>
   );
 
-  const people = (
-    <div className={cn("flex items-start justify-center", theater ? "gap-12" : "gap-8")}>
-      {peer ? (
-        <HeroParticipant participant={peer} speaking={speakingIds.has(peer.identity)} theater={theater} />
-      ) : peerPubkey ? (
-        <HeroPendingPeer pubkey={peerPubkey} theater={theater} />
-      ) : null}
-      {self && (
-        <HeroParticipant participant={self} speaking={speakingIds.has(self.identity)} theater={theater} />
+  const count = people.length + (pendingPubkey ? 1 : 0);
+  const size = heroSize(count, theater, wide);
+  const cluster = (
+    <div
+      className={cn(
+        "flex flex-wrap items-start justify-center",
+        count <= 2 ? (theater ? "gap-12" : "gap-8") : theater ? "gap-8" : "gap-4",
+      )}
+    >
+      {pendingPubkey && <HeroPendingPeer pubkey={pendingPubkey} size={size} theater={theater} />}
+      {people.map((p) => (
+        <HeroParticipant
+          key={p.identity}
+          participant={p}
+          speaking={speakingIds.has(p.identity)}
+          size={size}
+          theater={theater}
+        />
+      ))}
+      {overflow > 0 && (
+        <div
+          className={cn(
+            "flex items-center justify-center rounded-full bg-foreground/10 font-medium text-muted-foreground tabular-nums",
+            HERO_SIZES[size].avatar,
+            theater ? "text-lg" : "text-sm",
+          )}
+        >
+          +{overflow}
+        </div>
       )}
     </div>
   );
@@ -1418,14 +1516,20 @@ function CallHero({
     </button>
   );
 
+  const backdrop = backdropPubkey && (
+    <>
+      <HeroBackdrop pubkey={backdropPubkey} />
+      <div className="absolute inset-0 bg-chrome-deep/60" />
+    </>
+  );
+
   if (theater) {
     return (
       <div className="relative flex h-full w-full flex-col overflow-hidden bg-chrome-deep">
-        <HeroBackdrop pubkey={peerPubkey} />
-        <div className="absolute inset-0 bg-chrome-deep/60" />
+        {backdrop}
         {theaterToggle}
-        <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-6">
-          {people}
+        <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-6 overflow-y-auto">
+          {cluster}
           {title}
         </div>
         <div className="relative flex justify-center px-4 pt-4 pb-[max(2rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]">
@@ -1449,97 +1553,12 @@ function CallHero({
         aria-label="Call"
         className="relative clip-corner-lg overflow-hidden bg-chrome-deep shadow-lg"
       >
-        <HeroBackdrop pubkey={peerPubkey} />
-        <div className="absolute inset-0 bg-chrome-deep/60" />
+        {backdrop}
         {theaterToggle}
         <div className="relative flex flex-col items-center gap-3 px-4 pt-5 pb-3">
-          {people}
+          {cluster}
           {title}
           {controls}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const STRIP_MAX_AVATARS = 5;
-
-/**
- * The call while nobody is showing video: one row of avatars, status and
- * controls, sized to its content rather than to the window.
- */
-function CallStrip({
-  callLabel,
-  roster,
-  speakingIds,
-  calling,
-  since,
-  videoCount,
-  onShowVideo,
-  exiting,
-}: {
-  callLabel?: React.ReactNode;
-  roster: readonly Participant[];
-  speakingIds: ReadonlySet<string>;
-  calling: boolean;
-  since: number;
-  /** Video feeds a collapsed stage is hiding; 0 when there are none. */
-  videoCount: number;
-  onShowVideo: () => void;
-  exiting: boolean;
-}) {
-  const shown = roster.slice(0, STRIP_MAX_AVATARS);
-  const overflow = roster.length - shown.length;
-  return (
-    <div
-      className={cn(
-        "shrink-0 mx-2 mt-2",
-        exiting
-          ? "animate-out fade-out-0 slide-out-to-top-2 duration-200 fill-mode-forwards"
-          : "animate-in fade-in-0 slide-in-from-top-2 duration-200",
-      )}
-    >
-      <div
-        role="region"
-        aria-label="Call"
-        className="clip-corner-lg bg-chrome-deep shadow-lg flex flex-wrap items-center gap-x-3 gap-y-2 px-2.5 py-2"
-      >
-        <div className="flex flex-1 basis-48 items-center gap-2.5 min-w-0">
-          <div className="flex items-center gap-1.5 shrink-0">
-            {shown.map((p) => (
-              <StripAvatar key={p.identity} participant={p} isSpeaking={speakingIds.has(p.identity)} />
-            ))}
-            {overflow > 0 && (
-              <span className="text-xs text-muted-foreground tabular-nums">+{overflow}</span>
-            )}
-          </div>
-          <div className="min-w-0 flex-1 leading-tight">
-            <div className="text-sm font-medium truncate">{callLabel}</div>
-            <div className="text-xs text-muted-foreground truncate">
-              <CallStatus calling={calling} since={since} />
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
-          {videoCount > 0 && (
-            <button
-              type="button"
-              onClick={onShowVideo}
-              aria-label="Show video"
-              title="Show video"
-              className="inline-flex items-center gap-1.5 rounded-md h-8 touch:h-11 px-2.5 shrink-0 bg-primary/20 text-primary hover:bg-primary/30 text-xs font-medium transition-colors"
-            >
-              <Video className="size-4" />
-              <span className="tabular-nums">{videoCount}</span>
-            </button>
-          )}
-          <MicButton />
-          <CameraButton />
-          <ScreenShareButton />
-          <RaiseHandButton />
-          <ReactionsMenu />
-          <DeviceMenu />
-          <LeaveButton />
         </div>
       </div>
     </div>
@@ -1598,6 +1617,10 @@ export function CallStage({
   const participantCount = uniqueParticipantCount(participants, resolveIdentity);
   const speakers = useSpeakers();
   const speakingIds = useMemo(() => new Set(speakers), [speakers]);
+  const { raisedHands, streamingPubkeys } = useVoiceActivity();
+  const lastSpoke = useRef(new Map<string, number>());
+  const heardAt = Date.now();
+  for (const identity of speakers) lastSpoke.current.set(identity, heardAt);
 
   const [focusKey, setFocusKey] = useState<string | null>(null);
 
@@ -1616,14 +1639,24 @@ export function CallStage({
     hevcScreenShare?.active && hevcScreenShare.previewTrack?.readyState === "live"
       ? hevcScreenShare.previewTrack
       : null;
+  const { watching } = useScreenShareWatch();
+  // Others' screen shares are opt-in: unwatched ones offer an invite tile instead.
   const videoTracks = allVideoTracks.filter(
     (track) =>
-      !(
-        localHevcPreview &&
-        track.source === Track.Source.ScreenShare &&
-        track.participant.identity === hevcScreenShare?.publisherIdentity
-      ),
+      track.source !== Track.Source.ScreenShare ||
+      (!(localHevcPreview && track.participant.identity === hevcScreenShare?.publisherIdentity) &&
+        (track.participant.isLocal ||
+          watching.has(streamOwnerKey(track.participant.identity, resolveIdentity)))),
   );
+  // One per streamer; our own H.265 companion is previewed locally instead.
+  const streamOwners = new Map<string, Participant>();
+  for (const p of participants) {
+    if (p.isLocal || p.identity === hevcScreenShare?.publisherIdentity) continue;
+    if (!p.getTrackPublication(Track.Source.ScreenShare)) continue;
+    const owner = streamOwnerKey(p.identity, resolveIdentity);
+    if (!streamOwners.has(owner)) streamOwners.set(owner, p);
+  }
+  const unwatchedStreams = [...streamOwners].filter(([owner]) => !watching.has(owner));
 
   // Everyone gets exactly one camera or avatar tile; screenshares are extra.
   const withCamera = new Set(
@@ -1675,7 +1708,16 @@ export function CallStage({
   const calling = isDmCall && othersSince === null;
   const clockSince = isDmCall ? othersSince ?? joinedAt.current : joinedAt.current;
 
-  // Auto-expand and spotlight only on a NEW share, so a user-closed stage stays closed.
+  const streamOwnersSig = [...streamOwners.keys()].sort().join("|");
+  const prevStreamOwners = useRef<string[]>([]);
+  useEffect(() => {
+    const owners = streamOwnersSig ? streamOwnersSig.split("|") : [];
+    if (owners.some((o) => !prevStreamOwners.current.includes(o))) playScreenShareSound();
+    prevStreamOwners.current = owners;
+  }, [streamOwnersSig]);
+
+  // Auto-expand and spotlight only on a NEW visible share (ours, or one just
+  // watched), so a user-closed stage stays closed.
   const remoteScreenShareKeys = videoTracks
     .filter((t) => t.source === Track.Source.ScreenShare)
     .map(trackTileKey);
@@ -1689,7 +1731,6 @@ export function CallStage({
     if (appeared) {
       setStageOpen(true);
       setFocusKey(appeared);
-      playScreenShareSound();
     }
     prevScreenShareKeys.current = screenShareKeys;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1741,6 +1782,12 @@ export function CallStage({
         ),
       });
     }
+    for (const [owner, p] of unwatchedStreams) {
+      list.push({
+        key: `${owner}:stream-invite`,
+        render: () => <StreamInviteTile participant={p} owner={owner} />,
+      });
+    }
     for (const p of avatarOnly) {
       const key = participantTileKey(p);
       list.push({
@@ -1759,6 +1806,7 @@ export function CallStage({
     return list;
   }, [
     videoTracks,
+    unwatchedStreams,
     avatarOnly,
     speakingIds,
     localHevcPreview,
@@ -1890,11 +1938,10 @@ export function CallStage({
   );
 
   const [theater, setTheater] = useState(false);
-  // Theater shows video; with none left (or the stage collapsed) it's back to the chat.
-  // A DM keeps its full-screen hero when video stops.
+  // A collapsed stage is back to the chat; with video gone theater keeps the hero.
   useEffect(() => {
-    if (!open || (!hasVideoTracks && !isDmCall)) setTheater(false);
-  }, [open, hasVideoTracks, isDmCall]);
+    if (!open) setTheater(false);
+  }, [open]);
   // On a phone, video takes the screen the moment it starts (the Signal model);
   // leaving theater returns to the chat with the stage docked above it.
   const hadVideo = useRef(false);
@@ -2041,27 +2088,46 @@ export function CallStage({
     </div>
   );
 
-  // A DM with no video on screen is the hero, docked or full screen.
-  const heroMode = isDmCall && (!open || !hasVideoTracks);
-  const hero = (variant: "docked" | "theater") => (
-    <CallHero
-      variant={variant}
-      callLabel={callLabel}
-      self={participants.find((p) => p.isLocal)}
-      peer={roster.find((p) => !p.isLocal)}
-      peerPubkey={activeCall?.dm?.peer}
-      speakingIds={speakingIds}
-      calling={calling}
-      since={clockSince}
-      videoCount={hasVideoTracks ? tiles.length - avatarOnly.length : 0}
-      onShowVideo={() => setStageOpen(true)}
-      onToggleTheater={() => {
-        setStageOpen(true);
-        setTheater((t) => !t);
-      }}
-      exiting={exiting}
-    />
-  );
+  const heroMode = !open || !hasVideoTracks;
+  const others = roster.filter((p) => !p.isLocal);
+  const self = roster.find((p) => p.isLocal);
+  const dmPeer = activeCall?.dm?.peer;
+  const pendingPubkey = dmPeer && others.length === 0 ? dmPeer : undefined;
+  const activityOf = (p: Participant): CallActivity => {
+    const { pubkey, verified } = resolveIdentity(p.identity);
+    return {
+      streaming: verified && streamingPubkeys.has(pubkey),
+      handRaised: verified && raisedHands.has(pubkey),
+      lastSpokeAt: lastSpoke.current.get(p.identity),
+    };
+  };
+  const hero = (variant: "docked" | "theater") => {
+    // We always stay on screen.
+    const max = variant === "theater" ? HERO_MAX_THEATER : HERO_MAX_DOCKED;
+    const room = max - (pendingPubkey ? 1 : 0) - (self ? 1 : 0);
+    const visible = pickVisible(others, room, activityOf, Date.now());
+    return (
+      <CallHero
+        variant={variant}
+        callLabel={callLabel}
+        people={self ? [...visible, self] : visible}
+        overflow={others.length - visible.length}
+        pendingPubkey={pendingPubkey}
+        backdropPubkey={dmPeer}
+        speakingIds={speakingIds}
+        calling={calling}
+        since={clockSince}
+        videoCount={videoTracks.length + (localHevcPreview ? 1 : 0)}
+        onShowVideo={() => setStageOpen(true)}
+        onToggleTheater={() => {
+          setStageOpen(true);
+          setTheater((t) => !t);
+        }}
+        exiting={exiting}
+        wide={isDesktop}
+      />
+    );
+  };
 
   if (theater && heroMode) {
     return createPortal(
@@ -2168,22 +2234,8 @@ export function CallStage({
   }
 
   // Docked: the stage only while there is video to show (and it's not
-  // collapsed); otherwise a DM's hero or the strip, sized to their content.
-  if (heroMode) return hero("docked");
-  if (!open || !hasVideoTracks || exiting) {
-    return (
-      <CallStrip
-        callLabel={callLabel}
-        roster={roster}
-        speakingIds={speakingIds}
-        calling={calling}
-        since={clockSince}
-        videoCount={hasVideoTracks ? tiles.length - avatarOnly.length : 0}
-        onShowVideo={() => setStageOpen(true)}
-        exiting={exiting}
-      />
-    );
-  }
+  // collapsed); otherwise the hero, sized to its content.
+  if (heroMode || exiting) return hero("docked");
 
   return (
     <div

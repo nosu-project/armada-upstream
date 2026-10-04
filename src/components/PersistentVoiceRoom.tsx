@@ -1,6 +1,5 @@
 import {
   LiveKitRoom,
-  RoomAudioRenderer,
   useLocalParticipant,
   useParticipants,
   useRoomContext,
@@ -31,6 +30,7 @@ import "@livekit/components-styles";
 
 import { InCallView } from "@/components/chat/VoiceBar";
 import { CallStage } from "@/components/chat/CallStage";
+import { CallAudioRenderer, ScreenShareWatchProvider } from "@/components/chat/ScreenShareWatch";
 import { DisplayName } from "@/components/DisplayName";
 import { DesktopPushToTalk } from "@/components/DesktopPushToTalk";
 import { Button } from "@/components/ui/button";
@@ -163,6 +163,28 @@ function MutedReporter() {
   }, [participants, resolveIdentity, setMutedPubkeys]);
 
   useEffect(() => () => setMutedPubkeys(new Set()), [setMutedPubkeys]);
+
+  return null;
+}
+
+/** Reports who is screen sharing (as pubkeys) to call context, for the LIVE badges. */
+function StreamingReporter() {
+  const { setStreamingPubkeys } = useCall();
+  const resolveIdentity = useVoiceIdentity();
+  const participants = useParticipants();
+
+  useEffect(() => {
+    const pubkeys = new Set<string>();
+    for (const p of participants) {
+      if (!p.identity || !p.getTrackPublication(Track.Source.ScreenShare)) continue;
+      // An H.265 companion resolves to its sharer's pubkey.
+      const { pubkey, verified } = resolveIdentity(p.identity);
+      if (verified) pubkeys.add(pubkey);
+    }
+    setStreamingPubkeys(pubkeys);
+  }, [participants, resolveIdentity, setStreamingPubkeys]);
+
+  useEffect(() => () => setStreamingPubkeys(new Set()), [setStreamingPubkeys]);
 
   return null;
 }
@@ -647,12 +669,14 @@ function VoiceRoomShell({
         onRejoiningChange={setRejoining}
         onGiveUp={onDisconnected}
       />
-      <RoomAudioRenderer />
+      <ScreenShareWatchProvider>
+      <CallAudioRenderer />
       <CallAudioKeeper />
       <CallSoundEffects />
       <MicNoiseProcessor />
       <DesktopPushToTalk />
       <MutedReporter />
+      <StreamingReporter />
       <CallNotificationMic />
       <RosterReporter />
       <PlaybackVolumeApplier />
@@ -667,6 +691,7 @@ function VoiceRoomShell({
         {placeBar(mobileBar, desktopBar, true)}
       </VoiceRejoiningContext.Provider>
       </DetectedSpeakersProvider>
+      </ScreenShareWatchProvider>
     </LiveKitRoom>
   );
 }

@@ -61,7 +61,7 @@ function ChannelLink({
 }) {
   const { user } = useCurrentUser();
   const { activeCall } = useCall();
-  const { speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useVoiceActivity();
+  const { speakingPubkeys, mutedPubkeys, streamingPubkeys, voiceRoomPubkeys } = useVoiceActivity();
   const { markRead } = useReadState();
   const { channelLevel, setLevel } = useNotifLevels();
   const notificationLevel = channelLevel(group.relay, group.id);
@@ -133,6 +133,7 @@ function ChannelLink({
           participants={roster!}
           speaking={inCall ? speakingPubkeys : undefined}
           muted={inCall ? mutedPubkeys : undefined}
+          streaming={inCall ? streamingPubkeys : undefined}
         />
       )}
         </div>
