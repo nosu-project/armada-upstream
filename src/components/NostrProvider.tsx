@@ -383,13 +383,12 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
                 if (!liveSigner) {
                   throw new Error("AUTH failed: no signer available (user not logged in)");
                 }
-                // A refused prompt counts too: the next challenge would only ask again.
-                const holdNext = () => {
-                  const now = Date.now();
-                  const streak = nextAuthStreak(authStreakRef.current.get(url), now);
-                  authStreakRef.current.set(url, streak);
-                  authCooldownRef.current.set(url, now + authCooldownMs(streak.count, signerPromptsRef.current));
-                };
+                // Held from the ASK, not the answer: a prompt nobody answers never settles,
+                // and a reopen meanwhile would otherwise start another one unheld.
+                const now = Date.now();
+                const streak = nextAuthStreak(authStreakRef.current.get(url), now);
+                authStreakRef.current.set(url, streak);
+                authCooldownRef.current.set(url, now + authCooldownMs(streak.count, signerPromptsRef.current));
                 return liveSigner.signEvent({
                   kind: 22242,
                   content: "",
@@ -399,12 +398,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
                   ],
                   created_at: Math.floor(Date.now() / 1000),
                 }).then((ev) => {
-                  holdNext();
                   authCacheRef.current.set(url, { challenge: current, event: ev, signedAt: Date.now() });
                   return ev;
-                }, (err: unknown) => {
-                  holdNext();
-                  throw err;
                 });
               }).finally(() => {
                 if (authInFlightRef.current.get(url) === signing) authInFlightRef.current.delete(url);
