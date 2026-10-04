@@ -63,6 +63,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { MountWhenOpened } from "@/components/MountWhenOpened";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -2470,6 +2471,12 @@ export function DMsPage() {
   useEffect(() => {
     if (requestRows.length === 0) setListView("inbox");
   }, [requestRows.length]);
+  // Back from the request list returns to the inbox, ahead of SwipeReveal's
+  // root-screen back (leave the app), which applies only there.
+  useAndroidBack(() => {
+    setListView("inbox");
+    return true;
+  }, listView === "requests" && !activePeer && !composing, "overlay");
 
   // Restored snapshot of the final merged OUTCOME, so live rows replace it without reshuffling.
   const restoredRows = useMemo(() => {
