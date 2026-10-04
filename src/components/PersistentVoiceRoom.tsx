@@ -81,6 +81,7 @@ import {
   subscribeUserVolumes,
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
+import { keepCallAwake } from "@/lib/callKeepAwake";
 import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
@@ -333,6 +334,7 @@ function AutoRejoin({
 function CallAudioKeeper() {
   const room = useRoomContext();
   useEffect(() => keepCallAudioRunning(room), [room]);
+  useEffect(() => keepCallAwake(), []);
   return null;
 }
 

@@ -11,7 +11,8 @@ const MAX_RETRY_MS = 10_000;
  * Resume the call's AudioContext whenever the browser suspends it mid-call.
  * Neither the app nor LiveKit suspends it, but Chromium on Android can (seen
  * after a reconnect), and nothing resumes it: remote playback stops and the
- * RNNoise mic graph, which runs in it, sends nothing.
+ * RNNoise mic graph, which runs in it, sends nothing. WebKit reports a
+ * screen lock or phone call as the non-standard `interrupted`; same remedy.
  */
 export function keepCallAudioRunning(room: Room): () => void {
   let watched: AudioContext | undefined;
@@ -26,7 +27,8 @@ export function keepCallAudioRunning(room: Room): () => void {
       watched = ctx;
     }
     clearTimeout(timer);
-    if (!ctx || ctx.state !== "suspended" || room.state !== ConnectionState.Connected) {
+    const state: string | undefined = ctx?.state;
+    if (!ctx || (state !== "suspended" && state !== "interrupted") || room.state !== ConnectionState.Connected) {
       attempt = 0;
       return;
     }
