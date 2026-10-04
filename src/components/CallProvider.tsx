@@ -247,6 +247,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // `showFloating`, not `stageFloating`: the latter waits a commit for host
   // registration and would briefly contradict the label.
   const stageVisible = hasNormalSlot ? stageOpen : showFloating;
+  const stageDocked = Boolean(user && activeCall) && hasNormalSlot;
 
   // Memoized: this provider holds fast-moving state. The live sets are in
   // `VoiceActivityContext` so this changes at human speed.
@@ -263,6 +264,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       toggleStage,
       setStageOpen,
       stageVisible,
+      stageDocked,
+      exiting,
       stageFloating,
       floatingVariant,
       callBarHeight,
@@ -288,6 +291,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       stageOpen,
       toggleStage,
       stageVisible,
+      stageDocked,
+      exiting,
       stageFloating,
       floatingVariant,
       callBarHeight,

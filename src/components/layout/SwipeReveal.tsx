@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { PaneCoveredContext, setPaneCovered } from "@/contexts/PaneCoveredContext";
 import { leaveApp, useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -57,6 +58,12 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // Optimistic resting state; `null` whenever the `open` prop is authoritative.
   const [pendingOpen, setPendingOpen] = useState<boolean | null>(null);
   const effectiveOpen = pendingOpen ?? open;
+  const [coverToken] = useState(() => Symbol("pane"));
+  const listShowing = swipeEnabled && effectiveOpen;
+  useEffect(() => {
+    setPaneCovered(coverToken, listShowing);
+    return () => setPaneCovered(coverToken, false);
+  }, [coverToken, listShowing]);
 
   const paneRef = useRef<HTMLDivElement>(null);
   const underlayRef = useRef<HTMLDivElement>(null);
@@ -320,7 +327,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           willChange: moving ? "transform" : undefined,
         }}
       >
-        {children}
+        <PaneCoveredContext.Provider value={effectiveOpen}>{children}</PaneCoveredContext.Provider>
       </div>
     </>
   );

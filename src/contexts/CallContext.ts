@@ -83,6 +83,13 @@ export interface CallContextType {
    */
   stageVisible: boolean;
   /**
+   * Whether the stage is docked in the call's own chat. The docked strip/stage
+   * then carries the controls, so the call bar steps aside.
+   */
+  stageDocked: boolean;
+  /** The call is sliding out after a leave (the room is still mounted). */
+  exiting: boolean;
+  /**
    * Whether the stage is in the floating desktop window (no normal slot, not hidden,
    * desktop width). The same stage host is reparented, so no duplicate media.
    */

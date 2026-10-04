@@ -11,6 +11,7 @@ import {
   Headphones,
   Loader2,
   Mic,
+  PictureInPicture2,
   ScreenShare,
   Settings2,
   Video,
@@ -165,7 +166,7 @@ function CallRouteGroup() {
 }
 
 /** Call/audio settings gear: device pickers, audio processing and per-participant volume. */
-function DeviceMenu({ className }: { className?: string }) {
+export function DeviceMenu({ className }: { className?: string }) {
   const { localParticipant } = useLocalParticipant();
   const [processing, setProcessing] = useState<AudioProcessingPrefs>(() => getAudioProcessing());
 
@@ -338,7 +339,7 @@ interface InCallViewProps {
   label?: React.ReactNode;
   onLabelClick?: () => void;
   stacked?: boolean;
-  /** Single-row layout for the fixed mobile bar, without inline roster. */
+  /** The fixed mobile bar: a larger label, no divider. */
   compact?: boolean;
 }
 
@@ -347,7 +348,6 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
   // `stageVisible`, not `stageOpen`: away from the call's channel the visible
   // stage is the floating window, which `stageOpen` doesn't describe.
   const { stageVisible, toggleStage } = useCall();
-  const participants = useParticipants();
   const connectionState = useConnectionState();
   const rejoining = useContext(VoiceRejoiningContext);
 
@@ -374,6 +374,7 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
     );
   }
 
+  const labelClass = cn("flex-1 min-w-0 truncate font-semibold", compact ? "text-sm" : "text-xs");
   const headerEl = (
     <div className="flex items-center gap-1.5 min-w-0 px-1">
       <Headphones className="size-4 text-success shrink-0" />
@@ -382,61 +383,42 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
           <button
             type="button"
             onClick={onLabelClick}
-            className="flex-1 min-w-0 truncate text-xs font-semibold text-foreground hover:underline text-left"
+            className={cn(labelClass, "text-foreground hover:underline text-left")}
           >
             {label}
           </button>
         ) : (
-          <span className="flex-1 min-w-0 truncate text-xs font-semibold text-foreground">
-            {label}
-          </span>
+          <span className={cn(labelClass, "text-foreground")}>{label}</span>
         )
       ) : (
-        <span className="flex-1 min-w-0 truncate text-xs font-semibold text-success">
-          {compact ? "Connected" : "Voice connected"}
-        </span>
+        <span className={cn(labelClass, "text-success")}>Voice connected</span>
       )}
-      <button
-        type="button"
-        onClick={toggleStage}
-        aria-label={stageVisible ? "Hide call stage" : "Show call stage"}
-        aria-pressed={stageVisible}
-        className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-[11px] font-medium text-foreground hover:bg-foreground/20"
-      >
-        <Video className="size-3.5" />
-        <span className="tabular-nums">{participants.length}</span>
-        <span>{stageVisible ? "Hide" : "Show"}</span>
-      </button>
     </div>
   );
-
-  if (compact) {
-    // Controls are a single `shrink-0` group and the header is the only flexible
-    // child, so a long label truncates instead of pushing controls past the clip edge.
-    return (
-      <div className="flex items-center gap-1.5 px-2 py-1.5 min-h-12">
-        <div className="flex-1 min-w-0">{headerEl}</div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <MicButton />
-          <CameraButton />
-          <ScreenShareButton />
-          <DeviceMenu />
-          <LeaveButton />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={cn("flex flex-col gap-1.5 px-2 py-2", stacked && "min-w-0")}>
       {headerEl}
-      <div className="flex items-center gap-1.5 pt-1.5 border-t border-foreground/10">
-        <div className="flex items-center gap-1.5">
-          <MicButton />
-          <CameraButton />
-          <ScreenShareButton />
-          <DeviceMenu />
-        </div>
+      <div className={cn("flex items-center gap-1.5", !compact && "pt-1.5 border-t border-foreground/10")}>
+        <MicButton />
+        <CameraButton />
+        <ScreenShareButton />
+        <DeviceMenu />
+        <button
+          type="button"
+          onClick={toggleStage}
+          aria-label={stageVisible ? "Hide call stage" : "Show call stage"}
+          aria-pressed={stageVisible}
+          title={stageVisible ? "Hide call stage" : "Show call stage"}
+          className={cn(
+            "shrink-0 inline-flex items-center justify-center rounded-md size-8 touch:size-11 transition-colors",
+            stageVisible
+              ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
+              : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+          )}
+        >
+          <PictureInPicture2 className="size-4" />
+        </button>
         <div className="flex-1" />
         <LeaveButton />
       </div>

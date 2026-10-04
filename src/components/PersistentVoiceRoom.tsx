@@ -4,7 +4,6 @@ import {
   useLocalParticipant,
   useParticipants,
   useRoomContext,
-  useSpeakingParticipants,
 } from "@livekit/components-react";
 import {
   AudioPresets,
@@ -92,6 +91,8 @@ import {
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { keepCallAwake } from "@/lib/callKeepAwake";
 import { keepCallAudioRunning } from "@/lib/voiceAudioContext";
+import { DetectedSpeakersContext, useDetectedSpeakers, useSpeakers } from "@/hooks/useSpeakers";
+import { useListShowing } from "@/contexts/PaneCoveredContext";
 import { ignorePrivateCandidatesFrom } from "@/lib/privateIceCandidates";
 import { isRecoverableDisconnect, rejoinRoom, trackMicIntent } from "@/lib/voiceRejoin";
 import { cn } from "@/lib/utils";
@@ -119,21 +120,26 @@ import { nip19 } from "nostr-tools";
 function SpeakingReporter() {
   const { setSpeakingPubkeys } = useCall();
   const resolveIdentity = useVoiceIdentity();
-  const speakingParticipants = useSpeakingParticipants();
+  const speakers = useSpeakers();
 
   useEffect(() => {
     const pubkeys = new Set<string>();
-    for (const p of speakingParticipants) {
-      if (isHevcScreenShareParticipant(p, resolveIdentity)) continue;
-      const { pubkey, verified } = resolveIdentity(p.identity);
+    for (const identity of speakers) {
+      const { pubkey, verified } = resolveIdentity(identity);
       if (verified) pubkeys.add(pubkey);
     }
     setSpeakingPubkeys(pubkeys);
-  }, [speakingParticipants, resolveIdentity, setSpeakingPubkeys]);
+  }, [speakers, resolveIdentity, setSpeakingPubkeys]);
 
   useEffect(() => () => setSpeakingPubkeys(new Set()), [setSpeakingPubkeys]);
 
   return null;
+}
+
+/** Measures who is speaking once per room, for everything beneath it. */
+function DetectedSpeakersProvider({ children }: { children: React.ReactNode }) {
+  const detected = useDetectedSpeakers();
+  return <DetectedSpeakersContext.Provider value={detected}>{children}</DetectedSpeakersContext.Provider>;
 }
 
 /** Reports muted participants (as pubkeys) to call context. Unverified identities are skipped. */
@@ -441,7 +447,8 @@ function ErrorBar({ placeBar, error, onLeave }: { placeBar: PlaceBar; error: unk
   );
 }
 
-type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode) => React.ReactNode;
+/** `dockable`: a bar the docked strip/stage replaces while it is on screen. */
+type PlaceBar = (mobile: React.ReactNode, desktop?: React.ReactNode, dockable?: boolean) => React.ReactNode;
 
 /** The call notification's picture as a small `data:` URL. Android only. */
 function useCallNotificationIcon(
@@ -470,6 +477,7 @@ function MobileCallBar({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { setCallBarHeight } = useCall();
+  const listShowing = useListShowing();
 
   useEffect(() => {
     const bar = ref.current;
@@ -496,7 +504,11 @@ function MobileCallBar({
       ref={ref}
       className={cn(
         // The inset is spelled out: the shell zeroes `--safe-area-pad-bottom` for everything above the bar.
-        "fixed bottom-0 inset-x-0 z-40 bg-background px-2 pb-[max(0.75rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] sidebar:hidden",
+        "fixed bottom-0 inset-x-0 z-40 px-2 pb-[max(0.75rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] sidebar:hidden",
+        // Over the list, continue the rail (60px) and channel column beneath it.
+        listShowing
+          ? "bg-[linear-gradient(to_right,hsl(var(--chrome-deep))_60px,hsl(var(--chrome))_60px)]"
+          : "bg-background",
         exiting
           ? "animate-out fade-out-0 slide-out-to-bottom-4 duration-200 fill-mode-forwards"
           : "animate-in fade-in-0 slide-in-from-bottom-4 duration-300",
@@ -511,8 +523,9 @@ function makePlaceBar(
   slots: HTMLElement[],
   exiting: boolean,
   shellRef: React.RefObject<HTMLDivElement | null>,
+  docked: boolean,
 ): PlaceBar {
-  return (mobile, desktop) => (
+  return (mobile, desktop, dockable) => dockable && docked ? null : (
     <>
       <MobileCallBar shellRef={shellRef} exiting={exiting}>
         {mobile}
@@ -639,19 +652,21 @@ function VoiceRoomShell({
       <CallSoundEffects />
       <MicNoiseProcessor />
       <DesktopPushToTalk />
-      <SpeakingReporter />
       <MutedReporter />
       <CallNotificationMic />
       <RosterReporter />
       <PlaybackVolumeApplier />
+      <DetectedSpeakersProvider>
+      <SpeakingReporter />
       <VoiceRejoiningContext.Provider value={rejoining}>
         {placeStage(
           <ServerScopeProvider relayUrl={scopeRelayUrl}>
             <CallStage callLabel={label} open={stageOpen} />
           </ServerScopeProvider>,
         )}
-        {placeBar(mobileBar, desktopBar)}
+        {placeBar(mobileBar, desktopBar, true)}
       </VoiceRejoiningContext.Provider>
+      </DetectedSpeakersProvider>
     </LiveKitRoom>
   );
 }
@@ -1674,7 +1689,11 @@ export default function PersistentVoiceRoom({
   exiting: boolean;
   shellRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  const placeBar = useMemo(() => makePlaceBar(slots, exiting, shellRef), [slots, exiting, shellRef]);
+  const { stageDocked } = useCall();
+  const placeBar = useMemo(
+    () => makePlaceBar(slots, exiting, shellRef, stageDocked),
+    [slots, exiting, shellRef, stageDocked],
+  );
   const placeStage = useMemo(() => makePlaceStage(stageHost), [stageHost]);
 
   if (call.concord) {
