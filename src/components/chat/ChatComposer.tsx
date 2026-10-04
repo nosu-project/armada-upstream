@@ -28,6 +28,7 @@ import { mayFocusOnSwitch, registerTypeToFocus } from "@/components/chat/typeToF
 import { authorsByRecency } from "@/components/chat/transport";
 import type { PollDraft } from "@/components/chat/transport";
 import { ReplyPreview } from "@/components/chat/ChatMessage";
+import { useMediaHeld, useMessageRevealed } from "@/components/chat/mediaHold";
 import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
 import { Lightbox } from "@/components/chat/Lightbox";
@@ -2523,20 +2524,27 @@ function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => 
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = useScopedDisplayName(event.pubkey, metadata);
+  // A held sender's custom emoji would fetch what their row is holding.
+  const revealed = useMessageRevealed(event.id);
+  const held = useMediaHeld(event.pubkey) && !revealed;
 
   return (
     <div className="flex items-center gap-2 rounded-md bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
       <Reply className="size-4 text-muted-foreground shrink-0" />
       <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
-        <span className="shrink-0">Replying to</span>
+        {/* Narrow screens: the reply icon says it, and the snippet needs the room. */}
+        <span className="sr-only sm:not-sr-only sm:shrink-0">Replying to</span>
         <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
           <AvatarImage src={metadata?.picture} imeta={author.data?.imeta?.picture} alt="" />
           <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <span className="font-semibold text-primary truncate min-w-0">
+        <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
           <DisplayName pubkey={event.pubkey} name={displayName} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground/70">
+          <ReplyPreview content={event.content} tags={held ? undefined : event.tags} />
         </span>
       </span>
       <button
