@@ -3,7 +3,6 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 
 import type { ChannelTimelineEntry, GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
-import { isCommunityGuest } from "@/components/chat/channelTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
@@ -441,11 +440,10 @@ function CIGroupRow({ entries }: { entries: readonly Extract<GitChannelTimelineE
   );
 }
 
-/** `members` enables the Guest badge (panel only; every CI coordinator is a guest). */
-function ActorName({ pubkey, members, className }: { pubkey: string; members?: ReadonlySet<string>; className?: string }) {
+function ActorName({ pubkey, className }: { pubkey: string; className?: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <><span className={cn("font-semibold text-foreground", className ?? "text-sm")}>{name}</span>{members && isCommunityGuest(pubkey, members) && <span className="ml-1 rounded border border-border px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Guest</span>}</>;
+  return <span className={cn("font-semibold text-foreground", className ?? "text-sm")}>{name}</span>;
 }
 
 function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ label: string; kind: GitStatusKind }> {
